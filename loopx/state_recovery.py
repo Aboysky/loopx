@@ -20,7 +20,7 @@ import tarfile
 import tempfile
 import unicodedata
 import zlib
-from typing import Any, BinaryIO, Iterator
+from typing import Any, BinaryIO, Iterator, NoReturn
 
 from .control_plane.effect_runtime import _node_executable, effect_runtime_result, effect_runtime_request_scope
 
@@ -143,9 +143,20 @@ class _BoundedGzip(io.RawIOBase):
 
 
 class _RecoveryTarInfo(tarfile.TarInfo):
+    def _reject_sparse(self, *_args: object) -> NoReturn:
+        raise StateRecoveryError("archive_sparse_unsupported")
+
+    # The stdlib invokes these hooks before yielding the final member. Refuse
+    # unsupported extents before their metadata/body is decoded or expanded.
+    _proc_gnusparse_00 = _reject_sparse
+    _proc_gnusparse_01 = _reject_sparse
+    _proc_gnusparse_10 = _reject_sparse
+
     def _proc_member(self, archive: tarfile.TarFile) -> tarfile.TarInfo | None:
+        _require(self.type != tarfile.GNUTYPE_SPARSE, "archive_sparse_unsupported")
         # Bound extended metadata before tarfile allocates/decodes its body.
-        if self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK):
+        if self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE,
+                         tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK):
             _require(self.size <= 128 * 1024, "archive_metadata_too_large")
             if isinstance(archive, _RecoveryTarFile):
                 archive.recovery_metadata_bytes += self.size
@@ -307,7 +318,10 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
         # Consume gzip EOF too: truncated CRC/trailing expansion is not a valid tar.
         while stream.read(_CHUNK):
             pass
-    except (tarfile.TarError, EOFError, gzip.BadGzipFile, OSError, zlib.error) as exc:
+    except StateRecoveryError:
+        raise
+    except (tarfile.TarError, EOFError, gzip.BadGzipFile, OSError, zlib.error,
+            ValueError, OverflowError, KeyError, RecursionError) as exc:
         raise StateRecoveryError("archive_unreadable") from exc
     finally:
         stream.source.close()
@@ -383,9 +397,12 @@ def verify_state_backup(
             reserved = False
             return read_state_recovery_audit(destination)
         finally:
-            if reserved:
-                destination.rmdir()
-            shutil.rmtree(staging, ignore_errors=True)
+            try:
+                if reserved:
+                    # Never recursively remove a destination occupied meanwhile.
+                    destination.rmdir()
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
 
 
 def read_state_recovery_audit(destination: Path) -> dict[str, Any]:

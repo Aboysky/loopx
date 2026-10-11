@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
 import io
 import http.client
 import json
@@ -298,6 +299,75 @@ def test_large_pax_metadata_is_refused_before_tarfile_decodes_its_body(tmp_path)
     with pytest.raises(StateRecoveryError, match="archive_metadata_too_large"):
         verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "invalid", execute=True)
     assert not (tmp_path / "invalid").exists()
+
+
+@pytest.mark.parametrize("kind,headers,decoder", [
+    (tarfile.GNUTYPE_SPARSE, {}, "_proc_sparse"),
+    (tarfile.REGTYPE, {"GNU.sparse.size": "invalid"}, "_proc_gnusparse_00"),
+    (tarfile.REGTYPE, {"GNU.sparse.map": "invalid"}, "_proc_gnusparse_01"),
+    (tarfile.REGTYPE, {"GNU.sparse.major": "1", "GNU.sparse.minor": "0"}, "_proc_gnusparse_10"),
+])
+def test_sparse_records_are_refused_before_stdlib_extent_decoding(tmp_path, monkeypatch, kind, headers, decoder):
+    archive, manifest = _backup(tmp_path)
+    member = tarfile.TarInfo("unsupported-sparse")
+    member.type, member.pax_headers = kind, headers
+    _rewrite(archive, manifest, member)
+
+    # Malformed sparse metadata must produce the same bounded refusal as a
+    # valid unsupported record, rather than leaking a decoder exception.
+    with pytest.raises(StateRecoveryError, match="^archive_sparse_unsupported$"):
+        verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+
+    def unexpected_decode(*_args):
+        pytest.fail("unsupported sparse extents reached the stdlib decoder")
+
+    monkeypatch.setattr(tarfile.TarInfo, decoder, unexpected_decode)
+    with pytest.raises(StateRecoveryError, match="^archive_sparse_unsupported$"):
+        verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+    assert not (tmp_path / "inert").exists()
+    assert not list(tmp_path.glob(".loopx-recovery-*"))
+
+
+@pytest.mark.parametrize("kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE])
+def test_oversized_pax_variants_are_refused_without_reading_the_body(kind):
+    from loopx.state_recovery import _scan
+
+    member = tarfile.TarInfo("oversized-pax")
+    member.type, member.size = kind, 128 * 1024 + 1
+    compressed = gzip.compress(member.tobuf())
+    with pytest.raises(StateRecoveryError, match="^archive_metadata_too_large$"):
+        _scan(io.BytesIO(compressed), len(compressed))
+
+
+def test_malformed_pax_record_length_is_a_bounded_archive_error():
+    from loopx.state_recovery import _scan
+
+    payload = b"9" * 5000 + b" comment=invalid\n"
+    member = tarfile.TarInfo("malformed-pax")
+    member.type, member.size = tarfile.XHDTYPE, len(payload)
+    raw = member.tobuf() + payload + b"\0" * (-len(payload) % 512 + 1024)
+    compressed = gzip.compress(raw)
+    with pytest.raises(StateRecoveryError, match="^archive_unreadable$"):
+        _scan(io.BytesIO(compressed), len(compressed))
+
+
+def test_failed_publication_cleans_staging_even_when_destination_becomes_occupied(tmp_path, monkeypatch):
+    import loopx.state_recovery as recovery
+
+    archive, manifest = _backup(tmp_path)
+    destination = tmp_path / "inert"
+
+    def failed_rename(source, target):
+        assert target == destination and (source / "recovery-audit.json").is_file()
+        (destination / "foreign-file").write_text("preserve this")
+        raise OSError("publication interrupted")
+
+    monkeypatch.setattr(recovery.os, "rename", failed_rename)
+    with pytest.raises(OSError):
+        verify_state_backup(archive=archive, manifest=manifest, destination=destination, execute=True)
+    assert (destination / "foreign-file").read_text() == "preserve this"
+    assert not (destination / "recovery-audit.json").exists()
+    assert not list(tmp_path.glob(".loopx-recovery-*"))
 
 
 def test_symlink_parent_and_occupied_directory_are_not_recovery_targets(tmp_path):
