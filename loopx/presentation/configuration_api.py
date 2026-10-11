@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from . import configuration_backup_api as backup_api
+from . import state_recovery_api as recovery_api
 from . import goal_ownership_api as ownership_api
 from . import goal_storage_api as storage_api
 from .. import chat_usage_statistics_api as usage_api
@@ -21,11 +22,14 @@ class ChatConfigurationRequestMixin(
     machine_api.MachineConfigurationRequestMixin,
     operator_api.OperatorProviderRequestMixin,
     backup_api.ConfigurationBackupRequestMixin,
+    recovery_api.StateRecoveryRequestMixin,
 ):
     """Expose machine and Goal configuration through one route registry."""
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            recovery_api.STATE_RECOVERY_PATH: self._state_recovery_list,
+            f"{recovery_api.STATE_RECOVERY_PATH}/profile": self._state_recovery_profile,
             storage_api.CHAT_GOAL_STORAGE_PATH: self._storage_inspect,
             ownership_api.CHAT_GOAL_OWNERSHIP_PATH: self._ownership_inspect,
             cadence_api.CHAT_AUTOMATION_CADENCE_PATH: self._cadence_read,
@@ -37,6 +41,10 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            f"{recovery_api.STATE_RECOVERY_PATH}/archive": lambda: self._state_recovery_upload("archive"),
+            f"{recovery_api.STATE_RECOVERY_PATH}/manifest": lambda: self._state_recovery_upload("manifest"),
+            f"{recovery_api.STATE_RECOVERY_PATH}/verify": self._state_recovery_verify,
+            f"{recovery_api.STATE_RECOVERY_PATH}/read": self._state_recovery_read,
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/preview": lambda: self._storage_update(action="plan-migration"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/apply": lambda: self._storage_update(action="migrate"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/recover": lambda: self._storage_update(action="migration-readback"),
