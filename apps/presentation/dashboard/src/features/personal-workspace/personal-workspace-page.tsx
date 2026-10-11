@@ -2243,7 +2243,14 @@ export function PersonalWorkspacePage({
             {composerSuggestions}
             </div>
             {!composerCollapsed ? <>
-            {actionDraft ? <WorkspaceActionForm draft={actionDraft} onClose={() => setActionDraft(null)} onPreview={(request) => createPreview(request)} /> : null}
+            {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} onClose={() => setActionDraft(null)} onPreview={async (request) => {
+              const proposal = await createPreview(request, { select: false });
+              if (proposal.gate?.kind === "workspace_unavailable") {
+                throw new Error(proposal.gate.summary);
+              }
+              if (isCurrentConversation()) setSelection({ item: proposal, kind: "proposal" });
+              return proposal;
+            }} /> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
                 <img alt={attachment.name} src={attachment.dataUrl} />
