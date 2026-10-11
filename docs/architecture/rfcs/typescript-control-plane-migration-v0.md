@@ -126,6 +126,16 @@ This removes an eager-import blocker; deleting live producers still requires
 their last-caller exit. App/Lark contracts, provider transactions, cohort adoption
 and frozen D2 evidence remain separate.
 
+The Monitor router likewise isolates its live source writer. Historical receipt
+codec/replay has a small shared scheduler IO owner, while the existing TS batch
+still owns operation identity and decisions. File/SQLite CLI and normal-wheel
+source removal must preserve later canonical writes and original successors;
+promoted replay leaves old outbox bytes inert. Unpromoted markerless batch
+recovery retains its existing drain. This removes a canonical import dependency,
+not the supported legacy writer. The absent arm also removes all four shadow
+producer modules using the qualified CLI startup isolation above.
+[Retained duties and rollback](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation).
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
