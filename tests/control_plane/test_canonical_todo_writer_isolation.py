@@ -111,6 +111,57 @@ def test_canonical_cli_lifecycle_without_source_todo_writers(tmp_path, provider,
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
+    registry, runtime, display = promoted_create_fixture(tmp_path, provider=provider)
+    config = json.loads(registry.read_text())
+    config["common_runtime_root"] = "runtime"
+    registry.write_text(json.dumps(config))
+    caller = tmp_path / "caller"
+    caller.mkdir()
+
+    def cli(*args, succeeds=True, override=False):
+        result = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+             *(["--runtime-root", str(runtime)] if override else []), *args, "--goal-id", "goal-a"],
+            cwd=caller, capture_output=True, text=True, timeout=45,
+        )
+        assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    original_display = display.read_bytes()
+    before = cli("todo", "list")
+    change = ("handoff-mode", "set", "--mode", "hard_lease", "--operation-id", "original-mode")
+    assert cli(*change, "--dry-run")["status"] == "planned"
+    assert cli("todo", "list") == before
+    assert cli(*change)["changed"] is True
+    assert cli("handoff-mode", "show", override=True)["handoff_mode"] == "hard_lease"
+    assert cli("handoff-mode", "set", "--mode", "soft_claim", "--operation-id", "later-mode")["changed"] is True
+    later = cli("todo", "list")
+    replay = cli(*change)
+    assert replay["status"] == "replayed" and replay["changed"] is False
+    assert replay["handoff_mode"] == "hard_lease"
+    assert cli("todo", "list") == later
+    assert cli("handoff-mode", "show")["handoff_mode"] == "soft_claim"
+    mismatch = cli("handoff-mode", "set", "--mode", "soft_claim", "--operation-id", "original-mode", succeeds=False)
+    assert mismatch["error_code"] == "coordination_operation_identity_mismatch"
+    assert cli("todo", "list") == later
+    assert display.read_bytes() == original_display
+
+    backend = runtime / "authority" / f"{provider}-v0"
+    offline = backend.with_name(backend.name + "-offline")
+    backend.rename(offline)
+    try:
+        for args in [("handoff-mode", "show"),
+                     ("handoff-mode", "set", "--mode", "hard_lease", "--operation-id", "provider-offline")]:
+            failed = cli(*args, succeeds=False)
+            assert failed["ok"] is False and failed["error_code"] not in {None, "ImportError"}
+            assert not backend.exists() and display.read_bytes() == original_display
+    finally:
+        offline.rename(backend)
+    assert cli("todo", "list") == later
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_new_goal_and_original_creation_recovery_without_source_todo_writers(tmp_path, provider, without_source_todo_writers):
     project = tmp_path / "project"
     project.mkdir()

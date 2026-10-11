@@ -970,6 +970,11 @@ acceptance 和 vision。展示限制不能变成结算限制。在 legacy、File
   重复 reference aggregate。
 - 保留永久 Markdown renderer、已验证 import/export 和外部 effect adapter。
   每条保留 bridge 标明真实 caller 与退出条件；不等待全 TS CLI、daemon 或远端服务。
+- canonical handoff-mode show/set 复用共同 runtime-root resolver，只有 canonical
+  路由返回未晋升时才加载兼容来源锁和 Todo capture producer。移除旧源的真实
+  File/SQLite CLI 验证覆盖预览、写入、后续模式变化后的原操作回放及 provider
+  故障时禁止 Markdown 回退。本批闭合 canonical setter 的 import 依赖；未晋升
+  writer、lease capture 恢复及旧源迁移窗口仍保留独立退役验收。
 
 **每张执行卡的验证与停止规则**
 
