@@ -70,6 +70,13 @@ UTF-8) an unpinned gate would decode the event into mojibake, miss the project
 goal and answer `{}` — no gate at all — and `/loopx status` would raise on its own
 state glyphs. `tests/test_claude_goal_mode_stdio_utf8.py` guards all three.
 
+Claude Code also runs those baked command strings through a shell, so an
+interpreter path that contains a space - the python.org all-users install, or a
+profile directory with a space - is quoted before the installer bakes it.
+Unquoted, the shell splits the path at the first space and the gate, the
+statusline and `/loopx` silently do nothing.
+`tests/test_claude_goal_install_python_launcher.py` guards that.
+
 ```bash
 python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /path/to/project --harden
 ```

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,23 @@ MCP_VENV = Path.home() / ".local" / "share" / "loopx" / "mcp-venv"
 
 def _p(*parts) -> str:
     return str(PLUGIN_ROOT.joinpath(*parts)).replace("\\", "/")
+
+
+_PLAIN_SHELL_PATH = re.compile(r"[A-Za-z0-9._/\\:@+-]+\Z")
+
+
+def _shell_path(value: str) -> str:
+    """Render one path token of a baked command string.
+
+    Claude Code runs the hook / statusline / `/loopx` command strings through a
+    shell, which splits an unquoted program path at the first space: on a host
+    where the confirmed-runnable interpreter lives under `C:\\Program Files` (or
+    any profile directory with a space) the baked command never starts Python
+    and the surface silently does nothing. Quote a token that is no longer a
+    plain path; a plain path keeps the exact previous rendering."""
+    if _PLAIN_SHELL_PATH.fullmatch(value):
+        return value
+    return f'"{value}"'
 
 
 def _launches_python(py: str) -> bool:
@@ -74,7 +92,7 @@ def deep_merge(base: dict, add: dict) -> dict:
 
 def hardening_block() -> dict:
     """The OPTIONAL per-tool gate + statusline. Not installed unless --harden."""
-    py = _python_cmd()
+    py = _shell_path(_python_cmd())
     return {
         "hooks": {
             "PreToolUse": [{"matcher": "*", "hooks": [
@@ -217,7 +235,7 @@ def install_mcp(
 
 def command_md() -> str:
     entry = _p("scripts", "goalmode_cmd.py")
-    py = _python_cmd()
+    py = _shell_path(_python_cmd())
     return (
         "---\n"
         "description: loopx goal-mode setup (NOT Claude Code's built-in /goal). "
