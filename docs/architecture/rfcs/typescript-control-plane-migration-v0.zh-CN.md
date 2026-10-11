@@ -65,6 +65,11 @@ normalization crossing，不删除仍受支持的 writer 或迁移 reader。
 省去可选捕获工作，输出、历史保留及 outbox 恢复保持原契约。Python 保留这层
 Host IO 适配，直到最后受支持的源 writer 被替换；本批不代表整个 writer 退役或
 默认 provider 资格通过。
+未迁移 lease acquire 现在仅在 typed 结果带有 capture 请求时加载 capture 适配器。
+真实 CLI 与正常 wheel 检查覆盖领取／重放、陈旧续约拒绝、续约、转交及释放：没有
+启用 capture 或活跃 binding 时，可物理移除四个旧 shadow producer 模块。已有活跃
+binding 在移除配置后仍完成 capture。这只退役默认关闭时的依赖，不删除仍受支持的
+源 writer，也不结束待处理 capture／历史恢复窗口。
 
 handoff／continuation 显示决策已归入既有 TypeScript Todo context owner。summary
 在同一个 batch 复用已归一化的身份、claim、exclusion 和任务类型事实；index 在单个
@@ -101,8 +106,34 @@ SQLite、租约工作、一次结算及可回退出口，以及冷 File／SQLite
 阻塞；删除活跃 producer 仍须其最后调用方退出。App／Lark 合同、provider 事务、
 cohort 采用及冻结 D2 证据保持独立。
 
+Monitor router 同样隔离活跃旧源 writer；历史回执 codec／replay 共用 scheduler
+只读 IO owner，原操作身份和决策继续归既有 TS batch。File/SQLite CLI 与正常
+wheel 删源检查须保留后来写入及原 successor；晋升后重放保持旧 outbox 静止，
+未晋升的 markerless batch 恢复保留原 drain。本批只移除 canonical 导入依赖，
+不删除受支持的旧 writer；缺席臂复用上述 CLI 启动隔离，同时移除四个 shadow
+producer module。
+见[保留义务及回滚](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation)。
+
+shadow 诊断现在有独立只读边界：历史 outbox 磁盘 codec 位于
+`local_authority_shadow_history.py`，status／candidate read transport 位于
+`local_authority_shadow_readback.py`。公开 status CLI 不加载源 producer；drain
+仍走现有 orchestration。原 entry 身份、损坏证据、cursor 残留和缺失 store 行为
+保持。Python 保留历史文件解码及展示 IO；TS 保留历史证明、投递与清理权限。
+旧 producer 的已有导入为支持调用方保留 alias，不复制实现。源码及正常 wheel
+的 File/SQLite 接收端检查，在 producer 存在／缺席两臂比较完整 status 响应和
+原文件字节。这是历史 reader 的退役前置，不代表 writer 删除、outbox 处置、
+安装 cohort 采用或发布默认资格。
+见[操作读回与回滚](../../reference/authority-observation-retirement.md#retained-readback-without-source-producers)。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
+
+导入后 canonical bootstrap 重连复用既有 typed authority reader，保留当前
+Todo、租约及原导入回执，避开 Markdown writer。File／SQLite 真实 CLI 覆盖旧
+v0 偏好指向另一 provider、显示缺失、选定权威丢失、force／改向拒绝，以及旧
+producer 不存在时的后续写入重放。Python 保留 bootstrap registry／Host IO，
+不新增决策 owner 或创建回执。本批关闭重连依赖，未关闭未晋升 writer、活跃
+outbox、Host 或发布默认验收。
 
 有界 cohort 在安装恢复和相关执行控制通过后可开始，不代表发布默认值或正式十天
 D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
