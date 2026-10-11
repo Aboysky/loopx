@@ -132,6 +132,20 @@ def main() -> int:
     assert goal_policy.decide({}).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
         "a cwd-less/unreadable event must be DENIED, not deferred"
 
+    # A non-read-only tool whose tool_input is not an object is unreadable the
+    # same way: decide must refuse it rather than crash on `ti.get` (rc=1 with
+    # no decision, which Claude Code reports and then runs the tool ungated).
+    goal_policy.active_context = lambda cwd: CTX
+    goal_policy.should_run = lambda *a, **k: True
+    non_object_input = goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Bash", "tool_input": "not-an-object"})
+    assert non_object_input.get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a non-object tool_input must be DENIED, not crash the gate (rc=1 fail-open)"
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Read", "tool_input": "not-an-object"}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "allow", \
+        "read-only tools keep their unconditional allow"
+
     print("claude-goalmode-hook-policy-smoke ok")
     return 0
 

@@ -21,6 +21,7 @@ Behavior (only while goal-mode is ARMED for the event's project):
 - no goal here / goal-mode off            -> {} (no-op; normal permission flow)
 - event unreadable (no session cwd)       -> deny (FAIL-CLOSED)
 - read-only/safe tools                    -> allow
+- non-read-only tool, unreadable tool_input -> deny (FAIL-CLOSED)
 - should_run == false (quota/gate closed) -> deny
 - should_run probe unavailable (error)    -> deny for non-read-only tools (FAIL-CLOSED)
 - should_run == true:
@@ -36,7 +37,8 @@ An event this hook cannot read joins that rule: ``rc=1`` with no decision is a
 non-blocking hook error to Claude Code, which then continues the tool call with
 no gate at all, so an unreadable event (undecodable stdin, malformed or
 non-object JSON, or a missing/unusable session cwd) is answered with an explicit
-deny instead of dying.
+deny instead of dying. A non-read-only tool whose ``tool_input`` is not an
+object is refused the same way; read-only tools keep their unconditional allow.
 
 Identity-aware: when the active goal registered an agent (loopx
 ``coordination.registered_agents``), the context carries ``agent_id`` and this
@@ -196,6 +198,14 @@ def decide(ev: dict) -> dict:
 
     if tool in READONLY_TOOLS:
         return d("allow", "read-only/safe tool under goal-mode")
+
+    if not isinstance(ti, dict):
+        # `ti` is `{}` for a falsy field, so a non-dict here means a truthy
+        # non-object `tool_input` - the input this gate evaluates below. The
+        # event cannot be read: refuse the non-read-only tool instead of
+        # crashing on `ti.get` (same fail-closed rule as an unreachable
+        # `should_run` probe).
+        return d("deny", "unreadable PreToolUse event (tool_input is not an object) - failing closed under goal-mode")
 
     sr = should_run(registry, goal_id, agent_id)  # True / False / None
     if sr is False:

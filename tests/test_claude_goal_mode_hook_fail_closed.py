@@ -114,6 +114,49 @@ def test_unreadable_event_is_refused_with_an_explicit_deny(
     assert output["permissionDecisionReason"]
 
 
+def test_non_object_tool_input_for_a_gated_tool_is_refused(tmp_path: Path) -> None:
+    """A truthy non-object `tool_input` is an unreadable event, not a crash.
+
+    ``decide`` reads the tool input with ``ti.get`` for the gated tools, so on
+    the pre-fix hook a Bash event carrying a non-object input died with a
+    traceback (rc=1, no decision) as soon as ``should_run`` returned true. The
+    reason substring pins the refusal to the unreadable-input rule: a deny from
+    the probe path carries a different reason, so the regression fails against
+    the old hook whichever branch the probe takes.
+    """
+
+    project = _project(tmp_path / "armed", armed=True)
+    event = json.dumps(
+        {
+            "tool_name": "Bash",
+            "cwd": str(project),
+            "tool_input": "not-an-object",
+        }
+    ).encode("utf-8")
+
+    result = _run(project, event, force_armed=True)
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert b"Traceback" not in result.stderr, result.stderr.decode("utf-8", "replace")
+    output = json.loads(result.stdout.decode("utf-8"))["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "tool_input" in output["permissionDecisionReason"]
+
+    # Read-only tools keep their unconditional allow even then: the refusal
+    # must not widen the gate past the tools it was meant to gate.
+    read_event = json.dumps(
+        {
+            "tool_name": "Read",
+            "cwd": str(project),
+            "tool_input": "not-an-object",
+        }
+    ).encode("utf-8")
+    read_result = _run(project, read_event, force_armed=True)
+    assert read_result.returncode == 0, read_result.stderr.decode("utf-8", "replace")
+    read_output = json.loads(read_result.stdout.decode("utf-8"))["hookSpecificOutput"]
+    assert read_output["permissionDecision"] == "allow"
+
+
 def test_unarmed_project_still_defers_to_the_normal_flow(tmp_path: Path) -> None:
     project = _project(tmp_path / "unarmed", armed=False)
 
