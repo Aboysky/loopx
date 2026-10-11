@@ -65,6 +65,11 @@ normalization crossing，不删除仍受支持的 writer 或迁移 reader。
 省去可选捕获工作，输出、历史保留及 outbox 恢复保持原契约。Python 保留这层
 Host IO 适配，直到最后受支持的源 writer 被替换；本批不代表整个 writer 退役或
 默认 provider 资格通过。
+未迁移 lease acquire 现在仅在 typed 结果带有 capture 请求时加载 capture 适配器。
+真实 CLI 与正常 wheel 检查覆盖领取／重放、陈旧续约拒绝、续约、转交及释放：没有
+启用 capture 或活跃 binding 时，可物理移除四个旧 shadow producer 模块。已有活跃
+binding 在移除配置后仍完成 capture。这只退役默认关闭时的依赖，不删除仍受支持的
+源 writer，也不结束待处理 capture／历史恢复窗口。
 
 handoff／continuation 显示决策已归入既有 TypeScript Todo context owner。summary
 在同一个 batch 复用已归一化的身份、claim、exclusion 和任务类型事实；index 在单个
