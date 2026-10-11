@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -149,3 +150,84 @@ def test_queue_status_cli_projects_items_without_external_effects(
     assert payload["ok"] is True
     assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
     assert payload["external_writes_performed"] is False
+
+
+def _queue_status_from_stdin(stdin: bytes) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "--format",
+            "json",
+            "content-ops",
+            "queue-status",
+            "--item-json",
+            "-",
+            "--queue-id",
+            "x-test-queue",
+            "--generated-at",
+            "2026-08-10T02:10:00+08:00",
+        ],
+        cwd=REPO_ROOT,
+        input=stdin,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_queue_status_cli_reads_stdin_within_the_input_limit() -> None:
+    item = _review_ready(_item("community-recap-v1"))
+    result = _queue_status_from_stdin(json.dumps(item).encode("utf-8"))
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
+
+
+def test_queue_status_cli_refuses_oversized_stdin_before_parsing() -> None:
+    # Not valid JSON either: the size refusal must come before json.loads.
+    result = _queue_status_from_stdin(b"{" + b" " * (16 * 1024 * 1024))
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] == (
+        "content-ops stdin JSON input exceeds the 16777216-byte limit"
+    )
+
+
+def test_queue_status_main_reads_text_only_stdin_up_to_the_byte_limit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from loopx.capabilities.content_ops import cli as content_ops_cli
+    from loopx.cli import main
+
+    item = _review_ready(_item("community-recap-v1"))
+    text = json.dumps(item)
+    budget = len(text.encode("utf-8"))
+    argv = [
+        "--format",
+        "json",
+        "content-ops",
+        "queue-status",
+        "--item-json",
+        "-",
+        "--queue-id",
+        "x-test-queue",
+        "--generated-at",
+        "2026-08-10T02:10:00+08:00",
+    ]
+
+    # In-process callers may replace stdin with a plain text stream.
+    monkeypatch.setattr(content_ops_cli, "MAX_INPUT_BYTES", budget)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+    assert main(argv) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
+
+    monkeypatch.setattr(content_ops_cli, "MAX_INPUT_BYTES", budget - 1)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+    assert main(argv) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == (
+        f"content-ops stdin JSON input exceeds the {budget - 1}-byte limit"
+    )

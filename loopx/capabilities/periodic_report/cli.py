@@ -40,6 +40,27 @@ from .request_action import (
 )
 from ...paths import resolve_runtime_root
 
+MAX_INPUT_BYTES = 16 * 1024 * 1024
+
+
+def _read_stdin_text(limit: int, label: str) -> str:
+    # Read through the text stream so stdin keeps its decoding, but charge each
+    # chunk by its encoded size: one character can take up to four bytes.
+    encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
+    errors = getattr(sys.stdin, "errors", None) or "surrogatepass"
+    chunks: list[str] = []
+    consumed = 0
+    while consumed <= limit:
+        chunk = sys.stdin.read(max(1, (limit + 1 - consumed) // 4))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        consumed += len(chunk.encode(encoding, errors))
+    if consumed > limit:
+        raise ValueError(f"{label} exceeds the {limit}-byte limit")
+    return "".join(chunks)
+
+
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
@@ -60,10 +81,16 @@ ProviderCommandHandler = Callable[..., int | None]
 
 
 def _load_json_object(path_text: str) -> dict[str, Any]:
+    label = "periodic-report JSON input"
     if path_text == "-":
-        payload = json.loads(sys.stdin.read())
+        text = _read_stdin_text(MAX_INPUT_BYTES, label)
     else:
-        payload = json.loads(Path(path_text).expanduser().read_text(encoding="utf-8"))
+        with Path(path_text).expanduser().open("rb") as source:
+            raw = source.read(MAX_INPUT_BYTES + 1)
+        if len(raw) > MAX_INPUT_BYTES:
+            raise ValueError(f"{label} exceeds the {MAX_INPUT_BYTES}-byte limit")
+        text = raw.decode("utf-8")
+    payload = json.loads(text)
     if not isinstance(payload, dict):
         raise ValueError(f"{path_text} must contain a JSON object")
     return payload

@@ -43,6 +43,27 @@ from .surface import (
     render_content_ops_walkthrough_artifact_markdown,
 )
 
+MAX_INPUT_BYTES = 16 * 1024 * 1024
+
+
+def _read_stdin_text(limit: int, label: str) -> str:
+    # Read through the text stream so stdin keeps its decoding, but charge each
+    # chunk by its encoded size: one character can take up to four bytes.
+    encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
+    errors = getattr(sys.stdin, "errors", None) or "surrogatepass"
+    chunks: list[str] = []
+    consumed = 0
+    while consumed <= limit:
+        chunk = sys.stdin.read(max(1, (limit + 1 - consumed) // 4))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        consumed += len(chunk.encode(encoding, errors))
+    if consumed > limit:
+        raise ValueError(f"{label} exceeds the {limit}-byte limit")
+    return "".join(chunks)
+
+
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
@@ -53,7 +74,7 @@ AddFormat = Callable[[argparse.ArgumentParser], None]
 
 def _load_json_object(path_text: str) -> dict[str, Any]:
     if path_text == "-":
-        payload = json.loads(sys.stdin.read())
+        payload = json.loads(_read_stdin_text(MAX_INPUT_BYTES, "content-ops stdin JSON input"))
     else:
         payload = json.loads(Path(path_text).expanduser().read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
