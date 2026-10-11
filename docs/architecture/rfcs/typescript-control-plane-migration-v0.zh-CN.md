@@ -104,6 +104,13 @@ cohort 采用及冻结 D2 证据保持独立。
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
+导入后 canonical bootstrap 重连复用既有 typed authority reader，保留当前
+Todo、租约及原导入回执，避开 Markdown writer。File／SQLite 真实 CLI 覆盖旧
+v0 偏好指向另一 provider、显示缺失、选定权威丢失、force／改向拒绝，以及旧
+producer 不存在时的后续写入重放。Python 保留 bootstrap registry／Host IO，
+不新增决策 owner 或创建回执。本批关闭重连依赖，未关闭未晋升 writer、活跃
+outbox、Host 或发布默认验收。
+
 有界 cohort 在安装恢复和相关执行控制通过后可开始，不代表发布默认值或正式十天
 D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
 或所有 Python 消失。本节替代陈旧的当前数量估算，不覆盖历史执行证据。
