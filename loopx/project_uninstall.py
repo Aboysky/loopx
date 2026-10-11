@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -194,7 +195,12 @@ def _archive_state_directory(
                 "archived only the selected state file"
             ),
         }
-    destination_is_nested = destination.resolve().is_relative_to(state_dir_resolved)
+    destination_path = Path(os.path.abspath(destination))
+    destination_is_nested = destination.resolve().is_relative_to(
+        state_dir_resolved
+    ) or any(
+        parent.resolve() == state_dir_resolved for parent in destination_path.parents
+    )
     if destination_is_nested:
         if not dry_run:
             destination.mkdir(parents=True, exist_ok=True)
