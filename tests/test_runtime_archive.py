@@ -49,3 +49,59 @@ def test_archive_runtime_resolves_relative_root_from_registry(
     assert not source.exists()
     assert (archive_path / "expected.txt").read_text(encoding="utf-8") == "target"
     assert (decoy / "decoy.txt").read_text(encoding="utf-8") == "unrelated"
+
+
+@pytest.mark.parametrize(
+    "archive_suffix",
+    [
+        Path("."),
+        Path("archive"),
+        Path("archive/deeper"),
+    ],
+    ids=["source", "direct-child", "nested-child"],
+)
+@pytest.mark.parametrize("execute", [False, True], ids=["dry-run", "execute"])
+def test_archive_runtime_rejects_destination_inside_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    archive_suffix: Path,
+    execute: bool,
+) -> None:
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    source = tmp_path / ".loopx" / "runtime" / "goals" / "obsolete-goal"
+    source.mkdir(parents=True)
+    marker = source / "expected.txt"
+    marker.write_text("preserved", encoding="utf-8")
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": ".loopx/runtime",
+                "goals": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_move(_source: str, _destination: str) -> None:
+        pytest.fail("invalid archive destination reached shutil.move")
+
+    monkeypatch.setattr("loopx.runtime.shutil.move", fail_move)
+
+    with pytest.raises(
+        ValueError,
+        match="archive destination must be outside the runtime goal directory",
+    ):
+        archive_runtime_goal(
+            registry_path=registry_path,
+            runtime_root_override=None,
+            goal_id="obsolete-goal",
+            archive_root=source / archive_suffix,
+            allow_registered=False,
+            execute=execute,
+        )
+
+    assert marker.read_text(encoding="utf-8") == "preserved"
+    assert [path.relative_to(source) for path in source.rglob("*")] == [
+        Path("expected.txt")
+    ]
