@@ -78,6 +78,12 @@ wheel 的恢复验收要求：Markdown 显示缺失或选定 provider 不可用�
 provider revision 仍被保留。这项读模型退役不等于受支持的 mutation／Host 调用方
 已删除，也不认证已发布的 SQLite 默认值。
 
+公开 Todo 创建现在以一次 typed creation-scope 调用组合 scope、受支持的等待条件和
+有界 Monitor metadata。旧 add writer 复用同次准备结果，独立 Markdown codec 与后继
+创建仍自行校验；priority 和 validation declaration 保留原错误顺序，canonical 事务
+仍复核 registry、claim、lease 和 CAS。本批只退出重复创建编排，不删除仍有调用方的
+Markdown writer、bootstrap、Host IO 或历史恢复路径；发布默认与整项退役验收保持独立。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
