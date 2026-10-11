@@ -165,6 +165,9 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
                         "--agent-id", AGENT_ID, "--turn-instance-id", recovery_turn, *capabilities)
     assert rc == 0 and next_turn["effective_action"] != "unsettled_host_turn_recovery", next_turn
     assert next_turn["work_lane_contract"]["lane"] == "advancement_task"
+    # The shared blocked_retry receipt slot must not turn an unavailable
+    # Monitor observation into the advancement retry scheduling overlay.
+    assert next_turn["scheduler_hint"].get("pending_retry") is None
     assert _spend_run_count(runtime) == 0
 
 
