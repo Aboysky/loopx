@@ -212,7 +212,9 @@ and virtual tables cannot masquerade as authority tables. WAL-mode copies and
 unsupported/service-owned providers remain unknown and need their existing
 owner; PostgreSQL is never contacted. The normal 2 MiB RPC wire is unchanged;
 only the two complete-manifest checks opt into the existing 64 MiB private-file
-transport. These bounds qualify this inspection profile, not a production SLO.
+transport. These bounds define this inspection profile; full-capacity
+qualification and per-audit duration/data-size reporting remain open under the
+recovery RFC's operational contract. No production SLO is claimed.
 
 中文：在设置的能力中心选择设备范围，打开既有备份入口并切到“完整归档检查”，
 选择同一份备份的归档与清单，一次明确操作建立隔离副本。可读、仅历史和未知分别

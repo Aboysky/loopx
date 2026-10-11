@@ -26,6 +26,8 @@ M1 的有界路径已包含增量 `backup-state verify`、loopback HTTP 上传�
 以及打包设置/能力中心交互。真实生产归档在原来源不可达后，通过既有配置与选定的
 File/SQLite Todo/history owner 检查。v0 缺少完整捕获/owner 元数据，因此所有审计仍为
 held，未知状态不改称可恢复，执行权限始终为 false。限制与回退见[备份指南](../../reference/configuration-backup.md#inspect-a-complete-backup-without-activating-it)。
+M1 的运行资格仍不完整：逐份审计的验证耗时和数据大小报告、完整容量范围测量，
+继续由第 10 节的 recovery owner 承接。
 本检查点不证明 M2/M3、live adoption、远端 provider 或 G1 团队验收，不重写原身份或回执。
 
 
