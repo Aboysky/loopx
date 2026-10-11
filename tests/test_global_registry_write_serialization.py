@@ -538,6 +538,68 @@ def test_project_uninstall_preserves_a_goal_committed_after_preview(
     assert [goal.get("id") for goal in remaining] == ["goal-beta"]
 
 
+@pytest.mark.parametrize(
+    "state_file_record",
+    ["ACTIVE_GOAL_STATE.md", ".loopx/ACTIVE_GOAL_STATE.md"],
+)
+def test_project_uninstall_archives_only_the_state_file_when_archive_is_nested(
+    tmp_path: Path,
+    state_file_record: str,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    project_root = registry_path.parents[1]
+    original_state_file = project_root / "ACTIVE_GOAL_STATE.md"
+    state_file = project_root / state_file_record
+    if state_file != original_state_file:
+        original_state_file.replace(state_file)
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry["goals"][0]["state_file"] = state_file_record
+        registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    sentinel = project_root / "project-sentinel.txt"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+
+    preview = uninstall_project(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_ids=["goal-alpha"],
+        archive_state=True,
+        remove_empty_registry=False,
+        execute=False,
+    )
+
+    preview_action = preview["state_actions"][0]
+    assert preview_action["action"] == "would-move-state-file"
+    assert "only the recorded state file" in preview_action["warning"]
+    assert state_file.read_text(encoding="utf-8") == "# state\n"
+    assert not (registry_path.parent / "archived-project-state").exists()
+
+    result = uninstall_project(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_ids=["goal-alpha"],
+        archive_state=True,
+        remove_empty_registry=False,
+        execute=True,
+    )
+
+    action = result["state_actions"][0]
+    archive_path = Path(action["archive_path"])
+    assert action["action"] == "moved-state-file"
+    assert "only the recorded state file" in action["warning"]
+    assert [path.relative_to(archive_path) for path in archive_path.rglob("*")] == [
+        Path("ACTIVE_GOAL_STATE.md")
+    ]
+    assert not state_file.exists()
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert json.loads(registry_path.read_text(encoding="utf-8"))["goals"] == []
+
+
 _HOLD_CANONICAL_WRITER_GUARD = """
 import {once} from "node:events";
 import {mkdir} from "node:fs/promises";
