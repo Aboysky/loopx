@@ -22,43 +22,13 @@
                 "type": "object",
                 "properties": {
                   "ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "field_ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "version_ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "digest": {
                     "anyOf": [
@@ -72,40 +42,13 @@
                     ]
                   },
                   "producer_as_of": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalClock"
                   },
                   "capture_start": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalClock"
                   },
                   "capture_end": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalClock"
                   }
                 },
                 "required": [
@@ -123,82 +66,22 @@
                 "type": "object",
                 "properties": {
                   "venue_ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "instrument_ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "version_ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "base_unit": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "quote_currency": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "evidence_ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "mapping_kind": {
                     "enum": [
@@ -231,16 +114,7 @@
                 "type": "object",
                 "properties": {
                   "value": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalClock"
                   },
                   "unit": {
                     "enum": [
@@ -263,28 +137,10 @@
                         "type": "object",
                         "properties": {
                           "start": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                            "$ref": "#/$defs/optionalClock"
                           },
                           "end": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                            "$ref": "#/$defs/optionalClock"
                           },
                           "event_relation": {
                             "enum": [
@@ -293,17 +149,7 @@
                             ]
                           },
                           "evidence_ref": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 512,
-                                "pattern": "\\S"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                            "$ref": "#/$defs/optionalReference"
                           }
                         },
                         "required": [
@@ -325,42 +171,13 @@
                         "type": "object",
                         "properties": {
                           "ref": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 512,
-                                "pattern": "\\S"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                            "$ref": "#/$defs/optionalReference"
                           },
                           "settlement_at": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                            "$ref": "#/$defs/optionalClock"
                           },
                           "evidence_ref": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 512,
-                                "pattern": "\\S"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                            "$ref": "#/$defs/optionalReference"
                           }
                         },
                         "required": [
@@ -383,30 +200,10 @@
                     ]
                   },
                   "evidence_ref": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   },
                   "original_literal": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/$defs/optionalReference"
                   }
                 },
                 "required": [
@@ -427,80 +224,22 @@
                     "type": "object",
                     "properties": {
                       "quantity": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalClock"
                       },
                       "quantity_unit": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "\\S"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalReference"
                       },
                       "reference_price": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalClock"
                       },
                       "price_base_unit": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "\\S"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalReference"
                       },
                       "currency": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "\\S"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalReference"
                       },
                       "evidence_ref": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "\\S"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalReference"
                       }
                     },
                     "required": [
@@ -524,67 +263,19 @@
                     "type": "object",
                     "properties": {
                       "payment_ref": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "\\S"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalReference"
                       },
                       "settled_at": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalClock"
                       },
                       "amount": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalClock"
                       },
                       "currency": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "\\S"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalReference"
                       },
                       "evidence_ref": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "\\S"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                        "$ref": "#/$defs/optionalReference"
                       }
                     },
                     "required": [
@@ -624,29 +315,10 @@
           "type": "object",
           "properties": {
             "amount": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/optionalClock"
             },
             "currency": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 512,
-                  "pattern": "\\S"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/optionalReference"
             },
             "kind": {
               "enum": [
@@ -656,29 +328,10 @@
               ]
             },
             "observed_at": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/optionalClock"
             },
             "evidence_ref": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 512,
-                  "pattern": "\\S"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/optionalReference"
             }
           },
           "required": [
@@ -705,5 +358,44 @@
   "additionalProperties": false,
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://loopx.dev/schemas/finance-funding-event-pair-input-v1.json",
-  "description": "Caller-declared funding events; semantic finite-number, clock, quantity and cash gates remain in the Finance provider. Nullable fields are unknown, not defaults."
+  "description": "Caller-declared funding events; semantic finite-number, clock, quantity and cash gates remain in the Finance provider. Nullable fields are unknown, not defaults.",
+  "$defs": {
+    "optionalReference": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalClock": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalDecimal": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
 }

@@ -41,15 +41,7 @@
             ]
           },
           "rate_fraction": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 1024
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/optionalDecimal"
           },
           "event_identity": {
             "anyOf": [
@@ -114,78 +106,25 @@
             ]
           },
           "currency": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "pattern": "\\S"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/optionalReference"
           },
           "candidate_signed_cash": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 1024
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/optionalDecimal"
           },
           "conditional_signed_estimate": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 1024
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/optionalDecimal"
           },
           "declared_realized_cash": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 1024
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/optionalDecimal"
           },
           "normalized_clocks": {
             "type": "object",
             "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/optionalClock"
             }
           },
           "payment_ref": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "pattern": "\\S"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/optionalReference"
           }
         },
         "required": [
@@ -223,61 +162,19 @@
       "type": "boolean"
     },
     "cash_currency": {
-      "anyOf": [
-        {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 512,
-          "pattern": "\\S"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/$defs/optionalReference"
     },
     "conditional_gross_estimate": {
-      "anyOf": [
-        {
-          "type": "string",
-          "maxLength": 1024
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/$defs/optionalDecimal"
     },
     "conditional_net_estimate": {
-      "anyOf": [
-        {
-          "type": "string",
-          "maxLength": 1024
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/$defs/optionalDecimal"
     },
     "declared_realized_gross_cash": {
-      "anyOf": [
-        {
-          "type": "string",
-          "maxLength": 1024
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/$defs/optionalDecimal"
     },
     "net_cash": {
-      "anyOf": [
-        {
-          "type": "string",
-          "maxLength": 1024
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/$defs/optionalDecimal"
     },
     "reason_codes": {
       "type": "array",
@@ -351,5 +248,43 @@
   ],
   "additionalProperties": false,
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://loopx.dev/schemas/finance-funding-event-pair-assessment-v1.json"
+  "$id": "https://loopx.dev/schemas/finance-funding-event-pair-assessment-v1.json",
+  "$defs": {
+    "optionalReference": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalClock": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalDecimal": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 1024
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
 }
