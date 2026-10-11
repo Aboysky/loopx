@@ -168,6 +168,8 @@ export type WorkspaceGoal = {
   boundHostSurfaces?: string[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
+  /** Open agent Todo count projected beside a possibly bounded item list. */
+  openTodoCount?: number;
   execution?: WorkspaceGoalExecution;
   goalId: string;
   /** Bound host threads as observed from the host's own records. */
