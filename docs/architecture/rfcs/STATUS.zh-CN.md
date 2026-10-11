@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (43)
+## 已接受 (44)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -30,7 +30,7 @@
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
 | [显式 Todo 接续：阶段 A](cross-session-memory-substrate-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX 桌面执行前端 v0](desktop-execution-frontends-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [2 条](ledger/external-evidence-research-capability-v0/) |
+| [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [3 条](ledger/external-evidence-research-capability-v0/) |
 | [RFC：前沿科学研究计划 v0](frontier-science-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal Artifact 生命周期投影（milestone / guard / next-transition）v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Goal Channel 协作模型 v0](goal-channel-collaboration-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -39,6 +39,7 @@
 | [Goal 实例身份与孤儿状态恢复（v0）](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal 级能力组合与 Connector 生命周期（v0）](goal-scoped-capability-portfolio-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | 已接受 | none | — |
+| [RFC：Goal 工作区页面 v0](goal-workspace-surface-v0.zh-CN.md) | 已接受 | 无 | — |
 | [DSH / Pi：L1 观察与 Managed Runtime 选型](harness-selection-dsh-pi-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 分层步幅控制 v0](hierarchical-agent-stride-control-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | 已接受 | 无 | — |
