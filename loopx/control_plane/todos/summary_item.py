@@ -58,6 +58,7 @@ TODO_SUMMARY_COMPACT_FIELDS = (
     "resume_monitor_generation",
     "resume_condition",
     "resume_ready",
+    "blocked_retry",
     "no_followup",
     "successor_todo_ids",
     "completion_continuation",

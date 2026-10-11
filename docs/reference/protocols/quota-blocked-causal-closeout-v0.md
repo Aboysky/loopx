@@ -189,3 +189,39 @@ host Turn 可选择独立合法任务，不新造第三身份或重绑旧 Turn�
 这是既有 quota owner 的 R1/S2/S10 有界修复，兼容保留活动调用者使用的
 `isBoundedBlockedRetry` 名称；只有 advancement schema 产生有界重试投影。
 不新增 Python 判断源、开关、前端控件或 Lark 权威；CLI 计划提供同源说明。
+
+### Receipt-owned retry projection / 回执所属的重试投影
+
+A promoted blocked `outcome_gap` Run can own a five-minute retry while its
+canonical Todo remains OPEN with no `resume_when`. Quota selection overlays the
+wait only for the same Goal/Agent/Todo, until the original due instant; a newer
+work Run supersedes it. The read-only projection now retains `blocked_retry`
+with the original `turn_instance_id`, source and clocks. The existing typed
+Todo frontier owns the earliest deadline before display compaction; thin
+scheduler output carries `pending_retry` from that same result.
+
+When that retry temporarily removes the only executable work, an independently
+open `user_action` remains a notice rather than becoming the reason work must
+wait. Execution still waits: `must_attempt_work=false`, no delivery or spend.
+The scheduler caps quiet/human/agent-scope/monitor waiting to the original retry
+horizon, then applies the existing owner cadence floor. A real user gate still
+blocks work. The wakeup is a quota recheck, not execution permission or an
+exact-time promise; all current gates, claims and leases must be read again.
+At or after due, the temporary overlay disappears without a maintenance write.
+
+CLI and managed heartbeat packets share this projection. This is a backend
+prerequisite: packaged Dashboard and live Lark rendering/adoption are separate
+acceptance stages. No new timer, authority, setting, canonical Todo field,
+financial clock, or automatically executing display action is introduced.
+
+原生 blocked/outcome_gap Run 可以拥有五分钟 retry，而 canonical Todo 仍为
+OPEN、没有 resume_when。临时选择投影只作用于同一 Goal/Agent/Todo，到原到期
+时点即消失；更新的工作 Run 会替代旧等待。blocked_retry 保留原 Turn、来源和
+时钟，typed Todo frontier 在显示压缩前选定最早时点；精简 scheduler 包的
+pending_retry 来自同一结果。
+
+retry 暂时移除唯一可执行工作时，独立 user_action 仍是提醒，不是恢复工作的
+前置门禁。此时仍不执行或扣额。scheduler 先按原 retry 时点收紧等待，再应用
+既有角色间隔下限；真实用户门禁继续阻塞执行。唤醒只意味着重新读取 quota、
+claim/lease 与当前门禁，不授权执行，也不承诺精确时刻运行。到期不需修改原
+Todo 或回执。CLI/heartbeat 同源；打包 App、真实 Lark 展示与采用仍须分别验收。

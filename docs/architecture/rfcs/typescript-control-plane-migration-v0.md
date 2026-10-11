@@ -112,9 +112,42 @@ caller-isolation exit, not deletion of the live legacy writer or completion of
 receiver adoption, Host execution, PostgreSQL or D2 qualification.
 [Contract and retained duties](../../reference/canonical-todo-completion-update.md#team-plan-source-writer-isolation).
 
+Public CLI isolation now keeps shadow configuration in `coordination/configuration.py`
+and complete source capture in `coordination/authority_source_capture.py`. Cold import,
+source inspection and historical promotion recovery reuse those retained owners;
+only explicit enabled shadow actions load the old producers. Ordinary new-Goal
+SQLite creation, leased work, once-only settlement and reversible exit, plus cold
+File/SQLite import and original-operation replay, run through the real CLI with
+all four shadow producers physically absent in disposable source/normal-wheel
+copies. The old module still re-exports the retained APIs for current consumers;
+enabled capture, outbox and legacy commands remain supported. Preserve exact
+source identity, archive dependencies, safe lease reads and later-write recovery.
+This removes an eager-import blocker; deleting live producers still requires
+their last-caller exit. App/Lark contracts, provider transactions, cohort adoption
+and frozen D2 evidence remain separate.
+
+The Monitor router likewise isolates its live source writer. Historical receipt
+codec/replay has a small shared scheduler IO owner, while the existing TS batch
+still owns operation identity and decisions. File/SQLite CLI and normal-wheel
+source removal must preserve later canonical writes and original successors;
+promoted replay leaves old outbox bytes inert. Unpromoted markerless batch
+recovery retains its existing drain. This removes a canonical import dependency,
+not the supported legacy writer. The absent arm also removes all four shadow
+producer modules using the qualified CLI startup isolation above.
+[Retained duties and rollback](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation).
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
+
+Imported canonical bootstrap reconnect now reuses the existing typed authority
+reader, keeping current Todos, leases and original import receipts without
+entering the Markdown writer. File/SQLite real CLI coverage includes an old v0
+preference naming the other provider, missing display, missing selected authority,
+force/route rejection and later-write replay with legacy producers absent.
+Python retains bootstrap registry/Host IO; it adds no decision owner or creation
+receipt. This closes a reconnect dependency, not the remaining unpromoted writer,
+active outbox, Host or release-default acceptance.
 
 A bounded cohort can start after its installed recovery and relevant execution
 controls pass; it does not certify a released default or formal ten-day D2.
