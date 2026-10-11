@@ -9,7 +9,8 @@ import {
 } from "../../loopx/control_plane/presentation/goal_workspace_digest.ts";
 
 const observedAt = "2026-10-11T10:00:00.000Z";
-const base: GoalWorkspaceDigestInput = { observedAt, activation: "active", todos: [], attention: [] };
+const base: GoalWorkspaceDigestInput = { observedAt, activation: "active", todos: [], attention: [],
+  attentionSummary: { blocking: 0, optional: 0, coverage: "complete" } };
 const running = (observed: boolean, quiet = false, lastActivityAt: string | null = "2026-10-11T09:58:00.000Z") =>
   ({ kind: "running" as const, observed, quiet, lastActivityAt });
 
@@ -102,10 +103,43 @@ test("needs-you counts blocking decisions, keeps optional ones apart and reports
     { blocking: true, updatedAt: "2026-10-11T06:30:00.000Z" },
     { blocking: true, updatedAt: "not a time" },
     { blocking: false, updatedAt: "2026-10-10T00:00:00.000Z" },
-  ] });
-  assert.deepEqual(digest.needsYou, { availability: "ok", blocking: 3, optional: 1, oldestWaitingSince: "2026-10-11T06:30:00.000Z" });
+  ], attentionSummary: { blocking: 3, optional: 1, coverage: "complete" } });
+  assert.deepEqual(digest.needsYou, { availability: "ok", blocking: 3, optional: 1, coverage: "complete", listed: 4, oldestWaitingSince: "2026-10-11T06:30:00.000Z" });
   assert.deepEqual(compileGoalWorkspaceDigest({ ...base, attention: null }).needsYou, { availability: "unavailable" });
-  assert.deepEqual(compileGoalWorkspaceDigest(base).needsYou, { availability: "ok", blocking: 0, optional: 0, oldestWaitingSince: null });
+  assert.deepEqual(compileGoalWorkspaceDigest(base).needsYou, { availability: "ok", blocking: 0, optional: 0, coverage: "complete", listed: 0, oldestWaitingSince: null });
+});
+
+test("21 owner decisions stay 21 when the overview lists only three; their oldest time is unknown", () => {
+  const attention = Array.from({ length: 3 }, () => ({ blocking: true, updatedAt: "2026-10-11T08:00:00.000Z" }));
+  const digest = compileGoalWorkspaceDigest({ ...base, attention,
+    attentionSummary: { blocking: 21, optional: 0, coverage: "partial" } });
+  assert.deepEqual(digest.needsYou, { availability: "ok", blocking: 21, optional: 0,
+    coverage: "partial", listed: 3, oldestWaitingSince: null });
+  const optional = compileGoalWorkspaceDigest({ ...base, attention: attention.map(item => ({ ...item, blocking: false })),
+    attentionSummary: { blocking: 0, optional: 21, coverage: "partial" } });
+  assert.deepEqual(optional.needsYou, { availability: "ok", blocking: 0, optional: 21,
+    coverage: "partial", listed: 3, oldestWaitingSince: null });
+});
+
+test("empty or missing overview coverage cannot invent zero, a complete count or a global oldest time", () => {
+  const attention = [{ blocking: true, updatedAt: "2026-10-10T00:00:00Z" }];
+  const missing = compileGoalWorkspaceDigest({ ...base, attention, attentionSummary: undefined });
+  assert.deepEqual(missing.needsYou, { availability: "ok", blocking: null, optional: null,
+    coverage: "unknown", listed: 1, oldestWaitingSince: null });
+  const empty = compileGoalWorkspaceDigest({ ...base, attention: [],
+    attentionSummary: { blocking: 21, optional: 0, coverage: "partial" } });
+  assert.deepEqual(empty.needsYou, { availability: "ok", blocking: 21, optional: 0,
+    coverage: "partial", listed: 0, oldestWaitingSince: null });
+  for (const count of [0, -1, NaN, Infinity, 0.5]) {
+    const bad = compileGoalWorkspaceDigest({ ...base, attention,
+      attentionSummary: { blocking: count, optional: 0, coverage: "complete" } });
+    assert.equal(bad.needsYou.availability, "ok");
+    if (bad.needsYou.availability === "ok") {
+      assert.equal(bad.needsYou.blocking, null);
+      assert.equal(bad.needsYou.coverage, "unknown");
+      assert.equal(bad.needsYou.oldestWaitingSince, null);
+    }
+  }
 });
 
 test("a pause reads back a finishing Turn only while one is observed", () => {

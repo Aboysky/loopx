@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { outputDir } from "./fixture.mjs";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
+import { outputDir, repoRoot } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
 // The Goal masthead keeps identity, the stop control and six typed vitals on
@@ -197,6 +199,53 @@ export const goalMastheadScenario = {
       await quiet.close();
       throw error;
     }
-    return { coverageEntries, note: "masthead, vitals, stop readback and unmeasured usage" };
+    // The real producer bounds the queue to 12 and its overview to three while
+    // retaining 21 open decisions. Pass its payload through the shipped parser
+    // and adapter, rather than manufacturing a complete three-item queue.
+    const fixtureEnv = { ...process.env, LOOPX_USAGE_PING: "0" };
+    if (!["LOOPX_TEST_PYTHON", "LOOPX_PYTHON_BIN", "LOOPX_PYTHON"].some(key => process.env[key])) fixtureEnv.PYTHONPATH = repoRoot;
+    const native = JSON.parse(execFileSync(resolveTestPython(), [
+      resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"),
+    ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
+    for (const locale of ["zh-CN", "en"]) for (const mode of ["bounded", "optional", "empty", "unknown"]) {
+      const ui = await openWorkspacePage(browser, url, {
+        collectCoverage,
+        viewport: { width: locale === "en" ? 390 : 1512, height: 982 },
+        beforeGoto: async (api, page) => {
+          await page.addInitScript(value => localStorage.setItem("loopx-pw-locale", value), locale);
+          populate(api);
+          const previous = api.transformStatus;
+          api.transformStatus = (fixture) => {
+            previous(fixture);
+            const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
+            Object.assign(queue, structuredClone(native));
+            if (mode === "optional") queue.waiting_on = "agent";
+            if (mode === "empty") {
+              queue.user_todos.items = [];
+              queue.project_asset.user_todos.items = [];
+            }
+            if (mode === "unknown") {
+              delete queue.user_todos.open_count;
+              delete queue.project_asset.user_todos.open;
+            }
+          };
+        },
+      });
+      try {
+        if (locale === "en") await ui.page.locator(".personal-mobile-menu").click();
+        await openGoal(ui.page, title);
+        const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
+        assert.equal(needs.value, mode === "unknown" ? "—" : mode === "optional" ? "0" : "21");
+        assert.match(needs.sub, locale === "en" ? /oldest unknown/ : /最早时间未知/);
+        assert.match(needs.sub, new RegExp(`${mode === "empty" ? 0 : 3} ${locale === "en" ? "listed" : "项"}`));
+        if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
+        if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
+        await ui.page.screenshot({ path: resolve(outputDir, `goal-attention-${mode}-${locale}.png`), animations: "disabled" });
+        assert.equal(ui.errors.length, 0, ui.errors.join(" | "));
+        assert.equal(ui.api.turnRequests.length, 0, "Reading attention never starts a Turn");
+        assert.equal(ui.api.actionApplies.length, 0, "Reading attention never changes owning state");
+      } finally { coverageEntries.push(...await ui.close()); }
+    }
+    return { coverageEntries, note: "masthead, stop readback, unmeasured usage and real-producer bounded attention" };
   },
 };
