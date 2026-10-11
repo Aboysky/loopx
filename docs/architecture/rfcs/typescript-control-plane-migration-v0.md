@@ -102,6 +102,16 @@ checks keep their prior diagnostic order, and canonical provider transactions
 still recheck registry/claim/lease/CAS authority. This retires duplicate add
 composition, not the supported Markdown writer or bootstrap/Host/history IO.
 
+The canonical team-plan caller now loads capture and Markdown editing only in
+its supported unpromoted arm. Real File/SQLite Chat and normal-wheel source
+removal cover confirmed batch commit, later-write replay, provider restoration,
+projection recovery and imported historical receipts. The existing TS
+transaction, source guards and projection owner remain unchanged; the legacy
+batch IO instrumentation seam stays lazy for its current consumers. This is a
+caller-isolation exit, not deletion of the live legacy writer or completion of
+receiver adoption, Host execution, PostgreSQL or D2 qualification.
+[Contract and retained duties](../../reference/canonical-todo-completion-update.md#team-plan-source-writer-isolation).
+
 Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
