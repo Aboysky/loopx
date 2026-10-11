@@ -55,6 +55,9 @@ canonical Todo 入口隔离（T4）：五种 mutation facade 统一进入既有
 revision 保持。这为最后调用方删除建立边界，不宣称代码已退役：bootstrap、
 handoff、team-plan 和 Monitor 仍有受支持的旧源调用；capture/outbox 及历史恢复
 各等自己的出口。见[调用方及回滚清单](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation)。
+保留的 import-compatible field writer 在既有 typed field plan 中统一等待条件
+归一化及矛盾 clear 拒绝；保持 Python 空白输入省略和锁内 IO，只退役重复的
+normalization crossing，不删除仍受支持的 writer 或迁移 reader。
 
 剩余 legacy writer 和 bootstrap 的 capture 适配器，在 runtime shadow 关闭且没有
 活跃持久 binding 时，跳过 rollout 历史读取和 Todo projector 构建。原源身份仍须
