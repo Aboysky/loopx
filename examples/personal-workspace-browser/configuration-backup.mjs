@@ -10,7 +10,7 @@ import {resolveTestPython} from "../../scripts/test-python.mjs";
 // Only the backup routes use a real disposable server. Other workspace state
 // uses the shared browser fixture; no Host, model or live runtime is contacted.
 const serverCode = `
-import json,pathlib,sys,loopx,subprocess
+import json,pathlib,sys,loopx,subprocess,os
 from loopx.chat_server import ChatHTTPServer,ChatRequestHandler
 from loopx.state_backup import build_state_backup_plan,execute_state_backup_plan
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -24,13 +24,14 @@ source_runtime=r/'source-runtime';source_registry=r/'source-registry.json'
 source_registry.write_text(json.dumps({'common_runtime_root':str(source_runtime),'goals':[{'id':'recovery-fixture','repo':str(source_project),'state_file':'ACTIVE.md','coordination':{'registered_agents':['worker']}}]}))
 projection=build_todo_runtime_shadow_projection(goal_id='recovery-fixture',todos=[{'schema_version':'todo_item_v0','todo_id':'todo_recovery_work','role':'agent','status':'open','done':False,'archive_state':'active','source_section':'Agent Todo','text':'Preserve the original commitment','task_class':'advancement_task'}],handoff_mode='soft_claim')
 provider=(pathlib.Path(loopx.__file__).parent/'control_plane/coordination/local_authority_provider.ts').as_uri()
-script='import {selectLocalSqliteAuthority,openLocalAuthorityStore} from '+json.dumps(provider)+';let input="";for await(const c of process.stdin)input+=c;const r=JSON.parse(input);await selectLocalSqliteAuthority(r.root,r.goal,true);const s=await openLocalAuthorityStore(r.root,r.goal);const x=await s.commitAuthority({expected_provider_revision:null,operation_id:"original-work",events:[],receipts:[],next_projection:r.projection});if(x.status!=="applied")throw new Error(JSON.stringify(x));'
-subprocess.run(['node','--no-warnings','--experimental-sqlite','--experimental-strip-types','--input-type=module','-e',script],input=json.dumps({'root':str(source_runtime),'goal':'recovery-fixture','projection':projection}),text=True,check=True,capture_output=True)
+source_provider=os.environ.get('LOOPX_RECOVERY_TEST_PROVIDER','sqlite');assert source_provider in ('file','sqlite')
+script='import {selectLocalSqliteAuthority,openLocalAuthorityStore} from '+json.dumps(provider)+';let input="";for await(const c of process.stdin)input+=c;const r=JSON.parse(input);if(r.provider==="sqlite")await selectLocalSqliteAuthority(r.root,r.goal,true);const s=await openLocalAuthorityStore(r.root,r.goal);const x=await s.commitAuthority({expected_provider_revision:null,operation_id:"original-work",events:[],receipts:[],next_projection:r.projection});if(x.status!=="applied")throw new Error(JSON.stringify(x));'
+subprocess.run(['node','--no-warnings','--experimental-sqlite','--experimental-strip-types','--input-type=module','-e',script],input=json.dumps({'root':str(source_runtime),'goal':'recovery-fixture','provider':source_provider,'projection':projection}),text=True,check=True,capture_output=True)
 saved=execute_state_backup_plan(build_state_backup_plan(project=source_project,runtime_root=source_runtime,registry_path=source_registry,output_dir=r/'source-backup',backup_id='recovery-fixture',include_registry_projects=False,include_automations=False,include_skills=False))
 source_project.rename(r/'unavailable-project');source_runtime.rename(r/'unavailable-runtime');source_registry.rename(r/'unavailable-registry.json')
 assert not source_project.exists() and not source_runtime.exists() and not source_registry.exists()
 s=ChatHTTPServer(('127.0.0.1',0),ChatRequestHandler);s.registry_path=registry;s.runtime_root=runtime;s.verbose=False
-print(json.dumps({'port':s.server_address[1],'python':sys.executable,'module_path':loopx.__file__,'archive':saved['archive_path'],'manifest':saved['manifest_path'],'original_sources_absent':True}),flush=True);s.serve_forever()
+print(json.dumps({'port':s.server_address[1],'python':sys.executable,'module_path':loopx.__file__,'archive':saved['archive_path'],'manifest':saved['manifest_path'],'source_provider':source_provider,'original_sources_absent':True}),flush=True);s.serve_forever()
 `;
 
 export const configurationBackupScenario = {
@@ -138,6 +139,8 @@ export const configurationBackupScenario = {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
       await recovery.getByRole("status").scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "state-recovery-mobile.png"), animations: "disabled"});
+      await recovery.getByRole("status").evaluate(element => element.scrollIntoView({block: "start"}));
+      await page.screenshot({path: resolve(outputDir, "state-recovery-mobile-result.png"), animations: "disabled"});
       await recovery.getByRole("button", {name: "历史检查结果", exact: true}).click();
       await recovery.getByLabel("历史备份检查", {exact: true}).getByRole("button").click();
       await page.setViewportSize({width: 1512, height: 982});
@@ -162,7 +165,7 @@ export const configurationBackupScenario = {
       await english.getByText("Historical inspection loaded; the copy has not been reverified.", {exact: true}).waitFor();
       await english.getByRole("status").scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "state-recovery-english.png"), animations: "disabled"});
-      return {coverageEntries: context.coverageEntries, errors: context.errors, backend, verified: "Packaged configuration recovery and full archive inspection; real SQLite head/history after original-source loss, no Goal registration, keyboard, corrupt-input recovery, immutable history reload and narrow viewport"};
+      return {coverageEntries: context.coverageEntries, errors: context.errors, backend, verified: `Packaged configuration recovery and full archive inspection; real ${backend.source_provider} head/history after original-source loss, no Goal registration, keyboard, corrupt-input recovery, immutable history reload and narrow viewport`};
     } finally {
       try {await context?.close();} finally {
         if (!closed) {

@@ -156,6 +156,15 @@ pending external operation is resumed. This is the M1 inspection path in the
 [complete recovery RFC](../architecture/rfcs/complete-state-recovery-v0.md),
 not controlled reactivation.
 
+The following public synthetic scene uses a built wheel and the real File
+backend. Before this change, the entry only restored configuration snapshots.
+The new path reads the saved Goal work after its original source was removed;
+it does not register that Goal. The phone view is explicitly a historical report.
+
+| Before: configuration only | Inert full-archive inspection | Phone historical readback |
+| --- | --- | --- |
+| ![Configuration-only entry](images/state-recovery/before-configuration.png) | ![Inert backup audit](images/state-recovery/inert-audit-desktop.png) | ![Historical audit on phone](images/state-recovery/historical-audit-phone.png) |
+
 Use **Previous inspections** after reloading to read the saved, digest-checked
 report. A historical report describes its recorded observation time; reading it
 again does not reverify copied data. A damaged new input clears the prior success
