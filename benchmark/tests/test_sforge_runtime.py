@@ -506,7 +506,7 @@ def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path
         assert kwargs["timeout"] == kwargs["config"].agent_timeout == expected
         assert kwargs["eval_interval"] == interval
         agent = kwargs["agent"]
-        assert f"total trial budget of {expected} seconds" in agent.workspace_instructions
+        assert "total trial budget" not in agent.workspace_instructions
         assert agent.task_objective in agent.workspace_instructions
         assert agent.feedback_prompt.startswith(agent.workspace_instructions)
         raise RuntimeError("synthetic launch failure")

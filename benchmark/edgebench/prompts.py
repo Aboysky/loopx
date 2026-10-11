@@ -7,21 +7,18 @@ SForge owns submission, grading and selection; these wrappers describe the actua
 from __future__ import annotations
 
 
-def native_task_objective(timeout_seconds: int) -> str:
-    """Keep task authority and the resolved trial horizon in the durable Goal."""
-    if type(timeout_seconds) is not int or timeout_seconds <= 0:
-        raise ValueError("Trial budget must be a positive integer number of seconds")
+def native_task_objective() -> str:
+    """Keep continued research, rather than Todo completion, in the Goal."""
     return (
-        "Pursue the original benchmark task's objective, priorities and acceptance criteria "
-        f"within one shared total trial budget of {timeout_seconds} seconds. "
-        "Judge completion against the original task, not merely the current Todo list."
+        "Continue researching and improving the original task objective. "
+        "Treat implementation, passing checks, and submission as milestones; "
+        "pursue the next useful experiment and preserve the best validated candidate."
     )
 
 
 def native_task_instructions(submit_paths: list[str], *,
                              submission_cooldown: int, eval_interval: int, internet: bool,
-                             selection: str, score_direction: str,
-                             timeout_seconds: int | None = None) -> str:
+                             selection: str, score_direction: str) -> str:
     """Expose runnable candidates without imposing a proxy-improvement gate."""
     paths = ", ".join(f"`{path}`" for path in submit_paths)
     observation = (
@@ -36,28 +33,6 @@ def native_task_instructions(submit_paths: list[str], *,
         "**This environment has NO internet access.** Only the judge server and AI API "
         "are reachable. Dependencies are pre-installed; do not download packages or "
         "fetch external resources.\n\n")
-    horizon = ("" if timeout_seconds is None else
-        "### Research Horizon and Completion\n\n"
-        f"{native_task_objective(timeout_seconds)} "
-        "The budget includes planning, work, evaluation waits and continuations; it "
-        "does not restart after a Todo, replan or session resume. The runner enforces "
-        "the total deadline. Check remaining time before long experiments. This is "
-        "a ceiling, not a requirement to consume the entire budget.\n\n"
-        "A runnable implementation, passing checks and a native submission are "
-        "milestones. Before closing a milestone or ending the task, compare the "
-        "original objective with the current candidate and available authorized "
-        "evidence. If a legal, discriminating candidate experiment could still "
-        "improve that objective within the remaining budget, continue that work. "
-        "In a Todo-driven run, retain or create the concrete follow-up through the "
-        "existing task workflow before declaring no follow-up. A local proxy, "
-        "passing every check or an invalid/missing report alone does not establish "
-        "that the optimization objective is exhausted.\n\n"
-        "Early completion is appropriate when the original acceptance is satisfied "
-        "and available evidence supports stopping, or when a real blocker or the "
-        "remaining budget prevents useful work. Explain the evidence, untested "
-        "uncertainties and expected benefit versus cost of further experiments. "
-        "Retain the best supported checkpoint. Do not invent filler work, idle "
-        "through cooldown, or repeat inconclusive evaluations just to extend the run.\n\n")
     return (
         "## Iterative Evaluation Mode\n\n"
         "You can actively submit runnable candidates for native evaluation. "
@@ -107,7 +82,7 @@ def native_task_instructions(submit_paths: list[str], *,
         "or feedback, repeatedly retry a refused submission, or make meaningless "
         "changes to fill the interval. Experimentation is encouraged; local evidence "
         "and evaluator feedback have different coverage.\n\n"
-        f"{horizon}"
+        f"{native_task_objective()}\n\n"
         "### Scoring\n\n"
         f"Native selection policy: `{selection}`; score direction: `{score_direction}`. "
         "The task's grading and final-selection rules determine your result; feedback "
@@ -119,13 +94,11 @@ def native_task_instructions(submit_paths: list[str], *,
 
 def native_task_prompt(original_query: str, submit_paths: list[str], *,
                        submission_cooldown: int, eval_interval: int, internet: bool,
-                       selection: str, score_direction: str,
-                       timeout_seconds: int | None = None) -> str:
+                       selection: str, score_direction: str) -> str:
     """Use one policy body for the startup prompt and workspace instructions."""
     instructions = native_task_instructions(submit_paths,
         submission_cooldown=submission_cooldown, eval_interval=eval_interval,
-        internet=internet, selection=selection, score_direction=score_direction,
-        timeout_seconds=timeout_seconds)
+        internet=internet, selection=selection, score_direction=score_direction)
     return instructions + f"---\n\n{original_query}\n"
 
 

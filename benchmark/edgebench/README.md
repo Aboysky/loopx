@@ -221,24 +221,14 @@ creates a new submission. Older clients may lack result lookup; unavailable
 commands, missing sessions and missing results remain unresolved feedback,
 and never justify blind resubmission. This does not add restart persistence.
 
-New non-game native trials also disclose the resolved `--timeout` / task-default
-total budget in the same task policy and workspace `AGENTS.md`. The original task
-query remains intact. LoopX profiles transport that policy's task objective into
-their durable Goal; the planning checkpoint still reads the complete task document.
-Planning, execution, evaluation waits and resumed sessions share the existing
-trial deadline. Finishing implementation, validation and one native submission
-are milestones: before closing, consider a useful legal candidate against the
-original objective and current authorized evidence. Retain a concrete follow-up
-when warranted, or explain supported early completion, uncertainty and further
-benefit versus cost. The budget is a ceiling, not a minimum duration.
-
-This is provider task guidance, not a machine-enforced completion gate or a new
-LoopX continuation owner. It changes prompts and Goal text for newly admitted
-native non-game attempts across all five workers, without changing grading,
-cooldown, final selection or deadlines. Keep frozen trials unchanged; explicit
-blind/best-only controls, game prompts and Harbor's default Goal text retain
-their existing behavior. Instruction/readback tests do not prove model adoption,
-sustained exploration or an outcome gain; qualify those on matched new attempts.
+New non-game native trials include brief guidance to keep researching the original
+task objective, treating implementation, passing checks and submission as milestones.
+The same text reaches the startup prompt, workspace `AGENTS.md` and LoopX Goal;
+the complete original task remains the planning input. Trial budgets and deadlines
+stay with the existing runner, without extra agent-facing budget instructions.
+This changes guidance for new native attempts across all five workers, preserving
+grading, cooldown, selection, blind/best-only controls, game prompts and frozen runs.
+Instruction readback does not establish model adoption or outcome gains.
 
 | Mode | Agent-visible evaluator feedback | Evaluation access |
 | --- | --- | --- |

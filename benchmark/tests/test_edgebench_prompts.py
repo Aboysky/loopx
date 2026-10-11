@@ -1,6 +1,5 @@
 from pathlib import Path
 from types import SimpleNamespace
-import asyncio
 import json
 import os
 import subprocess
@@ -78,11 +77,11 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
     if feedback == "native":
         prompt = native_task_prompt("Complete the supplied task.", ["solver.py"],
             submission_cooldown=3600, eval_interval=0, internet=False,
-            selection="pass_rate_first", score_direction="maximize", timeout_seconds=43200)
+            selection="pass_rate_first", score_direction="maximize")
         instructions = native_task_instructions(["solver.py"],
             submission_cooldown=3600, eval_interval=0, internet=False,
-            selection="pass_rate_first", score_direction="maximize", timeout_seconds=43200)
-        objective = native_task_objective(43200)
+            selection="pass_rate_first", score_direction="maximize")
+        objective = native_task_objective()
     else:
         render = best_only_task_prompt if feedback == "best-only" else blind_task_prompt
         prompt = render("Complete the supplied task.", ["solver.py"])
@@ -145,31 +144,15 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
     assert len(uploads) == 1  # Resume does not replace a live task context.
 
 
-@pytest.mark.parametrize("budget", [1800, 43200, 64800])
-def test_native_horizon_preserves_task_priorities_and_allows_supported_early_completion(budget):
+def test_native_research_guidance_preserves_original_task_without_budget_injection():
     query = "Original task: maximize A subject to B. Keep native acceptance and ranking."
     options = dict(submission_cooldown=3600, eval_interval=0, internet=False,
-                   selection="score_first", score_direction="maximize", timeout_seconds=budget)
+                   selection="score_first", score_direction="maximize")
     policy = native_task_instructions(["solution.py"], **options)
-    prompt = native_task_prompt(query, ["solution.py"], **options)
-    assert prompt == policy + "---\n\n" + query + "\n"
-    assert f"total trial budget of {budget} seconds" in policy
-    for obligation in ("objective, priorities and acceptance criteria", "not merely the current Todo list",
-                       "includes planning, work, evaluation waits and continuations",
-                       "does not restart", "ceiling", "milestones", "authorized evidence",
-                       "legal, discriminating candidate", "before declaring no follow-up",
-                       "invalid/missing report", "Early completion is appropriate",
-                       "real blocker", "untested uncertainties", "benefit versus cost",
-                       "Do not invent filler work"):
-        assert obligation in policy
-    assert "Research Horizon" not in native_task_instructions(["solution.py"], **{
-        key: value for key, value in options.items() if key != "timeout_seconds"})
-
-
-@pytest.mark.parametrize("budget", [0, -1, True, 1.5, "64800"])
-def test_native_horizon_rejects_ambiguous_budget_units(budget):
-    with pytest.raises(ValueError, match="positive integer"):
-        native_task_objective(budget)
+    assert native_task_prompt(query, ["solution.py"], **options) == policy + "---\n\n" + query + "\n"
+    assert native_task_objective() in policy
+    assert "total trial budget" not in policy
+    assert "remaining time" not in policy
 
 
 @pytest.mark.parametrize("objective", ["", "  ", 64800, "Unrelated objective"])
@@ -229,13 +212,13 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
             Path(target).write_bytes(Path(source).read_bytes())
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
     options = dict(submission_cooldown=3600, eval_interval=0, internet=False,
-                   selection="score_first", score_direction="maximize", timeout_seconds=64800)
+                   selection="score_first", score_direction="maximize")
     query = "Optimize original metric A while preserving hard constraint B."
     policy = native_task_instructions(["solution.py"], **options)
     prompt = native_task_prompt(query, ["solution.py"], **options)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
         profile=profile, cwd=str(project), feedback_prompt=prompt, workspace_instructions=policy,
-        task_objective=native_task_objective(64800))
+        task_objective=native_task_objective())
     worker.install_stop_hook(None, None, tmp_path, None)
     worker.environment = Environment()
     remote = control / "entry.md"
@@ -255,7 +238,7 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         assert worker.task_objective in packet["text"] and query in packet["text"]
         assert packet["existing_todos"] == [] and packet["execution_handoff"]["spends_quota"] is False
         assert worker.format_run_cmd(str(remote), internet=False, resume=True) == command
-        assert (project / "AGENTS.md").read_text().count("Research Horizon and Completion") == 1
+        assert (project / "AGENTS.md").read_text().count(native_task_objective()) == 1
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import "
             "effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],

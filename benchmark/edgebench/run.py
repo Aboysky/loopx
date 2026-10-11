@@ -168,11 +168,10 @@ def main(argv=None):
     elif not task.game_mode:
         native_policy = dict(submission_cooldown=args.submission_cooldown,
             eval_interval=args.eval_interval, internet=task.internet,
-            selection=task.judge.selection, score_direction=task.judge.score_direction,
-            timeout_seconds=args.timeout)
+            selection=task.judge.selection, score_direction=task.judge.score_direction)
         feedback_prompt = native_task_prompt(task.work.agent_query, task.submit_paths, **native_policy)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
-        task_objective = native_task_objective(args.timeout)
+        task_objective = native_task_objective()
     config = SForgeConfig(
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
