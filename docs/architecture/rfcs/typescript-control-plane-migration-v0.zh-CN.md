@@ -66,6 +66,13 @@ normalization crossing，不删除仍受支持的 writer 或迁移 reader。
 Host IO 适配，直到最后受支持的源 writer 被替换；本批不代表整个 writer 退役或
 默认 provider 资格通过。
 
+canonical team-plan 只在受支持的未迁移分支加载 capture 和 Markdown 编辑依赖。
+真实 File/SQLite Chat 及正常 wheel 的物理删源检查覆盖确认整批提交、后续写入后
+重放、provider 恢复、投影恢复和导入前历史回执。既有 TS 事务、源锁和投影 owner
+保持；旧批量 IO 的故障注入入口为当前消费方保留惰性加载。这是调用隔离出口，
+不等于删除活跃旧 writer，或完成 receiver adoption、Host 执行、PostgreSQL／D2
+资格。见[合同及保留义务](../../reference/canonical-todo-completion-update.md#team-plan-source-writer-isolation)。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 

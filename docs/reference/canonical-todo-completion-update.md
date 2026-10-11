@@ -581,6 +581,39 @@ bootstrap、handoff、team-plan 和 Monitor 的旧源调用尚须分别退役，
 时区归一化、显式清除和拒绝时源字节不变继续保持；非法条件使用 typed owner
 的可操作诊断。canonical 更新本就使用完整事务，本批不新增路由或权限。
 
+## Team-plan source-writer isolation
+
+Canonical team-plan preview, confirmed batch commit and original-operation
+replay do not load `runtime_shadow_writer_adapter.py`. Source locks, reviewed
+intent, the TypeScript batch transaction and canonical projection outbox keep
+their existing owners. Only the supported unpromoted branch loads the capture
+producer and Markdown editing dependencies. Its batch-write IO seam remains
+available to existing failure/recovery consumers through a lazy adapter.
+
+The real File/SQLite Chat oracle physically removes the capture adapter from
+the package before preview and confirmation. It checks provider outage without
+Markdown fallback, restoration, original replay after newer writes, stale
+reviewed intent and committed-but-undelivered projection recovery. Imported
+pre-promotion receipts remain historical readback: replay preserves newer work
+and the current provider revision. Normal wheel qualification uses the same
+oracle; the source checkout cannot substitute for its installed package.
+
+This isolates another canonical caller, without deleting the still-supported
+legacy branch, changing provider defaults or requiring existing Goals to migrate.
+Projection IO and historical receipt readers remain necessary. Assignment still
+grants neither receiver adoption nor execution authority.
+
+canonical team-plan 的预览、确认后整批提交与原操作重放不再加载 capture adapter；
+源锁、审核意图、TS batch 事务及 canonical 投影 outbox 继续复用原 owner。
+只有受支持的未迁移分支加载 capture producer 与 Markdown 编辑依赖，既有批量
+写入故障／恢复消费方通过惰性 IO adapter 保留其调用入口。
+真实 File/SQLite Chat 检查在预览及确认前物理移除该模块，验证 provider 失效无
+Markdown fallback、恢复、后续写入后的原操作重放、审核依据过期及提交后投影失败
+恢复；导入前的历史回执重放保留后来写入与当前 revision。正常 wheel 复用同一
+oracle，不能以源码检查代替安装包。本批只隔离 canonical 调用，不删除仍受支持的
+旧源分支、不改变默认值或强制迁移；投影 IO、历史 reader 继续保留，分派不授予
+receiver adoption 或执行权。
+
 ## Monitor source-writer isolation
 
 Canonical Monitor polling also loads no Markdown line writer or source Todo
