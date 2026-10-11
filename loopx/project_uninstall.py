@@ -16,7 +16,11 @@ from .control_plane.projects.registry_codec import (
 from .control_plane.runtime.time import now_local_iso, utc_timestamp
 from .file_lock import exclusive_cross_runtime_file_lock
 from .global_registry import GlobalRegistryReduction, mutate_global_registry
-from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
+from .paths import (
+    global_registry_path,
+    resolve_runtime_root,
+    select_default_runtime_root,
+)
 from .registry import read_json, registry_goals
 from .runtime import validate_goal_id_path_segment
 
@@ -130,7 +134,7 @@ def _archive_state_directory(
             )
         )
         is not None
-        and _path_is_within(retained_state.parent, state_dir_resolved)
+        and _path_is_within(retained_state, state_dir_resolved)
     ]
     shared_state_owners = [
         retained_goal_id
@@ -165,8 +169,7 @@ def _archive_state_directory(
                 "action": "state-file-missing",
                 "archived": False,
                 "retained_goal_ids": sorted(
-                    retained_goal_id
-                    for retained_goal_id, _ in retained_state_owners
+                    retained_goal_id for retained_goal_id, _ in retained_state_owners
                 ),
                 "warning": (
                     "state directory is still registered by a retained goal; "
