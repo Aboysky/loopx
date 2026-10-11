@@ -1148,6 +1148,9 @@ export type DelegationReadback = {
   validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
     output_versions?: Array<{ref: string; sha256: string}>};
+  task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";
+    recovery_kind: "repair_required" | "replan_required"; summary: string; validator_kind: string;
+    turn_key: string; resume_mode: "revalidate_cached_result"};
   current_use?: {state: "current" | "unavailable"; checked_operation_count: number;
     reason?: "input_unavailable" | "source_unavailable" | "source_version_changed" | "dependency_cycle" | "verification_budget_exhausted";
     blocking_operation_id?: string; blocking_input_ref?: string; path?: string[]};
@@ -1156,6 +1159,11 @@ export type DelegationReadback = {
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
   return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
+  });
+}
+export function revalidateLoopXTeamWork(sessionId: string, operationId: string) {
+  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+    method: "POST", body: JSON.stringify({operation: "revalidate", operation_id: operationId}),
   });
 }
 export type ManagedGoalResultRow = {
@@ -1909,7 +1917,39 @@ const automationCadenceSourceSchema = z.object({
   agent_id: z.string().nullable(),
   automation_id: z.string().nullable(),
   min_interval_minutes: z.number().int().nonnegative(),
+  revision: z.number().int().nonnegative(),
 });
+
+const automationCadenceEligibilitySchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("unconfigured"),
+    reason: z.literal("unconfigured"),
+    eligible_now: z.null(),
+    next_eligible_at_ms: z.null(),
+  }),
+  z.object({
+    state: z.literal("eligible"),
+    reason: z.literal("owner_minimum_interval"),
+    eligible_now: z.literal(true),
+    next_eligible_at_ms: z.number().int().nonnegative().nullable(),
+  }),
+  z.object({
+    state: z.literal("waiting"),
+    reason: z.literal("minimum_interval_wait"),
+    eligible_now: z.literal(false),
+    next_eligible_at_ms: z.number().int().nonnegative(),
+  }),
+  z.object({
+    state: z.literal("unavailable"),
+    reason: z.enum([
+      "agent_scope_required",
+      "runtime_root_unavailable",
+      "owner_read_failed",
+    ]),
+    eligible_now: z.null(),
+    next_eligible_at_ms: z.null(),
+  }),
+]);
 
 export const automationCadenceSchema = z.object({
   ok: z.literal(true),
@@ -1919,6 +1959,7 @@ export const automationCadenceSchema = z.object({
   automation_id: z.string().nullable(),
   configuration_revision: z.number().int().nonnegative(),
   min_interval_minutes: z.number().int().nonnegative(),
+  eligibility: automationCadenceEligibilitySchema,
   enabled: z.boolean(),
   enforcement: z.string(),
   pre_model_admission: z.string(),
