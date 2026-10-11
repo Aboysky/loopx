@@ -54,8 +54,9 @@ The TypeScript interaction-contract owner supplies the execution-consistency
 rules used by the Effect interpreter, scoped-override projection and Python
 scheduler arbitration. Delivery requires an attempt; a quiet no-op cannot
 coexist with required work or user action. Terminal, peer-blocked and
-monitor-only modes require quiet channels and cannot authorize quota spend.
-An already-settled mode permits neither new work/user action nor another spend.
+monitor-only modes require `quiet_noop_allowed=true`, no required action or
+delivery, and no quota spend. An already-settled mode permits neither required
+work/user action, delivery nor another spend. Non-blocking notifications remain valid.
 Independent capability intent retains its own mode and existing authority.
 
 This strengthens transient contract validation: typed consumers now reject the
@@ -71,7 +72,8 @@ these checks do not grant execution, lease or charging authority.
 TypeScript interaction-contract owner 统一提供 Effect 解释器、scoped-override
 投影与 Python 调度仲裁使用的执行一致性规则。delivery 必须有 attempt；quiet
 no-op 不能与必须执行的工作或用户动作并存。terminal、peer-blocked、monitor-only
-模式必须保持安静且不能授权扣费；已结算模式不能重新授权工作、用户动作或扣费。
+模式必须允许 quiet no-op，不得要求动作、允许交付或扣费；已结算模式也不得重新
+要求工作或用户动作、允许交付或扣费。非阻塞通知仍然有效。
 独立 capability intent 保留自己的模式与现有权限。
 
 本次加强瞬时合同校验：类型化消费者开始拒绝此前调度仲裁已拒绝的关闭模式矛盾，

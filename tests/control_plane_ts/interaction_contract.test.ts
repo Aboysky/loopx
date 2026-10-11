@@ -21,6 +21,14 @@ const invalidDeliveryChannel: AgentInteractionChannel = {
 };
 void invalidDeliveryChannel;
 
+test("a closed contract can notify without requiring user action or spending", () => {
+  const contract = {schema_version: "loopx_interaction_contract_v0", mode: "terminal_no_followup",
+    user_channel: {action_required: false, notify: "NOTIFY"},
+    agent_channel: {must_attempt: false, delivery_allowed: false, quiet_noop_allowed: true},
+    cli_channel: {next_cli_actions: ["no quota spend until explicit goal resume"]}};
+  assert.deepEqual(decodeInteractionContract(contract), contract);
+});
+
 test("shared consistency validation retains diagnostic order and does not gate independent capability intent", () => {
   const invalid = {mode: "heartbeat_settled_skip", user_required: true,
     must_attempt: false, delivery_allowed: true, quiet_noop_allowed: true,
