@@ -231,3 +231,40 @@ def test_queue_status_main_reads_text_only_stdin_up_to_the_byte_limit(
     assert payload["error"] == (
         f"content-ops stdin JSON input exceeds the {budget - 1}-byte limit"
     )
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-8-sig"])
+def test_queue_status_main_charges_a_stdin_bom_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    encoding: str,
+) -> None:
+    from loopx.capabilities.content_ops import cli as content_ops_cli
+    from loopx.cli import main
+
+    raw = json.dumps(_review_ready(_item("community-recap-v1"))).encode(encoding)
+    argv = [
+        "--format",
+        "json",
+        "content-ops",
+        "queue-status",
+        "--item-json",
+        "-",
+        "--queue-id",
+        "x-test-queue",
+        "--generated-at",
+        "2026-08-10T02:10:00+08:00",
+    ]
+    for limit, expected in [(len(raw) + 1, 0), (len(raw), 0), (len(raw) - 1, 1)]:
+        monkeypatch.setattr(content_ops_cli, "MAX_INPUT_BYTES", limit)
+        monkeypatch.setattr(
+            sys, "stdin", io.TextIOWrapper(io.BytesIO(raw), encoding=encoding)
+        )
+        assert main(argv) == expected
+        payload = json.loads(capsys.readouterr().out)
+        if expected == 0:
+            assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
+        else:
+            assert payload["error"] == (
+                f"content-ops stdin JSON input exceeds the {limit}-byte limit"
+            )

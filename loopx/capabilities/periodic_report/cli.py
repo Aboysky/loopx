@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
 import sys
@@ -45,17 +46,20 @@ MAX_INPUT_BYTES = 16 * 1024 * 1024
 
 def _read_stdin_text(limit: int, label: str) -> str:
     # Read through the text stream so stdin keeps its decoding, but charge each
-    # chunk by its encoded size: one character can take up to four bytes.
+    # chunk by its encoded size: one character can take up to four bytes. One
+    # incremental encoder spans all chunks, so a BOM is charged only once.
     encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
     errors = getattr(sys.stdin, "errors", None) or "surrogatepass"
+    encoder = codecs.getincrementalencoder(encoding)(errors)
     chunks: list[str] = []
     consumed = 0
     while consumed <= limit:
         chunk = sys.stdin.read(max(1, (limit + 1 - consumed) // 4))
         if not chunk:
+            consumed += len(encoder.encode("", final=True))
             break
         chunks.append(chunk)
-        consumed += len(chunk.encode(encoding, errors))
+        consumed += len(encoder.encode(chunk))
     if consumed > limit:
         raise ValueError(f"{label} exceeds the {limit}-byte limit")
     return "".join(chunks)

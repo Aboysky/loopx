@@ -339,3 +339,26 @@ def test_periodic_report_cli_reads_stdin_and_refuses_oversized_pipe() -> None:
     assert payload["error"] == (
         "periodic-report JSON input exceeds the 16777216-byte limit"
     )
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-8-sig"])
+def test_periodic_report_main_charges_a_stdin_bom_once(
+    monkeypatch, capsys, encoding
+) -> None:
+    # Embedded main(argv) callers may hand in a BOM-bearing text stream; the
+    # budget must equal the stream's real byte size, not one BOM per chunk.
+    raw = json.dumps(_request()).encode(encoding)
+    argv = ["--format", "json", "periodic-report", "compose-run", "--request-json", "-"]
+    for limit, expected in [(len(raw) + 1, 0), (len(raw), 0), (len(raw) - 1, 1)]:
+        monkeypatch.setattr(periodic_report_cli, "MAX_INPUT_BYTES", limit)
+        monkeypatch.setattr(
+            sys, "stdin", io.TextIOWrapper(io.BytesIO(raw), encoding=encoding)
+        )
+        assert main(argv) == expected
+        payload = json.loads(capsys.readouterr().out)
+        if expected == 0:
+            assert payload["schema_version"] == "periodic_report_v0"
+        else:
+            assert payload["error"] == (
+                f"periodic-report JSON input exceeds the {limit}-byte limit"
+            )
