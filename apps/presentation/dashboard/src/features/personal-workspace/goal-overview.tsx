@@ -45,7 +45,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   const blocking = needs.availability === "ok" ? needs.blocking : null;
   const optional = needs.availability === "ok" ? needs.optional : null;
   const totalAttention = blocking !== null && optional !== null ? blocking + optional : null;
-  const showAttention = attention.length > 0 || blocking !== 0 || optional !== 0;
+  const showAttention = attention.length > 0 || (totalAttention !== null && totalAttention > 0);
   const moreAttention = needs.availability !== "ok" || needs.coverage !== "complete" || (totalAttention ?? attention.length) > 3;
   const run = items.find((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> => item.kind === "run" && item.run.goalId === goal.goalId);
   const observation = goal.acceptanceObservation?.goal_id === goal.goalId ? goal.acceptanceObservation : null;
