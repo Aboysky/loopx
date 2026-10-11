@@ -140,6 +140,15 @@ Existing Goal migration, two-policy ownership retirement and storage-format
 upgrade retain separate receipts and exits. Original-receipt recovery does not
 justify retaining `legacy` as a live policy. Required migration readers remain.
 
+Imported canonical bootstrap reconnect now reuses the existing typed authority
+reader, keeping current Todos, leases and original import receipts without
+entering the Markdown writer. File/SQLite real CLI coverage includes an old v0
+preference naming the other provider, missing display, missing selected authority,
+force/route rejection and later-write replay with legacy producers absent.
+Python retains bootstrap registry/Host IO; it adds no decision owner or creation
+receipt. This closes a reconnect dependency, not the remaining unpromoted writer,
+active outbox, Host or release-default acceptance.
+
 A bounded cohort can start after its installed recovery and relevant execution
 controls pass; it does not certify a released default or formal ten-day D2.
 Frozen failures/missing evidence remain visible. T4 deletes proven redundant
