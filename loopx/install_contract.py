@@ -3,7 +3,8 @@
 One platform-aware owner keeps the bootstrap/connect hint, the doctor freshness
 command, and the archive fallback consistent. POSIX keeps the documented public
 defaults; native Windows has neither a ``python3`` launcher nor Bash, so it
-names the interpreter and snapshot installer this host owns.
+names the interpreter that runs here and prints the snapshot installer only for a
+checkout that actually ships it.
 """
 
 from __future__ import annotations
@@ -41,6 +42,31 @@ def _is_windows_host() -> bool:
     return os.name == "nt"
 
 
+def _checkout_snapshot_installer(repo_root: Path) -> Path | None:
+    """The snapshot installer only when this module runs from the checkout that owns it.
+
+    An installed distribution places this module under site-packages, which does not
+    ship ``scripts/install-windows.ps1``. Printing that path would hand the operator a
+    ``pwsh -File`` command PowerShell rejects, so the project marker and the script
+    itself decide whether the checkout route is real.
+    """
+
+    installer = repo_root / "scripts" / "install-windows.ps1"
+    if installer.is_file() and (repo_root / "pyproject.toml").is_file():
+        return installer
+    return None
+
+
+def _windows_pypi_upgrade_command(*, doctor_agent_arg: str, skip_skills: bool) -> str:
+    """No-clone upgrade through the interpreter that owns this installation."""
+
+    lines = [f"& {_powershell_literal(sys.executable)} -m pip install --upgrade loopx"]
+    if not skip_skills:
+        lines.append(DEFAULT_WORKFLOW_SKILL_INSTALL_COMMAND)
+    lines.append(f"loopx doctor{doctor_agent_arg}")
+    return "\n".join(lines)
+
+
 def local_install_command(repo_root: Path, *, skip_skills: bool = False) -> str:
     if _is_windows_host():
         return (
@@ -66,9 +92,13 @@ def no_clone_upgrade_command(
             if doctor_agent_type
             else ""
         )
-        return (
-            f"{local_install_command(repo_root, skip_skills=skip_skills)}\n"
-            f"loopx doctor{doctor_agent_arg}"
+        if _checkout_snapshot_installer(repo_root) is not None:
+            return (
+                f"{local_install_command(repo_root, skip_skills=skip_skills)}\n"
+                f"loopx doctor{doctor_agent_arg}"
+            )
+        return _windows_pypi_upgrade_command(
+            doctor_agent_arg=doctor_agent_arg, skip_skills=skip_skills
         )
     ref = str(source_ref or "").strip()
     installer = f"curl -fsSL {NO_CLONE_INSTALL_URL}"
@@ -97,11 +127,7 @@ def install_repair_command() -> str:
     """PyPI repair guidance that runs as printed on this host."""
 
     if _is_windows_host():
-        return (
-            f"& {_powershell_literal(sys.executable)} -m pip install --upgrade loopx\n"
-            f"{DEFAULT_WORKFLOW_SKILL_INSTALL_COMMAND}\n"
-            "loopx doctor"
-        )
+        return _windows_pypi_upgrade_command(doctor_agent_arg="", skip_skills=False)
     return DEFAULT_INSTALL_REPAIR_COMMAND
 
 
