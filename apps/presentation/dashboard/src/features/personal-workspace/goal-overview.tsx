@@ -2,6 +2,7 @@ import { ArrowRight, CircleCheck, CircleDashed, CircleX, Hand, Info } from "luci
 import { DeliveryReview } from "./delivery-review";
 import { relativeTime } from "./goal-activity-view";
 import { goalAcceptanceContractCopy } from "./delivery-review-copy";
+import { useGoalWorkspaceDigest } from "./goal-masthead";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
@@ -40,7 +41,12 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
     remote: "This source provides synchronized status and acceptance observations. The delivery chain requires the live local source.",
   };
   const attention = userTodos.filter(item => item.goalId === goal.goalId);
-  const blocking = attention.filter(item => item.blocking).length;
+  const needs = useGoalWorkspaceDigest(goal, userTodos, items).needsYou;
+  const blocking = needs.availability === "ok" ? needs.blocking : null;
+  const optional = needs.availability === "ok" ? needs.optional : null;
+  const totalAttention = blocking !== null && optional !== null ? blocking + optional : null;
+  const showAttention = attention.length > 0 || blocking !== 0 || optional !== 0;
+  const moreAttention = needs.availability !== "ok" || needs.coverage !== "complete" || (totalAttention ?? attention.length) > 3;
   const run = items.find((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> => item.kind === "run" && item.run.goalId === goal.goalId);
   const observation = goal.acceptanceObservation?.goal_id === goal.goalId ? goal.acceptanceObservation : null;
   const contract = observation?.goal_acceptance_contract?.enabled === true ? observation.goal_acceptance_contract : null;
@@ -48,7 +54,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   const passed = criteria.filter(criterion => criterion.state === "verified").length;
   const acceptanceCopy = goalAcceptanceContractCopy[locale === "zh-CN" ? "zh-CN" : "en"];
   return <section className="goal-overview" aria-label={t("header.overview")}>
-    <div className={`goal-overview-summary${attention.length ? " has-attention" : ""}`}>
+    <div className={`goal-overview-summary${showAttention ? " has-attention" : ""}`}>
       <section className="goal-overview-direction" aria-label={copy.direction}>
         <header className="goal-overview-heading">
           <h2>{copy.direction}</h2>
@@ -75,11 +81,11 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         </>}
         {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><strong>{run.run.title}</strong><ArrowRight aria-hidden size={15} /></button> : null}
       </section>
-      {attention.length ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
+      {showAttention ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
         <header>
           <h2>{copy.attention}</h2>
-          <span className={blocking ? "goal-overview-count is-blocking" : "goal-overview-count"}>{blocking}</span>
-          {attention.length > blocking ? <small>{copy.optional.replace("{count}", String(attention.length - blocking))}</small> : null}
+          <span className={blocking ? "goal-overview-count is-blocking" : "goal-overview-count"}>{blocking ?? "—"}</span>
+          {optional ? <small>{copy.optional.replace("{count}", String(optional))}</small> : null}
         </header>
         <ul>{attention.slice(0, 3).map(item => <li key={item.todoId}><button type="button" onClick={() => onSelect({ kind: "attention", item })}>
           <Hand aria-hidden size={15} />
@@ -87,7 +93,8 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
             {item.updatedAt ? <time dateTime={item.updatedAt}>{relativeTime(item.updatedAt, locale)}</time> : null}</span>
           <ArrowRight aria-hidden size={14} />
         </button></li>)}</ul>
-        {attention.length > 3 ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks} ({attention.length})<ArrowRight aria-hidden size={14} /></button> : null}
+        {needs.availability === "ok" && needs.coverage !== "complete" ? <small>{t("vitals.needsYouPartial", { count: needs.listed })}</small> : null}
+        {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
     {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>

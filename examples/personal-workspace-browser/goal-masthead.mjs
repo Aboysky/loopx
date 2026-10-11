@@ -240,6 +240,11 @@ export const goalMastheadScenario = {
         assert.match(needs.sub, new RegExp(`${mode === "empty" ? 0 : 3} ${locale === "en" ? "listed" : "项"}`));
         if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
         if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
+        await ui.page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
+        const rail = ui.page.locator(".goal-overview-attention");
+        assert.equal(await rail.locator(".goal-overview-count").textContent(), mode === "unknown" ? "—" : mode === "optional" ? "0" : "21", "Rail and strip retain the same owner total");
+        assert.match(await rail.textContent(), locale === "en" ? /oldest unknown/ : /最早时间未知/);
+        await rail.locator(".goal-overview-more").waitFor({ state: "visible" });
         await ui.page.screenshot({ path: resolve(outputDir, `goal-attention-${mode}-${locale}.png`), animations: "disabled" });
         assert.equal(ui.errors.length, 0, ui.errors.join(" | "));
         assert.equal(ui.api.turnRequests.length, 0, "Reading attention never starts a Turn");
