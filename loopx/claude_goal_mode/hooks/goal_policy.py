@@ -19,6 +19,7 @@ container or VM, which contains the whole process at the environment level.
 
 Behavior (only while goal-mode is ARMED for the event's project):
 - no goal here / goal-mode off            -> {} (no-op; normal permission flow)
+- event unreadable (no session cwd)       -> deny (FAIL-CLOSED)
 - read-only/safe tools                    -> allow
 - should_run == false (quota/gate closed) -> deny
 - should_run probe unavailable (error)    -> deny for non-read-only tools (FAIL-CLOSED)
@@ -31,6 +32,11 @@ Behavior (only while goal-mode is ARMED for the event's project):
 Fail-closed: if the deterministic ``should_run`` probe cannot be reached, a
 non-read-only tool is denied rather than allowed, so a flaky/broken control
 plane pauses delivery instead of running ungated. Read-only tools stay allowed.
+An event this hook cannot read joins that rule: ``rc=1`` with no decision is a
+non-blocking hook error to Claude Code, which then continues the tool call with
+no gate at all, so an unreadable event (undecodable stdin, malformed or
+non-object JSON, or a missing/unusable session cwd) is answered with an explicit
+deny instead of dying.
 
 Identity-aware: when the active goal registered an agent (loopx
 ``coordination.registered_agents``), the context carries ``agent_id`` and this
@@ -152,11 +158,31 @@ def decide(ev: dict) -> dict:
     (or {} for no-op). Reused by the CLI hook AND the Agent SDK in-process hook.
 
     The hook is the whole gate (no OS sandbox): should_run (fail-closed) +
-    Edit/Write write_scope + a destructive-Bash denylist."""
+    Edit/Write write_scope + a destructive-Bash denylist. An event without a
+    usable session cwd is refused rather than deferred, because the armed state
+    cannot be resolved from it (the module docstring states the fail-closed
+    rule)."""
+    def d(decision, reason):
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason}}
+
     # Claude Code feeds the session's working directory on the event; resolve the
     # goal from THAT project's registry, and gate only while goal-mode is armed
     # (the project's .claude/loop.md exists). Unrelated/unarmed projects -> no-op.
-    cwd = ev.get("cwd") or (ev.get("workspace") or {}).get("current_dir")
+    cwd = ev.get("cwd")
+    workspace = ev.get("workspace")
+    if not isinstance(cwd, str) or not cwd:
+        cwd = workspace.get("current_dir") if isinstance(workspace, dict) else None
+    if not isinstance(cwd, str) or not cwd:
+        # Every real PreToolUse event carries the session cwd. Without one this
+        # hook cannot tell an armed project from an unrelated one, so it cannot
+        # decide to stay out of the way: refusing is the same fail-closed rule
+        # the unreachable-should_run branch below applies. Unreadable events
+        # (see main) arrive here as an empty dict.
+        return d("deny", "unreadable PreToolUse event (no session cwd) - failing closed under goal-mode")
+
     ctx = active_context(cwd)
     if not ctx:
         return {}  # no goal here, or goal-mode off -> defer to normal flow
@@ -167,12 +193,6 @@ def decide(ev: dict) -> dict:
     scope = ctx.get("write_scope") or []
     tool = ev.get("tool_name", "")
     ti = ev.get("tool_input", {}) or {}
-
-    def d(decision, reason):
-        return {"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason}}
 
     if tool in READONLY_TOOLS:
         return d("allow", "read-only/safe tool under goal-mode")
@@ -200,10 +220,15 @@ def decide(ev: dict) -> dict:
 
 
 def main():
-    raw = sys.stdin.read() or "{}"
     try:
-        ev = json.loads(raw)
-    except Exception:
+        # `ValueError` also covers `UnicodeDecodeError`: the strict stdin pin
+        # (stdio_utf8) never repairs a bad byte into a different event, so an
+        # event that cannot be read becomes the explicit deny in decide()
+        # instead of a traceback with no decision.
+        ev = json.loads(sys.stdin.read())
+    except ValueError:
+        ev = {}
+    if not isinstance(ev, dict):
         ev = {}
     result = decide(ev)
     sys.stdout.write(json.dumps(result) if result else "{}")

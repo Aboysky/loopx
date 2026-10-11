@@ -125,6 +125,13 @@ def main() -> int:
     assert decision("Bash", True, command="make test") == "allow", "non-destructive bash allowed"
     assert decision("Read", True, file_path="/anywhere") == "allow", "read-only allowed"
 
+    # An event with no session cwd (what an unreadable event becomes in main)
+    # cannot be attributed to an armed project, so the gate must refuse it
+    # rather than defer: rc=1 with no decision is a non-blocking hook error to
+    # Claude Code, which then runs the tool with no gate at all.
+    assert goal_policy.decide({}).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a cwd-less/unreadable event must be DENIED, not deferred"
+
     print("claude-goalmode-hook-policy-smoke ok")
     return 0
 
