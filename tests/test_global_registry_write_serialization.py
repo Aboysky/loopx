@@ -586,6 +586,134 @@ def _release_canonical_writer_guard(holder: subprocess.Popen[str]) -> None:
     assert holder.returncode == 0, stdout + stderr
 
 
+@pytest.mark.parametrize(
+    "retained_relative",
+    [Path("goal-beta.md"), Path("nested/goal-beta.md")],
+)
+def test_project_uninstall_archives_only_selected_state_in_a_shared_directory(
+    tmp_path: Path,
+    retained_relative: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    project_root = registry_path.parents[1]
+    state_dir = project_root / "shared-state"
+    state_dir.mkdir()
+    selected_state = state_dir / "goal-alpha.md"
+    retained_state = state_dir / retained_relative
+    retained_state.parent.mkdir(parents=True, exist_ok=True)
+    selected_state.write_text("# alpha state\n", encoding="utf-8")
+    retained_state.write_text("# beta state\n", encoding="utf-8")
+
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["state_file"] = "shared-state/goal-alpha.md"
+    registry["goals"].append(
+        {
+            **registry["goals"][0],
+            "id": "goal-beta",
+            "state_file": str(Path("shared-state") / retained_relative),
+        }
+    )
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+
+    preview = uninstall_project(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_ids=["goal-alpha"],
+        archive_state=True,
+        remove_empty_registry=False,
+        execute=False,
+    )
+
+    assert preview["dry_run"] is True
+    assert preview["state_actions"][0]["action"] == "would-move-state-file"
+    assert preview["state_actions"][0]["retained_goal_ids"] == ["goal-beta"]
+    assert selected_state.read_text(encoding="utf-8") == "# alpha state\n"
+    assert retained_state.read_text(encoding="utf-8") == "# beta state\n"
+
+    result = uninstall_project(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_ids=["goal-alpha"],
+        archive_state=True,
+        remove_empty_registry=False,
+        execute=True,
+    )
+
+    state_action = result["state_actions"][0]
+    assert state_action["action"] == "moved-state-file"
+    assert state_action["retained_goal_ids"] == ["goal-beta"]
+    archived = Path(state_action["archive_path"])
+    assert not selected_state.exists()
+    assert (archived / selected_state.name).read_text(
+        encoding="utf-8"
+    ) == "# alpha state\n"
+    assert retained_state.read_text(encoding="utf-8") == "# beta state\n"
+    assert not (archived / retained_state.name).exists()
+    local_goals = json.loads(registry_path.read_text(encoding="utf-8"))["goals"]
+    assert [goal["id"] for goal in local_goals] == ["goal-beta"]
+    global_goals = json.loads(
+        global_registry_path(runtime_root).read_text(encoding="utf-8")
+    )["goals"]
+    assert [goal["id"] for goal in global_goals] == ["goal-beta"]
+
+
+def test_project_uninstall_keeps_a_state_file_registered_by_a_retained_goal(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"].append(
+        {
+            **registry["goals"][0],
+            "id": "goal-beta",
+        }
+    )
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+    state_file = registry_path.parents[1] / "ACTIVE_GOAL_STATE.md"
+
+    result = uninstall_project(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_ids=["goal-alpha"],
+        archive_state=True,
+        remove_empty_registry=False,
+        execute=True,
+    )
+
+    assert state_file.read_text(encoding="utf-8") == "# state\n"
+    assert result["state_actions"] == [
+        {
+            "goal_id": "goal-alpha",
+            "state_file": str(state_file),
+            "state_dir": str(state_file.parent),
+            "action": "kept-shared-state-file",
+            "archived": False,
+            "retained_goal_ids": ["goal-beta"],
+            "warning": (
+                "state file is still registered by a retained goal; kept in place"
+            ),
+        }
+    ]
+    local_goals = json.loads(registry_path.read_text(encoding="utf-8"))["goals"]
+    assert [goal["id"] for goal in local_goals] == ["goal-beta"]
+    global_goals = json.loads(
+        global_registry_path(runtime_root).read_text(encoding="utf-8")
+    )["goals"]
+    assert [goal["id"] for goal in global_goals] == ["goal-beta"]
+
+
 def test_project_uninstall_archive_waits_for_canonical_writer_guard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
