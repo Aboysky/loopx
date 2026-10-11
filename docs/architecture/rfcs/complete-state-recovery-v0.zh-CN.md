@@ -172,10 +172,10 @@ digest 和大小，并排除 WAL/SHM sidecar。其他文件和目录可能在来
 因此，该命令只具备组件本地 SQLite snapshot 语义和 best-effort 文件捕获，不具备
 跨 owner point-in-time 保证。
 
-`loopx backup-state` 支持 plan 和 create。它不能验证已有归档、安全物化归档、
-分类状态 owner、reconcile reference 或重新激活 runtime。当前测试用 Python tar
-API 提取，验证 SQLite integrity 与内容，并检查发布／权限行为；它们没有建立
-restore 契约。
+设计基线中的 `loopx backup-state` 只有 plan/create，测试通过 Python tar API 手工解包。
+第 1 节记录的当前有界 M1 路径已通过 CLI 和打包 UI 提供验证后的隔离解包及既有 owner
+读回。它不采用身份、不处置 pending effect、不重新激活 runtime；这些后续 owner 边界
+仍保持开放。
 
 配置备份另行支持 export、verify 和 isolated restore。其 checkpoint 是惰性的：
 它不会创建 live registry、provider selection、writer fence、lease、Host session、

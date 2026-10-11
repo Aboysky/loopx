@@ -207,11 +207,11 @@ Other files and directories are traversed while the source may remain live.
 The command therefore has component-local SQLite snapshot semantics and
 best-effort file capture, not a cross-owner point-in-time guarantee.
 
-`loopx backup-state` supports plan and create. It does not verify an existing
-archive, safely materialize one, classify state owners, reconcile references,
-or reactivate a runtime. Current tests extract with the Python tar API, validate
-SQLite integrity and content, and verify publication/permission behavior. They
-do not establish a restore contract.
+At the design baseline, `loopx backup-state` supported plan/create only, and
+tests manually extracted archives. The current bounded M1 route in Section 1
+adds verified inert extraction and existing-owner readback through CLI and the
+packaged UI. It does not adopt identity, reconcile pending effects or reactivate
+a runtime; those later owner boundaries remain open.
 
 Configuration backup separately supports export, verify, and isolated restore.
 Its checkpoint is inert: it creates no live registry, provider selection,
