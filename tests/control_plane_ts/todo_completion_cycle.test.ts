@@ -101,6 +101,40 @@ test("a bound Turn exposes dependency repair without changing its binding or qua
   assert.deepEqual(request, before);
 });
 
+for (const state of ["spend_required", "spend_receipt_required"]) {
+  test(`a later cycle preserves the original Turn's verified ${state} settlement`, () => {
+    const input = {...waitRequest(evaluate(cycle())), schema_version: RECEIPT_BOUND_WAIT_REQUEST_SCHEMA,
+      agent_id: "agent-alpha", turn_instance_id: "turn-cycle",
+      settlement_progress: {schema_version: "quota_settlement_progress_v0", state, next_step: "quota_spend"}};
+    const before = structuredClone(input);
+    const result = projectReceiptBoundWait(input);
+    assert.deepEqual(result.recovery, {schema_version: "unsettled_host_turn_recovery_v0", scope: "current_turn",
+      turn_instance_id: "turn-cycle", binding_kind: "todo", binding_id: "todo_alpha", repair: "quota_spend"});
+    assert.equal((result.obligation as JsonObject).spend_allowed_now, true);
+    assert.equal((result.obligation as JsonObject).delivery_allowed, false);
+    // Settling verified past work does not qualify the current cycle as a wait.
+    assert.throws(() => prepareBlockedWait({...input, schema_version: BLOCKED_WAIT_REQUEST_SCHEMA}), /cycle/i);
+    assert.deepEqual(input, before);
+  });
+}
+
+test("a cycle still requires dependency repair without applicable verified spend progress", () => {
+  for (const progress of [null, {},
+    {schema_version: "quota_settlement_progress_v0", state: "writeback_required", next_step: "durable_writeback"},
+    {schema_version: "quota_settlement_progress_v0", state: "writeback_receipt_required", next_step: "durable_writeback"},
+    {schema_version: "quota_settlement_progress_v0", state: "spend_required", next_step: "durable_writeback"},
+    {schema_version: "quota_settlement_progress_v0", state: "settled", next_step: null},
+    {schema_version: "other", state: "spend_required", next_step: "quota_spend"},
+  ]) {
+    const result = projectReceiptBoundWait({...waitRequest(evaluate(cycle())),
+      schema_version: RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, agent_id: "agent-alpha",
+      turn_instance_id: "turn-cycle", settlement_progress: progress});
+    assert.equal((result.recovery as JsonObject).repair, "dependency");
+    assert.equal((result.obligation as JsonObject).spend_allowed_now, undefined);
+    assert.equal((result.obligation as JsonObject).delivery_allowed, false);
+  }
+});
+
 test("cycle planning requests scoped replan instead of quiet successor waiting", () => {
   const rows = evaluate(cycle());
   const items = rows.map((row, index) => ({payload: row, id: row.todo_id, status: row.status,
