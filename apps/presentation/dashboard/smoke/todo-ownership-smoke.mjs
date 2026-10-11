@@ -19,6 +19,19 @@ try {
     ));
     const notesLabel = locale === "en" ? "Notes" : "备注";
     const evidenceLabel = locale === "en" ? "Evidence" : "证据";
+    for (const invalid of [null, "dependency_cycle"]) {
+      const source = todoItemSchema.parse({todo_id: "todo_cycle", text: "Review dependent work", done: false,
+        status: "open", resume_when: "todo_done:todo_peer", resume_ready: false,
+        resume_condition: {satisfied: false, ...(invalid ? {invalid_state: invalid} : {})}});
+      const todo = workspaceAgentTodoFromItem(source, "fallback-id");
+      const drawer = render(ContextDrawer, {agents: [], callbacks: {}, onClose() {}, selection: {
+        kind: "todo", item: {...todo, goalId: "test-goal", goalTitle: "Test Goal"},
+      }});
+      const cycleLabel = locale === "en" ? "Circular dependency" : "循环依赖";
+      const pendingLabel = locale === "en" ? "Waiting for condition" : "等待条件满足";
+      assert.equal(drawer.includes(cycleLabel), Boolean(invalid));
+      assert.equal(drawer.includes(pendingLabel), !invalid);
+    }
     const longNote = "Preserve separate notes. ".repeat(800) + "NOTE_END_SENTINEL";
     for (const fields of [{}, {note: null, evidence: null}, {note: "", evidence: ""},
       {note: longNote}, {evidence: "RECORDED_EVIDENCE"}, {note: longNote, evidence: "RECORDED_EVIDENCE"}]) {

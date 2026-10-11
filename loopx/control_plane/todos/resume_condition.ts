@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { completionDependencyCycles } from "./completion_dependency.ts";
 
 import { readGoalRolloutEventSnapshot } from "../rollout_receipt_log.ts";
 
@@ -683,6 +684,17 @@ export function evaluateTodoResumeConditions(value: unknown): JsonObject {
   }
   const byId = new Map<string, TodoItem>();
   for (const item of [...sourceItems, ...items]) byId.set(item.todo_id, item);
+  const completionEdges = new Map<string, string>();
+  if (!requestedKinds || requestedKinds.has("todo_done")) {
+    for (const item of byId.values()) {
+      const spec = parseResumeWhen(item.resume_when);
+      // Retained completion satisfies its dependents. Its old wait is history.
+      if (item.status !== "done" && spec?.kind === "todo_done") {
+        completionEdges.set(item.todo_id, spec.target);
+      }
+    }
+  }
+  const cycles = completionDependencyCycles(completionEdges);
   const conditions: JsonObject[] = [];
   for (const item of items) {
     const spec = parseResumeWhen(item.resume_when);
@@ -695,6 +707,9 @@ export function evaluateTodoResumeConditions(value: unknown): JsonObject {
       availableCapabilities,
       evaluatedAt,
     );
+    const cycle = spec.kind === "todo_done" ? cycles.get(item.todo_id) : null;
+    if (cycle) Object.assign(condition, {satisfied: false, invalid_state: "dependency_cycle",
+      dependency_cycle_todo_ids: cycle.todo_ids, dependency_cycle_size: cycle.size});
     conditions.push({
       todo_id: item.todo_id,
       condition: diagnosedCondition(condition, item.todo_id),
