@@ -34,10 +34,27 @@ def _p(*parts) -> str:
     return str(PLUGIN_ROOT.joinpath(*parts)).replace("\\", "/")
 
 
+def _launches_python(py: str) -> bool:
+    """True when running `py` actually starts an interpreter.
+
+    `shutil.which` only proves a file is executable, not that it runs Python. On
+    Windows it can return the 0-byte `WindowsApps` App Execution Alias, which
+    exits 9009 writing nothing, so anything that bakes that path (the PreToolUse
+    hook, the statusline, `/loopx`) silently does nothing."""
+    try:
+        return subprocess.run([py, "-c", ""], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
 def _python_cmd() -> str:
     """Interpreter to bake into hook / statusline / command strings — robust where
-    only `python` (not `python3`) is registered."""
-    return shutil.which("python3") or shutil.which("python") or sys.executable
+    only `python` (not `python3`) is registered, and where `python3` resolves to a
+    launcher that cannot run Python (the Windows `WindowsApps` alias)."""
+    for candidate in (shutil.which("python3"), shutil.which("python")):
+        if candidate and _launches_python(candidate):
+            return candidate
+    return sys.executable
 
 
 def deep_merge(base: dict, add: dict) -> dict:
