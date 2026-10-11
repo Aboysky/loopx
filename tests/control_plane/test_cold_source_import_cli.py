@@ -119,8 +119,13 @@ print(json.dumps({{'package': loopx.__file__, 'observations': observations}}))
     assert all(row[0] == 2 for row in observations[0][5:])
 
 
-def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path, monkeypatch):
+@pytest.mark.parametrize("old_producers_present", [True, False])
+def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path, monkeypatch, old_producers_present):
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
+    if not old_producers_present:
+        for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
+                     "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
+            (receiver / "loopx/control_plane/coordination" / name).unlink()
     registry = tmp_path / "project/.loopx/registry.json"
     original = state.read_bytes()
     observations = []
@@ -142,6 +147,44 @@ def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path
     assert not (runtime / "authority-transition").exists()
 
 
+@pytest.mark.parametrize("command,action,missing", [
+    ("coordination-shadow", "inspect", "runtime_shadow"),
+    ("authority-shadow", "status", "local_authority_shadow_adapter"),
+    ("authority-shadow", "drain", "local_authority_shadow_adapter"),
+])
+def test_explicit_shadow_action_reports_missing_producer_without_writing(
+    tmp_path, monkeypatch, command, action, missing,
+):
+    _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
+    registry = tmp_path / "project/.loopx/registry.json"
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["runtime_shadow"] = {
+        "schema_version": "loopx_coordination_runtime_shadow_config_v0",
+        "enabled": True, "provider": "file_v0",
+    }
+    registry.write_text(json.dumps(data))
+    (receiver / "loopx/control_plane/coordination" / f"{missing}.py").unlink()
+    before = {str(path.relative_to(tmp_path)): path.read_bytes()
+              for root in (registry.parent, state.parent, runtime)
+              for path in root.rglob("*") if path.is_file()}
+    child = subprocess.run([sys.executable, "-c",
+        "import loopx,sys; print(loopx.__file__,file=sys.stderr); "
+        "from loopx.entrypoint import main; raise SystemExit(main())",
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        command, action, "--goal-id", "cold"], cwd=tmp_path, env=env,
+        capture_output=True, text=True, timeout=60)
+    assert str(receiver / "loopx/__init__.py") in child.stderr
+    assert "Traceback" not in child.stderr, child.stderr
+    assert child.returncode == 1
+    result = json.loads(child.stdout)
+    assert result["ok"] is False
+    assert missing in result["error"]
+    after = {str(path.relative_to(tmp_path)): path.read_bytes()
+             for root in (registry.parent, state.parent, runtime)
+             for path in root.rglob("*") if path.is_file()}
+    assert after == before
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("old_producers_present", [True, False])
 def test_cold_cli_import_and_source_free_original_recovery(
@@ -151,6 +194,8 @@ def test_cold_cli_import_and_source_free_original_recovery(
     if not old_producers_present:
         for path in ("todos.py", "bootstrap.py", "control_plane/coordination/runtime_shadow_writer_adapter.py",
                      "control_plane/coordination/local_authority_shadow_outbox.py",
+                     "control_plane/coordination/runtime_shadow.py",
+                     "control_plane/coordination/local_authority_shadow_adapter.py",
                      "control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py"):
             (receiver / "loopx" / path).unlink()
     original = state.read_bytes()
@@ -182,13 +227,17 @@ def test_cold_cli_import_and_source_free_original_recovery(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("old_writer_present", [True, False])
+@pytest.mark.parametrize("old_producers_present", [True, False])
 def test_cold_import_recovery_preserves_later_canonical_writes(
-    tmp_path, monkeypatch, provider, old_writer_present,
+    tmp_path, monkeypatch, provider, old_producers_present,
 ):
     cli, state, backup, body, runtime, receiver, env = workspace(tmp_path, monkeypatch)
-    if not old_writer_present:
-        for path in ("control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py"):
+    if not old_producers_present:
+        for path in ("control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py",
+                     "control_plane/coordination/runtime_shadow.py",
+                     "control_plane/coordination/runtime_shadow_writer_adapter.py",
+                     "control_plane/coordination/local_authority_shadow_adapter.py",
+                     "control_plane/coordination/local_authority_shadow_outbox.py"):
             (receiver / "loopx" / path).unlink()
     prepared = cli("prepare-import", "--backup-manifest", backup["manifest_path"],
         "--provider", provider, "--target-handoff-mode", "hard_lease")["cold_import"]

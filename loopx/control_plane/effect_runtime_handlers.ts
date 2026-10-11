@@ -288,6 +288,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.source.inspect", lazyHandler(() => Promise.all([import("./coordination/cold_source_inspection.ts"), import("./coordination/source_transfer.ts")]), ([{inspectColdCoordinationSource}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.source.inspect", inspectColdCoordinationSource))],
     ["coordination.source.inspect_storage", lazyHandler(() => Promise.all([import("./coordination/cold_source_inspection.ts"), import("./coordination/source_transfer.ts")]), ([{inspectColdCoordinationStorage}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.source.inspect_storage", inspectColdCoordinationStorage))],
     ["todo.monitor_metadata.plan", lazyHandler(() => import("./todos/monitor_metadata.ts"), ({planMonitorMetadata}) => planMonitorMetadata)],
+    ["todo.creation_scope.plan", lazyHandler(() => import("./todos/creation_scope.ts"), ({planTodoCreationScope}) => planTodoCreationScope)],
     ["todo.authoring_scope.plan", lazyHandler(() => import("./todos/authoring_scope.ts"), ({planTodoAuthoringScope}) => planTodoAuthoringScope)],
     ["todo.contract_diagnostics.evaluate", lazyHandler(() => import("./todos/authoring_scope.ts"), ({evaluateTodoContractDiagnostics}) => evaluateTodoContractDiagnostics)],
     [
@@ -462,6 +463,7 @@ export function createEffectRuntimeHandlers(
     ["capabilities.issue_fix.monitor_reconciliation.plan", lazyHandler(() => import("./capabilities/issue_fix_monitor_reconciliation.ts"), ({planIssueFixMonitorReconciliation}) => planIssueFixMonitorReconciliation)],
     ["capabilities.change_quality.validation_gate", lazyHandler(() => import("./capabilities/change_quality_validation.ts"), ({qualifyChangeQualityValidation}) => qualifyChangeQualityValidation)],
     ["capabilities.pr_review.approval_closeout.plan", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({planPrReviewApprovalCloseout}) => planPrReviewApprovalCloseout)],
+    ["capabilities.pr_review.conclusion.select", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({selectPrReviewConclusion}) => selectPrReviewConclusion)],
     ["capabilities.pr_review.configuration", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({prReviewConfiguration}) => prReviewConfiguration)],
     ["capabilities.pr_review.order", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({orderPrReviewQueue}) => orderPrReviewQueue)],
     ["coordination.local_authority_shadow.record", lazyHandler(() => import("./coordination/local_authority_shadow.ts"), ({recordLocalAuthorityShadow}) => recordLocalAuthorityShadow)],
