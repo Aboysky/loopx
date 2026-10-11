@@ -50,7 +50,8 @@ import { ContextDrawer } from "./context-drawer";
 import { monitorScheduleReadback } from "./monitor-readback";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
-import { GoalOverview } from "./goal-overview";
+import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
+import { GoalVitals, type GoalVitalRegion } from "./goal-masthead";
 import { GoalWorkspacePanels } from "./goal-workspace-panels";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import { MarkdownText } from "./markdown";
@@ -1311,7 +1312,8 @@ export function PersonalWorkspacePage({
     setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: selectedAgentId });
   }
 
-  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: GoalLifecycleOperation) {
+  /** `keepGoalSelected` reads the result back on the Goal page instead of returning to the directory. */
+  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: GoalLifecycleOperation, { keepGoalSelected = false } = {}) {
     setMobileSidebarOpen(false);
     const reasonByOperation: Record<GoalLifecycleOperation, string> = {
       delete: "Deleted from the owner workspace",
@@ -1355,7 +1357,7 @@ export function PersonalWorkspacePage({
         projectionOwnedByApply = true;
         callbacks.onGoalActivationStateChange?.(goal.goalId, result.activationState);
         setActionFeedback(t("feedback.completed", { title: summaryByOperation[operation] }));
-        if (operation === "stop") selectGoal(null);
+        if (operation === "stop" && !keepGoalSelected) selectGoal(null);
         await reconcileStatus([goal.goalId]);
         return;
       }
@@ -1378,6 +1380,7 @@ export function PersonalWorkspacePage({
         if (proposal.reviewPlan?.interaction === "direct") {
           projectionOwnedByApply = true;
           await applyProposal(proposal, {
+            keepGoalSelected,
             lifecycleProjection: stopProjection ?? undefined,
             presentation: "feedback",
           });
@@ -1404,6 +1407,24 @@ export function PersonalWorkspacePage({
         setLifecycleBusyGoalIds(new Set(lifecyclePendingGoalIdsRef.current));
       }
     }
+  }
+
+  function focusGoalRegion(region: GoalVitalRegion) {
+    if (!selectedGoal) return;
+    if (region === "usage") {
+      setSelection({ kind: "goal", item: selectedGoal });
+      return;
+    }
+    setSelectedGoalTab(region === "tasks" ? "tasks" : "overview");
+    window.requestAnimationFrame(() => {
+      const target = region === "attention" ? document.getElementById(goalOverviewAttentionId) : null;
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        target.focus({ preventScroll: true });
+      } else if (region !== "tasks") {
+        channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 });
+      }
+    });
   }
 
   function prepareScheduleDraft(kind: "heartbeat" | "monitor", goalId: string | null) {
@@ -1459,6 +1480,7 @@ export function PersonalWorkspacePage({
   async function applyProposal(
     proposal: WorkspaceActionPreview,
     options: {
+      keepGoalSelected?: boolean;
       lifecycleProjection?: GoalLifecycleProjection;
       presentation?: "drawer" | "feedback";
     } = {},
@@ -1494,7 +1516,7 @@ export function PersonalWorkspacePage({
         if (showDrawer) setSelection({ item: applied, kind: "proposal" });
         setActionFeedback(t("feedback.completed", { title: proposal.title }));
         if (proposal.actionKind === "goal.lifecycle") {
-          if (proposal.lifecycleOperation === "stop" || proposal.lifecycleOperation === "delete") {
+          if (proposal.lifecycleOperation === "delete" || (proposal.lifecycleOperation === "stop" && !options.keepGoalSelected)) {
             selectGoal(null);
           }
           if (proposal.lifecycleOperation === "delete" && proposal.goalId) {
@@ -1540,7 +1562,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create") {
         await callbacks.onRefresh?.();
       }
-      if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "stop" || applied.lifecycleOperation === "delete")) {
+      if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {
         selectGoal(null);
       }
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
@@ -2004,7 +2026,14 @@ export function PersonalWorkspacePage({
             readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={selectedGoal}
             selectedGoalTab={selectedGoalTab}
+            goalLifecycleBusy={selectedGoal ? lifecycleBusyGoalIds.has(selectedGoal.goalId) : false}
+            onOpenWorkspace={() => selectGoal(null)}
+            onRequestGoalLifecycle={selectedGoal && (!readOnly || callbacks.onExecuteGoalLifecycle)
+              ? (operation) => void requestGoalLifecycle(selectedGoal, operation, { keepGoalSelected: true })
+              : undefined}
+            resumeReviewed={!callbacks.onExecuteGoalLifecycle}
           />
+          {selectedGoal && !selectedGoal.loadState ? <GoalVitals goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
             {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode

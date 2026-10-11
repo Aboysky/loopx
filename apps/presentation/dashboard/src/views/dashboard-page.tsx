@@ -463,6 +463,7 @@ type PersonalGoalItem = {
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
   doneTodoCount: number;
+  openTodoCount?: number;
   goalId: string;
   latestActivity?: string;
   needsYou?: string | null;
@@ -1090,6 +1091,7 @@ function buildPersonalHomeModel(
       boundHostSurfaces: Array.from(new Set((goal.coordination?.thread_agent_bindings ?? [])
         .flatMap((binding) => binding.host_surface ? [binding.host_surface] : []))),
       doneTodoCount: agentTodoFacts.doneTodoCount,
+      openTodoCount: row.queueItem?.agent_todos?.open_count ?? row.queueItem?.project_asset?.agent_todos?.open,
       hostThreadActivity: goal.host_thread_activity ? {
         completeness: goal.host_thread_activity.completeness,
         threads: goal.host_thread_activity.threads.map((thread) => ({
