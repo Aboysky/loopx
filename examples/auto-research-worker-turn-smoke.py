@@ -499,6 +499,19 @@ def main() -> int:
         )
         assert failed_attempt["active"] is False, failed_attempt
 
+        unfinished_summary = run_auto_research_worker_turn(
+            **{**evaluator_request, "complete_selected_todo": False}
+        )
+        assert unfinished_summary["selected_todo_id"] == evaluator_seed["todo_id"], unfinished_summary
+        assert unfinished_summary["executed"] is True, unfinished_summary
+        assert unfinished_summary["completion"]["requested"] is False, unfinished_summary
+        unfinished_lease = inspect_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=evaluator_seed["todo_id"],
+        )
+        assert unfinished_lease["active"] is False, unfinished_lease
+        assert unfinished_lease["lease"]["idempotency_key"].startswith("auto-research-worker-"), unfinished_lease
+
         seeded_failure_turn = run_worker_turn(
             registry=registry,
             runtime_root=runtime_root,
@@ -530,6 +543,24 @@ def main() -> int:
         )
         assert completed_attempt["active"] is False, completed_attempt
         assert_public_safe(seeded_failure_turn)
+
+        manual_todo = add_goal_todo(
+            registry_path=registry, goal_id=GOAL_ID, role="agent",
+            text="Author a real failure successor before further research execution.",
+            task_class="advancement_task", action_kind="propose_failure_successor",
+            claimed_by="research-curator", priority="P0", dry_run=False,
+        )
+        manual_successor = run_worker_turn(
+            registry=registry, runtime_root=runtime_root, workspace=workspace,
+            agent_id="research-curator", execute=True, complete=True,
+        )
+        assert_manual_research_required(manual_successor, action="propose_failure_successor")
+        assert manual_successor["selected_todo_id"] == manual_todo["todo_id"], manual_successor
+        manual_lease = inspect_task_lease(
+            registry_path=registry, runtime_root=Path(runtime_root), goal_id=GOAL_ID,
+            todo_id=manual_successor["selected_todo_id"],
+        )
+        assert manual_lease["lease"] is None, manual_lease
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
