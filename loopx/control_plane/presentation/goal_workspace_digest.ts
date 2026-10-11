@@ -25,6 +25,14 @@ export type DigestTodo = {
 
 export type DigestAttention = { blocking: boolean; updatedAt?: string | null };
 
+/** Counts from the attention owner's Goal group, with coverage of its item list.
+ * A bounded list can carry exact totals but cannot establish the global oldest. */
+export type DigestAttentionSummary = {
+  blocking: number | null;
+  optional: number | null;
+  coverage: DigestCoverage;
+};
+
 export type DigestUsage = {
   costUsd24h?: number; costUsd7d?: number; durationMs24h?: number; durationMs7d?: number;
 };
@@ -50,6 +58,7 @@ export type GoalWorkspaceDigestInput = {
   runningTodoIds?: readonly string[];
   /** `null` when the attention owner could not be read. */
   attention: readonly DigestAttention[] | null;
+  attentionSummary?: DigestAttentionSummary;
   usage?: DigestUsage | null;
   /** `undefined` while the session owner has not been read. */
   execution?: DigestExecution;
@@ -75,7 +84,8 @@ export type GoalWorkspaceDigest = {
     projectedOpen: number | null;
   };
   needsYou:
-    | { availability: "ok"; blocking: number; optional: number; oldestWaitingSince: string | null }
+    | { availability: "ok"; blocking: number | null; optional: number | null;
+        coverage: DigestCoverage; listed: number; oldestWaitingSince: string | null }
     | { availability: "unavailable" };
   /** Agent time and Cost always share one window. */
   usage: {
@@ -140,15 +150,24 @@ export function compileGoalWorkspaceDigest(input: GoalWorkspaceDigestInput): Goa
     needsYou = { availability: "unavailable" };
   } else {
     const blocking = input.attention.filter((item) => item.blocking);
+    const count = (value: number | null | undefined, minimum: number): number | null =>
+      typeof value === "number" && Number.isSafeInteger(value) && value >= minimum ? value : null;
+    const blockingCount = count(input.attentionSummary?.blocking, blocking.length);
+    const optionalCount = count(input.attentionSummary?.optional, input.attention.length - blocking.length);
+    const coverage: DigestCoverage = blockingCount === null || optionalCount === null ? "unknown"
+      : blockingCount + optionalCount > input.attention.length ? "partial"
+        : input.attentionSummary?.coverage ?? "unknown";
     const oldest = blocking
       .map((item) => ({ raw: item.updatedAt ?? null, at: timeOf(item.updatedAt) }))
       .filter((item): item is { raw: string; at: number } => item.at !== null)
       .sort((left, right) => left.at - right.at)[0];
     needsYou = {
       availability: "ok",
-      blocking: blocking.length,
-      optional: input.attention.length - blocking.length,
-      oldestWaitingSince: oldest?.raw ?? null,
+      blocking: blockingCount,
+      optional: optionalCount,
+      coverage,
+      listed: input.attention.length,
+      oldestWaitingSince: coverage === "complete" ? oldest?.raw ?? null : null,
     };
   }
 

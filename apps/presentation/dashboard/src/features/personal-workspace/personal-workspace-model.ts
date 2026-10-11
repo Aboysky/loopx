@@ -8,6 +8,7 @@ import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
 import type { TodoItem } from "../../data/status";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import type { DigestAttentionSummary } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
@@ -177,6 +178,7 @@ export type WorkspaceGoal = {
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
   state: WorkspaceGoalState;

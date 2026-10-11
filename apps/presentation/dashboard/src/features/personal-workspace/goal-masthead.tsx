@@ -28,6 +28,7 @@ export function useGoalWorkspaceDigest(goal: WorkspaceGoal, userTodos: Workspace
     openCount: goal.openTodoCount,
     runningTodoIds: items.flatMap((item) => item.kind === "run" && item.run.goalId === goal.goalId && item.run.status === "running" && item.run.todoId ? [item.run.todoId] : []),
     attention: goal.loadState === "error" ? null : userTodos.filter((item) => item.goalId === goal.goalId).map((item) => ({ blocking: item.blocking, updatedAt: item.updatedAt })),
+    attentionSummary: goal.attentionSummary,
     usage: goal.usage,
     execution: digestExecution(goal.execution),
     activity: (goal.hostThreadActivity?.threads ?? []).map((thread) => ({ actor: hostSurfaceLabel(thread.hostSurface), at: thread.lastEventAt })),
@@ -189,13 +190,15 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
         {work.total === null ? work.open : <span>{work.done}<small>/{work.total}</small></span>}
       </Vital>
       <Vital label={t("vitals.needsYou")} onClick={() => onFocusRegion("attention")} valueKey={`${goal.goalId}:${needs.availability}:${needs.availability === "ok" ? needs.blocking : ""}`}
-        tone={needs.availability === "ok" && needs.blocking > 0 ? "danger" : needs.availability === "ok" ? "recede" : undefined}
+        tone={needs.availability === "ok" && needs.blocking !== null && needs.blocking > 0 ? "danger" : needs.availability === "ok" ? "recede" : undefined}
         sub={needs.availability !== "ok" ? null : [
           needs.blocking === 0 ? t("vitals.needsYouNone") : null,
+          needs.coverage !== "complete" ? t("vitals.needsYouPartial", { count: needs.listed }) : null,
           needs.oldestWaitingSince ? t("vitals.needsYouOldest", { time: relativeTime(needs.oldestWaitingSince, locale) ?? "" }) : null,
           needs.optional ? t("vitals.needsYouOptional", { count: needs.optional }) : null,
         ].filter(Boolean).join(" · ")}>
-        {needs.availability !== "ok" ? t("vitals.unavailable") : <>{needs.blocking > 0 ? <AlertCircle aria-hidden size={15} /> : null}{needs.blocking}</>}
+        {needs.availability !== "ok" ? t("vitals.unavailable") : needs.blocking === null ? "—"
+          : <>{needs.blocking > 0 ? <AlertCircle aria-hidden size={15} /> : null}{needs.blocking}</>}
       </Vital>
       <Vital label={t("vitals.agentTime")} onClick={() => onFocusRegion("usage")} sub={windowLabel}
         tone={digest.usage.agentTimeMs === null ? "recede" : undefined} valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.agentTimeMs}`}>
