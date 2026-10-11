@@ -130,6 +130,88 @@ register it as a second live Goal or start a Host using an old grant. Explicit
 identity/path adoption, pending-effect disposition and authorized reactivation,
 including their App journey, remain separate acceptance work.
 
+## Inspect a complete backup without activating it
+
+In **Settings → Capability Center → device defaults → Configuration backup and
+recovery**, choose **Full archive inspection**. Select the original `.tar.gz`
+and matching external `.manifest.json`, then choose **Verify and create isolated
+copy**. The existing configuration-snapshot option remains separate. Full-archive
+inspection is a machine-level operation; it is not shown in single-Goal scope.
+Unsupported services/platforms keep the operation unavailable.
+
+The local server streams the two uploads into private temporary inputs. It checks
+the archive digest before decoding tar data, then checks embedded/external
+manifest agreement, paths, links, member hashes and extraction capacity. Only a
+new inert checkpoint can be published. It reads configuration and selected
+File/SQLite authority through their existing owners, including the complete Todo
+read model and committed history. Original registry paths are never followed.
+
+The result separates **readable**, **historical only** and **unknown** components,
+with an owner and one next action. SQLite bytes alone do not prove a readable Goal
+work model. Remaining v0 state has no complete owner inventory, so it stays
+unknown; every v0 audit carries `legacy_manifest_incomplete`, stays `held`, and
+reports `execution_authority_granted=false` and `activation_eligible=false`.
+No Goal is registered, no provider is selected, and no Host, lease, timer or
+pending external operation is resumed. This is the M1 inspection path in the
+[complete recovery RFC](../architecture/rfcs/complete-state-recovery-v0.md),
+not controlled reactivation.
+
+Use **Previous inspections** after reloading to read the saved, digest-checked
+report. A historical report describes its recorded observation time; reading it
+again does not reverify copied data. A damaged new input clears the prior success
+view and leaves existing checkpoints intact. If a response was lost, **Check for
+an existing result** reads the original checkpoint; a repeated write to that
+occupied target is refused.
+
+The additive CLI route preserves existing backup creation syntax:
+
+```bash
+uv run --extra test loopx --format json backup-state verify \
+  --archive BACKUP.tar.gz --manifest BACKUP.manifest.json \
+  --destination NEW_PHYSICAL_DIRECTORY
+
+# Explicitly create and inspect that new inert copy.
+uv run --extra test loopx --format json backup-state verify \
+  --archive BACKUP.tar.gz --manifest BACKUP.manifest.json \
+  --destination NEW_PHYSICAL_DIRECTORY --execute
+```
+
+Preview checks archive/manifest bytes and capacity; owner records are not yet
+read and no zero-readability result is invented. Execution writes `data/` and
+`recovery-audit.json` below the new destination. Source archive and manifest must
+be private regular files; the destination must not exist and its ancestors must
+be physical directories. Existing targets are never replaced. Browser callers
+use opaque upload/checkpoint refs and cannot supply filesystem destinations.
+Uploads expire after an hour and are cleaned by a later upload; completed audits
+are retained. Removing these inert copies cannot undo or authorize live state.
+
+The first profile is POSIX with local File/SQLite state. Bounds are 128 MiB
+compressed archive, 512 MiB expanded tar stream, 16 MiB external/embedded
+manifest, 20,000 entries, expansion ratio 2,000, 128 KiB per extended tar header
+and 16 MiB total extended metadata. Paths have at most 64 components, 1,024
+characters and 255 UTF-8 bytes per component; JSON nesting is bounded at 64.
+Owner inspection permits 128 Goals, 128 SQLite files and 20,000 committed
+transactions per Goal. Overflow refuses publication rather than truncating a
+required inventory. Internal symlinks remain inert; escaping/cyclic links,
+hard links, sparse or special files and normalized name collisions reject.
+
+Archive parsing never loads restored code. Database/domain inspection runs in a
+disposable verifier with a 90-second deadline and a 512 MiB V8 heap ceiling.
+SQLite gets a 64 MiB process-local [hard heap limit](https://www.sqlite.org/pragma.html#pragma_hard_heap_limit);
+this is why that verifier is not dispatched in the shared Effect daemon. Views
+and virtual tables cannot masquerade as authority tables. WAL-mode copies and
+unsupported/service-owned providers remain unknown and need their existing
+owner; PostgreSQL is never contacted. The normal 2 MiB RPC wire is unchanged;
+only the two complete-manifest checks opt into the existing 64 MiB private-file
+transport. These bounds qualify this inspection profile, not a production SLO.
+
+中文：在设置的能力中心选择设备范围，打开既有备份入口并切到“完整归档检查”，
+选择同一份备份的归档与清单，一次明确操作建立隔离副本。可读、仅历史和未知分别
+显示；旧格式始终保留一致性/owner 缺口，不能据此启动 Goal。重载后可读历史报告，
+但历史读回不等于重新验证副本。CLI 不带 `--execute` 只做计划，不虚构 owner 读取结果。
+当前支持本地 POSIX File/SQLite 检查；Windows、服务端 PostgreSQL、身份接纳和实际
+重新启用仍未取得此路径的资格。备份内可能包含私有数据和凭据，副本及上传始终私有。
+
 ## Privacy, consistency and limits
 
 Backups are **private by default**. Full Goal rows can contain private paths,

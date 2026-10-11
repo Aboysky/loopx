@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal; backup creation and configuration-only isolated recovery exist, complete state verification and reactivation do not
+- **Delivery maturity:** Partial: bounded M1 full-archive verification and inert File/SQLite inspection implemented; controlled reactivation remains open
 - **Authors / owners:** Control-plane state, reliability, and affected domain maintainers
 - **Created:** 2026-10-08
 - **Last normative revision:** 2026-10-08
@@ -23,6 +23,18 @@ implementation slices, not live recovery, provider promotion, credential
 transfer, or a default change.
 
 ## 1. Decision summary
+
+### Current implementation checkpoint
+
+The bounded M1 path now has additive `backup-state verify`, loopback HTTP upload
+and immutable report readback, and a packaged Settings/Capability Center journey.
+It verifies real producer archives and reads captured configuration plus selected
+File/SQLite Todo/history through existing owners after original sources become
+unavailable. Every v0 audit remains held for incomplete capture/owner metadata;
+unknown state is not relabeled recoverable, and execution authority is always
+false. Limits, rollback and reproduction are in the [backup guide](../../reference/configuration-backup.md#inspect-a-complete-backup-without-activating-it).
+This checkpoint does not qualify M2/M3, live adoption, remote providers or the G1
+team journey. No original identity or receipt is rewritten.
 
 ### First supported user outcome
 
