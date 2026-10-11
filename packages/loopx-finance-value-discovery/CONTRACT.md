@@ -721,6 +721,12 @@ the existing error packet. Replay is deterministic calculation, not current
 source validation. Source/payment authentication, lifecycle/PIT, financial
 admission, trading and external read/write flags always remain false.
 
+For managed calls, read Core's typed run receipt and provider result together.
+A provider refusal uses `status=provider_failed` and preserves its nonzero
+`exit_code`; an admission refusal before invocation is a different path. Do not
+assume every unsuccessful managed call exits with code 2. A held `ok:true`
+assessment is neither kind of process failure and never grants financial use.
+
 `assess-funding-event --input-json` and schema-selected installed stdin call the
 same owner. Old input versions keep their original results. Disable via the
 existing extension lifecycle; a pinned 0.8.12 rollback rejects this new schema
