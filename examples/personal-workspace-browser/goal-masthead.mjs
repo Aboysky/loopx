@@ -102,8 +102,16 @@ export const goalMastheadScenario = {
       assert.equal(await page.locator(".goal-overview-usage").count(), 0, "Usage moved to the vitals strip");
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-overview.png"), animations: "disabled" });
 
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.evaluate(() => {
+        const target = document.getElementById("goal-overview-attention");
+        const scroll = target.scrollIntoView.bind(target);
+        target.scrollIntoView = (options) => { target.dataset.scrollBehavior = options?.behavior ?? "auto"; scroll(options); };
+      });
       await needs.cell.click();
       await page.waitForFunction(() => document.activeElement?.id === "goal-overview-attention");
+      assert.equal(await page.locator("#goal-overview-attention").getAttribute("data-scroll-behavior"), "auto", "Reduced motion reaches the decision directly without a scrolling animation");
+      await page.emulateMedia({ reducedMotion: null });
       await work.cell.click();
       await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "任务" }).waitFor();
       const openLane = page.locator(".personal-task-lane").filter({ has: page.locator("header strong", { hasText: "待执行 / 进行中" }) });
