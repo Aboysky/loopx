@@ -12,7 +12,7 @@ from .legacy_writer_fence import (
     ActiveStateAuthorityMutationError as ActiveStateAuthorityMutationError,
     require_prose_state_write_allowed as require_prose_state_write_allowed,
 )
-from .runtime_shadow import resolve_coordination_runtime_shadow_config
+from .configuration import resolve_coordination_runtime_shadow_config
 from .shadow_goal_scope import shadow_goal_scope
 from .shadow_management import ShadowManagementError, read_shadow_capture_binding, require_shadow_primary_write_allowed
 
