@@ -67,6 +67,7 @@ QUOTA_PAYLOAD_ITEM_FIELDS = (
     "resume_monitor_generation",
     "resume_condition",
     "resume_ready",
+    "blocked_retry",
     "blocking_monitor_todo_id",
     "no_followup",
     "successor_todo_ids",
