@@ -1847,6 +1847,15 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
     assert next_turn["status_projection_cache"]["miss_reason"] == "run_index_changed"
     assert (next_turn.get("selected_todo") or {}).get("todo_id") != TODO_ID
+    # Canonical Todo still has no wait; the committed Run alone supplies the
+    # bounded retry through real File/SQLite CLI collection and compaction.
+    pending = next_turn["scheduler_hint"]["pending_retry"]
+    assert pending["source"] == "turn_settlement"
+    assert pending["due_at"] == refresh["blocked_retry"]["due_at"]
+    assert pending["turn_instance_id"] == turn_id
+    assert pending["todo_id"] == TODO_ID
+    assert pending["execution_authority_granted"] is False
+    assert next_turn["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] <= 5
 
 
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(

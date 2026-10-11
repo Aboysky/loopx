@@ -232,6 +232,7 @@ def _execution_obligation(
     work_lane_contract: dict[str, Any] | None = None,
     external_evidence_observation: dict[str, Any] | None = None,
     user_gate_owns_frontier: bool = False,
+    blocked_retry_wait: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return build_execution_obligation(
         should_run=should_run,
@@ -240,6 +241,7 @@ def _execution_obligation(
         work_lane_contract=work_lane_contract,
         external_evidence_observation=external_evidence_observation,
         user_gate_owns_frontier=user_gate_owns_frontier,
+        blocked_retry_wait=blocked_retry_wait,
         successor_replan_mode=AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value,
     )
 
@@ -1279,6 +1281,14 @@ def _build_active_quota_payload(
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     agent_scope_action = _agent_scope_frontier_action(route.effective_action)
+    retry_deadline = (prepared.agent_todo_summary or {}).get("frontier_deadline") or {}
+    user_summary = prepared.user_todo_summary or {}
+    # Only an explicitly complete, notice-only user lane can replace the user
+    # gate explanation. Genuine gates and unknown scope keep their old route.
+    notice_only = (user_summary.get("user_action_open_count", 0) > 0 and
+                   user_summary.get("all_open_count") == user_summary.get("user_action_open_count"))
+    retry_wait = (retry_deadline.get("blocked_retry")
+                  if notice_only and retry_deadline.get("source") == "turn_settlement" else None)
     execution_obligation = _execution_obligation(
         should_run=route.should_run,
         effective_action=route.effective_action,
@@ -1289,6 +1299,7 @@ def _build_active_quota_payload(
         ),
         work_lane_contract=route.payload_work_lane_contract,
         external_evidence_observation=route.external_evidence_observation,
+        blocked_retry_wait=retry_wait,
         user_gate_owns_frontier=_user_action_owns_empty_agent_lane(
             prepared.user_todo_summary,
             prepared.agent_todo_summary,

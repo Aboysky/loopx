@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import base64
 import hashlib
 import json
@@ -625,6 +627,30 @@ def build_codex_app_scheduler_fallback_hint(
     }
 
 
+def _pending_retry_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    deadline = _dict_or_empty(_dict_or_empty(payload.get("agent_todo_summary")).get("frontier_deadline"))
+    retry = deadline.get("blocked_retry")
+    if deadline.get("source") != "turn_settlement" or not isinstance(retry, dict):
+        return {}
+    return {"pending_retry": {**retry, "execution_authority_granted": False,
+        "recheck": "rerun quota at or after due_at; current gates and owner cadence still apply"}}
+
+
+def _receipt_retry_wait_profile(
+    payload: dict[str, Any], cadence_class: str, interval_minutes: int,
+) -> dict[str, Any] | None:
+    # This is a wakeup recommendation. TS cadence admission still owns the
+    # floor; a deadline never changes claims, leases or execution authority.
+    retry = _pending_retry_projection(payload).get("pending_retry")
+    current_time = now_utc()
+    due = parse_scheduler_timestamp(retry.get("due_at")) if retry else None
+    if (cadence_class not in {"human_gate", "quiet_wait", "agent_scope_wait", "monitor_wait"}
+            or due is None or due <= current_time):
+        return None
+    horizon = max(1, math.ceil((due - current_time).total_seconds() / 60))
+    return {"interval_minutes": horizon, "retry": retry} if horizon < interval_minutes else None
+
+
 @dataclass(frozen=True)
 class _SchedulerHintBuilder:
     payload: dict[str, Any]
@@ -663,6 +689,18 @@ class _SchedulerHintBuilder:
             **projections, "min_interval_minutes": floor,
         }) if floor else projections
 
+    def _wait_cadence(
+        self, cadence_class: str, interval: int, maximum: int, multiplier: int,
+        progression: list[int] | None, reset: dict[str, Any] | None,
+        detail: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+        retry_wait = _receipt_retry_wait_profile(self.payload, cadence_class, interval)
+        if retry_wait:
+            interval = retry_wait["interval_minutes"]
+            progression, reset = [interval], None
+            detail = {**(detail or {}), "blocked_retry": retry_wait["retry"]}
+        return self._cadence_projections(interval, maximum, multiplier, progression), reset, detail
+
     def build(
         self,
         *,
@@ -692,7 +730,10 @@ class _SchedulerHintBuilder:
             (self.codex_app_scheduler_state or {}).get("state_key")
             or APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
         )
-        cadence = self._cadence_projections(codex_interval, codex_max, multiplier, cadence_progression_override)
+        cadence, reset_profile_snapshot_override, cadence_context_detail = self._wait_cadence(
+            cadence_class, codex_interval, codex_max, multiplier, cadence_progression_override,
+            reset_profile_snapshot_override, cadence_context_detail,
+        )
         local_cadence_progression, app_cadence_progression = cadence["local"], cadence["app"]
         app_host_max, codex_max, floor = cadence["app_max"], cadence["local_max"], cadence["floor"]
         app_initial_interval = app_cadence_progression[0]
@@ -1056,6 +1097,7 @@ class _SchedulerHintBuilder:
                 "contains": detail_contains,
             },
         }
+        scheduler_hint.update(_pending_retry_projection(self.payload))
         if app_surface == CODEX_APP_SURFACE:
             scheduler_hint["codex_app"] = build_codex_app_compatibility_projection(
                 app_automation,
@@ -1500,13 +1542,16 @@ def build_scheduler_hint(
             action="backoff_until_state_change",
             cadence_class="quiet_wait",
             reason=(
+                "the receipt-owned retry is pending; recheck its original due time "
+                "and current admission gates without waiting on the non-blocking user notice"
+                if arbitration.reason_code == "blocked_wait" else
                 "quota blocks delivery and no immediate user/monitor-specific path "
                 "is projected; poll at a slower cadence until the status changes"
             ),
-            codex_interval=30,
-            codex_max=120,
             cli_limit=3,
             claude_limit=3,
+            codex_interval=30,
+            codex_max=120,
         )
 
     raise AssertionError(f"unhandled scheduler disposition: {arbitration.disposition}")
