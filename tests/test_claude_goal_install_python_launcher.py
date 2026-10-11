@@ -7,9 +7,10 @@ interpreter name found, without ever running it.
 
 On Windows, `shutil.which("python3")` can resolve to the 0-byte `WindowsApps`
 App Execution Alias (`%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe`). That
-file exists and passes `shutil.which`, but executing it exits 9009 without
-starting Python and without writing to stdout or stderr. An installer that bakes
-that path writes hook / statusline / `/loopx` commands that silently do nothing:
+file exists and passes `shutil.which`, but it never starts Python - on some
+hosts executing it exits non-zero (9009), on others launching it raises OSError,
+and it writes nothing either way. An installer that bakes that path writes hook /
+statusline / `/loopx` commands that silently do nothing:
 the `--harden` should_run gate fails OPEN (Claude Code treats the non-zero,
 decision-less hook exit as a non-blocking error and runs the tool anyway), the
 statusline renders nothing, and `/loopx` never runs.
@@ -102,3 +103,38 @@ def test_installed_gate_command_actually_runs_python(alias_host: Path, tmp_path:
 
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     assert json.loads(result.stdout.decode("utf-8")) == {}
+
+
+def test_python_cmd_keeps_the_python3_preference_when_it_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    tried: list[str] = []
+
+    def launches(py: str) -> bool:
+        tried.append(py)
+        return True
+
+    monkeypatch.setattr(claude_install.shutil, "which", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(claude_install, "_launches_python", launches)
+    assert claude_install._python_cmd() == "/fake/python3"
+    assert tried == ["/fake/python3"]
+
+
+def test_python_cmd_falls_through_python3_to_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(claude_install.shutil, "which", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(claude_install, "_launches_python", lambda py: py.endswith("python"))
+    assert claude_install._python_cmd() == "/fake/python"
+
+
+def test_launches_python_rejects_a_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 9009
+
+    monkeypatch.setattr(claude_install.subprocess, "run", lambda *args, **kwargs: Result())
+    assert claude_install._launches_python("python3") is False
+
+
+def test_launches_python_accepts_a_clean_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 0
+
+    monkeypatch.setattr(claude_install.subprocess, "run", lambda *args, **kwargs: Result())
+    assert claude_install._launches_python("python3") is True

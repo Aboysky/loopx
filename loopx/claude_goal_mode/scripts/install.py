@@ -39,11 +39,13 @@ def _launches_python(py: str) -> bool:
 
     `shutil.which` only proves a file is executable, not that it runs Python. On
     Windows it can return the 0-byte `WindowsApps` App Execution Alias, which
-    exits 9009 writing nothing, so anything that bakes that path (the PreToolUse
-    hook, the statusline, `/loopx`) silently does nothing."""
+    never starts Python: on some hosts it exits non-zero (9009), on others
+    launching it raises OSError, and it writes nothing either way. Anything that
+    bakes that path (the PreToolUse hook, the statusline, `/loopx`) then
+    silently does nothing."""
     try:
-        return subprocess.run([py, "-c", ""], capture_output=True).returncode == 0
-    except OSError:
+        return subprocess.run([py, "-c", ""], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
