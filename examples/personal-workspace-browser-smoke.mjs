@@ -62,6 +62,7 @@ import { newestDraftScenario } from "./personal-workspace-browser/newest-draft.m
 import { conversationInputScenario } from "./personal-workspace-browser/conversation-input.mjs";
 import { goalActivityScenario } from "./personal-workspace-browser/goal-activity.mjs";
 import { goalWorkMapScenario } from "./personal-workspace-browser/goal-work-map.mjs";
+import { goalMastheadScenario } from "./personal-workspace-browser/goal-masthead.mjs";
 
 import { stewardGroupTriggerScenario } from "./personal-workspace-browser/steward-group-trigger.mjs";
 
@@ -82,6 +83,7 @@ scenarioCatalog.push(monitorReadbackScenario);
 scenarioCatalog.push(blockedReasonReadbackScenario);
 scenarioCatalog.push(turnStepsScenario);
 scenarioCatalog.push(goalWorkMapScenario);
+scenarioCatalog.push(goalMastheadScenario);
 scenarioCatalog.push(performanceDiagnosisScenario);
 scenarioCatalog.push(blockedNoticeSettingsScenario);
 scenarioCatalog.push(nativeChildActivityScenario);
