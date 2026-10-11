@@ -91,6 +91,16 @@ canonical team-plan 只在受支持的未迁移分支加载 capture 和 Markdown
 不等于删除活跃旧 writer，或完成 receiver adoption、Host 执行、PostgreSQL／D2
 资格。见[合同及保留义务](../../reference/canonical-todo-completion-update.md#team-plan-source-writer-isolation)。
 
+公开 CLI 的 shadow 配置归入 `coordination/configuration.py`，完整源捕获归入
+`coordination/authority_source_capture.py`；冷导入、源检查和历史 promotion 恢复
+复用保留 owner，只有显式开启的 shadow 动作加载旧 producer。隔离源码及正常
+wheel 的副本中物理删除四个 shadow producer 后，真实 CLI 仍覆盖新 Goal 默认
+SQLite、租约工作、一次结算及可回退出口，以及冷 File／SQLite 导入和原操作重放。
+旧模块为现有消费者保留 API 重导出；启用的 capture、outbox 和旧命令仍受支持。
+精确源身份、归档依赖、安全 lease 读取和后续写入恢复均须保留。本批移除提前导入
+阻塞；删除活跃 producer 仍须其最后调用方退出。App／Lark 合同、provider 事务、
+cohort 采用及冻结 D2 证据保持独立。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 

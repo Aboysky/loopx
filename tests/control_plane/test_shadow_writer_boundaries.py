@@ -588,7 +588,7 @@ def test_prose_guard_ignores_resume_evaluation_clock(
         return project_at_distinct_time
 
     monkeypatch.setattr(
-        "loopx.control_plane.coordination.runtime_shadow.todo_partition_projector",
+        "loopx.control_plane.coordination.authority_source_capture.todo_partition_projector",
         ticking_projector,
     )
     goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
@@ -621,7 +621,7 @@ def test_prose_guard_preserves_json_scalar_identity(
     original_value: bool, planned_value: int,
 ) -> None:
     """A full source projection must retain JSON types even if Python equates them."""
-    from loopx.control_plane.coordination import runtime_shadow as adapter
+    from loopx.control_plane.coordination import authority_source_capture as adapter
     from loopx.control_plane.coordination.local_authority_shadow_projection import (
         todo_partition_projection,
     )
@@ -693,7 +693,7 @@ def test_prose_projection_failure_preserves_source_and_reward_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, maintenance: bool,
 ) -> None:
     from loopx.feedback import append_human_reward
-    from loopx.control_plane.coordination import runtime_shadow as source
+    from loopx.control_plane.coordination import authority_source_capture as source
     from loopx.control_plane.coordination.runtime_shadow_writer_adapter import ActiveStateAuthorityMutationError
     from loopx.control_plane.coordination.shadow_management import ShadowManagementError, shadow_management_state_path
 
@@ -723,7 +723,8 @@ def test_configuration_and_prose_guard_load_without_capture_modules(tmp_path, mo
     from test_cold_source_import_cli import workspace
 
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
-    for name in ("runtime_shadow_writer_adapter.py", "local_authority_shadow_outbox.py"):
+    for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
+                 "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
         (receiver / "loopx/control_plane/coordination" / name).unlink()
     registry = tmp_path / "project/.loopx/registry.json"
     child = subprocess.run([sys.executable, "-c", """
