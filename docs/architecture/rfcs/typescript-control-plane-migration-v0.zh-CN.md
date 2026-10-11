@@ -101,6 +101,14 @@ SQLite、租约工作、一次结算及可回退出口，以及冷 File／SQLite
 阻塞；删除活跃 producer 仍须其最后调用方退出。App／Lark 合同、provider 事务、
 cohort 采用及冻结 D2 证据保持独立。
 
+Monitor router 同样隔离活跃旧源 writer；历史回执 codec／replay 共用 scheduler
+只读 IO owner，原操作身份和决策继续归既有 TS batch。File/SQLite CLI 与正常
+wheel 删源检查须保留后来写入及原 successor；晋升后重放保持旧 outbox 静止，
+未晋升的 markerless batch 恢复保留原 drain。本批只移除 canonical 导入依赖，
+不删除受支持的旧 writer；缺席臂复用上述 CLI 启动隔离，同时移除四个 shadow
+producer module。
+见[保留义务及回滚](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation)。
+
 存量 Goal 迁移、两策略退役和格式升级仍各有独立回执及出口；原回执恢复不能成为
 保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
