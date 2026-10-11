@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from contextlib import ExitStack
 from datetime import datetime, timezone
@@ -33,7 +34,11 @@ def unique_archive_path(archive_root: Path, goal_id: str, timestamp: str) -> Pat
 
 
 def _validate_archive_destination(source: Path, destination: Path) -> None:
-    if destination.resolve().is_relative_to(source.resolve()):
+    source_path = source.resolve()
+    destination_path = Path(os.path.abspath(destination))
+    if destination.resolve().is_relative_to(source_path) or any(
+        parent.resolve() == source_path for parent in destination_path.parents
+    ):
         raise ValueError(
             "archive destination must be outside the runtime goal directory"
         )
