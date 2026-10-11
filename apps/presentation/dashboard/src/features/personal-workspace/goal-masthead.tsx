@@ -121,15 +121,28 @@ export type GoalVitalRegion = "overview" | "tasks" | "attention" | "usage";
 
 const ribbonOrder = ["done", "running_observed", "open", "waiting_dependency", "blocked", "deferred"] as const;
 
-function Vital({ children, label, onClick, sub, tone }: {
-  children: ReactNode; label: string; onClick: () => void; sub?: ReactNode; tone?: string;
+function Vital({ children, extra, label, onClick, sub, tone, valueKey }: {
+  children: ReactNode; extra?: ReactNode; label: string; onClick: () => void; sub?: ReactNode; tone?: string; valueKey?: string;
 }) {
   return (
     <button className={`goal-vital${tone ? ` is-${tone}` : ""}`} onClick={onClick} type="button">
-      <span className="goal-vital-label">{label}</span>
-      <span className="goal-vital-value">{children}</span>
-      {sub ? <span className="goal-vital-sub">{sub}</span> : null}
+      <span className="goal-vital-value goal-vital-swap" key={valueKey}>{children}</span>
+      <span className="goal-vital-meta">
+        <span className="goal-vital-label">{label}</span>
+        {sub ? <span className="goal-vital-sub">{sub}</span> : null}
+      </span>
+      {extra}
     </button>
+  );
+}
+
+/** Holds the strip's geometry while a Goal's first read is in flight. */
+export function GoalVitalsSkeleton() {
+  const { t } = useWorkspaceI18n();
+  return (
+    <section aria-busy="true" aria-label={t("vitals.label")} className="goal-vitals is-loading" data-testid="goal-vitals-loading">
+      {Array.from({ length: 6 }, (_, index) => <span aria-hidden className="goal-vital goal-vital-skeleton" key={index}><i /><i /></span>)}
+    </section>
   );
 }
 
@@ -159,23 +172,23 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
   const needs = digest.needsYou;
   const last = digest.lastActivity;
   const lastTime = last ? relativeTime(last.at, locale) : null;
+  const stateLabel = finishing ? t("vitals.stopping") : t(activity.labelKey as WorkspaceMessageKey);
 
   return (
     <section aria-label={t("vitals.label")} className="goal-vitals" data-testid="goal-vitals">
       <Vital label={t("vitals.state")} onClick={() => onFocusRegion("overview")} sub={stateSub}
-        tone={finishing ? "stopped" : activity.tone}>
+        tone={finishing ? "stopped" : activity.tone} valueKey={`${goal.goalId}:${stateLabel}`}>
         <span aria-hidden className={`goal-vital-dot${activity.live && !finishing ? " is-live" : ""}`} />
-        {finishing ? t("vitals.stopping") : t(activity.labelKey as WorkspaceMessageKey)}
+        <span>{stateLabel}</span>
       </Vital>
-      <Vital label={t("vitals.work")} onClick={() => onFocusRegion("tasks")} sub={<>
-        {work.coverage === "partial" && work.projectedOpen !== null
+      <Vital label={t("vitals.work")} onClick={() => onFocusRegion("tasks")} valueKey={`${goal.goalId}:${work.done}:${work.total}:${work.open}`}
+        sub={work.coverage === "partial" && work.projectedOpen !== null
           ? <span className="goal-vital-partial">{t("vitals.workPartial", { listed: work.listedOpen, projected: work.projectedOpen })}</span> : workSub}
-        {ribbonTotal > 0 ? <span aria-hidden className="goal-work-ribbon">{ribbonOrder.map((name) => work.classes[name]
-          ? <i className={`is-${name}`} key={name} style={{ flexGrow: work.classes[name] }} /> : null)}</span> : null}
-      </>}>
+        extra={ribbonTotal > 0 ? <span aria-hidden className="goal-work-ribbon">{ribbonOrder.map((name) => work.classes[name]
+          ? <i className={`is-${name}`} key={name} style={{ flexGrow: work.classes[name] }} /> : null)}</span> : null}>
         {work.total === null ? work.open : <span>{work.done}<small>/{work.total}</small></span>}
       </Vital>
-      <Vital label={t("vitals.needsYou")} onClick={() => onFocusRegion("attention")}
+      <Vital label={t("vitals.needsYou")} onClick={() => onFocusRegion("attention")} valueKey={`${goal.goalId}:${needs.availability}:${needs.availability === "ok" ? needs.blocking : ""}`}
         tone={needs.availability === "ok" && needs.blocking > 0 ? "danger" : needs.availability === "ok" ? "recede" : undefined}
         sub={needs.availability !== "ok" ? null : [
           needs.blocking === 0 ? t("vitals.needsYouNone") : null,
@@ -185,11 +198,11 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos }: {
         {needs.availability !== "ok" ? t("vitals.unavailable") : <>{needs.blocking > 0 ? <AlertCircle aria-hidden size={15} /> : null}{needs.blocking}</>}
       </Vital>
       <Vital label={t("vitals.agentTime")} onClick={() => onFocusRegion("usage")} sub={windowLabel}
-        tone={digest.usage.agentTimeMs === null ? "recede" : undefined}>
+        tone={digest.usage.agentTimeMs === null ? "recede" : undefined} valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.agentTimeMs}`}>
         {digest.usage.agentTimeMs === null ? "—" : formatDurationMs(digest.usage.agentTimeMs)}
       </Vital>
       <Vital label={t("vitals.cost")} onClick={() => onFocusRegion("usage")} sub={windowLabel}
-        tone={digest.usage.costUsd === null ? "recede" : undefined}>
+        tone={digest.usage.costUsd === null ? "recede" : undefined} valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.costUsd}`}>
         {digest.usage.costUsd === null ? "—" : formatCostUsd(digest.usage.costUsd)}
       </Vital>
       <Vital label={t("vitals.lastActivity")} onClick={() => onFocusRegion("overview")}

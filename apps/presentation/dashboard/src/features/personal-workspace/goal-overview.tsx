@@ -1,5 +1,6 @@
-import { ArrowRight, Check, Circle, Info, X } from "lucide-react";
+import { ArrowRight, CircleCheck, CircleDashed, CircleX, Hand, Info } from "lucide-react";
 import { DeliveryReview } from "./delivery-review";
+import { relativeTime } from "./goal-activity-view";
 import { goalAcceptanceContractCopy } from "./delivery-review-copy";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
@@ -47,32 +48,46 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   const passed = criteria.filter(criterion => criterion.state === "verified").length;
   const acceptanceCopy = goalAcceptanceContractCopy[locale === "zh-CN" ? "zh-CN" : "en"];
   return <section className="goal-overview" aria-label={t("header.overview")}>
-    <header className="goal-overview-heading"><h2>{t("header.overview")}</h2><button onClick={onOpenDetails} type="button"><Info size={15} />{copy.details}</button></header>
     <div className={`goal-overview-summary${attention.length ? " has-attention" : ""}`}>
       <section className="goal-overview-direction" aria-label={copy.direction}>
-        <header><h3>{copy.direction}</h3>{contract ? <span>{acceptanceCopy.verificationState[contract.status]}</span> : null}</header>
+        <header className="goal-overview-heading">
+          <h2>{copy.direction}</h2>
+          {contract ? <span>{acceptanceCopy.verificationState[contract.status]}</span> : null}
+          <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
+        </header>
         {contract ? <>
-          <strong>{contract.objective || acceptanceCopy.unknown}</strong>
+          <p className="goal-overview-objective">{contract.objective || acceptanceCopy.unknown}</p>
           {criteria.length ? <>
-            <p>{copy.verified.replace("{passed}", String(passed)).replace("{total}", String(criteria.length))}</p>
+            <div className="goal-overview-progress">
+              <span>{copy.verified.replace("{passed}", String(passed)).replace("{total}", String(criteria.length))}</span>
+              <span aria-hidden className="goal-criteria-meter">{criteria.map(criterion => <i className={`is-${criterion.state}`} key={criterion.id} />)}</span>
+            </div>
             <ul className="goal-overview-criteria">{criteria.map(criterion => <li className={`is-${criterion.state}`} key={criterion.id}>
-              {criterion.state === "verified" ? <Check aria-hidden size={14} /> : criterion.state === "failing" ? <X aria-hidden size={14} /> : <Circle aria-hidden size={12} />}
+              {criterion.state === "verified" ? <CircleCheck aria-hidden size={16} /> : criterion.state === "failing" ? <CircleX aria-hidden size={16} /> : <CircleDashed aria-hidden size={16} />}
               <span>{criterion.description}</span><small>{copy.criterion[criterion.state]}</small>
             </li>)}</ul>
           </> : null}
-          <p><small>{copy.agentSummary}</small> {goal.nextSentence}</p>
+          <p className="goal-overview-note"><small>{copy.agentSummary}</small> {goal.nextSentence}</p>
         </> : <>
-          <small>{copy.agentSummary}</small>
-          <strong>{goal.nextSentence}</strong>
-          {goal.agentSentence && goal.agentSentence !== goal.nextSentence ? <p>{goal.agentSentence}</p> : null}
-          <p className="goal-overview-quiet">{copy.noTarget}</p>
+          <p className="goal-overview-objective">{goal.nextSentence}</p>
+          {goal.agentSentence && goal.agentSentence !== goal.nextSentence ? <p className="goal-overview-note">{goal.agentSentence}</p> : null}
+          <p className="goal-overview-note"><small>{copy.agentSummary}</small> {copy.noTarget}</p>
         </>}
-        {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><strong>{run.run.title}</strong><ArrowRight size={15} /></button> : null}
+        {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><strong>{run.run.title}</strong><ArrowRight aria-hidden size={15} /></button> : null}
       </section>
-      {attention.length ? <section className="goal-overview-attention" id={goalOverviewAttentionId} tabIndex={-1}>
-        <header><h3>{copy.attention}</h3><span>{blocking}{attention.length > blocking ? ` · ${copy.optional.replace("{count}", String(attention.length - blocking))}` : ""}</span></header>
-        <ul>{attention.slice(0, 3).map(item => <li key={item.todoId}><button type="button" onClick={() => onSelect({ kind: "attention", item })}><span>{item.text}</span><ArrowRight size={15} /></button></li>)}</ul>
-        {attention.length > 3 ? <button type="button" onClick={() => onView("tasks")}>{copy.tasks} ({attention.length})<ArrowRight size={14} /></button> : null}
+      {attention.length ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
+        <header>
+          <h2>{copy.attention}</h2>
+          <span className={blocking ? "goal-overview-count is-blocking" : "goal-overview-count"}>{blocking}</span>
+          {attention.length > blocking ? <small>{copy.optional.replace("{count}", String(attention.length - blocking))}</small> : null}
+        </header>
+        <ul>{attention.slice(0, 3).map(item => <li key={item.todoId}><button type="button" onClick={() => onSelect({ kind: "attention", item })}>
+          <Hand aria-hidden size={15} />
+          <span className="goal-attention-text"><span>{item.text}</span>
+            {item.updatedAt ? <time dateTime={item.updatedAt}>{relativeTime(item.updatedAt, locale)}</time> : null}</span>
+          <ArrowRight aria-hidden size={14} />
+        </button></li>)}</ul>
+        {attention.length > 3 ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks} ({attention.length})<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
     {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>
