@@ -268,3 +268,83 @@ def test_queue_status_main_charges_a_stdin_bom_once(
             assert payload["error"] == (
                 f"content-ops stdin JSON input exceeds the {limit}-byte limit"
             )
+
+
+_QUEUE_ARGV = [
+    "--format",
+    "json",
+    "content-ops",
+    "queue-status",
+    "--queue-id",
+    "x-test-queue",
+    "--generated-at",
+    "2026-08-10T02:10:00+08:00",
+    "--item-json",
+]
+
+
+def _queue_main(monkeypatch, capsys, source: str, stdin: str = "", *extra: str):
+    from loopx.cli import main
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    code = main([*_QUEUE_ARGV, source, *extra])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_queue_status_max_input_bytes_bounds_stdin_and_recovers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    item = _review_ready(_item("community-recap-v1"))
+    text = json.dumps(item)
+    size = len(text.encode("utf-8"))
+    for limit, expected in [(size + 1, 0), (size, 0), (size - 1, 1)]:
+        code, payload = _queue_main(monkeypatch, capsys, "-", text, "--max-input-bytes", str(limit))
+        assert code == expected
+        if expected:
+            assert payload["error"] == f"content-ops stdin JSON input exceeds the {limit}-byte limit"
+        else:
+            assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
+
+    compact = json.dumps(item, separators=(",", ":"))
+    assert len(compact.encode("utf-8")) <= size - 1
+    code, payload = _queue_main(monkeypatch, capsys, "-", compact, "--max-input-bytes", str(size - 1))
+    assert code == 0
+    assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
+
+
+def test_queue_status_max_input_bytes_raises_the_default(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from loopx.capabilities.content_ops import cli as content_ops_cli
+
+    text = json.dumps(_review_ready(_item("community-recap-v1")))
+    monkeypatch.setattr(content_ops_cli, "MAX_INPUT_BYTES", 64)
+    code, payload = _queue_main(monkeypatch, capsys, "-", text)
+    assert code == 1 and payload["error"].endswith("exceeds the 64-byte limit")
+    code, payload = _queue_main(monkeypatch, capsys, "-", text, "--max-input-bytes", str(len(text)))
+    assert code == 0
+    assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
+
+
+def test_queue_status_max_input_bytes_leaves_item_files_unbounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The content-ops limit covers stdin only; file inputs keep their prior scope.
+    path = tmp_path / "item.json"
+    path.write_text(json.dumps(_review_ready(_item("community-recap-v1"))), encoding="utf-8")
+    code, payload = _queue_main(monkeypatch, capsys, str(path), "", "--max-input-bytes", "8")
+    assert code == 0
+    assert payload["projection"]["next_action"]["item_id"] == "community-recap-v1"
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "1e6", "+5", "", "unlimited"])
+def test_queue_status_rejects_invalid_max_input_bytes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    from loopx.cli import main
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+    with pytest.raises(SystemExit) as exited:
+        main([*_QUEUE_ARGV, "-", f"--max-input-bytes={value}"])
+    assert exited.value.code == 2
+    assert "must be a positive whole number of bytes" in capsys.readouterr().err

@@ -262,32 +262,28 @@ def _object_of_size(size: int, fill: str = "x") -> str:
 def test_periodic_report_stdin_input_is_bounded_by_encoded_bytes(
     monkeypatch, fill
 ) -> None:
-    monkeypatch.setattr(periodic_report_cli, "MAX_INPUT_BYTES", 32)
 
     monkeypatch.setattr(sys, "stdin", _MeteredStdin(_object_of_size(32, fill)))
-    assert periodic_report_cli._load_json_object("-") == {"k": fill * (24 // len(fill.encode()))}
+    assert periodic_report_cli._load_json_object("-", 32) == {"k": fill * (24 // len(fill.encode()))}
 
     # 18 characters but 38 bytes when fill is multibyte: the budget is bytes.
     oversized = _MeteredStdin(_object_of_size(35 if fill == "x" else 38, fill))
     monkeypatch.setattr(sys, "stdin", oversized)
     with pytest.raises(ValueError, match="exceeds the 32-byte limit"):
-        periodic_report_cli._load_json_object("-")
+        periodic_report_cli._load_json_object("-", 32)
     # Refusal happens within one character of the budget, not after buffering.
     assert oversized.bytes_read <= 32 + 4
 
 
-def test_periodic_report_file_input_is_bounded_and_keeps_strict_utf8(
-    tmp_path, monkeypatch
-) -> None:
-    monkeypatch.setattr(periodic_report_cli, "MAX_INPUT_BYTES", 32)
+def test_periodic_report_file_input_is_bounded_and_keeps_strict_utf8(tmp_path) -> None:
     request_path = tmp_path / "request.json"
 
     request_path.write_text(_object_of_size(32, "\u20ac"), encoding="utf-8")
-    assert periodic_report_cli._load_json_object(str(request_path)) == {"k": "\u20ac" * 8}
+    assert periodic_report_cli._load_json_object(str(request_path), 32) == {"k": "\u20ac" * 8}
 
     request_path.write_text(_object_of_size(33), encoding="utf-8")
     with pytest.raises(ValueError, match="exceeds the 32-byte limit"):
-        periodic_report_cli._load_json_object(str(request_path))
+        periodic_report_cli._load_json_object(str(request_path), 32)
 
     # The size guard must not widen the accepted encodings of request files.
     for raw, error in [
@@ -297,7 +293,7 @@ def test_periodic_report_file_input_is_bounded_and_keeps_strict_utf8(
     ]:
         request_path.write_bytes(raw)
         with pytest.raises(error):
-            periodic_report_cli._load_json_object(str(request_path))
+            periodic_report_cli._load_json_object(str(request_path), 32)
 
 
 def test_periodic_report_cli_reads_stdin_and_refuses_oversized_pipe() -> None:
@@ -362,3 +358,68 @@ def test_periodic_report_main_charges_a_stdin_bom_once(
             assert payload["error"] == (
                 f"periodic-report JSON input exceeds the {limit}-byte limit"
             )
+
+
+_COMPOSE_ARGV = ["--format", "json", "periodic-report", "compose-run", "--request-json"]
+
+
+def _compose(monkeypatch, capsys, source: str, stdin: str = "", *extra: str):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    code = main([*_COMPOSE_ARGV, source, *extra])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_periodic_report_default_limit_admits_exactly_16_mib(monkeypatch, capsys) -> None:
+    limit = 16 * 1024 * 1024
+    # Exactly the default passes the size gate; only request validation remains.
+    _, payload = _compose(monkeypatch, capsys, "-", _object_of_size(limit))
+    assert "byte limit" not in payload.get("error", "")
+    code, payload = _compose(monkeypatch, capsys, "-", _object_of_size(limit + 1))
+    assert code == 1
+    assert payload["error"] == f"periodic-report JSON input exceeds the {limit}-byte limit"
+
+
+@pytest.mark.parametrize("source", ["stdin", "file"])
+def test_periodic_report_max_input_bytes_bounds_both_sources_and_recovers(
+    tmp_path, monkeypatch, capsys, source
+) -> None:
+    def run(text: str, limit: int):
+        path = tmp_path / "request.json"
+        path.write_text(text, encoding="utf-8")
+        if source == "stdin":
+            return _compose(monkeypatch, capsys, "-", text, "--max-input-bytes", str(limit))
+        return _compose(monkeypatch, capsys, str(path), "", "--max-input-bytes", str(limit))
+
+    text = json.dumps(_request())
+    size = len(text.encode("utf-8"))
+    for limit, expected in [(size + 1, 0), (size, 0), (size - 1, 1)]:
+        code, payload = run(text, limit)
+        assert code == expected
+        if expected:
+            assert payload["error"] == f"periodic-report JSON input exceeds the {limit}-byte limit"
+        else:
+            assert payload["schema_version"] == "periodic_report_v0"
+
+    # The same request, written compactly, fits the limit it just exceeded.
+    compact = json.dumps(_request(), separators=(",", ":"))
+    assert len(compact.encode("utf-8")) <= size - 1
+    code, payload = run(compact, size - 1)
+    assert code == 0 and payload["schema_version"] == "periodic_report_v0"
+
+
+def test_periodic_report_max_input_bytes_raises_the_default(monkeypatch, capsys) -> None:
+    text = json.dumps(_request())
+    monkeypatch.setattr(periodic_report_cli, "MAX_INPUT_BYTES", 64)
+    code, payload = _compose(monkeypatch, capsys, "-", text)
+    assert code == 1 and payload["error"].endswith("exceeds the 64-byte limit")
+    code, payload = _compose(monkeypatch, capsys, "-", text, "--max-input-bytes", str(len(text)))
+    assert code == 0 and payload["schema_version"] == "periodic_report_v0"
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "1e6", "+5", "", "unlimited"])
+def test_periodic_report_rejects_invalid_max_input_bytes(monkeypatch, capsys, value) -> None:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_request())))
+    with pytest.raises(SystemExit) as exited:
+        main([*_COMPOSE_ARGV, "-", f"--max-input-bytes={value}"])
+    assert exited.value.code == 2
+    assert "must be a positive whole number of bytes" in capsys.readouterr().err
