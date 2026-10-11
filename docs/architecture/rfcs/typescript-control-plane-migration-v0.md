@@ -77,6 +77,13 @@ is disabled. This removes optional capture work from ordinary legacy writes,
 without changing their output, history retention or outbox recovery. Python
 retains this Host IO adapter until its last supported source writer is replaced;
 this is neither whole-writer retirement nor default-provider qualification.
+Unpromoted lease acquire now loads the capture adapter only when the typed
+result carries a capture request. The real CLI and normal-wheel oracle cover
+acquire/replay, rejected stale renewal, renewal, transfer and release with the
+four legacy shadow producer modules physically absent and with no enabled
+capture or active binding. An active binding still delivers capture after the
+setting is removed. This retires a default-off dependency, not the supported
+source writer or pending capture/history recovery.
 
 Handoff/continuation display decisions now belong to the existing TypeScript Todo
 context owner. Summary reuses its normalized identity/claim/exclusion/class
