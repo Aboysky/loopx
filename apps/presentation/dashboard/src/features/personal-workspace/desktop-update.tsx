@@ -98,7 +98,7 @@ export function DesktopUpdate() {
     if (!invoke || busy.current) return;
     busy.current = true;
     statusGeneration.current++;
-    setState({ phase: action === "check" ? "checking" : action === "repair" ? "installing_runtime" : action === "forget_runtime_selection" ? "connecting" : "downloading" });
+    setState({ phase: action === "check" ? "checking" : action === "repair" ? "installing_runtime" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : action === "forget_runtime_selection" ? "connecting" : "downloading" });
     try {
       if (!version) {
         const generation = ++statusGeneration.current;
@@ -177,7 +177,7 @@ export function DesktopUpdate() {
           <button disabled={working || state.phase === "restart_required"} type="button" onClick={() => void run("forget_runtime_selection")}>{zh ? "清除记住的运行时选择" : "Forget runtime choice"}</button>
         </> : null}
       </> : null}
-      {invoke && rollbackAvailable ? <details><summary>{zh ? "恢复上个版本" : "Restore previous version"}</summary><p>{zh ? "将恢复已保留的 App 和它的运行时，需要重启。" : "Restore the retained App and its runtime, then restart."}</p><button disabled={working} type="button" onClick={() => void run("rollback")}>{zh ? "确认恢复上版" : "Restore previous version"}</button></details> : null}
+      {invoke && rollbackAvailable ? <details><summary>{zh ? "恢复上个版本" : "Restore previous version"}</summary><p>{zh ? "将恢复已保留的 App 和它的运行时，需要重启。" : "Restore the retained App and its runtime, then restart."}</p><button disabled={working || state.phase === "restart_required"} type="button" onClick={() => void run("rollback")}>{zh ? "确认恢复上版" : "Restore previous version"}</button></details> : null}
       </details>
     </section>
   </div>;
