@@ -118,6 +118,34 @@ def _loopx_state_components(env, components, output_dir):
         "execution_authority_granted": False}
 
 
+def _mark_replan_attempt(root: Path, obligation_id: str, turn_id: str, request_sha256: str | None) -> bool:
+    """The first boundary wins even when its optional declaration was lost."""
+    if not root.is_absolute() or root != root.resolve():
+        raise ValueError("replan checkpoint root must be a normalized physical path")
+    attempts = root / ".replan-attempts"
+    attempts.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if attempts != attempts.resolve():
+        raise ValueError("replan attempt directory must not contain symlinks")
+    attempt_path = attempts / (obligation_id + ".json")
+    attempt = {"obligation_id": obligation_id, "turn_id": turn_id,
+               "request_sha256": request_sha256}
+    try:
+        with attempt_path.open("x", encoding="utf-8") as marker:
+            marker.write(json.dumps(attempt))
+        attempt_path.chmod(0o600)
+        return True
+    except FileExistsError:
+        if attempt_path.is_symlink():
+            raise ValueError("replan attempt must not be a symlink")
+        prior_attempt = json.loads(attempt_path.read_text())
+        # None means the first declaration was unavailable, not permission to
+        # replace that lost point with a repaired file and later model state.
+        if (prior_attempt["obligation_id"] != obligation_id or
+                prior_attempt["request_sha256"] not in (None, request_sha256)):
+            raise ValueError("existing replan attempt has a different declaration")
+        return False
+
+
 def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
     """Preload the original guard once, then capture before invoking the model.
 
@@ -128,8 +156,13 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     path = env.get("LOOPX_CHECKPOINT_REQUEST")
     if not path:
         return body
-    request, raw = read_checkpoint_request(path)
-    if request.get("trigger") != "fresh_replan":
+    declaration_error = None
+    try:
+        request, raw = read_checkpoint_request(path)
+    except (OSError, ValueError) as error:
+        declaration_error = error
+        request, raw = {}, None
+    if declaration_error is None and request.get("trigger") != "fresh_replan":
         return body
     if receipt.get("mode") != "heartbeat" or receipt.get("stage") != "execute":
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
@@ -156,16 +189,25 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
             "action": "select_replan", "quota": guard, "goal_id": env["LOOPX_GOAL_ID"],
             "agent_id": env["LOOPX_AGENT_ID"], "turn_instance_id": receipt["turn_id"],
         })
+        root = Path(env["LOOPX_WAKE_LOG_DIR"]).parent / "checkpoints"
+        if declaration_error is not None:
+            if intent["capture"]:
+                _mark_replan_attempt(root, intent["obligation_id"], receipt["turn_id"], None)
+            raise declaration_error
         if not intent["capture"]:
             receipt["checkpoint"]["reason"] = intent["reason"]
         else:
-            root = Path(env["LOOPX_WAKE_LOG_DIR"]).parent / "checkpoints"
-            requested_root = Path(request["destination"])
-            if not requested_root.is_absolute() or requested_root != requested_root.resolve() or requested_root != root:
-                raise ValueError("fresh_replan destination must be this trial's checkpoints directory")
             destination = root / intent["obligation_id"]
             if destination.parent != root or destination != destination.resolve():
                 raise ValueError("replan checkpoint identity must select a direct child")
+            if not destination.exists() and not _mark_replan_attempt(
+                root, intent["obligation_id"], receipt["turn_id"], hashlib.sha256(raw).hexdigest(),
+            ):
+                receipt["checkpoint"]["reason"] = "pre_decision_capture_already_attempted"
+                return preloaded_body
+            requested_root = Path(request["destination"])
+            if not requested_root.is_absolute() or requested_root != requested_root.resolve() or requested_root != root:
+                raise ValueError("fresh_replan destination must be this trial's checkpoints directory")
             if destination.exists():
                 # Readback of the first point, never overwrite it with later work.
                 manifest = json.loads((destination / "checkpoint.json").read_text())
@@ -181,26 +223,6 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                 # A failed first capture is a missed point. Once its model is
                 # allowed to decide/work, a retry must not relabel later state
                 # as the original pre-decision checkpoint.
-                attempts = root / ".replan-attempts"
-                attempts.mkdir(parents=True, exist_ok=True, mode=0o700)
-                if attempts != attempts.resolve():
-                    raise ValueError("replan attempt directory must not contain symlinks")
-                attempt_path = attempts / (intent["obligation_id"] + ".json")
-                attempt = {"obligation_id": intent["obligation_id"], "turn_id": receipt["turn_id"],
-                           "request_sha256": hashlib.sha256(raw).hexdigest()}
-                try:
-                    with attempt_path.open("x", encoding="utf-8") as marker:
-                        marker.write(json.dumps(attempt))
-                    attempt_path.chmod(0o600)
-                except FileExistsError:
-                    if attempt_path.is_symlink():
-                        raise ValueError("replan attempt must not be a symlink")
-                    prior_attempt = json.loads(attempt_path.read_text())
-                    if (prior_attempt["obligation_id"] != attempt["obligation_id"] or
-                            prior_attempt["request_sha256"] != attempt["request_sha256"]):
-                        raise ValueError("existing replan attempt has a different declaration")
-                    receipt["checkpoint"]["reason"] = "pre_decision_capture_already_attempted"
-                    return preloaded_body
                 prior_paths = sorted(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("wake-*/receipt.json"))
                 prior_paths = [p for p in prior_paths if p.parent.name != receipt["turn_id"]]
                 if not prior_paths:

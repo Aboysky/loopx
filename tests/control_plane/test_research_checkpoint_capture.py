@@ -42,6 +42,90 @@ def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
     assert receipt["checkpoint"]["reason"] == "capture_failed"
 
 
+@pytest.mark.parametrize("trigger", [None, "fresh_replan"])
+@pytest.mark.parametrize("failure", ["missing", "denied", "malformed"])
+def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
+    tmp_path, monkeypatch, trigger, failure,
+):
+    """Real worker/session/guard; synthetic executable replaces only the model."""
+    import os
+    import sys
+    from benchmark.runtime.worker import run_once
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    if trigger:
+        cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    binary = tmp_path / "codex"
+    binary.write_text(f"#!{sys.executable}\n" +
+        "import json,pathlib,sys\n"
+        "body=sys.stdin.read()\n"
+        "pathlib.Path('host-input.txt').write_text(body)\n"
+        "pathlib.Path('solution.py').write_text('after_decision = 11\\n')\n"
+        "print(json.dumps({'type':'thread.started','thread_id':'synthetic-capture-session'}))\n")
+    binary.chmod(0o755)
+    logs = tmp_path / "logs"
+    request = tmp_path / "request.json"
+    declaration = json.dumps({"destination": str(logs / "checkpoints" / "point"),
+        "components": [{"id": "code", "source_path": str(project / "solution.py")}],
+        "point_metadata": {"purpose": "synthetic worker observer failure"},
+        **({"trigger": trigger, "destination": str(logs / "checkpoints")} if trigger else {})})
+    request.write_text(declaration)
+    env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(Path(sys.executable).parent / "loopx"),
+        "LOOPX_CODEX_HOME": str(tmp_path / "home"), "LOOPX_WAKE_LOG_DIR": str(logs / "wakes"),
+        "LOOPX_SHARED_SKILLS": str(skills), "CODEX_BIN": str(binary),
+        "MODEL_NAME": "fixture", "REASONING_EFFORT": "high", "OPENAI_BASE_URL": "http://localhost:8123/v1",
+        "OPENAI_API_KEY": "fixture-key", "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_REGISTRY": str(registry), "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID}
+    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", lambda *a, **kw: "original work contract")
+    off = run_once(env)
+    assert off["ok"] and "checkpoint" not in off
+    (project / "host-input.txt").unlink()
+    if failure == "missing":
+        request.unlink()
+    elif failure == "malformed":
+        request.write_text("{")
+    read_bytes = Path.read_bytes
+    with monkeypatch.context() as faults:
+        if failure == "denied":
+            def denied_read(path):
+                if path == request:
+                    raise PermissionError("synthetic staged-file permission loss")
+                return read_bytes(path)
+            faults.setattr(Path, "read_bytes", denied_read)
+        failed = run_once({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)})
+    assert failed["ok"] and failed["session"]["session_id"] == "synthetic-capture-session"
+    assert (project / "host-input.txt").read_text().endswith("original work contract")
+    assert failed["checkpoint"]["reason"] == "capture_failed"
+    assert not failed["checkpoint"]["captured"]
+    saved = json.loads((logs / "wakes" / failed["turn_id"] / "receipt.json").read_text())
+    assert saved == failed
+    request.write_text(declaration)
+    if trigger:
+        # A repaired declaration cannot label the model's later code as the
+        # original missed pre-decision point, even on exact guard replay.
+        replay = {"turn_id": failed["turn_id"], "mode": "heartbeat", "stage": "execute", "ok": False}
+        body = capture_before_replan({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)}, replay,
+                                     "original work contract")
+        assert replay["checkpoint"]["reason"] == "pre_decision_capture_already_attempted", replay
+        assert body.endswith("original work contract")
+        assert not list((logs / "checkpoints").glob("replan-*/checkpoint.json"))
+    recovered = run_once({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)})
+    assert recovered["ok"]
+    if trigger:
+        # An unavailable declaration is optional; an unavailable original
+        # admission owner is not. This boundary must still stop before work.
+        import subprocess
+        (project / "host-input.txt").unlink()
+        request.unlink()
+        registry.rename(registry.with_suffix(".unavailable"))
+        with pytest.raises(subprocess.CalledProcessError):
+            run_once({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)})
+        assert not (project / "host-input.txt").exists()
+
+
 @pytest.mark.parametrize("opportunity,corrupt", [(False, False), (True, False), (True, True)])
 def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_path, monkeypatch, opportunity, corrupt):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
