@@ -17,11 +17,12 @@ import {
 import {
   parseQuotaAccountingOwner,
   quotaGoalRef,
+  quotaOwnerOwnsProjection,
   withBorrowedQuotaAccountingOwner,
   type QuotaAccountingOwner,
 } from "./source_admission.ts";
 
-import type { JsonObject } from "../effect_program.ts";
+import type { JsonObject, SettlementIdentity } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   appendJsonLine,
@@ -566,8 +567,9 @@ interface Admission {
 
 async function readMonitorSettlement(request: MonitorRequest): Promise<JsonObject | null> {
   const todoId = request.observation.settlement_todo_id ?? request.observation.todo_id;
+  const agentId = request.observation.actor_agent_id ?? request.decision.agent_id;
   if (!request.runtime_root || !request.turn_instance_id ||
-      !request.observation.actor_agent_id || !todoId) return null;
+      !agentId || !todoId) return null;
   const snapshot = await readQuotaSettlementSnapshot(
     request.runtime_root,
     request.goal_id,
@@ -575,7 +577,7 @@ async function readMonitorSettlement(request: MonitorRequest): Promise<JsonObjec
   return readQuotaSettlementForAdmittedOwnerFromSnapshot({
     schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
     runtime_root: request.runtime_root, goal_id: request.goal_id,
-    agent_id: request.observation.actor_agent_id, todo_id: todoId,
+    agent_id: agentId, todo_id: todoId,
     turn_instance_id: request.turn_instance_id, replan_obligation_id: null,
     infer_turn_instance_id: false, allow_unbound_binding: false,
   }, request.owner, snapshot);
@@ -635,15 +637,15 @@ async function auxiliaryMonitorAllowed(
 
 async function admission(request: MonitorRequest, historicalAdmission = false): Promise<Admission> {
   const observation = request.observation;
-  if (observation.todo_id &&
-      (observation.settlement_todo_id ?? observation.todo_id) === observation.todo_id) {
+  const settlementTodo = observation.settlement_todo_id ?? observation.todo_id;
+  if (settlementTodo && (!observation.todo_id || settlementTodo === observation.todo_id)) {
     const settlement = await readMonitorSettlement(request);
     // The readback owner verifies admission, exact identity and durable blocked
     // evidence. A late observation cannot replace that frozen no-spend outcome.
     // Durable poll replay returns before admission; independent auxiliary
     // Monitors retain their advancement-bound admission below.
     if (jsonObject(settlement?.progress)?.closeout_kind === "typed_blocked_writeback_no_spend" &&
-        isMonitorUnavailableWait(jsonObject(settlement?.writeback_run)?.blocked_retry, observation.todo_id)) {
+        isMonitorUnavailableWait(jsonObject(settlement?.writeback_run)?.blocked_retry, settlementTodo)) {
       throw new EffectRuntimeRequestError(
         "monitor-poll conflicts with the committed unavailable attempt; use a fresh Turn for a new observation",
         "monitor_poll_admission_rejected",
@@ -1713,6 +1715,7 @@ function receiptObject(value: unknown): MonitorReceipt {
       "receipt.expected_index_digest",
     ),
     expected_index_bytes: expectedBytes,
+    ...(receipt.goal_ref === undefined ? {} : {goal_ref: requiredObject(receipt.goal_ref, "receipt.goal_ref")}),
   } as const;
   const status = requireStringLiteral(
     receipt.status,
@@ -1761,6 +1764,34 @@ async function readReceipt(path: string): Promise<MonitorReceipt | null> {
     }
     throw error;
   }
+}
+
+/** A stored observation may already have reached its provider even before the
+ * run index is settled. Its existing receipt owner must recover or prove no
+ * effect before a competing unavailable closeout can be admitted. */
+export async function hasMonitorPollTransaction(
+  runtimeRoot: string, identity: SettlementIdentity, owner: QuotaAccountingOwner,
+): Promise<boolean> {
+  if (!identity.todo_id) return false;
+  const runsDir = join(runtimeRoot, "goals", identity.goal_id, "runs");
+  const base = `quota-monitor-poll:${identity.goal_id}:${identity.agent_id}:${identity.turn_instance_id}`;
+  for (const effectId of [base, `${base}:todo:${identity.todo_id}`]) {
+    const receipt = await readReceipt(transactionPath(runsDir, effectId));
+    if (!receipt) continue;
+    validateReceiptScope(receipt, runsDir, join(runsDir, "index.jsonl"));
+    const facts = receipt.status === "provider_pending" ? receipt.provider_plan : receipt.index_record;
+    if (receipt.effect_id !== effectId || facts.goal_id !== identity.goal_id ||
+        facts.agent_id !== identity.agent_id || facts.todo_id !== identity.todo_id) continue;
+    const goalRef = receipt.status === "provider_pending" ? receipt.goal_ref : facts.goal_ref;
+    if (receipt.status === "provider_pending" && goalRef === undefined && owner.kind !== "alias") {
+      throw new EffectRuntimeRequestError(
+        "historical pending Monitor transaction lacks GoalRef scope; reconcile its original owner before unavailable closeout",
+      );
+    }
+    if (!quotaOwnerOwnsProjection(owner, goalRef)) continue;
+    return true;
+  }
+  return false;
 }
 
 function validateReceiptScope(
@@ -2329,6 +2360,7 @@ async function evaluateQuotaMonitorPollRequest(
           expected_index_bytes: indexBytes?.length ?? 0,
           provider_plan: plan,
           admitted_decision: request.decision,
+          ...(quotaGoalRef(request.owner) === null ? {} : {goal_ref: quotaGoalRef(request.owner)}),
         } satisfies PendingMonitorReceipt;
         await atomicWriteJson(receiptPath, pending);
       }
