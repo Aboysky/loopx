@@ -29,6 +29,7 @@ from .chat_agent import (
 
 EventSink = Callable[[str, dict[str, Any]], None]
 ACP_PROTOCOL_VERSION = 1
+ACP_SESSION_STARTUP_TIMEOUT_FLOOR_SEC = 45.0
 
 
 def _reader(stream: Any, messages: "queue.Queue[dict[str, Any] | Exception]") -> None:
@@ -151,6 +152,12 @@ class ACPStdioAdapter:
                 raise adapter._runtime_error("ACP Agent selected an unsupported protocol version.")
             capabilities = initialized.get("agentCapabilities")
             adapter.agent_capabilities = capabilities if isinstance(capabilities, dict) else {}
+            # ACP agents may defer session creation until the client confirms
+            # initialization before accepting ``session/new``.
+            adapter._notify("initialized", {})
+            session_startup_timeout_sec = max(
+                startup_timeout_sec, ACP_SESSION_STARTUP_TIMEOUT_FLOOR_SEC
+            )
             session_params = {"cwd": str(adapter.agent_work_dir), "mcpServers": []}
             if resume_thread_id:
                 session_capabilities = adapter.agent_capabilities.get("sessionCapabilities")
@@ -160,14 +167,14 @@ class ACPStdioAdapter:
                         "session/resume",
                         {**session_params, "sessionId": resume_thread_id},
                         request_id=2,
-                        timeout_sec=startup_timeout_sec,
+                        timeout_sec=session_startup_timeout_sec,
                     )
                 elif bool(adapter.agent_capabilities.get("loadSession")):
                     result = adapter._request(
                         "session/load",
                         {**session_params, "sessionId": resume_thread_id},
                         request_id=2,
-                        timeout_sec=startup_timeout_sec,
+                        timeout_sec=session_startup_timeout_sec,
                     )
                 else:
                     raise adapter._runtime_error("ACP Agent does not support session recovery.")
@@ -180,7 +187,7 @@ class ACPStdioAdapter:
                     "session/new",
                     session_params,
                     request_id=2,
-                    timeout_sec=startup_timeout_sec,
+                    timeout_sec=session_startup_timeout_sec,
                 )
                 adapter.session_id = str(result.get("sessionId") or "")
                 if not adapter.session_id:
