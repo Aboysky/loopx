@@ -146,6 +146,8 @@ export const configurationBackupScenario = {
         await recovery.getByLabel("配套清单", {exact: true}).setInputFiles(process.env.LOOPX_RECOVERY_HISTORY_OVERFLOW_MANIFEST);
         await recovery.getByRole("button", {name: "验证并建立隔离副本", exact: true}).click();
         await recovery.getByRole("alert").filter({hasText: "20,000"}).waitFor();
+        assert.equal(await recovery.getByRole("button", {name: "检查是否已有结果", exact: true}).count(), 0,
+          "a definitive pre-publication refusal must not suggest a lost response");
         assert.equal(await recovery.getByText("保存的任务: 1", {exact: false}).count(), 0);
         await page.screenshot({path: resolve(outputDir, "state-recovery-history-capacity.png"), animations: "disabled"});
       }

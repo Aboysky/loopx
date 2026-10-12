@@ -52,6 +52,7 @@ export function StateRecoverySettings() {
     setBusy(true); setError("");
     try { await operation(); } catch (failure) {
       const code = failure instanceof ChatApiError ? String(failure.payload.error_code ?? "") : "";
+      if (code === "authority_history_capacity") setPending(null);
       setError(errors[code]?.[index] ?? (zh ? "检查未完成，请核对文件或稍后重试。" : "Inspection did not finish. Check the files or retry later."));
     }
     finally { setBusy(false); }
