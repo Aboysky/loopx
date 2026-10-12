@@ -1,4 +1,4 @@
-import { Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { List, Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { GoalLifecycleControl, GoalMastheadIdentity } from "./goal-masthead";
 
 import { useWorkspaceI18n } from "./i18n";
@@ -15,6 +15,9 @@ export function ChannelHeader({
   managerRuntime,
   mobileNavigationOpen,
   onOpenGoalCapabilities,
+  onOpenGoalDetails,
+  onOpenAllWork,
+  allWorkOpen,
   onOpenManagerChat,
   onOpenManagerSettings,
   onOpenWorkspace,
@@ -43,6 +46,9 @@ export function ChannelHeader({
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   mobileNavigationOpen?: boolean;
   onOpenGoalCapabilities?: () => void;
+  onOpenGoalDetails?: () => void;
+  onOpenAllWork?: () => void;
+  allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
   onOpenWorkspace?: () => void;
@@ -179,7 +185,7 @@ export function ChannelHeader({
     <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)} data-workspace-scope={workspaceGrantLabel ? "true" : undefined}>
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
-        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{t("header.manager")}</h1>}
+        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenDetails={onOpenGoalDetails} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{t("header.manager")}</h1>}
         {workspaceGrantLabel ? <p className="personal-channel-activity">{t("workspace.conversation", { grant: workspaceGrantLabel })}</p> : null}
         <div className="personal-manager-context">
         {stewardBindingVisible && managerChannelBinding ? (
@@ -241,6 +247,7 @@ export function ChannelHeader({
         </nav>
       )}
       <div className="personal-channel-actions">
+        {selectedGoal && onOpenAllWork ? <button type="button" className="personal-icon-button goal-all-work-trigger" aria-label={locale === "zh-CN" ? "打开全部工作" : "Open all work"} aria-expanded={allWorkOpen} aria-haspopup="dialog" onClick={onOpenAllWork}><List size={17} aria-hidden/></button> : null}
         {selectedGoal && !selectedGoal.loadState && onRequestGoalLifecycle ? (
           <GoalLifecycleControl busy={goalLifecycleBusy ?? false} goal={selectedGoal} onRequest={onRequestGoalLifecycle} resumeReviewed={resumeReviewed ?? true} />
         ) : null}
