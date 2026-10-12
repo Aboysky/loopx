@@ -552,6 +552,7 @@ jobs:
         # Each runner retains the measured two-worker pool.
         run: >-
           python -m pytest -v -n 2 -m "not stage2c_e2e"
+          -p scripts.ci.pytest_timing
           --splits 4 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1
