@@ -1394,6 +1394,8 @@ const en = {
   "vitals.work": "Work",
   "vitals.workOpen": "{count} open",
   "vitals.workDoneUnknown": "done not reported",
+  "vitals.workCoverageUnknown": "listed work · total coverage unknown",
+  "vitals.workTotalUnknown": "Total unknown",
   "vitals.workRunning": "{count} running",
   "vitals.workBlocked": "{count} blocked",
   "vitals.workPartial": "partial · {listed} of {projected} open listed",
@@ -2797,6 +2799,8 @@ const zhCN: Record<WorkspaceMessageKey, string> = {
   "vitals.work": "工作",
   "vitals.workOpen": "{count} 项未完成",
   "vitals.workDoneUnknown": "未报告完成数",
+  "vitals.workCoverageUnknown": "当前所列工作 · 总体覆盖未知",
+  "vitals.workTotalUnknown": "总数未知",
   "vitals.workRunning": "{count} 项执行中",
   "vitals.workBlocked": "{count} 项受阻",
   "vitals.workPartial": "部分 · 已列出 {projected} 项中的 {listed} 项",
@@ -2904,6 +2908,7 @@ export function localizedSessionStatus(status: string | undefined, t: WorkspaceT
     ready: "runs.ready",
     resume_failed: "runs.resumeFailed",
     running: "runs.running",
+    interrupted: "runs.interrupted",
     waiting: "runs.waiting",
   };
   return status ? (keyByStatus[status] ? t(keyByStatus[status]) : status) : t("runs.unknown");
