@@ -2,10 +2,10 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal
+- **Delivery maturity:** Partial (M1 pure builder; M2 producer and consumer unqualified)
 - **Authors / owners:** LoopX maintainers and contributors
 - **Created:** 2026-09-10
-- **Last normative revision:** 2026-09-10
+- **Last normative revision:** 2026-10-12
 - **Implementation baseline:** `41a95d9`
 - **Tracking issue:** [#2831](https://github.com/huangruiteng/loopx/issues/2831)
 - **Related contracts:**
@@ -25,9 +25,10 @@ before runtime delivery; recommendations there are not approval. The
 appendices are non-normative execution, decision, evidence, and fixture-plan
 records.
 
-RFC maturity and delivery maturity are independent. This proposal does not
-claim that `goal_direction_baseline_v0`, its declaration, or a runtime
-consumer exists on `main`.
+RFC maturity and delivery maturity are independent. The M1 TypeScript builder
+implements `goal_direction_baseline_v0` over supplied canonical inputs. No
+production receipt writer, declaration authoring command or runtime consumer
+is delivered; schema-valid synthetic receipts do not prove real consumption.
 
 The separate [acceptance contract v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
 does not implement this RFC's material declarations or usage receipts.
@@ -57,9 +58,9 @@ become a write authority, and repository paths are not the protocol. Private
 wikis, external document systems, or other registered providers may satisfy
 the same contract without exposing raw content.
 
-This RFC approves documentation and a synthetic fixture plan only. It does
-not approve a new writer, scheduler, state authority, automatic Vision update,
-or runtime gate.
+M1 is a pure read model only. It introduces no writer, scheduler, state
+authority, automatic Vision update or runtime gate. M2 retains its separate
+consumer and recovery qualification.
 
 ## 2. Problem and motivation
 
@@ -145,10 +146,10 @@ The implementation baseline already provides these relevant owners:
 - `shared_goal_alignment_v0` currently binds event-log or canonical Todo
   projection facts, not a typed canonical Goal-intent revision.
 
-No current type declares which authority materials define Goal direction. No
-current reducer binds such a set to one Agent's current usage receipts. This
-RFC does not relabel shared-alignment source digests or Markdown state as that
-missing semantic identity.
+The M1 builder now binds declared direction materials to one Agent's supplied
+receipts. Production declaration authoring and receipt provenance remain M2
+dependencies. Shared-alignment source digests and Markdown state are not
+substitutes for that provenance.
 
 ## 5. Proposed architecture
 
@@ -415,24 +416,58 @@ materials.
 | M1 | Optional pure builder over full Goal authority plus receipts; no consumer or writer. | Approval of Section 12 decisions and schema limits. | Deterministic fixtures, mutation checks, Python/TypeScript parity if both runtimes consume it, and public-boundary scan. | Remove the default-off builder and projection. |
 | M2 | One read-only Agent-scoped Vision-gap consumer. | M1 conformance plus explicit maintainer approval of the consumer and recovery UX. | End-to-end proof that drift is surfaced, same-revision replay is quiet, and no Vision/Todo/route mutation occurs. | Disable the consumer; retain canonical registry and receipts. |
 
-Later milestones are not authorized by merging M0. The Appendix D F2 fixture
-is checked in ahead of M1 as a conformance harness
-([examples/goal-direction-baseline-f2-smoke.py](../../../examples/goal-direction-baseline-f2-smoke.py));
-it does not authorize M1 and adds no runtime builder, writer, or consumer.
+M1 is implemented in
+[`direction_baseline.ts`](../../../loopx/control_plane/goals/direction_baseline.ts).
+The existing [F2 smoke](../../../examples/goal-direction-baseline-f2-smoke.py)
+now exercises the actual TypeScript tests and two source mutations; its old
+fixture-local reducer is retired. No CLI, persistence, consumer, scheduler or
+quota path calls this builder. M2 remains separate.
 
-## 12. Open decisions
+## 12. Implementation decisions and remaining qualification
 
-1. **Schema capacity.** Goal authority owners must choose maximum declaration
-   rows and projected items before M1. Recommendation: use the existing bounded
-   material-frontier limits where possible. Evidence needed: production-scale
-   synthetic registry fixtures.
-2. **Required receipt outcome.** Goal Vision owners must decide whether `read`,
-   `used`, and `verified` all satisfy a direction requirement or whether v0
-   should require `used`/`verified`. Recommendation: preserve current Material
-   Frontier semantics for M1 and tighten only with migration evidence.
-3. **First consumer.** Control-plane owners must approve whether M2 surfaces in
-   Goal Frontier, status, or another existing Agent-scoped view. Recommendation:
-   choose one cold-path read surface and avoid quota/scheduler promotion.
+The concrete M1 envelope follows the candidate in [#6289](https://github.com/loopx-project/loopx/pull/6289).
+These implementation choices do not claim production capacity promotion or
+approval of the M2 consumer.
+
+1. **Capacity.** Independently bound 64 input declaration rows (before dedup),
+   256 distinct resolved materials including optional items, 4,096 input receipt
+   rows (before dedup), 2 MiB complete compact UTF-8 JSON input and 256 KiB complete
+   compact UTF-8 JSON output. Combined maxima are not guaranteed. No truncation.
+   Overflow returns `blocked` / `direction_capacity_exceeded`, empty items and
+   a null digest; counts are not a partial authority summary. Text limits reuse
+   frontier widths: 180 Unicode characters for ids/revisions, 120 for topics,
+   220 for purposes and 80 for explicitly available boundaries.
+2. **Receipt selection.** Validate every supplied row before scope selection:
+   exact v0 schema, identity, eligible `read`/`used`/`verified` or `unavailable`,
+   revision and timezone-bearing timestamp. `unavailable` may omit revision.
+   Same Goal, Agent and exact Todo scope are required; a Todo receipt does not
+   satisfy a Goal-wide read. Identical replay ids deduplicate; conflicting ids
+   refuse. Latest timestamp wins with nanosecond precision. Tied observations
+   must agree on outcome and revision, then smallest receipt id is deterministic.
+   Malformed/unknown rows and contradictory ties return a complete blocked
+   refusal, never an older success. Refusal exposes typed reasons without raw
+   input, partial items or digest. Invalid caller identity/time throws a typed
+   input error because a scoped projection cannot be formed.
+3. **Authority metadata.** Registry fields currently allow prose. M1 never
+   interprets it: only `owner_status=reviewed`, `conflict_rule=owner_wins`,
+   `freshness=current` and `gate_status=ready|registered|readable` qualify.
+   Missing or unknown values block. These are a bounded reader profile, not a
+   rewrite of registration policy. Material role is informational. Public/public_safe
+   boundaries or explicitly supplied available boundaries permit this read;
+   supplying that envelope does not itself grant access. Missing boundary is
+   inaccessible. Full `project_materials` and `topic_authority` are required.
+   Map/list identities and duplicate declarations must agree. Optional items
+   remain visible; aggregate counts/reasons concern required items only, so an
+   optional pass never masks a required failure. Malformed full input refuses
+   even when its bad row is optional or belongs to a peer.
+4. **First consumer remains open.** Reuse explicit Goal/Agent-scoped management
+   cold reads and packaged Goal detail, outside polling/quota/scheduler. M2 must
+   qualify actual authorized source read → exact-revision receipt → same-Agent
+   refresh, bound through existing Goal-instance lifetime and acceptance owners.
+   Drift, unavailable source, wrong Agent, reload and retry must be visible with
+   unchanged Vision/Todo/lease/route. Current material basis must not make whole
+   Goal acceptance green. Lark remains independently unqualified. No v0 receipt
+   extension, second receipt store or fabricated provenance is introduced here.
 
 ---
 
@@ -493,15 +528,28 @@ effect.
 | F7 replay stability | Same canonical inputs and same receipts are reordered and projected twice. | Identical normalized items, digest, state, and reason codes apart from explicit `generated_at`. | Receipt order and declaration duplication cannot create churn. |
 | F8 route ownership | Agent reads the changed revision, then either retains or changes its route. | Fresh receipt returns the baseline to current. | Retained route emits no path delta; a changed route is accepted only with a valid existing `goal_path_delta_v0`. |
 
-Before M1, turn this table into a checked-in public-safe fixture and mutation
-test. The mutation arm must deliberately relax Agent or revision matching and
-prove that F2 or F3 fails, so the test cannot pass merely because the happy
-path was never exercised. F2 is checked in at
-`examples/goal-direction-baseline-f2-smoke.py` with its mutation arm; the
-remaining cases stay open until M1.
+The real builder's [TypeScript suite](../../../tests/control_plane_ts/direction_baseline.test.ts)
+executes F1–F8 read-model assertions and capacity boundaries. The existing F2
+smoke mutates actual revision and Agent matching in isolated copies and requires
+the independent tests to fail with assertion errors. F8's write-side route
+validation remains owned and tested by `vision_checkpoint.test.ts`; a pure
+read model cannot qualify an Agent's real route change or consumption.
 
 ## Appendix E: Rejected or superseded alternatives
 
 Section 6 records the currently rejected designs. Evidence that a provider-
 specific owner can preserve the same authority, privacy, and no-mutation
 invariants may justify a profile, but not a fork of the core contract.
+
+## M1 source checkpoint
+
+The optional pure TypeScript builder replaces the synthetic decision owner.
+Validation covers complete registry resolution, exact Agent/Todo/revision,
+conflicts, timestamp order, immutable inputs, input/output limits and public-safe
+projection. Run `node --experimental-strip-types --test tests/control_plane_ts/direction_baseline.test.ts`
+and `uv run --extra test python examples/goal-direction-baseline-f2-smoke.py` with
+Node >=22.22.3. Run the existing `vision_checkpoint.test.ts` for route authority.
+No parallel Python reducer or Python/TypeScript consuming pair is introduced.
+Production receipt authenticity, instance-bound storage, live providers,
+production capacity freeze and the M2 CLI/frontend/Lark journey remain unqualified.
+Rollback removes this unconsumed builder; no canonical state needs migration.
