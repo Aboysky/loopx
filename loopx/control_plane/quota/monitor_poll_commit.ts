@@ -567,7 +567,9 @@ interface Admission {
 
 async function readMonitorSettlement(request: MonitorRequest): Promise<JsonObject | null> {
   const todoId = request.observation.settlement_todo_id ?? request.observation.todo_id;
-  const agentId = request.observation.actor_agent_id ?? request.decision.agent_id;
+  // The Turn/effect and run record belong to the decision Agent; provider actor
+  // metadata cannot select a different historical settlement to evade its fence.
+  const agentId = request.decision.agent_id;
   if (!request.runtime_root || !request.turn_instance_id ||
       !agentId || !todoId) return null;
   const snapshot = await readQuotaSettlementSnapshot(

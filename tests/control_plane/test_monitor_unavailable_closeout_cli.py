@@ -186,16 +186,17 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
             from loopx.control_plane.quota import monitor_poll as monitor_runtime
             native = monitor_runtime._native_result
 
-            def actor_optional_request(request):
-                request = {**request, "observation": {**request["observation"], "actor_agent_id": None}}
-                return native(request)
-
             # The native compatibility request permits an omitted actor;
-            # provider and settlement admission must use the same agent fallback.
-            with monkeypatch.context() as context:
-                context.setattr(monitor_runtime, "_native_result", actor_optional_request)
-                rc, missing_actor = cli(*poll_args, "--execute")
-            assert rc != 0 and missing_actor["error_code"] == "monitor_poll_admission_rejected", missing_actor
+            # provider actor metadata cannot rebind the Turn's accounting Agent.
+            for actor in (None, "other-synthetic-actor"):
+                def actor_metadata_request(request):
+                    request = {**request, "observation": {**request["observation"], "actor_agent_id": actor}}
+                    return native(request)
+
+                with monkeypatch.context() as context:
+                    context.setattr(monitor_runtime, "_native_result", actor_metadata_request)
+                    rc, actor_reply = cli(*poll_args, "--execute")
+                assert rc != 0 and actor_reply["error_code"] == "monitor_poll_admission_rejected", actor_reply
         rc, after_late = cli("todo", "list", "--goal-id", GOAL_ID)
         assert rc == 0, after_late
         monitor = next(todo for todo in after_late["todos"] if todo["todo_id"] == MONITOR_ID)
