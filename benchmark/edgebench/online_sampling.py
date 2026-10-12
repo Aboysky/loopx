@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from enum import StrEnum
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import requests
 from sforge.harness.run_agent import _extract_archive_from_container
-from .online_judge import POLICY
+from .online_judge import POLICY, RegistrationState
 
 
 class CaptureStatus(StrEnum):
@@ -29,7 +30,7 @@ class CaptureStatus(StrEnum):
 
 
 class OnlineSampler:
-    def __init__(self, *, trial, task, interval, judge_url, secret, logger):
+    def __init__(self, *, trial, task, interval, judge_url, secret, logger, task_sha256=None):
         self.trial, self.task, self.interval = trial, task, interval
         self.url, self.secret, self.logger = judge_url.rstrip("/"), secret, logger
         self.directory = trial / "online-captures"
@@ -44,6 +45,8 @@ class OnlineSampler:
         self.session.trust_env = False
         self.token = None
         self.epoch = None
+        self.evaluators = {}
+        self.task_sha256 = task_sha256
 
     def qualify(self):
         response = self.session.get(self.url + "/api/v1/best-only/admission",
@@ -53,6 +56,19 @@ class OnlineSampler:
         if value.get("policy") != POLICY or value.get("max_running_per_run") != 1 or not value.get("epoch"):
             raise ValueError("Best-only needs a capacity-reserved online judge")
         self.epoch = value["epoch"]
+        self.evaluators = value.get("evaluators", {})
+        if self.task is not None:
+            evaluator = self.evaluators.get(self.task.task_id, {})
+            expected = dict(judge_image_key=self.task.judge_image_key,
+                            selection=self.task.judge.selection,
+                            score_direction=self.task.judge.score_direction)
+            if self.task_sha256 is not None:
+                expected["task_spec_sha256"] = self.task_sha256
+            if (any(evaluator.get(key) != item for key, item in expected.items())
+                    or any(not isinstance(evaluator.get(key), str)
+                           or not re.fullmatch(r"[0-9a-f]{64}", evaluator[key])
+                           for key in ("native_source_sha256", "task_spec_sha256"))):
+                raise ValueError("Online evaluator differs from the admitted task configuration")
         (self.directory / "admission.json").write_text(json.dumps(value))
 
     def start(self, backend, handle, token):
@@ -168,3 +184,25 @@ class OnlineSampler:
         final = self.trial / "final_archive.tar.gz"
         if final.is_file() and not any(r["status"] == CaptureStatus.FINAL for r in self.records):
             self.capture(final.read_bytes(), final=True)
+
+    def release_registration(self, *, run_id, task_id):
+        """Call only after verified worker removal; retain ambiguous releases for retry."""
+        if not self.stop.is_set():
+            raise RuntimeError("Stop online sampling before releasing its registration")
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.post(self.url + "/api/v1/best-only/release", data={
+                "run_id": run_id, "task_id": task_id, "epoch_id": self.epoch,
+                "admin_secret": self.secret}, timeout=(3, 10))
+            response.raise_for_status()
+            receipt = response.json()
+        if (receipt.get("epoch") != self.epoch or receipt.get("run_id") != run_id
+                or receipt.get("task_id") != task_id
+                or receipt.get("state") not in (RegistrationState.DRAINING, RegistrationState.RELEASED)):
+            raise ValueError("Online release receipt does not match the original registration")
+        target = self.directory / "release.json"
+        temporary = target.with_suffix(".tmp")
+        temporary.write_text(json.dumps({key: receipt[key] for key in
+            ("epoch", "run_id", "task_id", "state")}))
+        temporary.replace(target)
+        return receipt

@@ -138,12 +138,32 @@ workspace, conflicting identity or unavailable authority still stops recovery.
 Target-only historical creation retains its adapter; it does not gain the
 canonical transaction's response-loss guarantee.
 
+If the Host dies after Session acceptance but before upstream startup, the local
+queued Turn is still the original request. Session restoration replays it through
+the same Turn acceptance owner before preparing the adapter. A refused upstream
+resume retains that queued request and reports `resume_failed`; it must not turn
+it into a `server_restarted` outcome. A previously ended Turn without startup
+readback cannot qualify `first_turn_started` or a successful creation receipt.
+Keep the original operation and Session when the Host cannot restore its empty
+thread; do not fabricate a rollout, switch identity or repeat committed Todos.
+This affected Host profile remains unqualified for first-Turn recovery until its
+original resume works; CLI authority creation and unrelated profiles retain their
+own qualification boundaries.
+
 首 Host 启动失败或响应丢失时，App 保留原创建卡片，并分别展示已提交的 Goal、
 Agent 和首批任务。使用“重试原操作”在冻结的服务端工作区恢复，普通非 Git
 工作区同样适用。原生 File/SQLite 复用 Todo 操作身份与既有 Session/Turn
 接纳规则；已启动的 Turn 必须从原 Session 读回。创建步骤不代表模型运行或
 Goal 验收完成；原工作区、操作身份或 authority 不可用时仍须停止恢复。
 历史 target-only 创建保留其适配器，不获得原生事务的响应丢失恢复保证。
+
+Host 在 Session 接纳后、上游启动前退出时，本地排队 Turn 仍是原请求。
+Session 恢复须先通过既有 Turn 接纳 owner 重放该请求，再准备适配器。
+上游拒绝恢复时保留排队请求并报告 `resume_failed`，不能将其结算为
+`server_restarted`。已终止但没有启动读回的 Turn 不能生成
+`first_turn_started` 或成功创建回执。Host 无法恢复空会话时保留原操作与
+Session，不伪造 rollout、不换身份、不重建已提交的 Todo。该 Host 的首
+Turn 恢复支持仍待实测；CLI authority 创建与其他支持范围分别验收。
 
 <details>
 <summary>Settings and recovery views / 设置与恢复界面</summary>
@@ -186,6 +206,22 @@ already-canonical Goals use the [reviewed File/SQLite cutover](file-authority-st
 Retain verified backups, stop writers, settle leases and preserve newer writes
 on reverse migration. Supported historical backup/format/receipt readers remain.
 
+After reviewed import or promotion, reconnect the registered Goal with ordinary
+bootstrap, without `--force`:
+
+```sh
+loopx --format json --registry REGISTRY bootstrap --project PROJECT \
+  --goal-id GOAL --objective OBJECTIVE --no-global-sync
+```
+
+The reconnect reports `state_action=kept-existing` and `authority_read` from the
+current canonical provider. It preserves later Todos, leases and the original
+import receipt; an old v0 creation preference cannot retarget that provider.
+Missing Markdown display is not recreated. Missing selected authority fails,
+even when the old display still exists. `--force` and redirected state routes
+are rejected; use the owning restore/migration operation instead. Reconnection
+does not create a new creation receipt or execution grant.
+
 This implementation candidate does not close full existing-Goal upgrade, D2
 sustained qualification or authorize release-default activation. Trial admission and release
 default admission remain separate; the existing RFC acceptance is unchanged.
@@ -216,6 +252,13 @@ SQLite/hard-lease 默认，不能用于关闭。两者均不会迁回已有数�
 删除 fence 或重新开放旧 writer。既有 Goal 升级仍需备份、停止写入、结算租约和
 审核计划；反向迁移须保留新增写入。受支持的旧备份、格式和原回执恢复能力保留。
 配置损坏明确失败，不视为未配置；候选实现不代表完整升级、D2 长期资格或发布默认已通过。
+
+审核导入或晋升后，使用上面的普通 bootstrap 命令重连已注册 Goal，不加
+`--force`。结果含 `state_action=kept-existing` 和当前 canonical provider 的
+`authority_read`；保留后续 Todo、租约及原导入回执，旧 v0 创建偏好不能重新选源。
+缺失 Markdown 显示不补建；选定权威丢失时，即使旧显示仍在也明确失败。
+`--force` 和改向其他 state 路径被拒绝，恢复或迁移须走其归属操作。
+重连不生成新的创建回执，也不增加执行授权。
 
 Prose-only source maintenance compares the exact canonical JSON bytes of the
 existing stable partition view. Only the resume evaluation clock is excluded;
@@ -304,6 +347,11 @@ typed coordination owner and Goal storage settings, shared by CLI and App:
   Todos, metadata, identities, ownership facts, captures and original receipts.
   Reject unsupported or ambiguous source content explicitly; never omit it or
   equate an empty target with successful import.
+- Source lease JSON inventory is fail-closed: unsupported record names,
+  non-regular files and linked source subtrees refuse observation/revalidation.
+  Exact byte witnesses include retained orphan records; those records do not
+  become live leases. Non-record host lock files remain outside that inventory.
+  This existing source-admission repair does not qualify the complete importer.
 - Stop source writers and affected Hosts, settle active leases and reconcile
   prepared/committed outbox entries against source bytes and original receipts.
   Preserve history without converting old leases or receipts into new grants.
@@ -322,6 +370,139 @@ File/SQLite provider cutover of an already-canonical Goal and from isolated
 archive restore into a new identity. Do not substitute either journey's
 acceptance for this one. Once this route qualifies, an old Goal's next normal
 write requires reviewed import; installing the binary alone does not migrate it.
+
+The CLI stage uses the typed `coordination.cold_source.import` transaction
+(`loopx_cold_source_import_request_v0`). First stop affected writers through
+their owning Host and verify that their processes have exited. Inspect each
+retained task lease and release it through `task-lease release`, using its
+original owner/key and current `--expected-version`. An expired lease is still
+unsettled; stopping a process does not release its lease. Dispose of pending
+capture/outbox through its owning workflow before preparing this import.
+Then execute `backup-state` with the source state, registry, coordination
+evidence and runtime root. Lease release after a saved preview changes its
+source: make a fresh backup and reviewed preview. `--writers-stopped` records
+an operator attestation, not an automatic process stop. For example, after
+shutdown and settlement, from the registered project:
+
+```bash
+loopx --format json backup-state --project . --execute --no-automations --no-skills
+loopx --format json coordination-shadow prepare-import --goal-id GOAL --operation-id IMPORT \
+  --backup-manifest SAVED-MANIFEST.json --provider sqlite --target-handoff-mode hard_lease
+# Inspect the immutable plan at plan_path. Confirm using its exact plan_sha256.
+loopx --format json coordination-shadow apply-import --goal-id GOAL --operation-id IMPORT \
+  --plan-sha256 SAVED-SHA256 --writers-stopped --execute
+# After interruption, use the original operation and digest; do not prepare a new source.
+loopx --format json coordination-shadow recover-import --goal-id GOAL --operation-id IMPORT \
+  --plan-sha256 SAVED-SHA256 --execute
+```
+
+Prepare reads complete active and archived Todo records and preserves metadata,
+original evidence and settled lease history. The trusted Python tar adapter
+reads actual archive members, including older backups without a member list;
+the TypeScript owner verifies coverage of the coordination source bytes and
+pins both saved artifacts. A missing source path in the backup refuses import.
+Prepare may select an empty target and persist its identity and immutable plan,
+but does not fence the writer, import state or grant execution authority.
+
+Apply rechecks the original source and backup under the owning locks before
+engaging `loopx_cold_source_import_writer_fence_v0`. Missing identity, changed
+source, unsettled leases (including expired active or orphan records) and
+unresolved capture/outbox fail closed. Recovery requires that original fence,
+accepts no replacement source snapshot, and reads the original receipt without
+overwriting later canonical writes. Source bytes remain retained history; the
+import writes a separate new receipt. Recovery is not a provider rollback or a
+whole-Goal restore, and replacing the binary cannot clear the writer fence.
+
+`coordination_source_backup_verified=true` qualifies the prepared coordination
+source witness only. `complete_goal_backup_verified=false` preserves the full
+backup and original-history recovery acceptance. The packaged Goal storage
+settings use the same transaction for cold import:
+
+1. Select the Goal and open **Goal settings → Task ownership → Data storage**.
+   Choose File or SQLite and an explicit supported execution policy.
+2. Stop affected writers/Hosts, verify their exit and settle/dispose of refused
+   work through its owning workflow. The preview refuses unsettled leases,
+   including expired active records; a checkbox cannot bypass this refusal.
+3. **Back up and preview import** creates a private local archive using the
+   existing backup owner, then displays the complete active/archive inventory.
+   Preview does not import, stop a Host, settle leases or grant execution.
+   Confirm **Import reviewed Markdown source**. Apply
+   rechecks the bound original source and backup; a changed source needs a new
+   reviewed preview.
+4. After a lost response or reload, **Read original preview and current storage**
+   observes the saved operation and current store independently. Reload never
+   completes an unfinished import. Confirm again to retry the original operation;
+   do not discard its carrier while the commit is ambiguous.
+
+Only Goal/operation/digest identifiers survive in browser storage. Full plans,
+source bytes and backup paths stay local to the server. Completed receipt
+readback neither overwrites later writes nor reselects a provider.
+The operator-led POSIX stop path is exercised with actual owned Host processes
+and native unpromoted-source leases on File/SQLite: import refuses while the
+Host runs and after it exits with an active lease; native release permits
+cutover. The imported released lease retains its identity and history, and a
+restart using the old grant is rejected before the actual Host launches.
+A fresh native acquisition advances that retained lease's version and execution
+epoch and can start a real supervised Host under the selected canonical provider.
+With that Host running, original-import recovery still works after the Markdown
+source is removed and preserves the current active lease. The old token refuses
+launch even while a new lease for the same Todo is active. Stopping the new Host
+also leaves its lease active until its owner releases it; import replay preserves
+the new settlement. Reacquire through the normal `task-lease acquire` workflow
+with a new execution key and the current version, rather than reusing the old
+execution receipt. Keep the supervisor/OS transport: writer retirement does not
+remove its process-exit and current-execution proof duties.
+This qualifies operator-led POSIX reactivation of synthetic work, not automatic
+Host discovery/stop, pending outbox disposition, live model sessions or identity
+adoption after full-history restore. The App loading boundary is qualified
+separately below. The cold-import CLI reuses the
+selected command dispatcher and
+the existing Goal path resolver; its File/SQLite import and original-receipt
+recovery run with `todos.py`, `bootstrap.py`, `runtime_shadow_writer_adapter.py`
+and `local_authority_shadow_outbox.py` physically absent in a disposable package.
+This proves that command's independence, not that other commands or supported
+writers can lose those files. The retained prose-write guard now belongs to the
+existing source/fence boundary and shares the source partition projector with
+capture. Its old import remains compatible. Configuration and the guard load
+with both capture modules absent. Pure runtime-root routing now belongs to
+`paths.effective_runtime_root`; canonical Todo, terminal lifecycle, acceptance,
+Chat and CLI callers import that owner directly. The old adapter reexports the
+same function for supported capture callers. Source and fresh-wheel File/SQLite
+qualification runs the complete `serve_chat`
+entrypoint with all four modules physically absent. The packaged Goal settings
+journey performs backup/preview, reload and original-operation readback before
+explicit confirmation. Full current and archived requirements survive import;
+subsequent reviewed App creation, editing and completion work with the explicitly
+selected `soft_claim` policy. Restart/replay preserves those later writes.
+Missing selected storage and missing `hard_lease` execution proof still refuse
+without a Markdown fallback. App reads use the existing readback owner, and
+shared input transport reaches the existing typed mutation owners. Reviewed
+canonical Todo creates use request v2 to bind the preview's provider
+revision to the existing command identity and transaction CAS. Concurrent
+changes reject the stale request; original-operation recovery runs first and
+retains subsequent writes. Unreviewed v0/v1 callers keep their existing intent
+and receipt identity. Import and original-receipt recovery refresh current
+ownership independently on the same settings screen, including retryable read
+failures; a saved receipt does not substitute for today's policy.
+Supported old APIs reexport the same functions; their real Markdown writers and bootstrap
+operations remain for actual callers. This qualifies the bounded import/loading
+journey, not retirement of every writer, full-state identity adoption, D2 or a
+released SQLite default.
+
+已审核的 canonical Todo 创建使用请求 v2，将预览的 provider revision 绑定到既有
+命令身份和事务 CAS；并发修改会拒绝过期请求。原操作恢复先于当前 head 校验，保留
+之后的新写入；未审核的 v0/v1 调用保留原有意图和回执身份。导入或原回执恢复后，
+同一设置页面独立回读当前所有权，读取失败时可重试；保存的回执不代替当前策略。
+Source checks accept registered runtime directory aliases only when both paths
+resolve to the same physical directory. Retargeting an alias after preview still
+rejects before the import fence; original source observations are not rewritten.
+App backup IO resolves its configured registry path to the same physical filename
+used by the source witness, including registries outside conventional Goal folders.
+
+来源校验只接受指向同一实际目录的 runtime 路径别名。预览后将别名改指向另一个
+目录，仍在写入导入 fence 前拒绝；原来源观察不会被改写。
+App 备份使用与 source witness 一致的 registry 实际路径，也覆盖位于常规 Goal
+目录之外的 registry。
 
 Deliver complete, reversible PR packages in this order:
 

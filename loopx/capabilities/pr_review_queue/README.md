@@ -299,6 +299,36 @@ scan, so the latency improvement does not change queue ordering or freshness
 semantics. The scan does not use a stale cache: rerunning the command always
 re-reads the requested GitHub window.
 
+When GitHub's paginated file API is capped at 3000 entries, a PR declaring
+more files can recover its inventory from already available exact Git objects
+in the caller's checkout. The `origin` must identify the requested GitHub
+repository. LoopX compares the unique merge base to the exact head, folds only
+API-confirmed rename pairs, and requires the resulting file count and whole-diff
+addition/deletion totals to match fresh GitHub metadata. Head, base and totals
+are fenced before pagination and after recovery. This is source completeness,
+not review evidence or approval of the recovered PR.
+
+The source provider's recovered file rows identify `source` as `github` or
+`git`. Known API per-file statistics are retained, including 0/0 for omitted
+or generated diffs. Unobserved Git binary rows retain unknown per-file counts
+(`null`); Git's textual totals exclude binary lines. Mixed display values need
+not sum to the independently verified whole-diff totals. Ordinary complete GraphQL/REST reads keep their
+existing shape. No object fetch, clone, checkout, external diff or textconv is
+performed. A wrong repository, missing objects, ambiguous rename or
+malformed statistics, total mismatch or remote version change remains an
+incomplete source. Callers without a versioned snapshot (including approval
+closeout) retain their complete-API requirement; inventory recovery grants no
+additional closeout, publication or merge authority.
+
+GitHub 文件 API 达到 3000 项上限时，调用方当前 checkout 中已有的精确 Git 对象
+可用于恢复更大 PR 的文件清单。必须核对 origin 仓库、唯一 merge base 与精确 head，
+仅折叠 API 明确确认的 rename，并让文件数和全 diff 增删量与远端 metadata 一致。
+分页前及恢复后校验 head、base 和总量。保留 API 已知行的统计值；恢复行的 Git 来源
+不等于已完成 review。Git 二进制行不贡献文本行数，未被 API 观测的逐行统计保留 null，
+不会假定为 API 的 0/0。不会自动抓取对象、切分支或执行外部 diff/textconv；缺对象、
+统计格式损坏、rename 歧义、总量不符或版本变化继续明确返回 incomplete。没有精确快照
+的 approval closeout 仍要求完整 API 读回，不扩大撤回 review 或合并权限。
+
 For an autonomous maintainer monitor, request the complete open queue while
 persisting its compact cursor in an ignored local checkpoint:
 
@@ -769,7 +799,21 @@ state transition, author-owned conclusions use `COMMENTED` plus one exact title:
 `Approval conclusion (author-owned PR; GitHub blocks formal self-approval)` or
 `Request changes conclusion (author-owned PR; GitHub blocks formal self-review)`.
 The compact result is versioned as `pull_request_review_conclusion_v0` and
-reports a typed verdict and invalid-reason codes.
+reports a typed verdict and invalid-reason codes. Queue selection and approval
+closeout share the typed owner for each reviewer's latest submitted opinion.
+A brief approval by another reviewer cannot hide a complete exact-head approval.
+A reviewer's newer formal opinion retires their own previous opinion, including
+when it is dismissed or lacks the required body. Current-head requests for
+changes remain visible even without that format, and ordinary comments or
+pending reviews cannot restore a retired approval. A changed head still requires
+fresh evidence. This corrects default queue/readiness classification; it neither
+relaxes body qualification nor grants dismissal or merge authority.
+
+队列与 closeout 复用同一 TypeScript 历史选择规则：另一评审者的简短批准不会
+遮住完整的精确 head 批准；同一评审者的新正式意见会替换自己的旧意见，撤回或
+格式不完整也不会复活旧批准。当前 head 的阻塞意见保留，普通评论及待提交评审
+不改变已有正式意见，head 变化仍需新证据。本修复改变默认队列和 readiness
+分类，不放宽正文校验，也不授予撤回评审或合并权限。
 
 After a published exact-head `APPROVE` is read back, the capability-owned
 `review_execution_contract.approval_closeout` requires effective-review

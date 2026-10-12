@@ -256,12 +256,16 @@ File → SQLite → 已确认的 Todo 新增／修改／完成 → 新进程读�
 保留前缀，不能充当当前 head 的回退。checkpoint 缺少合格路径决策时，新一轮仍
 须重规划；provider 恢复不能抹掉这项义务，也不能把 Todo 完成当作 Goal 验收。
 
-这补齐了有界 CLI 组合验收，不是完整安装态产品验收。App 的任务所有权编辑器
-只迁移执行策略，尚无已有 Goal 的 File/SQLite 切换交互。下一配套仍复用同一 TS
-migration owner：在现有 Goal 设置中提供不接收调用者路径的 preview/apply，
-失响应／重启后恢复原预览，明确拒绝原因，并单独读回当前选中来源。须用真实
-packaged UI 和后端核验 pending projection/outbox、Host 停止及结算。旧 Markdown
-完整捕获、隔离 checkpoint 导入、全 Goal 恢复、D2 与发布默认决策仍各自验收。
+已有 Goal 设置现已通过同一 TS migration owner 提供 File/SQLite 预览、显式应用、
+失响应／重启后恢复原预览，以及独立的当前来源读回。真实 packaged UI／后端旅程
+将 SQLite 新写入带回 File；历史完成回执不能重新采用旧目标。执行策略迁移仍是
+另一个设置。真实 HTTP／provider 还覆盖预览后新准入的 Host lease：runtime 重启后
+应用仍拒绝，恢复只读；原生 release 改变了 source，结算后仍须审核新计划。
+原生 capture disposition 先在其所属归档保留 prepared outbox 字节，再切换 provider；
+旧计划不能绕过后来启动的 capture。这些只验证本地 canonical 连续性，不证明真实
+Host 进程已停止、旧 Markdown 完整捕获、pending projection 投递、隔离 checkpoint
+导入或全 Goal 恢复。这些更广的验收边界、D2 和发布默认决策各自核验，
+设置旅程不强制 legacy 迁移。
 
 以下是冻结候选版本后的工程窗口，不是承诺发布日期。故障注入只用可丢弃 runtime
 和经过验证的隔离副本，不能为了测试杀掉或改写活跃 Goal。
@@ -391,6 +395,30 @@ SQLite 的 `Count` opcode 读取覆盖索引，执行均值由 0.145 增至 0.83
 2.059 倍越线的精确归因。JS 返回行数有界不代表 SQLite 工作量恒定。回归同时验证
 live proof 窗口外的非尾部 hole：完整极值／head／parent 不能代替连续性校验。
 本次不据此提权威缓存、删 proof、切换 provider 或运行时性能修复。
+
+`233cc76fd` 上的固定历史消费者对照补齐了本诊断缺少的完整读取命令比较。
+macOS arm64、Node 24.21.0／SQLite 3.53.4，复用经完整历史校验的 64 KiB
+FULL/WAL 10k／100k 合成历史，并在隔离副本中执行。每轴各测 20 次 status 和
+20 次 quota，交替历史深度与命令顺序。每个样本新启 Python CLI 和 managed
+Effect runtime，关闭在计时外；保留 OS 文件缓存。两轴采用相同且非空的
+1,353 文件公共扫描根，测量前后输入 digest 不变。
+
+| 完整读取命令 | 10k p50／p95 | 100k p50／p95 |
+| --- | ---: | ---: |
+| `status` | 672／846 ms | 689／875 ms |
+| `quota should-run` | 873／1,111 ms | 894／1,079 ms |
+
+80 次调用均保留 canonical Todo；最终 cursor／完整 projection digest 不变，
+最老／中间原始 receipt 仍能校验，隔离 runtime 已停止并删除。这个单 Todo 读取
+负载没有明显命令增长，既不证明原 warm-head 失败的根因，也不验收原正式 profile。
+它未测 mutation、增长中的历史、并发 writer、安装 wheel／App 或完整领域 Goal
+payload。源码与扫描输入也不同于 `5f51559dc`，不能把这些值称为性能修复前后对比。
+
+处置：保留连续性校验和当前持久格式。这项消费者对照本身不足以支持新增索引、
+缓存决策、计数器或连接池。后续更窄索引／持久证明方案须先明确格式／升级边界，
+保留非尾部 hole 检测、原 digest／receipt，并在真实所属消费者上证明同负载改善，
+再决定实现。继续既有整 Goal 消费者、安装恢复和社区负责人所持正式资格工作，
+不让独立迁移／退役等待微基准全绿。
 
 原失败和预算继续保留；绝对值通过不抵消增长失败行，但按 §7.2 的消费者影响决策，
 这一行也不能单独否决发布默认值。#5805 已让新建默认采用 canonical SQLite／
@@ -561,13 +589,13 @@ Archive restore／audit 已使用 provider 通用的 1–64 个操作批量回�
 样本，File 查询 16 条回执的中位数从 346.2 降至 21.3 毫秒；未改动的 SQLite 对照为
 111.3／111.1 毫秒。每个 provider 的回执结果与权威 head 均保持一致。这是暖读组件
 测量，不是相同完整性工作下的 provider 比较、整次恢复延迟、冷读或 D2／默认项
-验收。File 每恢复一笔仍重写保留的文件；此前一次完整历史恢复超出调用方的
-300 秒超时，随后才发布精确匹配的确认。批量回执优化没有闭合这项恢复成本。
+验收。此前一次完整 File 历史恢复超出调用方的 300 秒超时，随后才发布精确
+匹配的确认。原失败保留；批量回执优化本身没有闭合这项恢复成本。
 CLI 现在区分恢复响应不确定与已知失败，并返回只读的
 `authority-archive restore-receipt` 命令。它有界读取现有、绑定 Goal／摘要／provider
 的历史完成回执，无需再次重放或扫描归档。回执缺失不代表后台仍在运行或已经失败。
-当前完整性仍走原有 audit，不改变 provider 激活或 D2／默认项门槛。下一项恢复成本
-工作仍是已测量的完整文件重写和解码路径，不再增加超时或另一套回执／状态格式。
+当前完整性仍走原有 audit，不改变 provider 激活或 D2／默认项门槛。恢复成本
+工作沿用同一归档和原回执／状态格式，不再增加超时。
 
 下一项已测量的 File 改动，在一个 checkpoint 窗口内复用 `AuthorityStateReplay`，
 不再为每条历史重建重放器、重新规范化未变化的完整状态。非可信 metadata 仍经
@@ -576,9 +604,25 @@ CLI 现在区分恢复响应不确定与已知失败，并返回只读的
 同一份隔离的 2,107 笔 File 历史每组运行三个全新进程，冷读中位数从 35.6 降至
 25.9 秒，约减少 27%；完整 head、revision、cursor 一致。两组连续采样未清空
 OS 缓存，未控制其他进程负载，不代表 p95、provider 对比或完整恢复时间。
-完整文件重写与剩余 revision 哈希成本仍归原有恢复任务；这不闭合 D2／默认项
-或旧 writer 退役验收。
+单独的冷读改进不能验收完整恢复，也不闭合 D2／默认项或旧 writer 退役。
 #4224 的 soak 已启动；其最终证据和对当前候选的适用性仍待核对。
+
+完整 File 恢复路径现在每新增最多 16 笔已验证逻辑事务，再原子发布更新后的
+完整 envelope。一个目标 identity/CAS 与原 writer lock 保护一页；下一页之前
+仍逐笔核验 journal 和原回执。每笔原 transaction、完整状态、cursor、revision
+和 receipt 分别保留，普通提交和持久化格式不变。SQLite/PostgreSQL 沿用逐笔
+写入；reviewed 本地 provider 迁移及现有 Goal 存储编辑器复用该路径。rename
+前后中断及丢响应反例验证原前缀恢复，不猜测重试；删除回执的突变被真实 CLI
+恢复 oracle 拒绝。
+
+同一份隔离 3,516 笔归档，在 macOS arm64／Node 24.21.0 上每组两个无 profile
+的全新进程，逐笔 File 恢复为 732.4–733.5 秒，整页发布为 143.5–173.2 秒。
+独立比较完整历史、events、receipts 和 metadata。未清空 OS 缓存，早期样本与
+其他验证重叠；这只是有界恢复观察，不是 p95、受控资源增长证书或 D2／默认项
+验收。File 仍按页重写完整文件，更大历史与持续运行沿用原资格。300 秒 CLI
+预算、结果未知读回、独立采用 fence、旧 writer 退役及正式 D2 的失败／缺失证据
+全部保留。
+
 
 ### 委派完成阶段的原租约衔接
 

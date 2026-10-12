@@ -52,7 +52,10 @@ from .extensions.lark.private_conversation_api import PrivateConversationRequest
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
 from .chat_loopx_mode import handle_loopx_request
-from .capabilities.manager_context.roundtrip import project_chat_session_snapshot
+from .capabilities.manager_context.roundtrip import (
+    ReturnService,
+    project_chat_session_snapshot,
+)
 from .control_plane.goals.active_state_metadata import active_state_section_text
 from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .control_plane.status.ssh_host_catalog import (
@@ -420,6 +423,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
     action_store: ChatActionStore
     action_service: ChatActionService
     runtime_controller: ChatRuntimeController
+    manager_return_service: ReturnService
     lark_runner: CommandRunner
     lark_cli_resolution: LarkCliResolution
     lark_app_setup_manager: LarkAppSetupManager
@@ -1644,6 +1648,8 @@ def serve_chat(
     )
     from .capabilities.native_chat.transports import install_conversation_transports
     install_conversation_transports(server, factories=external_conversation_factories,
+        observe_group=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
+            cli_bin=server.lark_cli_resolution.command or "lark-cli", audience="group"),
         observe_default=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
             cli_bin=server.lark_cli_resolution.command or "lark-cli"))
     private_transport = LarkPrivateConversations(controller=server.runtime_controller, runtime_root=runtime_root,
@@ -1688,7 +1694,9 @@ def serve_chat(
     )
     server.lark_goal_topic_runtime.start()
     from .extensions.lark.manager_returns import start_return_service
-    server.manager_return_service = start_return_service(server, server.runtime_controller.coordination_runtime_root)
+    server.manager_return_service = start_return_service(
+        server, server.runtime_controller.coordination_runtime_root, start_service=False
+    )
     from .chat_loopx_mode import DelegationWakeService
 
     def _wake_goal_context(session):
@@ -1715,6 +1723,7 @@ def serve_chat(
     try:
         if external_conversation_factories:
             server.conversation_transports.start(server)
+        server.manager_return_service.start()
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopping LoopX Chat", flush=True)

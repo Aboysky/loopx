@@ -48,11 +48,16 @@ test("dependency facts, not cached readiness or supplied secondary rows, decide 
   assert.equal(projectFallbackDisposition(input).kind, "resolved");
 });
 
-test("only repository-bound PR waits count as known pending evidence", () => {
+test("repository binding needs observed merge evidence to resolve a PR alternative", () => {
   const waiting = todo("todo_fallback", { resume_when: "pr_merged:#23" });
   assert.equal(projectFallbackDisposition(request([waiting])).kind, "vision_fallback_unresolved");
   waiting.task_repository = "git:github.com/example/project";
-  assert.equal(projectFallbackDisposition(request([waiting])).kind, "resolved");
+  assert.equal(projectFallbackDisposition(request([waiting])).kind, "vision_fallback_unresolved");
+  const input = request([waiting]);
+  input.resume_evaluation = {...input.resume_evaluation as JsonObject, rollout_events: [{
+    event_kind: "pr_merge", pr_ref: "example/project#23", recorded_at: "2026-10-01T00:00:00Z",
+  }]};
+  assert.equal(projectFallbackDisposition(input).kind, "resolved");
 });
 
 test("duplicate alternatives or prerequisites are uncertain, independent of row order", () => {

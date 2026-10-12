@@ -9,9 +9,10 @@ import pytest
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
-from loopx.control_plane.goals.goal_frontier import fallback_disposition, fallback_source
+from loopx.control_plane.goals.goal_frontier import fallback_source
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos.todo_summary import TODO_ITEM_SCHEMA_VERSION
 
 GOAL_ID = "fallback-wait-capacity-fixture"
@@ -289,14 +290,14 @@ def test_real_cli_reads_only_direct_fallback_dependencies(
 
     monkeypatch.setattr(fallback_source, "read_fallback_source_snapshot", record_read)
     transported: list[int] = []
-    original_projection = fallback_disposition.effect_runtime_result
+    original_projection = fallback_source.effect_runtime_result
 
     def record_projection(method: str, params: dict) -> object:
         if method == "goal.fallback_disposition.project":
             transported.append(len(params["items"]))
         return original_projection(method, params)
 
-    monkeypatch.setattr(fallback_disposition, "effect_runtime_result", record_projection)
+    monkeypatch.setattr(fallback_source, "effect_runtime_result", record_projection)
     assert cli_main(args) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["should_run"] is False
@@ -453,7 +454,7 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
     )
     initialize_canonical_authority(runtime_root, GOAL_ID, projection,
                                    state_path=state_file, provider=provider)
-    before = fallback_source.read_canonical_todos_if_promoted(
+    before = read_canonical_todos_if_promoted(
         runtime_root=runtime_root, goal_id=GOAL_ID,
     )
     if display == "missing":
@@ -474,7 +475,7 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
     result = json.loads(capsys.readouterr().out)
     assert "fallback_gaps" not in result["goal_frontier_projection"]
     assert snapshots == [len(rows)]
-    after = fallback_source.read_canonical_todos_if_promoted(
+    after = read_canonical_todos_if_promoted(
         runtime_root=runtime_root, goal_id=GOAL_ID,
     )
     assert before == after

@@ -42,7 +42,7 @@ DECLARED_FALLBACK_ACCEPTANCE = (
 def test_one_resolved_alternative_discharges_only_its_declaration(
     resolution: str, reverse: bool,
 ) -> None:
-    from loopx.control_plane.goals.goal_frontier.fallback_disposition import (
+    from loopx.control_plane.goals.goal_frontier.fallback_source import (
         declared_fallback_gap_from_agent_vision,
     )
 
@@ -70,7 +70,7 @@ def test_one_resolved_alternative_discharges_only_its_declaration(
 
 
 def test_loaded_writeback_source_is_bounded_before_effect_transport(monkeypatch) -> None:
-    from loopx.control_plane.goals.goal_frontier import fallback_disposition as module
+    from loopx.control_plane.goals.goal_frontier import fallback_source as module
 
     source = [quota_todo_item(todo_id=f"todo_unrelated_{index}", index=index + 1,
                              text="Unrelated work") for index in range(4096)]

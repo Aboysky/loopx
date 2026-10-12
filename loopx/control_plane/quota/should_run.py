@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..goals.goal_frontier.fallback_disposition import FallbackTodoSource
+    from ..goals.goal_frontier.fallback_source import FallbackTodoSource
 
 from ...quota import (
     _build_quota_plan_for_goal,
@@ -51,6 +51,7 @@ from .effect_program import (
     ReceiptBoundTerminalPhase,
 )
 from .should_run_packet import (
+    _attach_automation_cadence_readback,
     _build_quota_should_run_payload,
     _execution_obligation,
     _QuotaDecisionRoute,
@@ -256,6 +257,22 @@ def build_quota_paused_should_run_payload(
     )
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)
+    effective_agent_id = (
+        str(agent_identity.get("agent_id") or "").strip()
+        if isinstance(agent_identity, Mapping)
+        else ""
+    ) or requested_agent_id
+    _attach_automation_cadence_readback(
+        payload,
+        goal_id=safe_goal_id,
+        agent_id=effective_agent_id,
+        automation_id=codex_app_automation_id,
+        runtime_root=(
+            runtime_root
+            or status_payload.get("runtime_root")
+        ),
+        resolved_scheduler_context=resolved_scheduler_context,
+    )
     payload["automation_liveness"] = build_automation_liveness(payload)
     payload["interaction_contract"] = build_interaction_contract(
         payload,
@@ -301,6 +318,7 @@ def build_quota_should_run(
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_guard_recorded_at: str | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
@@ -377,6 +395,7 @@ def build_quota_should_run(
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
             receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
             authoritative_fallback_todo_items=authoritative_fallback_todo_items,
+            receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         )
         route = _resolve_quota_should_run_route(prepared)
         route = _apply_selected_todo_guards(prepared, route, workspace_path=workspace_path)
@@ -389,7 +408,7 @@ def build_quota_should_run(
             goal_ref=goal_ref,
         )
     if health_item:
-        return {
+        payload = {
             "ok": False,
             "mode": "should-run",
             "goal_id": safe_goal_id,
@@ -406,6 +425,15 @@ def build_quota_should_run(
             "recommended_action": health_item.get("recommended_action"),
             "plan_summary": plan.get("summary"),
         }
+        _attach_automation_cadence_readback(
+            payload,
+            goal_id=safe_goal_id,
+            agent_id=agent_id,
+            automation_id=codex_app_automation_id,
+            runtime_root=runtime_root or status_payload.get("runtime_root"),
+            resolved_scheduler_context=resolved_scheduler_context,
+        )
+        return payload
     return {
         "ok": False,
         "mode": "should-run",
