@@ -703,6 +703,7 @@ export async function createChatSession(
   agentId?: string,
   mode: "resume_latest" | "new" = "resume_latest",
   signal?: AbortSignal,
+  agentModelId?: string,
 ) {
   return requestJson<{
     agent_id: string;
@@ -718,8 +719,23 @@ export async function createChatSession(
     // silently re-point the steward channel away from its configured executor.
     // A project Session carries only the host-issued reference, never a Goal.
     body: JSON.stringify(context.kind === "project"
-      ? { context_kind: "project", project_ref: context.projectRef, agent_id: agentId, mode }
-      : { goal_id: context.kind === "goal" ? context.goalId : "", agent_id: agentId, mode, context_kind: context.kind }),
+      ? { context_kind: "project", project_ref: context.projectRef, agent_id: agentId, agent_model_id: agentModelId, mode }
+      : { goal_id: context.kind === "goal" ? context.goalId : "", agent_id: agentId, agent_model_id: agentModelId, mode, context_kind: context.kind }),
+  });
+}
+
+export type AgentModelOption = { value: string; label: string };
+export type AgentModelDiscovery = {
+  ok: true;
+  schema_version: "loopx_chat_agent_model_options_v1";
+  agent_id: string;
+  supported: boolean;
+  model: { id: "model"; label: string; selected: string; options: AgentModelOption[] } | null;
+};
+
+export function discoverAgentModelOptions(agentId: string, signal?: AbortSignal) {
+  return requestJson<AgentModelDiscovery>("/api/chat/agent-model-options", {
+    method: "POST", signal, body: JSON.stringify({agent_id: agentId}),
   });
 }
 

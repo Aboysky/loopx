@@ -257,6 +257,7 @@ class ChatSessionStore(ChatIngressStore):
         codex_home: str | None = None,
         project_context: dict[str, Any] | None = None,
         steward_context: dict[str, Any] | None = None,
+        agent_model_id: str | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         token = _opaque_id(session_id or uuid.uuid4().hex, field="session_id")
@@ -304,6 +305,7 @@ class ChatSessionStore(ChatIngressStore):
             field="executor_endpoint_id",
         )
         normalized_adapter_kind = _opaque_id(adapter_kind, field="adapter_kind")
+        normalized_agent_model_id = _opaque_id(agent_model_id, field="agent_model_id") if agent_model_id else None
         normalized_upstream_thread_id = _upstream_id(upstream_thread_id)
         normalized_upstream_mode = _opaque_id(upstream_mode, field="upstream_mode")
         normalized_channel_id = _opaque_id(
@@ -330,6 +332,7 @@ class ChatSessionStore(ChatIngressStore):
                 else {}
             ),
             "agent_id": normalized_agent_id,
+            "agent_model_id": normalized_agent_model_id,
             "executor_endpoint_id": normalized_executor_endpoint_id,
             "adapter_kind": normalized_adapter_kind,
             "upstream_thread_id": normalized_upstream_thread_id,
@@ -388,6 +391,7 @@ class ChatSessionStore(ChatIngressStore):
                     "manager_runtime_standing_grant",
                     "manager_runtime_tool_classes",
                     "manager_executor_allocation",
+                    "agent_model_id",
                     "goal_id",
                 }
                 unknown = set(changes) - allowed
@@ -408,6 +412,8 @@ class ChatSessionStore(ChatIngressStore):
                         raise ValueError("only the owner manager may migrate to global identity")
                 if "upstream_thread_id" in changes:
                     changes["upstream_thread_id"] = _upstream_id(changes["upstream_thread_id"])
+                if "agent_model_id" in changes:
+                    changes["agent_model_id"] = _opaque_id(changes["agent_model_id"], field="agent_model_id") if changes["agent_model_id"] else None
                 if "upstream_mode" in changes:
                     changes["upstream_mode"] = _opaque_id(changes["upstream_mode"], field="upstream_mode")
                 if "manager_authorization_scope_id" in changes:
@@ -1914,6 +1920,7 @@ class ChatSessionStore(ChatIngressStore):
             key: payload.get(key)
             for key in (
                 "session_id", "goal_id", "agent_id", "adapter_kind", "status",
+                "agent_model_id",
                 "active_turn_id", "last_error_code", "created_at", "updated_at", "last_activity_at",
             )
         } | {

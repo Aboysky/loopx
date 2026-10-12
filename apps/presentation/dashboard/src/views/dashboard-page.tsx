@@ -1406,6 +1406,7 @@ function PersonalGoalHome({
   const agentDefaultForContext = (targetContextId: string) =>
     targetContextId === "manager" ? stewardExecutorAgentId ?? defaultAgentId : defaultAgentId;
   const [selectedAgents, setSelectedAgents] = useState<Record<string, string>>(readPersonalAgentSelections);
+  const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
   const selectedAgentId = selectedAgents[contextId] ?? agentDefaultForContext(contextId);
   const selectedAgent = selectAvailableChatAgent(agentOptions, selectedAgentId, defaultAgentId);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
@@ -1726,7 +1727,7 @@ function PersonalGoalHome({
         // actually made for this context is sent.
         const sessionEndpoint =
           targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedAgent.agentId;
-        const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest");
+        const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest", undefined, selectedAgentModels[sessionEndpoint ?? selectedAgent.agentId]);
         if (cancelled) return;
         if (targetContext.kind === "manager" && created.session.manager_runtime) {
           setManagerRuntime(created.session.manager_runtime);
@@ -2216,7 +2217,7 @@ function PersonalGoalHome({
     const key = `${goalId}:${agentId}`;
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
-    const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal);
+    const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal, selectedAgentModels[agentId]);
     recordSessionAdmission(session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
@@ -2310,7 +2311,7 @@ function PersonalGoalHome({
         const mode = newSessionRequired.current.has(sessionKey) ? "new" : "resume_latest";
         const sessionEndpoint =
           targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedRoute.agentId;
-        const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal);
+        const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal, selectedAgentModels[sessionEndpoint ?? selectedRoute.agentId]);
         if (targetContextId === "manager" && session.session.manager_runtime) {
           setManagerRuntime(session.session.manager_runtime);
         }
@@ -2631,6 +2632,14 @@ function PersonalGoalHome({
     }
     setSelectedAgents((current) => ({ ...current, [contextId]: agentId }));
     setAgentMenuOpen(false);
+  }
+
+  function chooseAgentModel(agentId: string, modelId: string) {
+    setSelectedAgentModels((current) => current[agentId] === modelId ? current : { ...current, [agentId]: modelId });
+    const key = `${contextId}:${agentId}`;
+    sessionIds.current.delete(key);
+    newSessionRequired.current.add(key);
+    recordRuntimeBinding(contextId, null);
   }
 
   function openGoalChat(goalId: string) {
@@ -3094,6 +3103,7 @@ function PersonalGoalHome({
           },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
+          onSelectAgentModel: chooseAgentModel,
           onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
           onSelectView,
           onSelectTodo,
@@ -3118,6 +3128,7 @@ function PersonalGoalHome({
         } : undefined}
         readOnly={readOnly}
         selectedAgentId={selectedAgent.agentId}
+        selectedAgentModelId={selectedAgentModels[selectedAgent.agentId]}
         selectedGoalId={selectedGoal?.goalId ?? null}
         serviceNotice={executionDiscoveryError
           ? <p className="personal-service-notice" role="status">{t(executionDiscoveryError === "partial" ? "runs.discoveryPartial" : "runs.discoveryOffline")}</p>
