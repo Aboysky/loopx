@@ -192,11 +192,28 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         assert _classification_count(runtime, "monitor_observation_unavailable") == 1
         assert _classification_count(runtime, "quota_monitor_poll") == 0
         assert _spend_run_count(runtime) == 0
-        fresh_binding = (*binding[:-1], f"fresh-observation-{provider}")
-        rc, fresh_guard = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *fresh_binding)
-        assert rc == 0 and fresh_guard["should_run"] is True, fresh_guard
+        # Re-enter the current recovery Turn after closing the original attempt;
+        # a third identity would leave the already-admitted recovery unresolved.
+        # Its advancement lane observes this due Monitor through the existing
+        # auxiliary route, rather than selecting a Monitor as advancement work.
+        rc, independent = cli("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+                              "--text", "Inspect an independent artifact.",
+                              "--task-class", "advancement_task", "--claimed-by", AGENT_ID,
+                              *(("--operation-id", f"fresh-independent-{provider}")
+                                if provider != "markdown" else ()))
+        assert rc == 0, independent
+        rc, fresh_guard = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app",
+                              "--agent-id", AGENT_ID, "--turn-instance-id", recovery_turn)
+        assert rc == 0 and fresh_guard["should_run"] is True, json.dumps({
+            "rc": rc, "error_code": fresh_guard.get("error_code"),
+            "error": fresh_guard.get("error"), "effective_action": fresh_guard.get("effective_action"),
+            "message": fresh_guard.get("message"), "reason": fresh_guard.get("reason"),
+            "selection": fresh_guard.get("action_selection"),
+        })
+        assert fresh_guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] != MONITOR_ID
+        assert fresh_guard["work_lane_contract"]["lane"] == "advancement_task"
         fresh_poll = list(poll_args)
-        fresh_poll[fresh_poll.index("--turn-instance-id") + 1] = fresh_binding[-1]
+        fresh_poll[fresh_poll.index("--turn-instance-id") + 1] = recovery_turn
         rc, observed = cli(*fresh_poll, "--execute")
         assert rc == 0 and observed["appended"] is True, observed
         rc, poll_replay = cli(*fresh_poll, "--execute")
