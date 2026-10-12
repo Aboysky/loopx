@@ -149,7 +149,7 @@ def test_checkpoint_opportunity_uses_native_admission_and_real_grade(tmp_path, m
         "work": {"image_tag": "fixture", "agent_query": "Synthetic fixture"},
         "judge": {"image_tag": "fixture", "eval_timeout": 15, "parser": "structured_json",
                   "selection": "score_first", "score_direction": "maximize",
-                  "eval_cmd": "python3 -c 'import json; print(json.dumps(dict(score=7, valid=True)))'"},
+                  "eval_cmd": "python3 -c 'import json; print(json.dumps(dict(score=json.load(open(\"candidate.json\"))[\"score\"], valid=True)))'"},
     }))
     config = SForgeConfig(tasks_dir=tasks, log_dir=tmp_path, judge_cpu_limit=1, judge_mem_limit="256m",
                           judge_max_outstanding_per_run=1)
@@ -175,14 +175,17 @@ def test_checkpoint_opportunity_uses_native_admission_and_real_grade(tmp_path, m
             "submission_cooldown": 3600, "max_agent_submissions": 12}, timeout=10)
         registered.raise_for_status()
         token = registered.json()["token"]
-        payload = io.BytesIO()
-        with tarfile.open(fileobj=payload, mode="w:gz") as archive:
-            member = tarfile.TarInfo("candidate.json")
-            data = b"{}"
-            member.size = len(data)
-            archive.addfile(member, io.BytesIO(data))
+        def candidate(score):
+            payload = io.BytesIO()
+            with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+                member = tarfile.TarInfo("candidate.json")
+                data = json.dumps({"score": score}).encode()
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+            return payload.getvalue()
+        first_archive = candidate(7)
         accepted = requests.post(url + "/api/v1/submit", data={"token": token},
-            files={"archive": ("candidate.tar.gz", payload.getvalue())}, timeout=15)
+            files={"archive": ("candidate.tar.gz", first_archive)}, timeout=15)
         accepted.raise_for_status()
         assert accepted.json()["round_id"] == "agent-1"
         assert requests.post(url + ROUTE, json={"token": token}, timeout=10).status_code == 409
@@ -192,20 +195,38 @@ def test_checkpoint_opportunity_uses_native_admission_and_real_grade(tmp_path, m
         assert released.status_code == 200, released.json()
         env = {"SFORGE_JUDGE_URL": url, "SFORGE_TOKEN": token,
                "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 100)}
-        point = capture_opportunity(env, timeout=10)
+        point = capture_opportunity(env, timeout=10, incumbent_path=tmp_path / "incumbent.tar.gz")
+        assert (tmp_path / "incumbent.tar.gz").read_bytes() == first_archive
         assert point["released_history"][0]["score"] == 7
         assert point["next_agent_round"] == 2 and 0 < point["remaining_cooldown_seconds"] <= 3600
         assert 0 < point["remaining_trial_seconds"] <= 100
         assert point["continuation_qualified"] is False
         before = app.state.judge.resolve_token(token)
-        assert capture_opportunity(env, timeout=10)["judge_epoch"] == point["judge_epoch"]
+        assert capture_opportunity(env, timeout=10, incumbent_path=tmp_path / "second-read.tar.gz")["judge_epoch"] == point["judge_epoch"]
         assert app.state.judge.resolve_token(token) == before
         cooled = requests.post(url + "/api/v1/submit", data={"token": token},
-            files={"archive": ("candidate.tar.gz", payload.getvalue())}, timeout=15)
+            files={"archive": ("candidate.tar.gz", first_archive)}, timeout=15)
         assert cooled.status_code == 429  # Reading the checkpoint cannot refill admission.
         assert app.state.judge.resolve_token(token) == before
         with pytest.raises(ValueError, match="original trial deadline"):
-            capture_opportunity({**env, "LOOPX_PHASE_DEADLINE_EPOCH": "0"}, timeout=10)
+            capture_opportunity({**env, "LOOPX_PHASE_DEADLINE_EPOCH": "0"}, timeout=10,
+                                incumbent_path=tmp_path / "closed.tar.gz")
+        # Separate native registration with no cooldown: two actual grades must
+        # retain the older winner, not substitute the later working candidate.
+        registered = requests.post(url + "/api/v1/register", json={"task_id": "fixture",
+            "run_id": "synthetic-selection", "admin_secret": app.state.judge.admin_secret}, timeout=10)
+        registered.raise_for_status()
+        selection_token = registered.json()["token"]
+        for raw in (first_archive, candidate(3)):
+            response = requests.post(url + "/api/v1/submit", data={"token": selection_token},
+                files={"archive": ("candidate.tar.gz", raw)}, timeout=15)
+            response.raise_for_status()
+            wait_for(lambda: not app.state.judge._outstanding_by_run, timeout=60)
+        selected = capture_opportunity({**env, "SFORGE_TOKEN": selection_token}, timeout=10,
+                                       incumbent_path=tmp_path / "selected.tar.gz")
+        assert selected["next_agent_round"] == 3 and selected["native_incumbent"]["round"] == "agent-1"
+        assert [entry["score"] for entry in selected["released_history"]] == [7, 3]
+        assert (tmp_path / "selected.tar.gz").read_bytes() == first_archive
     finally:
         finish_grade.set()
         server.should_exit = True

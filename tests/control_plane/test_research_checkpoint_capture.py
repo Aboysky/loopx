@@ -1,6 +1,7 @@
 """Inert checkpoint capture reuses the real settled-Turn source owner."""
 from pathlib import Path
 import json
+import hashlib
 import pytest
 import time
 
@@ -41,8 +42,8 @@ def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
     assert receipt["checkpoint"]["reason"] == "capture_failed"
 
 
-@pytest.mark.parametrize("opportunity", [False, True])
-def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_path, monkeypatch, opportunity):
+@pytest.mark.parametrize("opportunity,corrupt", [(False, False), (True, False), (True, True)])
+def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_path, monkeypatch, opportunity, corrupt):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path)
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
@@ -56,12 +57,21 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_
     wake.mkdir(parents=True)
     (wake / cli.TURN_ID).mkdir()
     observed = []
-    opportunity_packet = {"meaning": "synthetic opportunity participant; no admission"}
-    def export(env, *, timeout):
+    incumbent_bytes = b"opaque older adopted candidate"
+    opportunity_packet = {"meaning": "synthetic opportunity participant; no admission", "native_incumbent": {
+        "round": "agent-1", "archive_sha256": hashlib.sha256(incumbent_bytes).hexdigest(), "archive_bytes": len(incumbent_bytes)}}
+    def export(env, *, timeout, incumbent_path):
         assert 0 < timeout <= 30
         observed.append(True)
+        incumbent_path.write_bytes(incumbent_bytes)
         return opportunity_packet
     monkeypatch.setattr("benchmark.runtime.sforge_checkpoint.capture_opportunity", export)
+    if corrupt:
+        def altered_probe(method, params, **kwargs):
+            if params["action"] == "probe":
+                next(wake.glob("*/checkpoint-incumbent.tar.gz")).write_bytes(b"altered after transport")
+            return effect_runtime_result(method, params, **kwargs)
+        monkeypatch.setattr("benchmark.runtime.checkpoint.effect_runtime_result", altered_probe)
     (project / "solution.py").write_text("retained_candidate = 7\n")
     request = tmp_path / "request.json"
     target = logs / "checkpoints" / "point"
@@ -91,17 +101,25 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_
     retained_goal = goal_state.read_bytes()
     capture_after_wake(env, receipt)
     assert receipt["ok"] is True
+    if corrupt:
+        assert receipt["checkpoint"]["captured"] is False and not target.exists()
+        assert "differs" in receipt["checkpoint"]["error"]
+        assert goal_state.read_bytes() == retained_goal
+        return
     assert receipt["checkpoint"].get("captured") is True, receipt
     assert receipt["checkpoint"]["research_point_qualified"] is False
     assert goal_state.read_bytes() == retained_goal
     if opportunity:
         assert json.loads((target / "components/evaluation_opportunity").read_text()) == opportunity_packet
+        assert (target / "components/evaluation_incumbent").read_bytes() == incumbent_bytes
 
     digest = receipt["checkpoint"]["sha256"]
     restored = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "materialize", "root": str(target),
         "expected_sha256": digest, "destination": str(tmp_path / "inert")})
     assert restored["activation_performed"] is False
     assert (tmp_path / "inert/components/code").read_text() == "retained_candidate = 7\n"
+    if opportunity:
+        assert (tmp_path / "inert/components/evaluation_incumbent").read_bytes() == incumbent_bytes
     before = (target / "checkpoint.json").read_bytes()
     capture_after_wake(env, receipt)
     assert receipt["checkpoint"]["reason"] == "destination_already_present_no_replay"

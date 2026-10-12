@@ -219,14 +219,18 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             "request_sha256": hashlib.sha256(raw).hexdigest(),
         }
         components = request["components"]
+        opportunity = None
         if request.get("evaluation_opportunity"):
             from .sforge_checkpoint import capture_opportunity
 
-            opportunity = capture_opportunity(env, timeout=max(.1, deadline - time.time()))
             evidence = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-opportunity.json"
+            incumbent = evidence.with_name("checkpoint-incumbent.tar.gz")
+            opportunity = capture_opportunity(env, timeout=max(.1, deadline - time.time()), incumbent_path=incumbent)
             evidence.write_text(json.dumps(opportunity), encoding="utf-8")
             evidence.chmod(0o600)
             components = [*components, {"id": "evaluation_opportunity", "source_path": str(evidence)}]
+            if opportunity["native_incumbent"] is not None:
+                components = [*components, {"id": "evaluation_incumbent", "source_path": str(incumbent)}]
         if request.get("native_session"):
             from .native_checkpoint import native_session_checkpoint
 
@@ -239,6 +243,13 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             "action": "probe", "components": components,
             "deadline_epoch_ms": deadline * 1000,
         }, timeout=max(.1, deadline - time.time()), retry_safe=False)
+        if opportunity is not None and opportunity["native_incumbent"] is not None:
+            selected = opportunity["native_incumbent"]
+            witness = probe["source_witness"].get("evaluation_incumbent", [])
+            if (len(witness) != 1 or witness[0].get("path") != "" or witness[0].get("kind") != "file" or
+                    witness[0].get("sha256") != selected["archive_sha256"] or
+                    witness[0].get("size") != selected["archive_bytes"]):
+                raise ValueError("native incumbent participant differs from its captured result")
         destination.parent.mkdir(parents=True, exist_ok=True)
         captured = effect_runtime_result("runtime.checkpoint_artifacts", {
             "action": "capture", "destination": str(destination),
