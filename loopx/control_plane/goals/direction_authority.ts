@@ -21,7 +21,7 @@ const SCHEMA = "goal_direction_result_v0";
 const OPERATION_SCHEMA = "goal_direction_operation_v0";
 const SCOPE_SCHEMA = "goal_direction_scope_v0";
 const USAGE_SCHEMA = "goal_material_usage_record_v0";
-const FIELDS = {inspect: [], configure: ["materials", "expected_provider_revision"], disable: ["expected_provider_revision"],
+const FIELDS = {inspect: [], prepare_configure: ["expected_provider_revision"], configure: ["materials", "expected_provider_revision"], disable: ["expected_provider_revision"],
   prepare_read: ["material_id", "required_revision", "authority_digest", "source_ref_sha256"],
   offer_read: ["material_id", "required_revision", "authority_digest", "source_ref_sha256"],
   acknowledge: ["read_operation_id", "delivery_digest"], receipt: ["receipt_operation_id"]} as const;
@@ -135,6 +135,17 @@ function readView(loaded: AuthorityStoreHead, goalRef: WireExactGoalRef, actor: 
       direction_baseline_digest: projection?.baseline_digest ?? null, acceptance_assessed: false, result: "not_assessed"},
     receipt_count: rows.filter(r => r.agent_id === actor).length, execution_authority_granted: false, acceptance_assessed: false};
 }
+function usageRecordedAt(rows: JsonObject[], now: string): string {
+  // v0 readers order by recorded_at. Preserve canonical append order across
+  // equal or rewound host clocks without rewriting any historical timestamp.
+  const prior=rows.reduce((latest,row)=>Math.max(latest,Date.parse(String(row.recorded_at))),-Infinity);
+  const recorded=new Date(Math.max(Date.parse(now),prior+1)).toISOString();
+  need(/^\d{4}-/.test(recorded),"material usage timestamp capacity exceeded");
+  return recorded;
+}
+function requestDigest(request:JsonObject):string {
+  return canonicalAuthoritySha256(Object.fromEntries(Object.entries(request).filter(([key])=>!["runtime_root","source","observed_at","dry_run"].includes(key))));
+}
 function currentMaterial(head: JsonObject, goalRef: WireExactGoalRef, request: JsonObject): JsonObject {
   const configured = scope(head, goalRef);need(configured?.enabled === true, "direction baseline is disabled");
   basis(request.authority_digest === configured.authority_digest, "direction authority changed; inspect the current basis");
@@ -166,24 +177,35 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
     }
     return {schema_version:SCHEMA,...found,ok:found.status==="found"||found.status==="missing",historical_only:true,execution_authority_granted:false,acceptance_assessed:false};
   }
-  const readOnly=op==="inspect"||op==="prepare_read";
+  const readOnly=op==="inspect"||op==="prepare_read"||op==="prepare_configure";
   const identity=readOnly?null:new CoordinationCommandReceipt({result_schema:SCHEMA,
     identity:{schema_version:OPERATION_SCHEMA,goal_id:goalRef.goal_id,operation_id:token(request.operation_id,"operation id"),
-      request_sha256:canonicalAuthoritySha256(Object.fromEntries(Object.entries(request).filter(([key])=>!["runtime_root","source","observed_at","dry_run"].includes(key))))},
+      request_sha256:requestDigest(request)},
     failure:(_code,reason)=>failure(reason),decode:commandReceiptResult});
   if(identity){const prior=await identity.read(store);if(prior!==null)return {...prior,
     ok:["applied","recovered","replayed","no_change"].includes(String(prior.status))&&prior.read_outcome!=="unavailable",
     historical_only:true,execution_authority_granted:false,acceptance_assessed:false};}
   need(await sourceCurrent(),"source Goal changed before direction operation");
   const ready=sourceGoalMutationReadiness({...source,requested_goal_ref:goalRef});need(ready.kind==="admit","Goal lifetime does not admit direction operation");
+  if(op!=="disable")need(source.legacy_authority_present===false,"existing registry authority needs an explicit owner migration; refusing a second authority");
   const loaded=await store.loadAuthority();need(loaded.status==="loaded","canonical Goal authority is unavailable");
   const lifecycle=readGoalAcceptanceLifecycle(loaded.head,goalRef.goal_id);
   need(!lifecycle || lifecycle.state==="active"&&sameExactGoalRef(lifecycle.goal_ref,goalRef),"canonical Goal lifetime retired or changed");
   if(op==="inspect")return readView(loaded,goalRef,actor,agents,now);
+  if(op==="prepare_configure"){
+    need(actor===null,"direction declarations require the trusted Goal owner");
+    const prior=scope(loaded.head,goalRef);need(prior!==null||loaded.head.authority_registry===undefined,"canonical authority already belongs to another owner");
+    const history=await store.readReceipt(token(request.operation_id,"configuration operation"));
+    // A known historical operation may be reread under the current live owner
+    // boundary. The final configure still verifies its complete request hash.
+    const known=history.status==="found"&&history.receipts.length===1&&history.receipts[0].schema_version===OPERATION_SCHEMA
+      &&sameExactGoalRef(parseWireExactGoalRef(object(history.receipts[0].result,"configuration receipt").goal_ref,"receipt Goal"),goalRef);
+    basis(known||request.expected_provider_revision===loaded.provider_revision,"direction provider basis changed; inspect and preview again");
+    return {schema_version:SCHEMA,status:"configuration_admitted",ok:true,goal_ref:goalRef,execution_authority_granted:false,acceptance_assessed:false};
+  }
   const next=structuredClone(loaded.head);let result:JsonObject;
   if(op==="configure"||op==="disable"){
     need(actor===null,"direction declarations require the trusted Goal owner");
-    need(source.legacy_authority_present===false,"existing registry authority needs an explicit owner migration; refusing a second authority");
     basis(request.expected_provider_revision===loaded.provider_revision,"direction provider basis changed; inspect and preview again");
     const prior=scope(loaded.head,goalRef);
     if(op==="configure"){
@@ -205,7 +227,8 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
     if(observation.available===false){
       keys(observation,["available"]);need(usage(loaded.head,goalRef).length<GOAL_DIRECTION_LIMITS.receipts,"material usage capacity exceeded");
       const receipt={schema_version:"material_usage_receipt_v0",receipt_id:`unavailable:${canonicalAuthoritySha256({goal_ref:goalRef,operation_id:request.operation_id}).slice(0,32)}`,
-        goal_id:goalRef.goal_id,agent_id:actor,material_id:request.material_id,todo_id:null,observed_revision:null,outcome:"unavailable",recorded_at:now};
+        goal_id:goalRef.goal_id,agent_id:actor,material_id:request.material_id,todo_id:null,observed_revision:null,outcome:"unavailable",
+        recorded_at:usageRecordedAt(usage(loaded.head,goalRef),now)};
       next.material_usage_receipts=[...(loaded.head.material_usage_receipts as JsonObject[]??[]),{
         schema_version:USAGE_SCHEMA,goal_ref:goalRef,receipt,read_operation_id:request.operation_id,
         delivery_digest:canonicalAuthoritySha256({goal_ref:goalRef,agent_id:actor,operation_id:request.operation_id,available:false})}];
@@ -236,7 +259,7 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
     need(existing||rows.filter(r=>r.agent_id===actor&&r.material_id===offer.material_id).length===offer.usage_count,
       "a later material observation invalidated this unacknowledged offer; read the source again");
     const receipt=existing??{schema_version:"material_usage_receipt_v0",receipt_id:receiptId,goal_id:goalRef.goal_id,agent_id:actor,material_id:offer.material_id,
-      todo_id:null,observed_revision:offer.required_revision,outcome:"read",recorded_at:now};
+      todo_id:null,observed_revision:offer.required_revision,outcome:"read",recorded_at:usageRecordedAt(rows,now)};
     if(!existing)next.material_usage_receipts=[...(loaded.head.material_usage_receipts as JsonObject[]??[]),{
       schema_version:USAGE_SCHEMA,goal_ref:goalRef,receipt,read_operation_id:readId,delivery_digest:read.delivery_digest}];
     result={changed:!existing,goal_ref:goalRef,agent_id:actor,receipt,receipt_recorded:true,understanding_verified:false};
@@ -247,7 +270,9 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
   need(Buffer.byteLength(JSON.stringify({goal_id:goalRef.goal_id,agent_id:"a".repeat(128),generated_at:now,
     authority_registry:next.authority_registry,receipts:usage(next,goalRef),available_boundaries:["local_private"]}))<=GOAL_DIRECTION_LIMITS.input_bytes,
     "combined direction authority and usage capacity exceeded");
-  if(request.dry_run===true)return {schema_version:SCHEMA,status:"planned",ok:true,...result,changed:false,execution_authority_granted:false,acceptance_assessed:false};
+  if(request.dry_run===true)return {schema_version:SCHEMA,status:"planned",ok:true,...result,changed:false,dry_run:true,
+    reviewed_request_sha256:requestDigest(op==="configure"?{...request,expected_authority_digest:result.authority_digest}:request),
+    ...(Object.hasOwn(result,"receipt_recorded")?{receipt_recorded:false}:{}),execution_authority_granted:false,acceptance_assessed:false};
   const committed=await identity!.commit(store,{expected_provider_revision:loaded.provider_revision,operation_id:String(request.operation_id),next_projection:next,
     events:[{schema_version:OPERATION_SCHEMA,operation:op,operation_id:request.operation_id,goal_ref:goalRef}],
     receipts:[{...identity!.contract.identity,result:{...result,execution_authority_granted:false,acceptance_assessed:false}}]});
@@ -261,7 +286,7 @@ export async function directionLocal(value: unknown): Promise<JsonObject> {
     const owner=parseQuotaAccountingOwner({runtimeRoot:root,goalId:goalRef.goal_id,
       goalRefValue:request.operation==="receipt"?source.current_goal_ref:goalRef,sourceAdmissionValue:source.accounting_admission});
     return await withBorrowedQuotaAccountingOwner(owner,()=>withCanonicalWriter(root,goalRef.goal_id,
-      ["inspect","prepare_read","receipt"].includes(String(request.operation))||request.dry_run===true,
+      ["inspect","prepare_read","prepare_configure","receipt"].includes(String(request.operation))||request.dry_run===true,
       async()=>executeDirectionOperation(await openLocalAuthorityStore(root,goalRef.goal_id),request,registryAuthoritySourceCheck({registry_source:source.registry_source},true))));
   } catch(error) {
     if(error instanceof DirectionBasisChanged)return {...failure(error.message),reason_code:"direction_basis_changed"};

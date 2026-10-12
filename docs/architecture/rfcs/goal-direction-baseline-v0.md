@@ -491,6 +491,11 @@ second authority. Under this profile `authority_registry` is the same logical
 Goal authority object in the canonical Goal head, with an exact-lifetime scope.
 Other Goal state, requirements, work, leases and acceptance remain unchanged.
 
+The typed owner checks the live lifetime, unique authority and provider basis
+before the operator configuration reads source bytes as well. A compact legacy
+authority summary is not treated as empty; migration is required. Disabling the
+reader remains available to the live owner without granting new source access.
+
 The operator declares a complete list of local Markdown sources, each with
 stable material id, purpose, topic refs, required/optional flag and an explicit
 public/public-safe/local-private boundary. The source path is transient input,
@@ -522,7 +527,10 @@ Usage has two distinct steps:
    or model understanding, actual route adoption, `used`, or `verified`.
 
 A later read failure records `unavailable` through the same owner and blocks
-an earlier passing receipt. Repair the source and perform a new read/ack;
+an earlier passing receipt. The producer keeps `recorded_at` strictly increasing
+in canonical append order even if the host clock repeats or moves backward;
+this is ordering evidence, not an independent wall-clock attestation. Preview
+acknowledgements explicitly keep `receipt_recorded=false` and write no record. Repair the source and perform a new read/ack;
 never edit a receipt to make the projection current. Recreated/retired source
 lifetimes fence new operations including a delayed RPC after caller timeout.
 Original operation receipts remain historical; replay grants no current access

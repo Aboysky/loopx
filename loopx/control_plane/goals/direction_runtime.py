@@ -49,12 +49,12 @@ def _source(*, registry_path: Path, goal_id: str, goal_instance_id: str, agent_i
                 "goal_status": goal.get("status"), "registered_agents": registered_agent_ids_for_goal(goal),
                 "gate": json.loads(gate_path.read_text()) if gate_path.exists() else None,
                 "registry_source": transaction.source_read_witness(), "accounting_admission": admission,
-                "legacy_authority_present": bool(goal.get("authority_registry"))}
+                "legacy_authority_present": bool(goal.get("authority_registry") or goal.get("authority_sources"))}
             yield {"goal_ref": requested, "actor_agent_id": agent_id, "runtime_root": str(root),
                    "source": source, "observed_at": datetime.now(timezone.utc).isoformat()}, goal, root
 
 
-def _read(goal: dict[str, Any], root: Path, material_id: str, path: str) -> tuple[str, dict[str, Any]]:
+def _read(goal: dict[str, Any], root: Path, path: str) -> tuple[str, dict[str, Any]]:
     if not isinstance(path, str) or not path or len(path) > 4096:
         raise ValueError("One bounded local material path is required")
     resolved = resolve_review_material_path(goal=goal, raw_path=path, runtime_root=root)
@@ -88,12 +88,16 @@ def execute_goal_direction(*, registry_path: Path, goal_id: str, goal_instance_i
             materials = parameters["materials"]
             if not isinstance(materials, list) or not 1 <= len(materials) <= 64:
                 raise ValueError("Direction declarations must contain 1 to 64 materials")
+            admitted = rpc("prepare_configure", {"expected_provider_revision": parameters["expected_provider_revision"],
+                                               "operation_id": parameters["operation_id"]})
+            if admitted.get("ok") is not True:
+                return admitted
             observed_materials = []
             total_bytes = 0
             for value in materials:
                 if not isinstance(value, dict) or set(value) != {"material_id", "source_path", "purpose", "topics", "required", "boundary"}:
                     raise ValueError("Material declaration fields missing or unsupported")
-                _, observation = _read(goal, root, value["material_id"], value["source_path"])
+                _, observation = _read(goal, root, value["source_path"])
                 total_bytes += observation["byte_count"]
                 if total_bytes > 2 * 1024 * 1024:
                     raise ValueError("Direction configuration read budget exceeded")
@@ -110,7 +114,7 @@ def execute_goal_direction(*, registry_path: Path, goal_id: str, goal_instance_i
             if admission.get("ok") is not True or not execute:
                 return admission
             try:
-                content, observation = _read(goal, root, parameters["material_id"], source_path)
+                content, observation = _read(goal, root, source_path)
                 if observation["revision"] != parameters["required_revision"]:
                     raise ValueError("actual material revision changed")
             except (OSError, ValueError):

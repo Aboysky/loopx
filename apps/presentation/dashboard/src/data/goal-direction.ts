@@ -18,10 +18,11 @@ export const directionMaterialSchema=z.object({material_id:z.string(),source_pat
   boundary:z.enum(["public","public_safe","local_private"])});
 export type DirectionMaterial=z.infer<typeof directionMaterialSchema>;
 export const directionRequestSchema=z.object({goal_id:z.string(),goal_instance_id:z.string(),operation:z.enum(["configure","disable"]),operation_id:z.string(),
-  parameters:z.object({expected_provider_revision:z.string(),materials:z.array(directionMaterialSchema).optional()}),preview_digest:z.string().optional()});
+  parameters:z.object({expected_provider_revision:z.string(),materials:z.array(directionMaterialSchema).optional()}),preview_digest:z.string().optional(),reviewed_request_sha256:z.string().optional()});
 export type DirectionRequest=z.infer<typeof directionRequestSchema>;
 export const savedDirectionSchema=z.object({request:directionRequestSchema,attempted:z.boolean()});
 const outcomeSchema=z.object({ok:z.boolean(),status:z.string(),reason:z.string().optional(),reason_code:z.string().optional(),authority_digest:z.string().nullable().optional(),
+  reviewed_request_sha256:z.string().optional(),
   execution_authority_granted:z.literal(false),acceptance_assessed:z.literal(false)});
 export async function fetchGoalDirection(goalId:string,agentId?:string){
   const query=new URLSearchParams({goal_id:goalId});if(agentId)query.set("agent_id",agentId);
@@ -30,10 +31,11 @@ export async function fetchGoalDirection(goalId:string,agentId?:string){
   return directionViewSchema.parse(value);
 }
 export async function updateGoalDirection(request:DirectionRequest,execute:boolean){
-  return outcomeSchema.parse(await requestJson<unknown>("/api/chat/goal-direction",{method:"POST",body:JSON.stringify({...request,execute})}));
+  const {goal_id,goal_instance_id,operation,operation_id,parameters,preview_digest}=request;
+  return outcomeSchema.parse(await requestJson<unknown>("/api/chat/goal-direction",{method:"POST",body:JSON.stringify({goal_id,goal_instance_id,operation,operation_id,parameters,preview_digest,execute})}));
 }
 export async function recoverGoalDirection(request:DirectionRequest){
   const query=new URLSearchParams({goal_id:request.goal_id,goal_instance_id:request.goal_instance_id,operation_id:request.operation_id});
-  return z.object({ok:z.boolean(),status:z.string(),historical_only:z.literal(true),receipts:z.array(z.object({operation_id:z.string(),result:z.object({goal_ref:ref,
+  return z.object({ok:z.boolean(),status:z.string(),historical_only:z.literal(true),receipts:z.array(z.object({operation_id:z.string(),request_sha256:z.string(),result:z.object({goal_ref:ref,
     authority_digest:z.string(),agent_id:z.null()})})).optional()}).parse(await requestJson<unknown>(`/api/chat/goal-direction?${query}`));
 }

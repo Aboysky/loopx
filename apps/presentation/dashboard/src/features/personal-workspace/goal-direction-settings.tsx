@@ -59,7 +59,10 @@ export function GoalDirectionSettings({goalId}:{goalId:string}){
         }
         throw Error(result.reason??w("未应用本次声明，请检查当前基线。","Declaration was not applied; inspect the current basis."));
       }
-      if(!apply){const saved={...next,preview_digest:result.authority_digest??undefined};sessionStorage.setItem(key,JSON.stringify({request:saved,attempted:false}));setRequest(saved);}
+      if(!apply){
+        if(!result.reviewed_request_sha256)throw Error(w("来源未提供可恢复的完整预览，请更新来源后重试。","The source did not provide a recoverable preview; update it and retry."));
+        const saved={...next,preview_digest:result.authority_digest??undefined,reviewed_request_sha256:result.reviewed_request_sha256};sessionStorage.setItem(key,JSON.stringify({request:saved,attempted:false}));setRequest(saved);
+      }
       else{sessionStorage.removeItem(key);setRequest(null);setAttempted(false);const current=await fetchGoalDirection(goalId,selected.current||undefined);if(observation===generation.current)setView(current);}
     }catch(cause){if(observation===generation.current){if(apply)setView(null);setError(cause instanceof Error?cause.message:w("结果未知，保留原操作进行恢复。","Outcome unknown; retain the original operation for recovery."));}}
     finally{if(flight.current===observation)flight.current=null;if(observation===generation.current)setBusy(false);}
@@ -69,7 +72,7 @@ export function GoalDirectionSettings({goalId}:{goalId:string}){
     const observation=generation.current;flight.current=observation;setBusy(true);setError(null);
     try{const result=await recoverGoalDirection(request);if(observation!==generation.current)return;
       const receipt=result.receipts?.[0];if(result.status!=="found"||receipt?.operation_id!==request.operation_id||receipt.result.goal_ref.goal_instance_id!==request.goal_instance_id
-        ||receipt.result.authority_digest!==request.preview_digest)throw Error(w("尚未确认原回执；不能据此断言未提交，请重试原操作。","Original receipt is unconfirmed; absence does not prove no commit. Retry the original operation."));
+        ||receipt.result.authority_digest!==request.preview_digest||receipt.request_sha256!==request.reviewed_request_sha256)throw Error(w("尚未确认原回执；不能据此断言未提交，请重试原操作。","Original receipt is unconfirmed; absence does not prove no commit. Retry the original operation."));
       sessionStorage.removeItem(key);setRequest(null);setAttempted(false);const current=await fetchGoalDirection(goalId,selected.current||undefined);if(observation===generation.current)setView(current);
     }catch(cause){if(observation===generation.current)setError(cause instanceof Error?cause.message:"Readback failed");}
     finally{if(flight.current===observation)flight.current=null;if(observation===generation.current)setBusy(false);}

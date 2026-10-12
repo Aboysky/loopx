@@ -58,6 +58,9 @@ def test_actual_read_then_same_agent_acknowledgement_and_drift(source_goal, tmp_
     assert call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]["projection"]["items"][0]["state"] == "required_unread"
     ack = {"read_operation_id": "material-read", "delivery_digest": read["delivery_digest"], "operation_id": "read-ack"}
     before = call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]
+    preview = call(f, tmp_path, capsys, "acknowledge", ack, actor="agent-a")[1]
+    assert preview["status"] == "planned" and preview["receipt_recorded"] is False, preview
+    assert call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]["provider_revision"] == before["provider_revision"]
     assert call(f, tmp_path, capsys, "acknowledge", ack, actor="agent-b", execute=True)[0] == 1
     after_wrong = call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]
     assert after_wrong["provider_revision"] == before["provider_revision"]
@@ -116,7 +119,10 @@ def test_recreated_lifetime_cannot_acknowledge_old_offer(source_goal, tmp_path, 
     assert old["status"] == "found" and old["historical_only"]
 
 
-def test_unavailable_read_supersedes_old_success_and_requires_new_delivery(source_goal, tmp_path, capsys):
+def test_unavailable_read_supersedes_old_success_and_requires_new_delivery(source_goal, tmp_path, capsys, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from loopx.control_plane.goals import direction_runtime
+
     f, document, _, request = setup(source_goal, tmp_path, capsys)
     read = call(f, tmp_path, capsys, "read", request, actor="agent-a", execute=True)[1]
     ack = {"read_operation_id": "material-read", "delivery_digest": read["delivery_digest"], "operation_id": "ack"}
@@ -124,6 +130,11 @@ def test_unavailable_read_supersedes_old_success_and_requires_new_delivery(sourc
     before = document.read_text()
     second = call(f, tmp_path, capsys, "read", {**request, "operation_id": "unconfirmed"}, actor="agent-a", execute=True)[1]
     document.unlink()
+    class RewoundClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(timezone.utc) - timedelta(days=1)
+    monkeypatch.setattr(direction_runtime, "datetime", RewoundClock)
     code, failed = call(f, tmp_path, capsys, "read", {**request, "operation_id": "unavailable"}, actor="agent-a", execute=True)
     assert code == 1 and failed["read_outcome"] == "unavailable" and "content" not in failed, failed
     view = call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]
@@ -252,3 +263,43 @@ def test_reordered_same_revision_declarations_do_not_invalidate_an_offer(source_
     assert code == 0 and result["status"] == "no_change" and result["authority_digest"] == first["authority_digest"], result
     confirmed = call(f, tmp_path, capsys, "acknowledge", {"operation_id": "ack", "read_operation_id": request["operation_id"], "delivery_digest": offered["delivery_digest"]}, actor="agent-a", execute=True)[1]
     assert confirmed["current"]["projection"]["direction_state"] == "current"
+
+
+def test_authority_summary_is_not_empty_and_blocks_source_io_before_configuration(source_goal, tmp_path, capsys, monkeypatch):
+    from loopx.control_plane.goals import direction_runtime
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
+    f, _, config, _ = setup(source_goal, tmp_path, capsys)
+    view = call(f, tmp_path, capsys, "inspect")[1]
+    with source_session_registry_transaction(f["registry"], operation="synthetic_existing_authority") as transaction:
+        registry = transaction.payload_copy()
+        registry["goals"][0]["authority_sources"] = [{"id": "preexisting", "source_ref_redacted": True}]
+        transaction.commit(registry)
+    touched = []
+    monkeypatch.setattr(direction_runtime, "_read", lambda *args: touched.append(args))
+    assert call(f, tmp_path, capsys, "inspect")[0] == 1
+    code, blocked = call(f, tmp_path, capsys, "configure", {**config,
+        "expected_provider_revision": view["provider_revision"], "operation_id": "second-owner"}, execute=True)
+    assert code == 1 and "existing registry authority" in blocked["reason"], blocked
+    assert touched == []
+    # Stopping this reader grants no new access and remains an owner operation.
+    assert call(f, tmp_path, capsys, "disable", {"expected_provider_revision": view["provider_revision"],
+        "operation_id": "stop-conflicting-reader"}, execute=True)[0] == 0
+    assert touched == []
+
+
+def test_retirement_closes_configuration_before_any_source_io(source_goal, tmp_path, capsys, monkeypatch):
+    from loopx.control_plane.goals import direction_runtime
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    f, _, config, _ = setup(source_goal, tmp_path, capsys)
+    route = {"runtime_root": str(f["runtime"]), "goal_id": f["ref"]["goal_id"], "actor_agent_id": None}
+    for kind in ["bind_existing", "retire"]:
+        transition = effect_runtime_result("goal.acceptance.lifecycle.transition", {**route, "operation_id": kind,
+            "transition": {"kind": kind, "goal_ref": f["ref"]}})
+        assert transition["status"] in {"applied", "no_change"}, transition
+    touched = []
+    monkeypatch.setattr(direction_runtime, "_read", lambda *args: touched.append(args))
+    code, result = call(f, tmp_path, capsys, "configure", {**config, "operation_id": "retiring-read"}, execute=True)
+    assert code == 1 and "lifetime retired or changed" in result["reason"], result
+    assert touched == []

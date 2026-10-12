@@ -77,6 +77,7 @@ def test_operator_declaration_preview_freshness_replay_and_disable(api):
     assert replay["status"] == "replayed" and replay["original_receipt"] == applied["original_receipt"]
     historical = call(query={**f["ref"], "operation_id": request["operation_id"]})[1]
     assert historical["status"] == "found" and historical["historical_only"]
+    assert historical["receipts"][0]["request_sha256"] == preview["reviewed_request_sha256"]
     disabled = call({**f["ref"], "operation": "disable", "operation_id": "disable", "execute": True,
         "parameters": {"expected_provider_revision": current["provider_revision"]}})[1]
     assert disabled["ok"]

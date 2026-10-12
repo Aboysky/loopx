@@ -427,6 +427,10 @@ canonical authority。新建使用 `project register --canonical-storage file|sq
 本实现拒绝建立第二份权威。此 profile 的 `authority_registry` 是 canonical Goal head
 内同一个逻辑权威对象，并绑定精确实例。原要求、工作、租约和验收保持不变。
 
+Operator 配置也先经过 TS 的活跃实例、唯一 authority 和 provider basis 检查，再读取
+来源字节。紧凑旧 authority 摘要不能当作空来源，仍须迁移；活跃 owner 可停用 reader，
+这个停止动作不授予新的来源读取权限。
+
 Operator 声明完整本地 Markdown 资料集：稳定 id、用途、topic、required/optional 和
 明确的 public/public-safe/local-private 边界。路径是仅用于本次读取的输入，只在既有
 Goal repo/state/runtime 根内解析；authority/journal 不保存原路径或正文；待确认的 operator 表单仅在当前浏览器 tab 的
@@ -446,7 +450,9 @@ Usage 分两步：
    receipt、使用另一 Agent 的 offer，或确认已被后续可用性观察作废的旧 offer。这证明
    来源支持的读取和明确确认，不证明人/模型理解、路线采纳、`used` 或 `verified`。
 
-后续真实读取失败由同一 owner 记录 unavailable，盖过旧成功。修复来源后重新 read/ack，
+后续真实读取失败由同一 owner 记录 unavailable，盖过旧成功。Producer 在 canonical
+追加顺序上保持 recorded_at 严格递增，即使宿主时钟相同或回退；这是顺序证据，不是
+独立墙钟证明。预览 acknowledge 明确 receipt_recorded=false，不产生记录。修复来源后重新 read/ack，
 不能编辑 receipt 让投影变绿。实例退休/重建会 fence 新操作，包括 caller 超时后的迟到
 RPC。原操作回执保持历史，不授予当前读取/执行权；peer receipt 不可转移。组合输入容量
 在提交前检查，不会为凑预算持久化部分投影。
