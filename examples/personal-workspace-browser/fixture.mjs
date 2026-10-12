@@ -149,7 +149,7 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
   return [
     goalCapability({
       capabilityId: "todo_replan_cadence",
-      displayName: "Goal review cadence",
+      displayName: "Goal review and stride",
       editorScopes: ["machine", "goal"],
       defaultConfiguration: { count_unit: "effective_turns", count: 5 },
       fields: [
@@ -967,6 +967,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
     }
+    if (url.pathname === "/api/chat/explore-results") {
+      await route.fulfill({json: {ok: true, goal_id: url.searchParams.get("goal_id"), items: [], total: 0, next_cursor: null}});
+      return;
+    }
     if (url.pathname === "/api/chat/goal-results") {
       await route.fulfill({ json: { ok: true, items: [], total: 0, next_cursor: null, unavailable_count: 0, unavailable_todo_ids: [] } });
       return;
@@ -1050,7 +1054,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           },
           {
             namespace: "todo_replan_cadence",
-            title: "Goal review cadence",
+            title: "Goal review and stride",
             description: "Live review threshold without added turns, quota, or authority.",
             schema_versions: ["todo_replan_cadence_machine_defaults_v0", "todo_replan_cadence_machine_defaults_v1"],
             configuration_template: cadenceConfiguration,

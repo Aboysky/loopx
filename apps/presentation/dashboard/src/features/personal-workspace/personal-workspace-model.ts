@@ -54,8 +54,8 @@ export type WorkspaceAgentTodo = {
   requestText?: string;
   /** The authority id, absent when a legacy projection needs a display-only id. */
   sourceTodoId?: string | null;
-  /** Local map fallback: exact request reading without current-state actions. */
-  detailMode?: "request_only";
+  /** Local inspection mode: exact request only, or a previously current item lost from readback. Neither authorizes actions. */
+  detailMode?: "request_only" | "missing_current";
   text: string;
   todoId: string;
   validationDigest?: string | null;
@@ -344,6 +344,7 @@ export type WorkspaceActionPreview = {
   // See proposal-recency.ts.
   createdAt?: string;
   previewId: string;
+  regeneratedFrom?: string | null;
   primaryLabel?: string;
   errorMessage?: string;
   status: "draft" | "ready" | "applying" | "applied" | "gated" | "stale" | "error" | "rejected" | "deferred";
@@ -520,6 +521,7 @@ export type PersonalWorkspaceCallbacks = {
     changed: boolean;
     configuration: WorkspaceGoalSubagentConfiguration;
     previewId: string;
+  regeneratedFrom?: string | null;
   }>;
   onApplyGoalSubagentConfiguration?: (
     request: WorkspaceGoalSubagentConfiguration & { goalId: string; previewId: string },
@@ -558,6 +560,7 @@ export type PersonalWorkspaceCallbacks = {
   onSelectAgent?: (agentId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
