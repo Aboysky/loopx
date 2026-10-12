@@ -21,9 +21,12 @@ PR #6166 named this residual as its out-of-scope successor.
 The same baked strings interpolate that interpreter unquoted, so a confirmed
 runnable interpreter under a path that contains a space - the python.org
 all-users install (`C:\Program Files\Python312`), or any profile directory with
-a space - produces a command the shell splits at the first space: the gate
-fails OPEN, the statusline renders nothing and `/loopx` never runs. PR #6229
-named that residual.
+a space - produces a command the shell splits at the first space. PR #6229
+named that residual; PR #6250 keeps every baked token literal in the shell that
+actually runs it (cmd.exe on Windows, `/bin/sh` elsewhere), where double quotes
+alone still expand `$NAME` and dequote an inner `"`. These tests read the
+generated commands back out of the installed files and execute them through the
+host shell.
 """
 
 from __future__ import annotations
@@ -101,12 +104,12 @@ def test_installed_gate_command_actually_runs_python(alias_host: Path, tmp_path:
     """
     settings = tmp_path / "claude" / "settings.json"
     claude_install.add_hardening(dry=False, settings_path=settings)
-    command = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    hook_cmd, _ = _installed_commands(settings)
 
     project = tmp_path / "project"
     project.mkdir()
     event = json.dumps({"cwd": str(project), "tool_name": "Read", "tool_input": {}})
-    result = subprocess.run(command, shell=True, input=event.encode("utf-8"), capture_output=True)
+    result = _host_shell_run(hook_cmd, event, cwd=project)
 
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     assert json.loads(result.stdout.decode("utf-8")) == {}
@@ -147,9 +150,9 @@ def test_launches_python_accepts_a_clean_run(monkeypatch: pytest.MonkeyPatch) ->
     assert claude_install._launches_python("python3") is True
 
 
-def _spaced_interpreter(tmp_path: Path) -> Path:
-    """A real launcher that lives under a path containing a space."""
-    home = tmp_path / "Program Files"
+def _literal_interpreter(tmp_path: Path, dirname: str) -> Path:
+    """A real launcher for `sys.executable` that lives under `tmp_path / dirname`."""
+    home = tmp_path / dirname
     home.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":
         launcher = home / "python.bat"
@@ -161,65 +164,213 @@ def _spaced_interpreter(tmp_path: Path) -> Path:
     return launcher
 
 
+# Directory names `_launches_python` accepts but the host shell would not read
+# as one literal token: spaces split, `$` expands, and an inner `"` closes the
+# token under `/bin/sh`. A Windows file name cannot contain `"`.
+_LITERAL_DIRNAMES = [
+    "Program Files",
+    "User $LABEL Home",
+    pytest.param(
+        'User "quoted" Home',
+        marks=pytest.mark.skipif(
+            sys.platform == "win32", reason='a Windows file name cannot contain "'
+        ),
+    ),
+]
+
+
 @pytest.fixture()
-def spaced_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A PATH whose `python3` is a runnable interpreter under a spaced path."""
-    launcher = _spaced_interpreter(tmp_path)
+def literal_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Select a literal launcher as PATH's `python3` for one directory name."""
 
-    def which(name: str) -> str | None:
-        return str(launcher) if name == "python3" else None
+    def make(dirname: str) -> Path:
+        launcher = _literal_interpreter(tmp_path, dirname)
+        monkeypatch.setattr(
+            claude_install.shutil,
+            "which",
+            lambda name: str(launcher) if name == "python3" else None,
+        )
+        return launcher
 
-    monkeypatch.setattr(claude_install.shutil, "which", which)
-    return launcher
+    return make
 
 
-def test_shell_path_quotes_only_a_token_a_shell_would_split() -> None:
-    """A plain path keeps its old rendering; a splittable one is quoted."""
+def _host_shell_run(command: str, stdin: str, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+    """Run one baked command string through the shell Claude Code uses.
+
+    Hook / statusline / command strings go through cmd.exe on Windows and
+    `/bin/sh` elsewhere, with the session or event JSON on stdin.
+    """
+    data = stdin.encode("utf-8")
+    if sys.platform == "win32":
+        return subprocess.run(command, shell=True, input=data, capture_output=True, cwd=cwd)
+    return subprocess.run(["/bin/sh", "-c", command], input=data, capture_output=True, cwd=cwd)
+
+
+def _installed_commands(settings_path: Path) -> tuple[str, str]:
+    """The hook and statusline command strings read back from settings.json."""
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    hook = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    status = settings["statusLine"]["command"]
+    return hook, status
+
+
+def _expected_interpreter_token(launcher: str, *, plain: bool) -> str:
+    """The token `_shell_path` must bake on this host for `launcher`."""
+    if plain:
+        return launcher
+    if sys.platform == "win32":
+        return f'"{launcher}"'
+    return f"'{launcher}'"
+
+
+def test_shell_path_encodes_for_posix_sh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under `/bin/sh` the token must keep `$`, `"` and `\\` as data, not syntax."""
+    monkeypatch.setattr(claude_install, "_is_windows_shell", lambda: False)
     assert claude_install._shell_path("/usr/bin/python3") == "/usr/bin/python3"
+    assert claude_install._shell_path("/opt/my python/bin/python3") == "'/opt/my python/bin/python3'"
+    assert (
+        claude_install._shell_path("/home/User $LABEL Home/python3")
+        == "'/home/User $LABEL Home/python3'"
+    )
+    assert (
+        claude_install._shell_path('/home/User "quoted" Home/python3')
+        == '\'/home/User "quoted" Home/python3\''
+    )
+    assert claude_install._shell_path(r"C:\Users\me\python.exe") == r"'C:\Users\me\python.exe'"
+
+
+def test_shell_path_encodes_for_cmd_exe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cmd.exe groups spaces with double quotes and reads `$` and `\\` literally.
+
+    A plain Windows path keeps the installer's previous unquoted rendering.
+    """
+    monkeypatch.setattr(claude_install, "_is_windows_shell", lambda: True)
     assert (
         claude_install._shell_path(r"C:\Users\me\Python311\python.exe")
         == r"C:\Users\me\Python311\python.exe"
     )
-    assert claude_install._shell_path("/opt/my python/bin/python3") == '"/opt/my python/bin/python3"'
     assert claude_install._shell_path(r"C:\Program Files (x86)\Python311\python.exe") == (
         r'"C:\Program Files (x86)\Python311\python.exe"'
     )
+    assert claude_install._shell_path(r"C:\Users\User $LABEL Home\python.bat") == (
+        r'"C:\Users\User $LABEL Home\python.bat"'
+    )
 
 
-def test_baked_surfaces_quote_a_spaced_interpreter(spaced_host: Path) -> None:
-    launcher = str(spaced_host)
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the rendering through /bin/sh")
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/usr/bin/python3",
+        "/opt/my python/bin/python3",
+        "/home/User $LABEL Home/python3",
+        '/home/User "quoted" Home/python3',
+        "/home/it's/python3",
+        "/home/back\\slash/python3",
+    ],
+)
+def test_posix_rendering_round_trips_through_sh(path: str) -> None:
+    """`/bin/sh` must expand the encoded token back to exactly the original path."""
+    rendered = claude_install._shell_path(path)
+    result = subprocess.run(["/bin/sh", "-c", f"printf %s {rendered}"], capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.decode("utf-8") == path
+
+
+@pytest.mark.parametrize("dirname", _LITERAL_DIRNAMES)
+def test_baked_surfaces_keep_the_interpreter_token_literal(literal_host, dirname: str) -> None:
+    launcher = str(literal_host(dirname))
+    token = _expected_interpreter_token(launcher, plain=False)
+
     hardening = claude_install.hardening_block()
-    hook_cmd = hardening["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    status_cmd = hardening["statusLine"]["command"]
+    assert hardening["hooks"]["PreToolUse"][0]["hooks"][0]["command"].startswith(f"{token} ")
+    assert hardening["statusLine"]["command"].startswith(f"{token} ")
+
     command = claude_install.command_md()
-
-    assert hook_cmd.startswith(f'"{launcher}" ')
-    assert status_cmd.startswith(f'"{launcher}" ')
     # The /loopx permission rule must carry the same token the command runs.
-    assert f'allowed-tools: Bash("{launcher}":*)' in command
-    assert f'!`"{launcher}" "{claude_install._p("scripts", "goalmode_cmd.py")}"' in command
+    assert f"allowed-tools: Bash({token}:*)" in command
+    body = next(line for line in command.splitlines() if line.startswith("!`"))
+    assert body.startswith(f"!`{token} ")
 
 
-def test_installed_gate_command_runs_from_a_spaced_interpreter(
-    spaced_host: Path, tmp_path: Path
+def test_a_plain_interpreter_path_keeps_its_previous_rendering(literal_host) -> None:
+    launcher = str(literal_host("PlainPython311"))
+    assert _expected_interpreter_token(launcher, plain=True) == launcher
+
+    hardening = claude_install.hardening_block()
+    assert hardening["hooks"]["PreToolUse"][0]["hooks"][0]["command"].startswith(f"{launcher} ")
+    assert hardening["statusLine"]["command"].startswith(f"{launcher} ")
+    assert f"allowed-tools: Bash({launcher}:*)" in claude_install.command_md()
+
+
+@pytest.mark.parametrize("dirname", _LITERAL_DIRNAMES)
+def test_installed_gate_command_runs_through_a_literal_interpreter(
+    literal_host, dirname: str, tmp_path: Path
 ) -> None:
-    """Run exactly the hook command `--harden` installs, the way Claude Code does.
+    """Execute the hook command exactly as `--harden` installed it.
 
-    With the spaced interpreter path unquoted, the shell splits it at the first
-    space and exits non-zero with nothing on stdout; the event never reaches the
-    gate, which Claude Code treats as a non-blocking hook error - the tool call
-    proceeds ungated.
+    A token the shell splits, expands or dequotes never reaches Python: the
+    gate exits non-zero with empty stdout (rc 127 under `/bin/sh`), which
+    Claude Code treats as a non-blocking hook error - the tool call proceeds
+    ungated.
     """
+    literal_host(dirname)
     settings = tmp_path / "claude" / "settings.json"
     claude_install.add_hardening(dry=False, settings_path=settings)
-    command = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]["hooks"][0][
-        "command"
-    ]
+    hook_cmd, _ = _installed_commands(settings)
 
     project = tmp_path / "project"
     project.mkdir()
     event = json.dumps({"cwd": str(project), "tool_name": "Read", "tool_input": {}})
-    result = subprocess.run(command, shell=True, input=event.encode("utf-8"), capture_output=True)
+    result = _host_shell_run(hook_cmd, event, cwd=project)
 
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     assert json.loads(result.stdout.decode("utf-8")) == {}
+
+
+@pytest.mark.parametrize("dirname", _LITERAL_DIRNAMES)
+def test_installed_statusline_command_renders_through_a_literal_interpreter(
+    literal_host, dirname: str, tmp_path: Path
+) -> None:
+    """Execute the statusline command read back from settings.json.
+
+    Claude Code feeds the session JSON on stdin; with no goal here the
+    statusline must render nothing - but only after the interpreter starts.
+    """
+    literal_host(dirname)
+    settings = tmp_path / "claude" / "settings.json"
+    claude_install.add_hardening(dry=False, settings_path=settings)
+    _, status_cmd = _installed_commands(settings)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    result = _host_shell_run(status_cmd, json.dumps({"cwd": str(project)}), cwd=project)
+
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    assert result.stdout.decode("utf-8").strip() == ""
+
+
+@pytest.mark.parametrize("dirname", _LITERAL_DIRNAMES)
+def test_installed_slash_command_runs_through_a_literal_interpreter(
+    literal_host, dirname: str, tmp_path: Path
+) -> None:
+    """Execute the `/loopx` body line from the installed command file.
+
+    Claude Code substitutes `$ARGUMENTS` textually and runs the line through
+    the host shell; `status` is the cheapest real argument, and with no goal
+    here the helper says so and exits 0.
+    """
+    literal_host(dirname)
+    cmd_dir = tmp_path / "claude" / "commands"
+    claude_install.install_command(dry=False, cmd_dir=cmd_dir)
+    text = (cmd_dir / "loopx.md").read_text(encoding="utf-8")
+    line = next(line for line in text.splitlines() if line.startswith("!`") and line.endswith("`"))
+    command = line[2:-1].replace("$ARGUMENTS", "status")
+
+    project = tmp_path / "project"
+    project.mkdir()
+    result = _host_shell_run(command, "", cwd=project)
+
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    assert "no goal in this project yet" in result.stdout.decode("utf-8")

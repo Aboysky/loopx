@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -35,21 +37,41 @@ def _p(*parts) -> str:
     return str(PLUGIN_ROOT.joinpath(*parts)).replace("\\", "/")
 
 
-_PLAIN_SHELL_PATH = re.compile(r"[A-Za-z0-9._/\\:@+-]+\Z")
+_PLAIN_CMD_PATH = re.compile(r"[A-Za-z0-9._/\\:@+-]+\Z")
+
+
+def _is_windows_shell() -> bool:
+    """Whether the baked command strings run under cmd.exe instead of `/bin/sh`.
+
+    Claude Code executes hook / statusline / command strings through the host
+    shell: cmd.exe on Windows (the split-at-the-first-space failure in issue
+    #6249 is cmd.exe's message), `/bin/sh` elsewhere. The two disagree about
+    what an unquoted - and even a double-quoted - token means, so the encoding
+    follows the shell that will actually run the string."""
+    return os.name == "nt"
+
+
+def _shell_literal(value: str) -> str:
+    """Render `value` as one token the target shell reads back byte-for-byte.
+
+    POSIX double quotes are not literal: `$NAME` still expands inside them and
+    an inner `"` closes the token, so `/bin/sh` targets get `shlex.quote`'s
+    single-quoted form. cmd.exe has no way to escape a `"` inside a quoted
+    token, but a Windows path cannot contain one; cmd's `%NAME%` expansion
+    inside quotes stays a documented residual."""
+    if _is_windows_shell():
+        return f'"{value}"'
+    return shlex.quote(value)
 
 
 def _shell_path(value: str) -> str:
-    """Render one path token of a baked command string.
-
-    Claude Code runs the hook / statusline / `/loopx` command strings through a
-    shell, which splits an unquoted program path at the first space: on a host
-    where the confirmed-runnable interpreter lives under `C:\\Program Files` (or
-    any profile directory with a space) the baked command never starts Python
-    and the surface silently does nothing. Quote a token that is no longer a
-    plain path; a plain path keeps the exact previous rendering."""
-    if _PLAIN_SHELL_PATH.fullmatch(value):
+    """`_shell_literal` for a path, except that a plain Windows path keeps the
+    installer's previous unquoted rendering (no churn in `settings.json` or in
+    the `/loopx` permission prefix). A path a shell would split, expand or
+    dequote - spaces, `$`, quotes - is encoded, not merely wrapped."""
+    if _is_windows_shell() and _PLAIN_CMD_PATH.fullmatch(value):
         return value
-    return f'"{value}"'
+    return _shell_literal(value)
 
 
 def _launches_python(py: str) -> bool:
@@ -93,12 +115,14 @@ def deep_merge(base: dict, add: dict) -> dict:
 def hardening_block() -> dict:
     """The OPTIONAL per-tool gate + statusline. Not installed unless --harden."""
     py = _shell_path(_python_cmd())
+    gate = _shell_literal(_p("hooks", "goal_policy.py"))
+    status = _shell_literal(_p("statusline", "goal_status.py"))
     return {
         "hooks": {
             "PreToolUse": [{"matcher": "*", "hooks": [
-                {"type": "command", "command": f'{py} "{_p("hooks", "goal_policy.py")}"', "timeout": 10}]}],
+                {"type": "command", "command": f"{py} {gate}", "timeout": 10}]}],
         },
-        "statusLine": {"type": "command", "command": f'{py} "{_p("statusline", "goal_status.py")}"'},
+        "statusLine": {"type": "command", "command": f"{py} {status}"},
     }
 
 
@@ -234,7 +258,7 @@ def install_mcp(
 # ---- /loopx command ----------------------------------------------------------
 
 def command_md() -> str:
-    entry = _p("scripts", "goalmode_cmd.py")
+    entry = _shell_literal(_p("scripts", "goalmode_cmd.py"))
     py = _shell_path(_python_cmd())
     return (
         "---\n"
@@ -245,7 +269,7 @@ def command_md() -> str:
         f"allowed-tools: Bash({py}:*)\n"
         "---\n\n"
         "Run the loopx setup helper and read its output:\n\n"
-        f"!`{py} \"{entry}\" $ARGUMENTS`\n\n"
+        f"!`{py} {entry} $ARGUMENTS`\n\n"
         "The output is loopx control-plane SETUP / status info — it is the COMPLETE, user-facing "
         "result. Show it to the user VERBATIM and STOP. Do NOT do any work, claim todos, write "
         "files, or loop here: the WORK runs when the user types Claude Code's native `/loop` (which "

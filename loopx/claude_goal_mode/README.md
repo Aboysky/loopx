@@ -70,12 +70,18 @@ UTF-8) an unpinned gate would decode the event into mojibake, miss the project
 goal and answer `{}` — no gate at all — and `/loopx status` would raise on its own
 state glyphs. `tests/test_claude_goal_mode_stdio_utf8.py` guards all three.
 
-Claude Code also runs those baked command strings through a shell, so an
-interpreter path that contains a space - the python.org all-users install, or a
-profile directory with a space - is quoted before the installer bakes it.
-Unquoted, the shell splits the path at the first space and the gate, the
-statusline and `/loopx` silently do nothing.
-`tests/test_claude_goal_install_python_launcher.py` guards that.
+Claude Code also runs those baked command strings through the host shell
+(`cmd.exe` on Windows, `/bin/sh` elsewhere), so the installer encodes every
+path it bakes - the interpreter and the script it starts - as one literal token
+for that shell: `shlex.quote`'s single-quoted form under `/bin/sh`, double
+quotes under `cmd.exe`, and a plain Windows path keeps its previous unquoted
+rendering. Unencoded, the shell splits the path at the first space, expands
+`$NAME`, or closes the token at an inner `"`: the `--harden` gate fails OPEN,
+the statusline renders nothing and `/loopx` never runs. One `cmd.exe` residual
+stays: `%NAME%` still expands inside double quotes.
+`tests/test_claude_goal_install_python_launcher.py` executes the installed
+hook, statusline and `/loopx` commands for a plain path, an ordinary spaced
+path and literal `$`/quote paths.
 
 ```bash
 python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /path/to/project --harden
