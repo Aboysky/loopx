@@ -97,3 +97,16 @@ test("invalid canonical fields and capacity cannot create a partial or content-b
  const restored=await invoke(request("inspect"));assert.equal(restored.ok,true);
  assert.equal((restored.projection as JsonObject).direction_state,"blocked");
 });
+
+test("writer rejects a valid source Goal id that the M1 identity envelope cannot represent",async t=>{
+ const folder=await mkdtemp(join(tmpdir(),"direction-identity-envelope-"));t.after(()=>rm(folder,{recursive:true,force:true}));
+ const longRef={...goal_ref,goal_id:"g".repeat(181)};
+ const store=new FileAuthorityStore(folder,longRef.goal_id);
+ const seed=await store.commitAuthority({expected_provider_revision:null,operation_id:"seed",events:[],receipts:[],next_projection:{goal_id:longRef.goal_id,todos:[],leases:[]}});
+ if(seed.status!=="applied")throw Error("seed");
+ const before=await store.loadAuthority();
+ await assert.rejects(executeDirectionOperation(store,request("configure",{goal_ref:longRef,source:{...source,current_goal_ref:longRef},
+   actor_agent_id:null,operation_id:"configure",expected_provider_revision:seed.provider_revision,materials:[material]}),async()=>true),/direction_input_invalid/);
+ assert.deepEqual(await store.loadAuthority(),before);
+ assert.equal((await store.readReceipt("configure")).status,"missing");
+});

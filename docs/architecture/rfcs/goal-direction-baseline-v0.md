@@ -499,7 +499,9 @@ reader remains available to the live owner without granting new source access.
 The operator declares a complete list of local Markdown sources, each with
 stable material id, purpose, topic refs, required/optional flag and an explicit
 public/public-safe/local-private boundary. The source path is transient input,
-resolved only inside the existing Goal repo/state/runtime roots. Its raw locator
+resolved only inside the existing Goal repo/state/runtime roots. Relative paths
+are pinned to the repository; a missing file cannot fall through to a same-named
+state/runtime copy. Other authorized roots require an explicit absolute path. Its raw locator
 and body never enter the authority or receipt journal. A pending operator form
 retains its private path only in that tab's local recovery state until resolved. Actual bounded bytes
 supply the content revision; only the locator digest is retained. Declaration

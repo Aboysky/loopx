@@ -13,7 +13,7 @@ import {openLocalAuthorityStore} from "../coordination/local_authority_provider.
 import {parseQuotaAccountingOwner, withBorrowedQuotaAccountingOwner} from "../quota/source_admission.ts";
 import {sourceGoalMutationReadiness} from "./source_session_lifetime.ts";
 import {parseWireExactGoalRef, readGoalAcceptanceLifecycle, sameExactGoalRef, type WireExactGoalRef} from "./acceptance_lifecycle.ts";
-import {buildGoalDirectionBaseline, GOAL_DIRECTION_LIMITS} from "./direction_baseline.ts";
+import {buildGoalDirectionBaseline, GOAL_DIRECTION_LIMITS, validateDirectionIdentity, DirectionBaselineInputError} from "./direction_baseline.ts";
 import {INTERNAL_STATE_PRIVATE_TEXT_PATTERNS} from "./vision_checkpoint.ts";
 import {readGoalAcceptanceAuthority} from "./acceptance_contract.ts";
 
@@ -163,6 +163,7 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
   keys(request,["operation","goal_ref","actor_agent_id","source","observed_at","dry_run",...FIELDS[op]],
     ["runtime_root","operation_id",...(op==="configure"?["expected_authority_digest"]:[])]);
   const goalRef=parseWireExactGoalRef(request.goal_ref,"direction Goal");const source=object(request.source,"source facts");
+  validateDirectionIdentity(goalRef.goal_id);
   need(typeof request.dry_run==="boolean","direction dry_run must be boolean");
   need(Array.isArray(source.registered_agents)&&source.registered_agents.length<=128,"source Agent registry unavailable");const agents=source.registered_agents.map((v:unknown)=>token(v,"registered Agent"));
   need(new Set(agents).size===agents.length,"source Agent identities are duplicated");
@@ -289,6 +290,7 @@ export async function directionLocal(value: unknown): Promise<JsonObject> {
       ["inspect","prepare_read","prepare_configure","receipt"].includes(String(request.operation))||request.dry_run===true,
       async()=>executeDirectionOperation(await openLocalAuthorityStore(root,goalRef.goal_id),request,registryAuthoritySourceCheck({registry_source:source.registry_source},true))));
   } catch(error) {
+    if(error instanceof DirectionBaselineInputError)return {...failure("Goal identity does not fit the direction reader contract"),reason_code:error.reason};
     if(error instanceof DirectionBasisChanged)return {...failure(error.message),reason_code:"direction_basis_changed"};
     if(error instanceof AuthorityStoreProtocolError)return failure(error.message);throw error;
   }

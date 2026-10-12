@@ -303,3 +303,21 @@ def test_retirement_closes_configuration_before_any_source_io(source_goal, tmp_p
     code, result = call(f, tmp_path, capsys, "configure", {**config, "operation_id": "retiring-read"}, execute=True)
     assert code == 1 and "lifetime retired or changed" in result["reason"], result
     assert touched == []
+
+
+def test_missing_repo_material_never_falls_back_to_same_named_runtime_copy(source_goal, tmp_path, capsys):
+    from loopx.materials import read_review_material
+    f, document, _, request = setup(source_goal, tmp_path, capsys)
+    replica = f["runtime"] / "goals" / f["ref"]["goal_id"] / "direction.md"
+    replica.parent.mkdir(parents=True, exist_ok=True)
+    replica.write_bytes(document.read_bytes())
+    document.unlink()
+    code, refused = call(f, tmp_path, capsys, "read", request, actor="agent-a", execute=True)
+    assert code == 1 and "content" not in refused and refused["read_outcome"] == "unavailable", refused
+    assert call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]["projection"]["direction_state"] == "blocked"
+    # Existing unregistered review links retain their older multi-root lookup;
+    # only this explicitly registered direction source uses repo-relative pinning.
+    legacy = read_review_material(registry={"goals": [{"id": f["ref"]["goal_id"],
+        "repo": str(f["registry"].parent.parent), "state_file": str(f["state"])}]},
+        runtime_root=f["runtime"], goal_id=f["ref"]["goal_id"], raw_path="direction.md")
+    assert legacy["content"] == replica.read_text()

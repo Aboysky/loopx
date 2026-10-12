@@ -57,7 +57,7 @@ def _source(*, registry_path: Path, goal_id: str, goal_instance_id: str, agent_i
 def _read(goal: dict[str, Any], root: Path, path: str) -> tuple[str, dict[str, Any]]:
     if not isinstance(path, str) or not path or len(path) > 4096:
         raise ValueError("One bounded local material path is required")
-    resolved = resolve_review_material_path(goal=goal, raw_path=path, runtime_root=root)
+    resolved = resolve_review_material_path(goal=goal, raw_path=path, runtime_root=root, repo_relative=True)
     _, content_bytes, revision, _ = read_bounded_material_file(resolved, MAX_REVIEW_MATERIAL_BYTES)
     content = content_bytes.decode("utf-8")
     if not content.strip():

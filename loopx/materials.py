@@ -91,6 +91,7 @@ def resolve_review_material_path(
     raw_path: str,
     runtime_root: Path | None = None,
     state_path: Path | None = None,
+    repo_relative: bool = False,
 ) -> Path:
     parsed = urlparse(raw_path)
     if parsed.scheme and parsed.scheme != "file":
@@ -102,6 +103,8 @@ def resolve_review_material_path(
     roots = material_roots(goal, runtime_root=runtime_root, state_path=state_path)
     if not roots:
         raise ValueError("goal has no repo/state/runtime root for review material resolution")
+    if repo_relative and goal_repo(goal) is None:
+        raise ValueError("registered material requires the Goal repository root")
 
     raw = Path(path_text).expanduser()
     if raw.is_absolute():
@@ -111,6 +114,14 @@ def resolve_review_material_path(
         raise ValueError("review material path is outside the goal repo/state/runtime roots")
 
     candidates = [(root, (root / raw).resolve()) for root in roots]
+    if repo_relative:
+        # Registered direction sources cannot silently fall through to another
+        # namespace when a repository file disappears. Explicit absolute paths
+        # above still require one of the existing authorized roots.
+        root, candidate = candidates[0]
+        if not path_is_under(candidate, root):
+            raise ValueError("relative material path is outside the goal repository")
+        return candidate
     safe_candidates = [(root, candidate) for root, candidate in candidates if path_is_under(candidate, root)]
     if not safe_candidates:
         raise ValueError("review material path is outside the goal repo/state/runtime roots")

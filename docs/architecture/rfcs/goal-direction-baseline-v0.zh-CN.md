@@ -433,7 +433,8 @@ Operator 配置也先经过 TS 的活跃实例、唯一 authority 和 provider b
 
 Operator 声明完整本地 Markdown 资料集：稳定 id、用途、topic、required/optional 和
 明确的 public/public-safe/local-private 边界。路径是仅用于本次读取的输入，只在既有
-Goal repo/state/runtime 根内解析；authority/journal 不保存原路径或正文；待确认的 operator 表单仅在当前浏览器 tab 的
+Goal repo/state/runtime 根内解析；相对路径固定到 repo，文件缺失不能回退到同名的
+state/runtime 副本，其他已授权根须显式绝对路径；authority/journal 不保存原路径或正文；待确认的 operator 表单仅在当前浏览器 tab 的
 私有恢复状态保留路径，直至操作已处理。实际有界字节
 决定 content revision，只保留 locator digest。声明提交绑定 provider revision；UI 还
 固定已检查的 authority digest，预览后文件变化会拒绝。未知/远程私有 provider 不支持。
