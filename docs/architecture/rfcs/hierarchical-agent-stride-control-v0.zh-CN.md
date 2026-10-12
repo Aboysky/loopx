@@ -606,9 +606,14 @@ Host profile 还须声明路径可移植性。原生索引可能保留绝对 gue
 第一项实现切片是 [inert 产物捕获](../../../benchmark/README.md#inert-checkpoint-capture)。
 Benchmark adapter 在既有 Turn 结算后请求捕获；typed 产物 owner 封存显式文件/
 目录及已提交 SQLite 快照，复查来源 witness 并验证隔离物化。Manifest 始终声明
-研究点尚未资格化。这项显式单点 hook 尚未实现上述自动 replan 触发。参与者/
-效果 reconciliation、原生会话重建、新状态采用及评测
-机会继承仍各自待验收；operator metadata 不能认证这些条件。
+研究点尚未资格化。Heartbeat adapter 还支持显式 fresh-replan 触发：预加载原
+quota guard，在模型调用前捕获 wake 开始已投影的准入 replan，并按既有义务
+去重；尚不覆盖运行中 Host wake 首次产生的 replan。可选 native 参与者通过
+Codex 读取完整历史，封存 rollout/索引/分页库并验证固定 guest 路径下的原生
+分叉。显式 checkpoint-aware native judge 还可导出已公开结果明细、受理计数/
+时钟、剩余冷却及原试验期限；不评测、不补发机会，未完成或未对账评测会拒绝。
+参与者/效果 reconciliation、新研究状态采用、目标侧评测准入及实际有效
+接续仍各自待验收；operator metadata 或历史一致不能认证这些条件。
 
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和

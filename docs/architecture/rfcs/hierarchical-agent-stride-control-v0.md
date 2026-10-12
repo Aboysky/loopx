@@ -724,10 +724,18 @@ The initial implementation slice is [inert artifact capture](../../../benchmark/
 The benchmark adapter requests it after the existing Turn settlement; the typed
 artifact owner seals explicit files/directories and committed SQLite snapshots,
 rechecks source witnesses and verifies an isolated materialization. Its manifest
-always declares the research point unqualified. This explicit one-point hook
-does not implement the proposed automatic replan trigger. Participant/effect reconciliation,
-native session reconstruction, fresh state adoption and preserved evaluator
-opportunities remain separate acceptance work; operator metadata cannot certify them.
+always declares the research point unqualified. The heartbeat adapter also accepts
+an explicit fresh-replan trigger: it preloads the original quota guard and captures
+an admitted replan projected at wake start before invoking the model, deduplicated
+by the existing obligation. It does not cover replans first created inside a running
+Host wake. The optional native participant reads complete history through Codex,
+seals its rollout/index/paged stores and verifies native forks at fixed guest paths.
+An explicit checkpoint-aware native judge also exports released public result
+details, accepted counters/clock, remaining cooldown and original trial deadline
+without grading or refilling admission; pending or unreconciled grades reject.
+Participant/effect reconciliation, fresh research-state adoption, preserved evaluator
+admission and useful continued work remain separate acceptance work; operator
+metadata and native history equality cannot certify them.
 
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission

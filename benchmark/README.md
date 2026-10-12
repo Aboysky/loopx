@@ -117,11 +117,14 @@ runner, verifier, submission, or publication authority.
 ## Inert checkpoint capture
 
 This is a developer prerequisite for the [research checkpoint contract](../docs/architecture/rfcs/hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation),
-not a qualified research continuation. The programmatic `BenchmarkCodex` and
-heartbeat `SForgeWorker` adapters accept an explicit `checkpoint_request_path`
-to a normalized absolute **guest** JSON file. Stage that file through the existing
-environment transport. Ambient host variables do not enable capture; omitting
-the option disables the hook. The EdgeBench CLI does not expose this option yet.
+not a qualified research continuation. The EdgeBench CLI accepts an explicit
+`--checkpoint-request /path/to/request.json` **host** file and stages its exact
+bytes into the heartbeat worker's protected control directory. The declaration
+is validated before trial creation/registration and its digest appears in the
+runtime receipt. The programmatic `BenchmarkCodex` and heartbeat `SForgeWorker`
+adapters also accept `checkpoint_request_path` to an already staged normalized
+absolute **guest** file. Ambient host variables do not enable capture; omitting
+these options disables the hook. Official and native-goal profiles reject them.
 
 The request contains exactly these fields; select only authorized private
 artifacts and exclude credentials and hidden evaluation material:
@@ -159,7 +162,69 @@ source boundary, not adversarial filesystem mutation or a cross-owner transactio
 Native session reconstruction, effect reconciliation, fresh authority admission
 and evaluator cooldown/opportunity inheritance must pass before matched continuation.
 
-这是研究 checkpoint 的开发前置切片。仅 programmatic adapter 的显式 guest
-请求路径会开启捕获，省略该参数即关闭；当前 EdgeBench CLI 尚无此选项。产物
+For pre-decision capture at a **fresh replan projected at the start of a heartbeat
+wake**, add `"trigger": "fresh_replan"` and set `destination` to the trial's
+`checkpoints` directory itself. The Host preloads that wake's original quota guard
+once, the typed owner validates its replan/settlement binding, and the adapter
+captures from the latest successful, settled work wake before invoking the model.
+The model reads the complete preloaded guard and follows its existing selection,
+required-read, recovery and settlement contract. Each obligation has one immutable
+destination; a repeated read verifies that point instead of replacing it with later
+work. The after-wake hook cannot substitute a post-decision state. Capture failures
+remain explicit and do not settle or complete the new work.
+The first attempt is also retained: if it fails and the model proceeds, retries
+cannot substitute a later state for that missed pre-decision point.
+
+Add `"native_session": true` to include Codex's completed native cursor, all
+retained history pages, rollout/compaction records and native index/history SQLite
+stores. The adapter uses native readback before sealing these members and excludes
+credential files, logs, memories and the symlinked skill installation. Record the
+effective configuration digest and Host version; tools/skills and credentials need
+their existing installation/authentication owners. Native state is opaque and its
+storage layout remains a pinned provider qualification.
+
+`benchmark.runtime.native_checkpoint.fork_native_checkpoint` verifies a unit and
+reconstructs a distinct native session in a **new isolated environment preserving
+the captured guest paths**, with matching configuration and Host version. It checks
+the full history digest and cursor, starts no model and registers no LoopX binding.
+A failed or partial reconstruction is not an admitted session. This is a session
+participant prerequisite, not full research continuation or arbitrary path import.
+
+For the native feedback protocol with **no automatic evaluations**, start an
+explicit checkpoint-aware native judge:
+
+```sh
+python -m benchmark.edgebench.checkpoint_judge --checkpoint-capture \
+  --tasks-dir /path/to/tasks --log-dir /path/to/private-run-logs
+```
+
+Its default-off factory otherwise preserves the native routes. With
+`"evaluation_opportunity": true` in the worker declaration, the capture hook
+reads that registration's released history and complete public result details,
+next round counters, accepted submission clock, remaining cooldown, task/native
+source identity and original trial deadline. The provider uses the existing
+native admission/history locks and rejects an outstanding grade, unreconciled
+consumed round, missing result details, automatic-evaluation history or closed
+registration. It never returns tokens or hidden task material and never grades,
+registers or refills an opportunity. The local `sforge_checkpoint_opportunity_v0`
+artifact records these facts; it grants no restored admission. Disabling capture
+means omitting both the judge flag and worker declaration option on a new run.
+
+Declare the workspace's authorized code/research files, LoopX runtime and
+registry, effective configuration and installed source/profile pins as separate
+non-overlapping components. The native and opportunity participants do not imply
+that omitted workspace state was saved. Every source remains private; inspect
+the verified member inventory before qualifying a complete research point.
+
+The current Host hook cannot capture a new replan created **inside an already
+running model wake** before that decision. Those boundaries still need a qualified
+Host handoff; a later snapshot must not be labeled as the missed point. Complete
+LoopX research-state adoption, restored evaluator admission and useful continued work
+remain open. No automatic retention or extra evaluation opportunity is introduced.
+
+这是研究 checkpoint 的开发前置切片。EdgeBench CLI 的显式
+`--checkpoint-request` 会把 host JSON 原文安全放入 heartbeat worker，并在
+runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 的请求
+路径。省略选项即关闭，Official/native-goal 不接受。产物
 验证和隔离物化不授予执行权，不代表研究点已资格化。请求中的 metadata 只是
 证据，不能代替会话、效果、状态采用及评测机会的联合验收。
