@@ -167,7 +167,7 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
     solution = project / "solution.py"
     solution.write_text("retained_candidate = 7\n")
     request = tmp_path / "request.json"
-    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(logs / "checkpoints"),
+    request.write_text(json.dumps({"trigger": "fresh_replan", "loopx_state": True, "destination": str(logs / "checkpoints"),
         "components": [{"id": "code", "source_path": str(solution)}],
         "point_metadata": {"purpose": "synthetic original settlement and replan ordering"}}))
     env = {**os.environ, "LOOPX_CLI": str(Path(sys.executable).parent / "loopx"),
@@ -210,3 +210,146 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
     capture_before_replan(env, again, "original instructions")
     assert again["checkpoint"]["reason"] == "replan_already_captured", json.dumps(again)
     assert (target / "checkpoint.json").read_bytes() == captured
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    import subprocess
+
+    def authority_head(root):
+        module = Path(__file__).resolve().parents[2]/'loopx/control_plane/coordination/local_authority_provider.ts'
+        script = ('import {openLocalAuthorityStore} from '+json.dumps(module.as_uri())+';'
+            "let input='';for await(const chunk of process.stdin)input+=chunk;"
+            'const x=JSON.parse(input);const store=await openLocalAuthorityStore(x.root,x.goal,{}, {existingOnly:true});'
+            'process.stdout.write(JSON.stringify(await store.loadAuthority()));')
+        result = subprocess.run(['node','--no-warnings','--experimental-strip-types','--input-type=module','-e',script],
+            input=json.dumps({'root':str(root),'goal':cli.GOAL_ID}),capture_output=True,text=True,timeout=45)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    source_ref = capture_first_party_host_goal_ref(registry_path=registry, goal_id=cli.GOAL_ID)
+    state = project / f'.codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md'
+    code, listed = cli._run_cli(registry, runtime, 'todo', 'list', '--goal-id', cli.GOAL_ID)
+    assert code == 0, listed
+    initialize_canonical_authority(runtime, cli.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=cli.GOAL_ID, todos=listed['todos'],
+                                            handoff_mode='hard_lease', leases=[]),
+        state_path=state, provider=provider)
+    def run(*args):
+        code, result = cli._run_cli(registry, runtime, *args)
+        assert code == 0 and result['ok'] is True, result
+        return result
+    lease = run('task-lease', 'acquire', '--goal-id', cli.GOAL_ID, '--todo-id', cli.TODO_ID,
+                '--owner', cli.AGENT_ID, '--idempotency-key', 'source-lease')
+    binding = ('--agent-id', cli.AGENT_ID, '--todo-id', cli.TODO_ID, '--turn-instance-id', cli.TURN_ID)
+    run('quota', 'should-run', '--goal-id', cli.GOAL_ID, '--codex-app', *binding)
+    vision = tmp_path / 'vision.json'
+    vision.write_text(json.dumps({'schema_version':'goal_vision_replan_contract_v0', 'state':'vision_patch_proposed',
+        'vision_patch':{'acceptance_summary':'Controlled participant probe passed; research continuation remains.'},
+        'path_delta':{'outcome':'continue','prior_assumption':'Capture requires settled original work.',
+            'observed_reality':'Isolated source work was verified.', 'retained':['Participant capture'],
+            'evidence_refs':['evidence:controller-fixture']}}))
+    run('refresh-state', '--goal-id', cli.GOAL_ID, *binding, '--classification','controller_fixture_verified',
+        '--delivery-batch-scale','multi_surface','--delivery-outcome','outcome_progress','--agent-vision-json',str(vision))
+    run('quota','spend-slot','--goal-id',cli.GOAL_ID,*binding,'--source','heartbeat','--execute')
+    before = run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    original_head = authority_head(runtime)
+    assert original_head['status'] == 'loaded'
+    source_settlement = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID,agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID,turn_instance_id=cli.TURN_ID,registry_path=registry)
+    assert source_settlement.progress['state'] == 'settled'
+    logs = tmp_path / 'logs'
+    wakes = logs / 'wakes'
+    (wakes / cli.TURN_ID).mkdir(parents=True)
+    (project / 'solver.py').write_text('candidate = 7\n')
+    target = logs / 'checkpoints/controller'
+    request = tmp_path / 'request.json'
+    request.write_text(json.dumps({'destination':str(target), 'loopx_state':True,
+        'components':[{'id':'code','source_path':str(project/'solver.py')}], 'point_metadata':{}}))
+    env = {'LOOPX_CHECKPOINT_REQUEST':str(request),'LOOPX_WAKE_LOG_DIR':str(wakes),
+        'LOOPX_PROJECT':str(project),'LOOPX_RUNTIME_ROOT':str(runtime),'LOOPX_REGISTRY':str(registry),
+        'LOOPX_GOAL_ID':cli.GOAL_ID,'LOOPX_AGENT_ID':cli.AGENT_ID}
+    receipt = {'ok':True,'stage':'execute','mode':'heartbeat','turn_id':cli.TURN_ID}
+    capture_after_wake(env, receipt)
+    assert receipt['checkpoint'].get('captured') is True, json.dumps(receipt['checkpoint'])
+    manifest = json.loads((target/'checkpoint.json').read_text())
+    coverage = manifest['point_metadata']['loopx_state']['source_inventory']
+    covered = {entry['source_path']:entry['component_id'] for entry in coverage}
+    assert str(runtime) in covered and str(registry) in covered and str(state) in covered
+    materialized = tmp_path / 'materialized'
+    effect_runtime_result('runtime.checkpoint_artifacts', {'action':'materialize','root':str(target),
+        'expected_sha256':receipt['checkpoint']['sha256'],'destination':str(materialized)})
+    copied_runtime = materialized/'components'/covered[str(runtime)]
+    assert authority_head(copied_runtime) == original_head
+    copied_code, copied_todos = cli._run_cli(registry, copied_runtime, 'todo', 'list',
+        '--goal-id', cli.GOAL_ID, '--todo-id', cli.TODO_ID)
+    assert copied_code == 0, copied_todos
+    assert copied_todos['todo'] == before['todo']
+    assert copied_todos['authority_read']['source_authority'] == provider + '_v0'
+    copied = read_heartbeat_settlement(copied_runtime,goal_id=cli.GOAL_ID,agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID,turn_instance_id=cli.TURN_ID,registry_path=registry)
+    assert copied.progress['state'] == 'settled' and copied.identity.value == source_settlement.identity.value
+    registry_copy = materialized/'components'/covered[str(registry)]/manifest['point_metadata']['loopx_state']['registry_member_path']
+    assert registry_copy.read_bytes() == registry.read_bytes()
+    assert manifest['research_point_qualified'] is False and manifest['execution_authority_granted'] is False
+    assert source_ref is None  # Preserve this legacy fixture; capture does not create an exact GoalRef.
+    assert lease['lease']['status'] == 'active'
+    after = run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    assert after['todo'] == before['todo']
+    assert after['authority_read']['provider_revision'] == before['authority_read']['provider_revision']
+
+
+@pytest.mark.parametrize('gap', ['shared_registry','wrong_actor','wrong_runtime','missing_state','symlink_state','overlap'])
+def test_loopx_participant_rejects_wrong_or_ambiguous_routes(tmp_path, gap):
+    from benchmark.runtime.checkpoint import _loopx_state_components
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    runtime.mkdir()
+    (project/'solver.py').write_text('candidate = 7\n')
+    env = {'LOOPX_PROJECT':str(project),'LOOPX_RUNTIME_ROOT':str(runtime),'LOOPX_REGISTRY':str(registry),
+        'LOOPX_GOAL_ID':cli.GOAL_ID,'LOOPX_AGENT_ID':cli.AGENT_ID}
+    state = project/f'.codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md'
+    components = [{'id':'code','source_path':str(project/'solver.py')}]
+    source = json.loads(registry.read_text())
+    if gap == 'shared_registry':
+        source['goals'].append({**source['goals'][0],'id':'other-goal'})
+        registry.write_text(json.dumps(source))
+    elif gap == 'wrong_actor':
+        env['LOOPX_AGENT_ID'] = 'other-agent'
+    elif gap == 'wrong_runtime':
+        other = tmp_path/'other'
+        other.mkdir()
+        env['LOOPX_RUNTIME_ROOT'] = str(other)
+    elif gap == 'missing_state':
+        state.unlink()
+    elif gap == 'symlink_state':
+        state.unlink()
+        state.symlink_to(project/'solver.py')
+    else:
+        components.append({'id':'narrow','source_path':str(registry)})
+    with pytest.raises(ValueError):
+        _loopx_state_components(env, components, tmp_path/'logs/checkpoints/point')
+    assert not (tmp_path/'logs').exists()
+
+
+def test_loopx_participant_preserves_legacy_and_current_owned_goal_directories(tmp_path):
+    from benchmark.runtime.checkpoint import _loopx_state_components, parse_checkpoint_request
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    # These are legitimate controller partitions, not two Goal registrations.
+    # Inventory follows the backup owner, not a basename-based Goal classifier.
+    for name in (cli.GOAL_ID, cli.GOAL_ID+'-partition'):
+        (runtime/'goals'/name).mkdir(parents=True)
+    components, metadata = _loopx_state_components({'LOOPX_PROJECT':str(project),
+        'LOOPX_RUNTIME_ROOT':str(runtime),'LOOPX_REGISTRY':str(registry),
+        'LOOPX_GOAL_ID':cli.GOAL_ID,'LOOPX_AGENT_ID':cli.AGENT_ID}, [], tmp_path/'logs/checkpoints/point')
+    assert sum(entry['source_path'] == str(runtime) for entry in components) == 1
+    assert metadata['execution_authority_granted'] is False
+    with pytest.raises(ValueError, match='explicit boolean'):
+        parse_checkpoint_request(json.dumps({'destination':'/logs/agent/checkpoints/point',
+            'components':[{'id':'code','source_path':'/tmp/solver.py'}], 'point_metadata':{},
+            'loopx_state':'true'}).encode())

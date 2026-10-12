@@ -36,13 +36,15 @@ def parse_checkpoint_request(raw: bytes) -> dict[str, Any]:
     """Validate the same explicit declaration before staging and before capture."""
     request = json.loads(raw)
     if (not isinstance(request, dict) or
-            set(request) - {"destination", "components", "point_metadata", "native_session", "evaluation_opportunity", "trigger"} or
+            set(request) - {"destination", "components", "point_metadata", "native_session", "evaluation_opportunity", "loopx_state", "trigger"} or
             not {"destination", "components", "point_metadata"}.issubset(request)):
         raise ValueError("checkpoint request requires destination, components and point_metadata")
     if "native_session" in request and type(request["native_session"]) is not bool:
         raise ValueError("checkpoint native_session must be an explicit boolean")
     if "evaluation_opportunity" in request and type(request["evaluation_opportunity"]) is not bool:
         raise ValueError("checkpoint evaluation_opportunity must be an explicit boolean")
+    if "loopx_state" in request and type(request["loopx_state"]) is not bool:
+        raise ValueError("checkpoint loopx_state must be an explicit boolean")
     if "trigger" in request and request["trigger"] != "fresh_replan":
         raise ValueError("checkpoint trigger must be fresh_replan or omitted")
     if not isinstance(request["components"], list) or not request["components"]:
@@ -50,6 +52,70 @@ def parse_checkpoint_request(raw: bytes) -> dict[str, Any]:
     if not isinstance(request["point_metadata"], dict):
         raise ValueError("checkpoint point_metadata must be an object")
     return request
+
+
+def _loopx_state_components(env, components, output_dir):
+    """Adapt the existing backup owner's inventory for one isolated trial.
+
+    No second state-discovery rule, archive execution or authority adoption.
+    The runtime owns its original evidence, quota and effect journals; this
+    adapter declares those private files to the inert artifact owner only.
+    """
+    from loopx.history import load_registry
+    from loopx.state_backup import build_state_backup_plan
+
+    project, runtime, registry = (Path(env[key]) for key in (
+        "LOOPX_PROJECT", "LOOPX_RUNTIME_ROOT", "LOOPX_REGISTRY"))
+    for path in (project, runtime, registry):
+        if not path.is_absolute() or path.resolve(strict=True) != path:
+            raise ValueError("LoopX checkpoint routes must be normalized physical paths")
+    raw_registry = registry.read_bytes()
+    source = load_registry(registry)
+    goals = source.get("goals", [])
+    if (len(goals) != 1 or goals[0].get("id") != env["LOOPX_GOAL_ID"] or
+            env["LOOPX_AGENT_ID"] not in goals[0].get("coordination", {}).get("registered_agents", [])):
+        raise ValueError("LoopX state capture requires this worker's single-Goal trial registry")
+    # Reject lexical route aliases before backup discovery resolves them.
+    goal = goals[0]
+    if Path(goal["repo"]) != project or Path(source.get("common_runtime_root", "")) != runtime:
+        raise ValueError("LoopX checkpoint routes differ from the registered trial")
+    state = Path(goal["state_file"])
+    state = state if state.is_absolute() else Path(goal["repo"]) / state
+    if not state.is_file():
+        raise ValueError("LoopX checkpoint requires its registered active state source")
+    routes = [state, *(project / path for path in (
+        ".loopx", ".codex/goals", ".claude/goals", ".local/goals"))]
+    if any(path.exists() and path.resolve(strict=True) != path for path in routes):
+        raise ValueError("LoopX checkpoint state routes must not contain symlinks")
+    plan = build_state_backup_plan(project=project, runtime_root=runtime,
+        registry_path=registry, output_dir=output_dir,
+        include_registry_projects=False, include_automations=False, include_skills=False)
+    if plan["warnings"]:
+        raise ValueError("LoopX backup inventory is incomplete; reconcile its source routes before capture")
+    # Select physical parent roots once. A caller-declared parent can already
+    # cover a discovered file; do not duplicate the same runtime/registry/state.
+    entries = list(components)
+    targets = sorted(plan["included"], key=lambda entry: len(Path(entry["source_path"]).parts))
+    for target in targets:
+        path = Path(target["source_path"])
+        if any(path.is_relative_to(Path(entry["source_path"])) for entry in entries):
+            continue
+        if any(Path(entry["source_path"]).is_relative_to(path) for entry in entries):
+            raise ValueError("LoopX state inventory overlaps a narrower declared component; declare its parent once")
+        entries.append({"id": f"loopx_state_{len(entries)}", "source_path": str(path)})
+    coverage = [{"key": target["key"], "source_path": target["source_path"],
+                 "component_id": next(entry["id"] for entry in entries
+                     if Path(target["source_path"]).is_relative_to(Path(entry["source_path"]))) }
+                for target in plan["included"]]
+    if registry.read_bytes() != raw_registry:
+        raise ValueError("LoopX registry moved during participant inventory")
+    registry_component = next(entry for entry in entries if registry.is_relative_to(Path(entry["source_path"])))
+    return entries, {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"],
+        "source_inventory": coverage, "registry_sha256": hashlib.sha256(raw_registry).hexdigest(),
+        "registry_component_id": registry_component["id"],
+        "registry_member_path": (registry.relative_to(Path(registry_component["source_path"])).as_posix()
+                                 if registry != Path(registry_component["source_path"]) else ""),
+        "execution_authority_granted": False}
 
 
 def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
@@ -219,6 +285,8 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             "request_sha256": hashlib.sha256(raw).hexdigest(),
         }
         components = request["components"]
+        if request.get("loopx_state"):
+            components, metadata["loopx_state"] = _loopx_state_components(env, components, destination)
         opportunity = None
         if request.get("evaluation_opportunity"):
             from .sforge_checkpoint import capture_opportunity
@@ -243,6 +311,12 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             "action": "probe", "components": components,
             "deadline_epoch_ms": deadline * 1000,
         }, timeout=max(.1, deadline - time.time()), retry_safe=False)
+        if request.get("loopx_state"):
+            declared = metadata["loopx_state"]
+            witness = probe["source_witness"][declared["registry_component_id"]]
+            member = next((entry for entry in witness if entry["path"] == declared["registry_member_path"]), None)
+            if member is None or member.get("sha256") != declared["registry_sha256"]:
+                raise ValueError("LoopX registry differs from the scoped participant inventory")
         if opportunity is not None and opportunity["native_incumbent"] is not None:
             selected = opportunity["native_incumbent"]
             witness = probe["source_witness"].get("evaluation_incumbent", [])
