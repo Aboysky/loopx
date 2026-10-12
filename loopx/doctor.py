@@ -19,6 +19,7 @@ from .control_plane.runtime.promotion_readiness import (
 )
 from .control_plane.runtime.time import chronology_key
 from .install_contract import (
+    _powershell_literal,
     NO_CLONE_INSTALL_URL,
     local_install_command,
     no_clone_upgrade_command,

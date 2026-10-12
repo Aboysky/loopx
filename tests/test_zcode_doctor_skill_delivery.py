@@ -426,3 +426,24 @@ def test_mixed_installation_and_facade_problems_keep_both_recovery_owners(
     assert all(skill["readback_status"] == "ready" for skill in recovered["skills"].values())
     assert recovered["install_freshness"]["requires_upgrade"] is False
     assert recovered["install_freshness"]["manifest_package_version_matches_runtime"] is True
+
+
+@pytest.mark.parametrize("home_name", ["ZCode Home", "O'Brien ZCode"])
+def test_public_doctor_nt_dispatch_returns_quoted_zcode_repair(
+    doctor_context, monkeypatch, tmp_path, capsys, home_name
+):
+    from types import SimpleNamespace
+    from loopx.entrypoint import main
+
+    selected = tmp_path / home_name
+    monkeypatch.setenv("ZCODE_HOME", str(selected))
+    # Replace only the module's platform selector; keep pathlib and the host OS.
+    monkeypatch.setattr(
+        doctor, "os", SimpleNamespace(**{**vars(doctor.os), "name": "nt"})
+    )
+    main(["--format", "json", "doctor", "--agent-type", "zcode"])
+    payload = json.loads(capsys.readouterr().out)
+    expected = "'" + str(selected).replace("'", "''") + "'"
+    assert payload["skill_delivery"]["repair_command"] == (
+        "loopx slash-commands --install --surface zcode " + f"--zcode-home {expected}"
+    )
