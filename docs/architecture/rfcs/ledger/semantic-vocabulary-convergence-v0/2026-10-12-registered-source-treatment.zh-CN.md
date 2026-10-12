@@ -1,9 +1,11 @@
 # 当前集成主线上的登记来源处理
 
-复核基线：`43173c0b8c8761abee4cdddc665f0f0f20f194f7`（2026-10-12）。
-本记录推进 #4447 既有 2a/2b/2c，不改变范围、扫描登记、预算或运行时行为。
-[分阶段范围修订 #4789](https://github.com/loopx-project/loopx/pull/4789) 已合入，
-交付验收及下方两项含义决策仍开放。**列出 26 行不等于 26 项 producer 证明或 tracker 关闭。**
+当前运行时代码基线：`509c38c502d3d0b4eafb01550efcdc4b5b5a1d17`（2026-10-13）。
+本次在结算失败、选择、旧工作基线及保留值处置合入后，更新既有 #6270 清单。
+候选的 `loopx/`、`apps/`、`packages/` 生产树与此 main 完全相同，只增加既有见证和记录。
+验收仍沿 [#4789 分阶段范围](https://github.com/loopx-project/loopx/pull/4789)。
+**26 行清单不是 26 项正式 producer 证明，也不是 tracker 关闭。** 来源清单 PR、独立的
+#6285 宿主观察 fixture 修复仍需集成，并由 owner 完成最终验收。
 
 注册表仍为 26 项，已用实际 `task_lease_lifecycle_operation` 替换退休的 `lease_action`。
 F1/F2 仍是 **6/26**：五项 kernel 和 settlement-binding witness。其余二十项跨运行时
@@ -26,7 +28,7 @@ local-only 来避开责任。本记录不证明全程序可达性、数据流或
 | settlement_binding_kind | `effect_program.ts::settlementIdentity` → binding_kind | 对输入身份做内部归一化；既有 binding witness 执行 Todo、replan、unbound 及矛盾组合。 | unbound 不允许扣费；精确身份仍由回执 owner 验证。 |
 | task_lease_lifecycle_operation | `work_items/task_lease_lifecycle_request.ts` → operation | 调用方选择的 native 输入。lifecycle 测试执行六种操作、非法输入、CAS 与重试。 | 替换退休的私有 lease_action，不删除租约行为；保留 fence 历史字段缺省，不计入 F1/F2。 |
 | settlement_step_kind | `effect_program.ts`, `turn_driver/settlement.ts` → receipts[].step_kind | 内部回执构造 + 外部 envelope 输入。2a 在无 callback 的已提交回放中产生四类 step，并拒绝非法输入。 | 保留顺序前缀、effect 身份与历史回执；注入 step 只证明解码。 |
-| settlement_failure_kind | `effect_program.ts`, `quota/settlement_readback.ts`, native lease owners → failure kind | 内部失败 + 接受的 envelope 输入。2a 覆盖 12 个 wire 值、真实 unbound guard 读取及 native 权限拒绝。 | cancelled 的来源用途仍待下方处理。租约摘要使用 failure.step，Effect envelope 使用 failure.step_kind，不能伪造 wire 转换。 |
+| settlement_failure_kind | `effect_program.ts`, `quota/settlement_readback.ts`, native lease owners → failure kind | 内部失败 + 接受的 envelope 输入。2a 覆盖 12 个 wire 值、真实 unbound guard 读取及 native 权限拒绝。 | cancelled 已有下方 reader 保留范围与退出条件，不声称内部 producer 或历史使用。租约摘要使用 failure.step，Effect envelope 使用 failure.step_kind，不能伪造 wire 转换。 |
 | receipt_bound_monitor_phase | `quota/settlement_readback.ts` → `settlement_phase.ts` → monitor_phase | 从精确 monitor commit 内部派生；2a 执行 poll_due/settled、错误身份和旧 monitor effect id。 | settlement_pending 仅有 consumer 兼容证据，实际 builder 不产生；迁移历史 work-lane reader 后才可删除。 |
 | receipt_bound_replay_phase | `quota/settlement_readback.ts` → `settlement_phase.ts` → replay_phase | 从隔离回执文件和完成/写回/扣费前缀内部派生三种 phase；重复读取与身份负例经过 bridge。 | 保留 terminal-to-replay 适配与原绑定；phase 投影不证明所有持久 writer 正确提交。 |
 | delivery_workspace_kind | `agents/workspace_guard.py::capture_delivery_workspace` → TS snapshot | 真实 Git/文件观察 + snapshot 输入；主 checkout、linked worktree、本地 Goal 与 TS normalization 覆盖三类及非法 origin。 | 保留 v0 Git snapshot；不能把 Git 缺失/读取失败转换成本地 Goal 授权。 |
@@ -34,7 +36,7 @@ local-only 来避开责任。本记录不证明全程序可达性、数据流或
 | delivery_workspace_requirement | `quota/settlement_workspace_causality.ts` → requirement | 根据明确工作合同内部派生 required/not_required/unknown；覆盖写入、非交付、缺元数据和事件读取。 | unknown 必须修复；无工作区的旧结算例外需要精确且完整的 validation/writeback 回执，部分或错 Todo 不通过。 |
 | todo_completion_continuation | `todos/completion_state.ts::selectTodoCompletionState` → continuation | 根据 intent/Todo 内部选择 active_goal/successor/no_followup，同时读取持久 metadata；完整 owner 与非法 authority 测试执行。 | 后继与 no_followup 矛盾时拒绝；保留 metadata normalization，退休的标量 RPC 仍拒绝。 |
 | todo_completion_recovery | `todos/completion_state.ts` → recovery | 根据已完成 Todo、关闭 intent 和 identity source 派生两类 terminal recovery；固定及显式 lifecycle 用例覆盖。 | 不重写原完成身份、不创建后继；null 表示没有恢复，与恢复类别分开。 |
-| todo_decision_scope_kind | `todos/decision_metadata.ts::normalizeTodoDecisionScope` → kind | 作者声明输入，无自动分类 producer。七类输入见证、非法值、真实 CLI 和精确 kind dominance 测试执行 reader。 | other 作者何时选择仍待下方处理。接纳不授予权限；保留旧 standing-scope codec。 |
+| todo_decision_scope_kind | `todos/decision_metadata.ts::normalizeTodoDecisionScope` → kind | 作者声明输入，无自动分类 producer。七类输入见证、非法值、真实 CLI 和精确 kind dominance 测试执行 reader。 | other 已按下方 custom authority 规则编写，不能作为未知输入的 fallback。接纳不授予权限；保留旧 standing-scope codec。 |
 | todo_decision_scope_granularity | `todos/decision_metadata.ts` → granularity; `decision_scope.ts` → dominance | 作者声明五级输入，显式 domain 与未知/null/数字负例，加 CLI/dominance 用例。 | 更宽 scope 不能跨 kind 或覆盖精确目标/接收者冲突；不由有界视图推断缺失 scope。 |
 | goal_amendment_class | `goals/goal_amendment_proposal.ts` → proposal.amendment_class | 作者按 RFC 声明四类；全类别/未知类别测试与真实 submit/list CLI 提供输入和 journal 证据。 | admission 是 canonical_effect=none 的提案事实，不是共享变更提交或 protected authority 委托。 |
 | goal_amendment_proposal_admission | `goals/goal_amendment_proposal.ts::admissionOutcome` → admission | 根据当前 basis、sequence、digest 内部产生 admitted/needs_rebase；相等/过期/未来/canonical/Markdown 情况经过 TS 与 CLI journal。 | 保留过期提案供 rebase，拒绝虚构未来历史；admitted 不等于变更获准。 |
@@ -45,23 +47,29 @@ local-only 来避开责任。本记录不证明全程序可达性、数据流或
 | delivery_outcome | `work_items/delivery_outcome.ts`, monitor/Host/replan producers → outcome | 作者声明 + 机器选择：monitor/Host 产生 surface_only/progress，replan 可降级 outcome_gap；primary_goal_outcome 是作者主张。history/monitor/executor/replan/diagnostic 测试覆盖。 | decoder/claim 检查不独立证明主目标已实现；历史矛盾主张被诊断，不改写为成功。 |
 | delivery_continuity_preemption | `quota/should_run_packet.py::_delivery_preemptions_for_route` → `turn_driver/delivery_continuity.ts` | guard 内部事实 + typed 输入：回执、阻塞 lane、replan、repair、拒绝交付；continuity route/selection 测试覆盖抢占与后续重选。 | 继续旧交付不能覆盖当前抢占；其他 qualifier 的同形字符串不自动归此词表，不改绑旧回执。 |
 
-## 两项待 owner 处置的含义
+## 两项原未决含义的当前处置
 
-- **`settlement_failure_kind.cancelled`：Effect/settlement owner。** 公开的
-  `SettlementResult.failed(...).bind(...)` 接受它并短路后续步骤，但核对 settlement
-  owner、枚举成员引用和调用方，仍没有内部取消 producer。chat/Host/usage 中的
-  cancellation 属于不同词表。decoder 证明 wire 处理，不回答谁可在何时产生。
-  保留现有 unresolved value note。关闭需要找到具体取消合同/producer 并执行见证，
-  或单独评审明确的 reserved/compatibility-only 范围和退出条件；本批不虚构 producer，
-  也不自动批准这个例外。
-- **`todo_decision_scope_kind.other`：Todo decision-scope owner。** 真实 parser 接受它，
-  精确 kind 匹配阻止它覆盖具名 kind；没有把未知输入转成 other 的 fallback，非法值被拒绝。
-  现有公开协议只列枚举，没有作者选择准则，catalog 的六类 authority 也不能补出含义。
-  保留 unresolved note。关闭需要明确的作者使用合同/例子，或获评审的兼容保留/迁移决定；
-  membership 测试不能代替 owner 决定产品含义。
+[#6313](https://github.com/loopx-project/loopx/pull/6313) 获得 `loopx-agent` 在精确
+head 上的 `APPROVED` 评审，并由 `huangruiteng` 合入
+`d3f84dced555b7fa8bdffa33b750de6b1b3ea968`。下面规则已经进入 canonical registry 和
+协议。这是具体的评审及 owner 集成记录，不补造人类评审、取消实现或整个 tracker
+验收。[原处置记录](2026-10-12-reserved-value-disposition.zh-CN.md) 保留提案时基线。
 
-以上是**未解决且未获批准的例外**，继续阻止 Stage 2/3 关闭。不能用统一来源标签或
-绿色测试替代这两个决定。
+- **`settlement_failure_kind.cancelled`：Effect/settlement owner。** 保留已接纳的
+  reader-reserved 失败输入；保留此前回执/细节，短路后续 callback。它不证明在途
+  provider 已停止，不抹除已提交步骤，也不授予 retry/rollback/resume/quota 权限。
+  仍没有已识别的内置取消 producer 或历史实际使用证明。退出须经过 owner 评审的
+  typed cancellation 合同与真实因果见证，或带 stored/caller 兼容证据的版本化 reader
+  迁移；不自动过期、不虚构生产者。
+- **`todo_decision_scope_kind.other`：Todo decision-scope owner。** 只在六种具名
+  kind 均不能表达具体自定义审批时，由作者明确选择；不知道该选什么不是理由。
+  Task 文本解释审批，稳定公开安全的 key 连接 gate 和工作。仍执行原 exact-kind、key、
+  granularity、recipient 和 target 规则，`other:global:*` 也不能覆盖具名权限；未知
+  输入仍拒绝。[编写合同](../../../../reference/protocols/decision-scope-v0.md#choosing-kindother)
+  已提供准则和例子。
+
+原先缺少使用规则的问题不再写成当前含义未知；输入和兼容处置仍不获得内部 producer
+证明。#4447 仍须完成来源清单集成与最终版本验收，不能仅凭这份处置已合并就关闭。
 
 ## 证据与复跑
 
@@ -77,23 +85,94 @@ Python 命令为 `uv run --extra test python -m pytest -q <所列文件>`；TS �
 2a 新增的 unbound guard 通过真实临时文件读取、TS owner 和 Python bridge；排除 owner
 用例执行真实 native lease 拒绝并验证无租约写入。外部失败输入现在显式覆盖 12 值，
 registry 对比只防止新值遗漏其 witness，不把枚举遍历升级为 producer 证明。
-新增 scope kind/granularity 输入用例也不解决 other 的作者含义。预期来自接受的合同和
+scope kind/granularity 用例是输入见证；other 的作者选择遵循当前协议。预期来自接受的合同和
 独立因果场景，而非回显 owner 结果。
 
-该源码基线加本批聚焦见证：2a **66 passed**，既有 Python 领域组 **564 passed**，
-补充真实 Git/monitor/replan/lease 组 **82 passed**，native TS 组 **421 passed**、无 skip。
-TS typecheck、聚焦 Ruff、两个生成器及完整 semantic drift 通过。以上是源码/隔离后端
-证据，不是安装端或真实模型验收。drift 仍为 F1/F2 6/26、F3 0/26、F4 4/4、F5 1/1、
-F6 0/0；45 个 producer site 未解析，其中 17 个无法提供 producer 见证。
-没有放宽任何上限或扫描边界。既有 semantic architecture/value-note 组另有
-**706 passed**，docs governance 和 premerge 通过。RFC status 索引仅更新 ledger
-条目数，不据此改变交付成熟度。
+### 当前执行结果
 
-已知集成边界：复用同一不可变主线上的独立复现结果，`test_quota_settlement_cli.py`
-的三个用例（普通结算及两种 Todo-less replan）在 scheduler ACK 失败。fixture 没有
-#6259 要求的当前宿主观察，owner 返回 `rrule_mismatch` 且不写 scheduler 状态。
-它们不在上述通过组中，本次文档批次未重跑；完整 CLI suite 的这个缺口仍开放，
-不通过放宽规则或断言消除。
+在上述 main 运行时代码加来源见证上，以 Python 3.11.7、合格 Node 22.22.3 执行：
+
+| 组 | 结果 | 含义 |
+| --- | --- | --- |
+| 前述 28 个 Python 领域文件：Turn/frontier/workspace/Todo/amendment/scheduler/handoff/continuity/history/local-provider | 610 passed | 真实领域 owner，含隔离 Git/File/SQLite；不证明真实模型或 Host 定时器。 |
+| `tests/architecture/test_semantic*.py` | 660 passed | scanner/registry/owner/兼容契约，不是全程序生产证明。 |
+| 前述 TS 组，另含 action-selection admission 与 interaction contract | 448 passed，无 skip | 类型化来源和消费边界，不是 PostgreSQL 或部署端资格。 |
+| 完整 settlement CLI、decision-scope CLI/consistency/lifecycle 与 2a 见证 | 206 passed，**3 failed** | 主干的三个原始 ACK 场景仍缺真实的合成宿主观察。 |
+
+失败仍是 `tests/control_plane/test_quota_settlement_cli.py` 的
+`test_standard_codex_app_settlement_is_receipted_and_idempotent` 和两个
+`test_todoless_autonomous_replan_settles_quota_refresh_spend_chain` 变体。
+它们收到 `rrule_mismatch`，没有 scheduler 写入；主干后续 CI 更正没有解决这三个
+用例。没有放宽规则或删除断言。
+
+既有 [#6285](https://github.com/loopx-project/loopx/pull/6285) 的
+`277dab815eb8dba20ff1ca6256009589a1675a85` 修复仍独立于本 PR。在隔离组合中，将
+同一 main + #6270 见证加上这份未改动的 fixture 修复，三个原失败场景和完整 settlement
+CLI 均通过：**101 passed**，无 skip。可由上述 main、既有 #6270 来源见证补丁和固定的
+#6285 纯测试提交复现组合；临时集成产物不是已发布版本。
+**不能据此把当前 main 写成通过，也不授予两个 PR 的合并权。** 修复让真实 reader 读取合成的 absent/mismatched/正确 manifest，
+验证无额外扣费，再恢复原 ACK 和字节稳定的 replay。
+
+完整 drift 仍保留 F1/F2 6/26、F3 0/26、F4 4/4、F5 1/1、F6 0/0；未知 producer
+站点继续显式报告：45 个未解析，其中 17 个不能提供 producer 证据；不放宽上限或扫描
+边界。既有跨运行时 value-note 组另有 46 项通过；生成器、typecheck 和对应质量检查
+在 PR 验证记录中披露。旧 66/564/82/706 Python、421 TS 数字属于 `43173c0b8`
+历史截面，不重新贴成当前结果。
+
+<details>
+<summary>610 项 Python 与 448 项 TypeScript 组的精确选集</summary>
+
+```sh
+uv run --extra test python -m pytest -q \
+  tests/test_loopx_turn_driver.py \
+  tests/test_loopx_turn_executor.py \
+  tests/test_loopx_turn_transaction.py \
+  tests/test_loop_turn_loop_controller.py \
+  tests/control_plane/test_agent_scope_frontier_contract.py \
+  tests/control_plane/test_quota_run_decision.py \
+  tests/control_plane/test_delivery_workspace.py \
+  tests/control_plane/test_workspace_git_fact_reads.py \
+  tests/control_plane/test_delivery_workspace_causality.py \
+  tests/control_plane/test_delivery_workspace_causality_runtime.py \
+  tests/control_plane/test_task_lease_cli_native.py \
+  tests/control_plane/test_todo_completion_state_runtime.py \
+  tests/control_plane/test_goal_amendment_proposal.py \
+  tests/control_plane/test_goal_amendment_proposal_cli.py \
+  tests/control_plane/test_goal_amendment_proposal_lifecycle.py \
+  tests/control_plane/test_scheduler_state_transition_rules.py \
+  tests/control_plane/test_scheduler_state_runtime_integration.py \
+  tests/control_plane/test_goal_handoff_mode_cli.py \
+  tests/control_plane/test_handoff_mode_source.py \
+  tests/control_plane/test_delivery_continuity_selection.py \
+  tests/control_plane/test_delivery_continuity_runtime.py \
+  tests/control_plane/test_native_monitor_poll.py \
+  tests/control_plane/test_replan_writeback_projection.py \
+  tests/control_plane/test_refresh_state_replan_gate.py \
+  tests/control_plane/test_final_outcome_diagnostics.py \
+  tests/control_plane/test_protocol_packet_history.py \
+  tests/control_plane/test_protocol_packet_retirement_cli.py \
+  tests/control_plane/test_local_provider_settlement_journey.py
+
+node --no-warnings --experimental-sqlite --experimental-strip-types --test \
+  tests/control_plane_ts/turn_settlement.test.ts \
+  tests/control_plane_ts/quota_settlement_readback.test.ts \
+  tests/control_plane_ts/task_lease_acquire.test.ts \
+  tests/control_plane_ts/task_lease_lifecycle.test.ts \
+  tests/control_plane_ts/delivery_workspace.test.ts \
+  tests/control_plane_ts/settlement_workspace_causality.test.ts \
+  tests/control_plane_ts/todo_completion_state.test.ts \
+  tests/control_plane_ts/decision_metadata.test.ts \
+  tests/control_plane_ts/decision_scope.test.ts \
+  tests/control_plane_ts/goal_amendment_proposal.test.ts \
+  tests/control_plane_ts/scheduler_state_transition_rules.test.ts \
+  tests/control_plane_ts/handoff_mode_plan.test.ts \
+  tests/control_plane_ts/delivery_continuity.test.ts \
+  tests/control_plane_ts/delivery_history.test.ts \
+  tests/control_plane_ts/action_selection_admission.test.ts \
+  tests/control_plane_ts/interaction_contract.test.ts
+```
+
+</details>
 
 ## 集成状态与关闭边界
 
@@ -103,7 +182,10 @@ F6 0/0；45 个 producer site 未解析，其中 17 个无法提供 producer 见
 投影；其余五个旧字段继续可见，全字段退休不是关闭前提。#5317 已交付独立 #4743 的
 开发期 advisory，因此旧“从未实现/AGENTS 没有指引”说法过期；advisory 仍不阻断或证明语义。
 
-本次测量时，后续 typed-failure 修复 #6251 与 canonical-selection 修复 #6268 尚未合入，
-不能算入该基线；#6260 已合入。它们不扩大 #4447 原关闭范围。完整来源处置、维护者验收
-及最终单一集成版本读回仍是关闭前提。本批不声称安装前端/Lark、真实模型或完整 Goal/团队
-验收；不改变生产 provider/持久格式，原始日志及本地 Goal 状态不进入仓库。
+当前基线已包含 #6251 typed-failure、#6268 canonical-selection、#6260 shared
+consistency、#6290 legacy-work-basis 及 #6313 含义处置。它们消除了具体代码/含义
+缺口，不扩大 #4447 原关闭范围。#6270 来源见证和 #6285 ACK fixture 修复仍待合入；
+当前 main 仍有上述三项失败，所以 Stage 3 与 issue 继续开放。最终 owner 验收须点名
+单一集成 revision 及其 passed/failed/untested 边界。安装前端/Lark、真实模型、完整
+Goal/团队资格和通用 F6 不属本 tracker；本次不改生产 provider/权限/持久格式，日志及
+本地 Goal 状态保留在私有位置。

@@ -1046,11 +1046,11 @@ are merged witnesses, not pending proposals. #5317 supplies the separate #4743
 development-time advisory; it does not close this tracker's source obligations.
 
 The [current registered-source inventory](ledger/semantic-vocabulary-convergence-v0/2026-10-12-registered-source-treatment.md)
-records all 26 entries, executed evidence, compatibility boundaries and two
-unresolved meanings. F1/F2 remain 6/26; source treatment does not inflate their
-producer domain. Final owner disposition and integrated delivery acceptance
-remain open; F6-wide proof is not claimed. Milestone rows below retain their
-acceptance obligations, while dated historical measurements keep their own SHA.
+records all 26 entries, current-main evidence and compatibility boundaries.
+The owner merged both source-meaning dispositions in #6313; source-inventory
+integration, #6285 ACK fixture repair and final single-revision acceptance
+remain open. F1/F2 stays 6/26, with no source-domain inflation or F6-wide claim.
+Milestone obligations and historical measurements retain their original scope/SHA.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |

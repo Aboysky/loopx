@@ -840,9 +840,9 @@ controller 消费。Stage 1 的 composition/replay/selection/inbox 及交叠 #47
 不替代本 tracker 的来源义务。
 
 [当前登记来源清单](ledger/semantic-vocabulary-convergence-v0/2026-10-12-registered-source-treatment.zh-CN.md)
-列出 26 项、执行证据、兼容边界及两项未决含义。F1/F2 仍为 6/26，来源处理不抬高 producer
-证明范围。owner 处置和最终集成交付验收仍开放，不声称通用 F6 证明；下表保留各里程碑
-验收义务，历史测量继续保留原 SHA。
+列出 26 项、当前主干上的执行证据及兼容边界。#6313 的两项含义处置已由 owner 合入；
+来源清单、#6285 的 ACK fixture 修复和最终单一版本验收仍待集成。F1/F2 保持 6/26，
+不抬高 producer 范围或声称通用 F6；历史测量保留原 SHA，下表验收义务不变。
 
 | 里程碑 | 交付行为 | 进入门 | 退出证据 | 回滚 |
 | --- | --- | --- | --- | --- |
