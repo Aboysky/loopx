@@ -36,7 +36,8 @@ for(const provider of ["file","sqlite","postgresql"]){
   const invoke=(r:JsonObject)=>executeDirectionOperation(store,r,async()=>true);
   const configure=request("configure",{actor_agent_id:null,operation_id:"configure",expected_provider_revision:initial.provider_revision,materials:[material]});
   for(const patch of [{actor_agent_id:"agent-a"},{dry_run:"false"},{source:{...source,legacy_authority_present:true}},
-    {materials:[{...material,required:false}]},{materials:[{...material,boundary:"unknown"}]},{materials:[{...material,purpose:"https://private.example"}]}]){
+    {materials:[{...material,required:false}]},{materials:[{...material,boundary:"unknown"}]},{materials:[{...material,purpose:"https://private.example"}]},
+    {materials:[{...material,topics:["t".repeat(121)]}]},{source:{...source,registered_agents:[]}}]){
     await assert.rejects(invoke({...configure,...patch}));assert.equal((await store.readReceipt("configure")).status,"missing");
   }
   const configured=await invoke(configure);assert.equal(configured.ok,true);

@@ -195,6 +195,7 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
   if(op==="inspect")return readView(loaded,goalRef,actor,agents,now);
   if(op==="prepare_configure"){
     need(actor===null,"direction declarations require the trusted Goal owner");
+    need(agents.length>0,"Register a local Agent before configuring a direction baseline");
     const prior=scope(loaded.head,goalRef);need(prior!==null||loaded.head.authority_registry===undefined,"canonical authority already belongs to another owner");
     const history=await store.readReceipt(token(request.operation_id,"configuration operation"));
     // A known historical operation may be reread under the current live owner
@@ -212,6 +213,10 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
     if(op==="configure"){
       need(prior!==null||loaded.head.authority_registry===undefined,"canonical authority already belongs to another owner");
       const registry=policyRegistry(request.materials);
+      need(agents.length>0,"Register a local Agent before configuring a direction baseline");
+      const readable=buildGoalDirectionBaseline({goal_id:goalRef.goal_id,agent_id:agents[0],generated_at:now,
+        authority_registry:registry,receipts:usage(loaded.head,goalRef),available_boundaries:["local_private"]});
+      need(readable?.baseline_digest,"direction declaration does not fit the existing reader envelope");
       const digest=canonicalAuthoritySha256({goal_ref:goalRef,authority_registry:registry});
       basis(request.expected_authority_digest===undefined||request.expected_authority_digest===digest,"reviewed material declaration changed before apply");
       next.authority_registry=registry;next.goal_direction_scope={schema_version:SCOPE_SCHEMA,goal_ref:goalRef,enabled:true,authority_digest:digest};
