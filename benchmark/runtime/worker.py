@@ -397,6 +397,10 @@ def run_once(env: dict[str, str]) -> dict:
             receipt.update(ok=False, error_kind=type(exc).__name__)
             raise
         finally:
+            if env.get("LOOPX_CHECKPOINT_REQUEST"):
+                from benchmark.runtime.checkpoint import capture_after_wake
+
+                capture_after_wake(env, receipt)
             if (home / "sessions").is_dir():
                 # One authoritative copy; resumed prefixes are never double counted.
                 shutil.copytree(

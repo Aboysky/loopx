@@ -91,7 +91,8 @@ class SForgeWorker(CodexAgent):
                  turn_envelope: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
-                 stride_strategy: str | None = None):
+                 stride_strategy: str | None = None,
+                 checkpoint_request_path: str | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -136,6 +137,12 @@ class SForgeWorker(CodexAgent):
             from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
             stride_strategy = normalize_stride_strategy(stride_strategy)
         self.stride_strategy = stride_strategy
+        self.checkpoint_request_path = None
+        if checkpoint_request_path is not None:
+            if not profile.startswith("heartbeat-"):
+                raise ValueError("checkpoint_request_path requires a heartbeat profile")
+            from .checkpoint import normalize_checkpoint_request_path
+            self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
             raise ValueError("Unknown feedback mode")
@@ -222,6 +229,7 @@ class SForgeWorker(CodexAgent):
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
                 stride_strategy=self.stride_strategy,
+                checkpoint_request_path=self.checkpoint_request_path,
                 task_objective=self.task_objective,
             )
             asyncio.run(self.runtime.install(self.environment))
@@ -260,6 +268,8 @@ class SForgeWorker(CodexAgent):
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "loopx_usage_ping_enabled": False,
+            **({"checkpoint_capture_enabled": True}
+               if self.checkpoint_request_path is not None else {}),
             **({"planning_timeout_seconds": None}
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
