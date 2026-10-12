@@ -360,6 +360,15 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             "action": "probe", "components": components,
             "deadline_epoch_ms": deadline * 1000,
         }, timeout=max(.1, deadline - time.time()), retry_safe=False)
+        if request.get("native_session"):
+            # Native readback precedes the byte witness. A completed later Turn
+            # in that gap must not be sealed under the earlier cursor. Re-read
+            # after the probe; capture's existing witness comparison then guards
+            # source writes during this recheck and through atomic publication.
+            confirmed = native_session_checkpoint(env, session.get("session_id", ""),
+                                                  timeout=max(.1, deadline - time.time()))
+            if confirmed != native:
+                raise ValueError("native checkpoint cursor or participant basis moved before sealing")
         if request.get("loopx_state"):
             declared = metadata["loopx_state"]
             witness = probe["source_witness"][declared["registry_component_id"]]

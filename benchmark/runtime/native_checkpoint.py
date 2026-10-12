@@ -71,6 +71,10 @@ def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: 
         readback = request("thread/read", {"threadId": session_id, "includeTurns": False})
         if readback.get("thread", {}).get("id") != session_id:
             raise ValueError("native checkpoint session identity mismatch")
+        workspace = Path(env["LOOPX_PROJECT"])
+        if (not workspace.is_absolute() or workspace.resolve(strict=True) != workspace or
+                readback["thread"].get("cwd") != str(workspace)):
+            raise ValueError("native checkpoint session workspace differs from the declared code basis")
         turns = _complete_history(request, session_id)
         ids = [t["id"] for t in turns]
     members = []
