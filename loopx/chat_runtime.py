@@ -9,6 +9,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import threading
 import time
 from typing import Any, Callable, Mapping, Protocol
@@ -400,6 +402,21 @@ class ChatRuntimeController:
         capability = next((row for row in self.capabilities() if row["agent_id"] == agent_id), None)
         if capability is None or not capability.get("available"):
             raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
+        if agent_id == "codex":
+            return {"agent_id": agent_id, "model": self._codex_model_options(), "supported": True}
+        if agent_id == "claude-code":
+            return {
+                "agent_id": agent_id,
+                "supported": True,
+                "model": {
+                    "id": "model", "label": "Model", "selected": "sonnet",
+                    "options": [
+                        {"value": "sonnet", "label": "Sonnet"},
+                        {"value": "opus", "label": "Opus"},
+                        {"value": "fable", "label": "Fable"},
+                    ],
+                },
+            }
         if str(capability.get("adapter_kind")) != "acp":
             return {"agent_id": agent_id, "model": None, "supported": False}
         adapter = self._start_adapter(
@@ -412,6 +429,33 @@ class ChatRuntimeController:
             return {"agent_id": agent_id, "model": adapter.model_options(), "supported": True}
         finally:
             adapter.close_session()
+
+    def _codex_model_options(self) -> dict[str, Any] | None:
+        """Project the local Codex catalog without exposing its instructions."""
+        executable = self.codex_bin if Path(self.codex_bin).is_absolute() else shutil.which(self.codex_bin)
+        if not executable:
+            return None
+        try:
+            result = subprocess.run(
+                [str(executable), "debug", "models"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, encoding="utf-8", errors="replace", timeout=15, check=False,
+            )
+            payload = json.loads(result.stdout) if result.returncode == 0 else {}
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            return None
+        rows = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return None
+        options = [
+            {"value": slug, "label": " ".join(str(row.get("display_name") or slug).split())[:100]}
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance((slug := str(row.get("slug") or "").strip()), str)
+            and slug and len(slug) <= 160
+            and str(row.get("visibility") or "list") == "list"
+        ]
+        return {"id": "model", "label": "Model", "selected": options[0]["value"] if options else "", "options": options} if options else None
 
     @staticmethod
     def _managed_upstream_mode(session: dict[str, Any]) -> str:
@@ -503,6 +547,8 @@ class ChatRuntimeController:
                 if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
                 else executor_model or {}
             )
+            if agent_config and agent_config.get("model"):
+                model_config = {**model_config, "model": agent_config["model"]}
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
                 codex_home=self.codex_home,
@@ -544,6 +590,7 @@ class ChatRuntimeController:
                 resume_thread_id=resume_thread_id,
                 tool_scope="read_only",
                 context_summary=f"{goal_id}: {objective}".strip() if goal_id is not None else objective.strip(),
+                model=agent_config.get("model") if agent_config else None,
             )
         if agent_id == MANAGED_TURN_HOST:
             # The managed host has no interactive session transport, so this

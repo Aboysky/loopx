@@ -120,6 +120,7 @@ class ClaudeCodeAdapter:
     session_id: str
     tool_scope: str = "read_only"
     context_summary: str = ""
+    model: str | None = None
     resumed: bool = False
     current_process: subprocess.Popen[str] | None = field(default=None, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -137,6 +138,7 @@ class ClaudeCodeAdapter:
         resume_thread_id: str | None = None,
         tool_scope: str = "read_only",
         context_summary: str = "",
+        model: str | None = None,
     ) -> "ClaudeCodeAdapter":
         resolved = shutil.which(claude_bin)
         if not resolved:
@@ -152,6 +154,7 @@ class ClaudeCodeAdapter:
             session_id=resume_thread_id or str(uuid.uuid4()),
             tool_scope=tool_scope,
             context_summary=context_summary,
+            model=model,
             resumed=bool(resume_thread_id),
         )
 
@@ -183,6 +186,8 @@ class ClaudeCodeAdapter:
             command.extend(["--resume", self.session_id])
         else:
             command.extend(["--session-id", self.session_id])
+        if self.model:
+            command.extend(["--model", self.model])
         command.append(_turn_prompt(message, context_summary=self.context_summary))
         event_sink("turn.started", {"upstream_turn_id": self.session_id})
         event_sink("agent.phase", {"label": "正在连接 Claude Code"})
