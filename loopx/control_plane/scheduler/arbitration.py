@@ -13,9 +13,10 @@ SCHEDULER_ARBITRATION_SCHEMA_VERSION = "scheduler_arbitration_v0"
 
 class SchedulerDisposition(str, Enum):
     TERMINAL_STOP = "terminal_stop"
-    PEER_COORDINATION_STOP = "peer_coordination_stop"
+    PEER_COORDINATION_WAIT = "peer_coordination_wait"
     AGENT_MONITOR_ONLY_WAIT = "agent_monitor_only_wait"
     ACTIVE_WORK = "active_work"
+    SETTLED_REPLAY = "settled_replay"
     AGENT_SCOPE_WAIT = "agent_scope_wait"
     CONSISTENCY_REPAIR = "consistency_repair"
     HUMAN_GATE = "human_gate"
@@ -75,20 +76,23 @@ def _classify_disposition(
     must_attempt: bool,
     quiet_noop_allowed: bool,
     agent_scope_frontier_actions: Collection[str],
+    non_gating_notice_retry: bool = False,
 ) -> tuple[SchedulerDisposition, str]:
     agent_scope_modes = {str(value) for value in agent_scope_frontier_actions}
     if mode == "terminal_no_followup":
         return SchedulerDisposition.TERMINAL_STOP, mode
     if mode == "peer_coordination_blocked":
-        return SchedulerDisposition.PEER_COORDINATION_STOP, mode
+        return SchedulerDisposition.PEER_COORDINATION_WAIT, mode
     if mode == "agent_monitor_only":
         return SchedulerDisposition.AGENT_MONITOR_ONLY_WAIT, mode
+    if user_required and not must_attempt and non_gating_notice_retry:
+        return SchedulerDisposition.QUIET_WAIT, "blocked_wait"
     if user_required and not must_attempt:
         return SchedulerDisposition.HUMAN_GATE, "interaction_blocking_user_gate"
     if mode == "monitor_quiet_skip":
         return SchedulerDisposition.MONITOR_WAIT, "interaction_monitor_quiet_wait"
     if mode == "heartbeat_settled_skip":
-        return SchedulerDisposition.QUIET_WAIT, "interaction_heartbeat_settled_wait"
+        return SchedulerDisposition.SETTLED_REPLAY, "interaction_heartbeat_settled_replay"
     if mode == "successor_replan_required" and must_attempt:
         return SchedulerDisposition.ACTIVE_WORK, "interaction_successor_replan_required"
     if mode in agent_scope_modes:
@@ -156,24 +160,30 @@ def build_scheduler_arbitration(
         errors=errors,
     )
 
-    if delivery_allowed and not must_attempt:
-        errors.append("interaction_contract.delivery_without_attempt")
-    if quiet_noop_allowed and (must_attempt or delivery_allowed or user_required):
-        errors.append("interaction_contract.quiet_noop_conflicts_with_required_action")
-    if mode in {
-        "terminal_no_followup",
-        "peer_coordination_blocked",
-        "agent_monitor_only",
-    } and (
-        user_required or must_attempt or delivery_allowed or not quiet_noop_allowed
+    from ..effect_runtime import effect_runtime_result
+
+    cli_channel = _mapping(contract.get("cli_channel"))
+    spend_flags = {field: _required_bool(
+        cli_channel, field, error_prefix="interaction_contract.cli_channel", errors=errors,
+    ) if field in cli_channel else False for field in ("spend_allowed_now", "spend_after_validation")}
+    validation = effect_runtime_result("work_item.interaction_consistency.validate", {
+        "mode": mode, "user_required": user_required, "must_attempt": must_attempt,
+        "delivery_allowed": delivery_allowed, "quiet_noop_allowed": quiet_noop_allowed,
+        **spend_flags,
+    })
+    if not isinstance(validation, dict) or not isinstance(validation.get("errors"), list) or any(
+        not isinstance(error, str) for error in validation["errors"]
     ):
-        errors.append("interaction_contract.terminal_conflicts_with_open_action")
+        raise TypeError("interaction consistency validation returned invalid diagnostics")
+    errors.extend(validation["errors"])
     disposition, reason_code = _classify_disposition(
         mode=mode,
         user_required=user_required,
         must_attempt=must_attempt,
         quiet_noop_allowed=quiet_noop_allowed,
         agent_scope_frontier_actions=agent_scope_frontier_actions,
+        non_gating_notice_retry=(user_channel.get("non_gating_notice") is True and
+            _mapping(agent_channel.get("wait")).get("source") == "turn_settlement"),
     )
 
     if errors:

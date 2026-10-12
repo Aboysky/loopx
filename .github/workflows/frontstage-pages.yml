@@ -2,6 +2,9 @@ name: Frontstage Pages
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [Desktop Release Artifacts]
+    types: [completed]
   schedule:
     - cron: "37 */6 * * *"
   pull_request:
@@ -10,7 +13,9 @@ on:
       - "README.md"
       - "README.zh-CN.md"
       - "apps/presentation/dashboard/**"
-      - "loopx/web/chat/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/chat_bundle_launcher.mjs"
+      - "loopx/presentation/chat_bundle.py"
       - "apps/presentation/site/**"
       - "benchmark/deepswe/behavior-discovery/**"
       - "docs/**"
@@ -27,10 +32,15 @@ on:
       - "examples/export-frontstage-share-bundle.mjs"
       - "examples/blog-bilingual-index-smoke.mjs"
       - "examples/frontstage-share-bundle-smoke.mjs"
+      - "examples/dashboard-frontstage-browser-smoke.mjs"
+      - "examples/personal-workspace-browser/**"
+      - "examples/personal-workspace-browser-smoke.mjs"
       - "examples/dev-book-browser-smoke.mjs"
       - "examples/readme-star-history-smoke.py"
       - "examples/frontstage-stargazer-fetch-smoke.py"
       - "examples/dev-book-publication-smoke.py"
+      - "packages/loopx-text-stats/**"
+      - "tests/test_dev_book_reader_checkpoints.py"
       - "examples/dev-book-welcome-wagon-smoke.py"
       - "examples/goal-channel-frontstage-fixture.py"
       - "examples/showcase-catalog-smoke.py"
@@ -46,7 +56,9 @@ on:
       - "README.md"
       - "README.zh-CN.md"
       - "apps/presentation/dashboard/**"
-      - "loopx/web/chat/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/chat_bundle_launcher.mjs"
+      - "loopx/presentation/chat_bundle.py"
       - "apps/presentation/site/**"
       - "benchmark/deepswe/behavior-discovery/**"
       - "docs/**"
@@ -63,10 +75,15 @@ on:
       - "examples/export-frontstage-share-bundle.mjs"
       - "examples/blog-bilingual-index-smoke.mjs"
       - "examples/frontstage-share-bundle-smoke.mjs"
+      - "examples/dashboard-frontstage-browser-smoke.mjs"
+      - "examples/personal-workspace-browser/**"
+      - "examples/personal-workspace-browser-smoke.mjs"
       - "examples/dev-book-browser-smoke.mjs"
       - "examples/readme-star-history-smoke.py"
       - "examples/frontstage-stargazer-fetch-smoke.py"
       - "examples/dev-book-publication-smoke.py"
+      - "packages/loopx-text-stats/**"
+      - "tests/test_dev_book_reader_checkpoints.py"
       - "examples/dev-book-welcome-wagon-smoke.py"
       - "examples/goal-channel-frontstage-fixture.py"
       - "examples/showcase-catalog-smoke.py"
@@ -83,17 +100,22 @@ permissions:
 
 concurrency:
   group: frontstage-pages-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'deployment' }}
-  # Keep production deploys in one lane, but isolate each pull request so an
-  # unrelated PR or main push cannot cancel its validation run.
-  cancel-in-progress: true
+  # Supersede validation for the same PR, but let an active publication finish.
+  # Frequent main pushes replace the pending deployment instead of starving Pages.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
+    # A completed public release refreshes downloads from trusted current main.
+    # PR validation, foreign runs and failed uploads must never deploy Pages.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && (github.event.workflow_run.event == 'release' || github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.repository.default_branch || '' }}
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -115,23 +137,21 @@ jobs:
         working-directory: apps/presentation/site
         run: npm ci --include=dev --no-audit --no-fund --registry=https://registry.npmjs.org
 
+      - name: Validate complete-release selection
+        working-directory: apps/presentation/site
+        run: node --test scripts/desktop-download.test.mjs
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Verify packaged Personal Workspace is current
+      # This artifact serves the public site and projection demo, not /chat/.
+      # Python Tests owns packaged Personal Workspace qualification.
+      - name: Install browser for public site checks
         working-directory: apps/presentation/dashboard
-        run: |
-          npm run build:chat
-          if [[ -n "$(git -C ../../.. status --short --untracked-files=all -- loopx/web/chat)" ]]; then
-            git -C ../../.. status --short --untracked-files=all -- loopx/web/chat
-            echo "Tracked packaged Dashboard assets differ from a clean source build." >&2
-            exit 1
-          fi
-          ./node_modules/.bin/playwright install --with-deps chromium
-          npm run smoke:personal-workspace-packaged
+        run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Install docs dependencies
         run: |
@@ -150,15 +170,27 @@ jobs:
       - name: Validate Developer Book publication
         run: python3 examples/dev-book-publication-smoke.py
 
+      - name: Validate Developer Book companion provider
+        run: python3 -m unittest discover -s packages/loopx-text-stats/tests -v
+
+      - name: Validate Developer Book reader checkpoints
+        run: python3 -m unittest discover -s tests -p test_dev_book_reader_checkpoints.py -v
+
       - name: Validate bilingual Blog catalog
         run: node examples/blog-bilingual-index-smoke.mjs
 
       - name: Validate public-safe frontstage bundle
         working-directory: apps/presentation/dashboard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOOPX_SITE_RESOLVE_DESKTOP_RELEASE: "1"
         run: npm run smoke:frontstage-share-bundle
 
       - name: Export Pages frontstage artifact
         working-directory: apps/presentation/dashboard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOOPX_SITE_RESOLVE_DESKTOP_RELEASE: "1"
         run: npm run export:frontstage-share -- --base /loopx/ --out-dir ../../../output/frontstage-pages
 
       - name: Fetch complete GitHub stargazer history
@@ -215,6 +247,19 @@ jobs:
       # MkDocs cleans site/docs and intentionally excludes standalone case HTML.
       - name: Restore public case pages after documentation builds
         run: node examples/export-frontstage-share-bundle.mjs --restore-case-pages --out-dir output/frontstage-pages
+
+      - name: Validate analytics opt-in and event boundaries
+        run: node apps/presentation/site/scripts/analytics-smoke.mjs output/frontstage-pages/site
+
+      - name: Configure public website analytics
+        env:
+          # Repository variable: public GA4 stream identifier, not an API secret.
+          # PR previews never send production analytics.
+          LOOPX_GA_MEASUREMENT_ID: ${{ github.event_name != 'pull_request' && vars.LOOPX_GA_MEASUREMENT_ID || '' }}
+        run: node apps/presentation/site/scripts/add-analytics.mjs output/frontstage-pages/site
+
+      - name: Validate search publication
+        run: node apps/presentation/site/scripts/seo-smoke.mjs output/frontstage-pages/site --with-docs
 
       - name: Validate homepage navigation and retired links in the published site
         run: LOOPX_PUBLIC_SITE_DIR="$PWD/output/frontstage-pages/site" npm --prefix apps/presentation/dashboard run smoke:frontstage-browser

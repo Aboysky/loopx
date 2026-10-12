@@ -5,13 +5,14 @@ import {
   requireJsonObject,
   requireNonEmptyString,
 } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA =
   "manager_return_delivery_attempt_v0";
 
 const PROVIDER = /^[a-z][a-z0-9_-]{0,31}$/;
 const OPAQUE_REF = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/;
-const DIGEST = /^sha256:[0-9a-f]{64}$/;
+const DIGEST = ENVELOPED_SHA256_PATTERN;
 const ATTEMPT_KEYS = [
   "schema_version",
   "provider",
@@ -26,6 +27,20 @@ function matchingString(value: unknown, label: string, pattern: RegExp): string 
     throw new EffectRuntimeRequestError(`${label} is invalid`);
   }
   return result;
+}
+
+/**
+ * The provider locator for one recorded attempt, when the provider gave one.
+ *
+ * `null` is the typed state for "the provider accepted the write and reported
+ * no message id". Such an attempt is still the durable record that a write
+ * happened; what it cannot do is name a readback target. Keeping the key
+ * required and the absence explicit is what stops a later retry from treating
+ * an unlocatable write as a write that never happened.
+ */
+function optionalOpaqueRef(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  return matchingString(value, label, OPAQUE_REF);
 }
 
 export function normalizeManagerReturnDeliveryAttempt(value: unknown): JsonObject {
@@ -45,11 +60,7 @@ export function normalizeManagerReturnDeliveryAttempt(value: unknown): JsonObjec
   return {
     schema_version: MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA,
     provider: matchingString(attempt.provider, "attempt.provider", PROVIDER),
-    message_ref: matchingString(
-      attempt.message_ref,
-      "attempt.message_ref",
-      OPAQUE_REF,
-    ),
+    message_ref: optionalOpaqueRef(attempt.message_ref, "attempt.message_ref"),
     intent_digest: matchingString(
       attempt.intent_digest,
       "attempt.intent_digest",
@@ -86,6 +97,14 @@ export function classifyManagerReturnVerification(value: unknown): JsonObject {
     };
   }
   if (!performed) {
+    // A transport outage is not proof that the original route or grant was
+    // revoked. Only exact, adapter-declared resolution reasons stop readback.
+    const blocker = outcome.blocker;
+    if (blocker === "return_authorization_unavailable"
+      || blocker === "original_route_unavailable"
+      || blocker === "initial_delivery_receipt_unavailable") {
+      return { status: "explicit_unverified", error: blocker, verification: null };
+    }
     return {
       status: "verification_required",
       error: "provider_verification_unavailable",

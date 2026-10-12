@@ -463,23 +463,21 @@ def test_live_inventory_ignores_missing_or_stale_reports(tmp_path, monkeypatch, 
     monkeypatch.setitem(smoke["check_inventory"].__globals__, "REPO_ROOT", tmp_path)
     inventory, _ = smoke["check_inventory"](registry, sources)
     assert inventory["summary"]["source_files"] == len(sources)
+    # Pin this fixture to its baseline so a fresh fork still overflows after
+    # unrelated source simplification creates room in the production budget.
+    registry["inventory_ratchets"]["same_runtime_forks"] = inventory["summary"]["same_runtime_forks"]
+    monkeypatch.setitem(smoke["BUDGET_ANCHOR"], "same_runtime_forks",
+                        registry["inventory_ratchets"]["same_runtime_forks"])
     # A newly observed duplicate must still fail; an old or missing report cannot hide it.
     duplicate = [smoke["SourceFile"](f"loopx/q9_{name}.py", ".py", 'Q9_DUPLICATE = "same"\n')
                  for name in ("first", "second")]
-    with pytest.raises(smoke["Drift"], match="same_runtime_forks grew"):
+    with pytest.raises(smoke["Drift"], match="same_runtime_forks"):
         smoke["check_inventory"](registry, sources + duplicate)
 
 
-@pytest.mark.parametrize('name', ['effective_action', 'lease_action'])
+@pytest.mark.parametrize('name', ['effective_action'])
 def test_remaining_kernel_values_each_carry_a_note(name):
-    """The two kernel vocabularies that are not Turn control flow still need notes.
-
-    ``effective_action`` is the overloaded should-run slot M1 is due to split, so
-    a value here is only legible once the registry says which condition produces
-    it; ``lease_action`` is legacy and every value is compatibility-only, which
-    is exactly the kind of disposition a reader cannot infer from the name. The
-    note is required in the diff that adds a value, not afterwards.
-    """
+    """The should-run slot still needs its producing condition after M4."""
     smoke = runpy.run_path(str(SMOKE))
     vocabulary = smoke['load_registry']()['vocabularies'][name]
     notes = vocabulary.get('value_notes', {})
@@ -505,15 +503,105 @@ def test_f1_f2_domain_names_exactly_the_vocabularies_the_producer_check_walks() 
     registry = smoke["load_registry"]()
     vocabularies = registry["vocabularies"]
     walked = {name for name, entry in vocabularies.items() if "producers" in entry}
-    assert walked == {name for name, entry in vocabularies.items() if entry["tier"] == "kernel"}
+    # The domain was the kernel tier while that happened to be the set the
+    # check walked. It is no longer: a cross-runtime vocabulary carrying
+    # executed production evidence is walked too, so the selector names the
+    # predicate rather than a tier it no longer matches.
+    assert walked >= {name for name, entry in vocabularies.items() if entry["tier"] == "kernel"}
     skipped = {entry["tier"] for name, entry in vocabularies.items() if name not in walked}
     assert skipped == {"cross_runtime"}
     for invariant_id in ("F1_producer_closedness", "F2_canonical_value_liveness"):
         domain = _invariant(registry, invariant_id)["domain"]
-        assert domain["quantifies_over"] == "vocabularies[tier=kernel].producers"
+        assert domain["quantifies_over"] == "vocabularies[producers].producers"
         assert domain["verified"] == len(walked)
         assert domain["registered"] == len(vocabularies)
         assert domain["evidence_bound"] == "producer_scan_reach"
+
+
+def test_the_formal_detail_line_cannot_report_a_projection_it_never_executed() -> None:
+    """A ratio whose two sides come from one expression cannot show a gap.
+
+    ``projections`` was printed as ``len(registry['projections'])`` on both
+    sides of the slash, so the detail line read 100% however many registered
+    projections ``check_projections`` never imports. The invariant above it had
+    already been fixed to count only executed projections, so the report and
+    the invariant could disagree while both stayed green.
+    """
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    assert "projections=1/1" in smoke["summarise_formal_domains"](registry, [])
+
+    registry["projections"]["never_executed"] = {
+        "owner": "loopx/nowhere.py::absent",
+        "mapping": {},
+    }
+    detail = smoke["summarise_formal_domains"](registry, [])
+    assert "projections=1/2" in detail, detail
+
+
+def test_the_formal_detail_line_agrees_with_the_selectors_it_reports() -> None:
+    """The detail line reports the pair the invariant's domain is checked on."""
+    smoke = runpy.run_path(str(SMOKE))
+    registry = smoke["load_registry"]()
+    selectors = smoke["FORMAL_DOMAIN_SELECTORS"]
+    detail = smoke["summarise_formal_domains"](registry, [])
+    for selector, label in (
+        ("projections[*]", "projections"),
+        ("scope_declarations[*].contexts", "declared_contexts"),
+    ):
+        walked, registered = selectors[selector](registry)
+        assert f"{label}={walked}/{registered}" in detail, (label, detail)
+
+
+@pytest.mark.parametrize("denial", [
+    " The cross_runtime tier declares no producers.",
+    " No vocabulary in the cross_runtime tier has any producer.",
+])
+def test_canonical_producer_statement_rejects_contradictory_paraphrases(denial: str) -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    _invariant(registry, "F2_canonical_value_liveness")["statement"] += denial
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+
+
+def test_generated_domain_accepts_true_kernel_comparison() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = smoke["load_registry"]()
+    model = registry["formal_model"]
+    assert "Kernel(V) ⊆ Producers(V)." in model["universes"]["vocabularies"]
+    smoke["check_formal_model"](model, registry)
+    domain = smoke["ProducerDomain"].from_registry(registry)
+    assert domain.kernel < domain.walked
+    assert domain.walked - domain.kernel == {"settlement_binding_kind"}
+    # M4 preserves the native lifecycle owner and relation, without claiming
+    # its production liveness from the retired Python compatibility-only set.
+    assert domain.outside_by_tier == (("cross_runtime", 20),)
+
+
+def test_canonical_domain_rejects_old_kernel_only_universe() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    registry["formal_model"]["universes"]["vocabularies"] = (
+        "V: registered vocabulary identifiers; Kernel(V) is the only producer domain"
+    )
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+
+
+def test_domain_membership_change_requires_regenerated_prose() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    # A membership change must not leave yesterday's tier/count claim green,
+    # even if the independent numeric domain entries were already updated.
+    registry["vocabularies"]["settlement_binding_kind"].pop("producers")
+    for invariant_id in ("F1_producer_closedness", "F2_canonical_value_liveness"):
+        _invariant(registry, invariant_id)["domain"]["verified"] = 5
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+    projected = smoke["producer_domain_prose"](registry)
+    assert "21 cross_runtime" in projected["F1_producer_closedness.statement"]
+    assert "5 kernel and 0 outside" in projected["universes.vocabularies"]
 
 
 @pytest.mark.parametrize("invariant_id", sorted({
@@ -706,8 +794,9 @@ def test_inventory_report_discloses_budget_slack(monkeypatch):
     # (the multi_value_twins slack belongs to the multi-value single-source
     # batch, not this one).
     _, pinned = smoke["check_inventory"](registry, sources)
-    assert "slack=conflicting_values" not in pinned, pinned
-    assert "slack=conflicting_definitions" not in pinned, pinned
+    pinned_slack = pinned.partition(" slack=")[2].split(" ", 1)[0].split(",")
+    assert not any(item.startswith("conflicting_values=") for item in pinned_slack), pinned
+    assert not any(item.startswith("conflicting_definitions=") for item in pinned_slack), pinned
     # A two-file budget revert (the merge-trap shape: registry and anchor
     # move back together, so the equality anchor stays satisfied) must show
     # up as disclosed slack instead of passing silently.
@@ -717,14 +806,15 @@ def test_inventory_report_discloses_budget_slack(monkeypatch):
         smoke["BUDGET_ANCHOR"], "conflicting_values", widened["inventory_ratchets"]["conflicting_values"],
     )
     _, line = smoke["check_inventory"](widened, sources)
-    assert "slack=conflicting_values=2" in line, line
+    slack = line.partition(" slack=")[2].split(" ", 1)[0].split(",")
+    assert "conflicting_values=2" in slack, line
 
 
 def _retirement_registry(python_surface: int, typescript_surface: int) -> dict:
     """A one-field ledger shaped like the real one, for the B3 budget checks."""
     return {"retirement_ledger": {"should_run_legacy_decision_fields": {"fields": {
         "protocol_action_packet": {
-            "python_module_budget": 5,
+            "python_module_budget": 1,
             "typescript_module_budget": 2,
             "python_migration_surface": python_surface,
             "typescript_migration_surface": typescript_surface,
@@ -736,10 +826,10 @@ def test_a_new_reader_of_a_legacy_field_exceeds_its_migration_surface() -> None:
     smoke = runpy.run_path(str(SMOKE))
     readers = [
         smoke["SourceFile"](f"loopx/probe_{index}.py", ".py", 'value = payload["protocol_action_packet"]')
-        for index in range(6)
+        for index in range(2)
     ]
     with pytest.raises(smoke["Drift"], match="modules migrated"):
-        smoke["check_reader_metric"](_retirement_registry(5, 2), readers)
+        smoke["check_reader_metric"](_retirement_registry(1, 2), readers)
 
 
 def test_migration_surface_budget_cannot_move_without_its_anchor() -> None:
@@ -754,7 +844,7 @@ def test_the_reader_metric_reports_all_five_facts_beside_the_role_labels() -> No
         "loopx/projection.py", ".py",
         'payload["protocol_action_packet"] = payload.get("protocol_action_packet")',
     )]
-    _, detail = smoke["check_reader_metric"](_retirement_registry(5, 2), sources)
+    _, detail = smoke["check_reader_metric"](_retirement_registry(1, 2), sources)
     line = next(item for item in detail if item.startswith("protocol_action_packet.py"))
     assert "reader=1 writer=0" in line, line
     assert "reads=1 writes=1" in line, (
@@ -771,9 +861,9 @@ def test_an_unresolved_name_carrier_is_inside_the_migration_surface() -> None:
         "loopx/carrier.py", ".py",
         'LEGACY = ["protocol_action_packet"]\nfor name in LEGACY:\n    emit(name)\n',
     )]
-    _, detail = smoke["check_reader_metric"](_retirement_registry(5, 2), sources)
+    _, detail = smoke["check_reader_metric"](_retirement_registry(1, 2), sources)
     line = next(item for item in detail if item.startswith("protocol_action_packet.py"))
-    assert "surface=1/5" in line and "unresolved=1" in line, (
+    assert "surface=1/1" in line and "unresolved=1" in line, (
         "the field name is in this module as data; that is work to investigate before the "
         f"field can go, so it belongs to the surface: {line}"
     )
@@ -785,8 +875,8 @@ def test_prose_and_same_prefix_identifiers_do_not_consume_the_migration_surface(
         smoke["SourceFile"]("loopx/prose.py", ".py", '"""protocol_action_packet is published downstream."""'),
         smoke["SourceFile"]("loopx/prefix.py", ".py", 'value = payload["protocol_action_packet_v2"]'),
     ]
-    report, detail = smoke["check_reader_metric"](_retirement_registry(5, 2), sources)
-    assert any("surface=0/5" in line and "mention=1" in line for line in detail), detail
+    report, detail = smoke["check_reader_metric"](_retirement_registry(1, 2), sources)
+    assert any("surface=0/1" in line and "mention=1" in line for line in detail), detail
     assert any("dynamic_mapping_key_sites=0" in line for line in report), report
 
 def _with_unexecuted_projection(registry: dict) -> dict:
@@ -847,3 +937,48 @@ def test_every_executed_projection_must_be_registered() -> None:
     del registry["projections"]["turn_route_to_loop_disposition"]
     with pytest.raises(smoke["Drift"], match="is not registered"):
         smoke["check_projections"](registry)
+
+
+@pytest.mark.parametrize('symbol', ['LeaseAction', 'LeaseModeGateCommand', 'CoordinationCommand'])
+@pytest.mark.parametrize('form', ['definition', 'absolute_import', 'relative_import'])
+def test_retired_lease_input_cannot_regrow_a_definition_or_producer(symbol, form):
+    smoke = runpy.run_path(str(SMOKE))
+    owner = 'loopx/control_plane/coordination/authority_core.py'
+    if form == 'definition':
+        text = f'{symbol} = object\n' if symbol == 'CoordinationCommand' else f'class {symbol}:\n pass\n'
+        source = smoke['SourceFile'](owner, '.py', text)
+    else:
+        module = 'loopx.control_plane.coordination.authority_core' if form == 'absolute_import' else '.authority_core'
+        text = f'from {module} import {symbol} as Restored\ndef emit():\n return Restored\n'
+        source = smoke['SourceFile']('loopx/control_plane/coordination/new_writer.py', '.py', text)
+    with pytest.raises(smoke['Drift'], match='retired lease input'):
+        smoke['check_retired_lease_input'](smoke['load_registry'](), [source])
+
+
+def test_retired_lease_registry_entry_cannot_return_as_fake_compatibility():
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke['load_registry']())
+    registry['vocabularies']['lease_action'] = {'producers': [], 'compatibility_only': {}}
+    with pytest.raises(smoke['Drift'], match='retired lease input'):
+        smoke['check_retired_lease_input'](registry, [])
+
+
+def test_native_lifecycle_relation_keeps_the_live_owner_and_verification_boundary():
+    smoke = runpy.run_path(str(SMOKE))
+    registry = smoke['load_registry']()
+    assert registry['coverage_floor']['vocabularies'] == 26
+    assert registry['coverage_floor']['owner_symbols'] == 51
+    assert registry['coverage_floor']['relations'] == 9
+    relation = next(row for row in registry['relations']['subsets']
+                    if row['name'] == 'task_lease_lifecycle_decision_operation')
+    assert relation['superset'] == 'task_lease_lifecycle_operation'
+    assert set(relation['excluded']) == {'terminal_verify', 'holder_verify', 'fence_close'}
+    smoke['check_relations'](registry)
+    mutated = copy.deepcopy(registry)
+    mutated['relations']['subsets'][-1]['excluded'] = ['holder_verify', 'fence_close']
+    with pytest.raises(smoke['Drift'], match='drifted from the registry'):
+        smoke['check_relations'](mutated)
+    mutated = copy.deepcopy(registry)
+    mutated['vocabularies']['task_lease_lifecycle_operation']['owners']['typescript'] = None
+    with pytest.raises(smoke['Drift'], match='actual owner'):
+        smoke['check_retired_lease_input'](mutated, [])

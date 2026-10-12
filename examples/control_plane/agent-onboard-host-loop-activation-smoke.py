@@ -487,7 +487,6 @@ def main() -> int:
                 "quota_event": {"source": spend_args.source},
             }
         ) is False
-        assert "not a heartbeat automation" in app_ssh_prompt["task_body"], app_ssh_prompt
         assert "host_action=" not in app_ssh_prompt["task_body"], app_ssh_prompt
         assert "automation_update stop" not in app_ssh_prompt["task_body"], app_ssh_prompt
         assert "call `update_goal` with `status=blocked`" in (
@@ -622,6 +621,7 @@ def main() -> int:
             "loopx-doc-registry",
             "loopx-benchmark",
             "loopx-self-repair",
+            "loopx-performance-diagnosis",
         }, delivery
         assert delivery["delivery_options"] == [
             "host_skill_manifest",

@@ -1,4 +1,5 @@
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
+import {currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import type { JsonObject } from "../effect_program.ts";
@@ -12,6 +13,7 @@ import {
 import {validateContinuationNote, computeContinuationTodoFacts} from "./continuation_note.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {
   prepareCoordinationProjectionCommit,
@@ -25,8 +27,8 @@ import {
   normalizeAgent,
   normalizeIdempotencyKey,
   normalizeTtl,
-  normalizeWriteScopes,
 } from "../work_items/task_lease_acquire.ts";
+import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 
 export const COORDINATION_TODO_CLAIM_RESULT_SCHEMA =
   "loopx_coordination_todo_claim_result_v0";
@@ -300,23 +302,6 @@ function normalizeLeaseRequest(value: unknown): CoordinationTodoClaimLeaseReques
   };
 }
 
-function claimWriteScopes(todo: JsonObject): string[] {
-  const requiredWriteScopes = todo.required_write_scopes ?? [];
-  if (!Array.isArray(requiredWriteScopes) ||
-      requiredWriteScopes.some((scope) => typeof scope !== "string")) {
-    throw new AuthorityStoreProtocolError(
-      "todo.required_write_scopes must be an array of strings",
-    );
-  }
-  const writeScopes = normalizeWriteScopes(requiredWriteScopes);
-  if (writeScopes.length !== requiredWriteScopes.length) {
-    throw new AuthorityStoreProtocolError(
-      "todo.required_write_scopes contains an invalid or duplicate scope",
-    );
-  }
-  return writeScopes;
-}
-
 function activeLeaseForOwner(
   lease: JsonObject | undefined,
   owner: string,
@@ -346,6 +331,23 @@ export async function executeCoordinationTodoClaim(
   store: AuthorityStore,
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+): Promise<CoordinationTodoClaimResult> {
+  // Retry only a conclusive provider CAS rejection. Each attempt rereads the
+  // original receipt and the complete head, then rechecks source authorization,
+  // claim ownership, acceptance and lease/write-scope exclusion. Pinned revisions
+  // (including handoff grants) must return to their caller for a fresh observation.
+  for (let attempt = 0; ; attempt++) {
+    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent);
+    if (attempt >= 2 || rawInput.expected_provider_revision !== undefined ||
+        rawInput.transfer_grant !== undefined || result.status !== "conflict" ||
+        result.conflict_kind !== "provider_revision_mismatch") return result;
+  }
+}
+
+async function executeClaimAttempt(
+  store: AuthorityStore,
+  rawInput: CoordinationTodoClaimInput,
+  authoritySourcesCurrent: AuthoritySourceCheck,
 ): Promise<CoordinationTodoClaimResult> {
   let input: CoordinationTodoClaimInput;
   try {
@@ -412,26 +414,39 @@ export async function executeCoordinationTodoClaim(
       // Pre-change claim receipts may omit changed; those encoded a real mutation.
       return {fields: {...result, original_receipt: original}, changed: result.changed !== false};
   }});
-  const existing = await receipt.read(store);
-  if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason,
-    existing === null ? {} : {original_receipt: existing.original_receipt}, "decision_rejection");
-  if (existing !== null) {
-    // A historical claim receipt cannot grant work after its acceptance binding
-    // changed. Preserve the original response when the contract is absent.
-    const current = await store.loadAuthority();
-    if (current.status === "loaded") {
-      const guard = acceptanceWorkGuard(current.head, input.goal_id, input.todo_id);
-      if (guard !== null && !guard.allowed) {
-        return failure(String(guard.reason_code), `${String(guard.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
+  const currentProof = async (result: CoordinationTodoClaimResult): Promise<CoordinationTodoClaimResult> => {
+    if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason,
+      {original_receipt: result.original_receipt}, "decision_rejection");
+    if (leaseRequest !== null) {
+      try {
+        result = await currentLeaseAcquisitionProof(store, {...input, owner: input.claimed_by,
+          idempotency_key: leaseRequest.idempotency_key, required_handoff_mode: "hard_lease"}, result,
+          (code, reason, detail = {}) => failure(code, reason, detail, "decision_rejection"));
+      } catch (error) {
+        return failure("invalid_coordination_task_lease", error instanceof Error ? error.message : "invalid canonical task lease",
+          {original_receipt: result.original_receipt});
+      }
+    } else if (["replayed", "recovered"].includes(String(result.status))) {
+      // A plain historical claim has no lease proof to grant, but an enabled
+      // acceptance contract still governs adoption of that work.
+      const current = await store.loadAuthority();
+      if (current.status === "loaded") {
+        const guard = acceptanceWorkGuard(current.head, input.goal_id, input.todo_id);
+        if (guard !== null && !guard.allowed) return failure(String(guard.reason_code),
+          `${String(guard.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
           {goal_acceptance_guard: guard}, "decision_rejection");
       }
     }
     if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason,
-      {original_receipt: existing.original_receipt}, "decision_rejection");
-    return existing;
-  }
-
-  const head = await store.loadAuthority();
+      {original_receipt: result.original_receipt}, "decision_rejection");
+    return result;
+  };
+  const existing = await receipt.read(store);
+  if (existing !== null) return currentProof(existing);
+  if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
+  const observation = await receipt.observe(store);
+  if (observation.kind === "receipt") return currentProof(observation.result);
+  const head = observation.authority;
   if (head.status !== "loaded") {
     return {
       schema_version: COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
@@ -509,7 +524,7 @@ export async function executeCoordinationTodoClaim(
     const currentLease = projection.leases.get(input.todo_id);
     if (handoffMode === "hard_lease" && leaseRequest !== null) {
       // Validate required scopes before planning; a caller cannot omit a required conflict.
-      const writeScopes = claimWriteScopes(todo);
+      const writeScopes = coordinationTodoWriteScopes(todo);
       const facts = canonicalTaskLeaseAcquireFacts(projection, input.goal_id, input.todo_id, input.registered_agents, input.now);
       const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: handoffMode,
         registered_agents: [...input.registered_agents], ...facts,
@@ -584,6 +599,11 @@ export async function executeCoordinationTodoClaim(
     return failure(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
       {goal_acceptance_guard: acceptance}, "decision_rejection");
   }
+  if (leaseRequest !== null) {
+    const dependency = todoExecutionDependencyRejection(projection.todos, input.todo_id, input.now);
+    if (dependency !== null) return failure(dependency.code, dependency.reason,
+      {resume_condition: dependency.condition}, "decision_rejection");
+  }
 
   const mutationAuthority = canonicalAuthorityObject(
     authority.mutation_authority,
@@ -652,5 +672,5 @@ export async function executeCoordinationTodoClaim(
     request_sha256: requestSha,
     result,
   }];
-  return receipt.commit(store, commit);
+  return currentProof(await receipt.commit(store, commit));
 }

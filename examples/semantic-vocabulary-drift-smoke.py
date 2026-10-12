@@ -7,14 +7,18 @@ relate, and the budgets the repository ratchets down. The inventory is computed
 from the complete tracked tree on each run, never loaded from a report file.
 Vocabulary changes, forks and registry weakening remain checked; ordinary
 carrier edits require no generated snapshot commit. Only tracked sources are
-read, and no private data is printed.
+read, and no private data is printed. The project-registry I/O census is also
+checked through its own tracked-product source policy so moved or unclassified
+sites fail premerge.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,10 +30,10 @@ from loopx.semantics.inventory import (  # noqa: E402
     INVENTORY_SCHEMA_VERSION,
     SourceFile,
     build_inventory,
-    render_inventory,
     collect_string_constants,
     load_sources,
     python_facts,
+    render_inventory as render_inventory,
     string_constant_definitions,
     typescript_facts,
 )
@@ -41,6 +45,9 @@ from loopx.semantics.production import (  # noqa: E402
 from loopx.semantics.python_production import scan_python_production  # noqa: E402
 from loopx.semantics.field_use import (  # noqa: E402
     FACTS, ROLES, field_use_summary, lexical_module_count, render_field_uses, scan_field_uses,
+)
+from loopx.semantics.project_registry_io import (  # noqa: E402
+    PROJECT_REGISTRY_IO_MANIFEST, validate_project_registry_io_manifest,
 )
 from scripts.generate_semantic_bindings import build_artifacts  # noqa: E402
 from loopx.canary.maintainability_ratchet import evaluate_maintainability_findings  # noqa: E402
@@ -99,11 +106,12 @@ FORMAL_ENFORCEMENT = {"m0", "m0_5", "m1", "advisory", "unproved"}
 FORMAL_DOMAIN_KEYS = {"quantifies_over", "verified", "registered", "evidence_bound"}
 FORMAL_DOMAIN_SELECTORS: dict[str, Callable[[dict[str, Any]], tuple[int, int]]] = {
     # ``check_producers`` walks exactly the vocabularies that declare producers.
-    # Today that predicate selects the kernel tier and nothing else, so F1/F2
-    # quantify over 6 of 26 vocabularies, not over V.
-    "vocabularies[tier=kernel].producers": lambda registry: (
-        sum(1 for entry in registry["vocabularies"].values()
-            if entry["tier"] == "kernel" and "producers" in entry),
+    # That predicate used to select the kernel tier and nothing else; it no
+    # longer does, so the selector names the predicate itself. Writing it as a
+    # tier would quietly stop describing the set the check walks the first time
+    # a cross-runtime vocabulary earns production evidence.
+    "vocabularies[producers].producers": lambda registry: (
+        len(ProducerDomain.from_registry(registry).walked),
         len(registry["vocabularies"]),
     ),
     "vocabularies[*]": lambda registry: (
@@ -151,9 +159,13 @@ FORMAL_EVIDENCE_BOUNDS: dict[str, frozenset[str]] = {
 # an invariant cannot quietly widen its own claim by choosing a looser selector
 # in a data-only edit. Restating an invariant over a different domain is a
 # normative change and edits this literal in the same diff.
+# F1/F2 statements are canonical projections of the producer domain, not
+# arbitrary prose classified by keyword rules.
+PRODUCER_DOMAIN_INVARIANTS = ("F1_producer_closedness", "F2_canonical_value_liveness")
+
 FORMAL_DOMAIN_ANCHOR = {
-    "F1_producer_closedness": ("vocabularies[tier=kernel].producers", "producer_scan_reach"),
-    "F2_canonical_value_liveness": ("vocabularies[tier=kernel].producers", "producer_scan_reach"),
+    "F1_producer_closedness": ("vocabularies[producers].producers", "producer_scan_reach"),
+    "F2_canonical_value_liveness": ("vocabularies[producers].producers", "producer_scan_reach"),
     "F3_consumer_domain_closedness": ("vocabularies[*]", "inventory_only"),
     "F4_scope_separation": ("scope_declarations[*].contexts", "declared_defining_modules"),
     "F5_projection_totality": ("projections[*]", "executable_owner_function"),
@@ -192,9 +204,15 @@ LITERAL_SCAN_ROOTS = ["loopx"]
 INPUT_PRODUCER_ANCHOR = {
     "turn_result_kind": "loopx/control_plane/turn_driver/transaction.py::_result_kind",
     "loop_disposition": "loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition",
+    # The settlement binding kind is decided inside the TypeScript builder, so
+    # the witness executes it rather than reading a literal out of the owner.
+    "settlement_binding_kind": "loopx/control_plane/effect_program.ts::settlementIdentity",
 }
 PRODUCER_VOCABULARY_ANCHOR = {
-    "effective_action", "turn_route", "loop_disposition", "agent_scope_frontier_action", "turn_result_kind", "lease_action",
+    "effective_action", "turn_route", "loop_disposition", "agent_scope_frontier_action", "turn_result_kind",
+    # First cross-runtime vocabulary carrying executed production evidence. One
+    # named boundary, not a claim about the rest of the cross-runtime set.
+    "settlement_binding_kind",
 }
 RETURN_PRODUCER_ANCHOR = {
     "turn_route": {"loopx/control_plane/turn_driver/driver.py::_typed_route", "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route", "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"},
@@ -220,16 +238,16 @@ RETURN_PATH_ANCHOR = {
 TWIN_ROOT_ANCHOR = "loopx/control_plane"
 TWIN_BUDGET_ANCHOR = 43
 BUDGET_ANCHOR = {
-    "same_runtime_forks": 18,
-    "same_runtime_fork_definitions": 41,
+    "same_runtime_forks": 2,
+    "same_runtime_fork_definitions": 5,
     "conflicting_values": 16,
-    "conflicting_definitions": 55,
-    "schema_version_same_runtime_forks": 7,
-    "multi_value_twins": 13,
+    "conflicting_definitions": 54,
+    "schema_version_same_runtime_forks": 0,
+    "multi_value_twins": 8,
     "multi_value_forks": 2,
     "multi_value_forks_semantic": 1,
     "multi_value_fork_definitions": 6,
-    "same_runtime_forks_semantic": 11,
+    "same_runtime_forks_semantic": 2,
     "conflicting_values_semantic": 0,
 }
 # Budgets for the legacy should-run decision fields, anchored the same way so a
@@ -240,7 +258,7 @@ RETIREMENT_ANCHOR = {
     "work_lane_contract": (29, 3),
     "external_evidence_observation": (8, 1),
     "goal_boundary": (30, 2),
-    "protocol_action_packet": (5, 2),
+    "protocol_action_packet": (1, 2),
 }
 # B3 migration surface: modules that read, write or bind the legacy field, plus
 # the modules holding its name unresolved, which have to be investigated before
@@ -253,7 +271,7 @@ MIGRATION_SURFACE_ANCHOR = {
     "work_lane_contract": (29, 3),
     "external_evidence_observation": (7, 1),
     "goal_boundary": (16, 1),
-    "protocol_action_packet": (5, 2),
+    "protocol_action_packet": (1, 2),
 }
 RETIREMENT_FIELD_KEYS = {
     "python_module_budget", "typescript_module_budget",
@@ -391,6 +409,7 @@ def check_formal_model(model: dict[str, Any], registry: dict[str, Any]) -> None:
         require(item["statement"].strip() and item["evidence"].strip(),
                 f"formal invariant {item['id']} needs a statement and evidence boundary")
         check_invariant_domain(item, registry)
+    check_domain_prose(model, registry)
     policy = model["enforcement_policy"]
     require(set(policy) == FORMAL_POLICY_KEYS,
             "formal_model enforcement_policy must separate current, next, advisory, and unproved checks")
@@ -421,6 +440,84 @@ def check_formal_model(model: dict[str, Any], registry: dict[str, Any]) -> None:
     for key in boundary:
         require(isinstance(boundary[key], list) and all(isinstance(value, str) and value.strip() for value in boundary[key]),
                 f"formal_model proof_boundary.{key} must contain non-empty claim names")
+
+
+@dataclass(frozen=True)
+class ProducerDomain:
+    """Finite facts behind the canonical F1/F2 statements."""
+
+    walked: frozenset[str]
+    kernel: frozenset[str]
+    outside_by_tier: tuple[tuple[str, int], ...]
+
+    @classmethod
+    def from_registry(cls, registry: dict[str, Any]) -> ProducerDomain:
+        vocabularies = registry["vocabularies"]
+        walked = frozenset(name for name, entry in vocabularies.items() if "producers" in entry)
+        kernel = frozenset(name for name, entry in vocabularies.items() if entry["tier"] == "kernel")
+        outside = [entry for name, entry in vocabularies.items() if name not in walked]
+        return cls(walked, kernel, tuple(
+            (tier, sum(entry["tier"] == tier for entry in outside))
+            for tier in sorted({entry["tier"] for entry in outside})
+        ))
+
+
+def producer_domain_prose(registry: dict[str, Any]) -> dict[str, str]:
+    """Render normalized claims; no free-text semantic inference is attempted."""
+    domain = ProducerDomain.from_registry(registry)
+    comparison = (
+        "Kernel(V) ⊆ Producers(V)." if domain.kernel <= domain.walked
+        else "Kernel(V) is not a subset of Producers(V)."
+    )
+    outside = ", ".join(f"{count} {tier}" for tier, count in domain.outside_by_tier) or "0"
+    boundary = (
+        f"Producers(V) contains {len(domain.walked)} vocabularies: "
+        f"{len(domain.walked & domain.kernel)} kernel and "
+        f"{len(domain.walked - domain.kernel)} outside the kernel tier. "
+        f"The {outside} vocabularies outside Producers(V) are unverified."
+    )
+    return {
+        "universes.vocabularies": (
+            "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly "
+            "the subset declaring a producers key (including compatibility-only "
+            f"entries with an empty list). {comparison} {boundary}"
+        ),
+        "F1_producer_closedness.statement": (
+            "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where "
+            "Produced_scan(v) is the production the fixed forms observe inside "
+            f"the code-owned scan reach. {boundary} Production outside the scan "
+            "reach is unverified rather than proven closed."
+        ),
+        "F1_producer_closedness.evidence": (
+            "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES "
+            "reach in loopx/semantics/production.py; check_producers visits only "
+            "vocabularies that declare producers, and validate_production claims no "
+            "whole-program closedness; unresolved dynamic sites are reported, not "
+            "treated as proven safe"
+        ),
+        "F2_canonical_value_liveness.statement": (
+            "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). "
+            f"{boundary} Liveness outside the walked set is not proven."
+        ),
+        "F2_canonical_value_liveness.evidence": (
+            "every value of a vocabulary in Producers(V) has a producer recognised "
+            "inside the scan reach, an executable input witness, or an explicit "
+            "compatibility-only reason; a value whose only producer lies outside "
+            "the reach would be reported as dead, not silently accepted"
+        ),
+    }
+
+
+def check_domain_prose(model: dict[str, Any], registry: dict[str, Any]) -> None:
+    """Require generated canonical statements, not keyword-based prose approval."""
+    actual = {"universes.vocabularies": model["universes"]["vocabularies"]}
+    for item in model["invariants"]:
+        if item["id"] in PRODUCER_DOMAIN_INVARIANTS:
+            for field in ("statement", "evidence"):
+                actual[f"{item['id']}.{field}"] = item[field]
+    for field, expected in producer_domain_prose(registry).items():
+        require(actual.get(field) == expected,
+                f"formal_model {field} must equal its canonical producer-domain projection: {expected}")
 
 
 def check_invariant_domain(invariant: dict[str, Any], registry: dict[str, Any]) -> None:
@@ -471,6 +568,47 @@ def check_invariant_domain(invariant: dict[str, Any], registry: dict[str, Any]) 
                 f"formal invariant {name} is enforced at {stage} over an empty domain")
     require(domain["verified"] <= domain["registered"],
             f"formal invariant {name} cannot verify more members than the registry holds")
+
+
+# M4 disposed of this private Python input. Keep its import boundary absent,
+# rather than claiming liveness from a compatibility-only enum with no callers.
+# The native lifecycle relation is retained against its actual TypeScript owner.
+RETIRED_LEASE_INPUT_MODULE = "loopx.control_plane.coordination.authority_core"
+RETIRED_LEASE_INPUT_SYMBOLS = frozenset({"LeaseAction", "LeaseModeGateCommand", "CoordinationCommand"})
+
+
+def check_retired_lease_input(registry: dict[str, Any], sources: list[SourceFile]) -> None:
+    from importlib.util import resolve_name
+
+    require("lease_action" not in registry["vocabularies"],
+            "retired lease input must not return to the registry")
+    lifecycle = registry["vocabularies"].get("task_lease_lifecycle_operation", {})
+    require(lifecycle.get("owners") == {
+        "python": None,
+        "typescript": "loopx/control_plane/work_items/task_lease_lifecycle_request.ts::TASK_LEASE_LIFECYCLE_OPERATIONS",
+    }, "native lease lifecycle coverage must retain its actual owner")
+    for source in sources:
+        if source.suffix != ".py":
+            continue
+        module = source.path.removesuffix(".py").replace("/", ".")
+        package = module.rpartition(".")[0]
+        for node in ast.walk(ast.parse(source.text)):
+            if module == RETIRED_LEASE_INPUT_MODULE:
+                names = set()
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                    names.add(node.name)
+                elif isinstance(node, ast.Assign):
+                    names.update(target.id for target in node.targets if isinstance(target, ast.Name))
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+                retired = sorted(names & RETIRED_LEASE_INPUT_SYMBOLS)
+                if retired:
+                    raise Drift(f"{source.path}:{node.lineno}: retired lease input definition {retired}")
+            if isinstance(node, ast.ImportFrom):
+                target = resolve_name("." * node.level + (node.module or ""), package) if node.level else node.module
+                if target == RETIRED_LEASE_INPUT_MODULE:
+                    retired = sorted({alias.name for alias in node.names} & RETIRED_LEASE_INPUT_SYMBOLS)
+                    require(not retired, f"{source.path}:{node.lineno}: retired lease input import {retired}")
 
 
 def check_coverage_floor(registry: dict[str, Any]) -> str:
@@ -680,15 +818,28 @@ def summarise_formal_domains(registry: dict[str, Any], sources: list[SourceFile]
     covered = [name for name in kernel if 'producers' in vocabularies[name]]
     unverified = [name for name in cross_runtime if 'producers' not in vocabularies[name]]
     scanned, tracked = producer_scan_reach(sources)
-    projections = len(registry['projections'])
-    contexts = sum(len(entry['contexts']) for entry in registry['scope_declarations'].values())
+    # Both sides of these ratios came from one expression, so they printed 100%
+    # by construction: ``projections={len(registry['projections'])}`` over
+    # itself reported full coverage however many registered projections the
+    # check never executed. The pair now comes from the same code-owned
+    # selector ``check_invariant_domain`` validates the declared domain
+    # against, so the detail line cannot disagree with the invariant above it.
+    projections_walked, projections_registered = FORMAL_DOMAIN_SELECTORS["projections[*]"](registry)
+    # F4's selector still derives both sides from the declaration list. That is
+    # not a second self-satisfying ratio but a fail-closed count:
+    # ``check_scope_declarations`` validates every declared context against the
+    # modules the inventory really found, or raises. The ratio therefore reads
+    # 100% whenever the smoke gets far enough to print it, and what it reports
+    # is how many contexts that check had to clear.
+    contexts_walked, contexts_registered = FORMAL_DOMAIN_SELECTORS["scope_declarations[*].contexts"](registry)
     return (
         f"formal_domain={sizes} (verified/registered)\n"
         f"  formal_domain_bounds: kernel_with_producers={len(covered)}/{len(kernel)}"
         f" cross_runtime_unverified={len(unverified)}/{len(cross_runtime)}"
         f" producer_scan_reach={scanned}/{tracked}_files"
-        f" projections={projections}/{projections}"
-        f" scope_declarations={len(registry['scope_declarations'])} declared_contexts={contexts}/{contexts}"
+        f" projections={projections_walked}/{projections_registered}"
+        f" scope_declarations={len(registry['scope_declarations'])}"
+        f" declared_contexts={contexts_walked}/{contexts_registered}"
     )
 
 
@@ -696,9 +847,10 @@ def check_producers(registry: dict[str, Any], sources: list[SourceFile]) -> list
     unknown: list[str] = []
     for name, vocabulary in registry['vocabularies'].items():
         if 'producers' not in vocabulary:
-            # Skipped: the whole cross_runtime tier, which declares no producers.
-            # F1/F2 therefore hold over the kernel tier only, which is the domain
-            # the registry's formal_model states -- not an unconditional claim.
+            # Skipped: a vocabulary that declares no producers. That is every
+            # cross_runtime vocabulary except the ones carrying an executed
+            # witness. F1/F2 therefore hold over the walked set the registry's
+            # formal_model names Producers(V) -- not an unconditional claim.
             continue
         try:
             rows = collect_production(REPO_ROOT, vocabulary, sources)
@@ -948,8 +1100,11 @@ def check_dual_runtime_twins(registry: dict[str, Any]) -> str:
     paths = {file.path for file in load_sources(REPO_ROOT, entry["root"])}
     twins = sorted(path for path in paths if path.endswith(".py") and not path.endswith("/__init__.py") and path[:-3] + ".ts" in paths)
     from scripts.generate_turn_contract import verified_generated_paths
-    generated = verified_generated_paths()
-    generated_twins = [path for path in twins if path in generated and path[:-3] + '.ts' in generated]
+    from scripts.generate_semantic_bindings import verified_generated_paths as semantic_generated_paths
+    generated = verified_generated_paths() | semantic_generated_paths()
+    # A verified source-derived binding has no independently maintained rule;
+    # its owner may be authored TS/Python or a shared generated contract.
+    generated_twins = [path for path in twins if path in generated or path[:-3] + '.ts' in generated]
     maintained = len(twins) - len(generated_twins)
     require(maintained <= entry['module_budget'], f"{maintained} independently maintained py/ts twins; budget is {entry['module_budget']}")
     return f"twins_raw={len(twins)} generated_verified={len(generated_twins)} independently_maintained={maintained}/{entry['module_budget']}"
@@ -1016,6 +1171,16 @@ def main() -> int:
     registry = load_registry()
     coverage = check_coverage_floor(registry)
     sources = load_sources(REPO_ROOT)
+    check_retired_lease_input(registry, sources)
+    registry_io_manifest = json.loads(
+        (REPO_ROOT / PROJECT_REGISTRY_IO_MANIFEST).read_text(encoding="utf-8")
+    )
+    registry_io_errors = validate_project_registry_io_manifest(
+        REPO_ROOT, registry_io_manifest,
+    )
+    require(not registry_io_errors, "; ".join(registry_io_errors)
+            + "; regenerate with uv run python scripts/generate_project_registry_io_manifest.py "
+            "and review any direct-I/O classifications")
     inventory, ratchets = check_inventory(registry, sources)
     check_owned_vocabularies(registry, inventory)
     for path, expected in build_artifacts().items():

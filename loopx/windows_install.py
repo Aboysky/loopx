@@ -24,7 +24,7 @@ from .slash_command_install import install_slash_commands, materialize_loopx_ent
 POINTER_SCHEMA_VERSION = "loopx_windows_release_pointer_v0"
 LAUNCHER_POINTER_FILENAME = "loopx-current-release.json"
 COPY_DIRECTORIES = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps", ".github")
-COPY_FILES = ("README.md", "README.zh-CN.md", "LICENSE", "pyproject.toml")
+COPY_FILES = ("README.md", "README.zh-CN.md", "LICENSE", "pyproject.toml", "setup.py", "MANIFEST.in")
 REQUIRED_DEEP_CHECKS = {
     "command_package_same_root",
     "representative_cli_commands",
@@ -57,6 +57,29 @@ def _release_id(requested: str | None, releases_dir: Path) -> str:
     return candidate
 
 
+def _ensure_chat_bundle(
+    *,
+    bundle_builder: Path,
+    source_root: Path,
+    python: Path,
+    pointer: Path,
+) -> None:
+    command = [str(python), str(bundle_builder), "ensure"]
+    if pointer.is_file():
+        pointer_payload = json.loads(pointer.read_text(encoding="utf-8"))
+        previous_root = pointer_payload.get("release_root")
+        if isinstance(previous_root, str) and previous_root.strip():
+            previous = Path(previous_root) / "loopx/web/chat"
+            if (previous / "index.html").is_file():
+                command.extend(["--previous", str(previous)])
+    subprocess.run(
+        command,
+        cwd=source_root,
+        check=True,
+        stdout=sys.stderr,
+    )
+
+
 def _copy_release(source_root: Path, target: Path) -> None:
     ignored = shutil.ignore_patterns(
         "__pycache__", "*.pyc", "node_modules", ".next", "dist", "build", "coverage"
@@ -73,6 +96,101 @@ def _copy_release(source_root: Path, target: Path) -> None:
 
 def _entry_command(release_root: Path, python: Path, args: Sequence[str]) -> list[str]:
     return [str(python), "-I", str(release_root / "scripts" / "loopx_entry.py"), *args]
+
+
+def _doctor_failure_summary(stdout: str) -> str | None:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    failed: dict[str, list[tuple[str, str]]] = {}
+    scopes = [("doctor", payload.get("checks"))]
+    release_candidate = payload.get("release_candidate")
+    if isinstance(release_candidate, dict):
+        scopes.append(("release candidate", release_candidate.get("checks")))
+    for scope, checks in scopes:
+        if not isinstance(checks, list):
+            continue
+        for item in checks:
+            if not (
+                isinstance(item, dict)
+                and item.get("required")
+                and not item.get("ok")
+                and isinstance(item.get("id"), str)
+            ):
+                continue
+            check_id = f"{scope}.{item['id'].strip()}"
+            fields = failed.setdefault(check_id, [])
+            for key in ("detail", "recommended_action"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    fields.append((key, value))
+    if not failed:
+        return None
+    check_ids = sorted(failed)
+    summary_limit = 2000
+    summary_prefix = "failed checks="
+    included_ids: list[str] = []
+    for check_id in check_ids:
+        omitted_after = len(check_ids) - len(included_ids) - 1
+        omission_marker = (
+            f"; {omitted_after} additional required failed check IDs omitted"
+            if omitted_after
+            else ""
+        )
+        candidate = (
+            summary_prefix + ", ".join([*included_ids, check_id]) + omission_marker
+        )
+        if len(candidate) > summary_limit:
+            break
+        included_ids.append(check_id)
+    omitted_ids = len(check_ids) - len(included_ids)
+    summary = summary_prefix + ", ".join(included_ids)
+    if omitted_ids:
+        marker = (
+            f"; {omitted_ids} required failed check IDs omitted by the summary limit"
+        )
+        while included_ids and len(summary + marker) > summary_limit:
+            included_ids.pop()
+            omitted_ids += 1
+            summary = summary_prefix + ", ".join(included_ids)
+            marker = f"; {omitted_ids} required failed check IDs omitted by the summary limit"
+        summary += marker
+
+    diagnostic_fields: list[tuple[str, str]] = []
+    for check_id in check_ids:
+        for key, value in failed[check_id]:
+            diagnostic_fields.append((f"{check_id} {key}=", value))
+    for key in ("error", "recommended_action"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            diagnostic_fields.append((f"{key}=", value))
+
+    if not diagnostic_fields:
+        return summary
+    separator_size = len("; ") * len(diagnostic_fields)
+    prefix_size = sum(len(prefix) for prefix, _ in diagnostic_fields)
+    content_budget = max(
+        0,
+        (summary_limit - len(summary) - separator_size - prefix_size)
+        // len(diagnostic_fields),
+    )
+    details: list[str] = []
+    for prefix, value in diagnostic_fields:
+        detail = " ".join(value.split())
+        limit = min(400, content_budget)
+        if len(detail) > limit:
+            detail = (
+                detail[: max(0, limit - 3)] + "..." if limit >= 3 else detail[:limit]
+            )
+        if detail:
+            details.append(prefix + detail)
+    if details:
+        summary += "; " + "; ".join(details)
+    return summary
 
 
 def _validate_candidate(
@@ -111,6 +229,12 @@ def _validate_candidate(
     finally:
         candidate_pointer.unlink(missing_ok=True)
     if result.returncode != 0:
+        summary = _doctor_failure_summary(result.stdout)
+        if summary is not None:
+            raise RuntimeError(
+                "release candidate doctor failed: "
+                f"failed checks={summary}, stderr={result.stderr[-2000:]!r}"
+            )
         raise RuntimeError(
             "release candidate doctor failed: "
             f"stdout={result.stdout[-2000:]!r}, stderr={result.stderr[-2000:]!r}"
@@ -133,6 +257,44 @@ def _validate_candidate(
     if missing or failed:
         raise RuntimeError(
             f"release candidate validation incomplete: missing={missing}, failed={failed}"
+        )
+
+
+def _upgrade_authority_archive(
+    release_root: Path,
+    *,
+    python: Path,
+    skills_dir: Path,
+) -> None:
+    env = dict(os.environ)
+    env["LOOPX_RELEASE_ROOT"] = str(release_root)
+    env["CODEX_HOME"] = str(skills_dir.parent)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        _entry_command(
+            release_root,
+            python,
+            [
+                "--format",
+                "json",
+                "authority-archive",
+                "upgrade",
+                "--all-known",
+                "--execute",
+            ],
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Authority format upgrade failed before launcher activation; "
+            "backups and candidate retained. "
+            f"stdout={result.stdout[-2000:]!r}, stderr={result.stderr[-2000:]!r}"
         )
 
 
@@ -270,11 +432,20 @@ def install_windows(
     bin_dir = bin_dir.expanduser().resolve()
     skills_dir = skills_dir.expanduser().resolve()
     python = _resolve_python(python_requested)
+    bundle_builder = source_root / "scripts/chat_bundle.py"
     releases_dir = install_root / "releases"
     releases_dir.mkdir(parents=True, exist_ok=True)
     installed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
     with exclusive_file_lock(install_root / ".install-guard"):
+        if bundle_builder.is_file():
+            pointer = install_root / "current-release.json"
+            _ensure_chat_bundle(
+                bundle_builder=bundle_builder,
+                source_root=source_root,
+                python=python,
+                pointer=pointer,
+            )
         release_id = _release_id(requested_release_id, releases_dir)
         release_root = releases_dir / release_id
         temporary = Path(tempfile.mkdtemp(prefix=f".{release_id}.", dir=releases_dir))
@@ -295,6 +466,12 @@ def install_windows(
         except Exception:
             shutil.rmtree(temporary, ignore_errors=True)
             raise
+
+        _upgrade_authority_archive(
+            release_root,
+            python=python,
+            skills_dir=skills_dir,
+        )
 
         launcher = bin_dir / "loopx.ps1"
         pointer = install_root / "current-release.json"
@@ -331,8 +508,8 @@ def install_windows(
                     _restore_paths(snapshots)
                 except Exception as restore_exc:  # pragma: no cover - filesystem failure
                     rollback_error = restore_exc
-                finally:
-                    shutil.rmtree(release_root, ignore_errors=True)
+                # Keep the candidate: physical data may already have upgraded.
+                # Launcher rollback alone cannot restore storage compatibility.
                 if rollback_error is not None:
                     raise RuntimeError(
                         "Windows installation failed and rollback was incomplete: "

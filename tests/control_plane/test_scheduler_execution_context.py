@@ -45,7 +45,9 @@ VALID_COMBINATIONS = {
     ("local_scheduler", "host_automation", "hosted_automation"),
     *{
         (surface, owner, mode)
-        for surface in ("codex_cli", "generic_cli", "claude_code", "kunluncode")
+        for surface in (
+            "codex_cli", "generic_cli", "claude_code", "kunluncode", "kiro_cli"
+        )
         for owner, mode in (
             ("agent_cli_loop", "interactive"),
             ("agent_cli_loop", "isolated_headless"),
@@ -90,6 +92,11 @@ FIRST_CLASS_RUNTIME_PROFILES = (
         SchedulerRuntimeProfile.KUNLUNCODE_VISIBLE,
         ("kunluncode", "agent_cli_loop", "interactive"),
         " --runtime-profile kunluncode",
+    ),
+    (
+        SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
+        ("kiro_cli", "agent_cli_loop", "interactive"),
+        " --runtime-profile kiro_cli",
     ),
     (
         SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
@@ -264,7 +271,7 @@ def test_missing_scheduler_context_fails_closed() -> None:
     assert hint["execution_phase"]["disposition"] == "contract_error"
 
 
-def test_codex_app_runtime_profile_preserves_host_backoff() -> None:
+def test_codex_app_runtime_profile_preserves_host_backoff_and_authority() -> None:
     context = scheduler_execution_context_for_runtime_profile(
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT
     )
@@ -300,7 +307,10 @@ def test_codex_app_runtime_profile_preserves_host_backoff() -> None:
         "codex_app_stateful_backoff_v0"
     )
     assert legacy["stateful_backoff"]["state_key"] == (
-        "scheduler_hint.codex_app.stateful_backoff"
+        "scheduler_hint.app_automation.stateful_backoff"
+    )
+    assert legacy["ack_hint"]["args"]["state_key"] == (
+        canonical["ack_hint"]["args"]["state_key"]
     )
     assert legacy["ack_hint"]["schema_version"] == (
         "codex_app_scheduler_ack_hint_v0"
@@ -395,6 +405,23 @@ def test_app_heartbeat_settlement_keeps_automation_active_until_terminal(
         "next heartbeat turn with a fresh turn identity"
     )
     assert terminal["keep_active"] is False
+
+
+def test_peer_coordination_block_keeps_recoverable_heartbeat_active() -> None:
+    liveness = build_automation_liveness(
+        {
+            "effective_action": "peer_coordination_blocked",
+            "heartbeat_recommendation": {
+                "recommended_mode": "peer_coordination_blocked"
+            },
+            "execution_obligation": {"must_attempt_work": False},
+        }
+    )
+
+    assert liveness["keep_active"] is True
+    assert liveness["pause_allowed"] is False
+    assert liveness["automation_action"] == "keep_active_peer_coordination_backoff"
+    assert "peer activation capability" in liveness["next_trigger"]
 
 
 def test_goal_runtime_projects_typed_immediate_continuation() -> None:
@@ -664,6 +691,26 @@ def test_goal_runtime_defer_uses_user_gate_deadline_before_monitors() -> None:
     assert hint["cold_path_detail"]["frontier_recheck"][
         "frontier_recheck_source"
     ] == "user_gate"
+
+
+def test_goal_runtime_recheck_uses_utc_instant_of_projected_deadlines(monkeypatch):
+    from loopx.control_plane.scheduler import scheduler_hint as module
+
+    now = datetime(2026, 8, 2, 6, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(module, "now_utc", lambda: now)
+    payload = _monitor_wait_payload()
+    for key, identity, due in [
+        ("agent_todo_summary", "earlier", "2026-08-02T14:01:00+08:00"),
+        ("user_todo_summary", "later", "2026-08-02T06:02:00Z"),
+    ]:
+        payload[key] = {"frontier_deadline": {"schema_version": "todo_frontier_deadline_v0",
+            "identity": identity, "source": "user_gate", "next_due_at": due, "candidate_count": 1}}
+    hint = build_scheduler_hint(payload, scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+        SchedulerRuntimeProfile.ARK_MANAGED_AGENT_GOAL))
+    continuation = hint["goal_runtime_continuation"]
+    assert continuation["disposition"] == "defer"
+    assert continuation["recheck_after_seconds"] == 60
+    assert continuation["recheck_source"] == "frontier_earliest_material_transition"
 
 
 def test_quota_human_gate_uses_future_user_gate_deadline_before_monitor() -> None:

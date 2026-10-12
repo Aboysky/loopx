@@ -5,6 +5,14 @@ from copy import deepcopy
 from typing import Any
 
 from ..configuration_transaction import configuration_payload_revision
+from ..control_plane.goals.goal_vision_policy import MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
+
+from .progress_review.policy import (
+    PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
+    PROGRESS_REVIEW_MIN_DRIFT_THRESHOLD,
+    PROGRESS_REVIEW_MODES,
+    PROGRESS_REVIEW_SIGNALS,
+)
 
 CAPABILITY_CONFIGURATION_CATALOG_SCHEMA = "capability_configuration_catalog_v0"
 CAPABILITY_CONFIGURATION_EDITOR_SCHEMA = "capability_configuration_editor_v0"
@@ -76,23 +84,36 @@ def capability_configuration_editor(
     # effort the owning namespace would reject.
     steward_endpoints, steward_efforts = _steward_executor_editor_options()
     definitions: dict[str, dict[str, Any]] = {
+        "goal_capability_organization": {
+            "supported_scopes": ["goal"], "writable_scopes": ["goal"],
+            "fields": [
+                _field("mode", "Improvement intent", "select", options=["off", "bounded"], required=True,
+                       description="Advisory discovery only; individual capability owners still decide enablement and admission."),
+                _field("discovery_budget_minutes", "Discovery budget (minutes)", "number", minimum=1, maximum=30, required=True),
+                _field("max_trials", "Maximum proposed trials", "number", minimum=0, maximum=2, required=True),
+            ],
+        },
+        "goal_storage": {
+            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
+            "fields": [_field("new_goal_provider", "New Goal storage provider", "select",
+                              options=["file", "sqlite"], required=True,
+                              description="Fixed at creation. Existing Goals need a separate backed-up migration."),
+                       _field("canonical_creation", "Create canonical authority", "boolean", required=True,
+                              description="Enabled by default for new Goals. Disabled retains the post-promotion target behavior."),
+                       _field("new_goal_handoff_mode", "New Goal execution policy", "select",
+                              options=["soft_claim", "hard_lease"], required=True,
+                              description="Used only with canonical creation. Agents inherit the Goal policy; this grants no tool permissions.")],
+        },
         "todo_replan_cadence": {
             "supported_scopes": ["machine", "goal"],
             "writable_scopes": ["machine", "goal"],
             "fields": [
-                _field(
-                    "completed_todos",
-                    "Completed Todos between Goal reviews",
-                    "number",
-                    minimum=1,
-                    maximum=5,
-                    required=True,
-                    description=(
-                        "Default 5 in both turn modes. Use 2 or 3 for earlier review; "
-                        "the Goal editor writes an explicit override. Counts this "
-                        "Agent's advancement work."
-                    ),
-                ),
+                _field("count_unit", "Count between reviews", "select",
+                       options=["completed_todos", "effective_turns"], required=True,
+                       description="Existing completed-Todo values keep their units until explicitly changed."),
+                _field("count", "Review interval", "number", minimum=1,
+                       maximum=MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD, required=True,
+                       description="Effective Turns: 1–6; completed Todos: 1–5. Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
             ],
         },
         "periodic_report": {
@@ -151,8 +172,20 @@ def capability_configuration_editor(
             "writable_scopes": ["machine"],
             "fields": [
                 _field(
+                    "selection_policy",
+                    "Selection policy",
+                    "select",
+                    options=["preferred", "pinned", "flexible"],
+                    required=True,
+                    description=(
+                        "Preferred supplies a default and permits an explicit user "
+                        "choice. Pinned rejects another executor. Flexible permits "
+                        "automatic fallback only inside the eligible pool."
+                    ),
+                ),
+                _field(
                     "executor_endpoint",
-                    "Steward executor",
+                    "Primary steward executor",
                     "select",
                     options=steward_endpoints,
                     required=True,
@@ -160,6 +193,15 @@ def capability_configuration_editor(
                         "The executor this machine's steward channel answers on: the "
                         "interactive CLI login, or the operator-billed managed host. "
                         "The choice outranks the Chat service environment."
+                    ),
+                ),
+                _field(
+                    "eligible_endpoints",
+                    "Flexible eligible executors",
+                    "string_list",
+                    description=(
+                        "One authorized executor id per line. Required only for "
+                        "flexible selection; include the primary executor."
                     ),
                 ),
                 _field(
@@ -215,6 +257,17 @@ def capability_configuration_editor(
                     "string_list",
                     description="One bounded, public-safe domain per line.",
                 ),
+                _field(
+                    "execution_config",
+                    "Delegation bindings",
+                    "text",
+                    nullable=True,
+                    description=(
+                        "Repo-relative ignored JSON under .loopx/config/. It exposes "
+                        "only authorized, public-safe route status to planning; it "
+                        "does not grant a binding."
+                    ),
+                ),
             ],
         },
         "peer_task_coordination": {
@@ -238,7 +291,8 @@ def capability_configuration_editor(
             "supported_scopes": ["goal"],
             "writable_scopes": ["goal"],
             "fields": [
-                _field("enabled", "Enabled", "boolean"),
+                _field("mode", "Exploration mode", "select", options=("off", "evidence", "planning"),
+                       description="Evidence only, or evidence with planning. Spawn authority is separate."),
                 _field(
                     "profile",
                     "Planner profile",
@@ -256,25 +310,77 @@ def capability_configuration_editor(
                 _field("strict_receipt", "Require an exact-diff receipt", "boolean"),
             ],
         },
+        "progress_review": {
+            "supported_scopes": ["goal"],
+            "writable_scopes": ["goal"],
+            "fields": [
+                _field(
+                    "mode",
+                    "Mode",
+                    "select",
+                    options=PROGRESS_REVIEW_MODES,
+                    required=True,
+                    description=(
+                        "off records nothing; shadow records typed receipts only; "
+                        "assist lets consecutive drift receipts raise the existing "
+                        "autonomous replan obligation. No pause or gate authority."
+                    ),
+                ),
+                _field(
+                    "signal",
+                    "Drift signal",
+                    "select",
+                    options=PROGRESS_REVIEW_SIGNALS,
+                    description=(
+                        "Which receipt judgment counts as drift: the Noul behavior/"
+                        "acceptance pair or the Choice relation/increment pair."
+                    ),
+                ),
+                _field(
+                    "drift_threshold",
+                    "Consecutive drift receipts before an obligation",
+                    "number",
+                    minimum=PROGRESS_REVIEW_MIN_DRIFT_THRESHOLD,
+                    maximum=PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
+                ),
+                _field(
+                    "contract_revision",
+                    "Pinned goal contract revision",
+                    "text",
+                    nullable=True,
+                    description=(
+                        "sha256 of the observer basis the receipts must be bound to; "
+                        "printed by `loopx-jev drift init`. assist raises nothing "
+                        "without it, and receipts for other revisions are stale."
+                    ),
+                ),
+            ],
+        },
         "pull_request_review": {
             "supported_scopes": ["machine", "goal"],
             "writable_scopes": ["machine", "goal"],
             "fields": [
                 _field("wait_for_ci", "Wait for CI", "boolean", description="When disabled, use local validation without querying or waiting for CI. This grants no merge authority."),
+                _field("owner_logins", "Additional owner accounts", "string_list", description="One GitHub login per line, in addition to the authenticated reviewer. Controls queue grouping only; does not infer membership or grant review/merge authority."),
                 _field(
-                    "review_priority",
-                    "Review priority",
+                    "review_order",
+                    "Review direction",
                     "select",
-                    options=("other-developers-first", "owner-first"),
+                    options=("forward", "reverse"),
                     required=True,
                     description=(
-                        "Default ranks actionable PRs whose author differs from the "
-                        "authenticated reviewer before the reviewer's own PRs."
+                        "Forward ranks other authors first, oldest first within tiers. "
+                        "Reverse inverts the whole actionable queue before the batch limit."
                     ),
                 ),
             ],
         },
         "local_authority_shadow": {
+            "supported_scopes": ["goal"],
+            "writable_scopes": [],
+            "fields": [],
+        },
+        "coordination_runtime_shadow": {
             "supported_scopes": ["goal"],
             "writable_scopes": ["goal"],
             "fields": [_field("enabled", "Enabled", "boolean")],
@@ -464,7 +570,7 @@ def _merge_goal_feature(
             entry[field] = deepcopy(feature[field])
     entry["configuration_editor"] = capability_configuration_editor(
         capability_id,
-        explore_harness_profiles=explore_harness_profiles,
+        explore_harness_profiles=feature.get("profiles") or explore_harness_profiles,
     )
     if "machine" in entry["available_scopes"]:
         entry["effective_value_policy"] = "goal_override_over_live_machine_default"

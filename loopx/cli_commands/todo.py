@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable, Sequence
+from operator import itemgetter
 from pathlib import Path
 
-from ..control_plane.coordination.local_authority import read_canonical_todo_fields_if_promoted
+from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
+from ..control_plane.coordination.local_authority import (
+    local_authority_is_promoted,
+    read_canonical_todo_fields_if_promoted,
+)
+from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.todos.contract import (
     replan_successor_semantic_binding,
@@ -12,48 +20,52 @@ from ..control_plane.todos.contract import (
 from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.quota.settlement import (
     QuotaSettlementReadback,
+    SettlementIdentity,
+    build_turn_scoped_cli_settlement_plan,
     read_heartbeat_settlement,
     settlement_result_payload,
 )
+from ..control_plane.runtime.time import chronology_key
 from ..control_plane.todos.markdown import render_todo_markdown
 from ..control_plane.todos.provider_projection import (
     project_current_canonical_todos,
 )
+from ..control_plane.todos.completion_result import read_completion_result
 from ..history import load_index, load_registry
 from ..paths import resolve_runtime_root
 from ..registry import registry_goals
 from ..control_plane.work_items.semantic_replan_writeback import (
     qualify_replan_writeback,
 )
-from ..todo_followups import capture_followup_todos
-from ..todo_suggestion_prompt import (
-    build_todo_suggestion_prompt_packet,
-    render_todo_suggestion_prompt_markdown,
-)
 from ..control_plane.goals.task_planning import (
     build_task_planning_packet,
     render_task_planning_packet,
 )
-from ..todos import (
+from ..control_plane.goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
+    capture_first_party_host_goal_ref,
+)
+from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+from ..control_plane.todos.mutation_api import (
     add_goal_todo,
     archive_completed_todos,
     complete_goal_todo,
-    list_goal_todos,
-    resolve_todo_state,
     supersede_goal_todo,
     update_goal_todo,
 )
+from ..control_plane.todos.list_readback import list_goal_todos
+from ..control_plane.todos.path_resolution import resolve_todo_state
 from .todo_argument_validation import (
     validate_capability_gap_options,
     validate_shared_todo_options,
     validate_todo_add_options,
     validate_todo_archive_completed_options,
-    validate_todo_capture_followups_options,
     validate_todo_claim_options,
     validate_todo_complete_options,
     validate_todo_list_options,
+    validate_todo_receipt_options,
+    validate_todo_result_read_options,
     validate_todo_project_markdown_options,
-    validate_todo_suggest_options,
     validate_todo_plan_options,
     validate_todo_supersede_options,
     validate_todo_update_options,
@@ -66,6 +78,7 @@ from .todo_event import (
 from .post_writeback import (
     PostWritebackProjectionBuilder,
     dispatch_committed_cli_post_writeback_hooks,
+    post_writeback_source_failure,
 )
 from ..control_plane.agents.capability_gate import (
     runtime_capabilities_for_cli_projection,
@@ -79,6 +92,28 @@ PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
 ]
+
+
+def _read_todo_turn_settlement(
+    args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
+    goal_ref: dict[str, str] | None,
+) -> QuotaSettlementReadback:
+    """Transport the original lifecycle tuple to the TS identity owner."""
+    readback = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+        turn_instance_id=args.turn_instance_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
+    )
+    if readback is None:
+        raise RuntimeError("exact settlement readback unexpectedly returned not-found")
+    if readback.identity.failure is not None:
+        raise ValueError(readback.identity.failure.reason)
+    if readback.identity.value is None:
+        operation = "completion" if args.todo_command == "complete" else "supersede"
+        raise ValueError(f"turn-scoped Todo {operation} has no identity")
+    return readback
 
 
 def _completion_settlement_error(
@@ -95,6 +130,39 @@ def _completion_settlement_error(
         "terminal no-follow-up closeout requires matching writeback and quota spend receipts: "
         + settlement_readback.settlement.failure.reason
     )
+
+
+def _completion_settlement_plan(
+    identity: SettlementIdentity, *, args: argparse.Namespace,
+    registry_path: Path, runtime_root: Path,
+    goal_ref: dict[str, str] | None,
+) -> dict[str, object]:
+    """Render the native plan with the original route and supplied lease facts."""
+    actor_args = ""
+    path_args = ""
+    for name, option in (
+        ("project", "--project"), ("state_file", "--state-file"),
+        ("task_lease_idempotency_key", "--task-lease-idempotency-key"),
+        ("task_lease_expected_version", "--task-lease-expected-version"),
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            argument = f" {option} {shlex.quote(str(value))}"
+            actor_args += argument
+            if name in {"project", "state_file"}:
+                path_args += argument
+    prefix = (f"loopx --registry {shlex.quote(str(registry_path))}"
+              f" --runtime-root {shlex.quote(str(runtime_root))}")
+    plan = build_turn_scoped_cli_settlement_plan(
+        goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+        turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
+        scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
+        goal_ref=goal_ref,
+    ).as_dict()
+
+    from ..capabilities.explore.turn_context import project_settlement_attachment
+
+    return project_settlement_attachment(plan, registry_path=registry_path)
 
 
 def _validated_replan_successor_obligation(
@@ -144,7 +212,7 @@ def _validated_replan_successor_obligation(
         for _, run in sorted(
             enumerate(existing_runs),
             key=lambda item: (
-                str(item[1].get("generated_at") or ""),
+                *chronology_key(item[1].get("generated_at")),
                 item[0],
             ),
             reverse=True,
@@ -165,6 +233,12 @@ def _validated_replan_successor_obligation(
         agent_id=args.claimed_by,
         goal_id=args.goal_id,
         registry_goal=registry_goal,
+        effective_turn_cadence=effective_turn_cadence_context(
+            resolve_todo_replan_cadence_goal(
+                registry_goal or {"id": args.goal_id}, runtime_root,
+            ), runtime_root,
+            registry_path=registry_path,
+        ),
     )
     current = str((obligation or {}).get("obligation_id") or "").strip()
     if not current:
@@ -188,6 +262,23 @@ def _todo_path_args(args: argparse.Namespace) -> dict[str, Path | None]:
     }
 
 
+def _render_todo_receipt(payload: dict[str, object]) -> str:
+    lines = [
+        "# LoopX Canonical Operation Receipt",
+        "",
+        f"- status: `{payload.get('status')}`",
+        f"- goal_id: `{payload.get('goal_id')}`",
+        f"- operation_id: `{payload.get('operation_id')}`",
+        f"- source_authority: `{payload.get('source_authority')}`",
+        f"- provider_revision: `{payload.get('provider_revision')}`",
+        f"- cursor: `{payload.get('cursor')}`",
+        "- note: Historical readback only; it does not grant a current lease or a retry.",
+    ]
+    if payload.get("error") or payload.get("reason"):
+        lines.append(f"- error: `{payload.get('error') or payload.get('reason')}`")
+    return "\n".join(lines)
+
+
 def handle_todo_command(
     args: argparse.Namespace,
     *,
@@ -199,14 +290,14 @@ def handle_todo_command(
     post_writeback_hooks: Sequence[PostWritebackHookRegistration] | None = None,
     post_writeback_projection_builder: PostWritebackProjectionBuilder | None = None,
 ) -> int:
-    renderer = (
-        render_task_planning_packet
-        if args.todo_command == "plan"
-        else
-        render_todo_suggestion_prompt_markdown
-        if args.todo_command == "suggest"
-        else render_todo_markdown
-    )
+    renderer = render_todo_markdown
+    if args.todo_command == "plan":
+        renderer = render_task_planning_packet
+    elif args.todo_command == "receipt":
+        renderer = _render_todo_receipt
+    elif args.todo_command == "result-read":
+        renderer = itemgetter("text")
+    goal_ref: dict[str, str] | None = None
     try:
         if args.todo_command is None:
             raise ValueError(
@@ -214,8 +305,22 @@ def handle_todo_command(
                 "`loopx todo claim`, `loopx todo update`, or another command shown "
                 "by `loopx todo --help`"
             )
+        if args.todo_command == "claim":
+            validate_todo_claim_options(args)
         validate_shared_todo_options(args)
         validate_capability_gap_options(args)
+        if getattr(args, "turn_instance_id", None):
+            goal_instance_id = str(
+                getattr(args, "goal_instance_id", None) or ""
+            ).strip()
+            goal_ref = (
+                exact_goal_ref(args.goal_id, goal_instance_id)
+                if goal_instance_id
+                else capture_first_party_host_goal_ref(
+                    registry_path=registry_path,
+                    goal_id=args.goal_id,
+                )
+            )
         if args.todo_command == "plan":
             validate_todo_plan_options(args)
             payload = build_task_planning_packet(
@@ -236,6 +341,30 @@ def handle_todo_command(
                 thin=bool(args.todo_thin),
                 **_todo_path_args(args),
                 runtime_root_arg=runtime_root_arg,
+            )
+        elif args.todo_command == "receipt":
+            validate_todo_receipt_options(args)
+            runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+            if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=args.goal_id):
+                raise ValueError("todo receipt requires promoted canonical authority; no legacy fallback")
+            result = effect_runtime_result(
+                "coordination.local_authority.operation_receipt",
+                {"schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+                 "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
+                 "goal_id": args.goal_id, "operation_id": args.operation_id},
+                timeout=15.0,
+            )
+            if not isinstance(result, dict):
+                raise RuntimeError("canonical operation receipt returned an invalid result")
+            payload = {"ok": result.get("status") in {"found", "missing"},
+                       "command": "receipt", **result}
+        elif args.todo_command == "result-read":
+            validate_todo_result_read_options(args)
+            registry = load_registry(registry_path)
+            payload = read_completion_result(
+                registry_path=registry_path,
+                runtime_root=resolve_runtime_root(registry, runtime_root_arg),
+                goal_id=args.goal_id, todo_id=args.todo_id,
             )
         elif args.todo_command == "project-markdown":
             validate_todo_project_markdown_options(args)
@@ -263,11 +392,13 @@ def handle_todo_command(
                 runtime_root_arg=runtime_root_arg,
             )
             payload = add_goal_todo(
+                operation_id=args.operation_id,
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,
                 role=args.role,
                 text=args.text,
+                priority=args.priority,
                 status=args.status,
                 note=args.note,
                 task_class=args.task_class,
@@ -322,7 +453,6 @@ def handle_todo_command(
                 if not payload.get("dry_run"):
                     payload["host_action"] = "end_current_heartbeat"
         elif args.todo_command == "claim":
-            validate_todo_claim_options(args)
             payload = update_goal_todo(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -346,9 +476,15 @@ def handle_todo_command(
                 goal_id=args.goal_id,
                 todo_id=args.todo_id,
                 text=args.text,
+                priority=args.priority,
+                clear_priority=args.clear_priority,
                 status=args.status,
                 role=args.role,
                 note=args.note,
+                validation_command=args.validation_command,
+                validation_command_json=args.validation_command_json,
+                validation_label=args.validation_label,
+                validation_timeout_seconds=args.validation_timeout_seconds,
                 evidence=args.evidence,
                 reason=args.reason,
                 task_class=args.task_class,
@@ -411,26 +547,15 @@ def handle_todo_command(
             completion_identity_source = None
             completion_delivery_workspace = None
             if getattr(args, "turn_instance_id", None):
-                runtime_root = resolve_runtime_root(
-                    load_registry(registry_path),
-                    runtime_root_arg,
+                runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+                settlement_readback = _read_todo_turn_settlement(
+                    args,
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_ref=goal_ref,
                 )
-                settlement_readback = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    todo_id=args.todo_id,
-                    turn_instance_id=getattr(args, "turn_instance_id", None),
-                )
-                if settlement_readback is None:
-                    raise RuntimeError(
-                        "exact settlement readback unexpectedly returned not-found"
-                    )
                 settlement_result = settlement_readback.identity
-                if settlement_result.failure is not None:
-                    raise ValueError(settlement_result.failure.reason)
-                if settlement_result.value is None:
-                    raise ValueError("turn-scoped Todo completion has no identity")
+                assert settlement_result.value is not None
                 identity = settlement_result.value
                 settlement_identity = identity
                 todo_payload = list_goal_todos(
@@ -472,6 +597,13 @@ def handle_todo_command(
                         "settlement_result": settlement_result_payload(
                             settlement_result
                         ),
+                        "settlement_plan": _completion_settlement_plan(
+                            identity,
+                            args=args,
+                            registry_path=registry_path,
+                            runtime_root=runtime_root,
+                            goal_ref=goal_ref,
+                        ),
                         "error": completion_error,
                     }
                 completion_turn_key = identity.effect_id
@@ -506,6 +638,7 @@ def handle_todo_command(
                     role=args.role,
                     decision_outcome=args.decision_outcome,
                     evidence=args.evidence,
+                    completion_result_file=Path(args.result_file).expanduser() if args.result_file else None,
                     completion_turn_key=completion_turn_key,
                     completion_identity_source=completion_identity_source,
                     completion_delivery_workspace=completion_delivery_workspace,
@@ -540,6 +673,16 @@ def handle_todo_command(
                     )
         elif args.todo_command == "supersede":
             validate_todo_supersede_options(args)
+            supersede_readback = (
+                _read_todo_turn_settlement(
+                    args,
+                    registry_path=registry_path,
+                    runtime_root=resolve_runtime_root(
+                        load_registry(registry_path), runtime_root_arg
+                    ),
+                    goal_ref=goal_ref,
+                ) if args.turn_instance_id else None
+            )
             payload = supersede_goal_todo(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -547,6 +690,7 @@ def handle_todo_command(
                 todo_id=args.todo_id,
                 role=args.role,
                 reason=args.reason,
+                successor_todo_ids=args.successor_todo_ids,
                 next_agent_todo=args.next_agent_todo,
                 next_user_todo=args.next_user_todo,
                 next_user_task_class=args.next_user_task_class,
@@ -564,6 +708,11 @@ def handle_todo_command(
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
+            if supersede_readback is not None:
+                retirement_identity = supersede_readback.identity.value
+                assert retirement_identity is not None
+                payload["settlement_identity"] = retirement_identity.as_dict()
+                payload["settlement_result"] = settlement_result_payload(supersede_readback.identity)
         elif args.todo_command == "archive-completed":
             validate_todo_archive_completed_options(args)
             payload = archive_completed_todos(
@@ -575,41 +724,16 @@ def handle_todo_command(
                 **_todo_path_args(args),
                 dry_run=not bool(args.execute),
             )
-        elif args.todo_command == "suggest":
-            validate_todo_suggest_options(args)
-            payload = build_todo_suggestion_prompt_packet(
-                goal_id=args.goal_id,
-                project=Path(args.project).expanduser() if args.project else None,
-                agent_id=args.agent_id,
-                sources=args.suggestion_sources,
-                limit=args.todo_limit,
-                trigger=args.suggestion_trigger,
-            )
-            payload["dry_run"] = True
-        elif args.todo_command == "capture-followups":
-            validate_todo_capture_followups_options(args)
-            followups = list(args.followups or [])
-            if args.text:
-                followups.append(args.text)
-            payload = capture_followup_todos(
-                registry_path=registry_path,
-                runtime_root_arg=runtime_root_arg,
-                goal_id=args.goal_id,
-                followups=followups,
-                evidence=args.evidence or "",
-                task_class=args.task_class,
-                action_kind=args.action_kind,
-                required_write_scopes=args.required_write_scopes,
-                required_capabilities=args.required_capabilities,
-                target_capabilities=args.target_capabilities,
-                required_decision_scopes=args.required_decision_scopes,
-                **_todo_path_args(args),
-                dry_run=bool(args.dry_run),
-            )
         else:
             raise ValueError("unsupported todo command")
+        if goal_ref is not None:
+            payload["goal_ref"] = dict(goal_ref)
     except Exception as exc:
-        payload = todo_error_payload(args, exc)
+        from ..usage_ping import capture_failure
+        capture_failure(exc)
+        payload = todo_error_payload(
+            args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+        )
     append_todo_rollout_event(
         payload,
         args=args,
@@ -634,6 +758,8 @@ def handle_todo_command(
             agent_id=args.agent_id,
             todo_id=args.todo_id,
             turn_instance_id=getattr(args, "turn_instance_id", None),
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         if settlement_readback is None:
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -659,37 +785,69 @@ def handle_todo_command(
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()
+        receipt_id = payload.get("completion_receipt_id")
         if committed_at:
-            # Capability evidence comes only from a Turn journal the TS
-            # journal owner validated against this completion's full
-            # settlement identity (goal/agent/binding/turn/effect): the
-            # journaled envelope froze what this exact Turn's scheduler
-            # observed. No fully-bound journal means no evidence, and gated
-            # successors stay excluded (fail closed).
-            observed = turn_journal_observed_capabilities(
-                resolve_runtime_root(load_registry(registry_path), runtime_root_arg),
-                settlement_identity=identity,
-            )
-            projected = runtime_capabilities_for_cli_projection(observed)
-            if projected:
-                payload["available_capabilities"] = projected
-            payload["post_writeback_hooks"] = (
-                dispatch_committed_cli_post_writeback_hooks(
-                    payload=payload,
+            try:
+                admission = FirstPartyHostGoalAdmission.for_plan(
                     registry_path=registry_path,
-                    runtime_root_arg=runtime_root_arg,
                     goal_id=args.goal_id,
-                    event_kind="todo_complete",
-                    identity=identity,
-                    state_version=committed_at,
-                    committed_at=committed_at,
-                    hooks=post_writeback_hooks,
-                    projection_builder=post_writeback_projection_builder,
+                    planned_goal_ref=goal_ref,
                 )
+                with admission.current_lifetime(
+                    operation="todo_post_writeback_hooks",
+                ):
+                    # The source lifetime lock keeps the journal evidence and
+                    # its consumers bound to the same exact Goal instance.
+                    observed = turn_journal_observed_capabilities(
+                        resolve_runtime_root(
+                            load_registry(registry_path),
+                            runtime_root_arg,
+                        ),
+                        settlement_identity=identity,
+                        goal_ref=goal_ref,
+                    )
+                    projected = runtime_capabilities_for_cli_projection(observed)
+                    if projected:
+                        payload["available_capabilities"] = projected
+                    payload["post_writeback_hooks"] = (
+                        dispatch_committed_cli_post_writeback_hooks(
+                            payload=payload,
+                            registry_path=registry_path,
+                            runtime_root_arg=runtime_root_arg,
+                            goal_id=args.goal_id,
+                            event_kind="todo_complete",
+                            identity=identity,
+                            state_version=receipt_id or committed_at,
+                            receipt_id=receipt_id,
+                            committed_at=committed_at,
+                            hooks=post_writeback_hooks,
+                            projection_builder=post_writeback_projection_builder,
+                        )
+                    )
+            except Exception:
+                # Optional post-writeback composition cannot invalidate or
+                # repeat the Todo completion that already committed above.
+                payload.pop("available_capabilities", None)
+                payload["post_writeback_hooks"] = post_writeback_source_failure(
+                    post_writeback_hooks
+                )
+    output_format = format_name or str(getattr(args, "format", None) or "markdown")
+    if (args.todo_command == "list" and payload.get("ok")
+            and not args.todo_id and not args.todo_thin and output_format == "json"):
+        try:
+            payload = effect_runtime_result(
+                "todo.context.page", {"list_payload": payload},
+                large_local_snapshot=True,
+            )
+        except Exception as exc:
+            from ..usage_ping import capture_failure
+            capture_failure(exc)
+            payload = todo_error_payload(
+                args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
             )
     print_payload(
         payload,
-        format_name or str(getattr(args, "format", None) or "markdown"),
+        output_format,
         renderer,
     )
     return 0 if payload.get("ok") else 1

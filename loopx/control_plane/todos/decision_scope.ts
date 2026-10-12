@@ -1,8 +1,9 @@
 /** Read-only decision dependency rules over one complete source snapshot.
  * A consistent dependency is not approval, a lease, or a mutation receipt. */
 import type {JsonObject} from "../effect_program.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, optionalNonEmptyString, requireBoolean, requireInteger} from "../runtime_decode.ts";
-import {gateAddressesAgent} from "./gate_scope.ts";
+import {gateAddressesAgent} from "./agent_scope.ts";
 import {
   TODO_DECISION_SCOPE_GRANULARITY_SET,
   TODO_DECISION_SCOPE_KEY_PATTERN,
@@ -207,24 +208,39 @@ export function decisionScopeConsistency(request: JsonObject): JsonObject {
     terminal_outcome_count: terminals, standing_authority_match_count: approvals, errors};
 }
 
+type TodoGateScopeState = "clear" | "independent" | "blocked";
+
+/** Dependency projection only; no approval, execution or lease is granted. */
+export function projectTodoGateScopes(request: JsonObject): JsonObject {
+  const agent = optionalNonEmptyString(request.agent_id, "agent_id");
+  const gates = rows(request.gates).filter(gate => gate.is_gate === true &&
+    gate.done !== true && ["open", "blocked"].includes(String(gate.status)) &&
+    gate.archive_state !== "archive" && addressed(gate, agent));
+  return {schema_version: "todo_gate_scope_projections_v0", items: rows(request.items).map(item => {
+    const relations = gates.map(gate => fallbackGateRelation(gate, item));
+    const state: TodoGateScopeState = !gates.length ? "clear" :
+      relations.every(relation => relation.state === "independent") ? "independent" : "blocked";
+    return {schema_version: "todo_gate_scope_projection_v0", agent_id: agent,
+      todo_id: item.todo_id ?? null, gate_count: gates.length, state};
+  })};
+}
+
 export function evaluateDecisionScope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "decision scope request");
   if (request.schema_version !== DECISION_SCOPE_REQUEST_SCHEMA) throw new TypeError("decision scope request schema mismatch");
-  let result: JsonObject | boolean | null | (JsonObject | null)[][];
+  let result: JsonObject | null | (JsonObject | null)[][];
   switch (request.operation) {
     case "fallback": result = selectScopedGateFallback(request); break;
+    case "gate_scopes": result = projectTodoGateScopes(request); break;
     case "consistency": result = decisionScopeConsistency(request); break;
     case "standing": result = scopeStandingAuthority(request.authority, optionalNonEmptyString(request.agent_id, "agent_id")); break;
-    case "covers": result = decisionScopeCovers(request.gate_scope, request.required_scope); break;
     case "relations": {
       const items = rows(request.items);
       result = rows(request.gates).map(gate => items.map(item => todoGateRelation(gate, item)));
       break;
     }
     case "relation": result = todoGateRelation(requireJsonObject(request.gate, "gate"), requireJsonObject(request.item, "item")); break;
-    case "scope_relation": result = decisionScopeRelation(requireJsonObject(request.gate, "gate"), requireJsonObject(request.item, "item")); break;
-    case "exact_relation": result = exactTodoGateRelation(requireJsonObject(request.gate, "gate"), requireJsonObject(request.item, "item")); break;
-    default: throw new TypeError("unsupported decision scope operation");
+    default: throw new EffectRuntimeRequestError("unsupported decision scope operation");
   }
   return {schema_version: "todo_decision_scope_result_v0", result};
 }

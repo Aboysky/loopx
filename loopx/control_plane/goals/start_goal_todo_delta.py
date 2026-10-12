@@ -10,12 +10,12 @@ unconditional planning contract — fail-closed.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from ..coordination.local_authority import read_canonical_todo_fields_if_promoted
+from ...history import load_registry
 from ...paths import resolve_runtime_root
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from ...control_plane.todos.contract import (
@@ -148,6 +148,23 @@ def todo_authoring_steps(
         agent_id=agent_id,
         registry_path=registry_path,
     )
+    # This adapter already owns routed CLI templates for both planning entrypoints.
+    readback = {
+        "id": "read_back_authored_todos",
+        "kind": "operator_or_agent_actions",
+        "command_template": (
+            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+            + (f"--registry {shell_arg(str(registry_path))} " if registry_path is not None else "")
+            + f"--format json todo list --goal-id {shell_arg(str(goal_id))} "
+            + (f"--agent-id {shell_arg(str(agent_id))} " if agent_id else "")
+            + "--todo-id '<todo-id>'"
+        ),
+        "purpose": (
+            "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
+            "compare .todo.text, status/claim. Excerpts cannot verify writes. "
+            "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+        ),
+    }
     if not existing_runnable_frontier:
         return [
             {
@@ -173,6 +190,7 @@ def todo_authoring_steps(
                     "the admitted action_kind and target_key for later quota re-entry"
                 ),
             },
+            readback,
         ]
     return [
         {
@@ -205,6 +223,7 @@ def todo_authoring_steps(
             "add_new_command_template": add_template,
             "purpose": "takeover continues the frontier; authoring is a delta",
         },
+        readback,
     ]
 
 
@@ -223,8 +242,10 @@ def append_todo_delta_render_line(
 
 
 def _read_registry(registry_path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not registry_path.is_file():
+        return None, "unreadable"
     try:
-        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        payload = load_registry(registry_path)
     except (OSError, ValueError):
         return None, "unreadable"
-    return (payload, None) if isinstance(payload, dict) else (None, "not_a_mapping")
+    return payload, None

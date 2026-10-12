@@ -15,7 +15,7 @@ const SECTION_FIELDS: Record<string, Section> = {
   replan_action_packet: "action", response_plan: "action",
   boundary: "boundary", execution_policy: "boundary", writeback: "writeback",
   scheduler: "scheduler", contract_capsule: "contracts",
-  agent_context: "context", task_orchestration_contract: "context",
+  agent_context: "context", work_context: "context", task_orchestration_contract: "context",
 };
 
 function sectionBytes(envelope: JsonObject): Record<Section, number> {
@@ -33,7 +33,7 @@ function sectionBytes(envelope: JsonObject): Record<Section, number> {
 
 export function turnEnvelopeBudgetBytes(envelope: JsonObject): number {
   const reads = Array.isArray(envelope.required_reads) ? envelope.required_reads : [];
-  return TURN_ENVELOPE_BUDGET_BYTES + reads.slice(0, 5).reduce((total: number, value: unknown) => {
+  return TURN_ENVELOPE_BUDGET_BYTES + reads.reduce((total: number, value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return total;
     const read = value as JsonObject;
     return total + (read.source === "turn_start_capability_hook"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from loopx.capabilities.pr_review_queue import (
     build_review_plan,
     build_review_template,
 )
+from loopx.capabilities.pr_review_queue.review_contract import build_review_execution_contract
 
 
 def _item(*, areas: dict[str, int]) -> dict[str, object]:
@@ -87,6 +89,20 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "minimum": 2,
         "maximum": 5,
     }
+    # Every review is bound to the specification it judged, inside the goal
+    # judgment that owns it, rather than to its own narrative.
+    assert "spec_basis" in requirements["problem_context"]["fields"]
+    assert "not_met" in contract["spec_basis_assessment"]["blocking_dispositions"]
+    # Provenance is carried by the result, never scored as review evidence.
+    assert "reviewer" not in requirements
+    assert contract["reviewer_declaration"]["actor_kinds"] == [
+        "model_agent",
+        "human_operator",
+    ]
+    assert contract["reviewer_declaration"]["model_agent_fields"] == [
+        "declared_model",
+        "declared_provider",
+    ]
     assert "caller_evidence" in requirements["symbol_map"]["item_fields"]
     assert "negative_fields" in requirements["walkthroughs"]
     assert "regression_test" in requirements["failure_analysis"]["fields"]
@@ -103,6 +119,21 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "silent behavior changes" in requirements["behavior_change_disclosure"]["rule"]
     )
     assert "must_attempt_work" in requirements["guidance_vs_obligation"]["rule"]
+    attribution = requirements["validation_matrix"]["failure_attribution"]
+    assert attribution["non_blocking_dispositions"] == [
+        "pre_existing_unrelated", "external_unrelated",
+    ]
+    assert "same normalized failing identity" in attribution["rule"]
+    assert "merge readiness remains on hold" in attribution["rule"]
+    assert "not the union of all historical" in attribution["evidence_scope"]
+    assert "A later green run alone does not resolve intermittency" in attribution["evidence_scope"]
+    assert "explicit accepted contract" in attribution["evidence_scope"]
+    assert "without making completion" in requirements["validation_matrix"]["validation_source"]
+    assert "required means review evidence" in requirements["validation_matrix"]["validation_source"]
+    assert "only decisive coverage" in requirements["validation_matrix"]["validation_source"]
+    assert "APPROVE when a required red check" in contract["verdict_policy"][
+        "unrelated_validation_failure"
+    ]
     proportionality = requirements["change_proportionality"]
     assert proportionality["required_when"] == "code_change"
     assert proportionality["verdict_values"] == [
@@ -469,6 +500,12 @@ def test_public_cli_delivers_state_review_without_claiming_it_was_performed(caps
     ):
         assert obligation in budget_rule
     assert packet["pull_requests"]
+    instruction_rule = requirements["observable_semantics"]["decision_text_assessment"]
+    assert "decision_text_assessment" in requirements["observable_semantics"]["fields"]
+    assert instruction_rule["blocking_verdicts"] == ["unintended_drift", "not_yet_proven"]
+    for obligation in ("temporal ordering", "evidence provenance", "scope qualifiers",
+                       "Equal enums", "independent obligation", "limit increase"):
+        assert obligation in instruction_rule["rule"]
     reviewed_code = False
     for item in packet["pull_requests"]:
         if not item["review_action_kind"]:
@@ -605,3 +642,35 @@ def test_observable_semantics_covers_diagnostics_and_claim_neutral_note_paths() 
         "observable_semantics"
         in contract["verdict_policy"]["open_pr_unresolved_semantics"]
     )
+
+
+def test_pr_review_skill_tracks_the_capability_policy_revision() -> None:
+    """The host skill must not pin a policy revision the capability owns.
+
+    A hardcoded number here goes stale on the next capability bump and blocks
+    reviewers with an unrelated mismatch: the skill text said ``== 6`` while
+    the installed contract already emitted 7. The skill has to compare the
+    packet's ``review_execution_contract.policy_revision`` with the result's
+    ``review_policy_revision`` instead of naming a value itself.
+    """
+
+    skill = (
+        Path(__file__).resolve().parents[2] / "skills/loopx-pr-review/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "review_execution_contract.policy_revision" in skill
+    assert "review_policy_revision" in skill
+    assert re.search(r"policy_revision\s*==\s*\d+", skill) is None, skill
+
+
+def test_motivation_publishes_existing_problem_context_before_implementation():
+    contract = build_review_execution_contract()
+    context = next(row for row in contract["evidence_requirements"]
+                   if row["evidence_id"] == "problem_context")
+    publication = context["publication"]
+    assert publication["section"] == "动机"
+    assert publication["fields"] == ["affected_caller_or_operator", "before_after_scenario",
+                                      "observable_outcome", "non_goals"]
+    assert set(publication["fields"] + publication["increment_fields"]) <= (
+        set(context["fields"]) | set(context["fields_by_verdict"]["justified_increment"]))
+    assert "not truth or comprehension" in publication["rule"]

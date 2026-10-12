@@ -16,6 +16,7 @@ Choose one installation owner and keep it authoritative:
 | --- | --- | --- | --- |
 | Normal release | Python package environment | `python3 -m pip install loopx` | `loopx update apply` or the manual pip sequence below |
 | Isolated CLI on an externally managed machine | `pipx` | `pipx install loopx` | `pipx upgrade loopx`, then refresh LoopX host material |
+| Existing uv tool environment | `uv` | `uv tool install loopx` | `uv tool upgrade loopx`, then refresh LoopX host material |
 | Contributor or source qualification | Git checkout | clone/fetch plus `scripts/install-local.sh` | update the checkout explicitly, rerun the installer, validate `loopx-canary` before promotion |
 | No-clone recovery fallback | LoopX archive snapshot | published archive installer | `loopx update apply` |
 
@@ -24,7 +25,7 @@ development and qualification surface, not a second implicit package channel.
 The archive snapshot remains a recovery path rather than a competing default.
 
 LoopX's Effect Program core runs in a managed, idle-exiting TypeScript runtime
-and requires Node.js 22.18.0 or later; Node.js 24 LTS is the recommended primary
+and requires Node.js 22.22.3 or later; Node.js 24 LTS is the recommended primary
 runtime. LoopX starts and reuses that local runtime automatically; users do not
 run a daemon manually. The runtime binds only to loopback, authenticates
 requests with a user-private token, rotates when the packaged Effect core
@@ -35,7 +36,25 @@ engine. The same doctor projection exposes `runtime_lifecycle.state` as
 `running`, `stopped`, or `unavailable`, plus a public-safe `diagnostic_code`;
 the App can render this projection without inventing a second health model.
 `stopped` is healthy and means the idle-exited runtime will restart on the next
-control-plane request. Validate Node before installing or upgrading LoopX:
+control-plane request. Validate Node before installing or upgrading LoopX.
+Upgrading from an older Node 22 installation requires restarting the managed
+runtime with `loopx doctor --restart-runtime` after the new Node is on `PATH`.
+SQLite remains opt-in and checks the actual embedded SQLite version before
+opening authority state.
+
+A managed runtime that cannot publish its startup locator returns the existing
+safe filesystem/lock diagnostic code, such as `mutation_lock_timeout`,
+`io_is_directory`, or Windows `io_permission_denied` for an occupied locator
+directory, instead of only an exit status. The message does not echo
+locator paths, tokens or Node stack traces. Inspect the named local ownership
+or filesystem problem before retrying; the diagnostic neither removes a live
+owner's lock nor repairs a foreign locator. It does not identify every possible
+startup crash: an exit without a typed envelope remains `runtime_exited_before_ready`.
+
+中文：启动 locator 发布失败会返回既有文件系统/锁诊断码，不回显路径、token 或
+Node 堆栈。先核对本机对应的占用或文件系统问题；诊断不会删除活进程持有的锁、
+修复未知 locator，也不证明所有启动退出都已归因。没有 typed envelope 的退出仍
+保留 `runtime_exited_before_ready`。
 
 The CI and release lanes use Node.js 24 LTS. Node.js 26 remains a non-blocking
 forward-compatibility probe and is not a supported-version promise. After the
@@ -45,7 +64,7 @@ flags.
 
 ```bash
 node --version
-# v22.18.0 or newer
+# v22.22.3 or newer
 ```
 
 Use `loopx doctor --deep` after installation to start the managed runtime and
@@ -64,6 +83,72 @@ loopx workflow-skills --install
 loopx doctor
 ```
 
+## macOS service identity and workspace selection
+
+Use the existing `scripts/macos-dashboard-launchagent.sh` from a matching
+checkout to manage the status and Chat services. `LOOPX_BIN_DIR` selects the
+single installed CLI owner; the helper asks that command's installation-only
+doctor for its Python executable and service identity. It does not install a
+second model runner or read registered projects to qualify the package.
+
+```bash
+LOOPX_GLOBAL_REGISTRY="$HOME/.loopx/registry.global.json" \
+LOOPX_CHAT_CODEX_HOME="$HOME/.codex" \
+LOOPX_CHAT_SCAN_PATHS_JSON='["/absolute/path/to/project-one", "/absolute/path/to/project-two"]' \
+bash scripts/macos-dashboard-launchagent.sh install
+bash scripts/macos-dashboard-launchagent.sh status
+```
+
+The generated Chat plist preserves the registry, selected Codex home and
+workspace directory array across `install`/`restart`; an explicit environment
+override changes that selection. Paths must be existing absolute directories;
+up to 32 are accepted. Selection enables discovery, while Core authorization
+still owns conversation grants. An empty array retains the CLI's default
+scan behavior. Existing plists without a workspace array also retain that
+behavior until an operator explicitly selects directories. Missing or malformed
+selected paths fail before either plist is replaced. The resolved registry is
+passed verbatim, including when its filename differs from the default global
+registry filename.
+
+For an existing Chat service with an explicit `--runtime-root`, set
+`LOOPX_CHAT_RUNTIME_ROOT` to that same absolute directory at its first managed
+install. Optional `LOOPX_CHAT_IDLE_TIMEOUT_SECONDS` and
+`LOOPX_CHAT_HARD_TIMEOUT_SECONDS` preserve its positive execution timeouts.
+The helper records these selections in the Chat plist and retains them on
+later installs when overrides are omitted, including legacy explicit command
+arguments. Without a selection, the CLI defaults remain in effect.
+
+The Chat root is independent of the global status registry. Selecting it does
+not copy sessions, grant workspace access or change the status service's root.
+Invalid selections fail before either plist changes. Quiesce the previous owned
+Chat listener before switching to launchd, and read back the original Sessions
+and one consumer per App. A generated plist alone does not qualify recovery
+after logout or reboot.
+
+The helper reads the full `/status.json` contract with a one-second connection
+deadline and a 15-second total deadline. A responding feed that takes longer
+than five seconds can therefore still show its schema and write-API setting.
+HTTP failures and feeds that miss the deadline remain unavailable; old schemas
+still carry the restart warning. This bounded diagnostic allowance does not
+reduce feed latency or qualify sustained service performance.
+
+Snapshot identities retain their release id and source revision. A non-editable
+wheel instead exposes an additive `package_fingerprint` in the existing
+`loopx_runtime_identity_v1`: SHA-256 over its actual RECORD-owned LoopX package
+files, including Python, TypeScript and frontend assets. Editable, unowned,
+redirected or incomplete packages cannot claim this fingerprint. It distinguishes
+same-version artifacts for local service reuse; it does not certify a release,
+publisher or source commit. Both services capture their identity at startup, so
+an in-place upgrade cannot make an old process report the replacement's identity.
+An unqualified install fails before the helper stops an existing service.
+
+After upgrading with the chosen package manager, use `restart` to replace the
+owned local services and verify the exact running Chat identity. `stop` unloads
+them; `uninstall` also removes their two plists. Restoring a prior package through
+the same installation owner and restarting provides rollback. Source and
+synthetic canary evidence do not establish actual login-after-reboot or provider
+message acceptance.
+
 ## Native Windows PowerShell 7
 
 The PyPI distribution is also the default native Windows path. From PowerShell
@@ -80,7 +165,7 @@ trusted checkout can install the native PowerShell launcher without Bash,
 POSIX symlinks, or WSL:
 
 ```powershell
-git clone https://github.com/huangruiteng/loopx.git "$HOME/loopx"
+git clone https://github.com/loopx-project/loopx.git "$HOME/loopx"
 Set-Location "$HOME/loopx"
 pwsh -NoLogo -NoProfile -File .\scripts\install-windows.ps1 `
   -Python (Get-Command python).Source `
@@ -117,7 +202,7 @@ If installation used `-AddToUserPath`, remove the chosen `BinDir` from the
 Windows user PATH through Windows Environment Variables after uninstalling.
 Installation and PATH opt-in only expose local command and skill files. They do
 not grant repository, network, credential, external-system, or merge authority,
-and uninstall does not delete project-local `.loopx/`, `.codex/goals/`, or
+and uninstall does not delete project-local `.loopx/`, legacy `.codex/goals/`, or
 evidence state.
 
 ## Host Command Surfaces
@@ -136,10 +221,20 @@ one. Host integration changes command discovery only. It does not grant LoopX
 permission to write a repository, contact external systems, or bypass a user
 gate.
 
-Codex installs expose only canonical `loopx-*` skills. Older managed
-`loop-global-*` skill aliases are retired; their catalog entries and native
-slash-host compatibility remain available. This changes the Codex picker,
-not goal execution or write authority.
+Every host skill root exposes only canonical `loopx-*` skills. Install and
+uninstall retire older LoopX-managed `loop-global-*` skill files; unmarked
+user-owned files are preserved and reported. This prevents cross-host imports
+from republishing a deprecated facade beside its canonical outcome.
+
+**Invocation migration:** on Claude Code and Kiro, the skill is also the slash
+command, so use `/loopx-global-summary`, `/loopx-global-gates`,
+`/loopx-global-todos` and `/loopx-global-risks` instead of `/loop-global-*`.
+Other skill-backed hosts likewise expose only the canonical names. OpenCode
+alone retains independently installed `commands/loop-global-*.md` when legacy
+aliases are enabled. `--no-legacy-aliases` omits those command files from new
+installs; it does not retire existing native command files. The command catalog
+still describes aliases, but a catalog row does not install a host invocation.
+Goal execution and write authority are unchanged.
 
 Both workflow and command installation reconcile managed duplicates between
 `CODEX_HOME/skills` (default `~/.codex/skills`) and `~/.agents/skills`.
@@ -220,6 +315,16 @@ loopx update plan        # read-only command, validation, and rollback plan
 loopx update apply       # explicit local-environment mutation
 ```
 
+An upgrade does not move local state directories. Existing installations keep
+their selected legacy `$HOME/.codex/loopx` route and registered Goal state;
+fresh installations use `$HOME/.loopx`. Check `local_state_route` in
+`loopx --format json doctor` before and after upgrading. Directory migration is
+optional, separate from `update apply`, and requires the explicit offline
+[preview and recovery procedure](../product/migrations/local-state-path-migration.md).
+If both default runtime roots contain state, implicit routing refuses the
+conflict; use explicit `--registry` and `--runtime-root` for diagnosis or
+independent work until the conflict is resolved.
+
 For archive installs, `update apply` downloads the bootstrap installer to a
 private temporary file before executing it. Downloading is limited to three
 attempts, a 60-second total download budget (or the smaller command timeout),
@@ -292,6 +397,16 @@ not necessarily active in an installed release. Archive maintainers may use
 the tagged package channel and wait for the corresponding release instead of
 trying to switch an installed distribution to `main`.
 
+For an archive snapshot, `update check` and `update plan` resolve a selected
+moving GitHub ref to its current commit before saying that no update is needed.
+Matching package versions and a recent install timestamp do not establish
+source equality. If the ref lookup is unavailable, the plan reports activation
+as unqualified; retry online or select a trusted full commit SHA. A custom
+archive URL is likewise not proven by the GitHub repo/ref alone.
+An injected `--installed-doctor-json` snapshot is diagnostic input, not a live
+remote-ref check: it can qualify an immutable SHA but cannot claim a moving ref
+is currently installed.
+
 An install taken from a pinned full commit SHA needs no separate lineage
 lookup: `loopx update check --ref <40-hex-commit>` compares that commit with the
 installed manifest source commit and reports `runtime_active` when they match,
@@ -327,7 +442,7 @@ Python package environment is unavailable or the CLI is too damaged to run its
 own repair path:
 
 ```bash
-curl -fsSL https://huangruiteng.github.io/loopx/install.sh | bash
+curl -fsSL https://loopx-project.github.io/loopx/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 loopx doctor
 ```
@@ -357,7 +472,7 @@ python3 -m pip uninstall loopx
 ```
 
 Both host uninstallers preserve same-name files whose content changed after
-LoopX installed them. Project-local `.loopx/`, `.codex/goals/`, evidence, and
+LoopX installed them. Project-local `.loopx/`, legacy `.codex/goals/`, evidence, and
 runtime state are not deleted by package uninstall.
 
 Contributors who need a live canary should use a real checkout and

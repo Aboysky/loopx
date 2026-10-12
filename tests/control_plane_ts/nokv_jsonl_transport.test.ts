@@ -7,13 +7,11 @@ import {
   NoKVTransportProtocolError,
   NoKVTransportUnavailableError,
 } from "../../loopx/control_plane/coordination/nokv_authority_store.ts";
-import {
-  NoKVHelperOpenRefusedError,
-  NoKVJsonLinesTransport,
-} from "../../loopx/control_plane/coordination/nokv_jsonl_transport.ts";
+import { NoKVHelperOpenRefusedError, NoKVJsonLinesTransport } from "../../loopx/control_plane/coordination/nokv_jsonl_transport.ts";
 import { registerAuthorityStoreConformance } from "./authority_store_conformance.ts";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
 
-const PYTHON = process.env.LOOPX_TEST_PYTHON ?? "python3";
+const PYTHON = resolveTestPython();
 const FAULT_HELPER = fileURLToPath(
   new URL("../fixtures/nokv_jsonl_fake_helper.py", import.meta.url),
 );
@@ -34,8 +32,11 @@ const ETCD_ROUTING = {
 // NoKV metadata-runtimes line, which drops the etcd constructor.
 const SEEDS_ROUTING = { kind: "seeds", endpoints: ["127.0.0.1:7750"] };
 
+const FAKE_INCARNATION = "a".repeat(32);
+
 async function openSdkHelper(
   routing: Record<string, unknown> = ETCD_ROUTING,
+  fakeSdkShape?: "0.11.0" | "0.11.1-unfenced",
   extraEnv: Record<string, string> = {},
 ) {
   return await NoKVJsonLinesTransport.open({
@@ -51,8 +52,8 @@ async function openSdkHelper(
       PYTHONPATH: process.env.PYTHONPATH
         ? `${FAKE_SDK_ROOT}:${process.env.PYTHONPATH}`
         : FAKE_SDK_ROOT,
+      ...(fakeSdkShape === undefined ? {} : { LOOPX_FAKE_NOKV_SDK_SHAPE: fakeSdkShape }),
     },
-    request_timeout_ms: 2_000,
   });
 }
 
@@ -60,7 +61,6 @@ async function openFaultHelper(mode: string, maxResponseBytes?: number) {
   return await NoKVJsonLinesTransport.open({
     argv: [PYTHON, FAULT_HELPER, mode],
     config: {},
-    request_timeout_ms: 2_000,
     max_response_bytes: maxResponseBytes,
   });
 }
@@ -128,6 +128,7 @@ test("JSON-lines transport starts once and reuses the helper process", async (t)
       workbench: "authority-workbench",
       path: "metadata/head.json",
       expected_generation: null,
+      expected_workspace_incarnation_id: FAKE_INCARNATION,
       bytes: Buffer.from("payload", "utf8"),
       operation_id: "a".repeat(32),
       artifact_revision_id: "b".repeat(32),
@@ -140,6 +141,69 @@ test("JSON-lines transport starts once and reuses the helper process", async (t)
     assert.equal(Buffer.from(loaded.bytes).toString("utf8"), "payload");
     assert.equal(loaded.generation, 1);
   }
+});
+
+test("JSON-lines helper refuses a stale incarnation fence typed and leaves the generation unchanged", async (t) => {
+  const transport = await openSdkHelper();
+  t.after(async () => await transport.close());
+  assert.deepEqual(
+    await transport.casPublishBlob({
+      workbench: "authority-workbench",
+      path: "metadata/head.json",
+      expected_generation: null,
+      expected_workspace_incarnation_id: FAKE_INCARNATION,
+      bytes: Buffer.from("generation one", "utf8"),
+      operation_id: "c".repeat(32),
+      artifact_revision_id: "d".repeat(32),
+    }),
+    { status: "applied", generation: 1 },
+  );
+
+  assert.deepEqual(
+    await transport.casPublishBlob({
+      workbench: "authority-workbench",
+      path: "metadata/head.json",
+      expected_generation: 1,
+      expected_workspace_incarnation_id: "b".repeat(32),
+      bytes: Buffer.from("stale incarnation", "utf8"),
+      operation_id: "e".repeat(32),
+      artifact_revision_id: "f".repeat(32),
+    }),
+    {
+      status: "failed",
+      reason_code: "store_identity_mismatch",
+      reason: "NoKV workbench incarnation does not match the expected incarnation",
+    },
+  );
+  const loaded = await transport.readBlob("authority-workbench", "metadata/head.json");
+  assert.equal(loaded.status, "loaded");
+  if (loaded.status === "loaded") {
+    assert.equal(Buffer.from(loaded.bytes).toString("utf8"), "generation one");
+    assert.equal(loaded.generation, 1);
+  }
+});
+
+test("JSON-lines helper refuses the 0.11.0 wheel by its version pin", async () => {
+  await assert.rejects(
+    openSdkHelper(ETCD_ROUTING, "0.11.0"),
+    (error: unknown) => {
+      assert.ok(error instanceof NoKVTransportProtocolError);
+      assert.match(error.message, /must be version 0\.11\.1/);
+      return true;
+    },
+  );
+});
+
+test("JSON-lines helper refuses a 0.11.1-labelled wheel without the publication fence", async () => {
+  await assert.rejects(
+    openSdkHelper(ETCD_ROUTING, "0.11.1-unfenced"),
+    (error: unknown) => {
+      assert.ok(error instanceof NoKVTransportProtocolError);
+      assert.match(error.message, /does not fence publication/);
+      assert.match(error.message, /expected_workspace_incarnation_id/);
+      return true;
+    },
+  );
 });
 
 test("JSON-lines helper disconnect is typed unavailable", async (t) => {
@@ -226,6 +290,35 @@ test("JSON-lines transport opens the real helper with seed routing", async () =>
   }
 });
 
+test("JSON-lines transport retains the SDK schema from the exact ready handshake", async () => {
+  const unknown = await openSdkHelper();
+  try {
+    assert.equal(unknown.sdkProtocolSchema, null);
+  } finally {
+    await unknown.close();
+  }
+  const declared = await openSdkHelper(SEEDS_ROUTING, undefined, {
+    LOOPX_FAKE_NOKV_PROTOCOL_SCHEMA: "nokv.workspace.rpc.v10",
+  });
+  try {
+    assert.equal(declared.sdkProtocolSchema, "nokv.workspace.rpc.v10");
+  } finally {
+    await declared.close();
+  }
+});
+
+test("a missing SDK routing constructor returns a typed open refusal", async () => {
+  await assert.rejects(
+    openSdkHelper(SEEDS_ROUTING, undefined, {LOOPX_FAKE_NOKV_RELEASE_SHAPE: "1"}),
+    (error: unknown) => error instanceof NoKVHelperOpenRefusedError
+      && error.reasonCode === "nokv_sdk_capability_mismatch"
+      && /RoutingConfig\.seeds/.test(error.message),
+  );
+  const supported = await openSdkHelper(ETCD_ROUTING, undefined,
+    {LOOPX_FAKE_NOKV_RELEASE_SHAPE: "1"});
+  await supported.close();
+});
+
 test("JSON-lines transport surfaces an unknown routing kind as a typed protocol failure", async () => {
   await assert.rejects(
     openSdkHelper({ kind: "gossip", endpoints: ["127.0.0.1:7750"] }),
@@ -234,39 +327,24 @@ test("JSON-lines transport surfaces an unknown routing kind as a typed protocol 
   );
 });
 
-test("JSON-lines transport records the SDK wire schema from the ready handshake", async () => {
-  const release = await openSdkHelper();
-  try {
-    assert.equal(release.sdkProtocolSchema, null, "the 0.11.0-shaped wheel exports no schema");
-  } finally {
-    await release.close();
-  }
-  const newer = await openSdkHelper(SEEDS_ROUTING, {
-    LOOPX_FAKE_NOKV_PROTOCOL_SCHEMA: "nokv.workspace.rpc.v10",
+test("a stalled helper request expires at the transport deadline and fences later requests", { timeout: 10_000 }, async t => {
+  const transport = await openFaultHelper("unresponsive");
+  t.after(async () => { t.mock.timers.reset(); await transport.close(); });
+  // Start the real process before controlling time: process startup is not the
+  // request deadline under test. No wall-clock scheduling budget is asserted.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let settled = false;
+  const pending = transport.readBlob("authority-workbench", "metadata/head.json");
+  const rejected = assert.rejects(pending, error => {
+    settled = true;
+    assert.ok(error instanceof NoKVTransportUnavailableError);
+    assert.match(error.message, /read_blob timed out/);
+    return true;
   });
-  try {
-    assert.equal(newer.sdkProtocolSchema, "nokv.workspace.rpc.v10");
-  } finally {
-    await newer.close();
-  }
+  t.mock.timers.tick(29_999);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  await rejected;
+  await assert.rejects(transport.storeIdentity("authority-workbench"), /read_blob timed out/);
 });
-
-test("JSON-lines transport types a helper open refused for a wheel that lacks the routing kind", async () => {
-  await assert.rejects(
-    openSdkHelper(SEEDS_ROUTING, { LOOPX_FAKE_NOKV_RELEASE_SHAPE: "1" }),
-    (error: unknown) =>
-      error instanceof NoKVHelperOpenRefusedError
-      && error instanceof NoKVTransportProtocolError
-      && error.reasonCode === "nokv_sdk_capability_mismatch"
-      && /RoutingConfig\.seeds/.test(error.message)
-      && !/7750/.test(error.message),
-  );
-  // The same narrowed wheel still opens with the routing kind it does provide.
-  const release = await openSdkHelper(ETCD_ROUTING, { LOOPX_FAKE_NOKV_RELEASE_SHAPE: "1" });
-  try {
-    assert.equal(release.sdkProtocolSchema, null);
-  } finally {
-    await release.close();
-  }
-});
-

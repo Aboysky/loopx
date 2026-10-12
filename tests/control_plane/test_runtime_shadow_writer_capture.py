@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
 from loopx.control_plane.work_items.task_lease import (
     acquire_task_lease,
@@ -18,14 +20,19 @@ from loopx.todos import add_goal_todo, update_goal_todo
 GOAL_ID = "runtime-shadow-writer"
 
 
-def _fixture(tmp_path: Path, *, enabled: bool) -> tuple[Path, Path, Path]:
+def _fixture(
+    tmp_path: Path,
+    *,
+    enabled: bool,
+    handoff_mode: str = "hard_lease",
+) -> tuple[Path, Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
     state = repo / "ACTIVE_GOAL_STATE.md"
     state.write_text(
         "---\n"
         f"goal_id: {GOAL_ID}\n"
-        "handoff_mode: hard_lease\n"
+        f"handoff_mode: {handoff_mode}\n"
         "updated_at: 2026-09-04T00:00:00+00:00\n"
         "---\n\n## Agent Todo\n\n",
         encoding="utf-8",
@@ -107,6 +114,39 @@ def test_runtime_shadow_todo_writer_captures_full_records_and_reuses_one_store(
     assert not (runtime_root / "authority-shadow" / "file" / GOAL_ID).exists()
 
 
+def test_runtime_shadow_todo_claim_preserves_claim_write_class(tmp_path: Path) -> None:
+    registry, _state, runtime_root = _fixture(
+        tmp_path,
+        enabled=True,
+        handoff_mode="legacy",
+    )
+    added = add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        role="agent",
+        text="Qualify the legacy claim path.",
+        task_class="advancement_task",
+    )
+
+    claimed = update_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=str(added["todo_id"]),
+        claimed_by="agent-a",
+        agent_id="agent-a",
+        claim_only=True,
+    )
+
+    assert claimed["coordination_runtime_shadow"]["outcome"] == "delivered"
+    view = adapter.read_local_authority_shadow(
+        runtime_root=runtime_root,
+        goal_id=GOAL_ID,
+        scan_limit=10,
+    )
+    receipt = view["proof"]["transactions"][-1]["receipts"][0]
+    assert receipt["write_class"] == "todo_claim"
+
+
 def test_runtime_shadow_todo_writer_is_zero_effect_by_default(tmp_path: Path) -> None:
     registry, _state, runtime_root = _fixture(tmp_path, enabled=False)
 
@@ -123,7 +163,10 @@ def test_runtime_shadow_todo_writer_is_zero_effect_by_default(tmp_path: Path) ->
     assert not (runtime_root / "authority-shadow").exists()
 
 
-def test_runtime_shadow_native_lease_writers_capture_complete_records(tmp_path: Path) -> None:
+@pytest.mark.parametrize("configuration_cleared", [False, True])
+def test_runtime_shadow_native_lease_writers_capture_complete_records(
+    tmp_path: Path, configuration_cleared: bool,
+) -> None:
     registry, _state, runtime_root = _fixture(tmp_path, enabled=True)
     added = add_goal_todo(
         registry_path=registry,
@@ -133,6 +176,10 @@ def test_runtime_shadow_native_lease_writers_capture_complete_records(tmp_path: 
         task_class="advancement_task",
     )
     todo_id = str(added["todo_id"])
+    if configuration_cleared:
+        config = json.loads(registry.read_text(encoding="utf-8"))
+        config["goals"][0]["coordination"].pop("runtime_shadow")
+        registry.write_text(json.dumps(config), encoding="utf-8")
 
     acquired = acquire_task_lease(
         registry_path=registry,

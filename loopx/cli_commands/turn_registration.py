@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Callable
 
+from ..control_plane.operator_provider import operator_provider_environ
+from ..control_plane.turn_driver.driver import SessionBindingScope, SUPPORTED_ITERATION_CONTEXT_POLICIES
 from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     resolve_default_turn_host,
 )
+from ..control_plane.turn_driver.execution_profile import REASONING_EFFORTS
 from ..paths import default_public_scan_root
 
 # Explicit host choices stay per-command: planning may name any host the Turn
@@ -44,6 +48,21 @@ def register_turn_commands(
             "Host Session binding check."
         ),
     )
+    inspect_journal.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Poll the read-only journal projection and emit one progress event "
+            "per changed phase/status until the Turn is terminal. With --format "
+            "json, events are newline-delimited JSON."
+        ),
+    )
+    inspect_journal.add_argument(
+        "--watch-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between journal reads while --watch is active (default: 1).",
+    )
 
     plan = command_sub.add_parser(
         "plan",
@@ -54,7 +73,7 @@ def register_turn_commands(
     # selected managed host runs bounded headless Turns, so pairing it with a
     # visible interactive mode would produce a default plan that cannot be
     # scheduled. The mode follows the *selected* host, whatever resolved it.
-    resolved_default_host = resolve_default_turn_host()
+    resolved_default_host = resolve_default_turn_host(operator_provider_environ())
     resolved_default_execution_mode = (
         "isolated-headless"
         if resolved_default_host == MANAGED_TURN_HOST
@@ -167,12 +186,20 @@ def register_turn_commands(
     add_subcommand_format(run_once)
     _add_turn_decision_arguments(
         run_once,
-        default_host=resolve_default_turn_host(),
+        default_host=resolved_default_host,
         host_choices=list(RUN_ONCE_TURN_HOST_CHOICES),
         execution_mode_choices=["isolated-headless"],
         default_execution_mode="isolated-headless",
     )
     run_once.add_argument("--project", required=True)
+    run_once.add_argument(
+        "--automation-id",
+        help="Stable automation identity for an automation-scoped execution interval.",
+    )
+    run_once.add_argument(
+        "--manual-interval-bypass-reason",
+        help="Explicit manual intent; bypass only the interval and record this start.",
+    )
     run_once.add_argument(
         "--host-command-json",
         "--host-adapter-command-json",
@@ -209,12 +236,46 @@ def register_turn_commands(
     )
     run_once.add_argument("--codex-model")
     run_once.add_argument(
+        "--codex-operation-tools",
+        action="store_true",
+        help="Opt in to the owned app-server operation transport for this admitted codex-cli Turn. Reuses the original Todo/session; does not authenticate an attached Desktop or grant domain effects.",
+    )
+    run_once.add_argument(
+        "--codex-confirmed-operation-id",
+        help="Internal exact-operation resume fence for an operator-granted callback continuation. Requires operation tools; does not authenticate a caller or permit a domain effect.",
+    )
+    run_once.add_argument(
+        "--codex-operation-source-route-json",
+        type=json.loads,
+        help="Registered return audience {host_surface,thread_id} for operation proposals. Required when this Agent has several source routes; not executor authentication or execution permission.",
+    )
+    run_once.add_argument(
+        "--codex-reasoning-effort",
+        choices=list(REASONING_EFFORTS),
+        help=(
+            "Reasoning effort for the independent Codex CLI Turn. This is an "
+            "operator-bound independent Agent profile, not the native child-agent "
+            "model preference."
+        ),
+    )
+    run_once.add_argument(
         "--codex-sandbox",
         choices=["read-only", "workspace-write", "danger-full-access"],
         default="read-only",
-        help=("Codex CLI sandbox (default: read-only). danger-full-access explicitly "
-              "disables the inner sandbox; callers must provide their own isolation. "
-              "The setting is passed explicitly for both new and resumed sessions."),
+        help=(
+            "Codex CLI sandbox (default: read-only). danger-full-access explicitly "
+            "disables the inner sandbox; callers must provide their own isolation. "
+            "The setting is passed explicitly for both new and resumed sessions."
+        ),
+    )
+    run_once.add_argument(
+        "--codex-mcp-server-json",
+        type=json.loads,
+        help=(
+            "Trusted codex_stdio_mcp_server_v0 JSON for one invocation-scoped "
+            "stdio MCP server. The command is passed to fresh and resumed Codex "
+            "sessions without modifying user configuration."
+        ),
     )
     run_once.add_argument(
         "--dsh-provider",
@@ -237,7 +298,14 @@ def register_turn_commands(
             "managed execution profile (LOOPX_TURN_REASONING_EFFORT)."
         ),
     )
-    run_once.add_argument("--dsh-max-tokens", type=int)
+    run_once.add_argument(
+        "--dsh-max-tokens",
+        type=int,
+        help=(
+            "Per-model-request output-token cap; defaults to LoopX's bounded "
+            "managed-host value. This is not a whole-Turn or tool-call budget."
+        ),
+    )
     run_once.add_argument(
         "--dsh-home",
         help=(
@@ -258,7 +326,8 @@ def register_turn_commands(
             "run_dsh_turn(...) used instead of the DeepSeek Harness SDK."
         ),
     )
-    run_once.add_argument("--timeout-seconds", type=float, default=120.0)
+    run_once.add_argument("--timeout-seconds", type=float, default=None,
+                          help="Optional execution deadline; by default wait for host completion or cancellation.")
     run_once.add_argument(
         "--retry-failed-turn",
         action="store_true",
@@ -331,13 +400,19 @@ def _add_turn_decision_arguments(
     )
     parser.add_argument(
         "--iteration-context",
-        choices=["fresh", "resume-if-available"],
-        default="resume-if-available",
+        choices=sorted(SUPPORTED_ITERATION_CONTEXT_POLICIES),
+        default="resume",
         help=(
             "Host context policy for this iteration. fresh starts a clean "
             "session even when a compatible prior session exists; "
-            "resume-if-available preserves the existing continuation behavior."
+            "resume continues the recorded session."
         ),
+    )
+    parser.add_argument(
+        "--session-scope",
+        choices=[scope.value for scope in SessionBindingScope],
+        default=SessionBindingScope.AGENT.value,
+        help="Codex exec conversation binding: todo isolates each Todo; agent continues across Todos in the same Goal/Agent. Turn authority and settlement stay Todo-scoped.",
     )
     parser.add_argument(
         "--resume-goal-id",

@@ -9,7 +9,25 @@ WORKERS = ("analyst", "reviewer")
 REVISIONS = ("initial", "corrected")
 
 
-def roster(topology: str) -> list[dict]:
+def roster(topology: str, team_size: tuple[int, int, int] | None = None) -> list[dict]:
+    if team_size is not None:
+        if topology != "mixed" or len(team_size) != 3 or any(type(n) is not int or n < 1 for n in team_size):
+            raise ValueError("mixed_team_requires_positive_luna_dsh_ark_counts")
+        # Each layer adopts an exact predecessor. The lead must also consume every
+        # member, including extra analysts with no downstream reviewer assigned.
+        members = []
+        previous = []
+        for (host, revision), count in zip((("codex", "initial"), ("dsh", "corrected"), ("ark", "corrected")), team_size):
+            current = []
+            for index in range(count):
+                worker = f"{host}-{index + 1}"
+                row = {"worker": worker, "revision": revision, "host": host}
+                if previous:
+                    row["upstream"] = previous[index % len(previous)]
+                members.append(row)
+                current.append(worker + "/" + revision)
+            previous = current
+        return members
     if topology == "local-led":
         members = [{"worker": worker, "revision": revision, "host": host} for worker, revision, host in (
             ("local-analyst", "initial", "dsh"), ("cloud-reviewer", "initial", "ark"),
@@ -75,6 +93,9 @@ def task(revision: str, question: str) -> str:
         "source_id values from issuer, prior and repost; cite the prior filing for the period-comparability check), "
         "reason (short). Count independent_source_families only for corroboration of CURRENT-period "
         "figures; prior-period comparison material is not current-period corroboration. "
+        "If read_input returns an upstream artifact, independently check it and include adopted_dependencies "
+        "in output.json: an object mapping upstream.identity to its full upstream.artifact_sha256. "
+        "Matching its numbers or mentioning a hash in prose does not record adoption. "
         "Do not use network, read another worker, modify Goal state, commit, or trade. "
         "Write only output.json. Return the normal Turn candidate after writing the artifact."
     )

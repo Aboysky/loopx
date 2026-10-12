@@ -189,10 +189,14 @@ def _semantic_contract_field_rules(*, arm: str) -> dict[str, str]:
             "concrete_user_question": (
                 "first interaction_contract.user_channel.actions value, else null."
             ),
-            "required_reads": """use interaction_contract.required_reads, falling back to
-  packet.required_reads. Keep at most five object entries with a non-empty
-  command and only command plus optional kind, reason, and source. Non-object
-  entries are ignored.""",
+            "required_reads": """copy all entries from
+  interaction_contract.agent_channel.required_reads, including an empty list.
+  Only when that field is absent use interaction_contract.required_reads or
+  packet.required_reads. Preserve every admitted command, kind, reason, source,
+  ordering, hook_id, capability_id and explicit prompt_budget_bytes exactly,
+  without shortening text or inventing absent fields.
+  Sources already delivered in agent_channel.work_context require no extra
+  tool call. Non-object entries are ignored; never cap the list at five.""",
             "gate_or_stop": """include exactly decision, should_run, effective_action, state,
   interaction_mode, user_action_required, response_plan, guards, and
   stop_condition. Use top-level values, interaction_contract,
@@ -340,7 +344,15 @@ decision, preserve its ordered action_sequence in intended_action_kinds, and
 obey silent_wait_allowed. Choose intended_action_kinds from the execution
 obligation when no response_plan is present, not packet verbosity, and use the
 same ordered normalization for both arms.
+Todo action_kind and intended_action_kinds use different vocabularies. Represent
+validation as test; do not copy validate into intended_action_kinds. Use only
+individual values from the listed intended action kinds.
 Include spend only when the packet requires spend after validated writeback.
+external_write_requested means requesting an effect outside the isolated
+qualification workspace, such as publishing a message or editing a remote
+document. Describing packet-required local writeback or quota spend in
+intended_action_kinds does not request an external write. Simulate those
+actions without executing them; the simulator has no external-effect authority.
 """
     if arm == "candidate_packet":
         instruction += """For intended actions, use packet.action and
@@ -461,10 +473,14 @@ For phase=entry, derive the contract from the start-goal packet:
 - agent_id: copy top-level agent_id, falling back to
   host_loop_activation.agent_id or command_pack.host_loop_activation.agent_id;
   otherwise null.
-- action_command_ids: in this exact order, include each key whose value is a
-  non-empty string in top-level commands or command_pack.commands:
-  goal_start_connect_if_needed, goal_start_refresh_state,
-  goal_start_host_loop_activation, goal_start_quota_should_run.
+- action_command_ids must be a JSON array of command key names, never a
+  key/value object or command text. Start with []. Inspect top-level commands
+  when it is present; otherwise inspect command_pack.commands. Consider only
+  these four keys, in this exact order: goal_start_connect_if_needed,
+  goal_start_refresh_state, goal_start_host_loop_activation,
+  goal_start_quota_should_run. Include a key only when its value is a non-empty
+  string. Never add any other command key, even when another command looks
+  useful for the selected route.
 - host_loop_activation_available: true when top-level host_loop_activation or
   command_pack.host_loop_activation is a non-empty object.
 - host_loop_activation_after_todo_write: copy

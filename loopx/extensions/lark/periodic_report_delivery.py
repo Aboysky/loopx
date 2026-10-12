@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from ...capabilities.periodic_report.adapters import PeriodicReportAdapterRegistry
 from ...capabilities.periodic_report.bindings import (
+    DELIVERY_INTENT_SCHEMA,
     GENERATION_BUNDLE_SCHEMA,
     build_periodic_report_generation_bundle,
 )
@@ -25,6 +26,7 @@ from ...capabilities.periodic_report.machine_defaults import (
 from ...capabilities.periodic_report.machine_store import (
     read_periodic_report_machine_defaults,
 )
+from ...history import load_registry
 from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .goal_channel_contracts import (
     binding_for_goal,
@@ -40,7 +42,6 @@ from .goal_channel_targets import (
 )
 from .presentation.kanban import CommandRunner, default_subprocess_runner
 from .presentation.periodic_report import periodic_report_lark_sink_adapter
-from ...registry import read_json
 from ...presentation.public_safety import redact_public_text
 
 
@@ -48,7 +49,6 @@ GOAL_CHANNEL_DELIVERY_REQUEST_SCHEMA = (
     "periodic_report_goal_channel_delivery_request_v0"
 )
 GOAL_CHANNEL_DELIVERY_RESULT_SCHEMA = "periodic_report_goal_channel_delivery_result_v0"
-DELIVERY_INTENT_SCHEMA = "periodic_report_delivery_intent_v0"
 ANNOUNCEMENT_IDEMPOTENCY_SCHEMA = "periodic_report_goal_channel_announcement_v1"
 _ANNOUNCEMENT_KINDS = ("hosted_report", "lark_document")
 _ANNOUNCEMENT_FOOTER = "LoopX periodic report · Goal Channel"
@@ -193,7 +193,7 @@ def _resolved_goal_channel_binding(
     goal_id: str,
     expected_authority: Mapping[str, Any],
 ) -> dict[str, Any]:
-    registry = read_json(registry_path)
+    registry = load_registry(registry_path)
     goal = goal_from_registry(registry, goal_id)
     subscription = resolve_goal_periodic_report_subscription(
         goal,

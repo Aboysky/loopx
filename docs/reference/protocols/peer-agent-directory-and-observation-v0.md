@@ -131,6 +131,23 @@ an identity.
 Rules:
 
 - a row exists per registered Agent of the Goal, whether or not it is running;
+- `peer_route` summarizes the thread bindings already published for that Agent as
+  `{schema_version, agent_id, outcome, address_shared, candidate_count, candidates,
+  scope, provenance}`. `outcome` describes only what this walk can prove:
+  `single_candidate`, `multiple_candidates` or `no_candidate` — it is never a claim
+  that an exact link has been resolved, which stays the forward resolver's job.
+  `address_shared: true` means one of these addresses also names a different
+  registered Agent, the same registry conflict the forward resolver answers
+  `conflict` for, so a lone candidate is not thereby unique. `scope` is
+  `goals_supplied`: the bindings read for this Goal, which does not bound
+  project-level uniqueness. `candidates` carries at most three entries that
+  survived the public-output boundary, and any entry that did not is witheld:
+  `withheld_candidate_count` and the packet-level `route_candidate_withheld`
+  limitation name it, while `candidate_count` keeps counting it, so a filtered
+  route is visibly filtered and never reads as a binding that does not exist.
+  Withholding never truncates an identifier to make it pass. In every case a
+  route is a locator, not a claim, lease, capability or cross-host resume
+  authority;
 - `presence` is optional and must carry `provider`, `observed_at` and `basis`,
   so a reader can tell "not running" from "this machine cannot see it";
 - `provider_session_ref` is an opaque handle **inside one provider session**.
@@ -140,6 +157,34 @@ Rules:
   injected pane identifiers) may strengthen "I am inside this space". It never
   replaces registry registration, and a failure of that proof means the reader
   reports `unknown`, not `absent`.
+
+For a named existing peer, `resolve-peer-route --goal-id ... --agent-id ...`
+reads the binding owner and the local host observer before any request is
+recorded. Without a task link, the shared typed selector may resolve exactly one
+readable local task when every alternative has an explicit host `archived`
+observation. It observes all matching candidates within the existing 32-thread
+budget, independently of the three-row publication cap. Missing, unsupported,
+failed or withheld observations remain unknown alternatives; multiple remaining
+candidates or an over-budget inventory stay `ambiguous`. It never selects the
+last, newest or only visible binding. An explicit
+`--thread-link` must resolve to that same Goal and Agent across the project
+registry. `unavailable` includes archived, unknown, unsupported and missing
+host observations. `not_authorized` means the named peer is outside the Goal or
+the supplied link belongs to another identity. A `resolved` result proves only
+an exact project binding plus a readable local host record. The host must still
+verify its own profile and submission permission. Every preview says
+`host_delivery: not_attempted`, and no route preview grants a claim, lease,
+session resume or message-send permission.
+
+This changes the previous default refusal for *all* multiple bindings: archived
+history no longer requires the owner to supply a link. It applies to the local
+CLI and `manager-inbox request --require-host-route`, including trusted steward
+and peer callers. Readable records are still neither fresh runtime liveness nor
+model/capacity qualification. Restricted Chat and remote hosts do not acquire a
+new observer or execution path. Registration, the scoped candidate set and the
+selected identity are rechecked after host reads; a changed set remains
+unresolved, while a mere reorder does not change the route. Request replay
+keeps its original exact route.
 
 ## Presence Vocabulary
 
@@ -195,6 +240,62 @@ facts that are easy to conflate:
 4. **No blind resend.** A timeout or a stall does not prove the request was never
    delivered, so the sender inspects state before repeating; `context_handoff`
    delivery receipts remain the durable record that a delivery happened.
+
+`manager-inbox request --require-host-route` applies that route check before
+the existing peer operation and Inbox write. An ambiguous, unavailable or
+wrong-identity route writes no request. The returned `host_delivery` block is
+an exact target and a content-free notification for an authorized host sender;
+its status remains `not_attempted` until the host actually submits it. Repeating
+the same operation id recovers one Inbox request; using it with another selected
+host task is an identity conflict. A sender must inspect the
+host after a lost submission response before repeating the host message. The
+receiver's `manager-inbox read`, decision and `report` receipts remain distinct
+from host submission and from each other.
+
+### Real-host qualification
+
+`examples/peer-handoff-live-qualification.py` is an explicit opt-in qualification of the
+existing Codex app-server adapter and the same request/return CLI. It creates
+two synthetic host threads in the selected authenticated home, a disposable
+Goal/registry/runtime, and a bounded artifact pinned to the checkout head and
+SHA-256. It does not resume a user thread or create replacement child workers.
+
+From the source checkout:
+
+```bash
+uv run --extra test python examples/peer-handoff-live-qualification.py --execute-real-host
+```
+
+The qualification filename keeps this paid host run outside the automatically
+discovered `*-smoke.py` fleet. Ordinary offline coverage remains in
+`tests/test_peer_collaboration.py` and `tests/control_plane/test_peer_host_route.py`;
+neither default CI nor the public smoke fleet
+authorizes model calls or host thread creation.
+
+On Windows select `--codex-bin codex.cmd` if the installed launcher needs it.
+The command consumes model quota and leaves the host's own test-thread records
+in that home; no authentication or session records are copied between homes.
+The caller authorizes these test submissions separately from route resolution.
+An unreachable historical binding keeps automatic selection ambiguous; an
+explicit exact link pins the existing reviewer. The real receiver reads and
+adopts the request, independently checks the artifact, and returns its exact
+head/digest. A fresh requester process restores its own thread, reads the
+result and acknowledges consumption. Retry recovers one request. Output contains
+compact assertions, without thread links, local paths or raw conversations.
+
+The qualification exposed two Windows blockers in this journey: private request
+hashes and lock/claim suffixes exceed `MAX_PATH`, and POSIX-only input flags
+prevent artifact readback. Private store/lock I/O now addresses the same physical
+files using Win32 extended paths; identities, lock exclusion and storage layout
+remain unchanged. Regular input files use the platform's binary/nonblocking
+flags. Focused regression checks cover mutual exclusion, release, artifact
+readback and one request across repeated delivery/consumption.
+
+This qualifies this local owned-host request/adopt/return slice. It does not
+qualify remote hosts, grant message permission to an arbitrary App task, transfer
+a lease, or close the overall R2/R3 collaboration acceptance. Route previews
+continue to report `host_delivery: not_attempted`; the smoke's explicit host
+submission and receiver receipts are separate evidence.
 
 ## Target Identity Pinning
 

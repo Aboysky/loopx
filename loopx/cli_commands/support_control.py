@@ -15,7 +15,6 @@ from ..chat_server import (
     DEFAULT_CHAT_PORT,
     serve_chat,
 )
-from ..control_plane.reward_memory import reward_memory_goal_policy
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from ..dashboard_launcher import launch_dashboard, replace_existing_loopx_chat
 from ..execution_profile import execution_profile_turn_granularity
@@ -31,7 +30,6 @@ from ..heartbeat_prompt import (
 )
 from ..kiro_cli_goal_mode import KIRO_CLI_BIN
 from ..paths import default_public_scan_root
-from ..presentation.renderers.status_markdown import render_status_markdown
 from ..registry import (
     inspect_registry,
     inspect_registry_boundary,
@@ -82,6 +80,7 @@ FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
 SUPPORT_CONTROL_COMMANDS = {
+    "configuration-backup",
     "automation-prompts",
     "backup-state",
     "chat",
@@ -107,6 +106,8 @@ def register_support_control_commands(
     from .automation_prompts import register_automation_prompts
     register_automation_prompts(subparsers, add_subcommand_format)
     register_backup_state_command(subparsers, add_subcommand_format)
+    from .configuration_backup import register_configuration_backup
+    register_configuration_backup(subparsers, add_subcommand_format)
     register_heartbeat_control_commands(subparsers, add_subcommand_format)
 
     register_supervisor_control_commands(subparsers, add_subcommand_format)
@@ -189,6 +190,27 @@ def register_support_control_commands(
     register_chat_and_dashboard_commands(subparsers, add_subcommand_format)
 
 
+def _start_failure_markdown(
+    command: str,
+) -> Callable[[dict[str, object]], str]:
+    """Render a local service start failure without the status projection.
+
+    A failed start has no status payload, so the status renderer would print an
+    empty status table and drop the error that tells the operator what to fix.
+    """
+
+    def render(payload: dict[str, object]) -> str:
+        lines = [f"# LoopX {command} could not start", "", f"- error: {payload.get('error')}"]
+        if payload.get("registry"):
+            lines.append(f"- registry: `{payload['registry']}`")
+        gate = payload.get("gate")
+        if isinstance(gate, dict) and gate.get("next_action"):
+            lines.append(f"- next action: {gate['next_action']}")
+        return "\n".join(lines)
+
+    return render
+
+
 def handle_support_control_command(
     args: argparse.Namespace,
     *,
@@ -215,6 +237,11 @@ def handle_support_control_command(
             registry_path=registry_path,
             print_payload=print_payload,
         )
+
+    if args.command == "configuration-backup":
+        from .configuration_backup import handle_configuration_backup
+        return handle_configuration_backup(args, registry_path=registry_path,
+            print_payload=print_payload, output_format=output_format)
 
     if args.command == "backup-state":
         return handle_backup_state_command(
@@ -250,6 +277,7 @@ def handle_support_control_command(
         active_state_source = None
         registered_agents = None
         effective_agent_id = args.agent_id
+        agent_registry_path = registry_path
         requested_runtime_profile = (
             SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value
             if args.codex_app
@@ -284,13 +312,6 @@ def handle_support_control_command(
                 if isinstance(registry_goal, dict)
                 else None
             )
-            reward_memory_policy = reward_memory_goal_policy(
-                registry_goal if isinstance(registry_goal, dict) else {}
-            )
-            reward_memory_enabled = bool(
-                reward_memory_policy["enabled"]
-                and reward_memory_policy["automation"].get("automatic_ingest") is True
-            )
             agent_profile = None
             if args.agent_id:
                 effective_agent_id = require_registered_agent_id(
@@ -301,6 +322,16 @@ def handle_support_control_command(
                 )
                 agent_profile = agent_profile_from_registry(
                     agent_registry_path, args.goal_id, effective_agent_id
+                )
+            reward_memory_enabled = False
+            if effective_agent_id is not None:
+                from ..capabilities.reward_memory.configuration import (
+                    reward_memory_automatic_ingest_for_agent,
+                )
+
+                reward_memory_enabled = reward_memory_automatic_ingest_for_agent(
+                    registry_goal if isinstance(registry_goal, dict) else {},
+                    effective_agent_id,
                 )
             explicit_scheduler_fields = (
                 args.host_surface,
@@ -340,6 +371,7 @@ def handle_support_control_command(
                 thin=bool(args.thin),
                 cli_bin=args.cli_bin,
                 runtime_root=args.runtime_root,
+                registry_path=agent_registry_path.resolve(),
                 agent_id=effective_agent_id,
                 agent_scopes=args.agent_scopes,
                 agent_profile=agent_profile,
@@ -358,6 +390,7 @@ def handle_support_control_command(
                 visible_goal_host=args.visible_goal_host,
                 turn_granularity=turn_granularity,
                 turn_instance_id=args.turn_instance_id,
+                decision_output_root=args.decision_output_root,
                 reward_memory_enabled=reward_memory_enabled,
             )
             if args.bootstrap and payload.get("ok"):
@@ -400,6 +433,7 @@ def handle_support_control_command(
                 thin=bool(args.thin),
                 cli_bin=args.cli_bin,
                 runtime_root=args.runtime_root,
+                registry_path=agent_registry_path.resolve(),
                 agent_id=effective_agent_id or args.agent_id,
                 agent_scopes=args.agent_scopes,
                 registered_agents=registered_agents,
@@ -411,6 +445,9 @@ def handle_support_control_command(
             SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value,
             SchedulerRuntimeProfile.TRAE_APP.value,
             SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value,
+            # Kiro CLI moved off generic_cli onto its own profile; its facade
+            # still reads the thin Agent input, so keep that output shape.
+            SchedulerRuntimeProfile.KIRO_CLI_VISIBLE.value,
         }
         recurring_thin_surface = bool(
             recurring_runtime_profile and args.visible_goal_host is None
@@ -496,7 +533,7 @@ def handle_support_control_command(
     if args.command == "serve-status":
         try:
             status_registry_path = (
-                explicit_global_registry(args.runtime_root)
+                explicit_global_registry(args.runtime_root, registry_path=registry_path)
                 if args.global_registry
                 else registry_path
             )
@@ -531,14 +568,14 @@ def handle_support_control_command(
                 "runtime_root": args.runtime_root,
                 "error": str(exc),
             }
-            print_payload(payload, args.format, render_status_markdown)
+            print_payload(payload, args.format, _start_failure_markdown("serve-status"))
             return 1
         return 0
 
     if args.command == "dashboard":
         try:
             dashboard_registry_path = (
-                explicit_global_registry(args.runtime_root)
+                explicit_global_registry(args.runtime_root, registry_path=registry_path)
                 if getattr(args, "global_registry", False)
                 else registry_path
             )
@@ -575,13 +612,13 @@ def handle_support_control_command(
                 "schema_version": "loopx_dashboard_start_v0",
                 "error": str(exc),
             }
-            print_payload(payload, args.format, render_status_markdown)
+            print_payload(payload, args.format, _start_failure_markdown("dashboard"))
             return 1
 
     if args.command == "chat":
         try:
             chat_registry_path = (
-                explicit_global_registry(args.runtime_root)
+                explicit_global_registry(args.runtime_root, registry_path=registry_path)
                 if args.global_registry
                 else registry_path
             )
@@ -591,6 +628,9 @@ def handle_support_control_command(
             if bool(getattr(args, "replace_existing_loopx_chat", False)):
                 replace_existing_loopx_chat(args.host, args.port)
             serve_chat(
+                project_workspace_grant=args.project_workspace_grant,
+                project_filesystem_scope=args.project_filesystem_scope,
+                private_reactions=not getattr(args, "no_private_reactions", False),
                 registry_path=chat_registry_path,
                 runtime_root_override=args.runtime_root,
                 scan_roots=scan_roots,
@@ -625,7 +665,7 @@ def handle_support_control_command(
                     "next_action": "Resolve the reported local host capability, then retry loopx chat.",
                 },
             }
-            print_payload(payload, args.format, render_status_markdown)
+            print_payload(payload, args.format, _start_failure_markdown("chat"))
             return 1
         return 0
 

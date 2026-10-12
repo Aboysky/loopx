@@ -32,6 +32,28 @@ gateway addresses, credentials, and verifier artifacts.
 
 The runnable current Heartbeat implementation lives in `benchmark/LHTB/`.
 
+## Three core metrics
+
+The brief shows mean reward, strict success rate (`reward >= 0.95`), and
+supplementary success rate (`reward > 0.80`) together. Each rate averages a
+binary reward over the same 46 effective task-arm cells; mean reward preserves
+partial credit. All three are derived from the unrounded `tasks` rows.
+The 80% threshold is a post-hoc descriptive view, not a change to the native
+reward, the study's original solved threshold, or trial selection. No published
+score equals 0.80 or 0.95, so strict and inclusive comparisons agree here.
+
+| Arm | Mean reward | Success ≥95% | Success >80% |
+| --- | ---: | ---: | ---: |
+| Plain | 0.4218 | 7/46 (15.2%) | 12/46 (26.1%) |
+| Native Goal | 0.4475 | 4/46 (8.7%) | 14/46 (30.4%) |
+| LoopX SSH-Goal | 0.4678 | 6/46 (13.0%) | 12/46 (26.1%) |
+| Legacy Heartbeat | 0.4794 | 7/46 (15.2%) | 15/46 (32.6%) |
+| LoopX 1.0.3 Heartbeat | 0.4948 | 7/46 (15.2%) | 15/46 (32.6%) |
+
+At >80%, current and legacy Heartbeat have identical task-level binary outcomes.
+One task changes the rate by 2.17 percentage points. Lowering the threshold does
+not establish lower run-to-run variance; each cell has one effective trial.
+
 ## Reading the baseline comparisons
 
 The brief derives these comparisons from the 46 `tasks` rows in `data.json`,

@@ -2,11 +2,14 @@
 // Smoke-test the public-safe frontstage static export bundle.
 
 import { spawnSync } from "node:child_process";
-import { readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateBilingualBlog } from "./blog-bilingual-index-smoke.mjs";
+import { scanPublicBoundary } from "./export-frontstage-share-bundle.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = resolve("/tmp", "loopx-frontstage-share-bundle-smoke");
@@ -51,23 +54,6 @@ function assertRelativeReferenceExists(pagePath, target) {
   assertExists(resolve(dirname(pagePath), target, "index.html"));
 }
 
-function assertNoLeak(text, label) {
-  const forbidden = [
-    /\/Users\//,
-    /\/private\//,
-    new RegExp("byte" + "dance", "i"),
-    new RegExp("lark" + "office", "i"),
-    new RegExp("\\.codex/goals|\\.goal-" + "harness"),
-    new RegExp("raw_" + "internal_note"),
-    /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/,
-    /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i,
-  ];
-  const hit = forbidden.find((pattern) => pattern.test(text));
-  if (hit) {
-    throw new Error(`${label} leaked forbidden pattern: ${hit}`);
-  }
-}
-
 function collectFakePrivateMarkers(text) {
   return Array.from(new Set(text.match(/GH_FAKE_[A-Z0-9_]+/g) ?? [])).sort();
 }
@@ -89,6 +75,34 @@ async function collectGeneratedTextFiles(rootDir) {
   }
   await visit(rootDir);
   return files;
+}
+
+// Exercise the real exporter guard, with independent accept/reject inputs.
+const boundaryProbeDir = await mkdtemp(resolve(tmpdir(), "loopx-public-source-smoke-"));
+try {
+  const publicCitation = '<a href="https://github.com/ByteDance-Seed/EdgeBench">Benchmark source</a>';
+  const probePath = resolve(boundaryProbeDir, "index.html");
+  await writeFile(probePath, publicCitation);
+  await scanPublicBoundary(boundaryProbeDir);
+  for (const unsafe of [
+    "byte" + "dance internal workspace",
+    '<a href="https://github.com/ByteDance-Seed/private-work">unverified source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench?access_token=secret">source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench/private">source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench.evil">source</a>',
+    "/Users/fixture/private-work",
+    "/private/fixture/private-work",
+    "https://fixture." + "lark" + "office.com/docx/private",
+    ".loopx/goals/private-fixture",
+    "raw_" + "internal_note",
+    "-----BEGIN PRIVATE KEY-----",
+    "access_token=fixture-secret",
+  ]) {
+    await writeFile(probePath, `${publicCitation}<p>${unsafe}</p>`);
+    await assert.rejects(scanPublicBoundary(boundaryProbeDir), /Public boundary scan failed/);
+  }
+} finally {
+  await rm(boundaryProbeDir, { recursive: true, force: true });
 }
 
 await rm(outDir, { force: true, recursive: true });
@@ -145,8 +159,17 @@ for (const locale of ["", "zh/"]) {
     const html = await readFile(pagePath, "utf8");
     const language = locale ? "zh-CN" : "en";
     const interactive = article === "application-scenarios/";
-    if (!html.includes(`<html lang="${language}">`) || !html.includes("<h1>") || (!interactive && html.includes("<script"))) {
+    const catalog = article === "";
+    if (!html.includes(`<html lang="${language}">`) || !html.includes("<h1>") || (!interactive && !catalog && html.includes("<script"))) {
       throw new Error(`Blog must provide static content in ${language}: ${pagePath}`);
+    }
+    if (catalog) {
+      const scriptHref = locale ? "../../blog/blog-index.js" : "../blog/blog-index.js";
+      const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((match) => match[0]);
+      if (scripts.length !== 1 || scripts[0] !== `<script type="module" src="${scriptHref}"></script>`) {
+        throw new Error("Blog catalog may only enhance its static listings with the shared sorting module");
+      }
+      assertExists(resolve(dirname(pagePath), scriptHref));
     }
     if (interactive) {
       const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((match) => match[0]);
@@ -200,8 +223,8 @@ if (!routerSource.includes("basepath:") || !routerSource.includes("import.meta.e
 }
 
 const homepageHtml = await readFile(resolve(siteDir, "index.html"), "utf8");
-if (!homepageHtml.includes('<div id="root"></div>')) {
-  throw new Error("homepage root must be the compiled React entry");
+if (!homepageHtml.includes('<div id="root">') || !homepageHtml.includes("<h1>")) {
+  throw new Error("homepage must include prerendered content inside its React root");
 }
 if (!homepageHtml.includes('src="/loopx/site-assets/') || !homepageHtml.includes('href="/loopx/site-assets/')) {
   throw new Error("homepage compiled assets did not resolve against the GitHub Pages base");
@@ -231,12 +254,12 @@ if (publishedInstaller !== canonicalInstaller) {
 const homepageSource = await readFile(resolve(repoRoot, "apps/presentation/site/src/App.tsx"), "utf8");
 const homepageStyles = await readFile(resolve(repoRoot, "apps/presentation/site/src/styles.css"), "utf8");
 const benchmarkHtml = await readFile(resolve(siteDir, "benchmarks/swe-marathon/index.html"), "utf8");
-if (benchmarkHtml !== homepageHtml) {
-  throw new Error("SWE-Marathon static route must reuse the compiled public-site entry");
+if (benchmarkHtml === homepageHtml || !benchmarkHtml.includes("<h1")) {
+  throw new Error("SWE-Marathon must publish its own prerendered research content");
 }
 const lhtbHtml = await readFile(resolve(siteDir, "benchmarks/lhtb/index.html"), "utf8");
-if (lhtbHtml !== homepageHtml) {
-  throw new Error("LHTB static route must reuse the compiled public-site entry");
+if (lhtbHtml === homepageHtml || !lhtbHtml.includes("<h1")) {
+  throw new Error("LHTB must publish its own prerendered research content");
 }
 const deepSweBehaviorHtml = await readFile(
   resolve(siteDir, "benchmarks/deepswe/behavior-discovery/index.html"),
@@ -250,16 +273,6 @@ if (deepSweBehaviorHtml !== canonicalDeepSweBehaviorHtml) {
   throw new Error("DeepSWE behavior article route must be byte-identical to the reviewed standalone source");
 }
 for (const sourceContract of [
-  "Your agents keep",
-  'secondPrefix: "the "',
-  'secondAccent: "night shift"',
-  'thirdPrefix: "You keep the "',
-  'thirdAccent: "judgment"',
-  'secondPrefix: "Agent "',
-  'secondAccent: "持续推进"',
-  'thirdPrefix: "判断始终"',
-  'thirdAccent: "由你掌握"',
-  "Provider-neutral",
   "Get started",
   "开始使用",
   "See in action",
@@ -276,7 +289,6 @@ for (const sourceContract of [
   "Prefer the shell? Install LoopX manually.",
   "Developer book",
   "benchmarks/swe-marathon/",
-  "Iowan Old Style",
   "Pi",
 ]) {
   if (!homepageSource.includes(sourceContract) && !homepageStyles.includes(sourceContract)) {
@@ -446,12 +458,12 @@ if (fakePrivateTrapMarkers.length < 6) {
 }
 for (const path of await collectGeneratedTextFiles(outDir)) {
   const text = await readFile(path, "utf8");
-  assertNoLeak(text, path);
   const leakedTrapMarkers = fakePrivateTrapMarkers.filter((marker) => text.includes(marker));
   if (leakedTrapMarkers.length) {
     throw new Error(`${path} leaked fake-private frontstage trap markers: ${leakedTrapMarkers.join(", ")}`);
   }
 }
+await scanPublicBoundary(outDir);
 
 const readmeText = await readFile(resolve(outDir, "README.md"), "utf8");
 if (readmeText.includes("?statusUrl=")) {

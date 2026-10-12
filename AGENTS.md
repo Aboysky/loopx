@@ -9,6 +9,16 @@ and relevant domain acceptance; do not make every fix wait for every RFC or
 invent a roadmap id. Check latest `main`, related PRs and canonical Todos so an
 older task description cannot override corrected direction or duplicate work.
 
+For recurring operational or performance problems, connect the demonstrated
+failure to the owning roadmap/RFC acceptance before choosing a repair. Separate
+caller overhead, shared typed semantics/transport and provider-specific costs;
+prefer the existing common contract where behavior is shared. Follow the
+[optimization evidence guide](docs/development/testing-and-quality.md#roadmap-aligned-optimization).
+Distinguish an interim mitigation from closing the owning acceptance: faster
+lookup, a larger timeout or successful promotion alone does not qualify sustained
+operation. Reconcile the existing checkpoint when the evidence changes it;
+do not add a parallel roadmap or require unrelated RFC work for a bounded fix.
+
 Carry one compact delivery brief from task to PR: goal/source, current gap,
 observable result, owning boundary and decisive acceptance evidence. Reuse the
 existing task/PR fields; keep private Goal state out of public artifacts.
@@ -25,6 +35,21 @@ boundary is necessary, name the delivered delta, remaining gap, next owner/
 dependency and why the boundary improves verification or rollback. Reuse or
 update an existing successor; do not create ceremonial follow-up tasks for a
 completed request. Real authorization, cost and operational stop gates remain.
+
+When a change introduces or extends a state classification, protocol literal,
+Enum, `Literal`, named closed set, or TypeScript `as const` vocabulary, answer
+whether it reuses an existing owner, extends a registered vocabulary, remains
+local, or creates a new shared contract. Before the full-tree semantic check,
+run the development-time advisory over the current diff:
+
+```bash
+uv run python scripts/generate_semantic_inventory.py --changed-from HEAD
+```
+
+Pass each intentional untracked source with `--include-untracked loopx/path.py`;
+the probe never scans untracked or ignored files automatically. Findings are
+review prompts, not a gate or proof of semantic equivalence, and an empty result
+does not cover dynamic construction or unsupported syntax.
 
 For multi-Agent changes, qualify the relationship the user needs: dependency
 artifacts, receiver adoption, claim/lease handling, independent acceptance and
@@ -97,16 +122,18 @@ adapters, smoke tests, public docs, or commit/push workflows, use the
    - focused validation or cleanup.
 6. Push a branch and open a PR for reviewable batches.
 
-Control-plane, runtime and product surfaces are never self-merged. A change
-that alters the behavior of `loopx/**`, `apps/**` or `packages/**`, a
-permission or authority boundary, a persisted state or receipt contract, a
-quota/scheduler/todo rule, or a CLI/API contract is proposed, reviewed on its
-exact head, and then left for the maintainer to merge -- including when the
-author has already validated it, its review is published, and its CI is green.
-Admin bypass does not convert one of those changes into a self-mergeable one,
-and neither does a small diff: a validated fix is still a control-plane change
-when it changes control-plane behavior. When the author cannot tell whether a
-change is in that set, it is not self-merged.
+Control-plane, runtime and product surfaces require explicit maintainer
+merge authorization. A change that alters the behavior of `loopx/**`, `apps/**`
+or `packages/**`, a permission or authority boundary, a persisted state or
+receipt contract, a quota/scheduler/todo rule, or a CLI/API contract must be
+proposed and reviewed on its exact head. After the required validation passes
+and exact-head merge readiness returns ready, an agent may use admin bypass
+when the maintainer has explicitly authorized that merge or delivery batch.
+A small diff, successful validation, published review or green CI does not grant
+merge authority by itself. Admin bypass never substitutes for exact-head review,
+required validation or merge readiness. Without explicit authorization, leave
+these changes for the maintainer to merge; when the affected boundary is unclear,
+use the same authorization requirement.
 
 For small, low-risk PRs, maintainers may self-merge after validation when all
 of the following are true:
@@ -122,7 +149,8 @@ merged commit and correcting the rule that let it through.
 - the change is single-purpose and easy to review from the diff;
 - required checks or focused smokes have passed;
 - the exact head carries a published self-review, and
-  `loopx pr-review --check-merge-readiness NUMBER@HEAD_OID` returned ready for
+  `loopx pr-review --goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID`
+  returned ready for
   that unchanged head. GitHub blocks formal self-approval, so on an
   author-owned PR the record is a `COMMENTED` review on the exact head that
   states the approval conclusion and an English verdict; a green CI run, a diff
@@ -154,6 +182,18 @@ set. The PR comment must name the changed surfaces, checks run, failures/skips,
 manual holds, and why the coverage is enough. One hand-picked smoke is not
 enough for runtime, quota/status, scheduler, todo, install, dashboard,
 benchmark-boundary, or public/private evidence changes.
+
+### Personal Feishu Release Guide
+
+Every named public release must include an illustrated Feishu release guide
+owned by the maintainer's verified personal user account. Follow the
+[release guide procedure](docs/product/release-readiness.md#personal-feishu-release-guide)
+before calling release communication complete. Verify account and document
+ownership, use public-safe screenshots of the released UI, teach upgrade and
+capability use, and read back the published text and images. Do not substitute a
+corporate account or bot, claim a candidate is released, or infer authorization
+for chat announcements or other social channels. Keep account identifiers,
+private reference documents, drafts, and validation logs out of the repository.
 
 ### Release Contributor Attribution
 
@@ -223,14 +263,32 @@ while planning. Inspect existing settings and capability editors before calling
 a configuration change backend-only; include necessary companion work in the
 same delivery plan, reusing the existing configuration owner and projection.
 
-Before PR handoff, verify the affected user interaction, state readback and
-feedback, including the packaged frontend when shipped. State which entry
-points changed and the validation performed. If no frontend change is needed,
-give a concrete, verified reason; if companion work remains, label delivery
-partial and link it. These are agent-owned completion checks, not new approval
-gates.
+Every new or materially extended caller-facing capability must enter the
+shipped frontend through an existing appropriate surface: users can discover
+its purpose, perform the authorized user operation, see unavailable/error states,
+and read back the result. A CLI command, catalog row, static description or
+"copy this command" button alone does not complete frontend delivery. Reuse the
+same typed owner; frontend presence does not require a duplicate configuration
+switch or automatic execution of privileged tools. Internal helpers and providers
+belong to their owning capability's interaction rather than a separate screen.
+
+Before PR handoff, validate that journey in the packaged frontend alongside the
+real owning rule/backend, including a relevant failure or recovery case. State
+which frontend/Lark/CLI entrypoints changed and what was verified. A staged CLI
+or backend prerequisite may be proposed as partial, with its remaining frontend
+journey and linked owner; do not mark the capability complete or use "developer
+only" as an automatic exemption. These are agent-owned completion checks, not
+new approval gates.
 
 ## UI Design Standard
+
+Apply the whole-viewport attention review in `docs/development/design.md`
+("Earn The User's Attention") before implementation and in PR visual evidence.
+For production-bound interactive UI changes, carry one ordinary user task through
+`docs/development/frontend-delivery.md`: compare the shortest authorized journey
+before coding, validate the packaged interaction and owning state, and distinguish
+proposed changes from installed behavior. For documentation and prototypes, name
+the simulated boundary without claiming packaged or installed readback.
 
 Before changing or reproducing any LoopX UI, read and follow the repository-root
 `docs/development/design.md`. This includes websites, dashboards, desktop applications,
@@ -283,6 +341,20 @@ broader actor lifecycle or authority model than the implementation provides.
 
 ## Engineering Quality And Right-Sized Scope
 
+### TypeScript-First Implementation
+
+Prefer TypeScript for new or refactored domain-neutral LoopX capabilities,
+control-plane and orchestration logic, capability composition, context/memory
+composition, and shared projections. Follow the accepted
+[TypeScript migration RFC](docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
+and reuse the existing typed owner. Do not introduce a parallel Python decision
+owner. Stable domain providers, specialized computation and transport adapters
+may remain Python with an explicit placement rationale; this preference does
+not require unrelated language-only rewrites or make a full migration a
+prerequisite for a bounded user outcome.
+
+尽量用 TypeScript 实现新增或重构的 LoopX 通用能力、控制面、编排、能力组合、上下文/记忆组合及共享投影，遵循 TS 重构 RFC 并复用既有类型化 owner，不新增平行的 Python 决策源。稳定领域 provider、专门计算与传输适配器可保留 Python，但须说明归属理由；不因语言偏好扩大无关重写，也不把全量迁移设为有界用户结果的前置条件。
+
 ### Source-Checkout Python Entry Points
 
 Run source development and validation from the intended worktree root with
@@ -310,6 +382,16 @@ compatibility; neither a historical ceiling nor a green revised test is the
 objective. Record the tradeoff in existing PR validation/review evidence, not a
 new approval workflow. Hard limits and frozen experiment/promotion criteria
 retain their owning authority and cannot be reclassified to erase a failure.
+
+LoopX is a semantic control plane: agent-consumed prose is part of its behavior
+contract. Before shortening packet guidance, compare obligations clause by
+clause, including ordering, evidence provenance, modality, scope qualifiers,
+continuation and stop conditions. Stable fields, commands and decision codes
+do not prove that shorter instructions preserve those obligations. A regression
+ceiling is not frozen authority: prefer an evidence-backed limit increase when
+compression would discard useful meaning. Use the existing review capability's
+`observable_semantics.decision_text_assessment`; do not optimize for a green
+size test at the expense of the caller's decision.
 
 ### Refactor Real-Path Validation
 

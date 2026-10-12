@@ -13,6 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,8 +50,8 @@ SURFACE_BUDGETS = {
         "consumer": "wake and route one bounded turn",
         "cold_path": "quota should-run, status, or review-packet --handoff-only",
         # Includes generator metadata and scoped commands, not just task_body.
-        # The independent 2,500-character thin body cap remains unchanged.
-        "max_json_chars": 4_800,
+        # The independent 3,000-character thin body cap is checked separately.
+        "max_json_chars": 5_400,
         "max_nested_keys": 40,
         "max_top_level_keys": 30,
         "budget_field": "interface_budget",
@@ -70,17 +71,25 @@ SURFACE_BUDGETS = {
         "cold_path": "status, history, or active state",
         # Codex keeps a lossless codex_app compatibility alias while the
         # provider-neutral app_automation packet becomes canonical.
-        "max_json_chars": 14_000,
-        "max_nested_keys": 350,
-        "max_top_level_keys": 52,
+        # Full Goal/selected-work read commands add necessary source continuity.
+        # One Agent-channel carrier avoids duplicating them in the CLI channel.
+        # M3 adds one validated cadence readback envelope to the quota packet:
+        # 357 -> 368 nested keys and 51 -> 52 top-level keys.
+        "max_json_chars": 15_500,
+        "max_nested_keys": 376,
+        "max_top_level_keys": 54,
     },
     "dashboard_status_json": {
         "owner": "operator dashboard",
         "consumer": "render first-screen operator state",
         "cold_path": "history, run artifacts, or project-local adapter output",
-        "max_json_chars": 19_500,
-        "max_nested_keys": 260,
-        "max_top_level_keys": 25,
+        # Selected-work freshness added seven 95-character digest fields to
+        # this unchanged fixture (21,895 -> 22,560). Keep the internal source
+        # revisions: quota consumes this status projection before its own CLI
+        # compaction. The contract records why modest headroom is appropriate.
+        "max_json_chars": 23_000,
+        "max_nested_keys": 350,
+        "max_top_level_keys": 27,
     },
 }
 
@@ -358,8 +367,9 @@ def assert_cadence_projection(
     assert projected["overdue"] is False, projected
     assert projected["within_budget"] is True, projected
     assert projected["next_check_due_at"] == "2099-01-02T00:10:00+00:00", projected
-    assert projected["headroom_remaining"] == 0, projected
-    assert projected["recommendation"] == "rerun_hot_path_interface_budget_smoke", projected
+    for field in ("headroom_remaining", "minimum_headroom_ratio", "tightest_surface", "tightest_metric"):
+        assert projected[field] == cadence[field], projected
+    assert projected["recommendation"] == "quiet_skip_until_next_check_due", projected
 
     quota_payload = build_quota_should_run(
         status_payload,
@@ -372,7 +382,13 @@ def assert_cadence_projection(
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="loopx-hot-path-budget-") as tmp:
+    # Prompt rendering inspects implicit routes even though status reads the
+    # declared fixture registry. Keep both default-route probes in this fixture.
+    with tempfile.TemporaryDirectory(prefix="loopx-hot-path-budget-") as tmp, patch.multiple(
+        "loopx.paths",
+        DEFAULT_RUNTIME_ROOT=Path(tmp) / "default-runtime",
+        LEGACY_RUNTIME_ROOT=Path(tmp) / "legacy-runtime",
+    ):
         root = Path(tmp)
         registry_path, project = write_registry(root)
         append_run(root)
@@ -386,6 +402,8 @@ def main() -> int:
         assert "presentation_surfaces" not in status_payload, status_payload
         status_items = status_payload["attention_queue"]["items"]
         assert status_items, status_payload
+        # Internal graph evaluations must not expand public status payloads.
+        assert "succession_evaluation" not in json.dumps(status_items)
         assert "task_graph_projection" not in status_items[0], status_items[0]
         route_health = status_payload["runtime_projection_routes"]
         assert route_health["healthy"] is True, route_health
@@ -446,26 +464,32 @@ def main() -> int:
         assert cadence["surface_count"] == len(summaries), cadence
         assert cadence["next_check_due_at"] == "2099-01-02T00:10:00+00:00", cadence
         assert cadence["minimum_headroom_ratio"] is not None, cadence
-        assert cadence["headroom_remaining"] == 0, cadence
-        assert cadence["recommendation"] == "rerun_hot_path_interface_budget_smoke", cadence
-        relaxed_summaries = [dict(summary) for summary in summaries]
-        for summary in relaxed_summaries:
-            if summary["json_chars"] == summary["max_json_chars"]:
-                summary["max_json_chars"] = summary["json_chars"] + 1
-            if summary["nested_keys"] == summary["max_nested_keys"]:
-                summary["max_nested_keys"] = summary["nested_keys"] + 1
-            if summary["top_level_keys"] == summary["max_top_level_keys"]:
-                summary["max_top_level_keys"] = summary["top_level_keys"] + 1
-        relaxed_cadence = build_interface_budget_cadence(
-            relaxed_summaries,
+        # Fixture paths affect JSON size and can change the tightest metric.
+        # Check the measured margin and minimum ratio, not a historical key count.
+        tightest = next(summary for summary in summaries
+                        if summary["surface"] == cadence["tightest_surface"])
+        metric = cadence["tightest_metric"]
+        limit = tightest[f"max_{metric}"]
+        remaining = limit - tightest[metric]
+        assert remaining > 0, cadence
+        assert cadence["headroom_remaining"] == remaining, cadence
+        assert cadence["minimum_headroom_ratio"] == round(remaining / limit, 4), cadence
+        for summary in summaries:
+            for value_key in ("json_chars", "nested_keys", "top_level_keys"):
+                ceiling = summary[f"max_{value_key}"]
+                ratio = round((ceiling - summary[value_key]) / ceiling, 4)
+                assert cadence["minimum_headroom_ratio"] <= ratio, (cadence, summary)
+        assert cadence["recommendation"] == "quiet_skip_until_next_check_due", cadence
+        saturated_summaries = [dict(summary) for summary in summaries]
+        saturated_summaries[0]["max_json_chars"] = saturated_summaries[0]["json_chars"]
+        saturated_cadence = build_interface_budget_cadence(
+            saturated_summaries,
             checked_at="2099-01-01T00:10:00+00:00",
             now="2099-01-01T01:00:00+00:00",
             freshness_hours=24,
         )
-        assert relaxed_cadence["within_budget"] is True, relaxed_cadence
-        assert relaxed_cadence["overdue"] is False, relaxed_cadence
-        assert relaxed_cadence["headroom_remaining"] > 0, relaxed_cadence
-        assert relaxed_cadence["recommendation"] == "quiet_skip_until_next_check_due", relaxed_cadence
+        assert saturated_cadence["headroom_remaining"] == 0, saturated_cadence
+        assert saturated_cadence["recommendation"] == "rerun_hot_path_interface_budget_smoke", saturated_cadence
         stale_cadence = build_interface_budget_cadence(
             summaries,
             checked_at="2099-01-01T00:10:00+00:00",

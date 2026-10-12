@@ -82,7 +82,7 @@ def test_remote_source_is_discovered_and_read_without_local_host_metadata(remote
     argv, opts = calls[0]
     assert (
         argv[-2] == "research-host"
-        and '"$HOME/.codex/loopx/registry.global.json"' in argv[-1]
+        and "--registry @host-global" in argv[-1]
     )
     assert "--manager-view todos" in argv[-1] and "--goal-id remote-goal" in argv[-1]
     assert "BatchMode=yes" in argv and opts["timeout"] == 45
@@ -158,8 +158,9 @@ def test_old_or_offline_remote_is_unknown_not_empty_healthy(remote):
     }
 
 
+@pytest.mark.parametrize("todo_id", [None, "t1"])
 def test_export_uses_canonical_todos_and_never_returns_owner_private_continuation(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, todo_id
 ):
     import loopx.chat_manager_details as details
 
@@ -167,34 +168,59 @@ def test_export_uses_canonical_todos_and_never_returns_owner_private_continuatio
     registry.write_text(
         json.dumps({"goals": [{"id": "remote-goal", "repo": str(tmp_path)}]})
     )
-    monkeypatch.setattr(
-        details,
-        "list_goal_todos",
-        lambda **_: {
-            "ok": True,
-            "source": "canonical",
-            "todos": [
-                {
-                    "todo_id": "t1",
-                    "text": "Validate delivery",
-                    "status": "open",
-                    "note": "Private deliberation",
-                }
-            ],
-        },
-    )
+    todo = {
+        "todo_id": "t1",
+        "text": "Validate delivery",
+        "status": "open",
+        "note": "Private deliberation",
+    }
+
+    def list_todos(**kwargs):
+        result = {"ok": True, "source": "canonical"}
+        if kwargs.get("todo_id"):
+            result["todo"] = todo
+        else:
+            result["todos"] = [todo]
+        return result
+
+    monkeypatch.setattr(details, "list_goal_todos", list_todos)
     args = SimpleNamespace(
         portfolio_goal_ids=["remote-goal"],
         manager_view="todos",
         limit=8,
         offset=0,
         days=1,
+        context_todo_id=todo_id,
     )
     packet = export_page(registry, str(tmp_path), args)
     assert packet["schema_version"] == "manager_evidence_page_v1"
     assert packet["rows"][0]["goal_id"] == "remote-goal"
     assert packet["rows"][0]["title"] == "Validate delivery"
     assert "Private deliberation" not in json.dumps(packet)
+
+
+@pytest.mark.parametrize("view", [None, "portfolio", "agents", "deliveries"])
+def test_cli_rejects_exact_todo_on_other_views_before_read(tmp_path, view):
+    args = ["goal-portfolio", "--todo-id", "t1", "--goal-id", "missing"]
+    if view is not None:
+        args += ["--manager-view", view]
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json",
+         "--registry", str(tmp_path / "missing-registry.json"), *args],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["ok"] is False
+
+
+def test_remote_exact_todo_preserves_the_selector_as_one_quoted_argument(remote):
+    tool, calls, *_ = remote
+    todo_id = "todo_sample; echo unintended"
+    result = tool.read(TOOL_NAME, {"view": "todos", "source_id": "ssh:research-host",
+                                  "goal_id": "remote-goal", "todo_id": todo_id})
+    assert result["ok"]
+    wire = shlex.split(calls[0][0][-1])
+    assert wire[wire.index("--todo-id") + 1] == todo_id
 
 
 def test_delivery_lookback_can_explain_stale_goals_without_redating_outcomes(tmp_path):
@@ -234,7 +260,7 @@ def test_ssh_wire_arguments_execute_real_remote_cli_projection(remote, tmp_path)
 
     def execute_cli(argv, **kwargs):
         arguments = shlex.split(argv[-1].split("--format json ", 1)[1])
-        return subprocess.run(
+        completed = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -249,12 +275,14 @@ def test_ssh_wire_arguments_execute_real_remote_cli_projection(remote, tmp_path)
             ],
             **kwargs,
         )
+        assert completed.returncode == 0, completed.stderr
+        return completed
 
     tool.remote_runner = execute_cli
     result = tool.read(
         TOOL_NAME, {"view": "portfolio", "source_id": "ssh:research-host", "limit": 3}
     )
-    assert result["ok"]
+    assert result["ok"], result
     assert result["rows"][0]["goal_id"] == "remote-goal"
     assert result["rows"][0]["source_host"] == "research-host"
     assert result["rows"][0]["quality"] != "verified"
@@ -453,6 +481,92 @@ def test_failed_source_read_is_typed_and_never_claims_no_progress(tmp_path):
     assert result["stale_rows_included"] is True
     assert "remote_source_rows_are_stale" in result["limitations"]
     assert result["rows"][0]["source_freshness"] == "stale"
+
+
+def test_failed_point_read_keeps_the_last_successful_portfolio_visible(tmp_path):
+    config, channel = _evidence_root(tmp_path)
+    remote_evidence(
+        tmp_path,
+        channel,
+        False,
+        window_days=7,
+        scope_valid=lambda: True,
+        config_path=config,
+        runner=_packet_runner([]),
+    )
+
+    def rejected(argv, **kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            255,
+            stdout="",
+            stderr="Permission denied (gssapi-with-mic).",
+        )
+
+    inspection = ManagerInspection(
+        context={"goals": []},
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path,
+        owner_scope=False,
+        channel_id=channel,
+        scope_valid=lambda: True,
+        record=lambda _result: None,
+        remote_runner=rejected,
+        ssh_config_path=config,
+    )
+    result = inspection.read(
+        TOOL_NAME,
+        {"view": "portfolio", "source_id": "ssh:research-host"},
+    )
+
+    assert result["ok"] is False
+    assert result["reason_code"] == "ssh_auth_required"
+    assert "kinit" in result["reason"]
+    assert result["last_success_at"]
+    assert result["cached_window_days"] == 7
+    assert result["stale_rows_included"] is True
+    assert result["rows"] == []
+    assert [row["goal_id"] for row in result["stale_portfolio_rows"]] == [
+        "remote-goal"
+    ]
+    assert result["stale_portfolio_rows"][0]["source_freshness"] == "stale"
+    assert result["coverage_effect"] == "remote_goals_may_be_outdated_not_absent"
+    assert "do not present" in result["next_action"]
+
+
+def test_failed_point_read_does_not_reveal_cache_after_scope_revocation(tmp_path):
+    config, channel = _evidence_root(tmp_path)
+    remote_evidence(
+        tmp_path,
+        channel,
+        False,
+        window_days=7,
+        scope_valid=lambda: True,
+        config_path=config,
+        runner=_packet_runner([]),
+    )
+    checks = iter([True, True, False])
+    inspection = ManagerInspection(
+        context={"goals": []},
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path,
+        owner_scope=False,
+        channel_id=channel,
+        scope_valid=lambda: next(checks),
+        record=lambda _result: None,
+        remote_runner=lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv,
+            255,
+            stdout="",
+            stderr="Permission denied (gssapi-with-mic).",
+        ),
+        ssh_config_path=config,
+    )
+
+    assert inspection.read(
+        TOOL_NAME,
+        {"view": "portfolio", "source_id": "ssh:research-host"},
+    ) == {"ok": False, "error": "authorization_changed"}
 
 
 def test_one_dial_per_turn_defers_the_other_declared_source(tmp_path):
@@ -702,3 +816,15 @@ def test_every_failed_read_declares_a_bounded_typed_limitation(
     # Exactly one code per cause: the summary teaches the repair without letting
     # a reader mistake an unread source for a remote Goal with no progress.
     assert packet["limitations"] == [expected_limitation]
+
+
+def test_remote_agent_search_keeps_source_and_audience_scope(remote):
+    tool, calls, records, _, _ = remote
+    result = tool.read(TOOL_NAME, {"view": "agents", "source_id": "ssh:research-host", "query": "review; $(noop)", "offset": 12})
+    assert result["ok"]
+    argv = shlex.split(calls[0][0][-1])
+    assert argv[argv.index("--manager-view") + 1] == "agents"
+    assert argv[argv.index("--query") + 1] == "review; $(noop)"
+    assert argv[argv.index("--goal-id") + 1] == "remote-goal"
+    assert argv[argv.index("--offset") + 1] == "12"
+    assert records[-1]["source_id"] == "ssh:research-host"

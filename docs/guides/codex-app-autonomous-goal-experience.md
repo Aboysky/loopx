@@ -40,7 +40,7 @@ $loopx 任务
 - 你理解启用 Heartbeat 后会周期性消耗 Agent 计算。首次安装前必须审阅
   预览并明确确认。
 
-不要把 `.loopx/`、`.codex/goals/`、运行记录、自动化数据库、凭证或原始
+不要把 `.loopx/`、`.loopx/goals/`、运行记录、自动化数据库、凭证或原始
 Agent 日志提交到仓库。
 
 ## 第 1 步：创建隔离的试验仓库
@@ -207,7 +207,7 @@ loopx history --goal-id "$GOAL_ID"
 
 ```bash
 loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop
-loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop --execute
+loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop --actor-kind owner --execute
 ```
 
 **预期效果：**
@@ -225,7 +225,7 @@ loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop --execute
 **输入：**
 
 ```bash
-loopx goal-lifecycle --goal-id "$GOAL_ID" --operation resume --execute
+loopx goal-lifecycle --goal-id "$GOAL_ID" --operation resume --actor-kind owner --execute
 loopx quota should-run \
   --goal-id "$GOAL_ID" \
   --agent-id "$AGENT_ID" \

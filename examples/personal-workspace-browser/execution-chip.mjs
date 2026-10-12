@@ -15,6 +15,11 @@ const shippedDefaultBinding = {
   executor_kind: "individual",
   model: "gpt-6-astra",
   model_source: "vendor_default",
+  selection_policy: "preferred",
+  allocation_reason: "product_default",
+  configured_endpoint: null,
+  eligible_endpoints: [],
+  allocation_configuration_revision: "",
   credential_env_var: "",
   operator_credential_configured: false,
   available: null,
@@ -37,12 +42,25 @@ const selectedManagedBinding = {
   executor_endpoint_source: "explicit_config",
   executor_endpoint_default_reason: "",
   executor_kind: "managed",
+  selection_policy: "pinned",
+  allocation_reason: "pinned_configuration",
+  configured_endpoint: "dsh",
+  allocation_configuration_revision: "sha256:managed",
   model: "deepseek-v4-flash",
   model_source: "managed_execution_profile",
   credential_env_var: "DEEPSEEK_API_KEY",
   operator_credential_configured: true,
   available: true,
   unavailable_reason: null,
+  output_token_budget: {
+    schema_version: "dsh_output_token_budget_v0",
+    scope: "per_model_request",
+    max_tokens: 16384,
+    valid: true,
+    source: "product_default",
+    final_response_reserve_supported: false,
+    hard_tool_budget_supported: false,
+  },
 };
 
 // The channel can select the managed host, but if it cannot launch here the chip
@@ -152,14 +170,20 @@ async function waitForPickerLabel(page, settled, timeoutMs = 15_000) {
   throw new Error(`Chat runtime picker never settled: ${resolution}`);
 }
 
-async function assertHairlineRow(page) {
+async function assertHairlineRow(page, maxHeight) {
   const headerBox = await page.locator(".personal-channel-header").boundingBox();
-  const chipBox = await page.locator(".personal-execution-chip").boundingBox();
+  const chip = page.locator(".personal-execution-chip");
+  const chipBox = await chip.boundingBox();
+  // The model editor turns the read-only label into a desktop button with a
+  // 28px target. Keep the original 26px label budget and the explicit mobile
+  // budget; do not derive the limit from the observed height or its CSS.
+  const desktopBudget = await chip.evaluate((element) => element.tagName === "BUTTON" ? 28 : 26);
+  const heightBudget = maxHeight ?? desktopBudget;
   if (!headerBox || !chipBox) throw new Error("Execution chip has no layout box");
   if (chipBox.y < headerBox.y || chipBox.y + chipBox.height > headerBox.y + headerBox.height) {
     throw new Error("Execution chip escaped the channel header row");
   }
-  if (chipBox.height > 26) {
+  if (chipBox.height > heightBudget) {
     throw new Error(`Execution chip is not a compact hairline row: ${chipBox.height}px tall`);
   }
 }
@@ -187,10 +211,15 @@ export const executionChipScenario = {
       }
       // The default is one endpoint, so the chip names it and the one way to
       // move it, and never claims a credential branch that does not exist.
+      await page.locator(".personal-runtime-details > summary").click();
       const defaultNote = await page.locator(".personal-execution-rule-note").innerText();
       shippedDefaultNote = defaultNote;
       if (!defaultNote.includes("出货默认值") || !defaultNote.includes("codex")) {
         throw new Error(`Shipped default did not explain itself: ${defaultNote}`);
+      }
+      const defaultDetails = await page.locator(".personal-runtime-details").innerText();
+      if (!defaultDetails.includes("选择：偏好 · 产品默认路径")) {
+        throw new Error(`Shipped allocation did not explain its policy and reason: ${defaultDetails}`);
       }
       if (defaultNote.includes("operator 凭据")) {
         throw new Error(`The shipped default claimed a credential branch: ${defaultNote}`);
@@ -220,6 +249,7 @@ export const executionChipScenario = {
           `A configured credential moved the steward chip: ${shippedText} -> ${text}`,
         );
       }
+      await credentialOnly.page.locator(".personal-runtime-details > summary").click();
       const credentialDefaultNote = await credentialOnly.page
         .locator(".personal-execution-rule-note")
         .innerText();
@@ -235,7 +265,7 @@ export const executionChipScenario = {
     const managed = await openChip(browser, url, selectedManagedBinding, collectCoverage);
     try {
       const text = await chipText(managed.page);
-      for (const fragment of ["dsh", "operator 凭据", "deepseek-v4-flash"]) {
+      for (const fragment of ["dsh", "operator 凭据", "deepseek-v4-flash", "每次请求 16,384 token"]) {
         if (!text.includes(fragment)) {
           throw new Error(`Managed host chip omitted ${fragment}: ${text}`);
         }
@@ -249,9 +279,45 @@ export const executionChipScenario = {
       if (text.includes("codex")) {
         throw new Error(`The selected managed host must not still report the CLI endpoint: ${text}`);
       }
+      await managed.page.locator(".personal-runtime-details > summary").click();
+      const allocation = await managed.page.locator(".personal-runtime-details").innerText();
+      if (!allocation.includes("选择：锁定 · 由本机配置锁定")) {
+        throw new Error(`Pinned steward allocation was not readable: ${allocation}`);
+      }
       await assertHairlineRow(managed.page);
+      await managed.page.screenshot({ animations: "disabled", fullPage: false,
+        path: resolve(outputDir, "execution-chip-dsh-budget-desktop.png") });
+      await managed.page.setViewportSize({ width: 390, height: 844 });
+      await assertHairlineRow(managed.page, 44);
+      const budget = managed.page.locator(".personal-execution-chip-budget");
+      if (!await budget.isVisible()) throw new Error("Mobile header lost the output budget");
+      const box = await budget.boundingBox();
+      if (!box || box.x < 0 || box.x + box.width > 390) throw new Error("Mobile output budget is clipped");
+      await managed.page.screenshot({ animations: "disabled", fullPage: false,
+        path: resolve(outputDir, "execution-chip-dsh-budget-mobile.png") });
     } finally {
       coverageEntries.push(...await managed.close());
+    }
+
+    for (const invalid of [false, true]) {
+      const binding = invalid ? {
+        ...selectedManagedBinding, available: false,
+        unavailable_reason: "invalid_output_token_limit",
+        output_token_budget: { ...selectedManagedBinding.output_token_budget, max_tokens: null, valid: false },
+      } : selectedManagedBinding;
+      const english = await openWorkspacePage(browser, url, {
+        apiOptions: { managerChannelBinding: binding }, collectCoverage,
+        beforeGoto: async (_api, page) => page.addInitScript(() => localStorage.setItem("loopx-pw-locale", "en")),
+      });
+      try {
+        await english.page.locator(".personal-execution-chip").waitFor({ state: "visible" });
+        const content = invalid
+          ? await english.page.locator(".personal-execution-note").innerText()
+          : await chipText(english.page);
+        if (!content.includes(invalid ? "positive integer" : "16,384 tok/request")) {
+          throw new Error(`English budget readback is missing: ${content}`);
+        }
+      } finally { coverageEntries.push(...await english.close()); }
     }
 
     // The chat-runtime picker has to report the same resolution as the chip: a
@@ -279,12 +345,8 @@ export const executionChipScenario = {
       if (pickerLabel.includes("Codex")) {
         throw new Error(`Chat runtime picker advertised a discovered CLI as the steward: ${pickerLabel}`);
       }
-      const composerLabel = (await stewardPicker.page
-        .locator(".personal-channel-composer > span")
-        .first()
-        .innerText()).trim();
-      if (composerLabel !== "DeepSeek Harness (managed)") {
-        throw new Error(`Composer named ${composerLabel} instead of the steward's declared executor`);
+      if (await stewardPicker.page.locator(".personal-channel-composer > span").count()) {
+        throw new Error("Composer repeated the executor already identified by the runtime picker");
       }
     } finally {
       coverageEntries.push(...await stewardPicker.close());

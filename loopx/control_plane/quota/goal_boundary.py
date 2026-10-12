@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...execution_profile import execution_profile_outcome_floor
 from ...explore_graph import compact_explore_graph_policy
+from ..projects.registry_codec import load_registry
 from ...orchestration import (
     compact_orchestration_policy,
     compact_peer_task_coordination_policy,
@@ -78,10 +78,10 @@ def registry_goal_by_id(
         return {}
     registry_path = Path(str(registry_value)).expanduser()
     try:
-        payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_registry(registry_path)
+    except (OSError, ValueError):
         return {}
-    goals = payload.get("goals") if isinstance(payload, dict) else None
+    goals = payload.get("goals")
     if not isinstance(goals, list):
         return {}
     return {
@@ -198,13 +198,21 @@ def _reward_memory_enablement_projection(
     status: Mapping[str, Any],
 ) -> dict[str, Any]:
     fields = (
+        "reason_code",
+        "repair",
         "isolation_mode",
         "enablement_receipt_status",
         "actor_binding_verified",
         "writability_verified",
         "exact_readback_verified",
     )
-    return {field: status[field] for field in fields if field in status}
+    projection = {field: status[field] for field in fields if field in status}
+    if status.get("config_schema_version"):
+        projection["config_schema_version"] = str(status["config_schema_version"])
+    config_runtime_route = status.get("config_runtime_route")
+    if isinstance(config_runtime_route, Mapping):
+        projection["config_runtime_route"] = dict(config_runtime_route)
+    return projection
 
 
 def _reward_memory_automation_projection(
@@ -376,15 +384,6 @@ def goal_boundary(
             reward_capability.update(
                 _reward_memory_enablement_projection(reward_memory_experiment_status)
             )
-            if reward_memory_experiment_status.get("config_schema_version"):
-                reward_capability["config_schema_version"] = str(
-                    reward_memory_experiment_status["config_schema_version"]
-                )
-            config_runtime_route = reward_memory_experiment_status.get(
-                "config_runtime_route"
-            )
-            if isinstance(config_runtime_route, Mapping):
-                reward_capability["config_runtime_route"] = dict(config_runtime_route)
         if agent_id is not None:
             reward_capability.update(
                 {
@@ -418,9 +417,9 @@ def goal_boundary(
         boundary.setdefault("capabilities", {})["reward_memory"] = reward_capability
     if goal.get("next_probe"):
         boundary["next_probe"] = str(goal.get("next_probe"))
-    if isinstance(goal.get("explore_graph"), dict):
+    if isinstance(goal.get("explore_graph"), dict) or (goal.get("spawn_policy") or {}).get("explore_harness"):
         boundary["explore_graph"] = compact_explore_graph_policy(
-            goal.get("explore_graph")
+            goal.get("explore_graph"), (goal.get("spawn_policy") or {}).get("explore_harness")
         )
     spawn_policy = (
         goal.get("spawn_policy") if isinstance(goal.get("spawn_policy"), dict) else None
@@ -440,10 +439,6 @@ def goal_boundary(
             if repository_identity and repository_identity.startswith("git:"):
                 boundary["task_repository"] = repository_identity
     project_asset_source = item if item is not None else goal
-    for policy_source in (goal, project_asset_source):
-        if not isinstance(policy_source, dict):
-            continue
-            break
     if isinstance(project_asset_source, dict) and project_asset_source.get(
         "project_asset"
     ):

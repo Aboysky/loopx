@@ -29,11 +29,11 @@ from loopx.control_plane.coordination.coordination_state_contract_generated impo
     LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_OUTBOX_ENTRY_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_REQUEST_SCHEMA,
-    LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
+    LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
     LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
 )
 from loopx.control_plane.turn_driver import delivery_continuity
-from loopx.control_plane.coordination.local_authority_shadow_observation import LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA as BRIDGE_SHADOW_EVIDENCE_SCHEMA, LOCAL_AUTHORITY_SHADOW_REQUEST_SCHEMA as BRIDGE_SHADOW_REQUEST_SCHEMA
+from loopx.control_plane.coordination.coordination_state_contract_generated import LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA as BRIDGE_SHADOW_EVIDENCE_SCHEMA, LOCAL_AUTHORITY_SHADOW_REQUEST_SCHEMA as BRIDGE_SHADOW_REQUEST_SCHEMA
 from loopx.control_plane.coordination.local_authority_shadow_outbox import (
     OUTBOX_ENTRY_SCHEMA,
 )
@@ -43,8 +43,8 @@ from loopx.control_plane.coordination.runtime_shadow import (
 from loopx.control_plane.coordination.legacy_writer_fence import (
     LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA as BRIDGE_WRITE_CHECK_REQUEST_SCHEMA,
 )
-from loopx.control_plane.coordination.local_authority import (
-    LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA as BRIDGE_LIST_REQUEST_SCHEMA,
+from loopx.control_plane.coordination.canonical_snapshot import (
+    REQUEST_SCHEMA as BRIDGE_LIST_REQUEST_SCHEMA,
 )
 
 
@@ -83,7 +83,7 @@ def test_generated_coordination_bindings_are_current() -> None:
 @pytest.mark.parametrize(
     ("source_family", "source_key", "message"),
     [
-        ("local_authority_protocol", "mutation_request_schema", "across families"),
+        ("local_authority_protocol", "todo_read_request_schema", "across families"),
         ("local_authority_protocol", "promotion_receipt_schema", "across families"),
         ("runtime_shadow_protocol", "inspect_request_schema", "must be unique"),
         ("local_authority_shadow_protocol", "outbox_entry_schema", "across families"),
@@ -146,9 +146,7 @@ def test_domain_projection_split_keeps_archival_as_a_task_fact() -> None:
     from loopx.control_plane.coordination.local_authority import (
         canonical_todo_summary_fields,
     )
-    from loopx.control_plane.todos.todo_summary import (
-        todo_item_is_succession_tracked_completion,
-    )
+    from loopx.control_plane.todos.succession_warning import project_succession
 
     assert "archive_state" in TODO_DOMAIN_RECORD_FIELDS
     assert set(TODO_PROJECTION_METADATA_FIELDS) == {"source_section", "index"}
@@ -160,8 +158,8 @@ def test_domain_projection_split_keeps_archival_as_a_task_fact() -> None:
         "archive_state": "active", "task_class": "advancement_task",
         "claimed_by": "agent-a",
     }
-    assert todo_item_is_succession_tracked_completion(todo)
-    assert not todo_item_is_succession_tracked_completion({**todo, "archive_state": "archive"})
+    assert project_succession([todo])[0]["tracked_completion"] is True
+    assert project_succession([{**todo, "archive_state": "archive"}])[0]["tracked_completion"] is False
     summary = canonical_todo_summary_fields([todo])
     assert summary["agent_todos"]["source_section"] == "Agent Todo"
     assert "source_section" not in todo and "index" not in todo
@@ -172,7 +170,7 @@ def test_domain_projection_split_keeps_archival_as_a_task_fact() -> None:
 
 
 def test_python_bridge_uses_generated_local_authority_protocol_schemas() -> None:
-    assert BRIDGE_LIST_REQUEST_SCHEMA == LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA
+    assert BRIDGE_LIST_REQUEST_SCHEMA == LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA
 
 
 def test_python_shadow_bridges_use_generated_protocol_schemas() -> None:

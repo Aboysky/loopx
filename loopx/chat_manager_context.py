@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import os
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -14,9 +14,14 @@ from .chat_manager import manager_model_config
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .chat_manager_details import read_manager_goal_details
 from .chat_manager_history import read_manager_delivery_history
-from .goal_portfolio import build_goal_portfolio
+from .capabilities.manager_context.inspection import agent_work_summary
+from .history import decode_registry_snapshot
+from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
 from .chat import redact_local_paths
 from .control_plane.collaboration import conversation_scope
+from .control_plane.effect_runtime import effect_runtime_result
+from .control_plane.goals.goal_ref_validation import exact_goal_ref
+from .control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
 
 
 # A progress question needs a bounded window, not a single day. One day of
@@ -42,6 +47,33 @@ MANAGER_EVIDENCE_WINDOW_REASON_INVALID_EXPLICIT = "explicit_window_out_of_bounds
 # on demand through the read tool, a prompt-only segment can only receive them.
 MANAGER_REMOTE_READ_INLINE = "inline_in_prompt"
 MANAGER_REMOTE_READ_ON_DEMAND = "on_demand_tool"
+# A declared source that contributed nothing to the window is a coverage fact,
+# not a quiet "no progress" reading. Every declared source therefore carries a
+# typed health row with the same four fields the read refusals already use
+# (source id, typed reason, coverage effect, next action) so the answer can cite
+# a row instead of narrating staleness as a disclaimer. The vocabulary is a
+# closed set: a source is either read in this window, declared but not read, or
+# impossible to reach because its configured alias is missing.
+MANAGER_SOURCE_FRESHNESS_VALUES = ("current", "stale", "unknown")
+MANAGER_SOURCE_READ_FRESHNESS = "current"
+MANAGER_SOURCE_UNREAD_FRESHNESS = "stale"
+MANAGER_SOURCE_UNKNOWN_FRESHNESS = "unknown"
+MANAGER_SOURCE_NOT_READ_REASON = "declared_source_not_read_this_turn"
+MANAGER_SOURCE_NOT_READ_NEXT_ACTION = (
+    "Read this source with the manager evidence read tool, or let the next "
+    "Turn's source rotation dial it."
+)
+MANAGER_SOURCE_UNCONFIGURED_NEXT_ACTION = (
+    "Register an existing SSH alias for this host and retry."
+)
+MANAGER_LOCAL_SOURCE_NOT_READ_REASON = "local_evidence_not_read_this_turn"
+MANAGER_LOCAL_SOURCE_NOT_READ_NEXT_ACTION = (
+    "Collect this window with details enabled, or narrow the evidence window."
+)
+MANAGER_SOURCE_COVERAGE_EFFECT = (
+    "no evidence was read from this source; the answer must not present it as "
+    "no progress"
+)
 
 
 def resolve_evidence_window_days(environ=None) -> tuple[int, str, str]:
@@ -95,6 +127,65 @@ def _declared_sources(
     except (OSError, ValueError, TypeError, RuntimeError, ImportError):
         return local
     return declared or local
+
+
+def _source_health_rows(
+    sources: list[dict[str, Any]], *, read_status: str
+) -> list[dict[str, Any]]:
+    """Type what each declared source contributed to this window.
+
+    A source that was declared but read nothing is a coverage fact the answer
+    must name, never evidence that a Goal made no progress. Every row reuses the
+    declaration's own status vocabulary and adds freshness, the typed reason,
+    the coverage effect and the next action, so the packet carries the same four
+    fields the read refusals already use.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for source in sources:
+        source_id = str(source.get("source_id") or "")
+        status = str(source.get("status") or "unknown")
+        read = status == "available" and read_status in {"read", "partial"}
+        if read:
+            freshness = MANAGER_SOURCE_READ_FRESHNESS
+            reason = None
+            coverage_effect = None
+            next_action = None
+        elif status == "available":
+            # Reachable but unread in this window: it cannot support a
+            # progress claim, and the answer has to say so with a row.
+            freshness = MANAGER_SOURCE_UNKNOWN_FRESHNESS
+            reason = MANAGER_LOCAL_SOURCE_NOT_READ_REASON
+            coverage_effect = MANAGER_SOURCE_COVERAGE_EFFECT
+            next_action = MANAGER_LOCAL_SOURCE_NOT_READ_NEXT_ACTION
+        elif status == "not_read":
+            freshness = MANAGER_SOURCE_UNREAD_FRESHNESS
+            reason = MANAGER_SOURCE_NOT_READ_REASON
+            coverage_effect = MANAGER_SOURCE_COVERAGE_EFFECT
+            next_action = MANAGER_SOURCE_NOT_READ_NEXT_ACTION
+        else:
+            # not_configured, and any future non-available declaration: the
+            # source cannot be read at all, which is drift the answer names.
+            freshness = MANAGER_SOURCE_UNKNOWN_FRESHNESS
+            reason = str(source.get("reason") or f"source_status_{status}")
+            coverage_effect = MANAGER_SOURCE_COVERAGE_EFFECT
+            next_action = (
+                MANAGER_SOURCE_UNCONFIGURED_NEXT_ACTION
+                if status == "not_configured"
+                else MANAGER_SOURCE_NOT_READ_NEXT_ACTION
+            )
+        rows.append(
+            {
+                "source_id": source_id,
+                "source_host": source.get("source_host"),
+                "status": status,
+                "freshness": freshness,
+                "reason": reason,
+                "coverage_effect": coverage_effect,
+                "next_action": next_action,
+            }
+        )
+    return rows
 
 
 def _bounded_receipts(history: dict[str, Any]) -> dict[str, Any]:
@@ -223,6 +314,10 @@ def _evidence_window(
         "matched_by_day": matched_by_day,
         "invalid_delivery_records": invalid,
         "sources": sources,
+        # Every declared source reports its own health, so an unread or
+        # unreachable source is a typed row rather than a staleness caveat the
+        # answer has to narrate.
+        "source_health": _source_health_rows(sources, read_status=read_status),
         "declared_unread_sources": [
             str(source.get("source_id"))
             for source in sources
@@ -278,17 +373,132 @@ def _remote_evidence(
         }
 
 
-def manager_authorization_scope_id(goal_ids: list[str], *, runtime_root=None, channel_id=None) -> str:
+def manager_authorization_scope_id(
+    goal_refs: list[str | Mapping[str, Any]], *, runtime_root=None, channel_id=None
+) -> str:
     """Opaque identity for the exact external Goal evidence scope."""
-    normalized = sorted(set(goal_ids))
+    normalized: dict[tuple[str, str, str], str | dict[str, str]] = {}
+    for value in goal_refs:
+        if isinstance(value, Mapping):
+            goal_id = str(value.get("goal_id") or "")
+            if value.get("goal_instance_id") is not None:
+                identity = exact_goal_ref(
+                    goal_id,
+                    str(value.get("goal_instance_id") or ""),
+                )
+                key = (goal_id, "goal_instance_id", identity["goal_instance_id"])
+            else:
+                operation_id = str(value.get("creation_operation_id") or "").strip()
+                if not goal_id or not operation_id:
+                    raise ValueError("manager Goal identity is incomplete")
+                identity = {
+                    "goal_id": goal_id,
+                    "creation_operation_id": operation_id,
+                }
+                key = (goal_id, "creation_operation_id", operation_id)
+            normalized[key] = identity
+        else:
+            goal_id = str(value)
+            normalized[(goal_id, "legacy", "")] = goal_id
+    encoded_scope = [
+        normalized[key]
+        for key in sorted(normalized)
+    ]
     if runtime_root is not None and channel_id:
         from .capabilities.manager_context.ssh_evidence import grants
         remote = grants(runtime_root, channel_id)
         if remote:
-            normalized.append("ssh_evidence:" + json.dumps(remote, sort_keys=True))
+            encoded_scope.append("ssh_evidence:" + json.dumps(remote, sort_keys=True))
     return hashlib.sha256(
-        json.dumps(normalized, separators=(",", ":")).encode()
+        json.dumps(encoded_scope, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()
+
+
+def manager_authorization_scope_id_for_registry(
+    registry_path: Path,
+    goal_ids: list[str],
+    *,
+    runtime_root=None,
+    channel_id=None,
+    expected_inventory_revision: str | None = None,
+) -> str | None:
+    """Bind authorized aliases to the current canonical Goal instances."""
+
+    try:
+        raw = registry_path.read_bytes()
+        revision = "sha256:" + hashlib.sha256(raw).hexdigest()
+        if (
+            expected_inventory_revision is not None
+            and revision != expected_inventory_revision
+        ):
+            return None
+        registry = decode_registry_snapshot(registry_path, raw)
+        goals = registry.get("goals")
+        if not isinstance(goals, list):
+            return None
+        refs: list[str | dict[str, str]] = []
+        for goal_id in sorted(set(goal_ids)):
+            matches = [
+                goal
+                for goal in goals
+                if isinstance(goal, dict) and goal.get("id") == goal_id
+            ]
+            if len(matches) != 1:
+                return None
+            instance_id = matches[0].get("goal_instance_id")
+            if instance_id is not None:
+                refs.append(exact_goal_ref(goal_id, str(instance_id)))
+                continue
+            creation_operation_id = str(
+                matches[0].get("creation_operation_id") or ""
+            ).strip()
+            if creation_operation_id:
+                refs.append(
+                    {
+                        "goal_id": goal_id,
+                        "creation_operation_id": creation_operation_id,
+                    }
+                )
+            elif registry.get("profile_id") == SOURCE_SESSION_PROFILE_ID:
+                return None
+            else:
+                refs.append(goal_id)
+        return manager_authorization_scope_id(
+            refs,
+            runtime_root=runtime_root,
+            channel_id=channel_id,
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def manager_authorization_scope_is_current(
+    registry_path: Path | None,
+    scope_resolver: Callable[[dict[str, Any]], Any] | None,
+    session: dict[str, Any],
+    expected_scope_id: Any,
+    *,
+    runtime_root: Path,
+) -> bool:
+    """Re-resolve an external audience against the current Goal instances."""
+
+    if (
+        registry_path is None
+        or scope_resolver is None
+        or not isinstance(expected_scope_id, str)
+    ):
+        return False
+    current = scope_resolver(session)
+    return (
+        isinstance(current, list)
+        and manager_authorization_scope_id_for_registry(
+            registry_path,
+            current,
+            runtime_root=runtime_root,
+            channel_id=session.get("channel_id"),
+        )
+        == expected_scope_id
+    )
 
 
 def manager_turn_context(
@@ -333,7 +543,7 @@ def manager_turn_context(
     }
     owner_scope = conversation["private_conversation"]
     scope = conversation["goal_ids"] if owner_scope else authorized_goal_ids
-    if not owner_scope and not scope:
+    if not owner_scope and not scope and not (conversation.get("bound_steward") is True and scope == []):
         return unavailable_manager_context(
             "external_authorization_unavailable",
             evidence_window=_evidence_window(
@@ -365,6 +575,12 @@ def manager_turn_context(
         goal_ids=scope,
         limit=128,
         include_stopped=False,
+        # The steward's answer order names the Goal's milestones and baseline,
+        # so the lifecycle projection the status collector already derived
+        # travels with the row instead of being reconstructed from todos.
+        include_goal_lifecycle=True,
+        include_goal_attention=True,
+        include_goal_instance_id=True,
     )
     labels: dict[str, str] = {}
     try:
@@ -373,7 +589,7 @@ def manager_turn_context(
             portfolio.get("inventory_revision")
             == "sha256:" + hashlib.sha256(raw).hexdigest()
         ):
-            for goal in json.loads(raw).get("goals", []):
+            for goal in decode_registry_snapshot(registry_path, raw).get("goals", []):
                 if isinstance(goal, dict) and (
                     scope is None or goal.get("id") in scope
                 ):
@@ -407,23 +623,33 @@ def manager_turn_context(
         rows.append(
             {
                 "goal_id": row["goal_id"],
+                **(
+                    {"goal_instance_id": row["goal_instance_id"]}
+                    if row.get("goal_instance_id")
+                    else {}
+                ),
                 "activation_state": row.get("activation_state", "unknown"),
                 "host_id": row.get("host_id"),
                 "project_id": row.get("project_id"),
                 "agent_coverage": row.get("agent_coverage"),
                 "description": labels.get(row["goal_id"]),
                 "quality": row.get("quality"),
+                "attention": row.get("attention") or {
+                    "status": "unavailable", "items": [], "reason": "goal_not_read",
+                },
                 "progress": row.get("progress", "unknown"),
                 "source": row.get("source"),
                 "warnings": row.get("warnings", []),
+                # Present for every row this turn's portfolio attempted; the
+                # portfolio already substitutes a typed gap for a Goal it could
+                # not read, and this floor keeps a future portfolio path from
+                # turning that contract back into a silent null.
+                "goal_lifecycle": row.get("goal_lifecycle")
+                or lifecycle_readback_unavailable(
+                    row["goal_id"], "portfolio_row_missing_lifecycle"
+                ),
                 "agents": [
-                    {
-                        "agent_id": a.get("agent_id"),
-                        "source_verified": a.get("source_verified"),
-                        "waiting_on": a.get("waiting_on"),
-                        "owner_gate_ids": a.get("owner_gate_ids", []),
-                        "todo_count_in_projection": len(a.get("todos", [])),
-                    }
+                    agent_work_summary(a)
                     for a in row.get("agents", [])
                 ],
                 "deliveries": row.get("deliveries", []),
@@ -434,6 +660,7 @@ def manager_turn_context(
                 ) if read_details else {"status": "not_read", "todos": []},
             }
         )
+    rows = effect_runtime_result("presentation.goal_attention.bound", {"goals": rows})["goals"]
     result = {
         "schema_version": "manager_turn_context_v1",
         "scope": "owner_goal" if local_goal else "owner_global" if owner_scope else "external_goal_scope",
@@ -473,7 +700,23 @@ def manager_turn_context(
         json.dumps(result, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
     if not owner_scope:
-        result["authorization_scope_id"] = manager_authorization_scope_id(scope or [], runtime_root=runtime_root, channel_id=session.get("channel_id"))
+        expected_revision = portfolio.get("inventory_revision")
+        scope_id = (
+            manager_authorization_scope_id_for_registry(
+                registry_path,
+                scope or [],
+                runtime_root=runtime_root,
+                channel_id=session.get("channel_id"),
+                expected_inventory_revision=expected_revision,
+            )
+            if isinstance(expected_revision, str)
+            else None
+        )
+        if scope_id is None:
+            return unavailable_manager_context("external_authorization_changed")
+        result["authorization_scope_id"] = scope_id
+    if conversation.get("bound_steward") is True:
+        result["bound_steward"] = {"authorized": True, "goal_count": len(scope or []), "empty": scope == []}
     return result
 
 
@@ -521,18 +764,65 @@ def collect_manager_turn_context(
             return None
 
     before = resolve()
-    context = manager_turn_context(
-        registry_path,
-        session,
-        runtime_root,
-        authorized_goal_ids=before,
-        include_details=include_details,
-        remote_evidence=remote_evidence,
-        remote_runner=remote_runner,
-        # The Turn owner already re-resolves the external scope after the local
-        # collection; the source read checks the same exact scope around it.
-        remote_scope_valid=lambda: before == resolve(),
+    before_scope_id = (
+        manager_authorization_scope_id_for_registry(
+            registry_path,
+            before,
+            runtime_root=runtime_root,
+            channel_id=session.get("channel_id"),
+        )
+        if registry_path is not None and before is not None
+        else None
     )
-    if before != resolve():
-        return unavailable_manager_context("external_authorization_changed")
+
+    def scope_unchanged() -> bool:
+        current = resolve()
+        if before != current:
+            return False
+        if before_scope_id is None:
+            return registry_path is None
+        return (
+            registry_path is not None
+            and current is not None
+            and before_scope_id
+            == manager_authorization_scope_id_for_registry(
+                registry_path,
+                current,
+                runtime_root=runtime_root,
+                channel_id=session.get("channel_id"),
+            )
+        )
+
+    for attempt in range(2):
+        context = manager_turn_context(
+            registry_path,
+            session,
+            runtime_root,
+            authorized_goal_ids=before,
+            include_details=include_details,
+            remote_evidence=remote_evidence,
+            remote_runner=remote_runner,
+            # Source reads and the Turn owner check the same exact authority.
+            remote_scope_valid=scope_unchanged,
+        )
+        after = resolve()
+        after_scope_id = (
+            manager_authorization_scope_id_for_registry(
+                registry_path,
+                after,
+                runtime_root=runtime_root,
+                channel_id=session.get("channel_id"),
+            )
+            if registry_path is not None and after is not None
+            else None
+        )
+        if before != after or before_scope_id != after_scope_id:
+            return unavailable_manager_context("external_authorization_changed")
+        # Recollect local, on-demand context once under the original scope.
+        # Inline remote collection owns one dial/Turn budget, including failed
+        # reads; recollecting it would restart that budget.
+        if (attempt == 0 and not remote_evidence and before_scope_id is not None
+                and context.get("warnings") == ["external_authorization_changed"]):
+            continue
+        break
     return context

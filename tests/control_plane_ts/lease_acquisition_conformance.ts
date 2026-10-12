@@ -9,6 +9,9 @@ import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordinati
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 import {productionScaleLeaseAcquisitionFixture} from "./production_scale_coordination_fixture.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {evaluateCanonicalTaskLeaseProof} from "../../loopx/control_plane/coordination/task_lease_proof.ts";
+import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {continuationExecutionAuthority} from "../../loopx/control_plane/coordination/continuation_adoption.ts";
 
 async function loaded(store: AuthorityStore) {
   const result = await store.loadAuthority();
@@ -36,6 +39,26 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
   }
 
   for (const schema of ["native", "legacy"] as const) {
+    test(`${provider} ${schema} completion wait fences acquire and atomic claim, then archived completion releases the wait`, async t => {
+      const {store, contender, request, fixture} = await setup(t, schema, (p, target, prerequisite) => {
+        (p.todos as JsonObject[]).find(row => row.todo_id === target)!.resume_when = `todo_done:${prerequisite}`;
+      });
+      const before = await loaded(store);
+      assert.equal((await acquire(store, request)).reason_code, "todo_dependency_pending");
+      const claim = {goal_id: request.goal_id, todo_id: request.todo_id,
+        claimed_by: request.owner, actor_agent_id: request.owner, expected_role: "agent" as const,
+        registered_agents: request.registered_agents, operation_id: "waiting-atomic-claim",
+        lease_request: {idempotency_key: "waiting-atomic", expected_version: 0, ttl_seconds: 600},
+        dry_run: false, now: request.now};
+      assert.equal((await executeCoordinationTodoClaim(store, claim)).reason_code, "todo_dependency_pending");
+      assert.deepEqual(await loaded(store), before);
+      const prerequisite = (before.head.todos as JsonObject[]).find(row => row.todo_id === fixture.acquisition.conflict_todo_id)!;
+      const done = {...prerequisite, status: "done", done: true, archive_state: "archive"};
+      assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+        expected_provider_revision: before.provider_revision, operation_id: "prerequisite-archived-complete",
+        projection: before.head, mutations: [{kind: "todo_upsert", todo: done}]}))).status, "applied");
+      assert.equal((await acquire(contender, request)).status, "applied");
+    });
     test(`${provider} ${schema} acquire, current-proof replay, handover and new execution`, async t => {
       const {store, contender, request, seed} = await setup(t, schema);
       const first = await acquire(store, request);
@@ -74,6 +97,55 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
       assert.deepEqual((final.head.leases as JsonObject[]).filter(l => l.todo_id !== request.todo_id), seed.leases);
     });
   }
+
+  for (const waitKind of ["completion", "future_date"] as const) test(`${provider} retained acquisition receipt and renewal lose current authority after a new ${waitKind} wait`, async t => {
+    const {store, contender, request, fixture} = await setup(t);
+    const first = await acquire(store, request);
+    assert.equal(first.status, "applied");
+    const renewal = {...request, operation: "renew" as const, expected_version: 1};
+    assert.equal((await mutate(store, renewal)).status, "applied");
+    const head = await loaded(store);
+    const todo = (head.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+      expected_provider_revision: head.provider_revision, operation_id: `new-${waitKind}-wait`,
+      projection: head.head, mutations: [{kind: "todo_upsert", todo: {...todo,
+        resume_when: waitKind === "completion"
+          ? `todo_done:${fixture.acquisition.conflict_todo_id}`
+          : "resume_at:2026-09-13T10:05:00.001Z"}}]}))).status, "applied");
+    const waiting = await loaded(store);
+    const replay = await acquire(contender, request);
+    assert.equal(replay.reason_code, "todo_dependency_pending");
+    assert.deepEqual(replay.original_receipt, first.original_receipt);
+    assert.equal((await mutate(store, renewal)).reason_code, "todo_dependency_pending");
+    assert.equal((await mutate(store, {...request, operation: "renew", expected_version: 2})).reason_code,
+      "todo_dependency_pending");
+    assert.equal((await mutate(store, {...request, operation: "transfer", expected_version: 2,
+      new_owner: "agent-b", new_idempotency_key: "waiting-transfer"})).reason_code, "todo_dependency_pending");
+    assert.deepEqual(await loaded(store), waiting);
+    assert.equal((await mutate(store, {...request, operation: "release", expected_version: 2,
+      ttl_seconds: null})).status, "applied");
+  });
+
+  for (const waitKind of ["completion", "future_date"] as const) test(`${provider} continuation proof follows the current ${waitKind} wait`, async t => {
+    const {store, request, fixture} = await setup(t);
+    const currentRequest = {...request, now: new Date()};
+    const first = await acquire(store, currentRequest);
+    assert.equal(first.status, "applied");
+    const execution = (head: JsonObject) => continuationExecutionAuthority(head, {goal_id: request.goal_id,
+      todo_id: request.todo_id, agent_id: request.owner, registered_agents: request.registered_agents,
+      proof: {idempotency_key: request.idempotency_key, expected_version: 1}});
+    const before = await loaded(store);
+    assert.equal(execution(before.head).allowed, true);
+    const todo = (before.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+      expected_provider_revision: before.provider_revision, operation_id: `continuation-add-${waitKind}-wait`,
+      projection: before.head, mutations: [{kind: "todo_upsert", todo: {...todo,
+        resume_when: waitKind === "completion"
+          ? `todo_done:${fixture.acquisition.conflict_todo_id}`
+          : "resume_at:2099-01-01T00:00:00Z"}}]}))).status, "applied");
+    const waiting = await loaded(store);
+    assert.deepEqual(execution(waiting.head), {allowed: false, reason_code: "todo_dependency_pending"});
+  });
 
   test(`${provider} lost acquire response recovers once and changed intent stays rejected`, async t => {
     const {store, contender, request} = await setup(t);
@@ -170,5 +242,111 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
       dry_run: false, now: request.now});
     assert.equal(result.status, "applied", JSON.stringify(result));
     assert.equal((result.lease as JsonObject).version, 1);
+  });
+
+  for (const [kind, repository, frozen, allowed] of [
+    ["different", "git:github.com/team/a", "git:github.com/team/b", true],
+    ["same", "git:github.com/team/a", "git:github.com/team/a", false],
+    ["case-alias", "git:github.com/Team/A", "git:github.com/team/a", false],
+    ["legacy-holder", "git:github.com/team/a", null, false],
+    ["unknown-requester", null, "git:github.com/team/b", false],
+  ] as const) {
+    test(`${provider} repository namespace ${kind} retains complete-scan admission`, async t => {
+      const {store, request} = await setup(t, "native", (p, target, conflict) => {
+        (p.todos as JsonObject[]).find(r => r.todo_id === target)!.task_repository = repository;
+        // Even a known current Todo cannot backfill an old unknown grant.
+        (p.todos as JsonObject[]).find(r => r.todo_id === conflict)!.task_repository = "git:github.com/team/b";
+        const holder = (p.leases as JsonObject[]).find(r => r.todo_id === conflict)!;
+        holder.write_scopes = ["lease-admission/shared/**"];
+        if (frozen !== null) holder.write_repository = frozen;
+      });
+      const before = await loaded(store), result = await acquire(store, request);
+      if (allowed) {
+        assert.equal(result.status, "applied", JSON.stringify(result));
+        assert.equal((result.lease as JsonObject).write_repository, repository);
+      } else {
+        assert.equal(result.reason_code, "write_scope_conflict", JSON.stringify(result));
+        assert.deepEqual(await loaded(store), before);
+      }
+    });
+  }
+
+  test(`${provider} independent repositories acquire same paths and preserve frozen lineage`, async t => {
+    const {store, contender, request, fixture} = await setup(t, "native", (p, target, conflict) => {
+      p.leases = [];
+      (p.todos as JsonObject[]).find(r => r.todo_id === target)!.task_repository = "https://github.com/team/a.git";
+      const other = (p.todos as JsonObject[]).find(r => r.todo_id === conflict)!;
+      other.task_repository = "git:github.com/team/b"; other.claimed_by = null;
+      other.required_write_scopes = ["tests/**"];
+    });
+    const first = await acquire(store, {...request, write_scopes: ["tests/**"]});
+    assert.equal(first.status, "applied", JSON.stringify(first));
+    assert.equal((first.lease as JsonObject).write_repository, "git:github.com/team/a");
+    const second = await executeCoordinationTodoClaim(contender, {goal_id: request.goal_id,
+      todo_id: fixture.acquisition.conflict_todo_id, claimed_by: "agent-b", actor_agent_id: "agent-b",
+      expected_role: "agent", registered_agents: request.registered_agents, operation_id: "second-repository-claim",
+      lease_request: {idempotency_key: "repository-b", expected_version: 0, ttl_seconds: 600}, dry_run: false, now: request.now});
+    assert.equal(second.status, "applied", JSON.stringify(second));
+    assert.equal((second.lease as JsonObject).write_repository, "git:github.com/team/b");
+    assert.deepEqual((second.lease as JsonObject).write_scopes, ["tests/**"]);
+    const maintenance = {...request, operation: "renew" as const, expected_version: 1};
+    const renewed = await mutate(store, maintenance);
+    assert.equal(renewed.status, "applied");
+    const replay = await acquire(contender, {...request, write_scopes: ["tests/**"]});
+    assert.equal(replay.status, "replayed"); assert.deepEqual(replay.original_receipt, first.original_receipt);
+    assert.deepEqual(replay.lease, renewed.lease);
+    const transfer = await mutate(store, {...maintenance, operation: "transfer", expected_version: 2,
+      new_owner: "agent-b", new_idempotency_key: "transferred-a"});
+    assert.equal(transfer.status, "applied");
+    const release = await mutate(store, {...maintenance, operation: "release", owner: "agent-b",
+      idempotency_key: "transferred-a", expected_version: 3, ttl_seconds: null});
+    assert.equal(release.status, "applied");
+    for (const result of [renewed, transfer, release]) assert.equal((result.lease as JsonObject).write_repository, "git:github.com/team/a");
+    const head = await loaded(store);
+    assert.equal((head.head.leases as JsonObject[]).filter(r => r.status === "active").length, 1);
+  });
+
+  test(`${provider} repository drift rejects current proof and renewal without rewriting receipt`, async t => {
+    const {store, contender, request} = await setup(t, "native", (p, target) => {
+      (p.todos as JsonObject[]).find(r => r.todo_id === target)!.task_repository = "git:github.com/team/a";
+    });
+    const first = await acquire(store, request);
+    assert.equal(first.status, "applied");
+    const head = await loaded(store), next = structuredClone(head.head);
+    const todo = (next.todos as JsonObject[]).find(r => r.todo_id === request.todo_id)!;
+    todo.task_repository = "git:github.com/team/b";
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+      expected_provider_revision: head.provider_revision, operation_id: "synthetic-repository-drift",
+      projection: head.head, mutations: [{kind: "todo_upsert", todo}]}))).status, "applied");
+    const before = await loaded(store);
+    const replay = await acquire(contender, request);
+    assert.equal(replay.reason_code, "lease_repository_divergence", JSON.stringify(replay));
+    assert.deepEqual(replay.original_receipt, first.original_receipt);
+    assert.equal(evaluateCanonicalTaskLeaseProof({todo, lease: first.lease as JsonObject,
+      handoff_mode: "hard_lease", actor_agent_id: request.owner, registered_agents: request.registered_agents,
+      lease_idempotency_key: request.idempotency_key, lease_expected_version: 1, now: request.now}).code, "lease_repository_divergence");
+    assert.equal((await mutate(store, {...request, operation: "renew", expected_version: 1})).reason_code, "lease_repository_divergence");
+    assert.deepEqual(await loaded(store), before);
+    // Cleanup still uses the exact holder/key/version, not the current repository.
+    const released = await mutate(store, {...request, operation: "release", expected_version: 1, ttl_seconds: null});
+    assert.equal(released.status, "applied");
+    assert.equal((released.lease as JsonObject).version, 1);
+    const recovered = await acquire(contender, {...request, idempotency_key: "repository-recovered", expected_version: 1});
+    assert.equal(recovered.status, "applied", JSON.stringify(recovered));
+    assert.equal((recovered.lease as JsonObject).write_repository, "git:github.com/team/b");
+    assert.equal(evaluateCanonicalTaskLeaseProof({todo, lease: recovered.lease as JsonObject,
+      handoff_mode: "hard_lease", actor_agent_id: request.owner, registered_agents: request.registered_agents,
+      lease_idempotency_key: "repository-recovered", lease_expected_version: 2, now: request.now}).code, "terminal_fence_verified");
+    assert.equal((await acquire(store, request)).reason_code, "idempotency_key_reuse");
+    assert.deepEqual((await acquire(store, request)).original_receipt, first.original_receipt);
+  });
+
+  test(`${provider} malformed frozen repository fails closed with no mutation`, async t => {
+    const {store, request} = await setup(t, "native", (p, _target, conflict) => {
+      (p.leases as JsonObject[]).find(r => r.todo_id === conflict)!.write_repository = "https://github.com/team/b.git";
+    });
+    const before = await loaded(store);
+    assert.equal((await acquire(store, request)).reason_code, "invalid_canonical_acquire_state");
+    assert.deepEqual(await loaded(store), before);
   });
 }

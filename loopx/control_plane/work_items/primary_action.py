@@ -39,7 +39,7 @@ def protocol_first_candidate_action(payload: dict[str, Any]) -> str | None:
         if isinstance(payload.get("agent_lane_next_action"), dict)
         else {}
     )
-    lane_text = protocol_action_label(agent_lane_next_action.get("text"))
+    lane_text = protocol_action_label(agent_lane_next_action.get("next_step") or agent_lane_next_action.get("text"))
     if lane_text:
         todo_id = str(agent_lane_next_action.get("todo_id") or "").strip()
         return f"{todo_id}: {lane_text}" if todo_id else lane_text
@@ -165,6 +165,8 @@ def protocol_replan_action_packet_instruction(payload: dict[str, Any]) -> str:
         if isinstance(packet.get("writeback_contract"), dict)
         else {}
     )
+    if packet.get("settlement_only") is True:
+        return protocol_action_text(writeback_contract.get("rule"))
     if uncovered.get("required_any_of") and writeback_contract.get(
         "successor_command"
     ):
@@ -343,3 +345,98 @@ def build_primary_action_projection(payload: dict[str, Any], *, mode: str) -> di
     if resolution_trace:
         projection["resolution_trace"] = resolution_trace
     return projection
+
+
+def _interaction_must_attempt(
+    execution_obligation: dict[str, Any],
+    *,
+    mode: str,
+    user_required: bool,
+    scoped_user_gate_fallback: bool,
+    bounded_delivery_with_user_notice: bool,
+) -> bool:
+    if mode == "governed_capability_intent":
+        return bool(execution_obligation.get("must_attempt_work"))
+    if user_required and not (
+        scoped_user_gate_fallback or bounded_delivery_with_user_notice
+    ):
+        return False
+    return bool(execution_obligation.get("must_attempt_work"))
+
+
+def _interaction_delivery_allowed(
+    payload: dict[str, Any],
+    execution_obligation: dict[str, Any],
+    *,
+    mode: str,
+    user_required: bool,
+    scoped_user_gate_fallback: bool,
+    bounded_delivery_with_user_notice: bool,
+) -> bool:
+    if mode == "governed_capability_intent":
+        return bool(execution_obligation.get("must_attempt_work"))
+    if mode == "mapped_noop_if_unchanged":
+        return False
+    if user_required and not (
+        scoped_user_gate_fallback or bounded_delivery_with_user_notice
+    ):
+        return False
+    return bool(
+        execution_obligation.get(
+            "delivery_allowed",
+            payload.get("normal_delivery_allowed")
+            or payload.get("recovery_delivery_allowed")
+            or payload.get("self_repair_allowed")
+            or payload.get("should_run"),
+        )
+    )
+
+
+def interaction_quiet_noop_allowed(
+    *,
+    mode: str,
+    user_required: bool,
+    must_attempt: bool,
+) -> bool:
+    if user_required or must_attempt:
+        return False
+    return _agent_scope_frontier_action(mode) is not None or mode in {
+        "monitor_quiet_skip",
+        "mapped_noop_if_unchanged",
+        "quota_throttled",
+        "blocked_wait",
+        "user_gate_cooldown_wait",
+        "terminal_no_followup",
+        "peer_coordination_blocked",
+        "agent_monitor_only",
+        "skip",
+    }
+
+
+def interaction_execution_flags(
+    payload: dict[str, Any], *, mode: str, user_required: bool,
+    blocked_successor_wait_observation: bool,
+) -> tuple[bool, bool]:
+    execution_obligation = payload.get("execution_obligation") if isinstance(payload.get("execution_obligation"), dict) else {}
+    scoped_user_gate_fallback = mode == "scoped_user_gate_fallback"
+    bounded_delivery_with_user_notice = mode == "bounded_delivery_with_user_notice"
+    must_attempt = _interaction_must_attempt(
+        execution_obligation,
+        mode=mode,
+        user_required=user_required,
+        scoped_user_gate_fallback=scoped_user_gate_fallback,
+        bounded_delivery_with_user_notice=bounded_delivery_with_user_notice,
+    )
+    if mode == "automation_prompt_upgrade":
+        must_attempt = True
+    if blocked_successor_wait_observation:
+        must_attempt = True
+    delivery_allowed = _interaction_delivery_allowed(
+        payload,
+        execution_obligation,
+        mode=mode,
+        user_required=user_required,
+        scoped_user_gate_fallback=scoped_user_gate_fallback,
+        bounded_delivery_with_user_notice=bounded_delivery_with_user_notice,
+    )
+    return must_attempt, delivery_allowed

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import threading
@@ -14,11 +17,14 @@ from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_CONTEXT_VERSION,
     is_manager_channel, manager_agent_objective, manager_model_config,
     manager_workspace, manager_skill_text, operator_credential_pair, operator_credential_resolution,
+    manager_answer_readback,
+    manager_session_model_allocation,
 )
-from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION
+from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
+from .capabilities.native_chat import codex_context, project_context as project_context_policy
 from .control_plane.collaboration import conversation_scope
 from .capabilities.manager_runtime import (
-    load_effective_manager_runtime_profile, manager_runtime_session_fields,
+    load_bound_manager_runtime_profile, manager_runtime_session_fields,
 )
 from .capabilities.manager_context.team_plan import (
     TeamPlanProjector,
@@ -26,8 +32,15 @@ from .capabilities.manager_context.team_plan import (
     team_plan_admission_context,
 )
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
+from .capabilities.steward_executor import allocation as alloc
 from .chat_acp import ACPStdioAdapter
 from .chat_agent import CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError, agent_endpoint_error
+from .chat_codex_goal import (
+    CodexGoalDriver,
+    UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE,
+    parse_native_goal_command,
+    validate_goal_chat,
+)
 from .chat_dsh import DshChatAdapter
 from .chat_endpoint_catalog import builtin_chat_endpoints
 from .chat_endpoints import AgentEndpointRegistry
@@ -45,9 +58,36 @@ from .chat_store import (
     utc_now,
 )
 from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .attached_session import (
+    enqueue_attached_agent_turn,
+    require_current_attached_session,
+    resume_attached_agent_session,
+    select_current_attached_session,
+)
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
+
+# These steering failures occur before the provider receives a message. A
+# fresh ingress identity can safely retry the same draft after recovery.
+STEERING_NOT_DELIVERED_CODES = frozenset({
+    "attached_session_live_steering_unavailable",
+    "live_steering_turn_mismatch",
+    "live_steering_requires_active_turn",
+    "live_steering_session_not_attached",
+    "live_steering_turn_not_started",
+})
+
+# The opaque payload an adapter forwards to its provider. Named here so the
+# worker signature that carries it between methods does not open another
+# module-level `Any`.
+AttachmentPayload = dict[str, Any]
+
+
+class ChatTurnAcceptanceUnavailableError(Exception):
+    """The durable acceptance attempt can be retried with the same request."""
+
+
 class ChatRuntimeAdapter(Protocol):
     @property
     def upstream_thread_id(self) -> str: ...
@@ -62,6 +102,7 @@ class ChatRuntimeAdapter(Protocol):
 @dataclass
 class CodexAppServerAdapter:
     session: CodexChatAgentSession
+    goal_driver: CodexGoalDriver | None = None
 
     @property
     def upstream_thread_id(self) -> str:
@@ -73,7 +114,7 @@ class CodexAppServerAdapter:
         *,
         codex_bin: str,
         work_dir: Path,
-        goal_id: str,
+        goal_id: str | None,
         objective: str,
         resume_thread_id: str | None = None,
         startup_timeout_sec: float = 30.0,
@@ -82,30 +123,45 @@ class CodexAppServerAdapter:
         execution_mode: bool = False,
         runtime_profile: str = "restricted",
         sandbox: str | None = None,
+        project_context: dict[str, str] | None = None,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
     ) -> "CodexAppServerAdapter":
-        return cls(
-            CodexChatAgentSession.start(
-                codex_bin=codex_bin,
-                work_dir=work_dir,
-                goal_id=goal_id,
-                objective=objective,
-                response_timeout_sec=startup_timeout_sec,
-                idle_timeout_sec=idle_timeout_sec,
-                hard_timeout_sec=hard_timeout_sec,
-                execution_mode=execution_mode,
-                runtime_profile=runtime_profile,
-                sandbox=sandbox,
-                resume_thread_id=resume_thread_id,
-                codex_home=codex_home,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                dynamic_tools=dynamic_tools,
-            )
-        )
+        retry_timeout = bool(resume_thread_id)
+        while True:
+            try:
+                return cls(
+                    CodexChatAgentSession.start(
+                        codex_bin=codex_bin,
+                        work_dir=work_dir,
+                        goal_id=goal_id,
+                        objective=objective,
+                        response_timeout_sec=startup_timeout_sec,
+                        idle_timeout_sec=idle_timeout_sec,
+                        hard_timeout_sec=hard_timeout_sec,
+                        execution_mode=execution_mode,
+                        runtime_profile=runtime_profile,
+                        sandbox=sandbox,
+                        project_context=project_context,
+                        resume_thread_id=resume_thread_id,
+                        codex_home=codex_home,
+                        model=model,
+                        reasoning_effort=reasoning_effort,
+                        dynamic_tools=dynamic_tools,
+                    )
+                )
+            except CodexChatTimeoutError as exc:
+                if not retry_timeout or exc.error_code != "response_timeout":
+                    raise
+                # start() has closed the failed process; no Turn was dispatched.
+                # Retry the same known thread once, never an unknown thread/start
+                # effect, a host gate or a request that has already begun.
+                retry_timeout = False
+                logging.getLogger(__name__).warning(
+                    "Codex resumed-session startup timed out; retrying once before Turn dispatch"
+                )
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -126,15 +182,24 @@ class CodexAppServerAdapter:
         self,
         message: str,
         event_sink: EventSink,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
     ) -> dict[str, Any]:
         return self.session.send(message, attachments=attachments, on_event=event_sink)
 
     def interrupt_turn(self, turn_id: str | None = None) -> None:
+        driver = self.goal_driver
+        if driver is not None:
+            driver.pause()
+            return
         self.session.interrupt(turn_id)
 
     def close_session(self) -> None:
-        self.session.close()
+        try:
+            driver = self.goal_driver
+            if driver is not None:
+                driver.pause()
+        finally:
+            self.session.close()
 
     def healthcheck(self) -> bool:
         return self.session.process.poll() is None
@@ -222,7 +287,7 @@ class _TurnEventBuffer:
                 payload=payload,
                 buffered=True,
             )
-            self._checkpoint_locked(force=kind == "turn.started")
+            self._checkpoint_locked(force=kind in {"turn.started", "native_goal.status"})
 
     def close(self) -> None:
         with self.lock:
@@ -250,10 +315,14 @@ class ChatRuntimeController:
         endpoint_registry: AgentEndpointRegistry | None = None,
         registry_path: Path | None = None,
         manager_scope_resolver: Callable[[dict[str, Any]], list[str] | None] | None = None,
+        project_contexts: project_context_policy.ChatProjectContexts | None = None,
     ) -> None:
         self.store = store
         self.registry_path = registry_path
+        from .capabilities.native_chat.project_context import coordination_runtime_root
+        self.coordination_runtime_root = coordination_runtime_root(registry_path, store.root.parent)
         self.manager_scope_resolver = manager_scope_resolver
+        self.project_contexts = project_contexts or project_context_policy.ChatProjectContexts([])
         self.codex_bin = codex_bin
         # Capture once; the service's startup environment is not session identity.
         self.codex_home = Path(
@@ -276,7 +345,10 @@ class ChatRuntimeController:
         self.session_adapter_locks: dict[str, threading.Lock] = {}
         self.session_queue_workers: set[str] = set()
         self.session_queue_threads: dict[str, threading.Thread] = {}
+        self.session_queue_wakeups: set[str] = set()
         self.closed = threading.Event()
+        from .chat_loopx_mode import ChatLoopXMode
+        self.loopx_mode = ChatLoopXMode(self)
         # Optional projection of an admitted steward team preview into the typed
         # action surface. It is injected by the host that owns that surface, so a
         # controller without one still answers; the projection is what makes an
@@ -284,11 +356,12 @@ class ChatRuntimeController:
         self.team_plan_projector: TeamPlanProjector | None = None
 
     def manager_runtime_profile(
-        self, channel_id: str = "manager"
+        self, channel_id: str = "manager", *,
+        steward_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return load_effective_manager_runtime_profile(
-            self.store.root.parent,
-            channel_id=channel_id,
+        return load_bound_manager_runtime_profile(
+            self.store.root.parent, channel_id=channel_id,
+            bindings=self.project_contexts.conversation_bindings, steward_context=steward_context,
         )
 
     def steward_executor_defaults(self) -> dict[str, Any]:
@@ -313,16 +386,14 @@ class ChatRuntimeController:
 
     @staticmethod
     def _managed_upstream_mode(session: dict[str, Any]) -> str:
-        return (
-            "chat"
-            if session.get("agent_id") == "codex"
-            else str(session.get("upstream_mode") or "default")
-        )
+        if session.get("agent_id") == "codex":
+            return CODEX_GOAL_CHAT_MODE if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE else "chat"
+        return str(session.get("upstream_mode") or "default")
 
     @staticmethod
     def _session_objective(
         *,
-        goal_id: str,
+        goal_id: str | None,
         objective: str,
         history: list[dict[str, Any]] | None,
         project_coordination: bool = False,
@@ -331,9 +402,12 @@ class ChatRuntimeController:
 
         history_context = ""
         if history:
+            # This history is supplied when native continuity cannot be reused.
+            # Dropping early messages discards user constraints in a fresh
+            # thread. Ordinary native resume supplies no replayed history.
             history_lines = [
                 f"{item.get('role', 'user')}: {str(item.get('content') or '').strip()}"
-                for item in history[-12:]
+                for item in history
                 if str(item.get("content") or "").strip()
             ]
             if history_lines:
@@ -347,14 +421,19 @@ class ChatRuntimeController:
         *,
         agent_id: str,
         work_dir: Path,
-        goal_id: str,
+        goal_id: str | None,
         objective: str,
         resume_thread_id: str | None = None,
         history: list[dict[str, Any]] | None = None,
         execution_mode: bool = False,
         manager_runtime: Mapping[str, Any] | None = None,
         project_coordination: bool = False,
+        loopx_tools: bool = False,
+        executor_model: Mapping[str, str | None] | None = None,
+        project_context: dict[str, str] | None = None,
     ) -> ChatRuntimeAdapter:
+        if project_context is not None:
+            project_context_policy.validate_project_native_executor(agent_id, project_context)
         if (
             manager_runtime is not None
             and manager_runtime.get("runtime_profile") == "trusted_owner"
@@ -376,6 +455,7 @@ class ChatRuntimeController:
             )
         if agent_id == "codex":
             from .capabilities.manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
+            from .chat_loopx_mode import TOOL as COLLABORATION_TOOL
             manager_profile = (
                 dict(manager_runtime or self.manager_runtime_profile())
                 if goal_id == MANAGER_AGENT_GOAL_ID
@@ -385,6 +465,14 @@ class ChatRuntimeController:
                 objective = manager_agent_objective(
                     str(manager_profile["runtime_profile"])
                 )
+            model_config = (
+                executor_model or manager_model_config(
+                    endpoint=agent_id,
+                    machine_defaults=self.steward_executor_defaults(),
+                )
+                if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
+                else executor_model or {}
+            )
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
                 codex_home=self.codex_home,
@@ -409,16 +497,15 @@ class ChatRuntimeController:
                     if manager_profile is not None
                     else None
                 ),
-                # The steward channel's executor, model and effort come from this
-                # controller's machine configuration.
-                **(
-                    manager_model_config(
-                        machine_defaults=self.steward_executor_defaults()
-                    )
-                    if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
-                    else {}
-                ),
-                **({"dynamic_tools": [READ_TOOL if goal_id == MANAGER_AGENT_GOAL_ID else CONTEXT_READ_TOOL]} if not execution_mode and (goal_id == MANAGER_AGENT_GOAL_ID or project_coordination) else {}),
+                project_context=project_context,
+                model=model_config.get("model"),
+                reasoning_effort=model_config.get("reasoning_effort"),
+                dynamic_tools=(
+                    [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
+                    else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]
+                ) if not execution_mode and (
+                    goal_id == MANAGER_AGENT_GOAL_ID or project_coordination
+                ) else None,
             )
         if agent_id == "claude-code":
             return ClaudeCodeAdapter.start(
@@ -426,7 +513,7 @@ class ChatRuntimeController:
                 work_dir=work_dir,
                 resume_thread_id=resume_thread_id,
                 tool_scope="read_only",
-                context_summary=f"{goal_id}: {objective}".strip(),
+                context_summary=f"{goal_id}: {objective}".strip() if goal_id is not None else objective.strip(),
             )
         if agent_id == MANAGED_TURN_HOST:
             # The managed host has no interactive session transport, so this
@@ -434,12 +521,13 @@ class ChatRuntimeController:
             # execution profile, authenticated by the operator credential.
             operator_environ = operator_credential_resolution(self)["environ"]
             profile = managed_execution_profile(operator_environ)
-            model = str(profile["model"])
-            reasoning_effort = str(profile["reasoning_effort"])
+            model, reasoning_effort = str(profile["model"]), str(profile["reasoning_effort"])
             if goal_id == MANAGER_AGENT_GOAL_ID:
-                manager_config = manager_model_config(operator_environ, machine_defaults=self.steward_executor_defaults())
-                model = manager_config["model"]
-                reasoning_effort = manager_config["reasoning_effort"]
+                manager_config = executor_model or manager_model_config(
+                    operator_environ, endpoint=agent_id,
+                    machine_defaults=self.steward_executor_defaults(),
+                )
+                model, reasoning_effort = str(manager_config["model"]), str(manager_config["reasoning_effort"])
             return DshChatAdapter(
                 objective=self._session_objective(
                     goal_id=goal_id, objective=objective, history=None,
@@ -489,20 +577,52 @@ class ChatRuntimeController:
     def open_session(
         self,
         *,
-        goal_id: str,
+        goal_id: str | None,
         agent_id: str,
         work_dir: Path,
         objective: str,
         mode: str,
         channel_id: str | None = None,
         agent_goal_id: str | None = None,
+        goal_instance_id: str | None = None,
+        manager_executor_allocation: Mapping[str, Any] | None = None,
+        project_ref: str | None = None,
+        conversation_binding_id: str | None = None,
+        source_context: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
         selected_channel = channel_id or f"goal.{goal_id}"
+        project_context = None
+        steward_context = None
+        if conversation_binding_id is not None:
+            if goal_id is not None or agent_goal_id is not None or project_ref is not None:
+                raise ValueError("bound project Chat cannot substitute a Goal or workspace")
+            if source_context is None:
+                raise ValueError("bound conversation authority is unavailable")
+            context = self.project_contexts.open_bound(conversation_binding_id, source_context, executor=agent_id, channel_id=channel_id)
+            goal_id, selected_channel = context["goal_id"], context["channel_id"]
+            project_context, steward_context = context["project_context"], context["steward_context"]
+            work_dir, objective = context["project"], context["objective"]
+        elif project_ref is not None:
+            if goal_id is not None or agent_goal_id is not None:
+                raise ValueError("ordinary project conversations cannot carry a Goal")
+            selected = self.project_contexts.resolve(project_ref)
+            if channel_id is not None and channel_id != selected["channel_id"]:
+                raise ValueError("project conversation channel mismatch")
+            project_context = selected["context"]
+            selected_channel = selected["channel_id"]
+            context = self.project_contexts.session_context({
+                "goal_id": None, "channel_id": selected_channel, "project_context": project_context,
+            })
+            work_dir, objective = context["project"], context["objective"]
+        elif goal_id is None:
+            raise ValueError("goal_id or an authorized project_ref is required")
+        if project_context is not None:
+            project_context_policy.validate_project_executor_scope(agent_id, project_context, self.capabilities, capability)
         manager_runtime = (
-            self.manager_runtime_profile(selected_channel)
+            self.manager_runtime_profile(selected_channel, steward_context=steward_context)
             if is_manager_channel(selected_channel)
             else None
         )
@@ -525,12 +645,35 @@ class ChatRuntimeController:
             route_lock = self.session_open_locks.setdefault(route_key, threading.Lock())
         with route_lock:
             latest = None
+            if not is_manager_channel(selected_channel) and project_context is None:
+                exact_attached, strict_profile = select_current_attached_session(
+                    store=self.store,
+                    registry_path=self.registry_path,
+                    goal_id=goal_id,
+                    agent_id=agent_id,
+                    channel_id=selected_channel,
+                )
+                if strict_profile:
+                    if mode == "resume_latest" and exact_attached is not None:
+                        return exact_attached, True
+                    raise CodexChatAgentError(
+                        "Managed Chat execution is not qualified for the "
+                        "source-session profile.",
+                        error_code="source_session_managed_chat_unsupported",
+                        gate=None,
+                    )
             if mode == "resume_latest":
                 latest = self.store.latest_session(
                     goal_id=None if is_manager_channel(selected_channel) else goal_id,
                     agent_id=agent_id,
                     channel_id=selected_channel,
                 )
+                # Reuse only the same typed project identity. A changed host grant
+                # starts a new Session while the old context and history remain intact.
+                if latest is not None and project_context is not None and latest.get("project_context") != project_context:
+                    latest = None
+                if latest is not None and goal_instance_id is not None and latest.get("goal_instance_id") != goal_instance_id:
+                    latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
             if capability is None:
@@ -551,22 +694,29 @@ class ChatRuntimeController:
                 execution_mode=selected_channel.startswith("task."),
                 project_coordination=conversation_scope({"channel_id": selected_channel, "goal_id": goal_id})["kind"] == "owner_goal",
                 manager_runtime=manager_runtime,
+                project_context=project_context,
+                executor_model=alloc.manager_executor_model(manager_executor_allocation),
             )
             persisted = self.store.create_session(
                 goal_id=goal_id,
+                goal_instance_id=goal_instance_id,
                 agent_id=agent_id,
                 executor_endpoint_id=agent_id,
                 adapter_kind=str(capability["adapter_kind"]),
                 upstream_thread_id=adapter.upstream_thread_id,
                 upstream_mode="chat" if agent_id == "codex" else "default",
                 channel_id=selected_channel,
-                codex_home=str(self.codex_home) if agent_id == "codex" else None,
+                codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
+                project_context=project_context,
+                steward_context=steward_context,
             )
+            persisted = self.project_contexts.initialize_bound_scope(self.store, persisted, runtime_root=self.coordination_runtime_root)
             if is_manager_channel(selected_channel):
                 assert manager_runtime is not None
                 persisted = self.store.update_session(
                     persisted["session_id"],
                     manager_context_version=MANAGER_CONTEXT_VERSION,
+                    **alloc.manager_executor_session_fields(manager_executor_allocation),
                     **manager_runtime_session_fields(manager_runtime),
                 )
             elif conversation_scope(persisted)["kind"] == "owner_goal":
@@ -583,14 +733,7 @@ class ChatRuntimeController:
     def _check_codex_home(self, session: dict[str, Any]) -> None:
         if session.get("agent_id") != "codex" or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             return
-        bound_home = session.get("codex_home")
-        if bound_home is not None and bound_home != str(self.codex_home):
-            raise CodexChatAgentError(
-                "This managed Session belongs to a different Codex home. Restart LoopX Chat "
-                "with its original LOOPX_CHAT_CODEX_HOME; do not copy or rebind its history.",
-                error_code="codex_home_mismatch",
-                gate=None,
-            )
+        codex_context.require_session_home(self.codex_home, session)
 
     def _ensure_adapter(
         self,
@@ -614,14 +757,22 @@ class ChatRuntimeController:
         work_dir: Path,
         objective: str,
         interrupted_turn_id: str | None = None,
+        accepted_turn_id: str | None = None,
     ) -> ChatRuntimeAdapter:
         session_id = str(session["session_id"])
         current_session = self.store.load_session(session_id)
         if current_session is None or current_session.get("status") == "closed":
             raise KeyError("chat session was not found")
         session = current_session
+        if session.get("steward_context") is not None:
+            self.project_contexts.session_context(session)
+        if session.get("project_context") is not None:
+            context = self.project_contexts.session_context(session)
+            project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
+            work_dir, objective = context["project"], context["objective"]
         manager_runtime = (
-            self.manager_runtime_profile(str(session.get("channel_id") or "manager"))
+            self.manager_runtime_profile(str(session.get("channel_id") or "manager"),
+                                         steward_context=session.get("steward_context"))
             if is_manager_channel(session.get("channel_id"))
             else None
         )
@@ -641,9 +792,26 @@ class ChatRuntimeController:
                 "The attached host Session must be served by its existing host bridge.",
                 error_code="attached_session_requires_host_bridge",
             )
+        # Session open and resume preserve the same admitted, unstarted request.
+        active_id = session.get("active_turn_id")
+        active = self.store.load_turn(session_id, str(active_id)) if active_id else None
+        if accepted_turn_id is None and active is not None and active.get("status") == "queued":
+            accepted_turn_id = str(active["turn_id"])
         reusable: ChatRuntimeAdapter | None = None
+        # An owner-edited model takes effect between Turns. Keep a running Turn
+        # and its binding intact; accepted queued work has not started upstream.
+        model_allocation = None
+        if manager_runtime is not None and (
+            not session.get("active_turn_id")
+            or (session.get("active_turn_id") == accepted_turn_id
+                and (self.store.load_turn(session_id, str(accepted_turn_id)) or {}).get("status") == "queued")
+        ):
+            model_allocation = manager_session_model_allocation(self, session)
         legacy_project_context = (conversation_scope(session)["kind"] == "owner_goal"
-            and session.get("coordination_context_version") != PROJECT_CONTEXT_VERSION)
+            and session.get("coordination_context_version") != PROJECT_CONTEXT_VERSION
+            # A context/tool refresh cannot discard a native Goal and its usage.
+            # Keep this binding; a new Session explicitly selects new tools.
+            and session.get("upstream_mode") != CODEX_GOAL_CHAT_MODE)
         with self.lock:
             current = self.adapters.get(session_id)
             manager_profile_changed = bool(
@@ -661,6 +829,7 @@ class ChatRuntimeController:
                 current is not None
                 and current.healthcheck()
                 and not manager_profile_changed
+                and model_allocation is None
             ):
                 reusable = current
             elif current is not None:
@@ -678,9 +847,19 @@ class ChatRuntimeController:
                     **manager_runtime_session_fields(manager_runtime),
                 )
             return reusable
-        self.store.update_session(session_id, status="resuming", last_error_code=None)
-        active_turn_id = interrupted_turn_id or session.get("active_turn_id")
-        if active_turn_id:
+        if accepted_turn_id is not None:
+            active = self.store.load_turn(session_id, accepted_turn_id)
+            if (active_id != accepted_turn_id or active is None
+                or active.get("status") != "queued"):
+                raise ValueError("accepted chat turn is no longer queued and active")
+        else:
+            self.store.update_session(
+                session_id,
+                status="resuming",
+                last_error_code=None,
+            )
+        active_turn_id = None if accepted_turn_id is not None else interrupted_turn_id or active_id
+        if active_turn_id is not None:
             active = self.store.load_turn(session_id, str(active_turn_id))
             if active and active.get("status") not in TERMINAL_TURN_STATES:
                 failed = self.store.update_turn(
@@ -708,17 +887,22 @@ class ChatRuntimeController:
                 }
                 for item in stored_messages
                 if item.get("role") in {"user", "agent"}
+                and (
+                    accepted_turn_id is None
+                    or item.get("turn_id") != accepted_turn_id
+                )
             ]
             legacy_manager_context = (
                 is_manager_channel(session.get("channel_id"))
                 and (
                     session.get("manager_context_version") != MANAGER_CONTEXT_VERSION
                     or manager_profile_changed
+                    or model_allocation is not None
                 )
             )
             legacy_codex_goal_thread = (
                 session.get("agent_id") == "codex"
-                and session.get("upstream_mode") != "chat"
+                and session.get("upstream_mode") not in {"chat", CODEX_GOAL_CHAT_MODE}
             )
             retry_failed_claude_session = (
                 session.get("agent_id") == "claude-code"
@@ -733,7 +917,7 @@ class ChatRuntimeController:
                 goal_id=(
                     MANAGER_AGENT_GOAL_ID
                     if is_manager_channel(session.get("channel_id"))
-                    else str(session["goal_id"])
+                    else session["goal_id"]
                 ),
                 objective=objective,
                 resume_thread_id=(
@@ -750,13 +934,25 @@ class ChatRuntimeController:
                 ),
                 execution_mode=str(session.get("channel_id") or "").startswith("task."),
                 project_coordination=conversation_scope(session)["kind"] == "owner_goal",
+                loopx_tools=session.get("loopx_tools") is True,
+                executor_model=(alloc.manager_executor_model(model_allocation)
+                    if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
+                project_context=session.get("project_context"),
             )
+            if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
+                try:
+                    if not isinstance(adapter, CodexAppServerAdapter):
+                        raise CodexChatAgentError("Native Goal continuation requires a Codex adapter.", error_code="native_goal_adapter_mismatch", gate=None)
+                    self.loopx_mode.recover(session_id, adapter)
+                except Exception:
+                    adapter.close_session()
+                    raise
         except Exception as exc:
             self.store.update_session(
                 session_id,
-                status="resume_failed",
-                active_turn_id=None,
+                status="busy" if accepted_turn_id is not None else "resume_failed",
+                active_turn_id=accepted_turn_id,
                 last_error_code="resume_failed",
             )
             gate = exc.gate if isinstance(exc, CodexChatAgentError) else None
@@ -771,17 +967,19 @@ class ChatRuntimeController:
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
-                self.store.update_session(session_id, codex_home=str(self.codex_home))
+                self.store.update_session(session_id, codex_home=str(codex_context.home_for_project(self.codex_home, session.get("project_context"))))
             if is_manager_channel(session.get("channel_id")):
                 assert manager_runtime is not None
                 changes = {
                     "manager_context_version": MANAGER_CONTEXT_VERSION,
                     **manager_runtime_session_fields(manager_runtime),
+                    **alloc.manager_executor_session_fields(model_allocation),
                 }
                 if session["channel_id"] == "manager":
                     changes["goal_id"] = MANAGER_AGENT_GOAL_ID
                 self.store.update_session(session_id, **changes)
-            elif conversation_scope(session)["kind"] == "owner_goal":
+            elif (conversation_scope(session)["kind"] == "owner_goal"
+                  and session.get("upstream_mode") != CODEX_GOAL_CHAT_MODE):
                 self.store.update_session(session_id, coordination_context_version=PROJECT_CONTEXT_VERSION)
             self.store.restore_managed_session_if_idle(
                 session_id,
@@ -804,51 +1002,133 @@ class ChatRuntimeController:
         session_id: str,
         client_turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]] | None = None,
+        attachments: list[AttachmentPayload] | None = None,
         work_dir: Path,
         objective: str,
+        loopx_execution: bool = False,
+        loopx_request: dict[str, object] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         session = self.store.load_session(session_id)
         if session is None:
             raise KeyError("chat session was not found")
+        if session.get("steward_context") is not None:
+            raise ValueError("bound steward Chat requires its external source admission")
+        if session.get("project_context") is not None:
+            if session["project_context"].get("audience") in {"bound_owner", "bound_group"}:
+                raise ValueError("bound project Chat requires its external source admission")
+            context = self.project_contexts.session_context(session)
+            project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
+            work_dir, objective = context["project"], context["objective"]
+            if loopx_execution:
+                raise ValueError("ordinary project conversations do not authorize LoopX execution")
+        if parse_native_goal_command(message) is not None:
+            validate_goal_chat(session, attachments)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             if attachments:
                 raise ValueError("attached host session queue does not yet accept attachments")
-            return self.store.create_queued_turn(
-                session_id,
+            return enqueue_attached_agent_turn(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
                 client_turn_id=client_turn_id,
                 message=message,
                 origin="web",
             )
         with self._session_adapter_lock(session_id):
-            adapter = self._ensure_adapter_locked(
-                session,
+            session = self.store.load_session(session_id)
+            if session is None or session.get("status") == "closed":
+                raise KeyError("chat session was not found")
+            self._check_codex_home(session)
+            if loopx_execution and session.get("loopx_tools") is not True:
+                session = self.loopx_mode.activate_tools(session, work_dir=work_dir, objective=objective)
+            try:
+                accepted = self.store.accept_managed_turn(
+                    session_id,
+                    client_turn_id=client_turn_id,
+                    message=message,
+                    attachments=attachments,
+                    display_message=(
+                        {
+                            "start": "开启 LoopX 模式，持续推进当前 Goal。",
+                            "wake": "成员结果已验收，继续推进 LoopX 模式。",
+                        }.get(str((loopx_request or {}).get("operation")), "恢复 LoopX 模式。")
+                        if loopx_execution
+                        else None
+                    ),
+                    loopx_execution=loopx_execution,
+                    loopx_request=loopx_request,
+                )
+            except OSError as exc:
+                raise ChatTurnAcceptanceUnavailableError(
+                    "Chat turn acceptance is temporarily unavailable."
+                ) from exc
+            if accepted.dispatch_required:
+                adapter = self._ensure_adapter_locked(
+                    session,
+                    work_dir=work_dir,
+                    objective=objective,
+                    accepted_turn_id=str(accepted.turn["turn_id"]),
+                )
+        if accepted.dispatch_reason == "already_started":
+            self.resume_session(
+                session_id=session_id,
                 work_dir=work_dir,
                 objective=objective,
             )
-            turn, created = self.store.create_turn(
+            current = self.store.load_turn(
                 session_id,
-                client_turn_id=client_turn_id,
-                message=message,
-                attachments=attachments,
+                str(accepted.turn["turn_id"]),
             )
-        if not created:
-            return turn, False
+            return current or accepted.turn, accepted.created
+        if accepted.dispatch_required:
+            self._start_accepted_turn_worker(
+                session_id=session_id,
+                turn_id=str(accepted.turn["turn_id"]),
+                message=message,
+                attachments=attachments or [],
+                adapter=adapter,
+                loopx_execution=loopx_execution,
+            )
+        return accepted.turn, accepted.created
+
+    def _start_accepted_turn_worker(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        message: str,
+        attachments: list[AttachmentPayload],
+        adapter: ChatRuntimeAdapter,
+        loopx_execution: bool,
+    ) -> bool:
+        key = (session_id, turn_id)
+        done_event = threading.Event()
+        with self.lock:
+            if key in self.turn_done_events:
+                return False
+            self.turn_done_events[key] = done_event
         worker = threading.Thread(
             target=self._run_turn,
             kwargs={
                 "session_id": session_id,
-                "turn_id": str(turn["turn_id"]),
+                "turn_id": turn_id,
                 "message": message,
-                "attachments": attachments or [],
+                "attachments": attachments,
                 "adapter": adapter,
+                "loopx_execution": loopx_execution,
+                "done_event": done_event,
             },
             daemon=True,
         )
-        with self.lock:
-            self.turn_done_events[(session_id, str(turn["turn_id"]))] = threading.Event()
-        worker.start()
-        return turn, True
+        try:
+            worker.start()
+        except Exception:
+            with self.lock:
+                if self.turn_done_events.get(key) is done_event:
+                    self.turn_done_events.pop(key, None)
+            done_event.set()
+            raise
+        return True
 
     def steer_active_turn(
         self,
@@ -856,17 +1136,31 @@ class ChatRuntimeController:
         session_id: str,
         client_ingress_id: str,
         message: str,
+        expected_turn_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Steer the exact active Codex Turn with durable ingress deduplication."""
 
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
+        if session.get("steward_context") is not None:
+            raise ValueError("bound steward Chat requires its external source admission")
+        if session.get("project_context") is not None:
+            if session["project_context"].get("audience") in {"bound_owner", "bound_group"}:
+                raise ValueError("bound project steering requires its external source admission")
+            self.project_contexts.session_context(session)
+        if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+            session = require_current_attached_session(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
+            )
         receipt, created = self.store.create_ingress_receipt(
             session_id,
             client_ingress_id=client_ingress_id,
             mode="live_steering",
             message=message,
+            expected_turn_id=expected_turn_id,
         )
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             capabilities = session.get("attached_capabilities")
@@ -887,8 +1181,16 @@ class ChatRuntimeController:
                 if turn is None:
                     raise RuntimeError("live_steering_turn_missing")
                 return turn, False
+            if receipt.get("status") == "failed" and receipt.get("error_code") in STEERING_NOT_DELIVERED_CODES:
+                raise RuntimeError(str(receipt["error_code"]))
             raise RuntimeError("live_steering_delivery_unresolved")
         active_turn_id = str(session.get("active_turn_id") or "")
+        if expected_turn_id is not None and active_turn_id != expected_turn_id:
+            self.store.update_ingress_receipt(
+                session_id, client_ingress_id, status="failed",
+                error_code="live_steering_turn_mismatch",
+            )
+            raise RuntimeError("live_steering_turn_mismatch")
         if not active_turn_id:
             self.store.update_ingress_receipt(
                 session_id,
@@ -911,6 +1213,14 @@ class ChatRuntimeController:
         deadline = time.monotonic() + min(5.0, self.startup_timeout_sec)
         while time.monotonic() < deadline:
             turn = self.store.load_turn(session_id, active_turn_id)
+            current_session = self.store.load_session(session_id) or {}
+            if (current_session.get("active_turn_id") != active_turn_id
+                    or (turn or {}).get("status") not in {"queued", "starting", "running"}):
+                self.store.update_ingress_receipt(
+                    session_id, client_ingress_id, status="failed",
+                    error_code="live_steering_turn_mismatch",
+                )
+                raise RuntimeError("live_steering_turn_mismatch")
             upstream_turn_id = str((turn or {}).get("upstream_turn_id") or "")
             if upstream_turn_id:
                 break
@@ -963,22 +1273,49 @@ class ChatRuntimeController:
         session_id: str,
         client_turn_id: str,
         message: str,
+        attachments: list[AttachmentPayload] | None = None,
         work_dir: Path,
         objective: str,
         origin: str = "external",
+        external_agent_target: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Persist a bounded same-Session Turn and dispatch it in FIFO order."""
 
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
-        turn, created = self.store.create_queued_turn(
-            session_id,
-            client_turn_id=client_turn_id,
-            message=message,
-            origin=origin,
-        )
-        if session.get("session_mode") != CHAT_SESSION_MODE_ATTACHED:
+        if session.get("steward_context") is not None:
+            if origin not in {"lark", "external"}:
+                raise ValueError("bound steward Chat requires its external source admission")
+            self.project_contexts.session_context(session)
+        if session.get("project_context") is not None:
+            if conversation_scope(session, origin=origin)["kind"] != "project_workspace":
+                raise ValueError("project grant does not authorize this external audience or source")
+            context = self.project_contexts.session_context(session)
+            project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
+            work_dir, objective = context["project"], context["objective"]
+        if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+            if attachments:
+                raise ValueError("attached host session queue does not yet accept attachments")
+            turn, created = enqueue_attached_agent_turn(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
+                client_turn_id=client_turn_id,
+                message=message,
+                origin=origin,
+                external_agent_target=external_agent_target,
+            )
+        else:
+            if external_agent_target is not None:
+                raise ValueError("Agent target requires its original attached Session")
+            turn, created = self.store.create_queued_turn(
+                session_id,
+                client_turn_id=client_turn_id,
+                message=message,
+                attachments=attachments,
+                origin=origin,
+            )
             self.resume_session_queue(
                 session_id=session_id,
                 work_dir=work_dir,
@@ -996,7 +1333,10 @@ class ChatRuntimeController:
         # Admission must not read session files: callers can hold their own
         # lifecycle fence here. The worker validates the session before effects.
         with self.lock:
-            if self.closed.is_set() or session_id in self.session_queue_workers:
+            if self.closed.is_set():
+                return
+            if session_id in self.session_queue_workers:
+                self.session_queue_wakeups.add(session_id)
                 return
             worker = threading.Thread(
                 target=self._drain_session_queue,
@@ -1033,12 +1373,16 @@ class ChatRuntimeController:
                     with self.lock:
                         attached = self.adapters.get(session_id)
                     if attached is None or not attached.healthcheck():
-                        self._ensure_adapter(
-                            session,
-                            work_dir=work_dir,
-                            objective=objective,
-                        )
-                        continue
+                        try:
+                            self._ensure_adapter(
+                                session,
+                                work_dir=work_dir,
+                                objective=objective,
+                            )
+                        except Exception as exc:
+                            self._fail_queue_preparation(session_id, active_turn_id, exc)
+                        else:
+                            continue
                     active = self.store.load_turn(session_id, active_turn_id)
                     if active and active.get("status") not in TERMINAL_TURN_STATES:
                         self.closed.wait(0.05)
@@ -1051,28 +1395,86 @@ class ChatRuntimeController:
                 refreshed = self.store.load_session(session_id)
                 if refreshed is None:
                     return
-                adapter = self._ensure_adapter(
-                    refreshed,
-                    work_dir=work_dir,
-                    objective=objective,
-                )
+                preparation_error = None
+                try:
+                    adapter = self._ensure_adapter(
+                        refreshed,
+                        work_dir=work_dir,
+                        objective=objective,
+                    )
+                except Exception as exc:
+                    # An accepted queued request still owns an outcome when
+                    # workspace preparation or adapter restoration fails.
+                    preparation_error = exc
+                with self.lock:
+                    self.session_queue_wakeups.discard(session_id)
                 turn = self.store.claim_next_queued_turn(session_id)
                 if turn is None:
+                    with self.lock:
+                        if session_id in self.session_queue_wakeups:
+                            continue
+                        worker = self.session_queue_threads.get(session_id)
+                        if worker is threading.current_thread():
+                            self.session_queue_workers.discard(session_id)
+                            self.session_queue_threads.pop(session_id, None)
                     return
                 turn_id = str(turn["turn_id"])
+                if preparation_error is not None:
+                    self._fail_queue_preparation(session_id, turn_id, preparation_error)
+                    continue
+                done_event = threading.Event()
                 with self.lock:
-                    self.turn_done_events[(session_id, turn_id)] = threading.Event()
+                    self.turn_done_events[(session_id, turn_id)] = done_event
                 self._run_turn(
                     session_id=session_id,
                     turn_id=turn_id,
                     message=str(turn.get("message") or ""),
-                    attachments=[],
+                    attachments=turn.get("attachments") or [],
                     adapter=adapter,
+                    done_event=done_event,
                 )
         finally:
             with self.lock:
-                self.session_queue_workers.discard(session_id)
-                self.session_queue_threads.pop(session_id, None)
+                worker = self.session_queue_threads.get(session_id)
+                if worker is threading.current_thread():
+                    self.session_queue_workers.discard(session_id)
+                    self.session_queue_threads.pop(session_id, None)
+                    self.session_queue_wakeups.discard(session_id)
+
+    def _fail_queue_preparation(
+        self, session_id: str, turn_id: str, error: Exception,
+    ) -> None:
+        key = (session_id, turn_id)
+        done_event = threading.Event()
+        with self.lock:
+            current = self.turn_done_events.get(key)
+            owns_done_event = current is None
+            if owns_done_event:
+                self.turn_done_events[key] = done_event
+            else:
+                done_event = current
+        logging.getLogger(__name__).error(
+            "Chat queue runtime preparation failed",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        try:
+            self._fail_turn(
+                session_id, turn_id,
+                error.error_code if isinstance(error, CodexChatAgentError) else "runtime_unavailable",
+                str(error) if isinstance(error, CodexChatAgentError) else (
+                    "The Agent runtime could not be prepared. Check the runtime installation "
+                    "and configuration, then retry."
+                ),
+                status="failed",
+                gate=error.gate if isinstance(error, CodexChatAgentError) else None,
+                expected_statuses={"queued", "starting", "running"},
+            )
+        finally:
+            done_event.set()
+            if owns_done_event:
+                with self.lock:
+                    if self.turn_done_events.get(key) is done_event:
+                        self.turn_done_events.pop(key, None)
 
     def _run_turn(
         self,
@@ -1080,24 +1482,71 @@ class ChatRuntimeController:
         session_id: str,
         turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
         adapter: ChatRuntimeAdapter,
+        done_event: threading.Event | None = None,
+        loopx_execution: bool = False,
     ) -> None:
-        started = utc_now()
-        started_turn = self.store.update_turn(
-            session_id,
-            turn_id,
-            expected_statuses={"queued"},
-            status="starting",
-            started_at=started,
-        )
-        if started_turn is None:
+        key = (session_id, turn_id)
+        if done_event is None:
             with self.lock:
-                self.cancelled_turns.discard((session_id, turn_id))
-                done_event = self.turn_done_events.pop((session_id, turn_id), None)
-            if done_event is not None:
-                done_event.set()
-            return
+                done_event = self.turn_done_events.get(key)
+                if done_event is None:
+                    done_event = threading.Event()
+                    self.turn_done_events[key] = done_event
+        # Everything runs inside the terminal release. The start fact is the
+        # first durable write and is not guaranteed to land: if it raises, the
+        # Turn was never dispatched, so the single-flight guard must be given
+        # back here rather than left holding the key, which would make every
+        # later dispatch of this same Turn a silent no-op.
+        try:
+            started_turn = self.store.update_turn(
+                session_id,
+                turn_id,
+                expected_statuses={"queued"},
+                status="starting",
+                started_at=utc_now(),
+            )
+            if started_turn is None:
+                with self.lock:
+                    self.cancelled_turns.discard(key)
+                return
+            from .control_plane.effect_runtime import effect_runtime_request_scope
+
+            # Reuse one code revision across this worker's typed decisions.
+            # This caches no Session, Turn or authority facts: each checkpoint
+            # still reads current state, including after a long provider wait.
+            with effect_runtime_request_scope():
+                retry_binding: dict[str, str] = {}
+                while self._run_started_turn(
+                    session_id=session_id, turn_id=turn_id, message=message,
+                    attachments=attachments, adapter=adapter,
+                    loopx_execution=loopx_execution, retry_binding=retry_binding,
+                ):
+                    pass
+        finally:
+            done_event.set()
+            with self.lock:
+                if self.turn_done_events.get(key) is done_event:
+                    self.turn_done_events.pop(key, None)
+
+    def _run_started_turn(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        message: str,
+        attachments: list[AttachmentPayload],
+        adapter: ChatRuntimeAdapter,
+        loopx_execution: bool,
+        retry_binding: dict[str, str],
+    ) -> bool | None:
+        """The body of a Turn whose `queued -> starting` fact is already durable.
+
+        `_run_turn` owns the single-flight release, so nothing here needs the
+        done event.
+        """
+        key = (session_id, turn_id)
         event_buffer = _TurnEventBuffer(
             store=self.store,
             session_id=session_id,
@@ -1106,22 +1555,43 @@ class ChatRuntimeController:
         with self.lock:
             self.turn_event_buffers[(session_id, turn_id)] = event_buffer
 
-        def consume_interrupted() -> bool:
-            key = (session_id, turn_id)
+        def execution_ended() -> bool:
+            from .control_plane.chat_turn_acceptance import managed_turn_execution_allowed
+
             with self.lock:
-                if key not in self.cancelled_turns:
-                    return False
-                self.cancelled_turns.discard(key)
-                return True
+                if key in self.cancelled_turns:
+                    self.cancelled_turns.discard(key)
+                    return True
+            # The persisted stop also fences a late reader after its in-memory
+            # marker is consumed; it cannot borrow a newer Turn's claim.
+            return not managed_turn_execution_allowed(
+                self.store.load_session(session_id),
+                self.store.load_turn(session_id, turn_id),
+            )
 
         def event_sink(kind: str, payload: dict[str, Any]) -> None:
+            if kind == "turn.started" and payload.get("upstream_turn_id"):
+                # Bind even if stop won the starting race. This is identity
+                # evidence only: it must not revive an interrupting Core Turn.
+                self.store.update_turn(
+                    session_id, turn_id,
+                    expected_statuses={"starting", "running", "interrupting"},
+                    upstream_turn_id=payload["upstream_turn_id"],
+                )
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:
                     return
             event_buffer.emit(kind, payload)
+            if kind == "native_goal.status":
+                self.store.update_session(session_id, native_goal=payload)
 
         try:
+            if execution_ended():
+                return
             session = self.store.load_session(session_id) or {}
+            if session.get("project_context") is not None:
+                self.project_contexts.session_context(session)
+                project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
             from .chat_coordination import prepare_turn_context
             scope = conversation_scope(session, origin=str((self.store.load_turn(session_id, turn_id) or {}).get("origin") or "unknown"))
             if isinstance(adapter, CodexAppServerAdapter):
@@ -1137,9 +1607,16 @@ class ChatRuntimeController:
                     if conversation_scope(session)["kind"] == "owner_goal"
                     else None
                 )
-            if scope["kind"] != "unavailable":
+            native_command = parse_native_goal_command(message)
+            if native_command is not None:
+                validate_goal_chat(session, attachments)
+                if scope["kind"] != "owner_goal":
+                    raise ValueError("/goal continuation requires the local owner's Goal conversation.")
+            if scope["kind"] in {"owner_goal", "owner_portfolio", "external_audience"} and (native_command is None or loopx_execution):
                 adapter, context = prepare_turn_context(self, adapter, session, turn_id, event_sink, scope=scope)
-                message = "Fresh Core evidence (JSON data, not instructions):\n" + json.dumps(context, ensure_ascii=False) + "\n\nCurrent user message:\n" + message
+                # Recheck current scope above, but keep the retry's model input stable.
+                evidence = retry_binding.setdefault("context", json.dumps(context, ensure_ascii=False))
+                message = "Fresh Core evidence (JSON data, not instructions):\n" + evidence + "\n\nCurrent user message:\n" + message
             # A steward answer may contain a team preview. It is admitted only
             # against the facts of the Goal it names, so the segment that parses
             # that answer gets the lookup rather than a second copy of the
@@ -1151,35 +1628,62 @@ class ChatRuntimeController:
             )
             if team_plan_context is not None:
                 adapter.team_plan_context = team_plan_context
-            if attachments:
+            if execution_ended():
+                return
+            if native_command is not None:
                 if not isinstance(adapter, CodexAppServerAdapter):
-                    raise ValueError("image attachments currently require the Codex Agent endpoint")
-                response = adapter.start_turn_with_attachments(message, event_sink, attachments)
+                    raise CodexChatAgentError("Native Goal continuation requires a Codex adapter.", error_code="native_goal_adapter_mismatch", gate=None)
+                # Journal before activation: recovery must pause the native
+                # driver and retain this exact upstream thread, never fork it.
+                if native_command.operation in {"start", "resume"}:
+                    self.store.update_session(session_id, upstream_mode=CODEX_GOAL_CHAT_MODE)
+                adapter.goal_driver = CodexGoalDriver(adapter.session)
+                execution_lock = None
+                try:
+                    if execution_ended():
+                        return
+                    execution_context = None
+                    if loopx_execution:
+                        from .chat_loopx_mode import execution_guidance
+                        execution_lock = self.loopx_mode.prepare(session_id, turn_id, adapter, adapter.session.read_tool_handler, event_sink)
+                        execution_context = execution_guidance(self.store.load_turn(session_id, turn_id)) + "\nFresh scoped evidence:\n" + json.dumps(context, ensure_ascii=False)
+                    if execution_ended():
+                        return
+                    response = adapter.goal_driver.run(native_command, event_sink, execution_context=execution_context)
+                finally:
+                    if execution_lock is not None:
+                        execution_lock.__exit__(None, None, None)
+                    adapter.goal_driver = None
             else:
-                response = adapter.start_turn(message, event_sink)
-            if consume_interrupted():
+                from .usage_goal import observe_goal_execution
+                if isinstance(adapter, CodexAppServerAdapter):
+                    binding = self._transport_retry_binding(session_id, turn_id, adapter)
+                    if "sha256" in retry_binding and binding != retry_binding["sha256"]:
+                        raise CodexChatAgentError(
+                            "The original request configuration changed; transport recovery stopped.",
+                            error_code="host_gate", gate=None,
+                        )
+                    retry_binding["sha256"] = binding
+                # Manager/native/external conversations have different execution
+                # and waiting boundaries. Do not invent Goal timing for them.
+                observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
+                with observe_goal_execution(self.store.root.parent, observed_goal, host=str(session.get("agent_id") or "unknown")):
+                    if attachments:
+                        if not isinstance(adapter, CodexAppServerAdapter):
+                            raise ValueError("image attachments currently require the Codex Agent endpoint")
+                        response = adapter.start_turn_with_attachments(message, event_sink, attachments)
+                    else:
+                        response = adapter.start_turn(message, event_sink)
+            if execution_ended():
                 event_buffer.close()
                 return
             if response.get("context_handoff") is not None:
-                from .capabilities.manager_context import deliver
-                if scope["kind"] == "unavailable":
-                    raise ValueError("context handoff requires a scoped conversation")
-                try:
-                    if scope["kind"] == "external_audience" and (
-                        self.manager_scope_resolver is None or not self.manager_scope_resolver(session)
-                    ):
-                        raise ValueError("manager connection authority is no longer available")
-                    receipt = deliver(self.store.root.parent, self.registry_path,
-                                      session=session, turn=self.store.load_turn(session_id, turn_id) or {},
-                                      request=response["context_handoff"])
-                    response = {**response, "proposals": [], "gate": None,
-                                "context_handoff_receipt": receipt,
-                                "message": ("已将交办说明和原消息交给 " if response["context_handoff"].get("brief") else "已将原消息交给 ") + receipt["agent_id"] +
-                                "。材料已进入收件箱，后续处理结论会自动回到这里。"
-                                "（委托 " + receipt["request_id"][:8] + "）"}
-                except (OSError, ValueError):
-                    response = {**response, "proposals": [], "gate": None,
-                                "message": "材料尚未转交：目标绑定、来源授权或持久收件回读未通过。需要修复交接链路；没有改动任务或优先级。"}
+                if scope["kind"] not in {"owner_goal", "owner_portfolio", "external_audience"}:
+                    raise ValueError("This workspace conversation cannot hand off to a Goal or Agent.")
+                response = apply_context_handoff(
+                    self, scope, session,
+                    self.store.load_turn(session_id, turn_id) or {}, response, context,
+                    execution_allowed=lambda: not execution_ended())
             response = offer_team_plan_confirmation(
                 store=self.store,
                 session=session,
@@ -1188,8 +1692,14 @@ class ChatRuntimeController:
                 response=response,
                 projector=self.team_plan_projector,
             )
+            # The owner manager channel states its answer shape in the answer
+            # itself, so the shape is recorded with the turn instead of being
+            # re-derived by every reader.
+            response = manager_answer_readback(
+                response, channel=str(session.get("channel_id") or "")
+            )
             event_buffer.close()
-            if consume_interrupted():
+            if execution_ended():
                 return
             completed = utc_now()
             completed_turn = self.store.update_turn(
@@ -1202,7 +1712,6 @@ class ChatRuntimeController:
                 last_activity_at=completed,
             )
             if completed_turn is None:
-                consume_interrupted()
                 return
             if adapter.upstream_thread_id != str((self.store.load_session(session_id) or {}).get("upstream_thread_id") or ""):
                 self.store.update_session(session_id, upstream_thread_id=adapter.upstream_thread_id)
@@ -1212,7 +1721,7 @@ class ChatRuntimeController:
             )
         except CodexChatTimeoutError as exc:
             event_buffer.close()
-            if consume_interrupted():
+            if execution_ended():
                 return
             try:
                 adapter.interrupt_turn()
@@ -1221,7 +1730,16 @@ class ChatRuntimeController:
             self._fail_turn(session_id, turn_id, exc.error_code, str(exc), status="timed_out")
         except CodexChatAgentError as exc:
             event_buffer.close()
-            if consume_interrupted():
+            if execution_ended():
+                return
+            if (not loopx_execution and parse_native_goal_command(message) is None
+                    and isinstance(adapter, CodexAppServerAdapter)
+                    and exc.error_code in {"host_gate", "upstream_transport_failure"}
+                    and self._prepare_transport_retry(
+                        session_id, turn_id, adapter, retry_binding, exc.native_error_info,
+                    )):
+                return True
+            if execution_ended():
                 return
             self._fail_turn(session_id, turn_id, exc.error_code, str(exc), status="failed", gate=exc.gate)
             if not adapter.healthcheck():
@@ -1235,16 +1753,98 @@ class ChatRuntimeController:
                         )
         except Exception as exc:  # noqa: BLE001 - preserve compact runtime failure.
             event_buffer.close()
-            if consume_interrupted():
+            if execution_ended():
                 return
             self._fail_turn(session_id, turn_id, "runtime_error", str(exc), status="failed")
         finally:
             event_buffer.close()
             with self.lock:
-                self.turn_event_buffers.pop((session_id, turn_id), None)
-                done_event = self.turn_done_events.pop((session_id, turn_id), None)
-            if done_event is not None:
-                done_event.set()
+                self.turn_event_buffers.pop(key, None)
+
+    def _transport_retry_binding(
+        self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
+    ) -> str:
+        """Compare the original request and current grants/config, not prose."""
+        session = self.store.load_session(session_id) or {}
+        turn = self.store.load_turn(session_id, turn_id) or {}
+        self._check_codex_home(session)
+        if session.get("project_context") is not None or session.get("steward_context") is not None:
+            self.project_contexts.session_context(session)
+        if session.get("project_context") is not None:
+            project_context_policy.validate_project_executor_scope(
+                str(session["agent_id"]), session["project_context"], self.capabilities,
+            )
+        manager = (self.manager_runtime_profile(
+            str(session.get("channel_id") or "manager"),
+            steward_context=session.get("steward_context"),
+        ) if is_manager_channel(session.get("channel_id")) else None)
+        native = adapter.session
+        facts = {
+            "session": {key: value for key, value in session.items() if key not in {
+                "status", "active_turn_id", "last_activity_at", "last_error_code", "updated_at",
+            }},
+            "request": {key: turn.get(key) for key in (
+                "turn_id", "client_turn_id", "host_claim_id", "message", "attachments", "origin",
+            )},
+            "native": {key: getattr(native, key) for key in (
+                "thread_id", "model", "reasoning_effort", "sandbox", "permissions_profile",
+                "runtime_profile", "project_context", "execution_mode",
+            )},
+            "manager": manager,
+            "allocation": manager_session_model_allocation(self, session) if manager else None,
+        }
+        return hashlib.sha256(json.dumps(facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def _prepare_transport_retry(
+        self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
+        retry_binding: dict[str, str], native_error_info: dict[str, Any] | str | None,
+    ) -> bool:
+        """One same-worker retry, reserved durably before backoff/dispatch.
+
+        The existing queued CAS and Core active claim own execution. The event
+        ledger retains the attempt across restart/compaction; a new worker never
+        reopens starting/terminal Turns or resets this allowance. Lark delivery
+        and other adapters do not decide whether to replay a model request.
+        """
+        from .control_plane.chat_turn_acceptance import managed_turn_execution_allowed
+
+        def current() -> bool:
+            with self.lock:
+                attached = self.adapters.get(session_id) is adapter
+            return (attached and not self.closed.is_set() and adapter.healthcheck()
+                    and managed_turn_execution_allowed(
+                        self.store.load_session(session_id), self.store.load_turn(session_id, turn_id),
+                    ) and retry_binding.get("sha256") == self._transport_retry_binding(session_id, turn_id, adapter)
+                    and not any(row.get("kind") == "turn.steered"
+                                for row in self.store.events_after(session_id, turn_id, None)))
+
+        try:
+            if not isinstance(native_error_info, dict):
+                return False
+            if retry_binding.get("attempt") or not current() or any(row.get("kind") == "transport.retry_planned"
+                                    for row in self.store.events_after(session_id, turn_id, None)):
+                return False
+            original = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
+            proof = adapter.session.transport_retry_readback(original) if original else None
+            if proof is None or proof["codex_error_info"] != native_error_info or not current():
+                return False
+            delay = 2.0
+            retry_binding["attempt"] = "1"
+            self.store.append_event(session_id, turn_id, kind="transport.retry_planned", payload={
+                "attempt": 1, "upstream_turn_id": original,
+                "binding_sha256": retry_binding["sha256"], "readback": proof,
+                "not_before": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
+            })
+            self.store.append_event(session_id, turn_id, kind="agent.phase", payload={
+                "phase": "retrying", "label": "连接暂时中断，已核验本轮未执行工具；正在原会话继续。",
+            })
+            if self.closed.wait(delay) or not current():
+                return False
+            # Stop/config changes during the final native read also win. A tool
+            # or new input appearing late cannot borrow the earlier proof.
+            return adapter.session.transport_retry_readback(original) == proof and current()
+        except (CodexChatAgentError, KeyError, OSError, TypeError, ValueError):
+            return False
 
     def _fail_turn(
         self,
@@ -1255,12 +1855,13 @@ class ChatRuntimeController:
         *,
         status: str,
         gate: dict[str, Any] | None = None,
+        expected_statuses: set[str] | None = None,
     ) -> None:
         completed = utc_now()
         failed = self.store.update_turn(
             session_id,
             turn_id,
-            expected_statuses={"starting", "running"},
+            expected_statuses=expected_statuses if expected_statuses is not None else {"starting", "running"},
             status=status,
             error_code=error_code,
             error=message,
@@ -1282,32 +1883,49 @@ class ChatRuntimeController:
         )
 
     def interrupt_turn(self, *, session_id: str, turn_id: str) -> dict[str, Any]:
-        turn = self.store.load_turn(session_id, turn_id)
-        if turn is None:
-            raise KeyError("chat turn was not found")
-        if turn.get("status") in TERMINAL_TURN_STATES:
-            return turn
-        session = self.store.load_session(session_id)
-        if (
-            session
-            and session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED
-            and session.get("active_turn_id") == turn_id
-        ):
-            raise CodexChatAgentError(
-                "The attached host does not expose interrupt control to LoopX Chat.",
-                error_code="attached_session_interrupt_unavailable",
-                gate={
-                    "kind": "host_tool_gate",
-                    "summary": "The active Turn is owned by the attached host.",
-                    "next_action": "Stop the Turn in the attached host, then retry.",
-                },
+        with self._session_adapter_lock(session_id):
+            turn = self.store.load_turn(session_id, turn_id)
+            if turn is None:
+                raise KeyError("chat turn was not found")
+            session = self.store.load_session(session_id)
+            if (
+                session
+                and session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED
+                and session.get("active_turn_id") == turn_id
+            ):
+                raise CodexChatAgentError(
+                    "The attached host does not expose interrupt control to LoopX Chat.",
+                    error_code="attached_session_interrupt_unavailable",
+                    gate={
+                        "kind": "host_tool_gate",
+                        "summary": "The active Turn is owned by the attached host.",
+                        "next_action": "Stop the Turn in the attached host, then retry.",
+                    },
+                )
+            prepared = self.store.prepared_managed_turn_request(
+                session_id,
+                turn_id=turn_id,
             )
-        interrupting = self.store.update_turn(
-            session_id,
-            turn_id,
-            expected_statuses={"queued", "starting", "running"},
-            status="interrupting",
-        )
+            if prepared is not None:
+                accepted = self.store.accept_managed_turn(
+                    session_id,
+                    client_turn_id=str(prepared["client_turn_id"]),
+                    message=str(prepared["message"]),
+                    attachments=prepared.get("attachments"),
+                    origin=str(prepared["origin"]),
+                    display_message=str(prepared["display_message"]),
+                    loopx_execution=bool(prepared["loopx_execution"]),
+                    loopx_request=prepared.get("loopx_request"),
+                )
+                turn = accepted.turn
+            if turn.get("status") in TERMINAL_TURN_STATES:
+                return turn
+            interrupting = self.store.update_turn(
+                session_id,
+                turn_id,
+                expected_statuses={"queued", "starting", "running", "interrupting"},
+                status="interrupting",
+            )
         if interrupting is None:
             current = self.store.load_turn(session_id, turn_id)
             if current is None:
@@ -1325,33 +1943,43 @@ class ChatRuntimeController:
             event_buffer = self.turn_event_buffers.get((session_id, turn_id))
             done_event = self.turn_done_events.get((session_id, turn_id))
             self.cancelled_turns.add((session_id, turn_id))
-        if adapter is not None and target_is_active:
-            try:
-                adapter.interrupt_turn(str(turn.get("upstream_turn_id") or "") or None)
-            except Exception:
-                pass
+        try:
+            if target_is_active:
+                with self._session_adapter_lock(session_id):
+                    upstream_turn_id = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
+                    if isinstance(adapter, CodexAppServerAdapter) and adapter.goal_driver is None:
+                        # Never fall back to the preceding native Turn while a
+                        # turn/start request is still binding the current one.
+                        deadline = time.monotonic() + adapter.session.response_timeout_sec
+                        while not upstream_turn_id and done_event is not None and not done_event.is_set():
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("native Turn identity was not confirmed")
+                            done_event.wait(timeout=0.02)
+                            upstream_turn_id = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
+                        if upstream_turn_id:
+                            adapter.interrupt_turn(upstream_turn_id)
+                    elif adapter is not None:
+                        adapter.interrupt_turn(upstream_turn_id or None)
+                    elif upstream_turn_id or turn.get("status") in {"running", "interrupting"}:
+                        raise RuntimeError("active Turn transport is unavailable")
+            if done_event is not None and not done_event.wait(timeout=5.0):
+                raise TimeoutError("Turn worker has not acknowledged stop")
+        except Exception as exc:
+            message = "停止尚未确认；当前会话仍保留执行屏障，请重试停止。"
+            self.store.update_turn(session_id, turn_id, expected_statuses={"interrupting"},
+                                   error_code="runtime_error", error=message)
+            self.store.append_message(session_id, role="error", text=message, turn_id=turn_id)
+            raise CodexChatAgentError(message, gate=None, error_code="runtime_error") from exc
         if event_buffer is not None:
             event_buffer.close()
-        if done_event is not None and not done_event.wait(timeout=5.0):
-            # A notification-only interrupt can be lost when an upstream runtime
-            # is unhealthy. Stop that transport before making the Session ready;
-            # the next Turn will resume the persisted upstream thread on a fresh
-            # adapter instead of racing two readers on one event stream.
-            if adapter is not None and target_is_active:
-                try:
-                    adapter.close_session()
-                except Exception:
-                    pass
-            with self.lock:
-                if target_is_active and self.adapters.get(session_id) is adapter:
-                    self.adapters.pop(session_id, None)
-            done_event.wait(timeout=1.0)
         completed = utc_now()
         updated = self.store.update_turn(
             session_id,
             turn_id,
             expected_statuses={"interrupting"},
             status="interrupted",
+            error_code=None,
+            error=None,
             completed_at=completed,
             last_activity_at=completed,
         )
@@ -1383,12 +2011,18 @@ class ChatRuntimeController:
         while True:
             if (turn := self.store.load_turn(session_id, turn_id)) is None:
                 raise KeyError("chat turn was not found")
-            if turn.get("status") in TERMINAL_TURN_STATES:
-                return turn
-            if (remaining := deadline - time.monotonic()) <= 0:
-                raise TimeoutError("chat turn wait timed out")
             with self.lock:
                 done_event = self.turn_done_events.get((session_id, turn_id))
+            remaining = deadline - time.monotonic()
+            if turn.get("status") in TERMINAL_TURN_STATES:
+                if done_event is None or done_event.is_set():
+                    return turn
+                if remaining <= 0:
+                    raise TimeoutError("chat turn wait timed out")
+                done_event.wait(remaining)
+                continue
+            if remaining <= 0:
+                raise TimeoutError("chat turn wait timed out")
             (done_event.wait if done_event else time.sleep)(remaining if done_event else min(0.02, remaining))
 
     def close_session(self, session_id: str) -> bool:
@@ -1415,21 +2049,35 @@ class ChatRuntimeController:
             return True
 
     def resume_session(self, *, session_id: str, work_dir: Path, objective: str) -> dict[str, Any]:
+        prepared = self.store.prepared_managed_turn_request(
+            session_id, include_accepted_queued=True,
+        )
+        if prepared is not None:
+            self.submit_turn(
+                session_id=session_id,
+                client_turn_id=str(prepared["client_turn_id"]),
+                message=str(prepared["message"]),
+                attachments=prepared.get("attachments"),
+                work_dir=work_dir,
+                objective=objective,
+                loopx_execution=bool(prepared["loopx_execution"]),
+                loopx_request=prepared.get("loopx_request"),
+            )
+            restored = self.store.load_session(session_id)
+            if restored is None:
+                raise KeyError("chat session was not found")
+            return restored
         with self._session_adapter_lock(session_id):
             session = self.store.load_session(session_id)
             if session is None or session.get("status") == "closed":
                 raise KeyError("chat session was not found")
             self._check_codex_home(session)
             if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
-                if session.get("active_turn_id"):
-                    return session
-                restored = self.store.update_session(
-                    session_id,
-                    status="ready",
-                    active_turn_id=None,
-                    last_error_code=None,
+                return resume_attached_agent_session(
+                    store=self.store,
+                    registry_path=self.registry_path,
+                    session_id=session_id,
                 )
-                return restored
             with self.lock:
                 current = self.adapters.get(session_id)
                 adapter_healthy = current is not None and current.healthcheck()

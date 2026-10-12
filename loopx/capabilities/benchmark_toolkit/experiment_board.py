@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ...domain_state import default_domain_state_file_path, upsert_domain_state_jsonl
+from .experiment_identity import (
+    ARM_ROLES,
+    experiment_run_key,
+    experiment_token_text as _token,
+)
 from .factorial_contrast import (
+    benchmark_metric_comparison_value,
     build_benchmark_factorial_contrasts,
     build_benchmark_metric_delta,
 )
@@ -18,8 +23,6 @@ BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION = "benchmark_experiment_board_row_
 BENCHMARK_EXPERIMENT_BOARD_SCHEMA_VERSION = "benchmark_experiment_board_v0"
 BENCHMARK_EXPERIMENT_BOARD_LEDGER_FILENAME = "experiment-board.jsonl"
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}$")
-_ARM_ROLES = {"baseline", "control", "treatment", "explore"}
 _RUN_STATUSES = {"planned", "running", "completed", "runner_invalid", "cancelled"}
 _RUN_STATUS_TRANSITIONS = {
     "planned": _RUN_STATUSES,
@@ -76,13 +79,6 @@ def _reject_unknown_fields(
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError(f"{field} contains unsupported fields: {', '.join(unknown)}")
-
-
-def _token(value: Any, *, field: str) -> str:
-    text = str(value or "").strip()
-    if not _TOKEN_RE.fullmatch(text):
-        raise ValueError(f"{field} must be a compact public-safe token")
-    return text
 
 
 def _optional_token(value: Any, *, field: str) -> str | None:
@@ -267,7 +263,7 @@ def normalize_benchmark_experiment_board_row(
         raise ValueError("benchmark experiment board row schema mismatch")
 
     arm_role = _token(payload.get("arm_role"), field="arm_role")
-    if arm_role not in _ARM_ROLES:
+    if arm_role not in ARM_ROLES:
         raise ValueError("arm_role is unsupported")
     status = _token(payload.get("status"), field="status")
     if status not in _RUN_STATUSES:
@@ -396,7 +392,7 @@ def read_benchmark_experiment_board_rows(
         return []
     rows: list[dict[str, Any]] = []
     for index, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
+        path.read_text(encoding="utf-8").split("\n"), start=1
     ):
         if not line.strip():
             continue
@@ -482,13 +478,7 @@ def upsert_benchmark_experiment_board_row(
 def _benchmark_experiment_board_row_key_tuple(
     payload: Mapping[str, Any],
 ) -> tuple[str, str, str, str]:
-    key = benchmark_experiment_board_row_key(payload)
-    return (
-        key["benchmark_id"],
-        key["study_id"],
-        key["case_id"],
-        key["run_id"],
-    )
+    return experiment_run_key(benchmark_experiment_board_row_key(payload))
 
 
 def _benchmark_experiment_board_observed_at(payload: Mapping[str, Any]) -> datetime:
@@ -647,6 +637,10 @@ def _build_comparison(
             metric_deltas[name] = build_benchmark_metric_delta(
                 anchor_metrics[name], candidate_metrics[name]
             )
+        if metric_deltas.get(candidate.get("primary_metric"), {}).get(
+            "comparison_unavailable_reason"
+        ):
+            reasons.append("primary_metric_definition_mismatch")
 
     return {
         "comparison_id": (
@@ -736,20 +730,30 @@ def build_benchmark_experiment_board(
         else []
     )
 
-    by_run_id = {row["run_id"]: row for row in normalized}
+    by_run_key = {}
+    for row in normalized:
+        key = experiment_run_key(row)
+        if key in by_run_key:
+            raise ValueError("duplicate experiment-board run identity")
+        by_run_key[key] = row
     comparisons = [
-        _build_comparison(row, by_run_id.get(row.get("comparison_anchor_run_id")))
+        _build_comparison(
+            row,
+            by_run_key.get(
+                experiment_run_key(row, run_id=row["comparison_anchor_run_id"])
+            ),
+        )
         for row in normalized
         if row["arm_role"] != "baseline"
     ]
     role_counts = {
         role: sum(1 for row in normalized if row["arm_role"] == role)
-        for role in sorted(_ARM_ROLES)
+        for role in sorted(ARM_ROLES)
     }
     comparison_arm_role_counts = _comparison_lane_counts(
         comparisons,
         field="candidate_arm_role",
-        values=_ARM_ROLES - {"baseline"},
+        values=ARM_ROLES - {"baseline"},
     )
     comparison_claim_scope_counts = _comparison_lane_counts(
         comparisons,
@@ -945,9 +949,11 @@ def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> st
             else {}
         )
         primary_delta = deltas.get(item.get("primary_metric"))
-        delta_value = (
-            primary_delta.get("delta") if isinstance(primary_delta, Mapping) else "n/a"
-        )
+        delta_value: str | float = "n/a"
+        if isinstance(primary_delta, Mapping):
+            value = benchmark_metric_comparison_value(primary_delta)
+            if value is not None:
+                delta_value = f"{value * 100:g} pp" if "delta_rate" in primary_delta else value
         reasons = (
             ", ".join(str(value) for value in item.get("reason_codes", []) or [])
             or "none"
@@ -998,10 +1004,12 @@ def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> st
         )
         primary = metrics.get(item.get("primary_metric"))
         interaction_value = (
-            primary.get("difference_in_differences")
+            primary.get("difference_in_differences", "n/a")
             if isinstance(primary, Mapping)
             else "n/a"
         )
+        if isinstance(primary, Mapping) and "difference_in_differences_rate" in primary:
+            interaction_value = f"{primary['difference_in_differences_rate'] * 100:g} pp"
         reasons = (
             ", ".join(str(value) for value in item.get("reason_codes", []) or [])
             or "none"

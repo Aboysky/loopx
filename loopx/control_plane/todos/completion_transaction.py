@@ -7,6 +7,7 @@ from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from .contract import normalize_todo_id_list
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 TODO_COMPLETION_TRANSACTION_REQUEST_SCHEMA = "loopx_todo_completion_transaction_v0"
@@ -227,6 +228,7 @@ def materialized_todo_completion_replay(
         "status": "done",
         "completion_continuation": fence.get("completion_continuation"),
         "completion_recovery": todo.get("completion_recovery"),
+        "completion_receipt_id": todo.get("completion_receipt_id"),
         "handoff_mode": handoff["handoff_mode"],
         "mutation_authority": dict(mutation_authority),
         "state_file": state_file,
@@ -284,6 +286,16 @@ def _valid_receipt(value: Any) -> bool:
         and value.get("stdout_captured") is False
         and value.get("stderr_captured") is False
         and value.get("local_path_captured") is False
+        and (
+            value.get("validation_declaration_sha256") is None
+            or (
+                isinstance(value.get("validation_declaration_sha256"), str)
+                and BARE_SHA256_PATTERN.fullmatch(
+                    value.get("validation_declaration_sha256")
+                )
+                is not None
+            )
+        )
     )
 
 
@@ -389,6 +401,16 @@ def _valid_execute_validation_result(result: Mapping[str, Any]) -> bool:
             effect.get("task_repository") is None
             or isinstance(effect.get("task_repository"), str)
         )
+        and (
+            effect.get("validation_declaration_sha256") is None
+            or (
+                isinstance(effect.get("validation_declaration_sha256"), str)
+                and BARE_SHA256_PATTERN.fullmatch(
+                    effect.get("validation_declaration_sha256")
+                )
+                is not None
+            )
+        )
     )
 
 
@@ -402,12 +424,21 @@ def _valid_completion_settlement(result: Mapping[str, Any]) -> bool:
         and (state.get("recovery") is None or state.get("recovery") in _RECOVERIES)
         and isinstance(updates, Mapping)
         and all(
-            key in {"completion_continuation", "completion_recovery"}
+            key in {"completion_continuation", "completion_recovery", "completion_receipt_id"}
             and isinstance(value, str)
             for key, value in updates.items()
         )
         and updates.get("completion_continuation") == state.get("continuation")
         and updates.get("completion_recovery") == state.get("recovery")
+        and (
+            updates.get("completion_receipt_id") is None
+            or (
+                isinstance(updates["completion_receipt_id"], str)
+                and updates["completion_receipt_id"].startswith("tcw_")
+                and BARE_SHA256_PATTERN.fullmatch(updates["completion_receipt_id"][4:])
+                is not None
+            )
+        )
         and (receipt is None or _valid_receipt(receipt))
     )
 

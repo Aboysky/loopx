@@ -731,6 +731,26 @@ def test_exhausted_quota_failure_routes_to_repair_without_retry_metadata() -> No
     assert "retry_continuation" not in payload
 
 
+def test_output_budget_failure_routes_to_repair_without_retry_metadata() -> None:
+    receipt = _validated_receipt(
+        result_kind=LoopXTurnResultKind.HOST_FAILURE,
+        host_failure=build_host_failure_record(
+            "output_budget_exhausted",
+            attempt=1,
+        ),
+    )
+    payload = decide_loop_disposition(
+        turn_receipt=receipt,
+        quota_decision=_envelope(
+            should_run=True,
+            predecessor_turn_key=receipt.turn_key,
+        ),
+    )
+
+    _assert_markers(payload, "repair")
+    assert "retry_continuation" not in payload
+
+
 def test_stale_todo_receipt_raises_not_terminal() -> None:
     receipt = _validated_receipt(
         result_kind=LoopXTurnResultKind.VALIDATED_COMPLETION,
@@ -977,7 +997,9 @@ def test_mismatched_signature_raises() -> None:
 def test_repair_decision_routes_to_repair() -> None:
     payload = decide_loop_disposition(
         turn_receipt=None,
-        quota_decision=_envelope(should_run=True, effective_action="workspace_repair"),
+        quota_decision=_envelope(
+            should_run=True, effective_action="agent_workspace_repair"
+        ),
     )
     _assert_markers(payload, "repair")
 
@@ -1098,7 +1120,7 @@ def test_fresh_user_gate_outranks_every_nonterminal_result(kind) -> None:
     "action,should_run,quiet",
     [
         ("deliver", True, False),
-        ("workspace_repair", True, False),
+        ("agent_workspace_repair", True, False),
         ("autonomous_replan", True, False),
         ("deliver", False, True),
         ("deliver", False, False),
@@ -1126,7 +1148,7 @@ def test_progress_exhaustion_outranks_fresh_work_and_wait(
     "action,expected",
     [
         ("deliver", "wait"),
-        ("workspace_repair", "repair"),
+        ("agent_workspace_repair", "repair"),
         ("autonomous_replan", "replan"),
     ],
 )
@@ -1290,3 +1312,43 @@ def test_completion_terminal_evidence_accepts_the_string_enum_owner() -> None:
         ),
     )
     _assert_markers(result, "terminal")
+
+
+def test_independent_validation_replan_is_preserved_and_legacy_failure_repairs():
+    execution = _execution(result_kind=LoopXTurnResultKind.VALIDATION_FAILED)
+    execution.update(validation_stage="task_postcondition", validation={
+        "schema_version": "loopx_turn_task_validation_v0", "ok": False, "status": "failed",
+        "validator_kind": "fixture", "summary": "Declared postcondition absent",
+        "recovery_kind": "replan_required", "errors": [],
+    })
+    receipt = ValidatedTurnReceipt.from_execution(execution)
+    assert receipt.task_failure["recovery_kind"] == "replan_required"
+    decision = _envelope(should_run=True, predecessor_turn_key=receipt.turn_key)
+    actual = decide_loop_disposition(turn_receipt=receipt, quota_decision=decision, bounded_turn_budget=None)
+    assert actual["disposition"] == "replan"
+    execution.pop("validation_stage")
+    legacy = ValidatedTurnReceipt.from_execution(execution)
+    actual = decide_loop_disposition(turn_receipt=legacy, quota_decision=decision, bounded_turn_budget=None)
+    assert actual["disposition"] == "repair"
+
+
+def test_committed_replay_requires_original_complete_settlement_receipts():
+    import copy
+    payload = _execution()
+    payload.update(replayed=True, dry_run=False, quota_slot_spend_count=1,
+        effects={"host_invoked": False, "state_written": False, "quota_spent": False})
+    assert ValidatedTurnReceipt.from_execution(payload).result_kind is LoopXTurnResultKind.VALIDATED_PROGRESS
+    for corrupt in ("effect_id", "receipt_status", "receipt_missing", "preview", "spend_missing"):
+        invalid = copy.deepcopy(payload)
+        if corrupt == "effect_id":
+            invalid["settlement_result"]["receipts"][0]["effect_id"] = "different"
+        elif corrupt == "receipt_status":
+            invalid["settlement_result"]["receipts"][0]["status"] = "prepared"
+        elif corrupt == "receipt_missing":
+            invalid["settlement_result"]["receipts"].pop()
+        elif corrupt == "preview":
+            invalid["dry_run"] = True
+        else:
+            invalid["quota_slot_spend_count"] = 0
+        with pytest.raises((ValueError, TypeError)):
+            ValidatedTurnReceipt.from_execution(invalid)

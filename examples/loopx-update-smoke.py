@@ -409,7 +409,8 @@ def test_check_compares_selected_source_version() -> None:
             doctor_payload=fake_fresh_doctor_payload(),
         )
     assert current_payload["source_version_check"]["matches_current"] is True, current_payload
-    assert "no update needed" in current_payload["recommended_action"], current_payload
+    assert current_payload["source_commit_check"]["status"] == "not_requested", current_payload
+    assert "no update needed" not in current_payload["recommended_action"], current_payload
 
 
 def test_check_degrades_when_source_version_is_unavailable() -> None:
@@ -567,7 +568,8 @@ def test_cli_rollback_previous_with_temp_home() -> None:
                 "previous",
             ],
             cwd=REPO_ROOT,
-            env={"HOME": str(home), "PATH": f"{home / '.local' / 'bin'}:{os.environ.get('PATH', '')}"},
+            env={"HOME": str(home), "PATH": f"{home / '.local' / 'bin'}:{os.environ.get('PATH', '')}",
+                 "LOOPX_USAGE_PING": "0"},
             text=True,
             capture_output=True,
         )

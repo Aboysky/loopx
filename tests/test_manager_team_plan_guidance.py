@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from loopx.chat_manager import manager_skill_text
 
 
@@ -39,8 +41,8 @@ def test_manager_guidance_orders_one_team_preview_before_any_effect() -> None:
     assert "instead of inventing a lane, an Agent, a capability, or an action kind" in prose
 
 
-def test_the_owner_visible_failure_names_the_executor_that_refused() -> None:
-    """A host gate is the executor's refusal, not a defect in the manager."""
+def test_the_owner_visible_failure_does_not_guess_why_the_host_failed() -> None:
+    """A generic host gate cannot establish quota or authorization."""
 
     from loopx.extensions.lark.manager_context import manager_failure_reply
 
@@ -50,13 +52,47 @@ def test_the_owner_visible_failure_names_the_executor_that_refused() -> None:
     code, text = manager_failure_reply(_Refused("upstream refused"))
 
     assert code == "host_gate"
-    assert "上游执行器" in text
+    assert "执行器未能完成" in text
+    assert "额度或授权" not in text
     assert "管家处理失败" not in text
+
+    class _Restarted(RuntimeError):
+        error_code = "server_restarted"
+
+    assert "服务在处理过程中重启" in manager_failure_reply(_Restarted())[1]
+
+    class _InvalidRequest(Exception):
+        error_code = "upstream_invalid_request"
+
+    assert "模型与 Codex CLI" in manager_failure_reply(_InvalidRequest())[1]
+
     # An unmapped code still falls back to the bounded generic label.
     class _Unknown(RuntimeError):
         error_code = "some_future_code"
 
     assert manager_failure_reply(_Unknown("x"))[0] == "processing_failed"
+
+
+@pytest.mark.parametrize("info", [
+    None, "responseStreamDisconnected", {"responseStreamDisconnected": None},
+    {"responseStreamDisconnected": {}, "futureVariant": {}}, {"futureVariant": {}},
+])
+def test_failure_reply_does_not_guess_from_unknown_retry_shapes(info) -> None:
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+
+    code, text = manager_failure_reply({"error_code": "host_gate"}, retry_info=info)
+    assert code == "host_gate" and "响应流曾中断" not in text
+    assert "/status" not in text and "已过期" not in text
+
+
+def test_retry_history_never_overrides_terminal_policy_or_expiry() -> None:
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+
+    retry = {"responseStreamDisconnected": {"message": "private fixture"}}
+    for code, label in [("cyber_policy", "安全策略"), ("session_queue_expired", "排队请求已过期")]:
+        actual_code, text = manager_failure_reply({"error_code": code}, retry_info=retry)
+        assert actual_code == code and label in text
+        assert "响应流曾中断" not in text and "private" not in text
 
 
 def test_manager_guidance_ships_the_machine_readable_preview_contract() -> None:

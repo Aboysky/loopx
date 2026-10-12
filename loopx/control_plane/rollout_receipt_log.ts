@@ -7,15 +7,33 @@
  * receipts lives here so a reader cannot invent a second path rule or a
  * different tolerance for malformed lines.
  */
-import { readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
+import { requireNonEmptyString } from "./runtime_decode.ts";
+import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
 export const HEARTBEAT_RECEIPT_EVENT_KIND = "quota_should_run";
+export type HeartbeatReceiptStatus = "fresh" | "missing" | "stale";
+
+/**
+ * One parse of a Goal's rollout-event log.
+ *
+ * Receipt discovery is intentionally tolerant: an unrelated malformed line
+ * cannot erase a valid heartbeat receipt. Settlement readback is intentionally
+ * strict: once a receipt creates a closeout obligation, malformed persisted
+ * state must fail closed. Keeping the first strict error beside the valid
+ * records lets both readers share one physical read without weakening either
+ * contract.
+ */
+export interface GoalRolloutEventSnapshot {
+  readonly runtimeRoot: string;
+  readonly goalId: string;
+  readonly events: readonly JsonObject[];
+  readonly firstStrictErrorLine: number | null;
+}
 
 /** Reject a goal id that is not one path segment, before any log read. */
 export function goalPathSegment(value: unknown): string {
@@ -57,6 +75,65 @@ export function goalRolloutEventLogPath(
   return path;
 }
 
+/** Read and parse the rollout log once, retaining strict-read diagnostics. */
+export async function readGoalRolloutEventSnapshot(
+  runtimeRoot: string,
+  goalId: string,
+): Promise<GoalRolloutEventSnapshot | null> {
+  const snapshot = await readReceiptLogSnapshot(
+    goalRolloutEventLogPath(runtimeRoot, goalId), ROLLOUT_EVENT_SCHEMA_VERSION,
+  );
+  return snapshot === null ? null : {
+    runtimeRoot, goalId, events: snapshot.records,
+    firstStrictErrorLine: snapshot.firstErrorLine,
+  };
+}
+
+/** Return strict settlement input, or fail on the first malformed line. */
+export function strictGoalRolloutEvents(
+  snapshot: GoalRolloutEventSnapshot | null,
+): readonly JsonObject[] {
+  if (snapshot !== null && snapshot.firstStrictErrorLine !== null) {
+    throw new EffectRuntimeRequestError(
+      `settlement readback line ${snapshot.firstStrictErrorLine} is malformed`,
+      "malformed_settlement_state",
+    );
+  }
+  return snapshot?.events ?? [];
+}
+
+/** Qualify heartbeat receipts without discarding diagnostic quota audit rows. */
+export function goalHeartbeatReceiptsFromSnapshot(
+  snapshot: GoalRolloutEventSnapshot | null,
+  goalId: string,
+  agentId?: string | null,
+): JsonObject[] | null {
+  if (snapshot === null) return null;
+  if (snapshot.goalId !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not belong to the requested goal",
+      "rollout_event_snapshot_scope_mismatch",
+    );
+  }
+  return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId);
+}
+
+/** The heartbeat receipt filter over events a caller already read. */
+export function heartbeatReceiptsFromEvents(
+  events: readonly JsonObject[],
+  goalId: string,
+  agentId?: string | null,
+): JsonObject[] {
+  return events.filter((event) =>
+    event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
+    event.goal_id === goalId &&
+    // A failed invocation without a real Turn identity is an audit, not a
+    // receipt that can grant host writeback or supersede an admitted Turn.
+    typeof event.run_id === "string" && event.run_id.trim().length > 0 &&
+    (agentId === undefined || event.agent_id === agentId)
+  );
+}
+
 /**
  * Read the heartbeat receipts this goal persisted for one Agent.
  *
@@ -70,30 +147,51 @@ export async function readGoalHeartbeatReceipts(
   goalId: string,
   agentId?: string | null,
 ): Promise<JsonObject[] | null> {
-  let text: string;
-  try {
-    text = await readFile(goalRolloutEventLogPath(runtimeRoot, goalId), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  const receipts: JsonObject[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const event = jsonObject(JSON.parse(line));
-      if (
-        event?.schema_version === ROLLOUT_EVENT_SCHEMA_VERSION &&
-        event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
-        event.goal_id === goalId &&
-        (agentId === undefined || event.agent_id === agentId)
-      ) {
-        receipts.push(event);
-      }
-    } catch {
-      // Match the established non-strict rollout-event reader: unrelated
-      // malformed lines do not manufacture or erase a valid receipt.
+  return goalHeartbeatReceiptsFromSnapshot(
+    await readGoalRolloutEventSnapshot(runtimeRoot, goalId),
+    goalId,
+    agentId,
+  );
+}
+
+export async function heartbeatReceiptStatus(params: {
+  runtimeRoot: string;
+  goalId: string;
+  agentId: string;
+  turnInstanceId: string;
+}): Promise<HeartbeatReceiptStatus> {
+  const snapshot = await readGoalRolloutEventSnapshot(
+    params.runtimeRoot,
+    params.goalId,
+  );
+  const receipts = goalHeartbeatReceiptsFromSnapshot(
+    snapshot,
+    params.goalId,
+    params.agentId,
+  );
+  if (snapshot === null || receipts === null) return "missing";
+  const firstReceipt = receipts.find(
+    (event) => event.run_id === params.turnInstanceId,
+  );
+  const firstMatch = firstReceipt === undefined
+    ? -1
+    : snapshot.events.indexOf(firstReceipt);
+  if (firstMatch < 0) return "missing";
+  return snapshot.events.slice(firstMatch + 1).some((event) => {
+    if (
+      event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
+      event.goal_id !== params.goalId ||
+      event.agent_id !== params.agentId
+    ) return false;
+    if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
+      return event.run_id !== params.turnInstanceId;
     }
-  }
-  return receipts;
+    const details = event.details;
+    return event.status === "normal_run" &&
+      typeof details === "object" && details !== null && !Array.isArray(details) &&
+      (details as JsonObject).ok === true &&
+      (details as JsonObject).should_run === true;
+  })
+    ? "stale"
+    : "fresh";
 }

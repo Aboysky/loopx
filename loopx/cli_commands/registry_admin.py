@@ -6,11 +6,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..agent_registry import normalize_registered_agents
+from ..capabilities.multi_subagent import (
+    apply_codex_subagent_capacity,
+    plan_codex_subagent_capacity,
+)
 from ..configure_goal import configure_goal, render_configure_goal_markdown
 from ..control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
 )
-from ..file_lock import exclusive_file_lock, lock_timeout_error_fields
+from ..control_plane.projects.registry_codec import project_registry_transaction
+from ..file_lock import lock_timeout_error_fields
 from ..global_registry import sync_project_registry_to_global
 from ..history import load_registry
 from ..registry import registry_goals
@@ -20,7 +25,6 @@ from ..thread_agent_binding import (
     resolve_thread_agent_binding,
     unbind_thread_agent_in_registry,
 )
-from ..upgrade import build_upgrade_plan
 from .goal_lifecycle import (
     handle_goal_lifecycle_command,
     register_goal_lifecycle_command,
@@ -33,6 +37,8 @@ from .registry_admin_lifecycle import (
     register_registry_lifecycle_commands,
 )
 from .registry_admin_peer import render_register_agent_markdown
+
+
 from .registry_admin_thread_resolution import (
     REGISTRY_THREAD_RESOLUTION_COMMANDS,
     handle_registry_thread_resolution_command,
@@ -44,6 +50,13 @@ from .registry_authority import (
     register_registry_authority_commands,
 )
 from .support_control_registry import explicit_global_registry
+
+def _pr_review_agent_order_pair(value: str) -> tuple[str, str | None]:
+    agent, separator, direction = value.partition("=")
+    if not separator or not agent or direction not in {"forward", "reverse", "inherit"}:
+        raise ValueError("--pr-review-agent-order requires AGENT=forward|reverse|inherit")
+    return agent, None if direction == "inherit" else direction
+
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -187,11 +200,7 @@ def register_agent_via_source_registry(
                 "registered_agents": merged_agents,
                 "changed": merged_agents != existing_agents,
                 "written": False,
-                "host_loop_activation": loop_activation_for_goal(
-                    registry_path=global_path,
-                    runtime_root_arg=runtime_root_arg,
-                    goal_id=goal_id,
-                ),
+                "host_loop_activation": unresolved_host_loop_activation(),
                 "global_registry_writability": global_writability,
                 "global_sync": {
                     "ok": False,
@@ -213,12 +222,24 @@ def register_agent_via_source_registry(
         "verified": False,
     }
     if execute:
-        with exclusive_file_lock(
+        with project_registry_transaction(
             source_registry_path,
             agent_id=requested_agents[0] if len(requested_agents) == 1 else None,
             operation="register_agent",
-        ):
-            source_goal = _registry_goal(source_registry_path, goal_id)
+        ) as registry_transaction:
+            source_goal = next(
+                (
+                    item
+                    for item in registry_goals(registry_transaction.payload_copy())
+                    if item.get("id") == goal_id
+                ),
+                None,
+            )
+            if source_goal is None:
+                raise ValueError(
+                    f"{goal_id}: registry does not contain the goal: "
+                    f"{source_registry_path}"
+                )
             existing_agents = _goal_registered_agents(source_goal)
             collisions = [
                 agent_id for agent_id in requested_agents if agent_id in existing_agents
@@ -243,6 +264,7 @@ def register_agent_via_source_registry(
                 registered_agents=merged_agents,
                 agent_model="peer_v1",
                 execute=True,
+                _registry_transaction=registry_transaction,
             )
             if configure_payload.get("written"):
                 sync_payload = sync_project_registry_to_global(
@@ -301,60 +323,20 @@ def register_agent_via_source_registry(
         "global_sync": sync_payload or {"enabled": bool(execute), "wrote": False},
         "registration_readback": readback_payload,
     }
-    result["host_loop_activation"] = loop_activation_for_goal(
-        registry_path=global_path,
-        runtime_root_arg=runtime_root_arg,
-        goal_id=goal_id,
-    )
+    result["host_loop_activation"] = unresolved_host_loop_activation()
     return result
 
 
-def loop_activation_for_goal(
-    *,
-    registry_path: Path,
-    runtime_root_arg: str | None,
-    goal_id: str,
-) -> dict[str, object]:
-    try:
-        plan = build_upgrade_plan(
-            registry_path=registry_path,
-            runtime_root_override=runtime_root_arg,
-            goal_ids=[goal_id],
-        )
-        goals = plan.get("managed_heartbeats") if isinstance(plan.get("managed_heartbeats"), list) else []
-        if not goals:
-            return {
-                "schema_version": "loopx_host_loop_activation_v0",
-                "host_surface": "codex_app_heartbeat",
-                "status": "unavailable",
-                "activated": False,
-                "recommended_action": (
-                    "run loopx upgrade-plan for this goal; do not claim setup complete until "
-                    "host_loop_activation.activated=true or a concrete host-tool gate is reported"
-                ),
-            }
-        activation = goals[0].get("host_loop_activation")
-        if isinstance(activation, dict):
-            return activation
-    except Exception as exc:
-        return {
-            "schema_version": "loopx_host_loop_activation_v0",
-            "host_surface": "codex_app_heartbeat",
-            "status": "error",
-            "activated": False,
-            "error": str(exc),
-            "recommended_action": (
-                "repair the host-loop activation check; do not claim setup complete until "
-                "host_loop_activation.activated=true or a concrete host-tool gate is reported"
-            ),
-        }
+def unresolved_host_loop_activation() -> dict[str, object]:
     return {
         "schema_version": "loopx_host_loop_activation_v0",
-        "host_surface": "codex_app_heartbeat",
-        "status": "unknown",
+        "host_surface": "unresolved",
+        "status": "selection_required",
         "activated": False,
         "recommended_action": (
-            "create or update the Codex App heartbeat automation from loopx heartbeat-prompt"
+            "run `loopx agent-onboard --list-agent-types`, then rerun onboarding "
+            "with the exact agent type; do not claim setup complete until the "
+            "host-specific activation is proven or a concrete host-tool gate is reported"
         ),
     }
 
@@ -469,13 +451,21 @@ def handle_registry_admin_command(
                 quota_window_hours=args.quota_window_hours,
                 execution_turn_granularity=args.execution_turn_granularity,
                 execution_replan_after_todos=args.execution_replan_after_todos,
+                execution_replan_after_turns=args.execution_replan_after_turns,
+                clear_execution_replan_after_turns=args.clear_execution_replan_after_turns,
                 clear_execution_replan_after_todos=bool(
                     args.clear_execution_replan_after_todos
                 ),
                 self_repair_enabled=args.self_repair_enabled,
                 self_repair_health=args.self_repair_health,
                 self_repair_waiting_projection=args.self_repair_waiting_projection,
-                pull_request_review_configuration=({"wait_for_ci": args.pr_review_wait_for_ci} if args.pr_review_wait_for_ci is not None else None),
+                pull_request_review_configuration=({
+                    **({"wait_for_ci": args.pr_review_wait_for_ci} if args.pr_review_wait_for_ci is not None else {}),
+                    **({"review_order": getattr(args, "pr_review_order", None)} if getattr(args, "pr_review_order", None) is not None else {}),
+                    **({"owner_logins": getattr(args, "pr_review_owner_login", None)} if getattr(args, "pr_review_owner_login", None) is not None else
+                       {"owner_logins": []} if getattr(args, "clear_pr_review_owner_logins", False) else {}),
+                } or None),
+                pull_request_review_agent_orders=(dict(_pr_review_agent_order_pair(value) for value in getattr(args, "pr_review_agent_order", [])) or None),
                 clear_pull_request_review_configuration=args.clear_pr_review_configuration,
                 change_quality_enabled=args.change_quality_enabled,
                 change_quality_safe_fix=args.change_quality_safe_fix,
@@ -483,19 +473,44 @@ def handle_registry_admin_command(
                 clear_change_quality_configuration=bool(
                     args.clear_change_quality_configuration
                 ),
+                progress_review_mode=args.progress_review_mode,
+                progress_review_signal=args.progress_review_signal,
+                progress_review_drift_threshold=args.progress_review_drift_threshold,
+                progress_review_contract_revision=args.progress_review_contract_revision,
+                clear_progress_review_configuration=bool(
+                    args.clear_progress_review_configuration
+                ),
                 multi_subagent_feature=args.multi_subagent_feature,
+                capability_improvement_configuration=({
+                    key: value for key, value in {
+                        "mode": args.capability_improvement_mode,
+                        "discovery_budget_minutes": args.capability_discovery_budget_minutes,
+                        "max_trials": args.capability_max_trials,
+                    }.items() if value is not None
+                } or None),
+                clear_capability_improvement_configuration=args.clear_capability_improvement_configuration,
                 orchestration_mode=args.orchestration_mode,
                 spawn_allowed=args.spawn_allowed,
                 max_children=args.max_children,
+                align_codex_subagent_capacity=bool(
+                    args.align_codex_subagent_capacity
+                ),
+                codex_host_capacity_planner=plan_codex_subagent_capacity,
+                codex_host_capacity_applier=apply_codex_subagent_capacity,
                 subagent_model=args.subagent_model,
                 subagent_reasoning_effort=args.subagent_reasoning_effort,
                 clear_subagent_model_config=args.clear_subagent_model_config,
+                subagent_execution_config=args.subagent_execution_config,
+                clear_subagent_execution_config=bool(
+                    args.clear_subagent_execution_config
+                ),
                 allowed_domains=args.allowed_domain,
                 clear_allowed_domains=bool(args.clear_allowed_domains),
                 explore_harness_enabled=args.explore_harness_enabled,
                 explore_harness_profile=args.explore_harness_profile,
                 clear_explore_harness_profile=bool(args.clear_explore_harness_profile),
                 explore_graph_enabled=args.explore_graph_enabled,
+                explore_mode=args.explore_mode,
                 lark_kanban_heartbeat_sync=args.lark_kanban_heartbeat_sync,
                 registered_agents=args.registered_agents,
                 clear_registered_agents=bool(args.clear_registered_agents),
@@ -525,6 +540,12 @@ def handle_registry_admin_command(
                 clear_local_authority_shadow=bool(
                     args.clear_local_authority_shadow
                 ),
+                coordination_runtime_shadow_file=bool(
+                    args.coordination_runtime_shadow_file
+                ),
+                clear_coordination_runtime_shadow=bool(
+                    args.clear_coordination_runtime_shadow
+                ),
                 waiting_on=args.waiting_on,
                 clear_waiting_on=bool(args.clear_waiting_on),
                 boundary_authority_scopes=args.boundary_authority_scope,
@@ -552,11 +573,7 @@ def handle_registry_admin_command(
                 execute=bool(args.execute),
             )
             if payload.get("ok"):
-                payload["host_loop_activation"] = loop_activation_for_goal(
-                    registry_path=registry_path,
-                    runtime_root_arg=args.runtime_root,
-                    goal_id=args.goal_id,
-                )
+                payload["host_loop_activation"] = unresolved_host_loop_activation()
         except Exception as exc:
             payload = {
                 "ok": False,

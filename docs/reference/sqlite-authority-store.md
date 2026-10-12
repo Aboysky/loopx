@@ -1,10 +1,131 @@
 # SQLite authority provider
 
 SQLite is an **opt-in local conformance candidate**, behind the existing
-TypeScript `AuthorityStore` interface. File remains the default. This slice
+TypeScript `AuthorityStore` interface. File remains the canonical-provider
+fallback when no selector is present; this does not make every new Goal
+canonical or migrate an existing legacy Goal. This slice
 does not promote a goal, run a live cutover, enable cross-host writes, or
 qualify ten elapsed days of operation. It does provide the explicit
 version-1 to version-2 database migration described below.
+
+## Short-term default decision and matched experiment
+
+The September 27 decision is to target **SQLite for the next qualified local
+new-Goal default**, rather than first defaulting to File and moving again.
+This is an implementation direction, **not default activation or completed D2
+qualification**. File remains an explicit provider, a conformance reference and
+an export/recovery destination. Existing Goals retain their selected authority;
+a rejected SQLite runtime must never silently open File instead.
+
+The decision compares current File checkpoint/delta storage, not its retired
+full-projection-per-commit layout. The final matched experiment ran sequentially
+on Linux x86_64 (16 vCPUs), Node 22.22.3 / SQLite 3.51.3, with baseline
+`96ce9efb3` and candidate `758db221e`. For each workload the baseline SQLite
+arm ran immediately before its candidate arm; candidate File arms followed.
+The same runner and qualified runtime served every arm. Each uses 20 warm
+read samples, the final 100 writes and five fresh-process head reads. Values
+below are p95 milliseconds. Cold process includes module loading and does not
+clear the OS page cache. These are bounded observations, not population
+estimates or formal capacity/soak qualification.
+
+| Projection / commits | SQLite receipt before | Receipt after | SQLite scan 100 before | Scan after |
+| --- | ---: | ---: | ---: | ---: |
+| Mixed 20 KiB / 128 | 67.69 | 16.04 | 184.69 | 71.37 |
+| Mixed 20 KiB / 512 | 75.70 | 17.18 | 187.22 | 67.61 |
+| 464 Todos, 64 leases, 220 KiB / 128 | 786.01 | 91.52 | 1964.03 | 623.49 |
+| Changing 1 MiB / 128 | 456.97 | 288.76 | 1190.10 | 1114.94 |
+| Fixed 64 KiB / 128 | 62.96 | 9.57 | 170.34 | 56.36 |
+
+The many-field receipt/scan costs fall by 88%/68%, but still exceed the
+50/250 ms targets on this host. Changing-1-MiB scan improves only about 6%:
+returning 100 complete large states remains expensive. Mixed and fixed-state
+reads also improve; the optimization is no longer limited to large strings.
+Write costs remain close to baseline because this is primarily a replay change.
+No frozen qualification threshold has been increased.
+
+The candidate-provider comparison retains the tradeoffs instead of declaring
+one provider faster for every operation:
+
+| Projection / commits | SQLite write / warm head / cold head | File write / warm head / cold head | File receipt / scan 100 |
+| --- | ---: | ---: | ---: |
+| Mixed 20 KiB / 128 | 10.26 / 2.11 / 146.14 | 21.01 / 4.81 / 296.79 | 3.28 / 97.72 |
+| Mixed 20 KiB / 512 | 10.56 / 2.59 / 143.09 | 51.87 / 6.08 / 702.25 | 5.55 / 78.13 |
+| 464 Todos, 64 leases, 220 KiB / 128 | 64.24 / 16.44 / 152.50 | 72.75 / 7.69 / 1494.86 | 3.48 / 939.29 |
+| Changing 1 MiB / 128 | 97.50 / 19.51 / 164.87 | 761.97 / 115.46 / 1892.69 | 154.34 / 441.47 |
+| Fixed 64 KiB / 128 | 12.27 / 2.84 / 144.58 | 14.85 / 3.19 / 329.43 | 3.22 / 85.83 |
+
+SQLite has lower write and restart costs in every measured shape. File has
+cheaper warm receipts and, for the many-field fixture, a cheaper warm head.
+SQLite now scans ordinary/many-field history faster, while File wins the
+changing-1-MiB scan. This supports SQLite as the implementation target for
+mutation/restart-heavy local operation, not a universal read-performance claim.
+
+The 1-MiB SQLite post-fill RSS rises from about 118 to 160 MiB; other measured
+SQLite shapes remain near their baseline. This includes fixture and verification
+allocations and is not a steady-state or leak measurement. Sustained-memory
+qualification remains open. Baseline/candidate SQLite final store bytes match
+in all five shapes; no persisted format is changed. Earlier macOS measurements
+motivated the initial target, but a new local paired run encountered load above
+40 and unstable unchanged-baseline timings. Its correctness checks were kept;
+its timing samples are not used to claim improvement or qualification.
+
+These tests change a deterministic observation field in a retained full state;
+they exercise storage, not the complete CLI/Turn workflow. In `changing-1m`,
+padding is resized to retain exactly 1 MiB, so the large string itself can
+change. It must not be reported as a stable-payload cache benchmark.
+
+Reproduce each arm from the same checkout and qualified Node runtime:
+
+```sh
+node --experimental-sqlite --experimental-strip-types \
+  examples/coordination/local-provider-comparison.ts \
+  --provider sqlite --workload mixed --commits 128 --samples 20
+# Repeat with --provider file. Workloads: mixed, full, fixed-64k, changing-1m.
+# Use --commits 512 to cross more checkpoint windows; --output writes JSON.
+```
+
+The runner creates and removes its own temporary store, checks complete
+projections (including Todo metadata), events, original receipts and reopened
+state, and records the source revision, runtime, runner hash and tracked source
+diff hash. After timing, it verifies that an exact historical retry returns the
+original applied revision/cursor, even after later commits; projection-, event-
+or receipt-only drift must conflict. The later head, original receipt and entire
+paged history must remain unchanged. `historical_replay_and_conflict_checks`
+is reported only after these checks pass; a failed check prevents a successful
+report. These are storage guarantees, not Goal-instance isolation or permission
+to repeat external effects. It does not open a selected live Goal. RSS includes fixture/checking
+allocations; File publication bytes are application bytes, not physical disk
+writes. Use the existing SQLite capacity runner for WAL traffic and D2 history
+sizes. Keep performance experiments separate from concurrent test suites.
+
+Before changing release defaults, the existing owners must close these gaps:
+
+1. **L6 / D2:** rerun the unchanged reference capacity profiles after read-path
+   optimization; qualify many-field/changing-state history, crash/restore,
+   consumer lag, supported runtimes/platforms and the >=10-day elapsed soak.
+   PR #4931 contributes read-proof optimization, not a D2 pass.
+2. **L8 / D3:** qualify the integrated Goal command/projection and migration
+   path. Reuse merged reviewed migration/retained audit (#5173), managed-host
+   protection (#5144) and obsolete Todo-source retirement (#5054), rather than
+   count them as new work. A storage benchmark does not certify long-running
+   execution or authorize migration of existing Goals.
+3. **L9:** make new-Goal creation/onboarding choose that qualified profile,
+   including installed runtime admission, settings/readback and packaged entry
+   points. Keep explicit provider selection and reviewed backup/rollback.
+
+The L9 implementation candidate now resolves an absent `goal_storage` namespace
+to canonical SQLite/hard-lease creation through the existing configuration and
+TS initialization owners. Explicit v0 selectors, v1 opt-out and existing Goals
+keep their recorded route. Settings preserves v0 opt-out during guided/JSON
+conversion; removing a setting restores the new default. See [new-Goal creation
+and compatibility](local-authority-provider-selection.md#new-goal-authority-machine-setting).
+This candidate does not certify the gates above or activate an installed release.
+
+Both current local providers require Node >=22.22.3. SQLite uses built-in
+`node:sqlite`: it adds no database service or external SQLite package. Its
+actual embedded SQLite/finalization probe remains required, and a pre-existing
+managed runtime must be restarted on the qualified executable as documented
+below. PostgreSQL deployment is independent of this local default decision.
 
 ## Placement and persistence
 
@@ -63,15 +184,37 @@ rotation, corruption repair, or network-filesystem sharing is supported.
 
 ## Read integrity
 
+Direct retries follow the [authority operation replay contract](authority-operation-replay.md):
+matching full intent returns its verified original position without a new write.
+
+
 Authority reads share one SQLite snapshot, and writes run the same live proof
 inside their transaction before publishing a new commit row. The proof is
 layered so that each layer pays only for what it returns:
 
 | Layer | Proves | Cost |
 | --- | --- | --- |
-| Live head (`loadAuthority`, `commitAuthority`) | Head row digest over the live projection, the retained transaction at that cursor reproducing its exact commit digest, parent linkage, `min=1`/`count=max=head` cursor continuity, and the presence of the checkpoint that covers the head | One head row, one retained row, one parent digest and index lookups; independent of retained history |
+| Live head (`loadAuthority`, `commitAuthority`) | Head row digest over the live projection, the retained transaction at that cursor reproducing its exact commit digest, parent linkage, `min=1`/`count=max=head` cursor continuity, and the presence of the checkpoint that covers the head | One head row, one retained row and one parent digest; no projection replay. The indexed continuity count still depends on retained cursor count |
 | Materialized history (`scanCommitted`, `readReceipt`) | Every row from the covering checkpoint through the requested span, including each delta, state digest and parent lineage; paged scans also prove the lookahead row used for `has_more` | At most one checkpoint window plus the requested span |
 | Archive audit (`verifyAuthorityHistory`) | The complete delta chain from the empty root, every checkpoint against retained history, and the final state against the head | Linear in retained history; qualification and recovery only |
+
+Historical reconstruction uses the shared TS `AuthorityStateReplay` owner.
+It validates and privately copies the initial state and each delta, copies only
+changed object paths, and reuses exact canonical encodings for unchanged
+subtrees. Both proofs still hash the complete original v0 byte sequence; this
+is not a new Merkle proof or a persisted digest format. Cached subtree keys are
+weak, and encoded long-string buffers are capped separately; no cache survives
+the provider read/audit call. A receipt query verifies its entire covering span
+without materializing projections it does not return. Scans return independent
+JSON objects, so editing one row cannot alter another row or a later read.
+
+The same owner now reconstructs provider-neutral archives. Previously a
+consumer could edit a yielded transaction's projection and change the decoder's
+next replay basis, causing a later digest or Goal-identity failure. The decoder
+now retains private state; callers receive detached projections. Existing
+File/SQLite/PostgreSQL archives and terminal seals keep the same bytes. Rejected
+delta batches never advance the replay frontier, and sparse protocol arrays
+are rejected rather than bypassing validation of their absent elements.
 
 A missing head, rolled-back head, internal cursor gap, rewritten receipt/event,
 orphaned parent digest or mismatched state digest is rejected as
@@ -112,9 +255,10 @@ qualify the complete D2 profile.
 
 This intentionally rejects SQLite runtimes previously accepted by the
 statement-only probe, including vulnerable drivers shipped with older Node 22
-releases. The public Node minimum remains 22.18 for the default File path;
-SQLite requires the additional fix. No provider selection changes and no
-fallback to File occur when an explicitly selected SQLite runtime is rejected.
+releases. The public Node minimum is now 22.22.3 for both File and optional
+SQLite use; SQLite also checks the actual embedded driver. Provider selection
+does not change, and an explicitly selected SQLite runtime never falls back to
+File when rejected.
 The optional driver is still opened only after opt-in. The serving runtime
 loads it in-process once at startup for the read-only identity probe described
 below; that probe opens no database file and creates no authority state, and
@@ -217,9 +361,9 @@ example --quota-compute 0 --execute` pauses automatic turns; separately stop
 any active host process before taking an offline backup. Pausing does not
 cancel a transaction already running.
 
-There is deliberately no in-place switch back to file authority after commits:
-that requires an explicit migration with receipt/lineage validation. Do not
-delete the selector to disable the provider. Preserve the database together
+Return to File through a reviewed migration from the **current SQLite head**
+using the steps below. Do not delete the selector to disable the provider.
+Preserve the database together
 with any `-wal`/`-shm` files when recovering an interrupted runtime; use SQLite
 backup facilities or a fully stopped database for a coherent backup. Restoring
 an older snapshot as concurrent live authority is not supported. Disposable
@@ -227,6 +371,135 @@ qualification runtimes may be retired as a whole after their processes stop.
 
 Selection grants local storage use only. It grants no actor/lease ownership,
 external service access, cross-host synchronization or promotion authority.
+
+### Reversible developer trial / 可逆开发者试用
+
+Use the existing at-most-20-person opt-in stage; qualify each entry profile
+separately. A new canonical Goal, an existing canonical File Goal and a cold
+Markdown Goal have different entry requirements. The cold source must complete
+[reviewed import](local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence);
+it cannot enter by creating an empty database. Existing canonical migration
+uses [Goal data storage](local-authority-provider-selection.md#existing-canonical-goal-storage-in-the-app).
+Do not make every participant wait for unrelated profiles or all formal D2 axes.
+
+Before admission, retain the exact candidate commit/package digest, actual
+Python/Node/embedded SQLite versions, platform and selected Goal/provider/policy.
+Compare the wheel's product Python/TypeScript inventory with that source;
+retired modules must be absent after both clean and repeated builds. Stale
+build output is not compatibility and cannot certify physical retirement.
+Verify its installed CLI and packaged App entry, ordinary Todo metadata/source
+readback, restart/original-operation recovery and a current-write-preserving
+exit in an isolated synthetic Goal. Keep passed, failed and untested cases
+separate. This operation sheet is preparation, not a trial invitation or a
+certificate for a released default.
+
+Record the selected Host separately from storage readiness. In Chat, a built-in
+CLI endpoint's `available` flag checks executable discovery; it does not prove
+authentication, model access, a completed Turn or restart recovery. For Codex,
+`codex --version` and `codex login status` inspect the existing installation and
+login without sending a model request. Do not copy credentials or another
+session's history to qualify a profile. An actual adapter `thread/start` response
+also establishes only startup: an empty upstream session can still lack a
+recoverable rollout after its process exits. Keep a refused original-session
+resume visible; neither a fresh replacement nor successful startup proves
+original-operation recovery.
+
+Use `turn plan` below to inspect the selected Todo's native decision without
+starting a model, writing state, acknowledging a scheduler or spending quota.
+`outer_controller` describes the hypothetical headless caller; this read-only
+command does not install or activate that controller. A ready route remains a
+plan, and the returned required reads, lease and execution boundaries still
+apply to any later authorized execution. Qualify the cohort's chosen Host and
+workload; unavailable unrelated Hosts do not block an independently qualified
+profile. Keep successful first-Turn execution and its original-operation restart
+readback separate from these non-model checks.
+
+For an already canonical trial Goal, set `TRIAL_REGISTRY`, `TRIAL_RUNTIME` and
+`TRIAL_GOAL` to its reviewed routes; choose `TRIAL_EXIT_PLAN` outside the live
+store. Keep the plan and returned `plan_sha256` privately. Read before applying:
+
+```sh
+trial_loopx() {
+  : "${TRIAL_REGISTRY:?Set the reviewed registry}" "${TRIAL_RUNTIME:?Set the reviewed runtime}"
+  : "${TRIAL_GOAL:?Set the reviewed Goal}"
+  loopx --registry "$TRIAL_REGISTRY" --runtime-root "$TRIAL_RUNTIME" --format json "$@"
+}
+trial_loopx doctor --installation-only
+trial_loopx todo list --goal-id "$TRIAL_GOAL"
+: "${TRIAL_AGENT:?Choose the registered trial Agent}" "${TRIAL_TODO:?Choose its eligible Todo}"
+trial_loopx turn plan --goal-id "$TRIAL_GOAL" --agent-id "$TRIAL_AGENT" \
+  --todo-id "$TRIAL_TODO" --host codex-cli --iteration-context fresh \
+  --execution-mode isolated-headless --scheduler-owner outer_controller \
+  --available-capability filesystem_read
+# These inspection commands do not execute the first Turn or grant a lease.
+trial_loopx todo list --goal-id "$TRIAL_GOAL"
+trial_loopx configure-goal --goal-id "$TRIAL_GOAL" --quota-compute 0 --execute
+# Separately stop owning Hosts/writers and settle active leases/captures.
+: "${TRIAL_EXIT_PLAN:?Choose a private plan path outside the live store}"
+trial_loopx authority-archive plan-migration --goal-id "$TRIAL_GOAL" \
+  --provider file --plan "$TRIAL_EXIT_PLAN"
+# Review the frozen current source and backup; copy its returned plan_sha256.
+: "${TRIAL_EXIT_DIGEST:?Copy the reviewed plan_sha256}"
+trial_loopx authority-archive migrate --goal-id "$TRIAL_GOAL" \
+  --plan "$TRIAL_EXIT_PLAN" --plan-sha256 "$TRIAL_EXIT_DIGEST"
+# Confirm only that unchanged reviewed plan.
+trial_loopx authority-archive migrate --goal-id "$TRIAL_GOAL" \
+  --plan "$TRIAL_EXIT_PLAN" --plan-sha256 "$TRIAL_EXIT_DIGEST" --execute
+trial_loopx todo list --goal-id "$TRIAL_GOAL"
+```
+
+Preview is read-only. Active/expired unsettled leases, active capture and source
+drift remain refusals, not reasons to edit state manually. After an ambiguous
+apply, keep and retry the original plan/digest; do not generate a second apply
+or restore an old pre-trial backup over later writes. Readback must report
+`authority_read.source_authority=file_v0`, `legacy_fallback_used=false` and the
+same full Todo records. Historical completion cannot reselect a superseded
+provider. Keep automatic turns paused until the exit/readback succeeds; restore
+only the reviewed prior quota configuration after owner confirmation.
+
+During the trial, follow each native guard's required reads and admission; after
+validated writeback consume its original refresh/spend continuation. Retry the
+same operation/Turn identity after response loss. Collect actual daily tasks,
+latency/resource/history growth, failures, human interventions and successful
+recovery; an accelerated loop is not elapsed-time evidence. Stop the affected
+lane for data loss, duplicate effects, identity/settlement/fence errors or failed
+recovery. Report the candidate/profile, step, original operation identifiers,
+expected/observed result and whether later writes survive through the project's
+normal issue/review route; redact private text, paths and raw evidence.
+Storage activation grants no Host execution, lease ownership or external access.
+
+新 canonical Goal、已有 canonical File Goal 和冷 Markdown Goal 按各自入组路径
+验收。复用既有不超过 20 人的可逆 opt-in 阶段，冷源先完成审核导入；不能通过创建
+空 SQLite 库替代导入，也不让无关 profile 或全部 D2 轴成为每个人的前置。
+入组前记录精确候选包/提交、实际 runtime/平台、Goal/provider/policy。
+核对 wheel 中产品 Python/TypeScript 文件与当前源码一致；冷构建和重复构建都不得
+夹带已退役模块。陈旧 build 产物不是兼容性，也不能作为物理退役证据。在隔离
+合成 Goal 验证安装 CLI、打包 App、完整 Todo/来源、重启原操作恢复及保留新写入的
+退出。上面的命令是操作准备，不代表已经邀请试用或发布默认资格通过。
+
+Host 与存储分别验收。Chat 内置 CLI endpoint 的 `available` 仅检查可执行文件
+能否找到；不是登录、模型访问、Turn 完成或重启恢复证明。Codex 可先用
+`codex --version`、`codex login status` 读取已有安装与登录，不发送模型请求，
+不复制凭据或其他 Session 的历史。真实 `thread/start` 返回也只证明启动；空
+Session 的进程退出后可能尚无可恢复的 rollout。原 Session 恢复拒绝须保留，
+不能用另建 Session 或启动成功证明原操作恢复。
+
+上面的 `turn plan` 只读选定 Todo 的原生决策，不启动模型、写状态、ACK 调度或
+扣额度。`outer_controller` 描述假定的 headless 调用方，并不安装或启动控制器；
+ready 路由仍是计划，后续授权执行须遵守返回的 required reads、lease 和权限边界。
+按试用所选 Host 和负载验收，不让无关 Host 不可用阻塞独立合格的 profile。
+首个真实 Turn 完成及原操作重启读回仍须分别证明，不能从上述非模型检查推断。
+
+退出先暂停自动 Turn，再分别停止 Host/writer、结算 active lease/capture；从当前
+SQLite head 预览 File 迁移，审核冻结来源与备份，再明确应用同一 plan/digest。
+预览不写；过期 active lease、active capture 或来源变化仍拒绝，不能手改状态绕过。
+失响应重试原计划；不恢复试用前旧备份覆盖后来写入。完整 Todo 与来源读回通过后，
+再经 owner 确认恢复原配额。历史 completed 不重新选择已被替代的 provider。
+日常工作遵守本次原生 guard/read/refresh/spend，同 Turn 只结算一次；记录实际使用、
+失败、恢复、资源和人工干预，不把加速循环当自然时间。数据、重复效果、身份、结算、
+fence 或恢复错误停止受影响 lane；通过项目既有 issue/review 路径报告已脱敏的候选/
+profile、步骤、原操作、预期/实际和新增写入保留情况。存储启用不授予 Host、lease
+或外部访问权。正式默认与剩余退役仍按原 RFC 分开验收。
 
 ## Reproduce validation
 
@@ -253,6 +526,12 @@ node --no-warnings --experimental-sqlite --experimental-strip-types \
 node --no-warnings --experimental-sqlite --experimental-strip-types \
   examples/coordination/sqlite-capacity.ts --profile matched-64k --cli \
   --output .local/sqlite-matched-64k.json
+node --no-warnings --experimental-sqlite --experimental-strip-types \
+  examples/coordination/sqlite-capacity.ts --profile matched-1m --cli \
+  --output .local/sqlite-matched-1m.json
+node --no-warnings --experimental-sqlite --experimental-strip-types \
+  examples/coordination/sqlite-capacity.ts --profile headroom-64k --cli \
+  --output .local/sqlite-headroom-64k.json
 ```
 
 For an already promoted Goal, [canonical lease renewal](canonical-lease-renew.md)
@@ -271,6 +550,18 @@ last 1,000 commits and their corresponding reads, plus 200 scan-100 samples.
 This one-Todo storage axis isolates history growth; it is not the complete
 multi-agent/lease/capture workload.
 
+Two dedicated headroom profiles extend the same workload to RFC 7.2's other
+axes with an unchanged budget matrix: `matched-1m` runs the identical 10k/100k
+shape with a 1 MiB live projection (rows prefixed `one_mib_`), and
+`headroom-64k` runs 100k/300k databases at 64 KiB (rows prefixed
+`headroom_300k_`, cumulative-growth budgets evaluated against the 3x depth
+ratio). The per-axis fill wall budget is an operational guard — floored at
+2,400 s and scaled by commits and payload bytes beyond the 64 KiB 100k
+workload — never a qualification budget; the p95 and growth budgets do not
+move with it. A dedicated axis clears its coverage row only after its measured
+payload and both exact commit depths match the selected profile. Other axes
+remain explicit `missing` rows (`payload_one_mib`, `headroom_300k`, `burst_60s`).
+
 `--cli` adds 20 formal samples (three in rehearsal) for complete CLI mutation,
 status and quota, using fresh Python processes and a newly started managed
 Effect runtime for each sample. Shutdown occurs outside the timed interval in
@@ -278,15 +569,44 @@ the isolated fixture. `--python` chooses the Python executable. These figures
 include process startup but do not drop the OS file cache. Cold Node-only load
 and warm actual-provider calls are separate. The provider's normal per-call
 connection open/close remains inside warm timing. CLI mutations happen after
-the fixed-history measurement; their extra commits are reported separately.
+the fixed-history measurement; CLI, traffic-window and lock-probe commits all
+extend past the fill target and are counted separately, so target-state rows
+keep their meaning.
+
+Status and quota CLI samples explicitly scan the checkout's complete `loopx/` directory by
+default. For comparisons between source revisions or installed releases, pass
+`--scan-root /path/to/fixed-public-source/loopx` to each run. Do not replace it
+with an empty or reduced fixture to meet a latency budget. The report records
+the selected root and per-axis before/after hashes, public-file counts and
+bytes from the production scan enumerator, outside the timed interval. Input
+drift fails the axis; missing or mismatched input evidence keeps the status budget
+row `missing`. Todo mutation has no scan option; its latency and independent store
+metrics remain usable. Hashes identify
+scan input, not scanner implementation or complete workload equivalence: keep
+the source/runtime, fixture, command mix and host conditions in the comparison.
+Untracked private-state contents are not read by the input probe. Synthetic
+CLI processes disable usage telemetry and preserve all normal boundary checks.
+Older reports without these input facts retain their measurements, but cannot
+establish matched status budget evidence through the current ledger.
 
 Reports carry p50/p95/p99 and counts, parent-process RSS, application request
 JSON bytes and separate DB/WAL/SHM sizes at the target history. Resource-usage
 peak RSS is process-lifetime across both groups; sampled axis RSS is separate,
 and CLI child RSS is not measured. Application bytes, final files, SQLite
 logical writes, cumulative WAL traffic and physical device writes are different
-metrics. The unavailable write-traffic and pure busy-wait metrics remain
-`missing`; a final WAL size of zero proves no cumulative-write bound.
+metrics and are never substituted for one another. Logical write volume is
+measured from the filled database as the serialized bytes each commit hands to
+SQLite (commits row plus the full-projection head rewrite plus amortized
+checkpoint rows); page, index and compaction overhead belong to the other
+columns. Cumulative WAL traffic is measured over one bounded commit window per
+axis: read marks pinned by two observer connections make every WAL reset
+impossible, so frame growth over the window is exact, and the per-commit
+traffic at both depths carries the <=15x cumulative-growth budget. Lock wait is
+app-observed: a probe process holds the write lock for a controlled interval
+and the end-to-end store commit wait is reported against the uncontended
+baseline. Whole-run WAL totals, pure busy-handler time and physical device
+writes remain `missing`; a final WAL size of zero still proves no
+cumulative-write bound.
 
 Each axis reserves 5 GiB free space, caps its database at 16 GiB and checks a
 2,400-second fill budget. All data are generated in a new temporary directory;
@@ -348,12 +668,19 @@ command, migration manifest and reverse export remain separate deliverables.
 ### Qualification holds / 资格保留项
 
 The report's `passed` rows apply only to their named axis and sample counts.
-`failed` measurements remain failed; `missing` rows include cumulative storage
-writes, pure lock wait, steady-state RSS proof, the full domain profile, 1 MiB
-and 300k headroom, 24-hour consumer lag, large-history recovery, fenced
-backup/restore, supported upgrades/rollback, OS/runtime coverage and a real
->=10-day soak. Those holds still block profile promotion. Accelerated volume
-never substitutes for elapsed time, and running this command starts no soak.
+`failed` measurements remain failed. The split storage-write rows —
+`logical_write_growth`, `wal_traffic_growth` and `lock_wait_observed`, prefixed
+`one_mib_`/`headroom_300k_` in the dedicated headroom profiles — carry
+the <=15x cumulative-growth budget as per-commit traffic measured at both
+depths, and an invalidated window or missing probe is missing evidence, never a
+pass from the surviving columns. `missing` rows still include whole-run WAL
+totals, pure busy-handler time, physical device writes, steady-state RSS proof,
+the full domain profile, the headroom axes a report did not itself run
+(`payload_one_mib`, `headroom_300k`, `burst_60s`), 24-hour consumer lag,
+large-history recovery, fenced backup/restore, supported upgrades/rollback,
+OS/runtime coverage and a real >=10-day soak. Those holds still block profile
+promotion. Accelerated volume never substitutes for elapsed time, and running
+this command starts no soak.
 
 Retained state is measured where the formal profile runs: an axis reports its
 checkpoint count, replay budget, recovery tail and retained projection/delta
@@ -362,7 +689,8 @@ retained commit. That row stays `missing` for a rehearsal, exactly like every
 other formal budget.
 
 SQLite 资格参考使用 Node 22.22.3／SQLite 3.51.3；打开前同时检查实际 WAL 修复版本
-和 statement 关闭行为。公开 Node 最低版本 22.18 继续用于默认 File 路径。显式
+和 statement 关闭行为。公开 Node 最低版本已升至 22.22.3，同时适用于默认 File
+和可选 SQLite；SQLite 仍检查实际内嵌驱动。显式
 SQLite 选择遇到不合格 runtime 会拒绝，不会改默认 provider 或静默回退。
 
 托管 Effect runtime 按用户与源码修订复用，因此真正服务某个 Goal 的 Node／SQLite

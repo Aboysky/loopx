@@ -308,7 +308,8 @@ def test_goal_configuration_merges_live_machine_defaults_without_goal_override()
 
 def test_machine_inheritable_goal_capabilities_can_clear_their_overrides() -> None:
     assert _goal_capability_options("todo_replan_cadence", None) == {
-        "clear_execution_replan_after_todos": True
+        "clear_execution_replan_after_todos": True,
+        "clear_execution_replan_after_turns": True,
     }
     assert _goal_capability_options("change_quality_qualification", None) == {
         "clear_change_quality_configuration": True
@@ -335,6 +336,15 @@ def test_reward_memory_goal_editor_reuses_the_capability_owned_configurator() ->
         "reward_memory_config": None,
         "reward_memory_agents": ["researcher"],
     }
+
+
+def test_coordination_runtime_shadow_editor_uses_the_transaction_bound_owner() -> None:
+    assert _goal_capability_options(
+        "coordination_runtime_shadow", {"enabled": True}
+    ) == {"coordination_runtime_shadow_file": True}
+    assert _goal_capability_options(
+        "coordination_runtime_shadow", {"enabled": False}
+    ) == {"clear_coordination_runtime_shadow": True}
 
 
 def test_goal_configuration_inspection_requires_one_goal_id() -> None:
@@ -500,7 +510,10 @@ def test_goal_configuration_service_rechecks_revision_before_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry_path = tmp_path / "registry.json"
-    registry_path.write_text("{}\n", encoding="utf-8")
+    import json
+    initial_registry = json.dumps({"common_runtime_root": str(tmp_path / "runtime"),
+        "goals": [{"id": "goal-example", "repo": str(tmp_path)}]}) + "\n"
+    registry_path.write_text(initial_registry, encoding="utf-8")
     calls: list[dict[str, Any]] = []
 
     def configure_goal_stub(**kwargs: Any) -> dict[str, Any]:
@@ -525,4 +538,4 @@ def test_goal_configuration_service_rechecks_revision_before_write(
         )
 
     assert len(calls) == 1
-    assert registry_path.read_text(encoding="utf-8") == "{}\n"
+    assert registry_path.read_text(encoding="utf-8") == initial_registry

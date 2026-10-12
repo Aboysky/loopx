@@ -1,5 +1,7 @@
 /** Canonical edit decoding and materialization shared by ordinary updates and
  * User completion. Admission, validation effects and commits stay with callers. */
+import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
+import {planTodoPriority} from "../todos/priority.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorityBytes,
   requireAuthorityStoreId} from "./authority_store_codec.ts";
@@ -7,6 +9,12 @@ import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.t
 import {canonicalTodoRecord} from "./todo_presentation.ts";
 import {TODO_OWNERSHIP_INTENT_FIELDS, planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
 import {normalizeNativePlanningIntent, planNativeTodoUpdate} from "../todos/native_update_plan.ts";
+import {decodeMonitorPollObservation, type MonitorPollObservation} from "../todos/monitor_metadata.ts";
+import {
+  decodeCompletionValidationRevision,
+  type CompletionValidationRevision,
+} from "../todos/completion_validation_revision.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 const UPDATE_FIELDS = new Set(["text", "note"]);
 
 export interface CoordinationTodoUpdateInput {
@@ -28,6 +36,8 @@ export interface CoordinationTodoUpdateInput {
   readonly lease_expected_version?: number | null;
   readonly planning_intent?: JsonObject;
   readonly completion?: JsonObject;
+  readonly monitor_observation?: MonitorPollObservation;
+  readonly completion_validation_revision?: CompletionValidationRevision;
 }
 
 /** Only edit intent crosses into the terminal owner; actor/lease authority is
@@ -41,7 +51,7 @@ export function normalizeTodoUpdateInput(raw: CoordinationTodoUpdateInput): Coor
   if (raw.expected_provider_revision !== undefined) {
     requireAuthorityStoreId(raw.expected_provider_revision, "expected_provider_revision");
   }
-  if (raw.expected_registry_sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(raw.expected_registry_sha256)) {
+  if (raw.expected_registry_sha256 !== undefined && !BARE_SHA256_PATTERN.test(raw.expected_registry_sha256)) {
     throw new AuthorityStoreProtocolError("expected_registry_sha256 must be a SHA-256 digest");
   }
   if (raw.authority_reason != null && typeof raw.authority_reason !== "string") {
@@ -78,7 +88,31 @@ export function normalizeTodoUpdateInput(raw: CoordinationTodoUpdateInput): Coor
   const patch = canonicalAuthorityObject(raw.patch, "Todo update patch");
   const clearFields = raw.clear_fields.map((field, index) =>
     requireAuthorityStoreId(field, `clear_fields[${index}]`));
-  if (Object.keys(patch).length + clearFields.length + Object.keys(planningIntent).length === 0) {
+  const observation = raw.monitor_observation === undefined ? undefined : decodeMonitorPollObservation(raw.monitor_observation);
+  const validationRevision = raw.completion_validation_revision === undefined
+    ? undefined
+    : decodeCompletionValidationRevision(raw.completion_validation_revision);
+  if (observation !== undefined) {
+    // Both public observation transports use the same proof decoder. A partial
+    // proof must never be collapsed to absence during admission.
+    decodeTaskLeaseProof(key === null && version === null ? null :
+      {idempotency_key: key, expected_version: version});
+    if (completion !== undefined || Object.keys(patch).length || clearFields.length ||
+        Object.keys(planningIntent).some(key => !["status", "reason", "no_followup"].includes(key)) ||
+        (planningIntent.status != null && planningIntent.status !== "open") ||
+        (planningIntent.no_followup != null && planningIntent.no_followup !== false)) {
+      throw new AuthorityStoreProtocolError("Monitor observation accepts only reason and explicit reactivation; not copy, ownership, configuration or completion edits");
+    }
+  }
+  if (validationRevision !== undefined &&
+      (completion !== undefined || observation !== undefined ||
+       Object.keys(patch).length + clearFields.length + Object.keys(planningIntent).length > 0)) {
+    throw new AuthorityStoreProtocolError(
+      "completion validation revision cannot be combined with another Todo edit",
+    );
+  }
+  if (observation === undefined && validationRevision === undefined &&
+      Object.keys(patch).length + clearFields.length + Object.keys(planningIntent).length === 0) {
     throw new AuthorityStoreProtocolError("Todo update requires a non-empty patch");
   }
   if (new Set(clearFields).size !== clearFields.length) {
@@ -101,7 +135,10 @@ export function normalizeTodoUpdateInput(raw: CoordinationTodoUpdateInput): Coor
   if (!(raw.now instanceof Date) || Number.isNaN(raw.now.valueOf())) {
     throw new AuthorityStoreProtocolError("now must be a valid Date");
   }
-  return {...raw, ...(completion === undefined ? {} : {completion}), planning_intent: planningIntent, lease_idempotency_key: key, lease_expected_version: version,
+  return {...raw, ...(completion === undefined ? {} : {completion}),
+    ...(observation === undefined ? {} : {monitor_observation: observation}),
+    ...(validationRevision === undefined ? {} : {completion_validation_revision: validationRevision}),
+    planning_intent: planningIntent, lease_idempotency_key: key, lease_expected_version: version,
     goal_id: requireAuthorityStoreId(raw.goal_id, "goal id"),
     todo_id: requireAuthorityStoreId(raw.todo_id, "todo id"),
     operation_id: requireAuthorityStoreId(raw.operation_id, "operation id"),
@@ -113,7 +150,7 @@ export function normalizeTodoUpdateInput(raw: CoordinationTodoUpdateInput): Coor
 
 export function prepareUpdatedTodo(
   todo: JsonObject, input: CoordinationTodoUpdateInput, head: JsonObject, kind: "planning" | "user_completion" = "planning",
-): {next: JsonObject; changed: boolean; clearFields: string[]} {
+): {next: JsonObject; changed: boolean; clearFields: string[]; monitorTransition?: JsonObject} {
   const next: JsonObject = {...todo, ...input.patch};
   for (const field of input.clear_fields) delete next[field];
   // Preserve the public planner's legacy metadata semantics. Raw copy edits
@@ -122,14 +159,17 @@ export function prepareUpdatedTodo(
   const rawCopyChanged = Object.entries(input.patch).some(([field, value]) =>
     !Object.hasOwn(todo, field) || !canonicalAuthorityBytes(todo[field]).equals(canonicalAuthorityBytes(value))) ||
     input.clear_fields.some(field => Object.hasOwn(todo, field));
-  if (rawCopyChanged || TODO_OWNERSHIP_INTENT_FIELDS.some(field => Object.hasOwn(input.planning_intent ?? {}, field))) {
+  if (rawCopyChanged || input.monitor_observation !== undefined || TODO_OWNERSHIP_INTENT_FIELDS.some(field => Object.hasOwn(input.planning_intent ?? {}, field))) {
     next.last_actor_agent_id = input.actor_agent_id;
   }
   next.updated_at = input.now.toISOString().replace(/\.\d{3}Z$/u, "Z");
   const clearFields = new Set(input.clear_fields);
-  if (Object.keys(input.planning_intent ?? {}).length) {
-    const updates = planNativeTodoUpdate(todo, input.planning_intent!, head,
-      input.actor_agent_id, input.registered_agents, String(next.updated_at), kind);
+  let monitorTransition: JsonObject | undefined;
+  if (Object.keys(input.planning_intent ?? {}).length || input.monitor_observation !== undefined) {
+    const plan = planNativeTodoUpdate(todo, input.planning_intent ?? {}, head,
+      input.actor_agent_id, input.registered_agents, String(next.updated_at), kind, input.monitor_observation);
+    const updates = plan.updates;
+    monitorTransition = plan.monitorTransition;
     for (const [field, value] of Object.entries(updates)) {
       // Markdown compatibility omits empty scalar metadata. Treat an
       // explicit empty planning scalar as a clear in the canonical record as
@@ -137,7 +177,25 @@ export function prepareUpdatedTodo(
       if (value === null || value === "") { delete next[field]; clearFields.add(field); }
       else next[field] = value;
     }
+    if (input.planning_intent?.clear_resume_when === true) {
+      // These are observations of the old condition, not independent resume
+      // authority. Keeping either after an explicit clear resurrects a stale
+      // wait in canonical readback even though resume_when is absent.
+      delete next.resume_condition;
+      delete next.resume_ready;
+      clearFields.add("resume_condition");
+      clearFields.add("resume_ready");
+    }
     next.done = next.status === "done" || next.status === "deferred";
+  }
+  // Derive text/title/priority together from the original record and caller intent.
+  // This runs within the same admitted head/CAS and never rewrites receipt intent.
+  const priorityUpdate = planTodoPriority(todo, {
+    ...input.planning_intent, ...(Object.hasOwn(input.patch, "text") ? {text: input.patch.text} : {}),
+  });
+  Object.assign(next, priorityUpdate);
+  if (priorityUpdate.priority === null) {
+    delete next.priority; delete next.title; clearFields.add("priority"); clearFields.add("title");
   }
   if (kind === "user_completion" && (todo.status !== "done" || Object.hasOwn(input.planning_intent ?? {}, "task_class"))) {
     planTodoAuthoringScope({schema_version: TODO_AUTHORING_SCOPE_REQUEST_SCHEMA, command: "class", role: "user", todo: next,
@@ -156,5 +214,5 @@ export function prepareUpdatedTodo(
     next.last_actor_agent_id = todo.last_actor_agent_id;
     next.updated_at = todo.updated_at;
   }
-  return {next, changed, clearFields: [...clearFields]};
+  return {next, changed, clearFields: [...clearFields], ...(monitorTransition ? {monitorTransition} : {})};
 }

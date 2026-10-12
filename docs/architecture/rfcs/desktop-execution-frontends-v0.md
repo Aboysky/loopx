@@ -1,11 +1,12 @@
 # RFC: LoopX Desktop Execution Frontends v0
 
-- Status: Draft
+- Status: Accepted
+- Supersedes / closes: none
 - Decision boundary: support both attachment to an externally owned Agent
   session and an end-to-end LoopX-managed desktop runtime
 - Initial attached runtime: Codex App / app-server
 - Initial managed runtimes: Pi and DeepSeek Harness (`dsh`)
-- Default managed provider profile: Volcengine Ark Agent Plan
+- Managed provider selection: explicit guided configuration and user intent; Agent allocation within authorized eligible profiles. Ark Agent Plan remains an optional distribution preset.
 
 ## Summary
 
@@ -16,9 +17,10 @@ LoopX Desktop should support two explicit execution frontend modes:
    process, conversation, interruption, resume, and execution-loop ownership.
 2. **Managed Agent Runtime.** LoopX Desktop launches and supervises Pi or
    DeepSeek Harness, selects an explicit provider profile, and advances work
-   through bounded `loopx_turn_v0` transactions. The default distribution
-   profile uses Volcengine Ark Agent Plan, while the runtime and provider
-   contracts remain replaceable.
+   through bounded `loopx_turn_v0` transactions. A distribution may offer
+   Volcengine Ark Agent Plan as a named preset. The operator's configuration and
+   explicit intent bound autonomous Agent allocation; no provider is a universal
+   product default. Runtime and provider contracts remain replaceable.
 
 Both modes present the same LoopX Goal, Todo, gate, quota, evidence, and status
 truth. They do not share process ownership. The frontend must never infer a
@@ -43,6 +45,104 @@ runtime supervisor repeatedly asks LoopX whether another bounded Turn is
 eligible, invokes the selected runtime adapter, validates its result, and
 commits accepted state. `loopx_turn_v0` remains one transaction rather than a
 second recurring scheduler.
+
+## Guided configuration, user intent and autonomous allocation
+
+This proposed selection rule refines the provider-default language; it does not
+change shipped runtime defaults or qualify new adapters. Reuse the existing
+machine/Goal capability editor, provider store, session binding and dispatch
+admission. It adds no capability id, provider implementation or routing service.
+
+- **Configuration makes choices usable.** Show detected installation and login,
+  supported tools, model/account, cost or unknown cost, host availability and
+  permission scope. Discovery does not grant access. A named preset is an
+  offered choice; it cannot override an existing configured selection.
+- **Explicit user intent binds the choice.** A fixed model/account, local-only
+  requirement, budget or member restriction applies at its declared scope.
+  A preference is not a hard lock unless the user made it one. Do not turn a
+  single user's Codex preference, or one distribution's Ark preset, into a
+  global provider rule. Unresolved conflicting instructions require clarification.
+- **The Agent allocates inside that boundary.** Choose eligible models/runtimes,
+  reuse or request workers and redistribute future work by task fit, tool access,
+  cost and observed availability. A flexible authorized pool does not need a
+  fresh confirmation for each assignment. Selection is semantic Agent judgment;
+  typed owners enforce eligibility, budget, authority and session fences.
+
+Project the effective runtime/model/profile, assignment reason and readiness in
+settings and the team detail. Recheck admission at dispatch. An unavailable pinned
+route blocks with a repair action; an unavailable member of a flexible pool may
+be replaced by another eligible route with visible readback. No substitution may
+expand data exposure, credentials, cost authority or supported tools. Active
+sessions retain their binding and context ownership; an authorized autonomous
+reassignment uses the existing explicit rebinding/continuation contract, not a
+silent session migration. New paid resources or scope changes retain their
+existing decision boundary.
+
+Qualify through packaged setup, Chat/steward and independent CLI: pinned choice
+wins over a preset; flexible allocation succeeds without repeated approval;
+unavailable pinned choice stays blocked; exhausted budget or an unauthorized
+fallback creates no execution; restart preserves the effective configuration.
+Optional Lark must project the same choice and its own audience restrictions.
+Until these cases pass, this is the allocation design, not a runtime guarantee.
+See the [near-term launch route](loopx-overall-roadmap-v0.md#near-term-local-agent-product-and-launch).
+
+## Settings ownership and scope
+
+Navigation follows the user's task; scope follows configuration ownership.
+The steward remains a first-level **Steward** destination for its executor,
+model/reasoning preference and host runtime grant. It is not a Goal member's
+model setting and is not buried inside Capability Center merely because its
+configuration is machine-owned. Reuse the same configuration components and
+transaction owner behind these distinct destinations.
+
+Capability Center has one target selector: **Device defaults** or **One Goal**.
+“Global” currently means the current device's configuration authority, not an
+account-wide or cross-host synchronized setting. A remote host retains its own
+credentials and defaults. Decide scope by the behavior below, not by whichever
+editor or storage path happens to exist.
+
+| Configuration owner | Scope decision | Reason |
+| --- | --- | --- |
+| `manager_runtime` | Device only; Steward tab | The host grants tools to its steward. A Goal cannot widen that grant. |
+| `steward_executor` | Device only; Steward tab | One steward channel owns its executor/model/effort preference. Goal worker allocation stays with that worker's binding. |
+| `periodic_report` | Device default + Goal override | Reuse report style, timezone and schedule; allow project-specific cadence and a Goal-resolved route. A default route alias is not permission to deliver to another Goal's audience. |
+| `change_quality_qualification` | Device default + Goal override | Reuse validation preferences while allowing the explicit project contract. Configuration does not waive repository or merge requirements. |
+| `pull_request_review` | Device default + Goal override | Reuse CI-wait and queue-priority preferences; repositories may differ. Neither layer grants approval or merge authority. |
+| `todo_replan_cadence` | Device default + Goal override | Reuse review frequency while allowing a Goal's work rhythm. This is completed-work review cadence, not the automation timer. |
+| `multi_subagent` | Goal only | Child model, capacity, responsibility domains and delegation bindings apply to one Goal's team and resource boundary. |
+| `peer_task_coordination` | Goal only | Coordinator identity must refer to a member of this Goal, not an inherited unrelated Agent. |
+| `explore_harness`, `explore_graph` | Goal only | Exploration strategy and opt-in affect this Goal's planning and evidence graph. |
+| `progress_review` | Goal only | Drift mode and threshold belong with this Goal's pinned acceptance contract revision. |
+| `reward_memory` | Goal only | Private provider binding and enabled Agents are Goal-local; a global preference cannot spread that data binding. |
+| `lark_kanban_heartbeat_sync` | Goal only | The target board and synchronization follow this Goal's binding and audience. |
+| `lark_event_inbox` | Goal only; binding editor in Lark settings/CLI | Captured messages, session binding and cursor belong to this Goal. The capability card remains read-only; transport credentials remain host-owned. |
+| `coordination_runtime_shadow` | Goal only | Experimental observation is explicitly scoped to this Goal's execution. |
+| `local_authority_shadow` | Goal only; retired/read-only | Historical inspection does not become a new activation or device default. |
+
+These decisions retain the shipped scope contracts. Goal-only does not forbid a
+future reusable preset: applying a preset would create a deliberate Goal-local
+configuration, not live inheritance of identities, permissions, bindings or
+experimental activation. A future split of reusable preferences from local
+bindings must change their owning schema and actual consumers together before
+advertising another scope.
+
+For dual-scope capabilities the precedence remains **explicit Goal value →
+live device default → capability default**. A Goal override is a complete value,
+not a field merge. Restoring inheritance removes the override via the existing
+preview/apply/readback path. Read-only status is independent from scope: a
+Goal-bound capability must still say Goal-only even when the current surface
+cannot edit it. Catalog declarations, runtime resolution and the UI must agree;
+unsupported-scope writes fail at the existing owner.
+
+Model-provider credentials, usage telemetry and appearance remain device-level
+settings in their existing destinations. Agent assignment belongs to a Goal.
+Automatic execution intervals keep their own Goal/Agent/automation hierarchy
+and scheduler readback; the Capability Center does not create a second timer.
+
+Acceptance: the catalog covers the scope matrix above; unsupported writes are
+rejected; packaged UI distinguishes all three scope classes and read-only Goal
+bindings, preserves the independent Steward tab, and qualifies target switching,
+preview/apply/readback and inheritance restoration without cross-target writes.
 
 ## Problem
 
@@ -157,6 +257,16 @@ application credential for every Agent. One Bot application may serve multiple
 connections if the local broker preserves explicit Agent and channel routing.
 
 ### One ordered working conversation
+
+The baseline project coordinator surface is the existing **Goal → Chat**. A
+registered peer may carry that responsibility instead; neither choice creates
+a separate coordinator conversation or changes the steward's cross-Goal role.
+[Explicit Codex continuation](../../reference/goal-chat-continuation.md) reuses
+the composer with explicit enable/pause/continue, streamed work and original local
+history. It joins the existing delegation service and independently accepted
+member results; queue/inbox/steer retain distinct receipts. First-use settings
+select an existing execution binding without granting authority by registration.
+Lark/other-lead parity and unattended operation remain separate requirements.
 
 In live-steering and queued-session modes, Web and Lark messages enter one
 serialized ingress stream for the selected Agent session. Each message records
@@ -526,8 +636,8 @@ The managed desktop path is end to end:
 
 1. select or create a LoopX Goal and working Agent binding;
 2. select Pi or `dsh` as the runtime;
-3. select a managed provider profile, with Ark Agent Plan as the default
-   distribution profile;
+3. guide provider configuration and user constraints, then let the Agent select
+   within the authorized eligible profiles; offer Ark Agent Plan as a named preset;
 4. validate runtime installation, provider authentication, and advertised
    capabilities;
 5. launch one runtime and create one opaque resumable session;
@@ -586,9 +696,10 @@ for reconciliation, validation, and resume.
 
 ### Provider profile contract
 
-Runtime choice and provider choice are orthogonal. Ark Agent Plan is the
-default managed product profile, not a special case embedded throughout the
-LoopX kernel.
+Runtime choice and provider choice are orthogonal. Ark Agent Plan is a named
+managed-provider preset. Guided configuration, scoped user intent and Agent
+allocation select an eligible profile; no provider rule is embedded throughout
+the LoopX kernel.
 
 A provider profile must expose or resolve:
 
@@ -807,6 +918,26 @@ An attached descriptor or managed session reference cannot grant new Goal
 authority. A stale or mismatched Goal, Agent, workspace, runtime, provider, or
 trust binding fails closed.
 
+The Desktop shell's own CLI/HTTP artifact selection is separate from an Agent's
+working-session or provider binding. Startup compares qualified package versions
+and official source ancestry; a launch-time developer override remains explicit.
+A remembered App-owned release path is only a discovery cache. When same-base
+snapshots cannot be ordered, the current App may maintain its own installation
+from its bundled artifact, while retaining a provably newer runtime or an
+independently managed CLI. Repair must retain its qualified promotion before
+reconnecting, and both HTTP services must read back that selected identity.
+An available signed App update must remain actionable while startup is blocked;
+an unchanged service retry cannot replace that result before the user applies
+the update or deliberately chooses another recovery action.
+A failed manual update or recovery must likewise retain its error, diagnostics
+and retry controls until the next explicit action. An unavailable automatic
+update feed must still allow the installed App to start. A completed verified
+restore must retire an incomplete-installation marker and expose Restart,
+without permitting service startup before that restart.
+Qualify ordinary packaged restart and same-window recovery alongside failure
+fallbacks; installation success or a temporary override does not close this
+bootstrap acceptance, Agent execution acceptance, or signed-release readiness.
+
 ## Safety and privacy
 
 - Keep opaque session handles, credentials, environment values, process
@@ -897,7 +1028,7 @@ running.
 2. one Desktop runtime supervisor with start, interrupt, close, reconcile, and
    resume;
 3. `dsh` as the first reference runtime by reusing its accepted Turn adapter;
-4. Ark Agent Plan as the default configured provider profile;
+4. Ark Agent Plan as one explicitly selected provider preset;
 5. one resumable conversation and one-at-a-time bounded Turn execution; and
 6. joined runtime, Turn, and LoopX status in Desktop.
 
@@ -917,6 +1048,23 @@ The dual-runtime managed mode is complete only after both Slice C and Slice D
 pass the shared conformance suite.
 
 ## Validation criteria
+
+### Native service ownership
+
+Packaged native windows use their own loopback status/Chat endpoints and own
+only the children they start. A ready service with the same source revision is
+not proof of the same registry or App ownership. Window navigation and native
+maintenance permissions must follow that exact Chat origin. A runtime repair
+keeps the same window endpoints and starts both replacement children from the
+one qualified selection; it must not rediscover the global CLI independently.
+CLI services and Vite development retain their existing shared ports; packaged App startup no
+longer borrows or restarts those services or their LaunchAgents.
+
+Qualify a packaged window while independent shared services are running: both
+HTTP runtime identities and the rendered workspace belong to its selected
+runtime; quit, runtime repair and reopen affect only its children. An occupied
+private endpoint fails without adopting or terminating its listener. A source
+checkout or passing helper test does not qualify this native process boundary.
 
 ### Shared
 

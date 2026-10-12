@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional
 
 HUMAN_REWARD_COMPACT_FIELDS = (
     "recorded_at",
+    "actor_kind",
     "decision",
     "reward",
     "reason_summary",
@@ -93,6 +94,7 @@ RUN_BASE_COMPACT_FIELDS = (
     "progress_scope",
     "todo_id",
     "progress_observation",
+    "blocked_retry",
     "delivery_batch_scale",
     "delivery_outcome",
     "lifecycle_phase",
@@ -355,6 +357,10 @@ def compact_run_base(
         compact["subagents"] = subagents[:max_subagent_activity_items]
         compact["subagent_count"] = len(subagents)
 
+    if isinstance(run.get("recommended_action_resolution"), dict):
+        resolution = run["recommended_action_resolution"]
+        if resolution.get("step_revision"):
+            compact["recommended_action_resolution"] = dict(resolution)
     return compact
 
 

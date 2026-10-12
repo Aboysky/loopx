@@ -1,3 +1,4 @@
+import {planTodoPriority, TODO_PRIORITIES} from "../todos/priority.ts";
 /** Team-plan admission and assignment transaction. A committed assignment is
  * neither receiver adoption nor a lease, quota grant, or execution receipt. */
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -10,7 +11,7 @@ import {TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA} from "../coordi
 export const TEAM_PLAN_SCHEMA = "steward_team_plan_preview_v0";
 export const TEAM_PLAN_KIND = "steward_team_plan_preview";
 export const TEAM_TRANSACTION_SCHEMA = "steward_team_plan_transaction_v0";
-const priorities = new Set(["P0", "P1", "P2", "P3"]);
+const priorities: ReadonlySet<string> = new Set(TODO_PRIORITIES);
 const declaredGaps = new Set(["agent_not_registered", "capability_not_granted", "audience_not_authorized"]);
 const hostGaps = new Set([...declaredGaps, "action_kind_not_supported"]);
 function text(value: unknown, label: string): string {
@@ -21,7 +22,9 @@ function todo(value: unknown): JsonObject {
   const item = requireJsonObject(value, "first_todo");
   if (!priorities.has(String(item.priority))) throw new EffectRuntimeRequestError("first_todo priority is invalid");
   if (item.task_class !== "advancement_task") throw new EffectRuntimeRequestError("a lane's first bounded Todo must be an advancement_task");
-  return {text: text(item.text, "first_todo text"), priority: item.priority,
+  const title = text(item.text, "first_todo text");
+  planTodoPriority({}, {text: title, priority: item.priority});
+  return {text: title, priority: item.priority,
     task_class: item.task_class, action_kind: text(item.action_kind, "first_todo action_kind")};
 }
 
@@ -136,8 +139,23 @@ export function planTeamTransaction(value: unknown): JsonObject {
   const identity = teamTransactionIdentity(request);
   if (request.previous_receipt != null) return {replayed: true,
     result: replayTeamTransaction(request, requireJsonObject(request.previous_receipt, "previous receipt")), todos: []};
-  if (request.expected_state_fingerprint != null && request.expected_state_fingerprint !== request.current_state_fingerprint) throw new EffectRuntimeRequestError("team plan state changed after preview", "team_plan_preview_stale");
+  // A first commit is admitted only against the state basis its reviewer bound.
+  // Every originator (owner confirmation or agent settlement) has to bind one
+  // and the settlement has to re-read the same one; a missing side is refused
+  // rather than skipping the check. Replay above stays historical readback.
+  if (typeof request.expected_state_fingerprint !== "string" || !request.expected_state_fingerprint ||
+      typeof request.current_state_fingerprint !== "string" || !request.current_state_fingerprint) {
+    throw new EffectRuntimeRequestError("team plan commit requires the reviewed state basis and its current readback", "team_plan_basis_missing");
+  }
+  if (request.expected_state_fingerprint !== request.current_state_fingerprint) throw new EffectRuntimeRequestError("team plan state changed after preview", "team_plan_preview_stale");
   const preview = previewTeamPlan(request);
+  const lanes = preview.lanes as JsonObject[];
+  // A plan whose every lane is a gap can only create nothing. Committing it
+  // would record success where the readback finds no work, so it is a typed
+  // failure and the plan's lanes and gap reasons stay with the proposal.
+  if (!lanes.some(lane => lane.staffing === "ready")) {
+    throw new EffectRuntimeRequestError(`none of the plan's ${lanes.length} lane(s) can be staffed by this host, so committing it would create no work`, "team_plan_no_staffable_lane");
+  }
   const records = request.todos == null ? [] : request.todos;
   if (!Array.isArray(records)) throw new EffectRuntimeRequestError("todos must be an array");
   const current = new Map(records.map(raw => {const row = requireJsonObject(raw, "Todo"); return [String(row.todo_id), row];}));
@@ -147,24 +165,19 @@ export function planTeamTransaction(value: unknown): JsonObject {
   if (actor && !registered.includes(actor)) throw new EffectRuntimeRequestError("team plan author is not registered");
   const todos: JsonObject[] = [];
   const settlements: JsonObject[] = [];
-  for (const lane of preview.lanes as JsonObject[]) {
+  for (const lane of lanes) {
     if (lane.staffing !== "ready") continue;
     const first = requireJsonObject(lane.first_todo, "first Todo");
     const id = laneTodoId(identity.operation_id, lane.lane_id);
     const rawText = String(first.text).replace(/^\s*[-*]\s+\[[ xX-]\]\s*/u, "");
     const record: JsonObject = {schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id: id, role: "agent",
       status: "open", done: false, archive_state: "active", task_class: "advancement_task",
-      action_kind: first.action_kind, text: /^\[P[0-4]\]\s+/iu.test(rawText) ? rawText : `[${first.priority}] ${rawText}`};
+      action_kind: first.action_kind, ...planTodoPriority({}, {text: rawText, priority: first.priority})};
     // An initial assignment reserves a lane; it does not impersonate the
     // receiver as author and does not create an adoption or execution lease.
     // Only an owner-originated confirmation can assign another registered peer.
     if (actor && actor !== lane.agent_id) throw new EffectRuntimeRequestError("assigning another Agent requires owner confirmation");
     record.claimed_by = lane.agent_id;
-    // Native records retain the same priority/title facts as the Markdown
-    // reader; projection validates these rather than manufacturing authority.
-    const label = /^\[(P[0-4])\]\s+(.+)$/iu.exec(String(record.text))!;
-    record.priority = label[1]!.toUpperCase();
-    record.title = label[2]!;
     const planned = planCoordinationTodoCreate({goal_id: String(identity.goal_id), operation_id: String(identity.operation_id),
       actor_agent_id: actor, registered_agents: registered, dry_run: false, now, todo: record},
     current, request.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA, "operation_lane");
@@ -176,10 +189,10 @@ export function planTeamTransaction(value: unknown): JsonObject {
   }
   const ids = todos.map(row => row.todo_id);
   const gaps = preview.gaps as JsonObject[];
-  const result: JsonObject = {action: ids.length ? "created" : "unstaffed", todo_id: ids[0] ?? "",
+  const result: JsonObject = {action: "created", todo_id: ids[0]!,
     target_key: null, created_todo_ids: ids, lane_todo_ids: ids, lane_settlements: settlements,
     gap_count: gaps.length, gap_lanes: gaps.map(gap => ({...gap,
-      agent_id: (preview.lanes as JsonObject[]).find(lane => lane.lane_id === gap.lane_id)!.agent_id})), reused_lane_count: 0,
+      agent_id: lanes.find(lane => lane.lane_id === gap.lane_id)!.agent_id})), reused_lane_count: 0,
     intent_basis: request.intent_basis ?? null, lane_failure: null};
   return {replayed: false, todos, result, receipt: {...identity, result}};
 }

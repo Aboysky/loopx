@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validateLegacyContinuationPolicyRepair } from "../../loopx/control_plane/todos/legacy_continuation_policy_migration.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA,
+  evaluateTodoContractDiagnostics, TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA,
   userTodoScopeConflict } from "../../loopx/control_plane/todos/authoring_scope.ts";
 
 function plan(intent: JsonObject, overrides: JsonObject = {}): JsonObject {
@@ -37,6 +39,25 @@ test("explicit all-agent intent is accepted without turning authorship into lane
     assert.equal(scope.blocks_agent, null);
     assert.equal(scope.bound_agent, null);
   }
+});
+
+test("create returns normalized author and claim without granting execution", () => {
+  const raw = "\u001cAGENT\u0085A\u001f";
+  const result = plan({actor_agent_id: raw, claimed_by: raw}, {role: "agent"});
+  assert.equal(result.actor_agent_id, "agent-a");
+  assert.equal(result.claimed_by, "agent-a");
+  assert.equal(result.bound_agent, null);
+  const anonymous = plan({}, {role: "agent"});
+  assert.equal(anonymous.actor_agent_id, null);
+  assert.equal(anonymous.claimed_by, null);
+  for (const field of ["actor_agent_id", "claimed_by"]) {
+    assert.throws(() => plan({[field]: "missing-agent"}, {role: "agent"}), /not registered/);
+    assert.throws(() => plan({[field]: raw}, {role: "agent", registered_agents: []}),
+      /loopx configure-goal --goal-id goal-a --registered-agent agent-a --execute/);
+  }
+  const edited = plan({}, {command: "update", role: "agent"});
+  assert.equal(Object.hasOwn(edited, "actor_agent_id"), false);
+  assert.equal(Object.hasOwn(edited, "claimed_by"), false);
 });
 
 test("explicit continuation and gate constraints cannot silently overwrite each other", () => {
@@ -79,6 +100,15 @@ test("authoring plan cannot grant terminal, executor, or non-user gate semantics
   assert.equal(plan({}, {command: "update", todo: {status: "done", task_class: "legacy"}}).status, "done");
 });
 
+test("create reports draft class violations before inferring response scope", () => {
+  assert.throws(() => plan({bound_agent: "agent-a"}), /user todo requires explicit --task-class/);
+  for (const flags of [{global_gate: true}, {blocks_agent: "agent-a"}]) {
+    assert.throws(() => plan({task_class: "user_action", ...flags}), /user_action is non-blocking/);
+  }
+  assert.throws(() => plan({task_class: "user_gate"}, {role: "agent"}),
+    /user_action and user_gate task_class are only valid for --role user/);
+});
+
 test("deferred state requires a supported condition and clears remain explicit", () => {
   const todo = {task_class: "advancement_task", status: "deferred", resume_when: "capacity_available:network"};
   assert.equal(plan({}, {command: "update", role: "agent", todo}).effective_resume_when, todo.resume_when);
@@ -105,4 +135,73 @@ test("malformed intent cannot turn a truthy string or an unknown field into scop
   for (const intent of [{global_gate: "true"}, {goal_bound: 1}, {global_gat: true}]) {
     assert.throws(() => plan({task_class: "user_gate", actor_agent_id: "agent-a", ...intent}), /boolean|does not own/);
   }
+});
+
+test("canonical diagnostics keep metadata and non-terminal user rules without repairing rows", () => {
+  const evaluate = (todos: JsonObject[], agents = ["agent-a"], terminal = ["done", "deferred", "archived"]) =>
+    evaluateTodoContractDiagnostics({schema_version: TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA,
+      todos, registered_agents: agents, terminal_statuses: terminal});
+  const open = (extra: JsonObject): JsonObject => ({schema_version: "todo_item_v0", todo_id: "todo_x",
+    role: "user", status: "open", done: false, text: "raw text that must not surface", ...extra});
+  const codes = (todos: JsonObject[], agents = ["agent-a"], terminal = ["done", "deferred", "archived"]) =>
+    (evaluate(todos, agents, terminal).diagnostics as JsonObject[]).map(row => row.code);
+  assert.deepEqual(codes([open({})]), ["user_todo_task_class_missing"]);
+  assert.deepEqual(codes([open({done: true})]), ["user_todo_task_class_missing"]);
+  assert.deepEqual(codes([open({task_class: "user_action", global_gate: true})]), ["user_action_blocking_scope_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true, blocks_agent: "agent-a"})]),
+    ["user_gate_scope_conflict"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", goal_bound: true, bound_agent: "agent-a"})]),
+    ["user_todo_response_scope_conflict"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true, bound_agent: "agent-a"})]),
+    ["goal_user_gate_agent_binding_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", blocks_agent: "agent-a", goal_bound: true})]),
+    ["agent_user_gate_goal_binding_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", goal_bound: true})], ["agent-a", "agent-b"]),
+    ["multi_agent_user_gate_missing_scope"]);
+  assert.deepEqual(codes([open({task_class: "user_action"})], ["agent-a", "agent-b"]),
+    ["multi_agent_user_todo_missing_response_scope"]);
+  const agent = (extra: JsonObject): JsonObject => ({...open({}), role: "agent", ...extra});
+  assert.deepEqual(codes([agent({blocks_agent: "agent-a"})]), ["agent_todo_blocks_agent_invalid"]);
+  assert.deepEqual(codes([agent({claimed_by: "agent-a", excluded_agents: ["agent-a"]})]), ["todo_claimed_by_excluded_agent"]);
+  assert.deepEqual(codes([agent({excluded_agents: ["agent-other"]})]), ["todo_excludes_unregistered_agent"]);
+  assert.deepEqual(codes([agent({removed_continuation_policy: "review_handoff"})]), ["agent_todo_removed_continuation_policy"]);
+  assert.deepEqual(codes([agent({excluded_agents: ["!"]})]), ["todo_excluded_agents_invalid"]);
+  assert.deepEqual(codes([agent({status: "bogus"})]), ["todo_status_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_action", excluded_agents: ["agent-a"]})]), ["todo_executor_exclusion_scope_invalid"]);
+  assert.deepEqual(codes([open({status: "done", archive_state: "archive", excluded_agents: ["agent-a"]})]), []);
+  assert.deepEqual(codes([agent({claimed_by: "agent-a", excluded_agents: ["agent-b"]})], ["agent-a", "agent-b"]), []);
+  // A historical executor claim does not override explicit whole-Goal scope.
+  for (const fields of [
+    {task_class: "user_gate", global_gate: true},
+    {task_class: "user_gate", global_gate: true, goal_bound: true},
+    {task_class: "user_action", goal_bound: true},
+  ]) {
+    const row = open({...fields, claimed_by: "agent-a"});
+    const before = structuredClone(row);
+    assert.deepEqual(codes([row], ["agent-a", "agent-b"]), []);
+    assert.deepEqual(row, before);
+  }
+  // Explicit contradictory bindings remain errors even with historical claims.
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true,
+    bound_agent: "agent-a", claimed_by: "agent-b"})], ["agent-a", "agent-b"]),
+    ["goal_user_gate_agent_binding_invalid"]);
+  // Controls: valid open user work, completed history without a class, and agent rows stay healthy.
+  assert.deepEqual(codes([open({task_class: "user_action"})]), []);
+  assert.deepEqual(codes([{...open({}), status: "done", done: true}]), []);
+  assert.deepEqual(codes([{schema_version: "todo_item_v0", todo_id: "todo_a", role: "agent",
+    status: "open", done: false}]), []);
+  const observed = evaluate([open({}), {...open({}), status: "done", done: true}]);
+  assert.equal(observed.checked, 1);
+  assert.equal(JSON.stringify(observed).includes("raw text"), false);
+});
+
+test("shared removed-policy classification preserves explicit migration authority", () => {
+  for (const policy of ["primary_review", " review_handoff "]) {
+    const source = {removed_continuation_policy: policy};
+    assert.throws(() => validateLegacyContinuationPolicyRepair(source, {claim_only: true}, "todo_x"), /repair it before claiming/);
+    assert.throws(() => validateLegacyContinuationPolicyRepair(source, {}, "todo_x"), /repair it explicitly/);
+    assert.doesNotThrow(() => validateLegacyContinuationPolicyRepair(source,
+      {continuation_policy: "independent_handoff", excluded_agents: ["agent-a"]}, "todo_x"));
+  }
+  assert.doesNotThrow(() => validateLegacyContinuationPolicyRepair({}, {claim_only: true}, "todo_x"));
 });

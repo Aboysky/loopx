@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
+from ..quota.blocked_retry import active_turn_retry_for_run
 from ..work_items.delivery_outcome import (
     MATERIAL_DELIVERY_OUTCOMES,
     PROGRESS_DELIVERY_OUTCOMES,
@@ -13,9 +14,11 @@ from ..work_items.autonomous_replan_ack import (
     autonomous_replan_ack_recorded,
 )
 from ..work_items.autonomous_replan_obligation import run_history_agent_id
+from .time import now_utc_iso
 
 GOAL_SEMANTIC_HISTORY_SCHEMA_VERSION = "goal_semantic_history_v0"
 SEMANTIC_CONTEXT_RUN_FIELDS = (
+    "latest_lane_step_run",
     "latest_agent_vision_run",
     "latest_vision_checkpoint_run",
     "latest_outcome_vision_checkpoint_run",
@@ -25,6 +28,7 @@ SEMANTIC_CONTEXT_RUN_FIELDS = (
     "latest_evidence_delivery_run",
 )
 SEMANTIC_CONTEXT_RUN_PAYLOAD_FIELDS = {
+    "latest_lane_step_run": ("generated_at", "goal_id", "agent_id", "recommended_action_resolution"),
     "latest_agent_vision_run": (
         "generated_at",
         "agent_id",
@@ -125,13 +129,17 @@ def goal_semantic_history_from_runs(
 ) -> dict[str, Any]:
     """Select time-bounded control semantics from newest-first run history.
 
-    The result grows with participating agents, not heartbeat count. Recent
-    drill-down rows remain a separate strictly bounded list.
+    The result grows with participating agents and currently waiting Todos,
+    not heartbeat count. Recent drill-down rows remain a separate strictly
+    bounded list.
     """
 
     contexts: dict[str, dict[str, Any]] = {}
     resolved_agent_vision: set[str] = set()
     latest_owner_correction_run: dict[str, Any] | None = None
+    active_blocked_retry_runs: list[dict[str, Any]] = []
+    seen_retry_todos: set[tuple[str, str]] = set()
+    observed_at = now_utc_iso()
 
     for run in runs:
         if latest_owner_correction_run is None and isinstance(
@@ -142,8 +150,22 @@ def goal_semantic_history_from_runs(
         agent_id = _agent_id_for_run(run)
         if not agent_id:
             continue
+        todo_id = str(run.get("todo_id") or "").strip()
+        classification = str(run.get("classification") or "")
+        if todo_id and not classification.startswith(("quota_slot_", "quota_scheduler_")):
+            key = (agent_id, todo_id)
+            if key not in seen_retry_todos:
+                seen_retry_todos.add(key)
+                if (
+                    active_turn_retry_for_run(run, observed_at=observed_at)
+                    is not None
+                ):
+                    active_blocked_retry_runs.append(run)
         context = contexts.setdefault(agent_id, {"agent_id": agent_id})
 
+        resolution = run.get("recommended_action_resolution")
+        if "latest_lane_step_run" not in context and isinstance(resolution, dict) and resolution.get("step_revision"):
+            context["latest_lane_step_run"] = run
         checkpoint = run.get("vision_checkpoint")
         if "latest_vision_checkpoint_run" not in context and isinstance(
             checkpoint, dict
@@ -202,6 +224,7 @@ def goal_semantic_history_from_runs(
 
     semantic_history: dict[str, Any] = {
         "schema_version": GOAL_SEMANTIC_HISTORY_SCHEMA_VERSION,
+        "active_blocked_retry_runs": active_blocked_retry_runs,
         "agents": [
             context
             for context in contexts.values()
@@ -212,6 +235,23 @@ def goal_semantic_history_from_runs(
     if latest_owner_correction_run is not None:
         semantic_history["latest_owner_correction_run"] = latest_owner_correction_run
     return semantic_history
+
+
+def iter_goal_semantic_history_runs(value: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Enumerate retained Run references without reselecting or limiting history.
+
+    The filesystem adapter uses this shape-owned traversal to observe artifacts
+    after semantic reduction, including evidence outside the recent-run window.
+    """
+    for context in value.get("agents", []):
+        for field in SEMANTIC_CONTEXT_RUN_FIELDS:
+            run = context.get(field)
+            if isinstance(run, dict):
+                yield run
+    yield from value.get("active_blocked_retry_runs", [])
+    correction = value.get("latest_owner_correction_run")
+    if isinstance(correction, dict):
+        yield correction
 
 
 def compact_goal_semantic_history(
@@ -250,6 +290,11 @@ def compact_goal_semantic_history(
         "schema_version": GOAL_SEMANTIC_HISTORY_SCHEMA_VERSION,
         "agents": agents,
     }
+    compact["active_blocked_retry_runs"] = [
+        compact_run(run)
+        for run in value.get("active_blocked_retry_runs") or []
+        if isinstance(run, dict)
+    ]
     owner_correction_run = value.get("latest_owner_correction_run")
     if isinstance(owner_correction_run, dict):
         compacted_run = compact_run(owner_correction_run)

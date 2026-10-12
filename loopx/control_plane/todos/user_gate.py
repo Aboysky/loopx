@@ -146,6 +146,19 @@ def build_user_todo_notification(
     }
 
 
+def scoped_user_gate_fallback_fields() -> dict[str, Any]:
+    """Project the existing scoped-fallback readback independently of execution."""
+    return {
+        "safe_bypass_allowed": True,
+        "safe_bypass_kind": "scoped_user_gate_fallback",
+        "safe_bypass_policy": (
+            "The user gate blocks only the matched agent action scope. Surface "
+            "that gate, then advance the selected non-gated fallback; spend only "
+            "after validated writeback."
+        ),
+    }
+
+
 def apply_scoped_user_gate_fallback_projection(
     payload: dict[str, Any],
     *,
@@ -182,13 +195,7 @@ def apply_scoped_user_gate_fallback_projection(
         }
     )
     projected["execution_obligation"] = execution_obligation
-    projected["safe_bypass_allowed"] = True
-    projected["safe_bypass_kind"] = "scoped_user_gate_fallback"
-    projected["safe_bypass_policy"] = (
-        "The user gate blocks only the matched agent action scope. Surface "
-        "that gate, then advance the selected non-gated fallback; spend only "
-        "after validated writeback."
-    )
+    projected.update(scoped_user_gate_fallback_fields())
     projected["actionable_by_codex"] = True
     return projected
 

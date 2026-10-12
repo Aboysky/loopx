@@ -23,6 +23,51 @@ HEAD_1 = "a" * 40
 HEAD_2 = "b" * 40
 
 
+def test_state_filter_defaults_open_but_exact_targets_are_lifecycle_neutral() -> None:
+    assert pr_review_module.normalize_pr_state_filter(None) == "open"
+    assert pr_review_module.normalize_pr_state_filter("unknown") == "open"
+    assert (
+        pr_review_cli_module._resolve_pr_review_state_filter(
+            None, target_exact_heads=[]
+        )
+        == "open"
+    )
+    assert (
+        pr_review_cli_module._resolve_pr_review_state_filter(
+            None, target_exact_heads=[f"1@{HEAD_1}"]
+        )
+        == "all"
+    )
+    assert (
+        pr_review_cli_module._resolve_pr_review_state_filter(
+            "open", target_exact_heads=[f"1@{HEAD_1}"]
+        )
+        == "open"
+    )
+
+
+def test_live_scan_omitted_state_queries_only_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_gh_json(args: list[str], *, cwd: Path | None = None) -> object:
+        del cwd
+        calls.append(args)
+        return []
+
+    monkeypatch.setattr(pr_review_module, "_run_gh_json", fake_run_gh_json)
+
+    scan = pr_review_module.scan_github_pull_requests(
+        repo="owner/repo",
+        limit=10,
+    )
+
+    assert [item["state"] for item in scan["states"]] == ["open"]
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("--state") + 1] == "open"
+
+
 def _rows() -> list[dict[str, object]]:
     return [
         {
@@ -31,6 +76,7 @@ def _rows() -> list[dict[str, object]]:
             "state": "OPEN",
             "changedFiles": 1,
             "headRefOid": HEAD_1,
+            "baseRefOid": "c" * 40,
             "updatedAt": "2026-08-12T00:00:00Z",
         },
         {
@@ -39,6 +85,7 @@ def _rows() -> list[dict[str, object]]:
             "state": "OPEN",
             "changedFiles": 1,
             "headRefOid": HEAD_2,
+            "baseRefOid": "c" * 40,
             "updatedAt": "2026-08-12T00:00:00Z",
         },
     ]
@@ -66,6 +113,8 @@ def _fake_run_gh_json(args: list[str], *, cwd: Path | None = None):
             ]
         )
         return {
+            "headRefOid": HEAD_1 if number == "1" else HEAD_2,
+            "baseRefOid": "c" * 40,
             "body": f"Body for PR {number}",
             "files": [
                 {
@@ -76,6 +125,7 @@ def _fake_run_gh_json(args: list[str], *, cwd: Path | None = None):
             ],
             "reviewDecision": "REVIEW_REQUIRED",
             "mergeStateStatus": "CLEAN",
+            "mergeable": "MERGEABLE",
             "createdAt": "2026-08-11T00:00:00Z",
             "commits": [
                 {
@@ -126,7 +176,7 @@ def test_pr_list_keeps_nested_details_in_bounded_per_pr_reads(monkeypatch) -> No
     assert sorted(args[2] for args in detail_calls) == ["1", "2"]
     assert all(
         args[args.index("--json") + 1]
-        == "body,files,reviewDecision,mergeStateStatus,createdAt,commits,reviews,statusCheckRollup"
+        == "headRefOid,baseRefOid,body,files,reviewDecision,mergeStateStatus,mergeable,createdAt,commits,reviews,statusCheckRollup"
         for args in detail_calls
     )
     assert rows[0]["body"] == "Body for PR 1"
@@ -135,6 +185,7 @@ def test_pr_list_keeps_nested_details_in_bounded_per_pr_reads(monkeypatch) -> No
     ]
     assert rows[0]["reviewDecision"] == "REVIEW_REQUIRED"
     assert rows[0]["mergeStateStatus"] == "CLEAN"
+    assert rows[0]["mergeable"] == "MERGEABLE"
     assert rows[0]["commits"][0]["committedDate"] == "2026-08-12T00:00:00Z"
     assert rows[0]["reviews"] == []
 
@@ -276,6 +327,48 @@ def test_pr_list_marks_source_incomplete_when_rest_files_are_still_truncated(
     assert "files" not in scan["pull_requests"][0]
 
 
+def test_exact_target_read_skips_lifecycle_queue_scan(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake(args: list[str], *, cwd: Path | None = None):
+        calls.append(args)
+        assert args[:2] == ["pr", "view"]
+        requested_fields = set(args[args.index("--json") + 1].split(","))
+        if "number" in requested_fields:
+            return _rows()[int(args[2]) - 1]
+        return _fake_run_gh_json(args, cwd=cwd)
+
+    scan = github_source_module.scan_github_pull_request_targets(
+        repository="owner/repo",
+        exact_heads=[f"1@{HEAD_1}", f"2@{HEAD_2}"],
+        run_gh_json=fake,
+    )
+
+    assert scan["complete"] is True
+    assert scan["mode"] == "exact_targets"
+    assert scan["requested_exact_heads"] == [f"1@{HEAD_1}", f"2@{HEAD_2}"]
+    assert [row["number"] for row in scan["pull_requests"]] == [1, 2]
+    assert len(calls) == 4
+    assert all(call[:2] == ["pr", "view"] for call in calls)
+    assert not any(call[:2] == ["pr", "list"] for call in calls)
+
+
+def test_exact_target_read_fails_closed_when_remote_head_changed(
+    monkeypatch,
+) -> None:
+    def fake(args: list[str], *, cwd: Path | None = None):
+        row = _rows()[0]
+        row["headRefOid"] = HEAD_2
+        return row
+
+    with pytest.raises(ValueError, match="head changed"):
+        github_source_module.scan_github_pull_request_targets(
+            repository="owner/repo",
+            exact_heads=[f"1@{HEAD_1}"],
+            run_gh_json=fake,
+        )
+
+
 def test_security_policy_keeps_public_entry_classification_after_move() -> None:
     assert pr_review_module._file_area(".github/SECURITY.md") == (
         "public_entry_or_policy"
@@ -365,14 +458,8 @@ def _full_review_body(
             if verdict == "APPROVE"
             else "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
         ) + "\n\n"
-    return (
-        f"{fallback}## 动机\n完整动机。\n\n"
-        "## 改动思路\n完整思路。\n\n"
-        "## 具体改动\n完整改动。\n\n"
-        "## 对主干的风险\n完整风险。\n\n"
-        "## 我的整体评价\n整体通过。\n\n"
-        f"**English verdict:** {verdict} at exact head {head}."
-    )
+    return fallback + (Path(__file__).parents[1] / "examples/fixtures/pr-review.body.md").read_text().replace("HEAD_OID", head).replace("VERDICT", verdict)
+
 
 
 def _merge_ready_pr(
@@ -449,9 +536,23 @@ def _merge_readiness_args(**overrides: object) -> SimpleNamespace:
         "repo": "owner/repo",
         "since": None,
         "fresh_audit_exact_head": [],
+        "target_exact_head": [],
+        "goal_id": "test-goal",
+        "limit": 100,
+        "state": "open",
+        "review_priority": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _goal_registry(tmp_path: Path) -> Path:
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps({"goals": [{"id": "test-goal", "repo": str(tmp_path)}]}),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _capture_payload(out: list[dict[str, object]]):
@@ -465,12 +566,20 @@ def _capture_payload(out: list[dict[str, object]]):
     return capture
 
 
+@pytest.mark.parametrize("heading_only_review", [False, True])
 def test_merge_readiness_cli_qualifies_one_fixture_exact_head(
     tmp_path: Path,
+    heading_only_review: bool,
 ) -> None:
     fixture_path = tmp_path / "pull-request.json"
     pull_request = _merge_ready_pr()
     pull_request["review_thread_summary"] = _complete_review_threads()
+    if heading_only_review:
+        pull_request["reviews"][0]["body"] = (
+            "\n".join(f"## {label}\n已验证。" for label in
+                      ("动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价"))
+            + f"\nEnglish verdict: APPROVE - {HEAD_1}"
+        )
     fixture_path.write_text(
         json.dumps(
             {
@@ -484,18 +593,24 @@ def test_merge_readiness_cli_qualifies_one_fixture_exact_head(
 
     result = pr_review_cli_module.handle_pr_review_command(
         _merge_readiness_args(fixture=str(fixture_path), repo=None),
+        runtime_root=tmp_path,
+        registry_path=_goal_registry(tmp_path),
         output_format=lambda _args: "json",
         print_payload=_capture_payload(out),
     )
 
-    assert result == 0
-    assert out[0]["ready"] is True
+    assert result == (1 if heading_only_review else 0)
+    assert out[0]["ready"] is not heading_only_review
+    if heading_only_review:
+        assert any("review_body:section_too_short:具体改动" in reason for reason in
+                   out[0]["review_conclusion"]["invalid_reasons"])
     assert out[0]["source"] == "fixture"
     assert out[0]["expected_exact_head"] == f"4110@{HEAD_1}"
 
 
 def test_merge_readiness_cli_reads_live_pr_and_threads(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
         pr_review_cli_module,
@@ -516,6 +631,8 @@ def test_merge_readiness_cli_reads_live_pr_and_threads(
 
     result = pr_review_cli_module.handle_pr_review_command(
         _merge_readiness_args(),
+        runtime_root=tmp_path,
+        registry_path=_goal_registry(tmp_path),
         output_format=lambda _args: "json",
         print_payload=_capture_payload(out),
     )
@@ -524,6 +641,232 @@ def test_merge_readiness_cli_reads_live_pr_and_threads(
     assert out[0]["ready"] is True
     assert out[0]["source"] == "github_cli"
     assert out[0]["review_conclusion"]["reviewer"] == "maintainer"
+
+
+def test_goal_readiness_observation_suppresses_only_unchanged_exact_head(
+    tmp_path: Path,
+) -> None:
+    fixture_path = tmp_path / "pull-request.json"
+    pull_request = _merge_ready_pr()
+    pull_request["review_thread_summary"] = _complete_review_threads()
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "repository": "owner/repo",
+                "reviewer_login": "maintainer",
+                "pull_requests": [pull_request],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry_path = _goal_registry(tmp_path)
+    readiness: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(fixture=str(fixture_path), repo=None),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(readiness),
+    ) == 0
+    assert readiness[0]["local_goal_observation_write_performed"] is True
+
+    def queue_args() -> SimpleNamespace:
+        return _merge_readiness_args(
+            check_merge_readiness=None,
+            fixture=str(fixture_path),
+            repo=None,
+        )
+
+    unchanged: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        queue_args(),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(unchanged),
+    ) == 0
+    item = unchanged[0]["pull_requests"][0]
+    assert item["review_action_kind"] is None
+    assert (
+        item["merge_readiness_observation"]["observation_state"]
+        == "observed_unchanged"
+    )
+
+    pull_request["baseRefOid"] = "c" * 40
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "repository": "owner/repo",
+                "reviewer_login": "maintainer",
+                "pull_requests": [pull_request],
+            }
+        ),
+        encoding="utf-8",
+    )
+    changed: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        queue_args(),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(changed),
+    ) == 0
+    changed_item = changed[0]["pull_requests"][0]
+    assert changed_item["review_action_kind"] == "qualify_pull_request_merge_readiness"
+    assert (
+        changed_item["merge_readiness_observation"]["observation_state"]
+        == "material_transition"
+    )
+
+
+@pytest.mark.parametrize("wait_for_ci", [False, True])
+def test_live_queue_reuses_readiness_with_versioned_detail_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, wait_for_ci: bool,
+) -> None:
+    pr = _merge_ready_pr()
+    pr.update(baseRefOid="c" * 40, mergeable="MERGEABLE", changedFiles=1)
+    calls: list[list[str]] = []
+
+    def github(args: list[str], *, cwd: Path | None = None):
+        del cwd
+        calls.append(args)
+        fields = args[args.index("--json") + 1].split(",")
+        result = {key: pr.get(key) for key in fields}
+        if args[:2] == ["pr", "list"]:
+            return [result]
+        # A detail request without the version returned UNKNOWN in the real
+        # provider, while the versioned readiness query returned known state.
+        if "headRefOid" not in fields:
+            result.update(mergeStateStatus="UNKNOWN", mergeable="UNKNOWN")
+        return result
+
+    monkeypatch.setattr(pr_review_module, "_run_gh_json", github)
+    monkeypatch.setattr(merge_readiness_module, "_run_gh_json", github)
+    monkeypatch.setattr(pr_review_cli_module, "resolve_current_github_login", lambda: "maintainer")
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_review_thread_summary",
+                        lambda **kwargs: _complete_review_threads())
+    registry = _goal_registry(tmp_path)
+    goal = json.loads(registry.read_text())
+    goal["goals"][0]["control_plane"] = {"pull_request_review": {
+        "schema_version": "pull_request_review_goal_configuration_v0",
+        "wait_for_ci": wait_for_ci,
+    }}
+    registry.write_text(json.dumps(goal))
+
+    def run(args: SimpleNamespace) -> dict[str, object]:
+        out: list[dict[str, object]] = []
+        assert pr_review_cli_module.handle_pr_review_command(
+            args, runtime_root=tmp_path, registry_path=registry,
+            output_format=lambda _: "json", print_payload=_capture_payload(out),
+        ) == 0
+        return out[0]
+
+    readiness = run(_merge_readiness_args())
+    assert readiness["ready"] is True
+    queue = run(_merge_readiness_args(check_merge_readiness=None))
+    assert queue["result_completeness"]["complete"] is True
+    row = queue["pull_requests"][0]
+    assert row["merge_state"] == "CLEAN"
+    assert row["mergeability"] == "MERGEABLE"
+    assert row["review_action_kind"] is None
+    assert row["merge_readiness_observation"]["observation_state"] == "observed_unchanged"
+    assert queue["review_sequence"] == []
+    assert all(("statusCheckRollup" in call[call.index("--json") + 1]) is wait_for_ci
+               for call in calls if call[:2] == ["pr", "view"])
+
+
+@pytest.mark.parametrize("field", ["headRefOid", "baseRefOid"])
+@pytest.mark.parametrize("exact_target", [False, True])
+def test_detail_version_drift_rejects_mixed_pr_snapshot(
+    monkeypatch: pytest.MonkeyPatch, field: str, exact_target: bool,
+) -> None:
+    listed = _rows()[0] | {"baseRefOid": "c" * 40}
+
+    def github(args: list[str], *, cwd: Path | None = None):
+        if args[:2] == ["pr", "list"]:
+            return [dict(listed)]
+        fields = args[args.index("--json") + 1].split(",")
+        if "files" not in fields:
+            return dict(listed)
+        return _fake_run_gh_json(args, cwd=cwd) | {
+            "headRefOid": HEAD_1, "baseRefOid": "c" * 40, field: "d" * 40,
+        }
+
+    if exact_target:
+        with pytest.raises(RuntimeError, match="detail read was incomplete"):
+            github_source_module.scan_github_pull_request_targets(
+                repository="owner/repo", exact_heads=[f"1@{HEAD_1}"], run_gh_json=github,
+            )
+    else:
+        monkeypatch.setattr(pr_review_module, "_run_gh_json", github)
+        scan = pr_review_module.scan_github_pull_requests(repo="owner/repo", limit=10)
+        assert scan["complete"] is False
+        assert scan["states"][0]["detail_read_failures"] == 1
+        assert "files" not in scan["pull_requests"][0]
+
+
+def test_head_drift_observation_does_not_suppress_the_new_remote_head(
+    tmp_path: Path,
+) -> None:
+    fixture_path = tmp_path / "pull-request.json"
+    pull_request = _merge_ready_pr()
+    pull_request["review_thread_summary"] = _complete_review_threads()
+    current_head = str(pull_request["headRefOid"])
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "repository": "owner/repo",
+                "reviewer_login": "maintainer",
+                "pull_requests": [pull_request],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry_path = _goal_registry(tmp_path)
+    readiness: list[dict[str, object]] = []
+    stale_head = "d" * 40
+    assert pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(
+            fixture=str(fixture_path),
+            repo=None,
+            check_merge_readiness=f"4110@{stale_head}",
+        ),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(readiness),
+    ) == 1
+    assert "remote_head_mismatch" in readiness[0]["blocking_reasons"]
+    assert readiness[0]["readiness_observation"]["exact_head"] == f"4110@{stale_head}"
+
+    queue: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(
+            fixture=str(fixture_path),
+            repo=None,
+            check_merge_readiness=None,
+        ),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(queue),
+    ) == 0
+    item = queue[0]["pull_requests"][0]
+    assert item["head_oid"] == current_head
+    assert item["review_action_kind"] == "qualify_pull_request_merge_readiness"
+    assert item["merge_readiness_observation"] is None
+
+
+def test_merge_readiness_requires_goal_scope() -> None:
+    out: list[dict[str, object]] = []
+    result = pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(goal_id=None),
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(out),
+    )
+
+    assert result == 1
+    assert out[0]["error"] == "merge readiness requires --goal-id"
 
 
 def test_pr_review_cli_uses_machine_capability_priority_when_flag_is_omitted(
@@ -984,6 +1327,45 @@ def test_queue_prioritizes_other_developers_by_default(monkeypatch) -> None:
     assert packet["scheduling_policy"]["other_developers_first_active"] is True
 
 
+def test_exact_target_packet_is_complete_without_queue_inventory(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(pr_review_module, "_now_iso", lambda: "2026-08-18T12:00:00Z")
+    row = _queue_pr(
+        31,
+        author="maintainer",
+        ready_at="2026-08-17T06:00:00Z",
+        updated_at="2026-08-18T11:58:00Z",
+    )
+    exact_head = f"31@{row['headRefOid']}"
+
+    packet = pr_review_module.build_pr_review_packet(
+        pull_requests=[row],
+        repository="owner/repo",
+        limit=100,
+        source="github_cli_exact_targets",
+        target_exact_heads=[exact_head],
+        reviewer_login="maintainer",
+    )
+
+    assert packet["request"]["target_exact_heads"] == [exact_head]
+    assert packet["result_completeness"]["complete"] is True
+    assert packet["result_completeness"]["limit_scope"] == "exact_targets"
+    assert packet["result_completeness"]["limit"] == 1
+    assert packet["result_completeness"]["recommended_limit"] is None
+    assert [item["number"] for item in packet["pull_requests"]] == [31]
+
+    with pytest.raises(ValueError, match="target exact head is absent"):
+        pr_review_module.build_pr_review_packet(
+            pull_requests=[row],
+            repository="owner/repo",
+            limit=100,
+            source="fixture",
+            target_exact_heads=[f"32@{HEAD_2}"],
+            reviewer_login="maintainer",
+        )
+
+
 def test_community_feedback_and_aged_backlog_precede_remaining_queue(
     monkeypatch,
 ) -> None:
@@ -1126,6 +1508,19 @@ def test_review_conclusion_requires_format_exact_head_and_formal_state(
     assert valid["review_conclusion"]["status"] == "valid"
     assert valid["review_action_kind"] == "qualify_pull_request_merge_readiness"
 
+    row["reviews"][0]["body"] = "<!--\n" + _full_review_body(head) + "\n-->"
+    hidden = pr_review_module.build_pr_review_packet(
+        pull_requests=[row],
+        repository="owner/repo",
+        limit=10,
+        source="fixture",
+        state_filter="open",
+        reviewer_login="maintainer",
+    )["pull_requests"][0]
+    assert hidden["review_conclusion"]["status"] == "invalid"
+    assert hidden["review_action_kind"] == "review_pull_request_exact_head"
+
+    row["reviews"][0]["body"] = _full_review_body(head)
     row["reviews"][0]["author"] = {"login": "peer-reviewer"}
     peer_valid = pr_review_module.build_pr_review_packet(
         pull_requests=[row],
@@ -1185,7 +1580,13 @@ def test_latest_review_and_author_owned_fallback_are_enforced(monkeypatch) -> No
         reviewer_login="maintainer",
     )["pull_requests"][0]
     assert valid_fallback["review_conclusion"]["status"] == "valid"
-    assert valid_fallback["review_action_kind"] is None
+    # Merge readiness follows the typed verdict, not GitHub's review state: an
+    # author-owned approval is COMMENTED because the platform blocks
+    # self-approval, and it still owes the pre-merge gate while the PR is open.
+    assert (
+        valid_fallback["review_action_kind"]
+        == "qualify_pull_request_merge_readiness"
+    )
 
     row["reviews"] = [
         {
@@ -1281,7 +1682,90 @@ def test_latest_review_and_author_owned_fallback_are_enforced(monkeypatch) -> No
         reviewer_login="maintainer",
     )["pull_requests"][0]
     assert ordinary_comment["review_conclusion"]["status"] == "valid"
-    assert ordinary_comment["review_action_kind"] is None
+    # The later COMMENTED note is not a conclusion, so the earlier valid
+    # author-owned approval still binds the current head and still owes the
+    # pre-merge gate.
+    assert (
+        ordinary_comment["review_action_kind"]
+        == "qualify_pull_request_merge_readiness"
+    )
+
+
+def test_other_reviewers_brief_approval_preserves_full_exact_head_conclusion() -> None:
+    row = _queue_pr(32, author="community", ready_at="2026-08-18T07:00:00Z",
+                    updated_at="2026-08-18T11:00:00Z")
+    head = row["headRefOid"]
+    row["reviews"] = [
+        {"author": {"login": "maintainer"}, "body": _full_review_body(head),
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T09:00:00Z"},
+        {"author": {"login": "reporter"}, "body": "Native platform reproduction passes.",
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T10:00:00Z"},
+    ]
+    item = pr_review_module.build_pr_review_packet(pull_requests=[row],
+        repository="owner/repo", limit=10, source="fixture", reviewer_login="maintainer",
+        wait_for_ci=False)["pull_requests"][0]
+    assert item["review_conclusion"]["valid"] is True
+    assert item["review_conclusion"]["reviewer"] == "maintainer"
+    assert item["review_action_kind"] == "qualify_pull_request_merge_readiness"
+
+
+@pytest.mark.parametrize("superseding", ["DISMISSED", "CHANGES_REQUESTED", "APPROVED"])
+def test_same_reviewers_new_opinion_cannot_resurrect_approval(superseding) -> None:
+    head = "a" * 40
+    reviews = [
+        {"author": {"login": "maintainer"}, "body": _full_review_body(head),
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T09:00:00Z"},
+        {"author": {"login": "MAINTAINER"}, "body": "New formal opinion.",
+         "commit": {"oid": head}, "state": superseding,
+         "submittedAt": "2026-08-18T10:00:00Z"},
+        {"author": {"login": "observer"}, "body": "Supplemental note.",
+         "commit": {"oid": head}, "state": "COMMENTED",
+         "submittedAt": "2026-08-18T11:00:00Z"},
+    ]
+    result = pr_review_module._review_conclusion(
+        {"headRefOid": head, "author": {"login": "community"}, "reviews": reviews},
+        reviewer_login="maintainer")
+    assert result["valid"] is False
+    assert result["state"] == superseding
+
+
+def test_unformatted_current_head_blocker_survives_other_approval() -> None:
+    head = "a" * 40
+    reviews = [
+        {"author": {"login": "dissent"}, "body": "Please fix the reproduced failure.",
+         "commit": {"oid": head}, "state": "CHANGES_REQUESTED",
+         "submittedAt": "2026-08-18T09:00:00Z"},
+        {"author": {"login": "maintainer"}, "body": _full_review_body(head),
+         "commit": {"oid": head}, "state": "APPROVED",
+         "submittedAt": "2026-08-18T10:00:00Z"},
+    ]
+    result = pr_review_module._review_conclusion(
+        {"headRefOid": head, "author": {"login": "community"}, "reviews": reviews},
+        reviewer_login="maintainer")
+    assert result["valid"] is False
+    assert result["state"] == "CHANGES_REQUESTED"
+    assert result["reviewer"] == "dissent"
+
+
+@pytest.mark.parametrize("head", ["a" * 40, "b" * 40])
+def test_pending_review_cannot_retire_opinion_or_transfer_it_to_new_head(head) -> None:
+    approved_head = "a" * 40
+    result = pr_review_module._review_conclusion({"headRefOid": head,
+        "author": {"login": "community"}, "reviews": [
+            {"author": {"login": "maintainer"}, "body": _full_review_body(approved_head),
+             "commit": {"oid": approved_head}, "state": "APPROVED",
+             "submittedAt": "2026-08-18T09:00:00Z"},
+            {"author": {"login": "maintainer"}, "body": "Pending draft.",
+             "commit": {"oid": head}, "state": "PENDING",
+             "submittedAt": "2026-08-18T10:00:00Z"},
+        ]}, reviewer_login="maintainer")
+    assert result["valid"] is (head == approved_head)
+    assert result["state"] == "APPROVED"
+    if head != approved_head:
+        assert "review_not_bound_to_current_head" in result["invalid_reasons"]
 
 
 def test_actionable_sequence_excludes_valid_merged_exact_head(monkeypatch) -> None:
@@ -1595,7 +2079,9 @@ def test_live_review_adapters_never_request_ci(monkeypatch) -> None:
     monkeypatch.setattr(merge_readiness_module, "_run_gh_json", fake)
     merge_readiness_module.fetch_github_pull_request(repo="owner/repo", number=4110, wait_for_ci=False)
     assert "statusCheckRollup" not in calls[0][calls[0].index("--json") + 1]
+    assert "mergeable" in calls[0][calls[0].index("--json") + 1].split(",")
     assert "statusCheckRollup" not in github_source_module.DETAIL_FIELDS
+    assert "mergeable" in github_source_module.DETAIL_FIELDS
 
 
 def test_review_risk_and_instructions_are_independent_of_legacy_ci() -> None:
@@ -1628,3 +2114,47 @@ def test_ci_independence_preserves_merge_conflict_and_unknown_gates() -> None:
         )
         assert result["ready"] is False, result
         assert all(not reason.startswith("status_checks") for reason in result["blocking_reasons"])
+
+
+@pytest.mark.parametrize("wait_for_ci", [False, True])
+@pytest.mark.parametrize("mergeable", ["MERGEABLE", "CONFLICTING", "UNKNOWN", None])
+def test_behind_readiness_depends_on_observed_conflicts_not_base_sync(
+    tmp_path: Path, wait_for_ci: bool, mergeable: str | None,
+) -> None:
+    pr = _merge_ready_pr()
+    pr["mergeStateStatus"] = "BEHIND"
+    pr["mergeable"] = mergeable
+    pr["review_thread_summary"] = _complete_review_threads()
+    fixture = tmp_path / "behind.json"
+    fixture.write_text(json.dumps({"repository": "owner/repo", "pull_requests": [pr]}))
+    args = _merge_readiness_args(fixture=str(fixture), repo=None)
+    registry = _goal_registry(tmp_path)
+    goals = json.loads(registry.read_text())
+    goals["goals"][0]["control_plane"] = {"pull_request_review": {
+        "schema_version": "pull_request_review_goal_configuration_v0",
+        "wait_for_ci": wait_for_ci,
+    }}
+    registry.write_text(json.dumps(goals))
+    out: list[dict[str, object]] = []
+    exit_code = pr_review_cli_module.handle_pr_review_command(
+        args, runtime_root=tmp_path, registry_path=registry,
+        output_format=lambda _args: "json", print_payload=_capture_payload(out),
+    )
+    assert out[0]["wait_for_ci"] is wait_for_ci
+    assert out[0]["ready"] is (mergeable == "MERGEABLE"), out
+    assert exit_code == (0 if mergeable == "MERGEABLE" else 1)
+    assert out[0]["authority"]["grants_merge_authority"] is False
+    if mergeable == "MERGEABLE":
+        assert out[0]["admin_bypass_required"] is True
+
+
+def test_conflicting_mergeability_rejects_a_clean_status() -> None:
+    pr = _merge_ready_pr()
+    pr["mergeable"] = "CONFLICTING"
+    result = merge_readiness_module.build_pr_merge_readiness_packet(
+        pull_request=pr, repository="owner/repo",
+        expected_exact_head=f"4110@{HEAD_1}", reviewer_login="maintainer",
+        review_threads=_complete_review_threads(), source="fixture", wait_for_ci=False,
+    )
+    assert result["ready"] is False
+    assert "merge_state_requires_update" in result["blocking_reasons"]

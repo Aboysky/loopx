@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .readiness_observation import (
+    readiness_material_fingerprint,
+    readiness_material_state,
+)
+
 
 SCHEMA_VERSION = "pull_request_merge_readiness_v0"
 
@@ -81,14 +86,23 @@ def build_merge_readiness(
         blockers.append("unresolved_review_threads")
 
     merge_state = _text(item.get("merge_state")).upper()
-    if merge_state in {"BEHIND", "DIRTY", "DRAFT"}:
+    mergeability = _text(item.get("mergeability")).upper()
+    if mergeability == "CONFLICTING" or merge_state in {"DIRTY", "DRAFT"}:
         blockers.append("merge_state_requires_update")
+    elif merge_state == "BEHIND" and mergeability != "MERGEABLE":
+        blockers.append("merge_state_unverified")
     elif merge_state in {"", "UNKNOWN"}:
         blockers.append("merge_state_unverified")
     elif merge_state == "BLOCKED" and wait_for_ci and not author_owned_fallback:
         blockers.append("repository_merge_state_blocked")
 
     blockers = list(dict.fromkeys(blockers))
+    material_state = readiness_material_state(
+        repository=repository,
+        item=item,
+        review_threads=review_threads,
+        wait_for_ci=wait_for_ci,
+    )
     return {
         "ok": True,
         "schema_version": SCHEMA_VERSION,
@@ -100,17 +114,21 @@ def build_merge_readiness(
         "url": item.get("url"),
         "state": item.get("state"),
         "merge_state": item.get("merge_state"),
+        "mergeability": item.get("mergeability"),
         "review_decision": item.get("review_decision"),
         "review_conclusion": dict(conclusion),
         "checks": dict(checks),
         "review_threads": dict(review_threads),
         "author_owned_commented_approval": author_owned_fallback,
         "admin_bypass_required": bool(
-            (author_owned_fallback or not wait_for_ci) and merge_state == "BLOCKED"
+            (merge_state == "BEHIND" and mergeability == "MERGEABLE")
+            or ((author_owned_fallback or not wait_for_ci) and merge_state == "BLOCKED")
         ),
         "ci_policy": "required" if wait_for_ci else "not_consulted",
         "wait_for_ci": wait_for_ci,
         "blocking_reasons": blockers,
+        "material_state": material_state,
+        "material_fingerprint": readiness_material_fingerprint(material_state),
         "authority": {
             "grants_merge_authority": False,
             "admin_bypass_overrides_this_gate": False,

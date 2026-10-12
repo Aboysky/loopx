@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from loopx.cli import build_parser
+from loopx.control_plane import operator_provider
 from loopx.control_plane.operator_credential import configured_operator_credential
 from loopx.control_plane.turn_driver.host_binding import (
     INDIVIDUAL_TURN_HOST,
@@ -16,6 +17,12 @@ from loopx.control_plane.turn_driver.host_binding import (
     resolve_default_turn_host,
     selected_turn_host,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_machine_credential_store(tmp_path, monkeypatch):
+    """CLI default tests must not read the developer machine's provider store."""
+    monkeypatch.setattr(operator_provider, "select_default_runtime_root", lambda: tmp_path / "machine")
 
 
 def test_managed_credential_selects_the_managed_default_host():
@@ -126,6 +133,23 @@ def test_explicit_host_flag_wins_over_the_default(monkeypatch):
     args = build_parser().parse_args([*_turn_argv("run-once"), "--host", "generic-cli"])
 
     assert args.host == "generic-cli"
+
+
+def test_codex_managed_agent_profile_is_explicit_cli_configuration():
+    args = build_parser().parse_args(
+        [
+            *_turn_argv("run-once"),
+            "--host",
+            "codex-cli",
+            "--codex-model",
+            "gpt-5.6-sol",
+            "--codex-reasoning-effort",
+            "xhigh",
+        ]
+    )
+
+    assert args.codex_model == "gpt-5.6-sol"
+    assert args.codex_reasoning_effort == "xhigh"
 
 
 @pytest.mark.parametrize("command", ["plan", "run-once"])

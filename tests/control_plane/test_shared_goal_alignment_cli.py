@@ -17,7 +17,6 @@ from loopx.cli import main as cli_main
 
 from tests.control_plane.test_shared_goal_alignment import (
     GOAL_ID,
-    _default_events,
     _default_todo_specs,
     _write_fixture,
 )
@@ -43,7 +42,6 @@ def test_cli_projects_shared_goal_alignment_json(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -66,8 +64,8 @@ def test_cli_projects_shared_goal_alignment_json(
     assert payload["goal_id"] == GOAL_ID
     assert payload["agent_id"] == "agent-a"
     assert payload["read_only"] is True
-    assert payload["source_basis"]["state_event_basis_sequence"] == 3
-    assert payload["frontier_basis"]["based_on_state_event_sequence"] == 3
+    assert payload["source_basis"]["state_event_basis_sequence"] == 0
+    assert payload["frontier_basis"]["based_on_state_event_sequence"] is None
     assert payload["frontier_counts"]["current_agent_claimed_advancement_count"] == 1
     assert payload["unclaimed_eligible_work"][0]["todo_id"] == "todo_unclaimed"
 
@@ -79,7 +77,6 @@ def test_cli_projects_shared_goal_alignment_markdown(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, _, stdout = _run_alignment_cli(
@@ -111,7 +108,6 @@ def test_cli_alias_goal_alignment(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -140,7 +136,6 @@ def test_cli_unregistered_agent_fails_closed(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -169,7 +164,6 @@ def test_cli_missing_goal_fails_closed(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -198,7 +192,6 @@ def test_cli_missing_state_file_fails_closed(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
     paths["state_file"].unlink()
 
@@ -219,3 +212,67 @@ def test_cli_missing_state_file_fails_closed(
     assert exit_code == 1
     assert payload["ok"] is False
     assert "missing" in payload["error"]
+
+
+def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_fixture(tmp_path, todo_specs=_default_todo_specs())
+    registry = json.loads(paths["registry"].read_text(encoding="utf-8"))
+    goal = next(item for item in registry["goals"] if item["id"] == GOAL_ID)
+    goal["repo"] = str(tmp_path / "missing-registered-project")
+    paths["registry"].write_text(json.dumps(registry), encoding="utf-8")
+
+    foreign_project = tmp_path / "foreign-project"
+    foreign_state = foreign_project / Path(goal["state_file"])
+    foreign_state.parent.mkdir(parents=True)
+    foreign_state.write_text(
+        paths["state_file"].read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(foreign_project)
+
+    exit_code, payload, _ = _run_alignment_cli(
+        capsys,
+        paths["registry"],
+        "shared-goal-alignment",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        "agent-a",
+        "--format",
+        "json",
+    )
+
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert "goal state file is missing" in payload["error"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("command", ["shared-goal-alignment", "goal-alignment"])
+def test_cli_preserves_selected_canonical_basis_without_display(tmp_path, monkeypatch, capsys, provider, command):
+    from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state_file = promoted_create_fixture(tmp_path, provider=provider)
+    state_file.unlink()
+    code, payload, _ = _run_alignment_cli(capsys, registry, command,
+        "--goal-id", "goal-a", "--agent-id", "agent-a", "--format", "json")
+    assert code == 0, payload
+    assert payload["ok"] and payload["read_only"]
+    basis = payload["source_basis"]
+    assert basis["revision_basis"] == "canonical_todo_snapshot"
+    assert basis["todo_basis"]["source_authority"] == f"{provider}_v0"
+    assert basis["todo_basis"]["provider_revision"].startswith(f"{provider}:")
+    # Independent digest of the fixture's complete empty records, not the output under test.
+    from hashlib import sha256
+    assert basis["todo_basis"]["records_sha256"] == sha256(b"[]").hexdigest()
+    assert payload["frontier_counts"] == {"current_agent_claimed_advancement_count": 0,
+        "unclaimed_advancement_count": 0, "other_agent_claimed_advancement_count": 0}
+    assert payload["frontier_basis"] == {"basis_source": "unbound",
+        "based_on_state_event_sequence": None, "last_agent_event_id": None}
+    assert not state_file.exists()

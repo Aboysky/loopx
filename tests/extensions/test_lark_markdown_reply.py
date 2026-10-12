@@ -3,10 +3,14 @@ import json
 import pytest
 
 from loopx.extensions.lark.outbound import (
-    lark_markdown_post_content, lark_markdown_preview_matches,
-    lark_markdown_readback_matches, normalize_lark_outbound_text,
+    normalize_lark_outbound_text,
     safe_lark_plain_text_fallback,
 )
+from loopx.extensions.lark.presentation.markdown_post import (
+    lark_markdown_post_content, lark_markdown_preview_matches,
+    lark_markdown_readback_matches, normalize_lark_markdown_emphasis,
+)
+
 from loopx.extensions.lark.inbox_reply import (
     reply_lark_event_inbox,
     verify_lark_inbox_reply,
@@ -14,6 +18,50 @@ from loopx.extensions.lark.inbox_reply import (
 from test_lark_inbox_reactions import ReplyRunner, _fixture
 
 TEXT = "进展\n\n- **结果**\n  - 证据\n\n```python\nif ok:\n    done()\n```"
+
+
+def test_result_attachment_zone_matches_raw_post_and_flattened_cli_readback():
+    keys = ("file_first", "file_second")
+    content = json.loads(lark_markdown_post_content(TEXT))
+    content["files"] = [{"key": key} for key in keys]
+    assert lark_markdown_preview_matches(text=TEXT, payload={"api": [{"body": {
+        "msg_type": "post", "content": content,
+    }}]}, attachment_keys=keys)
+    for actual in [{"body": {"content": content}}, {"content": TEXT + '\n\n<file key="file_first" name="first.pdf"/>\n<file key="file_second" name="second.csv"/>'}]:
+        assert lark_markdown_readback_matches(text=TEXT, message={"msg_type": "post", **actual}, attachment_keys=keys)
+    for tags in ['', '<file key="file_first"/>', '<file key="file_second"/>\n<file key="file_first"/>', '<image key="file_first"/>\n<file key="file_second"/>', '<file key="file_first"/>\n<file key="other"/>']:
+        assert not lark_markdown_readback_matches(text=TEXT, message={"msg_type": "post", "content": TEXT + '\n' + tags}, attachment_keys=keys)
+    assert not lark_markdown_readback_matches(text=TEXT, message={"msg_type": "post", "body": {"content": content}})
+
+
+@pytest.mark.parametrize("flattened", [False, True])
+def test_result_readback_allows_provider_resource_keys_only_for_exact_file_names(flattened):
+    from loopx.extensions.lark.presentation.markdown_post import lark_markdown_readback_attachment_keys
+
+    uploaded = ("file_upload_first", "file_upload_second")
+    names = ("first.pdf", "second.csv")
+    resources = ("file_message_first", "file_message_second")
+    content = json.loads(lark_markdown_post_content(TEXT))
+    content["files"] = [{"key": key, "name": name} for key, name in zip(resources, names)]
+    message = {"msg_type": "post", **({"content": TEXT + '\n\n' + '\n'.join(
+        f'<file key="{key}" name="{name}"/>' for key, name in zip(resources, names))}
+        if flattened else {"body": {"content": content}})}
+    assert lark_markdown_readback_attachment_keys(text=TEXT, message=message,
+        attachment_keys=uploaded, attachment_names=names) == resources
+    assert lark_markdown_readback_matches(text=TEXT, message=message,
+        attachment_keys=uploaded, attachment_names=names)
+    assert not lark_markdown_readback_matches(text=TEXT, message=message, attachment_keys=uploaded)
+    for wrong_names in [("second.csv", "first.pdf"), ("first.pdf", "other.csv"), ("first.pdf",)]:
+        assert not lark_markdown_readback_matches(text=TEXT, message=message,
+            attachment_keys=uploaded, attachment_names=wrong_names)
+    for replacement in ['<image key="file_message_first" name="first.pdf"/>',
+                        '<file key="../outside" name="first.pdf"/>',
+                        '<file key="file_message_first"/>',
+                        '<file key="file_message_first" name="first.pdf"><text>extra</text></file>']:
+        changed = {"msg_type": "post", "content": TEXT + '\n' + replacement +
+                   '\n<file key="file_message_second" name="second.csv"/>'}
+        assert not lark_markdown_readback_matches(text=TEXT, message=changed,
+            attachment_keys=uploaded, attachment_names=names)
 
 
 def test_safe_plain_text_fallback_repairs_presentation_without_forging_mentions():
@@ -177,3 +225,72 @@ def test_markdown_request_with_mentions_keeps_verified_text_transport(tmp_path):
     assert result["reply_verified"]
     assert result["content_format"] == "text"
     assert all("--content" not in args for args in runner.calls)
+
+
+@pytest.mark.parametrize(("source", "expected"), [
+    ("**委派已完成。**回执可查", "**委派已完成**。回执可查"),
+    ("**交给了 `research-agent`。**回执 `example-01` 确认", "**交给了 `research-agent`**。回执 `example-01` 确认"),
+    ("**Done.**Next", "**Done**.Next"),
+    ("- **设计回顾（草稿）**｜状态：待审", "- **设计回顾（草稿**）｜状态：待审"),
+    ("**Release notes (draft)**｜Ready", "**Release notes (draft**)｜Ready"),
+    ("**检查完成！**✅", "**检查完成**！✅"),
+    ("**一。**后面 **二！**还有", "**一**。后面 **二**！还有"),
+])
+def test_provider_strong_boundary_preserves_visible_text(source, expected):
+    assert normalize_lark_markdown_emphasis(source) == expected
+    assert expected.replace("**", "") == source.replace("**", "")
+    assert normalize_lark_markdown_emphasis(expected) == expected
+    post = json.loads(lark_markdown_post_content(source))
+    assert post["zh_cn"]["content"][0][0]["text"] == expected
+    assert lark_markdown_preview_matches(text=source, payload={"api": [{"body": {
+        "msg_type": "post", "content": post,
+    }}]})
+    assert lark_markdown_readback_matches(text=source, message={
+        "msg_type": "post", "content": expected,
+    })
+    assert not lark_markdown_readback_matches(text=source, message={
+        "msg_type": "post", "content": source,
+    })
+
+
+@pytest.mark.parametrize("source", [
+    "**已完成。** 回执确认", "**已完成**。回执确认",
+    "**已完成。**！确认", "**Ready.**|Next", "**Price $**$10",
+    "**标题**｜下一项", "`**标题（草稿）**｜下一项`",
+    "[link](https://example.org/**draft）**｜next)",
+    "`**literal。**Next`", "``**literal。**Next``",
+    "**带 `**literal。**Next` 的代码。** 已确认",
+    r"\*\*literal。\*\*Next", "**unmatched。Next",
+    "***nested。***Next", "[link](https://example.org/**path。**Next)",
+    "[link](https://example.org/(nested)/**path。**Next)",
+    "**[link](https://example.org)**Next", "**`code`**Next",
+    "```python\n**literal。**Next\n```", "````md\n**literal。**Next\n````",
+    "~~~md\n**literal。**Next\n~~~", "```md\n**literal。**Next",
+])
+def test_provider_repair_keeps_valid_or_opaque_markdown(source):
+    assert normalize_lark_markdown_emphasis(source) == source
+
+
+@pytest.mark.parametrize(("source", "expected"), [
+    ("**交给了 `research-agent`。**回执已确认", "**交给了 `research-agent`**。回执已确认"),
+    ("**设计回顾（草稿）**｜待审", "**设计回顾（草稿**）｜待审"),
+])
+def test_reply_transport_uses_the_provider_repair_and_checks_normalized_readback(tmp_path, source, expected):
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    fallback = ReplyRunner()
+    def runner(args):
+        if "+messages-send" in args or "+messages-reply" in args:
+            content = args[args.index("--content") + 1]
+            assert json.loads(content)["zh_cn"]["content"][0][0]["text"] == expected
+            result = {"api": [{"body": {"msg_type": "post", "content": content}}]} if "--dry-run" in args else {"message_id": "om_reply_fixture"}
+            return {"returncode": 0, "stdout": json.dumps(result)}
+        if "+messages-mget" in args:
+            return {"returncode": 0, "stdout": json.dumps({"items": [{
+                "message_id": "om_reply_fixture", "msg_type": "post", "content": expected,
+            }]})}
+        return fallback(args)
+    result = reply_lark_event_inbox(project=project, config_path=config,
+        message_id="om_reaction_fixture", text=source, content_format="markdown",
+        execute=True, runner=runner)
+    assert result["reply_verified"] is True
+    assert result["content_format"] == "markdown"

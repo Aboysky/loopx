@@ -157,8 +157,21 @@ class LarkOutboundTextError(ValueError):
     """A local text-format failure before any provider write."""
 
 
+# The single owner of the provider's plain-text delivery limit: the validator and
+# the splitter both read it, so a part can never be sized against a stale number.
+DEFAULT_LARK_TEXT_LIMIT = 1200
+
+
+def present_lark_conversation_text(text: str) -> str:
+    """Render a persisted answer without granting unresolved mention authority."""
+    try:
+        return normalize_lark_outbound_text(text, limit=None, preserve_format=True)
+    except LarkOutboundTextError:
+        return safe_lark_plain_text_fallback(text)
+
+
 def normalize_lark_outbound_text(
-    value: Any, *, limit: int | None = 1200, preserve_format: bool = False,
+    value: Any, *, limit: int | None = DEFAULT_LARK_TEXT_LIMIT, preserve_format: bool = False,
 ) -> str:
     text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
     outside_code = FENCED_CODE_PATTERN.sub("", text)
@@ -185,6 +198,84 @@ def normalize_lark_outbound_text(
             f"Lark outbound text exceeds the {limit}-character delivery limit"
         )
     return normalized
+
+
+# A part marker such as "(12/345)" costs a fixed budget at the head of every
+# part. Reserving it before packing keeps every part inside the provider limit
+# without a second pass that could overflow the last part.
+LARK_PART_MARKER_BUDGET = len("(999/999) ")
+
+
+def split_lark_outbound_text(
+    value: Any,
+    *,
+    limit: int = DEFAULT_LARK_TEXT_LIMIT,
+    preserve_format: bool = False,
+    max_parts: int | None = None,
+    overflow_note: str | None = None,
+) -> list[str]:
+    """Split an over-limit body into bounded, ordered, lossless parts.
+
+    The provider rejects a reply over the delivery limit, which used to leave a
+    persisted manager answer undelivered. Splitting happens after the same
+    validation every other outbound write uses, packs whole lines while they
+    fit, hard-splits a single long line, and marks each part with ``(i/N)`` so a
+    reader can order the parts. The body itself is not reworded, abbreviated or
+    re-flowed: removing the markers restores the validated text exactly.
+
+    ``max_parts`` bounds how many messages an oversized answer may become. A
+    caller that sets it must also pass ``overflow_note``: the note replaces the
+    parts beyond the bound, so the reader learns the answer was longer instead
+    of receiving a flood of messages (or nothing at all).
+    """
+
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        raise ValueError("limit must be a positive integer")
+    if max_parts is not None and (
+        not isinstance(max_parts, int) or isinstance(max_parts, bool) or max_parts < 1
+    ):
+        raise ValueError("max_parts must be a positive integer")
+    if max_parts is not None and not (overflow_note or "").strip():
+        raise ValueError("max_parts requires an overflow_note")
+    normalized = normalize_lark_outbound_text(
+        value, limit=None, preserve_format=preserve_format
+    )
+    if len(normalized) <= limit:
+        return [normalized]
+    budget = limit - LARK_PART_MARKER_BUDGET
+    if budget <= 0:
+        raise LarkOutboundTextError(
+            f"delivery limit {limit} cannot hold a part marker"
+        )
+    pieces: list[str] = []
+    buffer = ""
+    for line in normalized.splitlines(keepends=True):
+        while len(line) > budget:
+            head, line = line[:budget], line[budget:]
+            if buffer:
+                pieces.append(buffer)
+                buffer = ""
+            pieces.append(head)
+        if len(buffer) + len(line) <= budget:
+            buffer += line
+            continue
+        if buffer:
+            pieces.append(buffer)
+        buffer = line
+    if buffer:
+        pieces.append(buffer)
+    total = len(pieces)
+    if max_parts is not None and total > max_parts:
+        pieces = pieces[: max_parts - 1] + [str(overflow_note)]
+        total = len(pieces)
+    parts = [
+        f"({index}/{total}) {piece}" for index, piece in enumerate(pieces, start=1)
+    ]
+    # A part that still cannot be delivered would fail the same way the whole
+    # body did, so refuse locally instead of writing half an answer.
+    for part in parts:
+        normalize_lark_outbound_text(part, limit=limit, preserve_format=preserve_format)
+    return parts
 
 
 def safe_lark_plain_text_fallback(value: Any) -> str:
@@ -340,63 +431,3 @@ def lark_readback_matches_outbound(
             return False
         actual_text = actual_text.replace(rendered_candidates[0], token)
     return normalized_lark_lines(actual_text) == expected_text
-
-
-def lark_markdown_post_content(text: str) -> str:
-    """Preserve authored Markdown without the CLI's image-fetch/rewrite pass."""
-    return json.dumps({"zh_cn": {"content": [[{"tag": "md", "text": text}]]}},
-                      ensure_ascii=False, separators=(",", ":"))
-
-
-def _single_markdown_post(value: Any) -> str | None:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return None
-    if not isinstance(value, Mapping) or set(value) != {"zh_cn"}:
-        return None
-    locale = value["zh_cn"]
-    if not isinstance(locale, Mapping) or set(locale) - {"title", "content"}:
-        return None
-    if locale.get("title", "") != "":
-        return None
-    rows = locale.get("content")
-    if not isinstance(rows, list) or len(rows) != 1:
-        return None
-    row = rows[0]
-    if not isinstance(row, list) or len(row) != 1:
-        return None
-    node = row[0]
-    if not isinstance(node, Mapping) or set(node) != {"tag", "text"}:
-        return None
-    return node["text"] if node["tag"] == "md" and isinstance(node["text"], str) else None
-
-
-def lark_markdown_preview_matches(*, text: str, payload: Mapping[str, Any]) -> bool:
-    data = payload.get("data")
-    calls = payload.get("api")
-    if calls is None and isinstance(data, Mapping):
-        calls = data.get("api")
-    if not isinstance(calls, list) or len(calls) != 1:
-        return False
-    call = calls[0]
-    body = call.get("body") if isinstance(call, Mapping) else None
-    return (isinstance(body, Mapping) and body.get("msg_type") == "post"
-            and _single_markdown_post(body.get("content")) == text)
-
-
-def lark_markdown_readback_matches(*, text: str, message: Mapping[str, Any]) -> bool:
-    """Accept the raw post or CLI's md text, never a plain-text lookalike."""
-    if message.get("msg_type", message.get("message_type")) != "post":
-        return False
-    if message.get("mentions") not in (None, []):
-        return False
-    body = message.get("body")
-    if isinstance(body, Mapping):
-        actual = _single_markdown_post(body.get("content"))
-    else:
-        actual = message.get("content")
-        if not isinstance(actual, str):
-            actual = _single_markdown_post(actual)
-    return isinstance(actual, str) and actual.replace("\r\n", "\n").strip() == text

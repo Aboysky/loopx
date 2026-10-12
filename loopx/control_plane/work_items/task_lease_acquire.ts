@@ -1,6 +1,7 @@
+import {observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
-import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire, type AcquireDecisionOtherLease} from "./task_lease_acquire_decision.ts";
+import {evaluateTaskLeaseWriteScopesOverlap, evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire, type AcquireDecisionOtherLease} from "./task_lease_acquire_decision.ts";
 import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
 import { ShadowManagementError, requireShadowPrimaryWriteAllowed } from "../coordination/shadow_management.ts";
 import { parseIsoTimestamp } from "../runtime_timestamp.ts";
@@ -29,6 +30,7 @@ import {
   type LocalAuthorityShadowBinding,
 } from "../coordination/local_authority_shadow_outbox.ts";
 import { TASK_LEASE_ACQUIRE_REQUEST_SCHEMA, TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA } from "../coordination/coordination_state_contract.generated.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const TASK_LEASE_ACQUIRE_REQUEST_SCHEMA_VERSION =
   TASK_LEASE_ACQUIRE_REQUEST_SCHEMA;
@@ -64,6 +66,7 @@ export interface TodoFact {
   task_class?: string | null;
   bound_agent?: string | null;
   blocks_agent?: string | null;
+  task_repository?: string | null;
   /** Fields explicitly supplied by a legacy caller snapshot, if known. */
   provided_fields?: readonly TodoFactField[];
 }
@@ -78,6 +81,8 @@ export interface AuthorityFacts {
 
 interface AcquireRequest {
   canonical: boolean;
+  write_worktree: string | null;
+  write_workspace?: LeaseWorkspace | null;
   runtime_root: string;
   goal_id: string;
   owner: string;
@@ -97,6 +102,7 @@ export interface LeaseRecord extends JsonObject {
   owner?: unknown;
   idempotency_key?: unknown;
   write_scopes?: unknown;
+  write_repository?: unknown;
   acquire_ttl_seconds?: unknown;
   version?: unknown;
   lease_epoch?: unknown;
@@ -280,7 +286,7 @@ function decodeSourceReceipt(value: unknown, index: number): SourceReceipt {
   const sha256 = receipt.sha256;
   if (
     (state === "file" &&
-      (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(sha256))) ||
+      (typeof sha256 !== "string" || !BARE_SHA256_PATTERN.test(sha256))) ||
     (state === "missing" && sha256 !== null)
   ) {
     throw new EffectRuntimeRequestError("authority source receipt digest is invalid");
@@ -384,7 +390,7 @@ export function decodeTaskLeaseAuthority(value: unknown): AuthorityFacts {
   };
 }
 
-function normalizeHandoffMode(value: unknown): string {
+export function normalizeHandoffMode(value: unknown): string {
   const mode = compact(value) || "legacy";
   if (!new Set(["legacy", "soft_claim", "hard_lease"]).has(mode)) {
     throw new TaskLeaseAcquireError(
@@ -407,7 +413,7 @@ function decodeRequest(value: unknown): AcquireRequest {
   // CLI: a missing authority projection is reported before unrelated fields.
   if (canonical) {
     const allowed = new Set(["schema_version", "runtime_root", "goal_id", "todo_id", "owner", "idempotency_key",
-      "ttl_seconds", "write_scopes", "expected_version", "authority"]);
+      "ttl_seconds", "write_scopes", "write_worktree", "expected_version", "authority"]);
     const unsupported = Object.keys(request).find(key => !allowed.has(key));
     if (unsupported) throw new TaskLeaseAcquireError(`canonical acquire does not accept ${unsupported}`, "invalid_canonical_acquire_request");
   }
@@ -415,6 +421,7 @@ function decodeRequest(value: unknown): AcquireRequest {
   const authority = decodeTaskLeaseAuthority(canonical ? {...rawAuthority, handoff_mode: "legacy", todos: [], todo_projection_error: null} : rawAuthority);
   return {
     canonical,
+    write_worktree: request.write_worktree == null ? null : stringValue(request.write_worktree, "write_worktree"),
     runtime_root: stringValue(request.runtime_root, "runtime_root"),
     goal_id: normalizeGoalId(request.goal_id),
     owner: normalizeOwner(request.owner),
@@ -986,6 +993,9 @@ async function commitAcquire(
       previous_lease: existing,
       planned_lease: lease,
       active_todo_ids: [...request.authority.todos.keys()],
+      goal_ref: request.runtime_shadow !== null && "goal_ref" in request.runtime_shadow
+        ? request.runtime_shadow.goal_ref
+        : undefined,
     });
   if (shadowCapture?.failure && await requireShadowPrimaryWriteAllowed(request.runtime_root, request.goal_id) !== null) {
     throw new ShadowManagementError("shadow_capture_prepare_failed", "durable shadow preparation failed; the primary lease was not changed");
@@ -1013,6 +1023,13 @@ export async function executeTaskLeaseAcquire(
   const context = executionContext(value);
   try {
     request = decodeRequest(value);
+    if (request.write_worktree !== null) {
+      if (!request.canonical || request.write_scopes.length === 0) throw new TaskLeaseAcquireError(
+        "--write-worktree requires canonical authority and nonempty code-edit scopes", "invalid_worktree_lease_request");
+      try { request.write_workspace = await observeLeaseWorktree(request.write_worktree, path =>
+        evaluateTaskLeaseWriteScopesOverlap({left: request.write_scopes, right: [path]}).overlap === true); }
+      catch { throw new TaskLeaseAcquireError("cannot verify independent Git worktree and origin for --write-worktree", "invalid_worktree_lease_request"); }
+    }
   } catch (error) {
     if (error instanceof TaskLeaseAcquireError || error instanceof ShadowManagementError || error instanceof LegacyCoordinationWriteError) {
       return failureEnvelope(

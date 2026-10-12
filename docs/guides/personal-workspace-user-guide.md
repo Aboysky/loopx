@@ -6,9 +6,9 @@ LoopX 控制台是为工程师与 Agent 深度协作打造的统一本地工作�
 
 ## 🎬 30 秒产品发布演示视频
 
-<video controls width="100%" poster="https://huangruiteng.github.io/loopx/docs/assets/personal-workspace/guide_manager_overview.png" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
-  <source src="https://huangruiteng.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4" type="video/mp4">
-  您的浏览器暂不支持直接播放视频，可下载 <a href="https://huangruiteng.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4">MP4 视频文件</a> 进行查看。
+<video controls width="100%" poster="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/guide_manager_overview.png" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+  <source src="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4" type="video/mp4">
+  您的浏览器暂不支持直接播放视频，可下载 <a href="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4">MP4 视频文件</a> 进行查看。
 </video>
 
 > 💡 **视频高光**：终端一键启动 ➔ 管家 4 泳道任务流 ➔ 快捷指令浮动托盘 ➔ 4 列看板与智能「转为 Task」清洗 ➔ 飞书话题直连 ➔ Brutal 野兽派主题切换。
@@ -84,6 +84,37 @@ graph TD
 
 ### 问答中的等待与失败
 
+前端与飞书的 Chat 回答保留项目内文件的相对位置，例如 `./notes/report.md`，便于核对产物；机器目录、项目外路径及另外声明为私有的目录仍隐藏。项目根目录本身显示为 `[project]`。本机 Markdown 链接保留可读标题，不发送无法在飞书使用的本地链接；状态、提议和权限门禁仍使用完整路径脱敏。这仅改变展现，不授予读取或写入权限。
+
+Frontend and Lark Chat answers retain project-relative filenames such as
+`./notes/report.md`, while hiding machine roots, other local paths and separately
+protected directories. The project root itself remains `[project]`. Local
+Markdown links keep their readable labels instead of unusable local destinations;
+status, proposals and gates still redact entire local paths. This changes answer
+presentation, not read or write authority.
+
+管家与 Goal 的前端对话共用运行视图，适用于查询、编码、投研等各种任务：回答下方显示当前正在做的一步，例如「正在读取 notes.md」。使用 Codex 执行器时，展开「执行过程」可逐步查看思考、读取、搜索、运行的命令、调用的工具和修改的文件；同一步的开始与结束合并为一行，失败的步骤标出退出码，点击一行可查看完整命令、改动文件列表或思考内容。思考内容仅在模型向宿主公开时显示（有的模型只给出思考用时）；不显示命令输出、工具参数与结果或文件改动内容，项目内路径显示为相对路径，其余本机路径和疑似凭据会被隐藏。「完成」只表示该步结束，不代表检查通过。这些步骤只保存在本机、仅所有者可读的会话回放记录中；回合结束超过 24 小时后，下次启动 LoopX Chat 时清理。其他执行器继续显示「最近活动」中的最近六条记录。尚未收到活动时保留等待提示，不根据等待时长推测执行进度。
+
+![运行中的回答显示当前活动、最近活动和中断本轮](../assets/personal-workspace/conversation-activity-desktop.png)
+
+点击回答中的「中断本轮」可以停止该回合。成功后保留已经显示的回答，继续发送消息会沿用当前会话；这不会停止整个 Goal。中断失败时错误留在原回答中，执行状态继续显示；若回合先完成，界面保留完成结果。仅连接到外部宿主、未开放中断的会话会返回宿主限制。
+
+The steward and Goal conversations share the same frontend activity view across task types. The reply shows the step in progress, such as "Reading notes.md". With the Codex executor, expand **Work steps** to follow each thought, read, search, command, tool call and file edit; a step's start and end share one row, failures show their exit code, and clicking a row reveals the full command, the changed files or the thinking text. Thinking text appears only when the model exposes it to the host (some models report only how long they thought). Command output, tool arguments and results, and file diffs are never shown; project paths read as relative paths, other local paths and credential-like values are hidden. A completed step means it ended, not that a check passed. Steps live only in the owner-only local session replay; the next LoopX Chat start after a Turn is more than 24 hours old clears them. Other executors keep **Recent activity** with the latest six observations; missing activity stays an honest waiting state. **Interrupt turn** targets that reply, preserves already visible text, and keeps the conversation available for continuation. A rejected interruption leaves the live reply visible; completion wins a race with interruption. This control does not stop the Goal. Attached hosts that do not expose interruption report that limitation.
+
+运行中可点击「调整本轮」，向原任务追加指令。当前支持原生 Codex 执行器；只有收到匹配的执行器回执后才显示已接收，这不代表调整后的任务已经完成。不支持的执行器、过期回合或无法确认的回执会保留草稿，不自动变成新任务。送达状态未知时，重试沿用同一请求编号，防止重复投递；执行器明确拒绝且确认未送达时，条件恢复后可用原文安全地重新发起。回合结束后，未发送的草稿仍可复制到输入框。草稿仅保存在当前页面，刷新前请自行保存。
+
+Use **Adjust turn** to add instructions to the running task. Native Codex executors currently support this control. A matching executor receipt confirms acceptance, not completion. Unsupported executors, expired turns and unconfirmed receipts retain the draft without starting another task. An unresolved delivery keeps the request identity on retry to prevent duplicates; a confirmed pre-delivery rejection allows the unchanged draft to start a new request after recovery. After the turn ends, copy an unsent draft to the composer. Drafts are page-local; save them before refreshing.
+
+For API callers, `POST /api/chat/sessions/{session_id}/turns/{turn_id}/steer`
+accepts `message` (1–12000 characters) and a stable `client_ingress_id`.
+The successful receipt includes both identities, the ingress id and
+`status: delivered`. Reusing the ingress id with changed text or a different
+turn is rejected. The original turn stream continues; this endpoint never
+queues a new turn. A pre-delivery rejection reports `delivery_state: not_delivered`;
+an uncertain outcome reports `delivery_state: unresolved`. Replaying the same
+ingress id preserves its recorded outcome; a confirmed non-delivery needs a new
+id for a fresh attempt. Existing LoopX-mode and Lark ingress keep their contracts.
+
 Codex 上游声明仍会重试时，会话显示「Codex 正在重试」并继续等待最终结果。若上游明确终止，LoopX 保存失败回执，不把已经出现的部分文字当成完整回答。明确的策略拦截、用量限制、频率限制、上下文超限和身份验证失败会保留各自类别；未知错误仍显示通用失败，不从报错正文猜测原因。
 
 策略拦截是本轮已结束，不是仍在安全检查中。LoopX 不会自动重放该请求；重启或重复提交同一个请求编号也会返回原失败回执。界面提示只说明上游给出的类别，不解释其未提供的具体触发原因，也不公开上游原始错误详情。
@@ -108,12 +139,15 @@ CLI 提供同一套可预览、可验证的生命周期操作：
 loopx goal-lifecycle --goal-id <goal-id> --operation stop
 
 # 确认执行，再读取 quota 验证自动推进已暂停
-loopx goal-lifecycle --goal-id <goal-id> --operation stop --execute
+loopx goal-lifecycle --goal-id <goal-id> --operation stop --actor-kind owner --execute
 loopx quota status --goal-id <goal-id>
 
 # 恢复；不会绕过其他运行门禁
-loopx goal-lifecycle --goal-id <goal-id> --operation resume --execute
+loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner --execute
 ```
+
+`--execute` 必须显式声明 `--actor-kind owner` 或 `controller`；不带 actor 的
+预览仍保持只读。写入的 activation receipt 会保留该 actor kind。
 
 执行时，LoopX 会写入权威 source registry、同步全局 registry，并验证两端 readback；任一端未验证成功时不会宣称操作完成。
 
@@ -123,6 +157,26 @@ loopx goal-lifecycle --goal-id <goal-id> --operation resume --execute
 手工 URL 以及创建、删除、Todo、会话等其他远端操作继续保持只读。
 
 ---
+
+### 创建 Goal 时选择已有工作目录 / Reuse a workspace when creating a Goal
+
+打开侧边栏的「创建 Goal」，填写目标和完成标准后，在「工作目录」中选择一个已有
+Goal，即可沿用它绑定的目录。检查配置并确认一次后，新的 Goal 在所选目录中创建；
+执行权限仍由表单中的权限选择与后端校验决定。对话草稿也可通过「修改」打开同一个表单。
+如果检查配置失败，目标文本与目录选择会保留供重试；失效或不可用的目录不会自动换成另一目录。
+
+默认工作区继续由现有连接配置解析。这一入口支持沿用**已注册 Goal 的目录**，不提供任意
+本机路径输入或新目录接入；未连接的目录仍需先通过
+[项目连接流程](../guides/newcomer-command-path.md)接入。创建前检查预览中的工作区标识。
+
+Open **Create Goal** in the sidebar, enter the objective and completion criteria, and select an
+existing Goal under **Working directory** to reuse its directory. Review and confirm once; the new
+Goal is created there under the selected execution permission and the existing backend checks.
+Conversational drafts reach the same form through **Edit**. A failed preview retains the text and
+selection for retry; unavailable selections do not silently redirect to another directory. The
+default still follows existing connection routing. This supports registered Goal workspaces, not
+arbitrary path entry or new-directory onboarding; connect a new project first and check the workspace
+reference in the creation preview.
 
 ## 🎯 4. Goal 深度工作区
 
@@ -163,15 +217,24 @@ Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判�
 
 **交付与依据：**概览直接展示当前交付链、责任、关联关系和验收观察，
 不需要额外打开复盘弹窗。可按标题、负责人或引用搜索，选择节点沿关系追溯，
-并打开当前工作区中的任务、决定或执行记录。桌面支持关系图，手机默认列表。
+并打开当前工作区中的任务、决定或执行记录。交付链默认列表，桌面可切换关系图。
 
-**范围与刷新：**交付链覆盖当前选中工作及有限前序，不是完整 Goal 依赖图。
+**工作地图：**交付链上方展示整个 Goal 的工作形状：全部未归档任务、决定和持续监控，
+以及已记录的依赖、延续与替代关系。默认「当前工作」显示进行中和受阻的事项、它们的直接前序
+（单项超过 2 个已完成前序时折叠为计数），以及待决定事项会解锁的工作；已完成或延后的其余工作
+隐藏并计数。「全部」包含早期已完成工作。互不相连的工作链分框排列，需要决定的链在前；
+没有关联的事项单独列出。选中事项会高亮全部前序与后续，检查器列出「之前 / 之后」并可打开任务详情。
+连线只来自已记录关系，不代表可以执行；遗漏、来源裁剪或依赖成环时显示「部分工作未出现在此地图中」，
+关联端点未找到时同样保留不完整提示，不能推断它已归档或属于其他 Goal。手机改为列表。
+
+**范围与刷新：**交付链覆盖当前选中工作及有限前序；完整 Goal 关系请看工作地图。
 缺失前序、来源裁剪与未展开决定可展开查看；任务完成或缺口列表为空都不代表通过验收。
 仅进入概览或点击「刷新快照」时读取交付链；离开概览取消未完成请求，
-不增加普通状态读取的图计算。状态变化后旧快照的来源跳转和导出暂停，刷新后继续。
+不增加普通状态读取的图计算。状态变化后自动重读快照，重读完成前暂停来源跳转和导出；
+重读失败才提示快照已过期。
 读取失败保留其他概览内容并显示重试提示，不将失败视为工作已完成。
 
-**导出：**「导出交付快照」下载包含读取时间、完整当前链、关系、证据引用和验收观察的
+**导出：**「导出交付快照」下载包含读取时间、完整当前链、工作地图、关系、证据引用和验收观察的
 Markdown。搜索筛选不会裁剪导出；不包含原始日志、文件正文或对话正文。
 成果与报告继续由成果页统一展示，不在概览建立第二份成果清单。
 
@@ -196,7 +259,23 @@ view session. Settings opens the existing capability editor directly.
 Overview brings progress, pending decisions, execution and usage into one page.
 Its delivery section reads the bounded current chain and acceptance observations
 on entry or explicit refresh, with search, map/list layouts, source navigation
-and Markdown export. Leaving Overview aborts pending reads. Export retains the
+and Markdown export. Leaving Overview aborts pending reads. A changed workspace
+re-reads the snapshot automatically; source navigation and export pause until it
+returns, and only a failed re-read reports the snapshot as stale.
+
+The **Work map** above the chain shows the whole Goal: every non-archived task,
+decision and monitor, with recorded requires/follow-up/replaces relations.
+**Current work** keeps in-progress and blocked items, their direct
+prerequisites (more than two finished ones collapse into a count on the card)
+and the work an open decision unblocks; other finished or deferred work is
+hidden and counted. **Everything** adds earlier finished work. Unconnected
+chains sit in separate frames, chains awaiting a decision first, and unlinked
+items sit in their own strip. Selecting an item highlights its full lineage and
+lists what comes before and after it, with **Open details** for tasks. A line is
+a recorded relation, not permission to run. Omitted items, a truncated source
+or a dependency loop show "Some work is not on this map". Missing linked items
+also keep that notice: absence alone does not prove archival or another Goal.
+Phones get a list instead of a canvas. Export retains the
 entire validated delivery snapshot regardless of filtering, excluding raw logs
 and conversation/file bodies. Outputs remain in Files. Missing observations
 never certify acceptance. Remote sources show their synchronized observations
@@ -219,7 +298,10 @@ CLI readback uses the same existing owners:
 ```bash
 loopx --format json status --goal-id example-goal --include-task-graph
 loopx --format json review-packet --goal-id example-goal
+loopx --format json todo list --goal-id example-goal
 ```
+
+The last command returns the typed relation fields the Work map draws.
 
 The local Chat HTTP read is `GET /api/chat/delivery-review?goal_id=example-goal`.
 Lark continues using its existing Goal Channel projection; this slice adds no

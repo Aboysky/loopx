@@ -23,10 +23,12 @@ uv sync --extra test --extra deepseek-harness
 uv pip install --python .venv/bin/python -e packages/loopx-ark-turn
 ```
 
-Set `ARK_API_KEY`, `ARK_MODEL_ID`, `ARK_ENVIRONMENT_ID` and `DEEPSEEK_API_KEY`
-in the environment. The Ark Environment must already belong to the operator;
-this launcher never creates or deletes it. The local model defaults to
-`deepseek-v4-flash@high`; select another profile with `--dsh-model`.
+Set `ARK_API_KEY`, `ARK_MODEL_ID` and `ARK_ENVIRONMENT_ID` in the process
+environment. DSH reuses the machine operator credential; `DEEPSEEK_API_KEY`
+is an explicit environment override. The Ark Environment must already belong to the operator;
+this launcher never creates or deletes it. The local model defaults to the
+managed profile `deepseek-flash@high` (DeepSeek-V4.1-Flash); select another
+profile with `--dsh-model`.
 
 Choose a **new private disposable directory**. Never point this example at an
 active Goal or research workspace. The canonical Goal quota governs admission;
@@ -59,7 +61,146 @@ uv run --no-sync --extra test python -m loopx.cli \
   --format json goal-acceptance verify --goal-id synthetic-managed-research --execute
 ```
 
+## Configure a Luna / DSH / Ark team
+
+Use `--team-size LUNA DSH ARK` to select positive counts for all three member
+runtimes. Counts exclude the coordinator. For example, this single command
+prepares the isolated Goal and starts a DSH coordinator with one member per
+runtime:
+
+```bash
+uv run --no-sync --extra test python examples/managed-research-team/research_team.py \
+  run "$DEMO_ROOT" --team-size 1 1 1 \
+  --model "$ARK_MODEL_ID" --environment-id "$ARK_ENVIRONMENT_ID"
+```
+
+Codex members use independent `gpt-5.6-luna@max` Turns and the machine's existing
+Codex login. Install `codex` on `PATH` first. DSH uses the machine operator
+credential or an explicit process environment override; no credential is
+copied into the Goal. Ark uses the selected model and existing Environment.
+This does not advertise a different DSH model version than the one the provider
+actually serves. A generated binding is configuration, not a successful login
+or model-availability check. `run` makes real, billable provider calls.
+
+Luna members analyze the initial filing. DSH members consume an accepted Luna
+artifact and analyze the correction; Ark members check an accepted DSH
+artifact. Predecessors are assigned round-robin within this sample graph. The
+coordinator chooses execution order and questions through the existing
+collaboration tools. The report must adopt **every** configured member,
+including an extra Luna member without a downstream consumer. Missing canonical
+completion or a changed artifact prevents report acceptance. Repeating the
+same analysis with more models does not create independent source families.
+
+`--team-size 2 1 1` creates four member tasks. The same option works with
+`prepare` and `prepare-chat`, which make **no model calls**. It cannot be combined
+with `--topology`; omitting it preserves the existing local-led four-member
+example. Zero/negative counts are rejected before creating a directory. More
+members increase spend and can exhaust the isolated Goal's quota or lead's
+20-minute deadline; this option is not a capacity or cost guarantee.
+
+Read `project/team.json`, `delegation-config.json` and canonical Todo state to
+inspect the generated roster. The `validate-report` and acceptance commands
+above recheck every configured dependency. The Chat route below consumes the
+same generated configuration; it still requires explicit owner settings and
+enabling, rather than silently starting from preparation.
+
+This remains a **synthetic acceptance example**, not a financial-research
+showcase or proof of autonomous source discovery. An interrupted run is not
+successful: use the existing delegation inventory/read/wait/resume operations
+for the original executions. Do not rerun `run` against the same directory or
+start replacements while their status is unknown. Pausing a Chat coordinator
+does not stop already running members; retain their receipts and use the
+individual provider's execution controls. Removing bindings prevents new
+admission but does not cancel accepted work.
+
+中文：`--team-size 1 1 1` 表示一名 Luna max、一名 DSH、一名 Ark 成员，协调员
+另计。`run` 准备隔离团队并发起真实模型执行；`prepare`/`prepare-chat` 只准备。
+可改为 `2 1 1` 等正整数；每名成员都必须通过独立验收并被最终报告采用，不能用
+人数或注册成功代替协作证据。凭证复用机器配置，Goal 只持有分工和授权。此处是
+明确标注的合成财报验收场景，真实投研、可视化一键启动、团队级停止和宣传影片
+仍需分别验证。暂停协调员不会取消成员；运行中断时先恢复原执行，勿重复拉起。
+
+## Goal Chat coordinator
+
+To use the local Goal conversation as the lead, prepare a new disposable team
+without launching the DSH lead. Use the same provider setup above:
+
+```bash
+uv run --no-sync --extra test python examples/managed-research-team/research_team.py \
+  prepare-chat "$DEMO_ROOT" --model "$ARK_MODEL_ID" --environment-id "$ARK_ENVIRONMENT_ID"
+
+export LOOPX_RESEARCH_DEMO_ROOT="$DEMO_ROOT"
+uv run --no-sync --extra test python -m loopx.cli \
+  --registry "$DEMO_ROOT/registry.json" --runtime-root "$DEMO_ROOT/runtime" \
+  chat --port 5310
+```
+
+Open `http://127.0.0.1:5310/chat/`, select **Synthetic managed research → Chat**,
+then **Enable LoopX → Settings**. Select `lead`, the prepared
+`.loopx/config/delegations.json`, and an explicit coordinator total token
+allowance. Save and enable. The Codex lead decides delegation order; no script
+advances business phases. Pause while a member works, refresh the page, then
+continue to observe that original member's accepted result. Queue a correction
+for the next native turn or explicitly select inbox/steer.
+
+This route returns the report in the conversation; all configured member tasks have
+independent canonical acceptance. It does **not** write `lead/report.json` or
+complete `todo_lead-report`. The `validate-report` command above applies to the
+DSH/Ark lead route, which has an explicitly bound report-writing tool. Both
+routes keep the overall Goal active. Read the member Todos with the canonical
+command above; do not infer report acceptance from a native completion label.
+
+中文：用 `prepare-chat` 准备隔离团队，再启动上述本地 Chat。进入该 Goal 的
+对话，原地选择 `lead`、已生成的执行配置和协调员额度，开启后让模型组织协作。
+可在成员执行时暂停、刷新、恢复，检查成员结果仍回到原对话。此入口把综合报告
+返回对话；各个成员任务分别验收，报告 Todo 和整体 Goal 保留给所有者处理。
+详见 [Goal 对话运行模式](../../docs/reference/goal-chat-continuation.md)。
+
 ## Collaboration path
+
+### Keep an existing Codex or other local lead
+
+Use `prepare` instead of `run` to provision only the disposable fixture and
+operator bindings. It makes no model call and does not start another lead
+session. Keep the provider setup above, including the existing Environment:
+
+```bash
+uv run --no-sync --extra test python examples/managed-research-team/research_team.py \
+  prepare "$DEMO_ROOT" --model "$ARK_MODEL_ID" --environment-id "$ARK_ENVIRONMENT_ID"
+export LOOPX_RESEARCH_DEMO_ROOT="$DEMO_ROOT"
+
+uv run --no-sync --extra test loopx --registry "$DEMO_ROOT/registry.json" \
+  --runtime-root "$DEMO_ROOT/runtime" --format json delegation list \
+  --goal-id synthetic-managed-research --agent-id lead \
+  --execution-config "$DEMO_ROOT/delegation-config.json"
+```
+
+The existing Agent then uses [delegation start/read/wait/resume](../../docs/reference/local-delegation.md#use-an-existing-agent-conversation-through-its-shell)
+for the listed bindings, writing its own briefs. It reads the synthetic
+`input.json` files and returned artifacts, chooses the work order and continues
+its own analysis while members run. The nested cloud analyst still requests
+its local reviewer through the same service. No business phase argument is
+introduced.
+
+After reading all configured canonical completions and exact artifact hashes, the
+lead writes `lead/report.json` with the fields described by `scenario.py` and
+the acceptance table below. Run `validate-report`, then complete the report
+through ordinary `todo complete --todo-id todo_lead-report --agent-id lead
+--no-follow-up --result-file "$DEMO_ROOT/lead/report.json"` against this disposable
+registry/runtime. That command reruns the bound validator and binds the exact
+report bytes to the canonical completion. The local operator can then run
+`todo result-read --goal-id synthetic-managed-research --todo-id todo_lead-report`
+with the same registry and runtime to read the accepted report. Changed bytes,
+missing completion, or a changed acceptance contract reject the read. This
+local CLI read does not grant a remote audience access. On the same loopback
+Chat server, the packaged Goal **Files** tab now lists only reports that pass
+current acceptance and opens their exact text after another version check;
+stale content is cleared. This Goal-scoped local view does not yet deliver a
+reply to the original conversation or grant remote audience access. Retain the
+original conversation; preparation does not attach, resume, migrate or
+impersonate any existing production Agent.
+
+### Member relationships
 
 The primary `local-led` profile has four independently accepted member tasks:
 
@@ -92,7 +233,7 @@ an additional route. It does not substitute for the primary local-led path.
 | Repost of issuer material | Same source | Old figures retained | One current-period source family; corrected repost is stale |
 
 `bootstrap.ts` creates only a fresh disposable canonical runtime and invokes
-the production owner configuration API once. It binds four member criteria and
+the production owner configuration API once. It binds each configured member criterion and
 one report criterion. Task instructions, the roster and verifier files are
 pinned; a member cannot change its own acceptance. Existing Goals are never
 promoted or rewritten by this bootstrap.
@@ -100,8 +241,8 @@ promoted or rewritten by this bootstrap.
 Core delegation asks the TS acceptance owner for the exact task's criteria and
 runs those checks as its Turn validator. It then uses ordinary `todo complete`,
 which re-executes validation and atomically commits through the same TS owner.
-The report separately checks all four canonical completions, current binding
-guards, adopted hashes and financial conclusions. All five Todos may be done
+The report separately checks all configured canonical completions, current binding
+guards, adopted hashes and financial conclusions. All configured Todos may be done
 while the overall Goal remains active for its owner.
 
 A member's own peer conclusion is preserved. The delegation result independently

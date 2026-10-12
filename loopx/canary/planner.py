@@ -314,7 +314,6 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             "loopx/control_plane/work_items/delivery_history.py",
             "loopx/control_plane/work_items/delivery_history.ts",
             "loopx/control_plane/work_items/work_lane.py",
-            "loopx/control_plane/runtime/event_store_migration_bridge.py",
         ),
         "checks": [
             {
@@ -389,7 +388,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "tier": "default",
                 "reason": (
                     "fails on an unregistered vocabulary value, a forked owner symbol, "
-                    "a stale semantic inventory, or a raised collision or retirement budget"
+                    "a stale project-registry I/O census, or a raised collision or retirement budget"
                 ),
             },
         ],
@@ -520,57 +519,12 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             {
                 "command": "python3 examples/control_plane/control-plane-integrated-canary-smoke.py",
                 "tier": "deep",
-                "reason": "samples the bounded status -> quota -> review-packet event read path",
+                "reason": "samples the bounded status -> quota -> review-packet Todo read path",
             },
             {
                 "command": "python3 examples/control_plane/hot-path-interface-budget-smoke.py",
                 "tier": "deep",
                 "reason": "checks review-packet handoff interface budgets after hot-path changes",
-            },
-        ],
-    },
-    {
-        "id": "event-sourced-read-path",
-        "title": "Event-sourced read-path contract",
-        "purpose": "Check event projection, status read path, downstream read surfaces, and migration gates before event-store/read-path changes ship.",
-        "catalog_families": ["Work Routing", "State And Boundary", "Planning Governance"],
-        "trigger_hints": (
-            "event-sourced",
-            "event sourced",
-            "event projection",
-            "event read-path",
-            "downstream read",
-            "event-store",
-            "event store",
-            "loopx/event_sourced_state.py",
-            "loopx/rollout_event_log.py",
-            "docs/reference/protocols/event-store-migration-bridge-v0.md",
-        ),
-        "checks": [
-            {
-                "command": "python3 examples/control_plane/event-sourced-state-api-smoke.py",
-                "tier": "default",
-                "reason": "guards event append/replay API behavior used by read-path projections",
-            },
-            {
-                "command": "python3 examples/control_plane/event-sourced-status-read-path-smoke.py",
-                "tier": "default",
-                "reason": "checks status consumption of event projection with Markdown fallback",
-            },
-            {
-                "command": "python3 examples/control_plane/event-sourced-downstream-read-path-smoke.py",
-                "tier": "default",
-                "reason": "checks downstream read surfaces consume event projection without private state",
-            },
-            {
-                "command": "python3 examples/control_plane/event-store-migration-bridge-smoke.py",
-                "tier": "deep",
-                "reason": "samples the migration bridge gates before bounded event read-path canaries",
-            },
-            {
-                "command": "python3 examples/control_plane/event-sourced-replay-compaction-smoke.py",
-                "tier": "deep",
-                "reason": "checks replay compaction when broader event-store changes are promoted",
             },
         ],
     },
@@ -637,11 +591,6 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "command": "python3 examples/control_plane/todo-deferred-capacity-cli-smoke.py",
                 "tier": "default",
                 "reason": "guards deferred writes, fail-closed resume kinds, and runtime capacity resume routing",
-            },
-            {
-                "command": "python3 examples/control_plane/todo-list-event-projection-smoke.py",
-                "tier": "default",
-                "reason": "guards event-sourced todo list projection with Markdown fallback",
             },
             {
                 "command": "python3 examples/control_plane/todo-concurrent-write-lock-smoke.py",
@@ -1414,8 +1363,24 @@ def _split_semicolon(value: str) -> list[str]:
     return [item.strip() for item in value.split(";") if item.strip()]
 
 
+def resolve_canary_catalog_path(
+    catalog_path: Path | None = None, *, repo_root: Path | None = None,
+) -> Path:
+    """Resolve development inputs without treating an installed wheel as a checkout."""
+    path = (catalog_path or (
+        repo_root / "docs/concepts/interaction-pattern-catalog.md"
+        if repo_root is not None else DEFAULT_CATALOG_PATH
+    )).expanduser()
+    if not path.is_file():
+        raise ValueError(
+            f"canary catalog is missing: {path}; run from a complete LoopX source "
+            "checkout or supply --catalog PATH. The wheel does not bundle development inputs."
+        )
+    return path
+
+
 def _read_catalog(catalog_path: Path | None = None) -> tuple[Path, str]:
-    path = (catalog_path or DEFAULT_CATALOG_PATH).expanduser()
+    path = resolve_canary_catalog_path(catalog_path)
     return path, path.read_text(encoding="utf-8")
 
 
@@ -1882,7 +1847,8 @@ def render_catalog_canary_profiles_markdown(payload: dict[str, Any]) -> str:
 
 
 def render_catalog_canary_plan_markdown(payload: dict[str, Any]) -> str:
-    inputs = payload.get("selection_inputs") if isinstance(payload.get("selection_inputs"), dict) else {}
+    inputs_value = payload.get('selection_inputs')
+    inputs = inputs_value if isinstance(inputs_value, dict) else {}
     lines = [
         "# Catalog Canary Plan",
         "",

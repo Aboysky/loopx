@@ -3,22 +3,24 @@ from __future__ import annotations
 from contextlib import nullcontext
 
 from .file_lock import exclusive_cross_runtime_file_lock
-from .control_plane.coordination.runtime_shadow_writer_adapter import require_prose_state_write_allowed
-from .control_plane.todos.active_state_editing import atomic_write_state_text
+from .control_plane.coordination.legacy_writer_fence import require_prose_state_write_allowed
+from .control_plane.runtime.document_io import atomic_write_state_text
 
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .history import _chronology_key, load_index, load_registry
+from .control_plane.runtime.time import chronology_key
+from .history import append_run_index_record, load_index, load_registry
 from .paths import resolve_runtime_root
 from .public_safe_text import (
     PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
-    find_private_text_match,
+    TEXT_OWNER_CATEGORIES,
+    classify_private_text,
 )
 from .registry import registry_goals, resolve_state_file
+from .control_plane.actor_identity import normalize_owner_controller_actor
 
 
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -121,7 +123,10 @@ def now_local() -> str:
 
 
 def validate_public_safe_text(label: str, value: str | None) -> None:
-    if find_private_text_match(value) is not None:
+    # The named policy, not a bare pattern sweep: this is LoopX's own state, so a
+    # mention of "Bearer"/"password"/"secret" is a fact about a credential, not
+    # one. Value and assignment shapes stay rejected (Refs #5136, direction 2).
+    if classify_private_text(value, categories=TEXT_OWNER_CATEGORIES) is not None:
         raise ValueError(
             f"{label} contains a private-looking value; "
             + public_safe_text_guidance(label)
@@ -214,7 +219,7 @@ def select_run(runs: list[dict[str, Any]], run_generated_at: str | None) -> dict
     return max(
         enumerate(runs),
         key=lambda item: (
-            *_chronology_key(item[1].get("generated_at")),
+            *chronology_key(item[1].get("generated_at")),
             item[0],
         ),
     )[1]
@@ -402,10 +407,12 @@ def append_human_reward(
     goal_id: str,
     run_generated_at: str | None,
     reward: dict[str, Any],
+    actor_kind: str | None = None,
     dry_run: bool = False,
     state_file_override: Path | None = None,
     write_active_state_summary: bool = False,
 ) -> dict[str, Any]:
+    actor = normalize_owner_controller_actor(actor_kind, required=not dry_run)
     validate_goal_id(goal_id)
     registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
@@ -432,6 +439,8 @@ def append_human_reward(
         for field in HUMAN_REWARD_FIELDS
         if field in reward
     }
+    if actor is not None:
+        index_record["human_reward"]["actor_kind"] = actor.value
 
     selected_run = {
         "generated_at": selected.get("generated_at"),
@@ -467,7 +476,9 @@ def append_human_reward(
             exclusive_cross_runtime_file_lock(state_file_to_write, operation="reward_summary")
             if state_file_to_write is not None else nullcontext()
         )
-        with state_lock:
+        # Match refresh/history: index first, then the source state lock.
+        from .file_lock import exclusive_run_index_lock
+        with exclusive_run_index_lock(index_path, operation="reward_append"), state_lock:
             if state_file_to_write is not None:
                 original = state_file_to_write.read_text(encoding="utf-8")
                 planned, changed = insert_progress_ledger_entry(
@@ -480,8 +491,7 @@ def append_human_reward(
                 )
                 state_text_to_write = planned if changed else None
             index_path.parent.mkdir(parents=True, exist_ok=True)
-            with index_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(index_record, ensure_ascii=False) + "\n")
+            append_run_index_record(index_path, index_record)
             if state_file_to_write and state_text_to_write is not None:
                 try:
                     atomic_write_state_text(state_file_to_write, state_text_to_write)
@@ -500,6 +510,7 @@ def append_human_reward(
         "dry_run": dry_run,
         "selected_run": selected_run,
         "human_reward": index_record["human_reward"],
+        "actor_kind": actor.value if actor is not None else None,
         **coordination,
         "active_state_update": active_state_update,
         "index_record": index_record,
@@ -568,6 +579,7 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Reward",
             f"- recorded_at: `{reward.get('recorded_at')}`",
+            f"- actor_kind: `{reward.get('actor_kind')}`",
             f"- decision: `{reward.get('decision')}`",
             f"- reward: `{reward.get('reward')}`",
             f"- reason_summary: {reward.get('reason_summary')}",

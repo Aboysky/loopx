@@ -41,7 +41,7 @@ def test_quota_union_cannot_be_weakened_or_made_ambiguous(mutation):
     if mutation == 'missing':
         registry['relations']['shared_field_names'] = []
     elif mutation == 'widened':
-        registry['relations']['shared_field_names'][0]['slots'][0]['vocabularies'].append('lease_action')
+        registry['relations']['shared_field_names'][0]['slots'][0]['vocabularies'].append('turn_route')
     else:
         registry['vocabularies']['agent_scope_frontier_action']['values'].append('normal_run')
     with pytest.raises(ValueError, match='anchored|disjoint'):
@@ -167,28 +167,6 @@ def test_input_witness_probe_rejects_decoder_contract_regressions(monkeypatch, d
         probe_turn_result_input_domain(v)
 
 
-def test_legacy_lease_values_stay_visible_without_claiming_production():
-    import json
-    from loopx.semantics.inventory import load_sources
-    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text())['vocabularies']['lease_action']
-    assert v['status'] == 'legacy'
-    assert v['producers'] == []
-    assert set(v['compatibility_only']) == {'acquire', 'renew', 'transfer', 'release'}
-    rows = collect_production(ROOT, v, load_sources(ROOT))
-    assert not any(r.values for r in rows)
-    assert validate_production('lease_action', v, rows) == []
-
-
-def test_new_lease_producer_invalidates_compatibility_only_claim():
-    import json
-    from loopx.semantics.inventory import load_sources
-    v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text())['vocabularies']['lease_action']
-    sources = load_sources(ROOT) + [SourceFile('loopx/control_plane/coordination/new_writer.py', '.py',
-        'from .authority_core import LeaseAction\ndef emit():\n return LeaseAction.ACQUIRE\n')]
-    with pytest.raises(ValueError, match='compatibility-only values are produced'):
-        validate_production('lease_action', v, collect_production(ROOT, v, sources))
-
-
 def test_typescript_syntax_failure_reports_only_source_location():
     source = SourceFile('loopx/control_plane/quota/broken.ts', '.ts', 'const secret = "fixture-only";\nfunction invalid( {')
     with pytest.raises(ValueError, match=r'broken.ts:2: invalid TypeScript source') as error:
@@ -311,3 +289,25 @@ def test_reported_sites_carry_a_blocker_label_and_summarise():
     # paths a future slice could still resolve.
     assert 'argument_name_only=' in summary
     assert 'annotation_only=' in summary
+
+
+def test_typescript_scan_names_the_missing_setup_step(monkeypatch):
+    import subprocess
+
+    from loopx.semantics import production
+
+    source = [SourceFile('loopx/example.ts', '.ts', 'export const x = 1;\n')]
+    monkeypatch.setattr(production.shutil, 'which', lambda name: None)
+    with pytest.raises(ValueError, match='needs Node.js on PATH'):
+        production.run_typescript_scan(ROOT, source, {})
+
+    monkeypatch.setattr(production.shutil, 'which', lambda name: '/usr/bin/node')
+    missing = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'typescript' imported from x.mjs"
+    monkeypatch.setattr(
+        production.subprocess, 'run',
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, stdout='', stderr=missing),
+    )
+    with pytest.raises(ValueError) as raised:
+        production.run_typescript_scan(ROOT, source, {})
+    assert str(raised.value) == production.NPM_DEV_DEPENDENCIES_MISSING
+    assert 'x.mjs' not in str(raised.value), 'parser stderr must never reach public diagnostics'

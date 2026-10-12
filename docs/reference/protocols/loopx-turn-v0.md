@@ -12,9 +12,39 @@ second control plane. LoopX remains authoritative for goal state, todos,
 claims, gates, quota, scheduler hints, and compact evidence. The host owns
 model execution, tools, and an opaque resumable session handle.
 
+The `turn run-once` dry-run response also carries a compact planned `route`:
+`kind`, `selected_todo_id` and `would_invoke_host`. This additive field lets delegation
+preflight distinguish a successful preview from task admission while using the
+same executor/model arguments as execution. It grants no host invocation and
+changes no executing-Turn receipt; the four effect flags remain false.
+
 The protocol is host-neutral. A Codex CLI adapter is the first target, but the
 driver lifecycle must not depend on Codex-specific session files, transcript
 formats, or benchmark task schemas.
+
+### Execution deadline defaults
+
+`turn run-once` now has no default single-turn wall-time limit (previously
+120 seconds). The built-in Codex hosts and generic managed host transport wait
+for natural completion or cancellation. `--timeout-seconds` remains an explicit
+operator-selected deadline for bounded execution or recovery tests.
+
+The external heartbeat scheduler likewise has no default wake-command deadline
+(previously 600 seconds); `--wake-timeout-seconds` opts into one. Quota probes,
+provider request/idle liveness checks, validation commands, output budgets,
+lease fencing and process-group cleanup retain their own boundaries. Cancellation
+still terminates the owned process tree; disabling an execution timer does not
+authorize continued effects after cancellation or lease loss.
+
+Benchmark adapters retain their declared total trial deadline. The shared Harbor
+adapter defaults a call to the remaining trial allowance, including its existing
+startup/cleanup reserve, instead of imposing an independent 4700-second wake cap.
+Explicit per-call settings in existing experiment configurations remain explicit
+protocol choices; omit them for natural continuation.
+
+单轮执行默认不再计时终止：Turn 的原 120 秒上限和外部 heartbeat 的原 600 秒
+wake 上限均改为显式选择。取消、租约失效、输出限制、请求存活检查和进程清理
+仍生效。benchmark 仍遵守整场总预算，默认不另设 4700 秒的单轮上限。
 
 ## Mental Model
 
@@ -127,11 +157,11 @@ then the product default.
 | execution profile field | product default | operator override | legacy lower-precedence override |
 | --- | --- | --- | --- |
 | provider | `deepseek-official` | `LOOPX_TURN_PROVIDER` | `DSH_PROVIDER` |
-| model | `deepseek-v4-flash` | `LOOPX_TURN_MODEL` | `DSH_MODEL` |
+| model | `deepseek-flash` | `LOOPX_TURN_MODEL` | `DSH_MODEL` |
 | reasoning effort | `high` | `LOOPX_TURN_REASONING_EFFORT` | — |
 
 The managed `managed_executor` readback reports the resolved profile as one line,
-`<model>@<reasoning_effort>` (the shipped shape is `deepseek-v4-flash@high`).
+`<model>@<reasoning_effort>` (the shipped shape is `deepseek-flash@high`).
 The provider is prepended as `<provider>/…` only when the resolved provider is
 not the shipped one, because dropping it for a deviating provider would make the
 line claim a profile the Turn would not use. Whichever values the line names are
@@ -202,12 +232,13 @@ Before wiring Trae CLI, Codex CLI, or another host, answer these five questions:
    dedicated result file. Do not scrape arbitrary conversation text as the
    completion contract.
 3. **What is its resume handle?** Keep the opaque handle in local adapter
-   state, keyed by `(goal_id, agent_id, todo_id)`. Never put it in LoopX state
-   or public evidence.
+   state, keyed by the declared scope: Goal/Agent for Codex exec by default,
+   or Goal/Agent/Todo for isolated Todo context. Keep it out of public Goal
+   narratives and evidence.
 4. **Which failures may resume?** A bounded timeout or lost transport may
-   preserve an observed session. A rejected startup contract, incompatible
-   host version, or missing session invalidates it so the next Turn starts
-   cleanly.
+   preserve an observed session. For agent-scoped Codex exec, a rejected
+   startup contract, incompatible host version or missing session requires
+   repair or explicit fresh context; it cannot silently fork.
 5. **What proves the work independently?** Name a command that checks the real
    repository, artifact, service readback, document revision, or other
    postcondition without trusting the agent CLI's own claim.
@@ -226,7 +257,8 @@ A thin adapter can be implemented with this host-neutral algorithm:
 ```text
 request = read_one_json(stdin)
 todo = request.turn_envelope.action.selected_todo
-session = load_local_session(goal_id, agent_id, todo.todo_id)
+scope = request.session.context_policy.get("binding_scope", "todo")
+session = load_local_session(goal_id, agent_id, scope, todo.todo_id)
 prompt = render_bounded_prompt(todo, request.result_contract, temporary_result_path)
 invoke_agent_cli(prompt, workspace, session, explicit_timeout)
 candidate = read_and_shape_temporary_result(temporary_result_path)
@@ -246,6 +278,60 @@ command only returns conversational text, the wrapper must first establish a
 dedicated typed result channel; passing `trae chat` directly as the adapter is
 not sufficient. Check the installed CLI's help and pin the qualified command
 shape because flags and headless behavior may vary by version.
+
+### Managed Host Process Lifetime
+
+The generic command executor and built-in Codex CLI adapter now share a TS
+process supervisor. Existing `turn run-once` commands need no new option. Node
+uses the same supported-version discovery as the control-plane runtime; the
+private request stream is limited to 8 MiB and is not a durable protocol.
+
+A Host leader exiting, its output pipes closing and its descendants stopping
+are distinct observations. On POSIX, LoopX starts a dedicated process group,
+sends TERM and escalates to KILL after 300 ms, **including when the leader has
+already exited**. Normal result return also cleans up leftover group members.
+After KILL, the supervisor uses a one-second observation budget for group absence or an
+all-zombie group, observed through signal zero and POSIX `ps` group/state output.
+Zombies cannot execute and need not have been reaped by init. Live, stopped or
+unknown states remain non-terminal. Missing/failed observation or deadline
+expiry fails supervision instead of returning a normal Host result; a sent
+signal is not a cleanup certificate. No command timeout is extended.
+
+KILL 后监督器以一秒观测预算核对进程组消失或只剩僵尸进程，通过零信号与 POSIX
+`ps` 的组号/状态观测判断。僵尸不能继续执行，不要求 init 已回收；存活、暂停或
+未知状态仍非终态。观测缺失/失败或超时会报监督失败，不返回普通 Host 结果；
+发出信号不等于清理完成，也不延长命令超时。
+
+Host commands must not use that group to launch intended persistent services.
+Windows retains Python command-launch compatibility (including batch entrypoints)
+through a transport-only relay, then attempts tree termination before killing
+the leader. Windows uses best-effort process-tree cleanup; this delivery does not claim
+POSIX-equivalent cancellation or Windows qualification.
+
+Timeout, output-consumer failure and loss of the owning Python process trigger
+cleanup. The control pipe remains open for the job lifetime; EOF cancels work.
+After leader exit, output drain is bounded (normally two seconds), rather than
+waiting indefinitely for inherited pipes. Generic stdout is capped at its
+existing 12,000-byte result budget while streaming. Codex output is consumed
+transiently with LF-framed records capped at 1,048,576 characters and a finite
+set of failure categories; an oversized record makes diagnostic observation
+incomplete. UTF-8 characters split across byte chunks remain intact. Raw Host
+output is not written to LoopX state.
+
+Generic results require complete output and zero exit status. Codex retains its
+existing separate typed result-file contract: incomplete diagnostics do not
+invent a failure category, and a validated result file remains usable. Timeout
+still preserves the observed opaque session for the existing retry path. No
+process observation certifies Todo completion, refunds spend or rolls back an
+external effect; independent validation and settlement keep their owners.
+
+This is **process supervision, not execution authority or a sandbox**. It does
+not renew provider leases, prevent stale remote side effects, cancel attached
+App sessions, or supervise in-process DSH execution. Descendants that escape the
+process group and killing the supervisor itself with SIGKILL are outside this
+boundary. Caller death can precede cleanup; the local lane lock alone cannot
+certify no overlap with a replacement executor. Authority-bound renewal,
+revocation and uncertain-effect recovery remain a separate delivery.
 
 ### Repeatable Codex CLI Qualification
 
@@ -376,6 +462,42 @@ existing journal lock, and projects `interpret_turn_journal` into
 quota construction, scheduler context, planning, host invocation, settlement,
 spend, or state writeback. Its `effects` field is therefore always an empty
 list.
+
+`recorded_effects` separately reports lower-bound observations of the **original
+Turn**, not effects performed by this inspection or a recovery invocation.
+Boolean values mean checkpointed execution or no recorded attempt; `null` means
+unknown. A saved Host attempt precedes launch confirmation; a `prepared` writeback
+or spend is not a commit receipt. Inconsistent/foreign identity or phase lineage
+supplies only unknown effect facts. A scheduler phase does not imply host acknowledgement.
+
+The inspector and journal writer share the original TS prepared-intent contract:
+one supported step, object shape, `prepared` status, exact settlement effect ref,
+the next phase and a nonterminal status. Unknown or malformed intents block the
+existing recovery decision, including Host reinvocation. Valid lineage's already
+completed effects remain proved; other effects are unknown, not `false`. The
+writer's empty-map rejection is retained: no pending intent uses an absent field;
+committed history is carried by completed checkpoints, not retained intents.
+
+If executing `run-once` raises unexpectedly, its error response retains the
+original error and resume key, marks uncertain current-invocation `effects` as
+`null`, and adds `journal_observation` from this same read-only TS owner. Its
+`scope=original_turn` prevents a saved Host result being mistaken for another
+launch. Unavailable inspection remains explicit; there is no Python fallback.
+Use the original `recovery_decision` and provider readback to recover, never a
+fresh task or repeated model call inferred from a failed CLI reply. This readback
+does not bypass controller completion validation, lease conflicts or quota gates.
+Pre-execution failures retain known Turn-start hook writes without claiming Host
+execution. Normal successful/replayed `effects` remain invocation-scoped.
+
+中文：`recorded_effects` 是原 Turn 的持久观察，不是本次检查或恢复又发生了副作用。
+`null` 表示未知：已登记 Host attempt 不等于模型已启动，`prepared` 不等于写回或扣额
+已提交。异常返回保留原错误/恢复身份，以同一 TS owner 的只读 `journal_observation`
+区分本次调用与原 Turn；读回失败不猜测“没有执行”。按原恢复判定和 provider 回执
+继续，不能因 CLI 报错新建任务重跑模型，也不放松验收、租约或扣额门禁。
+检查与写入共用原 TS prepared-intent 合同，校验步骤、形状、状态、effect 身份和
+阶段绑定。未知或畸形 intent 阻断原恢复判定，不能建议重调 Host；保留合法身份与
+阶段已经证明的执行事实，其余返回未知而非 `false`。不放松原 writer 的空 map
+拒绝语义：无待决 intent 应省略该字段，已提交历史由完成 checkpoint 表达。
 
 Exit zero means that inspection completed, including when `decision` is
 `replay_blocked`. A non-zero exit means the command could not inspect the
@@ -535,6 +657,87 @@ Every attempted tick returns one result kind:
 | `validation_failed` | Host output exists but task validation failed or is inconclusive. | Preserve failure evidence and route to repair/replan. |
 | `writeback_failed` | Validated work could not be durably recorded. | Do not spend; retry idempotent writeback before more delivery. |
 
+Managed host adapters carry the existing path-delta fields through the typed
+result unchanged: `path_delta_mode`, `agent_vision_json`, and
+`vision_unchanged_reason`. A material path change uses
+`path_delta_mode: "material_replan"`, `result_kind: "replan_required"`, and a
+JSON-encoded `goal_vision_replan_contract_v0` packet whose
+`goal_path_delta_v0.outcome` is `replan`; it must not also claim an unchanged
+reason. An unchanged path uses `path_delta_mode: "unchanged"`, no vision
+packet, and a bounded `vision_unchanged_reason`. The Turn executor remains the
+owner of packet parsing, bounds, and semantic validation. These declarations do
+not grant write or Goal authority, and legacy hosts that omit both path-delta
+fields retain their prior compatibility behavior. For material results, an
+explicit null or other non-string value for either path-delta field is invalid;
+omitting the field remains distinct from supplying null. Stop results
+(`wait`, `user_action_required`, and `iteration_failed`) do not declare a path
+delta. Managed dsh and optional-cloud prompts may omit both fields; the Codex
+CLI output schema requires both strings, so empty strings express the same
+no-declaration result. The executor accepts those empty strings and rejects
+non-empty stop-result declarations. The shared material validation applies to
+generic CLI, Codex CLI, dsh, and optional-cloud host results.
+
+The existing TypeScript Vision normalizer owns packet interpretation and emits
+the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility
+behavior does not verify the submitted packet's top-level `schema_version`;
+the nested `path_delta.schema_version` remains optional, and when present the
+existing owner requires `goal_path_delta_v0`.
+
+### Settlement identity decoding / 结算身份解码
+
+Executable settlement decodes exactly one Todo or autonomous-replan binding in
+`effect_program.ts`. Goal, Agent, Turn and active binding IDs must be non-empty
+strings. Declared `binding_kind` and `binding_id` must agree with that target;
+scoped v1 requires both fields. Unknown declared versions and v0 replan records
+are rejected. Legacy Todo v0 records may omit binding metadata, and supported
+schema-less adapter records remain readable. Generated payloads and effect IDs
+are unchanged; unbound planning identities cannot authorize settlement.
+
+This tightens previously permissive malformed-input handling: invalid identities
+return `invalid_identity` before writeback, spend or receipt replay. Journal
+inspection reports `settlement_identity_invalid` and blocks recovery without
+rewriting the stored record. A valid shape still needs current authority and the
+existing commit-time fences.
+
+可执行结算由 `effect_program.ts` 解码唯一的 Todo 或自主 replan 绑定。Goal、Agent、
+Turn 及有效 target ID 必须是非空字符串；声明的 `binding_kind`／`binding_id` 必须
+与 target 一致，scoped v1 必须同时提供两者。不支持的声明版本和 v0 replan 记录会
+被拒绝；旧 Todo v0 可省略 binding metadata，支持的无 schema adapter 记录继续
+可读。生成的 payload 和 effect ID 不变，unbound 规划身份不能授权结算。
+
+本修订收紧此前宽松的损坏输入处理：非法身份在 writeback、扣额或 receipt replay
+前返回 `invalid_identity`。Journal inspection 报告 `settlement_identity_invalid`，
+阻止恢复且不重写记录。合法结构仍需通过当前权限及已有 commit-time fence。
+
+### In-flight Turn settlement / 在途 Turn 结算
+
+A Todo can stay open across several bounded Turns. An exact accountable
+`outcome_progress` writeback with an accepted `vision_checkpoint_v0`
+`in_flight_continuation` boundary discharges that Turn's progress obligation,
+not the Todo's terminal acceptance. With its matching durable writeback and
+quota-spend receipts, the original Turn replays as `heartbeat_settled_skip`:
+no more work and no second debit. Without the spend receipt it remains
+`settlement_pending`; a missing writeback receipt, unaccepted checkpoint or
+wrong Goal/Agent/Todo/Turn cannot prove settlement. A plain progress claim or
+`semantic_closeout` checkpoint is not this exception.
+
+Todo 可以跨多个有界 Turn 保持开放。与原始身份精确绑定的 `outcome_progress`
+写回，只有携带已获准的 `vision_checkpoint_v0`、`in_flight_continuation` 边界和
+当前 Todo 的 trigger，才履行该 Turn 的进展义务，而非 Todo 的最终验收。有匹配
+的写回和扣额回执后，同一 Turn 返回 `heartbeat_settled_skip`，不得再次执行或
+重复扣额；缺少扣额回执时仍是 `settlement_pending`。缺少写回回执、未获准
+checkpoint 或错配 Goal/Agent/Todo/Turn 均不能证明结算，普通进展声明或
+`semantic_closeout` 也不能替代这项凭证。
+
+Waiting conditions and frontier/successor changes do not reopen a settled Turn.
+A fresh Turn must recompute admission to continue the open Todo or select an
+independent successor. The Todo's completion validator, definition revision,
+leases and Goal acceptance remain authoritative and unchanged.
+
+等待条件和 frontier／后继变化不能重新打开已结算 Turn。继续开放 Todo 或选择
+独立后继必须用新 Turn 重新准入。Todo 完成验证器、定义版本、租约和 Goal 验收
+仍由原权威负责，不因在途结算而放宽或改写。
+
 `validated_completion` is admitted only when the Turn caller supplies an
 explicit Todo lifecycle adapter. After independent validation, the adapter must
 authorize and complete the selected Todo through the existing Todo lifecycle,
@@ -564,6 +767,31 @@ The completion fence accepts this distinct
 `active_goal`, no successor, and an authorized lifecycle actor. It does not
 reinterpret the local key as a quota receipt or permit arbitrary cross-Turn
 terminal replay.
+
+After legacy state is promoted to a canonical provider, this lifecycle-only
+closeout uses its own stable closeout operation receipt. The authoritative
+completed Todo supplies the original identity even when its pre-promotion
+completion has no native operation receipt. The transition preserves the
+original completion timestamp, evidence, validation commitment, completion
+receipt and quota history. It neither resolves nor reruns the old validator.
+Only continuation metadata changes; new results, successors, ownership edits,
+replacement evidence, a mismatched identity or an active execution lease are
+rejected. Exact retry recovers the closeout receipt, including after a lost
+response. This does not relax the original Turn's writeback/spend ordering.
+Quota-bound identities must resolve through original durable settlement
+receipts and pass the existing settlement readback; missing history rejects.
+Only the exact TS-derived local completion identity is exempt from quota
+readback. Historical closeout replay still precedes fresh authority lookup.
+
+旧状态迁移到 canonical provider 后，这类生命周期收尾使用独立、稳定的收尾操作
+回执。即使迁移前的完成记录没有 native operation receipt，也从权威已完成 Todo
+读取原始身份，只更新 continuation 元数据；原始完成时间、证据、验证声明、完成
+回执与 quota 历史保持不变，不重新解析或执行旧验证器。身份不符、新结果、后继、
+所有权或证据修改，以及仍持有执行租约的请求均拒绝。响应丢失后的精确重试恢复
+已有收尾回执，不放宽原始 Turn 的 writeback/spend 顺序。
+绑定 quota 的身份必须从原始持久回执解析，并通过既有 settlement 读回；历史缺失
+时拒绝。只有精确匹配 TS 生成的本地完成身份才能免除 quota 读回。已提交收尾的
+历史重放仍先于新的权威检查。
 
 `repair_required` and `replan_required` are distinct. Repair preserves the
 current task intent. Replan changes the runnable todo set or route because the
@@ -611,10 +839,10 @@ Session recovery is fail-closed:
 
 | Host observation | Session disposition | Next Turn |
 | --- | --- | --- |
-| Typed result returned | Keep the opaque session eligible. | Resume when the same todo remains selected. |
+| Typed result returned | Keep the opaque session eligible. | Resume within the selected conversation scope; refresh current Todo inputs. |
 | Timeout or transport loss after a session was observed | Keep it eligible, but do not infer progress. | Retry the side-effect-safe host phase. |
-| Incompatible host version or rejected startup/output contract | Invalidate it. | Start a fresh session after repair. |
-| Host reports the session is missing | Invalidate it. | Start a fresh session if policy still allows execution. |
+| Incompatible host version or rejected startup/output contract | Agent-scoped Codex exec retains the binding and fails closed; Todo scope invalidates it. | Repair, then explicitly select fresh for agent scope. |
+| Host reports the session is missing | Agent-scoped Codex exec retains the binding and fails closed; Todo scope invalidates it. | Repair history or explicitly select fresh for agent scope. |
 | Failure before any session was observed | Store nothing. | Re-decide, then start fresh only if allowed. |
 
 Session eligibility is recovery metadata, not evidence that work happened. It
@@ -626,13 +854,41 @@ writeback ordering.
 Each `turn plan` or `turn run-once` invocation declares an iteration context
 policy independently from the Todo and Goal lifecycle:
 
-- `resume-if-available` preserves the existing behavior and resumes a compatible
-  opaque Host Session for the same Goal, Agent, and Todo;
-- `fresh` ignores a compatible saved session for this invocation and starts a
-  clean Host Session. Selecting `fresh` does not itself delete the prior binding;
-  after a successful host start, the newly observed session becomes the eligible
-  binding for later iterations. It does not imply a new Todo, successor, retry,
-  or Goal.
+- `resume` is the CLI default. The first invocation starts a session; later
+  invocations reuse its exact native ID. The retired context name is rejected.
+- Codex exec defaults to `--session-scope agent`: the same Goal and Agent keep
+  their conversation when Todos change. `--session-scope todo` explicitly
+  isolates conversations per Todo. These scopes use separate persistence keys;
+  existing Todo-scoped bindings are not automatically adopted into agent scope.
+- `fresh` starts a clean session. After a native ID is observed, that session
+  replaces the binding for the selected scope, including on timeout. It implies
+  no new Todo, successor, retry, progress or Goal.
+
+The Codex exec binding includes the exact Goal lifetime where available and a
+profile digest for agent scope: workspace, Codex home/settings, executable,
+model, effort, sandbox and MCP configuration. A corrupt/incompatible binding,
+missing native history or unexpected resumed ID fails closed; it cannot silently
+fork. A read-only agent-scoped exec session may resume with workspace-write
+when that is the only profile change and the current registry records an
+unexpired operator checkpoint approving the entire working directory. The
+Agent must remain registered in the active Goal; file-only, sibling, expired,
+malformed-expiry or projection-only approval is insufficient. Expiration is
+optional: omitted, null or blank `expires_at`/`fresh_until` retains no expiry.
+The first nonblank `expires_at`, or its `fresh_until` compatibility alias, must
+be an ISO timestamp string with a representable UTC instant. Invalid supplied
+expiration makes the checkpoint inactive in the shared normalization owner;
+it cannot authorize a write resume or add projected write scope. A valid
+`expires_at` takes precedence over the alias. Other profile changes retain the
+explicit `fresh` gate. Configure the approval through `configure-goal
+--boundary-authority-scope DIRECTORY/** --boundary-authority-source SOURCE`
+and preview before `--execute`; it grants neither publication nor production
+actions. This transition preserves the native Session and updates its profile
+digest only after the same native ID is observed. Current Turn selection, task
+lease, validation and settlement remain Todo-bound. Session scope grants no
+additional tool or effect authority. Managed operation-equipped app-server
+sessions retain their existing Todo-bound approval/handoff contract; this CLI
+option applies to exec conversations. Other hosts retain their adapter's
+Todo-based session contract.
 
 Use a new `turn_instance_id` for each new iteration. Reuse the same id only for
 an explicit replay or failed-Turn recovery. The context policy controls Host

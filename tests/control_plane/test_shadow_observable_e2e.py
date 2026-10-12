@@ -42,12 +42,14 @@ class Caller:
 
     def files(self) -> dict[str, str]:
         # All fixture files, including receipts. Locks are retained in raw evidence too.
-        return {str(p.relative_to(self.path)): p.read_bytes().hex()
+        # Keys use POSIX separators so prefix filters work on every host.
+        return {p.relative_to(self.path).as_posix(): p.read_bytes().hex()
                 for p in sorted(self.path.rglob('*')) if p.is_file()}
 
     def primary(self) -> dict[str, str]:
         return {k: v for k, v in self.files().items()
-                if k == 'STATE.md' or k.startswith('runtime/goals/') and not k.endswith('.lock')}
+                if k == 'STATE.md' or k.startswith('runtime/goals/')
+                and not k.endswith(('.lock', '.lock.holder'))}  # Windows keeps holder records apart.
 
     def call(self, *args: str, goal: str = 'observable') -> dict:
         command = [sys.executable, '-m', 'loopx.cli', '--registry', str(self.registry),
@@ -120,17 +122,8 @@ def test_todo_argument_intent_and_rejections(caller: Caller) -> None:
     assert 'Corrected operator intent' in w.state.read_text()
 
 
-def test_handoff_followup_preview_batch_and_quiescence(caller: Caller) -> None:
+def test_handoff_mode_quiescence(caller: Caller) -> None:
     w = caller
-    args = ('todo', 'capture-followups', '--follow-up', 'First bounded followup',
-            '--follow-up', 'Second bounded followup', '--evidence', 'validation://followups')
-    before = w.primary()
-    assert w.call(*args, '--dry-run')['recorded_count'] == 2
-    assert w.primary() == before
-    assert w.call(*args)['recorded_count'] == 2
-    before = w.primary()
-    assert w.call(*args)['recorded_count'] == 0
-    assert w.primary() == before
     assert w.call('handoff-mode', 'set', '--mode', 'hard_lease')['changed'] is True
     before = w.primary()
     assert w.call('handoff-mode', 'set', '--mode', 'hard_lease')['changed'] is False
@@ -179,21 +172,22 @@ def test_lease_arguments_cas_transfer_and_replay(caller: Caller) -> None:
     assert w.call('task-lease', 'inspect', '--todo-id', todo)['ok'] is True
 
 
-def test_refresh_and_reward_owned_prose(caller: Caller) -> None:
+def test_refresh_bound_step_and_reward_owned_prose(caller: Caller) -> None:
     w = caller
     todo = w.add('Canonical record must survive prose')
     record = w.read(todo)
     args = ('refresh-state', '--agent-id', 'agent-a', '--progress-scope', 'goal', '--classification', 'continue',
-            '--recommended-action', 'Inspect persisted arguments.', '--vision-unchanged-reason', 'Same bounded validation.',
+            '--recommended-action', 'Read the independent lease snapshot.', '--vision-unchanged-reason', 'Same bounded validation.',
             '--next-action', 'Read the independent lease snapshot.', '--no-global-sync')
     before = w.primary()
     assert w.call(*args, '--dry-run')['ok'] is True
     assert w.primary() == before
     refreshed = w.call(*args)
     assert refreshed['ok'] is True, refreshed
-    assert 'Read the independent lease snapshot.' in w.state.read_text()
+    assert 'Read the independent lease snapshot.' not in w.state.read_text()
+    assert refreshed['recommended_action_resolution']['recommended_action_source'] == 'agent_lane_step'
     assert w.read(todo) == record
-    args = ('reward', '--recorded-at', '2026-09-01T12:00:00+00:00', '--decision', 'continue',
+    args = ('reward', '--actor-kind', 'owner', '--recorded-at', '2026-09-01T12:00:00+00:00', '--decision', 'continue',
         '--reward', 'positive', '--reason-summary', 'Retained argument evidence.', '--write-active-state-summary')
     before = w.primary()
     assert w.call(*args, '--dry-run')['ok'] is True
@@ -318,22 +312,16 @@ def test_monitor_successor_retains_caller_routing(caller: Caller) -> None:
     assert successor['action_kind'] == 'validate_release_head' and successor['required_capabilities'] == ['network']
 
 
-def test_observation_remains_independent_of_runtime_capture(caller: Caller) -> None:
+def test_retired_observation_request_preserves_runtime_capture(caller: Caller) -> None:
     w = caller
     before = w.primary()
-    args = ('configure-goal', '--local-authority-shadow-file')
-    assert w.call(*args)['ok'] is True
-    assert w.primary() == before
-    assert w.call(*args, '--execute')['ok'] is True
+    for extra in ((), ('--execute',)):
+        rejected = w.call('configure-goal', '--local-authority-shadow-file', *extra)
+        assert rejected['ok'] is False and 'local_authority_shadow_retired' in rejected['error'], rejected
+        assert w.primary() == before
+    assert not (w.root / 'authority-shadow' / 'file' / 'observable').exists()
     todo = w.add('Independent observation contract')
     assert w.read(todo)['text'] == 'Independent observation contract'
-    retained = sorted((w.root / 'authority-shadow' / 'file' / 'observable').glob('authority-store-*.json'))
-    assert len(retained) == 1
-    snapshot = retained[0].read_bytes()
-    assert w.call('configure-goal', '--clear-local-authority-shadow', '--execute')['ok'] is True
-    assert retained[0].read_bytes() == snapshot
-    if w.mode != 'enabled':
-        assert not (w.root / 'authority-shadow' / 'file-v0').exists()
 
 
 def test_turn_input_rejection_has_no_host_or_primary_effect(caller: Caller) -> None:

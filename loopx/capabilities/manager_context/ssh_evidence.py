@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -170,6 +171,25 @@ def read_remote(
     goal = args.get("goal_id")
     if goal and not owner and goal not in before[host]:
         return {"ok": False, "error": "goal_outside_available_scope"}
+
+    def unavailable(code: str, reason: str) -> dict[str, Any]:
+        # A failure may arrive after the grant or alias changed. Never reveal a
+        # cached row unless the caller still owns the same source scope.
+        if (
+            not scope_valid()
+            or (not owner and before != grants(root, channel))
+            or host not in configured_ssh_host_aliases(config_path)
+        ):
+            return {"ok": False, "error": "authorization_changed"}
+        return _unavailable_read_with_cached_portfolio(
+            root,
+            channel,
+            owner,
+            args,
+            code,
+            reason,
+        )
+
     # Values are validated/quoted; the model cannot choose a binary, path or command.
     argv = [
         "goal-portfolio",
@@ -184,10 +204,14 @@ def read_remote(
     ]
     for gid in ([goal] if goal else (None if owner else before[host])) or []:
         argv += ["--goal-id", gid]
+    if args.get("view") == "agents":
+        argv += ["--query", args.get("query", "")]
+    if args.get("todo_id"):
+        argv += ["--todo-id", args["todo_id"]]
     if args.get("include_stopped"):
         argv += ["--include-stopped"]
     command = (
-        'exec "$HOME/.local/bin/loopx" --registry "$HOME/.codex/loopx/registry.global.json" --runtime-root "$HOME/.codex/loopx" --format json '
+        'exec "$HOME/.local/bin/loopx" --registry @host-global --format json '
         + shlex.join(argv)
     )
     ssh = [
@@ -214,14 +238,14 @@ def read_remote(
                 returncode=int(result.returncode),
                 stderr=str(getattr(result, "stderr", "") or ""),
             )
-            return _unavailable_read(args, code, reason)
+            return unavailable(code, reason)
         if len(result.stdout) > 100000:
             code, reason = _remote_read_failure(
                 returncode=0,
                 stderr="",
                 protocol=True,
             )
-            return _unavailable_read(args, code, reason)
+            return unavailable(code, reason)
         packet = json.loads(result.stdout)
         if (
             not isinstance(packet, dict)
@@ -232,7 +256,7 @@ def read_remote(
             code, reason = _remote_read_failure(
                 returncode=0, stderr="", protocol=True
             )
-            return _unavailable_read(args, code, reason)
+            return unavailable(code, reason)
         if (
             not scope_valid()
             or (not owner and before != grants(root, channel))
@@ -255,7 +279,7 @@ def read_remote(
             stderr=str(exc),
             protocol=isinstance(exc, ValueError),
         )
-        return _unavailable_read(args, code, reason)
+        return unavailable(code, reason)
 
 
 def _cache_dir(root) -> Path:
@@ -312,6 +336,13 @@ _REMOTE_READ_LIMITATIONS = {
     REMOTE_READ_PROTOCOL: "remote_source_protocol_unavailable",
     REMOTE_READ_UNKNOWN: "remote_source_unavailable",
 }
+REMOTE_SOURCE_STALE_COVERAGE_EFFECT = "remote_goals_may_be_outdated_not_absent"
+REMOTE_SOURCE_FAILURE_NEXT_ACTION = (
+    "Tell the owner this source is unread, why it failed, how to repair it, and "
+    "the last successful read; use cached rows only as stale evidence, continue "
+    "with the evidence that is readable, and do not present the failure as no "
+    "progress."
+)
 
 
 def _remote_read_failure(
@@ -379,7 +410,7 @@ def _unavailable_read(args: Mapping[str, Any], code: str, reason: str) -> dict[s
 
 
 def _cached_entry(
-    root, host: str, *, identity: str, window_days: int
+    root, host: str, *, identity: str, window_days: int | None
 ) -> dict[str, Any] | None:
     try:
         entry = _read(_cache_dir(root) / (host + ".json"))
@@ -390,10 +421,57 @@ def _cached_entry(
         or entry.get("schema_version") != MANAGER_REMOTE_EVIDENCE_SCHEMA
         or entry.get("source_host") != host
         or entry.get("scope_identity") != identity
-        or entry.get("window_days") != window_days
+        or (window_days is not None and entry.get("window_days") != window_days)
     ):
         return None
     return entry
+
+
+def _unavailable_read_with_cached_portfolio(
+    root,
+    channel: str,
+    owner: bool,
+    args: Mapping[str, Any],
+    code: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Attach the latest authorized portfolio snapshot to a failed point read."""
+
+    result = _unavailable_read(args, code, reason)
+    if args.get("view") != "portfolio":
+        return result
+    host = str(args["source_id"]).removeprefix("ssh:")
+    entry = _cached_entry(
+        root,
+        host,
+        identity=_scope_identity(root, channel, owner),
+        window_days=None,
+    )
+    if entry is None:
+        return result
+    packet = entry.get("packet") if isinstance(entry.get("packet"), dict) else {}
+    rows = [row for row in (packet.get("rows") or []) if isinstance(row, dict)]
+    goal_id = args.get("goal_id")
+    if goal_id:
+        rows = [row for row in rows if row.get("goal_id") == goal_id]
+    stale_rows = [
+        _compact_remote_row(
+            row,
+            source_id=str(args["source_id"]),
+            host=host,
+            fresh=False,
+        )
+        for row in rows
+    ]
+    return {
+        **result,
+        "last_success_at": entry.get("read_at"),
+        "cached_window_days": entry.get("window_days"),
+        "stale_rows_included": bool(stale_rows),
+        "stale_portfolio_rows": stale_rows,
+        "coverage_effect": REMOTE_SOURCE_STALE_COVERAGE_EFFECT,
+        "next_action": REMOTE_SOURCE_FAILURE_NEXT_ACTION,
+    }
 
 
 def _entry_age_seconds(entry: dict[str, Any], now: datetime) -> float | None:
@@ -637,12 +715,8 @@ def remote_evidence(
             "reason_code": str(packet.get("reason_code") or "") or None,
             "last_success_at": last_success_at,
             "stale_rows_included": bool(stale_rows),
-            "coverage_effect": "remote_goals_may_be_outdated_not_absent",
-            "next_action": (
-                "Tell the owner this source is unread, what the reason names as "
-                "the repair, and the last successful read, then continue with "
-                "the evidence you did read; do not present it as no progress."
-            ),
+            "coverage_effect": REMOTE_SOURCE_STALE_COVERAGE_EFFECT,
+            "next_action": REMOTE_SOURCE_FAILURE_NEXT_ACTION,
         }
         limitation = _REMOTE_READ_LIMITATIONS.get(
             str(packet.get("reason_code") or ""), "remote_source_unavailable"

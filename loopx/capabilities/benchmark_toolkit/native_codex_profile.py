@@ -32,7 +32,10 @@ NATIVE_CODEX_PROFILE_REQUIRED_SKILL_IDS = (
     "loopx",
     *PACKAGED_HOST_SKILL_IDS,
 )
-_DEFAULT_GLOBAL_REGISTRY_TOKEN = "$HOME/.codex/loopx/registry.global.json"
+_DEFAULT_GLOBAL_REGISTRY_TOKENS = (
+    "$HOME/.loopx/registry.global.json",
+    "$HOME/.codex/loopx/registry.global.json",  # Explicit legacy route before migration.
+)
 _SAFE_RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _SAFE_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INSTALL_ENV_PASSTHROUGH = (
@@ -202,11 +205,17 @@ def _formal_install_environment(
     env.update(
         {
             "HOME": str(paths["home"]),
+            "TMPDIR": str(paths["home"]),
+            "TMP": str(paths["home"]),
+            "TEMP": str(paths["home"]),
             "SHELL": "/bin/sh",
             "CODEX_HOME": str(paths["codex_home"]),
             "LOOPX_PYTHON": python_executable,
             "LOOPX_PROMOTE_DEFAULT": "1",
             "LOOPX_INSTALL_CANARY": "0",
+            # Synthetic profiles must not become adoption samples, even when
+            # rebuilding the environment drops the supervisor's CI/opt-out flags.
+            "LOOPX_USAGE_PING": "0",
             "LOOPX_BIN_DIR": str(paths["bin_dir"]),
             "LOOPX_RELEASES_DIR": str(paths["release_root"].parent),
             "LOOPX_RELEASE_ID": release_id,
@@ -240,7 +249,13 @@ def native_codex_profile_environment(
     env.update(
         {
             "HOME": str(profile.home),
+            # The Effect runtime locator is temp-scoped and content-addressed.
+            # Equal-source profiles must not share its writer or stop owner.
+            "TMPDIR": str(profile.home),
+            "TMP": str(profile.home),
+            "TEMP": str(profile.home),
             "CODEX_HOME": str(profile.codex_home),
+            "LOOPX_USAGE_PING": "0",
             "PATH": f"{profile.bin_dir}{os.pathsep}{inherited_path}",
         }
     )
@@ -276,6 +291,8 @@ def native_codex_app_server_shell_policy_args(
         f"shell_environment_policy.include_only={json.dumps(_AGENT_SHELL_ENV_INCLUDE_ONLY)}",
         "-c",
         f"shell_environment_policy.exclude={json.dumps(normalized)}",
+        "-c",
+        'shell_environment_policy.set.LOOPX_USAGE_PING="0"',
     )
 
 
@@ -382,10 +399,9 @@ def render_native_codex_goal_prompt(
     runtime_registry_bound = runtime_registry_path is None
     if runtime_registry_path is not None:
         runtime_registry = str(Path(runtime_registry_path).expanduser().resolve())
-        if _DEFAULT_GLOBAL_REGISTRY_TOKEN in task_body:
-            task_body = task_body.replace(
-                _DEFAULT_GLOBAL_REGISTRY_TOKEN, runtime_registry
-            )
+        if any(token in task_body for token in _DEFAULT_GLOBAL_REGISTRY_TOKENS):
+            for token in _DEFAULT_GLOBAL_REGISTRY_TOKENS:
+                task_body = task_body.replace(token, runtime_registry)
             runtime_registry_bound = runtime_registry in task_body
         else:
             # Explicit runtime-root commands resolve their own global registry;

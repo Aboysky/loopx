@@ -49,8 +49,9 @@ def _advancement_payload() -> dict:
     )
 
 
-def test_quota_should_run_exposes_canonical_effect_slots() -> None:
+def test_quota_should_run_exposes_canonical_effect_slots_without_legacy_packet() -> None:
     packet = build_quota_should_run(_advancement_payload(), goal_id=GOAL_ID)
+    assert "protocol_action_packet" not in packet
     turn = interpret_quota_should_run_packet(
         packet,
         goal_id=GOAL_ID,
@@ -72,7 +73,7 @@ def test_quota_should_run_exposes_canonical_effect_slots() -> None:
     assert turn.observation.should_run is True
     assert turn.observation.effective_action == "normal_run"
     assert turn.observation.recommended_action == "[P1] Advance the bounded slice."
-    assert "lane=advancement_task" in turn.observation.protocol_summary
+    assert turn.observation.protocol_summary is None
 
     # next effect
     assert turn.next_effect.cli_actions

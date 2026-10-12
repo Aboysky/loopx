@@ -1,9 +1,12 @@
+import {leaseWorkspace, sameLeaseWorkspace, sameLeaseCheckout, type LeaseWorkspace} from "./task_lease_workspace.ts";
 /** Shared acquire/reclaim admission. IO and durable receipts belong to callers. */
 import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import type {JsonObject} from "../effect_program.ts";
 import type {TodoFact, LeaseRecord} from "./task_lease_acquire.ts";
+import {normalizeTodoRepository} from "../todos/work_requirements.ts";
+import {leaseWriteRepository, leaseRepositoryRejection, repositoryScopesMayOverlap} from "./task_lease_repository.ts";
 
 export interface AcquireDecisionLease {
   present: boolean;
@@ -14,14 +17,19 @@ export interface AcquireDecisionLease {
   version: number;
   lease_epoch: number;
   write_scopes: readonly string[];
+  write_repository?: string | null;
+  write_workspace?: LeaseWorkspace | null;
   acquire_ttl_seconds: number | null;
 }
 
 export interface AcquireDecisionOtherLease {
   todo_id: string;
+  owner?: string;
   active: boolean;
   effective: boolean;
   write_scopes: readonly string[];
+  write_repository?: string | null;
+  write_workspace?: LeaseWorkspace | null;
 }
 
 export interface AcquireDecisionInput {
@@ -36,6 +44,7 @@ export interface AcquireDecisionInput {
     ttl_seconds: number;
     write_scopes: readonly string[];
     expected_version: number | null;
+    write_workspace?: LeaseWorkspace | null;
   };
 }
 
@@ -45,6 +54,7 @@ export interface AcquireDecision extends JsonObject {
   idempotent: boolean;
   next_lease: JsonObject | null;
   conflict_indexes: number[];
+  overlap_advisory_indexes?: number[];
 }
 
 function stringValue(value: unknown, label: string): string {
@@ -206,6 +216,7 @@ function decodeDecisionTodo(value: unknown): TodoFact | null {
     status: stringValue(todo.status, "todo.status"),
     claimed_by: decisionNullableString(todo.claimed_by, "todo.claimed_by"),
     excluded_agents: decisionStringArray(todo.excluded_agents, "todo.excluded_agents"),
+    task_repository: normalizeTodoRepository(todo.task_repository),
   };
 }
 
@@ -226,6 +237,8 @@ function decodeDecisionLease(value: unknown): AcquireDecisionLease | null {
     version: decisionInteger(lease.version, "lease.version"),
     lease_epoch: decisionInteger(lease.lease_epoch, "lease.lease_epoch"),
     write_scopes: decisionStringArray(lease.write_scopes, "lease.write_scopes"),
+    write_repository: leaseWriteRepository(lease.write_repository),
+    write_workspace: leaseWorkspace(lease.write_workspace),
     acquire_ttl_seconds: optionalInteger(
       lease.acquire_ttl_seconds,
       "lease.acquire_ttl_seconds",
@@ -246,6 +259,8 @@ function decodeAcquireDecisionInput(value: unknown): AcquireDecisionInput {
       todo_id: stringValue(lease.todo_id, `other_leases[${index}].todo_id`),
       active: decisionBoolean(lease.active, `other_leases[${index}].active`),
       effective: decisionBoolean(lease.effective, `other_leases[${index}].effective`),
+      write_repository: leaseWriteRepository(lease.write_repository),
+      write_workspace: leaseWorkspace(lease.write_workspace),
       write_scopes: decisionStringArray(
         lease.write_scopes,
         `other_leases[${index}].write_scopes`,
@@ -272,6 +287,7 @@ function decodeAcquireDecisionInput(value: unknown): AcquireDecisionInput {
         command.write_scopes,
         "command.write_scopes",
       ),
+      write_workspace: leaseWorkspace(command.write_workspace),
       expected_version: optionalInteger(
         command.expected_version,
         "command.expected_version",
@@ -287,6 +303,7 @@ function acquireDecisionResult(
     idempotent?: boolean;
     nextLease?: JsonObject | null;
     conflictIndexes?: number[];
+    advisoryIndexes?: number[];
   } = {},
 ): AcquireDecision {
   return {
@@ -295,6 +312,7 @@ function acquireDecisionResult(
     idempotent: options.idempotent ?? false,
     next_lease: options.nextLease ?? null,
     conflict_indexes: options.conflictIndexes ?? [],
+    ...(options.advisoryIndexes?.length ? {overlap_advisory_indexes: options.advisoryIndexes} : {}),
   };
 }
 
@@ -332,6 +350,8 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
   // The old wire effective hint is not authority over the supplied owner facts.
   if (lease !== null && lease.present && lease.active &&
       ownerRejection(input.todo, lease.owner, input.registered_agents) === null) {
+    const repositoryRejection = leaseRepositoryRejection(input.todo, lease);
+    if (repositoryRejection !== null) return acquireDecisionResult("rejected", repositoryRejection);
     if (
       lease.owner === command.owner &&
       lease.idempotency_key === command.idempotency_key
@@ -339,7 +359,7 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
       const scopesMatch = equalScopeSets(lease.write_scopes, command.write_scopes);
       const ttlMatches = lease.acquire_ttl_seconds === null ||
         lease.acquire_ttl_seconds === command.ttl_seconds;
-      if (!scopesMatch || !ttlMatches) {
+      if (!scopesMatch || !ttlMatches || !sameLeaseWorkspace(lease.write_workspace, command.write_workspace)) {
         return acquireDecisionResult("rejected", "idempotency_key_reuse");
       }
       return acquireDecisionResult("no_change", "lease_acquire_replay", {
@@ -354,12 +374,23 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
   ) {
     return acquireDecisionResult("rejected", "idempotency_key_reuse");
   }
-  const conflictIndexes = input.other_leases.flatMap((other, index) =>
-    other.active && other.effective &&
-      writeScopesOverlap(command.write_scopes, other.write_scopes)
-      ? [index]
-      : []
-  );
+  const repository = normalizeTodoRepository(input.todo?.task_repository);
+  const workspace = leaseWorkspace(command.write_workspace);
+  if (workspace && workspace.repository.toLowerCase() !== repository?.toLowerCase()) {
+    return acquireDecisionResult("rejected", "lease_workspace_repository_mismatch");
+  }
+  const advisoryIndexes: number[] = [], conflictIndexes: number[] = [];
+  for (const [index, other] of input.other_leases.entries()) {
+    if (!other.active || !other.effective) continue;
+    const sameCheckout = workspace !== null && sameLeaseCheckout(workspace, other.write_workspace);
+    if ((!sameCheckout && !repositoryScopesMayOverlap(repository, other.write_repository)) ||
+        !writeScopesOverlap(command.write_scopes, other.write_scopes)) continue;
+    // Verified code-edit mode coordinates integration, rather than requesting
+    // cross-checkout file exclusivity. Unknown legacy workspaces stay unknown;
+    // neither their records nor their execution ownership are changed.
+    if (workspace && !sameCheckout) advisoryIndexes.push(index);
+    else conflictIndexes.push(index);
+  }
   if (conflictIndexes.length > 0) {
     return acquireDecisionResult("conflict", "write_scope_conflict", {
       conflictIndexes,
@@ -369,6 +400,7 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
     return acquireDecisionResult("rejected", "lease_generation_exhausted");
   }
   return acquireDecisionResult("apply", "lease_acquire", {
+    advisoryIndexes,
     nextLease: {
       present: true,
       active: true,
@@ -378,6 +410,8 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
       version: actualVersion + 1,
       lease_epoch: (lease?.lease_epoch ?? 0) + 1,
       write_scopes: [...command.write_scopes],
+      ...(workspace ? {write_workspace: workspace} : {}),
+      ...(repository === null ? {} : {write_repository: repository}),
       acquire_ttl_seconds: command.ttl_seconds,
     },
   });
@@ -398,7 +432,10 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
   const at = now.toISOString().replace(/\.\d{3}Z$/u, "Z");
   return {schema_version: "task_lease_v0", goal_id: identity.goal_id, todo_id: identity.todo_id,
     owner: command.owner, idempotency_key: command.idempotency_key,
+    ...(decision.next_lease.write_workspace ? {write_workspace: leaseWorkspace(decision.next_lease.write_workspace)} : {}),
     write_scopes: [...command.write_scopes], acquire_ttl_seconds: command.ttl_seconds,
+    ...(decision.next_lease.write_repository == null ? {} :
+      {write_repository: leaseWriteRepository(decision.next_lease.write_repository)}),
     version: decisionInteger(decision.next_lease.version, "next_lease.version"),
     lease_epoch: decisionInteger(decision.next_lease.lease_epoch, "next_lease.lease_epoch"),
     acquired_at: at, updated_at: at,

@@ -15,8 +15,9 @@ What it deliberately cannot do:
 - it reports no presence, because no presence provider is registered, and it
   says so in `presence_coverage` instead of leaving a reader to guess between
   "not running" and "this machine cannot see it";
-- it does not project a lease epoch, which the current projection does not own,
-  and it names that gap as a limitation.
+- it projects lease state only when the status payload carries execution
+  facts; a payload without them gets `lease_state_not_projected` instead of
+  a guess.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from typing import Any
 
 from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.time import now_utc_iso
+from ...thread_agent_binding import summarize_agent_binding_routes
+from ..runtime.public_safety import validate_public_safe_value
 from ..todos.contract import normalize_todo_id
 from .management_projection import build_agent_management_projection
 
@@ -35,6 +38,7 @@ PEER_AGENT_DIRECTORY_SCOPE = "goal_registered_agents"
 MAX_DIRECTORY_ROWS = 24
 MAX_OBSERVATION_REFS = 1
 MAX_DELIVERY_REFS = 1
+MAX_ROUTE_CANDIDATES = 3
 MAX_ROLLUP_AGENTS = 8
 
 # Limitation codes are contract vocabulary, not prose: a reader switches on them.
@@ -43,6 +47,7 @@ LIMITATION_PRESENCE_IS_ADVISORY = "presence_is_advisory"
 LIMITATION_LEASE_STATE_NOT_PROJECTED = "lease_state_not_projected"
 LIMITATION_CALLER_IDENTITY_NOT_SUPPLIED = "caller_identity_not_supplied"
 LIMITATION_ROWS_TRUNCATED = "rows_truncated_at_cap"
+LIMITATION_ROUTE_CANDIDATE_WITHHELD = "route_candidate_withheld"
 
 GAP_AUDIENCE_NOT_AUTHORIZED = "audience_not_authorized"
 
@@ -74,6 +79,53 @@ def _compact_refs(value: Any, *, limit: int) -> list[str]:
     return refs
 
 
+def _publishable_route(route: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Cap the candidate list and withhold entries the public boundary rejects.
+
+    Withholding is reported, never silent: `candidate_count` keeps the withheld
+    entries, so a filtered candidate cannot be read as a binding that does not
+    exist. Values are never truncated to make them pass, because a half a thread
+    identifier is a locator that no longer locates.
+    """
+
+    visible: list[dict[str, str]] = []
+    withheld = 0
+    for candidate in route["candidates"]:
+        try:
+            validate_public_safe_value(candidate, path="peer_route.candidate")
+        except ValueError:
+            withheld += 1
+            continue
+        visible.append(candidate)
+    published = {key: value for key, value in route.items() if key != "candidates"}
+    published["candidates"] = visible[:MAX_ROUTE_CANDIDATES]
+    if withheld:
+        published["withheld_candidate_count"] = withheld
+    return published, withheld
+
+
+def _projected_execution_facts(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Recover the execution facts status collection projected onto agent rows.
+
+    ``None`` when the payload's projection says no facts were collected, so an
+    older or fact-less payload keeps `lease_state_not_projected` instead of
+    reading as "leases projected, none found".
+    """
+
+    projection = _as_mapping(payload.get("agent_management_projection"))
+    summary = _as_mapping(projection.get("source_summary"))
+    if summary.get("execution_facts_collected") is not True:
+        return None
+    facts: dict[str, Any] = {}
+    for row in _as_list(projection.get("agents")):
+        row = _as_mapping(row)
+        agent_id = str(row.get("agent_id") or "").strip()
+        execution = row.get("execution")
+        if agent_id and isinstance(execution, Mapping):
+            facts[agent_id] = dict(execution)
+    return facts
+
+
 def _work_block(agent_row: Mapping[str, Any]) -> dict[str, Any] | None:
     """Project one Agent's bounded work facts, or nothing when it holds none."""
 
@@ -91,9 +143,12 @@ def _work_block(agent_row: Mapping[str, Any]) -> dict[str, Any] | None:
         if claimed_by and _compact(todo.get("updated_at"), limit=60)
         else CLAIM_AGE_UNKNOWN
     )
+    lease = _as_mapping(_as_mapping(agent_row.get("execution")).get("lease"))
     work: dict[str, Any] = {
         "todo_id": normalize_todo_id(todo_id) or todo_id,
         "todo_status": _compact(todo.get("status"), limit=40) or "unknown",
+        "lease_status": _compact(lease.get("status"), limit=40),
+        "lease_expired": lease.get("expired") if isinstance(lease.get("expired"), bool) else None,
         "task_class": _compact(todo.get("task_class"), limit=60),
         "action_kind": _compact(todo.get("action_kind"), limit=60),
         "priority": _compact(todo.get("priority"), limit=20),
@@ -145,6 +200,7 @@ def build_peer_agent_directory(
     goal_id: str | None = None,
     caller_agent_id: str | None = None,
     available_capabilities: Any = None,
+    execution_facts: Any = None,
 ) -> dict[str, Any]:
     """Return a bounded `peer_agent_directory_v0` packet for one Goal.
 
@@ -153,13 +209,22 @@ def build_peer_agent_directory(
     against the registry rather than asserted by the caller; when it is absent
     the packet records that the caller identity was not supplied instead of
     inventing one.
+
+    `execution_facts` defaults to the facts the payload's management projection
+    already carries on its rows, so this re-projection reads the same lane,
+    worker and lease facts status collection did instead of reading them again.
     """
 
     payload = status_payload if isinstance(status_payload, Mapping) else {}
     resolved_goal = _compact(goal_id or payload.get("goal_filter"), limit=120)
     caller = _compact(caller_agent_id, limit=120)
+    if execution_facts is None:
+        execution_facts = _projected_execution_facts(payload)
+    facts = execution_facts if isinstance(execution_facts, Mapping) else None
     projection = build_agent_management_projection(
-        dict(payload), available_capabilities=available_capabilities
+        dict(payload),
+        available_capabilities=available_capabilities,
+        execution_facts=dict(facts) if facts is not None else None,
     )
     agent_rows = [row for row in _as_list(projection.get("agents")) if isinstance(row, Mapping)]
     registered_agent_ids = [
@@ -171,8 +236,9 @@ def build_peer_agent_directory(
     limitations = [
         LIMITATION_PRESENCE_PROVIDER_UNAVAILABLE,
         LIMITATION_PRESENCE_IS_ADVISORY,
-        LIMITATION_LEASE_STATE_NOT_PROJECTED,
     ]
+    if facts is None:
+        limitations.append(LIMITATION_LEASE_STATE_NOT_PROJECTED)
     gaps: list[dict[str, Any]] = []
     if caller and caller not in registered_agent_ids:
         # An unregistered caller gets a scope gap, never a listing it has no
@@ -187,8 +253,12 @@ def build_peer_agent_directory(
     if not caller:
         limitations.append(LIMITATION_CALLER_IDENTITY_NOT_SUPPLIED)
 
+    # Route candidates are read from the same published bindings the management
+    # projection walks, but only the owning resolver module interprets them.
+    binding_goals = _as_list(_as_mapping(payload.get("run_history")).get("goals"))
     rows: list[dict[str, Any]] = []
     dropped_at_cap = 0
+    withheld_route_candidates = 0
     for row in agent_rows:
         agent_id = _compact(row.get("agent_id"), limit=120)
         if not agent_id:
@@ -199,6 +269,10 @@ def build_peer_agent_directory(
             dropped_at_cap += 1
             continue
         work = _work_block(row)
+        peer_route, withheld_candidates = _publishable_route(
+            summarize_agent_binding_routes(binding_goals, agent_id=agent_id)
+        )
+        withheld_route_candidates += withheld_candidates
         directory_row: dict[str, Any] = {
             "agent_id": agent_id,
             "registered": True,
@@ -210,6 +284,7 @@ def build_peer_agent_directory(
             "delivery_refs": _compact_refs(
                 row.get("handoff_refs"), limit=MAX_DELIVERY_REFS
             ),
+            "peer_route": peer_route,
         }
         rows.append(
             {
@@ -230,6 +305,8 @@ def build_peer_agent_directory(
     )
     if omitted:
         limitations.append(LIMITATION_ROWS_TRUNCATED)
+    if withheld_route_candidates:
+        limitations.append(LIMITATION_ROUTE_CANDIDATE_WITHHELD)
 
     packet: dict[str, Any] = {
         "ok": True,

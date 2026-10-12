@@ -122,6 +122,10 @@ Acceptance 证据应来自能直接证明结果的对象：
 - assistant 的完成声明；
 - 没有 acceptance evidence 的 `no_followup`。
 
+Checkpoint 证明的对象必须明确：来源与阶段一致性不等于业务结论正确，
+续跑 journal 也不等于回滚 workspace。已有机制与剩余边界见
+[Agent 失败控制与恢复](../../architecture/agent-failure-containment-and-recovery.zh-CN.md)。
+
 一个好的 evidence ref 足够紧凑，可以恢复判断，又不复制 raw log：
 
 ```text
@@ -382,7 +386,7 @@ Replan 是当前目标图或覆盖账本上的机器可见语义变化：
 
 Dreaming 是探索未来可能性，可以产生 proposal，但不能替代当前 runnable frontier。
 
-quota 会把 evidence-log 压成 host-projected coverage ledger，并给出当前
+quota 会把当前 Agent 的 compact run history 压成 host-projected coverage ledger，并给出当前
 `obligation_id`。新 surface / hypothesis / probe 用 typed observation 写回；如果
 replan 的结果是下一条 runnable direction，则 Todo 本身就是原子语义 receipt：
 
@@ -778,7 +782,7 @@ ACTIVE_GOAL_STATE.md prose
   -> state_projection_gap_warning
   -> status.project_asset.state_projection_gap
   -> build_state_projection_gap_repair_hint
-  -> quota effective_action=self_repair
+  -> quota effective_action=state_projection_gap_repair
   -> 写回 concrete todo / user gate / successor
 ```
 
@@ -857,7 +861,7 @@ CLI/status/quota 并补 smoke；只更新文档不会改变机器的下一次决
 
 - `examples/state-projection-gap-smoke.py`
 - `examples/project/goal-vision-replan-contract-smoke.py`
-- `examples/control_plane/agent-scoped-evidence-log-smoke.py`
+- `tests/control_plane/test_replan_context_evidence.py`
 - `examples/outcome-followthrough-policy-smoke.py`
 - `tests/control_plane_ts/quota_monitor_poll_commit.test.ts`
 

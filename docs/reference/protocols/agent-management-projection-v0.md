@@ -57,8 +57,8 @@ This contract intentionally does not add:
 - a tool gateway or agent profile runtime.
 
 State changes still go through existing LoopX lifecycle commands such as
-`loopx todo ...`, `loopx refresh-state ...`, `loopx quota ...`, evidence-log
-writeback, and future APIs that preserve the same event-ledger semantics.
+`loopx todo ...`, `loopx refresh-state ...`, `loopx quota ...`, and future APIs
+that preserve the same event-ledger semantics. Replan context is a read model.
 
 ## Shape
 
@@ -112,9 +112,18 @@ Optional fields:
 - `handoff_refs`;
 - `handoff_note`;
 - `material_frontier`;
-- `session_binding`: optional `{thread_id, host_surface}` from existing
-  `run_history.goals[].coordination.thread_agent_bindings`; absence is not
-  evidence of a stopped host, and a binding does not prove executable capacity;
+- `session_binding_candidates` and `session_binding_count`: present together
+  when the Agent has at least one entry in existing
+  `run_history.goals[].coordination.thread_agent_bindings`. The list holds up
+  to three distinct `{thread_id, host_surface}` candidates in first-seen order
+  and `session_binding_count` is the number of distinct bindings observed, so a
+  shorter list than the count means candidates were capped, not that the
+  remainder is invalid. Distinctness is decided on the full binding identity, not
+  on the rendered text: the owner accepts wider identifiers than this projection
+  displays, so two counted bindings can render alike. Neither field selects an execution route: absence is
+  not evidence of a stopped host, a binding does not prove executable capacity,
+  and several candidates for one Agent are resolved by the owning binding
+  resolver, not by this display projection;
 - `stale_claim_hint`;
 - `blocked_on`;
 - `recent_events`;
@@ -129,32 +138,39 @@ making the whole peer appear blocked.
 ### Worker state refinement and compatibility
 
 The current producer emits `registered`, `addressable`, `bound`, `launchable`,
-`executing`, `blocked`, `monitoring`, and `waiting`.
-`running`, `unknown`, `scope_wait`, and `stale` remain
-accepted legacy vocabulary; this producer does not emit them. There is no
-parallel `lifecycle_state` field.
-
-This changes the default read projection: registered idle rows previously
-reported `unknown` or `waiting`, and open advancement work reported `running`.
-The new states refine those observations without adding dispatch authority:
+`executing`, `unknown`, `blocked`, `monitoring`, and `waiting`.
+`running`, `scope_wait`, and `stale` remain accepted legacy vocabulary. There is
+no parallel `lifecycle_state` field.
 
 | State | Observed facts |
 | --- | --- |
 | `registered` | Registered row without current work or session binding |
 | `addressable` | Session binding exists, with no current work |
-| `bound` | Current open work and a session binding; no recent work update |
-| `launchable` | Current open work without a binding or recent work update |
-| `executing` | Current open work updated between zero and eight hours ago |
+| `bound` | Current open work and a session binding, without live execution proof or unreadable execution facts |
+| `launchable` | Current open work without a binding, live execution proof or unreadable execution facts |
+| `executing` | A live Turn lane or a delegation worker with matching live operation and execution-slot holders |
+| `unknown` | Unreadable/foreign-host lane, unavailable lease authority, or an expired active lease without live execution proof |
 | `blocked` | Current work is blocked or has the blocker task class |
-| `monitoring` | Current work is a monitor, regardless of activity age |
+| `monitoring` | Current work is a monitor |
 | `waiting` | Other non-open current work, such as deferred work |
 
-Blocked, monitor and waiting classification precedes activity/binding refinement.
-The eight-hour activity window is inclusive, rejects future timestamps, and
-uses the current Todo only; it is independent of the 36-hour stale-claim
-warning. `last_activity_at` still summarizes the displayed Todos. Neither an
-`executing` observation nor `launchable` proves a live process, configured
-runtime, available capacity, lease, or permission to start a worker.
+Blocked, monitor and waiting classification precedes execution refinement.
+Live execution proof precedes uncertainty. A fresh Todo timestamp alone does
+not prove execution; `last_activity_at` remains an activity summary and the
+36-hour stale-claim warning is independent.
+
+An unreadable lease on any open Todo claimed by an Agent is projected as
+`execution.lease.status = unavailable`; it cannot be hidden by another healthy
+lease for that Agent. This changes the default read projection for damaged local
+lease files from possible `launchable`/`bound` to `unknown` when no live execution
+is proven. A distinct healthy Agent remains visible. A missing lease file retains
+its previous absence semantics, and canonical authority read failure does not
+fall back to superseded local files. No raw read error or local path is added to
+the projection.
+
+Neither `executing` nor `launchable` grants capacity, permission, a lease or
+worker-start authority. An executing Agent can still have unavailable lease
+facts; the actual mutation owner must independently enforce its authority.
 
 Registered-peer orchestration accepts `executing`, `bound`, and `launchable`
 where it accepted legacy `running`, and continues to accept `monitoring` and

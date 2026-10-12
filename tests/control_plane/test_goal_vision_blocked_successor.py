@@ -14,9 +14,6 @@ from loopx.control_plane.goals.goal_frontier import (
     build_goal_frontier_projection_context_from_status,
     select_autonomous_replan_obligation,
 )
-from loopx.control_plane.runtime.agent_scoped_evidence_log import (
-    build_agent_scoped_evidence_log_command,
-)
 from loopx.control_plane.quota.monitor_poll import build_quota_monitor_poll_event
 from loopx.control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
@@ -224,10 +221,11 @@ def _quota(payload: dict) -> dict:
                 "agent_id": AGENT_ID,
                 "status": "completed",
                 "recorded_at": acked_at,
-                "command": build_agent_scoped_evidence_log_command(
-                    goal_id=GOAL_ID,
-                    agent_id=AGENT_ID,
-                    required_read_id=obligation_id,
+                # Frozen persisted command from the retired interface, not executed.
+                "command": (
+                    f"loopx --format json evidence-log --goal-id {GOAL_ID}"
+                    f" --agent-id {AGENT_ID} --thin --limit 24"
+                    + (f" --required-read-id {obligation_id}" if obligation_id else "")
                 ),
                 "read_window": {"mode": "thin", "limit": 24},
                 **(
@@ -698,7 +696,7 @@ def test_exact_blocked_successor_defers_only_open_vision_gap(
     cli_actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     assert "quota monitor-poll" in cli_actions[0]
     assert "quota should-run" in cli_actions[1]
-    assert "agent_action_required=true" in guard["protocol_action_packet"]["summary"]
+    assert "protocol_action_packet" not in guard
     cli_wait = guard["interaction_contract"]["cli_channel"]["vision_wait_state"]
     assert cli_wait["selected_todo_id"] == WAITING_ID
     assert cli_wait["automatic_resume"] is True
@@ -812,7 +810,8 @@ def test_two_identical_blocked_successor_waits_trigger_bounded_replan() -> None:
     ] == obligation["satisfying_semantic_outcomes"]
     cli_actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     refresh_action = next(action for action in cli_actions if "refresh-state" in action)
-    assert "--progress-result-class" in refresh_action
+    assert "--agent-vision-json" in refresh_action
+    assert "--progress-result-class" not in refresh_action
     assert "--autonomous-replan-recorded" not in refresh_action
     assert "--repair-delta-kind" not in refresh_action
 

@@ -1,3 +1,8 @@
+import type { GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
+export type LoopXModeSettings = { agent_id: string; token_budget: number };
+/** A host-granted workspace an ordinary conversation may be scoped to. */
+export type ChatProject = { project_ref: string; title: string; grant: "workspace_read" | "workspace_write" };
+
 export type ChatTodo = {
   todo_id: string | null;
   role: string | null;
@@ -77,6 +82,25 @@ export type ChatCapabilities = {
   }>;
 };
 
+export type CollaborationReadback = {
+  schema_version: "collaboration_request_readback_v0";
+  request_id: string;
+  agent_id: string;
+  goal_id?: string;
+  decision_reason?: string;
+  brief: {
+    purpose: string;
+    context: string;
+    constraints: string[];
+    inputs: { ref: string; description: string; sha256?: string }[];
+    acceptance: string[];
+    return_requirement: string;
+  };
+  read_status: string;
+  decision: string;
+  returns: { phase: string; status: string }[];
+};
+
 export type ChatRouteCandidate = {
   agentId: string;
   available: boolean;
@@ -132,6 +156,7 @@ export function isTeamPlanPreviewProposal(
 }
 
 export type AgentResponse = {
+  goal_draft?: GoalDraft | null;
   schema_version: "loopx_chat_agent_response_v0";
   message: string;
   proposals: AgentProposal[];

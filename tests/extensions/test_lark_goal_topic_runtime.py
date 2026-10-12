@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from loopx.extensions.lark.manager_reply_parts import (
+    MANAGER_REPLY_MAX_PARTS,
+    MANAGER_REPLY_OVERFLOW_NOTE,
+    PART_DELIVERY_COMPLETE_KEY,
+)
 from loopx.extensions.lark.event_collector import _jq_projection
 from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
 from loopx.extensions.lark.goal_channel_contracts import (
@@ -18,6 +26,18 @@ from loopx.extensions.lark.goal_channel_contracts import (
 )
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
 from loopx.extensions.lark.goal_topic_connections import connect_lark_goal_topic
+
+
+_FIXTURE_TIME_ANCHOR = datetime.now(UTC).replace(second=0, microsecond=0)
+
+
+def _fixture_time(minutes_ago: int) -> str:
+    """Return one stable, recent UTC minute for manager-context fixtures."""
+    return (
+        (_FIXTURE_TIME_ANCHOR - timedelta(minutes=minutes_ago))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def test_goal_topic_runtime_exposes_the_inbox_bridge() -> None:
@@ -87,12 +107,12 @@ def test_a_stale_steward_session_names_the_rebind_instead_of_a_generic_failure(
     assert "管家处理失败" not in text
 
 
-def test_existing_collector_uses_the_real_compact_event_schema() -> None:
+def test_compact_collector_preserves_optional_reply_lineage() -> None:
     projection = _jq_projection("oc_public_fixture")
 
     assert "message_id:(.message_id // .id)" in projection
-    assert "root_id" not in projection
-    assert "parent_id" not in projection
+    assert "root_id:.root_id" in projection
+    assert "parent_id:.parent_id" in projection
     assert "mentions" not in projection
     assert "mentioned" not in projection
 
@@ -156,7 +176,7 @@ def _reply_runner(state: dict[str, Any]):
             }
         elif args[3:6] == ["im", "chats", "get"]:
             payload = {"data": {"chat_id": "oc_public_fixture"}}
-        elif "+messages-reply" in args:
+        elif "+messages-reply" in args or "+messages-send" in args:
             if "--content" in args:
                 state["reply_content"] = args[args.index("--content") + 1]
                 state["reply_type"] = "post"
@@ -338,7 +358,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "message_id": "om_context_only",
             "chat_id": "oc_public_fixture",
             "root_id": "om_unrelated_thread",
-            "create_time": "2026-09-13T05:59:00Z",
+            "create_time": _fixture_time(61),
             "content": "先把这个背景放在这里",
             "mentions": [],
             "sender_type": "user",
@@ -359,7 +379,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "message_id": "om_context_only",
             "chat_id": "oc_public_fixture",
             "root_id": "om_unrelated_thread",
-            "create_time": "2026-09-13T05:59:00Z",
+            "create_time": _fixture_time(61),
             "content": "先把这个背景放在这里",
             "mentions": [],
             "sender_type": "user",
@@ -383,7 +403,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "message_id": "om_authorized",
             "chat_id": "oc_public_fixture",
             "root_id": "om_unrelated_thread",
-            "create_time": "2026-09-13T06:00:00Z",
+            "create_time": _fixture_time(60),
             "content": "@linkmacbot 结合上文给结论",
             "mentions": [{"id": "cli_public_fixture"}],
             "sender_type": "user",
@@ -400,8 +420,10 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
     assert route["context_materials"] == [
         {
             "message_id": "om_context_only",
-            "create_time": "2026-09-13T05:59:00Z",
+            "create_time": _fixture_time(61),
             "content": "先把这个背景放在这里",
+            "sender_type": "user",
+            "sender_id": "ou_owner_fixture",
         }
     ]
     assert inspect_lark_event_inbox(
@@ -446,7 +468,7 @@ def test_manager_route_rejects_missing_or_unknown_authority_mode(
             "message_id": "om_invalid_authority",
             "chat_id": "oc_public_fixture",
             "root_id": "om_topic_alpha",
-            "create_time": "2026-09-13T06:00:00Z",
+            "create_time": _fixture_time(60),
             "content": "continue",
             "mentions": [],
             "sender_type": "user",
@@ -512,7 +534,7 @@ def test_manager_authorized_turn_quietly_recovers_history_as_context(
                     {
                         "message_id": "om_old_authorized",
                         "root_id": "om_topic_alpha",
-                        "create_time": "2026-09-13T05:59:00Z",
+                        "create_time": _fixture_time(61),
                         "content": "@linkmacbot 历史请求只作背景",
                         "mentions": [{"id": "cli_public_fixture"}],
                         "sender_type": "user",
@@ -541,7 +563,7 @@ def test_manager_authorized_turn_quietly_recovers_history_as_context(
             "message_id": "om_current_authorized",
             "chat_id": "oc_public_fixture",
             "root_id": "om_topic_alpha",
-            "create_time": "2026-09-13T06:00:00Z",
+            "create_time": _fixture_time(60),
             "content": "@linkmacbot 结合刚才内容回答",
             "mentions": [{"id": "cli_public_fixture"}],
             "sender_type": "user",
@@ -832,6 +854,93 @@ def test_invalid_persisted_routing_state_never_answers_replies_or_acknowledges(
     assert not (tmp_path / "runtime" / ".loopx").exists()
 
 
+def test_profile_stream_stops_when_its_durable_route_disappears(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
+
+    snapshot = {
+        "target_payload": {
+            "targets": {
+                "mew-product": {
+                    "name": "mew-product",
+                    "provider": "lark",
+                    "enabled": True,
+                    "channel": {"chat_id": "oc_public_fixture"},
+                    "identity": {"sender_profile": "mew", "cli_bin": "fake-lark"},
+                }
+            }
+        },
+        "binding_payloads": {
+            "goal-alpha": {
+                "bindings": {
+                    "goal-alpha": {
+                        "goal_id": "goal-alpha",
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": "mew-product",
+                    }
+                }
+            }
+        },
+    }
+    released = threading.Event()
+    listening = threading.Event()
+    result: dict[str, Any] = {}
+
+    class BlockingLines:
+        def __iter__(self):
+            yield "[event] ready event_key=im.message.receive_v1\n"
+            assert released.wait(5)
+
+    class BlockingConsumer:
+        stdout = BlockingLines()
+
+        def poll(self):
+            return 0 if released.is_set() else None
+
+        def wait(self, timeout=None):
+            assert released.wait(timeout or 5)
+            return 0
+
+        def terminate(self):
+            released.set()
+
+        def kill(self):
+            released.set()
+
+    stop = threading.Event()
+
+    def run() -> None:
+        result.update(
+            stream_lark_goal_topic_profile(
+                profile="mew",
+                snapshot_provider=lambda: snapshot,
+                stop=stop,
+                runtime_root=tmp_path,
+                answer=lambda _route, _text: "ok",
+                process_factory=lambda _args: BlockingConsumer(),
+                health_sink=lambda update: (
+                    listening.set() if update.get("status") == "listening" else None
+                ),
+            )
+        )
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    assert listening.wait(2)
+    snapshot["binding_payloads"] = {}
+    worker.join(4)
+    assert not worker.is_alive()
+    assert stop.is_set()
+    assert result == {
+        "ok": True,
+        "status": "configuration_removed",
+        "event_count": 0,
+        "replied_count": 0,
+    }
+
+
 def test_bound_topic_reuses_one_goal_chat_session(tmp_path: Path) -> None:
     from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic
 
@@ -884,6 +993,67 @@ def test_bound_topic_reuses_one_goal_chat_session(tmp_path: Path) -> None:
     assert runtime.open_calls[0]["channel_id"] == runtime.open_calls[1]["channel_id"]
     assert runtime.submit_calls[0]["client_turn_id"].startswith("lark.")
     assert "只生成预览" in runtime.submit_calls[0]["message"]
+
+
+def test_remote_manager_answer_returns_the_exact_projected_proposal_ids(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic
+
+    class Store:
+        def load_session(self, _session_id: str) -> dict[str, Any]:
+            return {
+                "session_id": "manager-session",
+                "agent_id": "codex",
+                "channel_id": "manager.external.public_fixture",
+                "status": "ready",
+            }
+
+        def events_after(
+            self, _session_id: str, _turn_id: str, _cursor: object
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    "kind": "team_plan.projected",
+                    "payload": {
+                        "proposal_id": "proposal-" + "a" * 32,
+                        "goal_id": "goal-alpha",
+                    },
+                }
+            ]
+
+    class Runtime:
+        store = Store()
+
+        def enqueue_turn(self, **_kwargs: Any):
+            return ({"turn_id": "turn-alpha"}, True)
+
+        def wait_for_turn(self, **_kwargs: Any):
+            return {
+                "status": "completed",
+                "response": {"message": "计划已准备。"},
+            }
+
+    result = answer_lark_goal_topic(
+        route={
+            "goal_id": "goal-alpha",
+            "conversation_kind": "manager",
+            "ingress_mode": "session_queue",
+            "session_id": "manager-session",
+            "manager_channel_id": "manager.external.public_fixture",
+            "message_id": "om_manager_plan",
+            "topic_root_message_id": "om_manager_root",
+        },
+        text="请组建团队",
+        work_dir=tmp_path,
+        objective="ignored",
+        runtime_controller=Runtime(),
+    )
+
+    assert result == {
+        "response_text": "计划已准备。",
+        "proposal_ids": ["proposal-" + "a" * 32],
+    }
 
 
 def test_runtime_service_uses_one_consumer_for_reused_app_profile(
@@ -959,6 +1129,280 @@ def test_runtime_service_uses_one_consumer_for_reused_app_profile(
     assert service.active_profiles() == []
 
 
+def test_same_lark_app_aliases_share_one_machine_consumer(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    started = threading.Event()
+    calls: list[str] = []
+    app_id = "cli_public_fixture"
+
+    def snapshot(profile: str) -> dict[str, Any]:
+        return {
+            "target_payload": {
+                "targets": {
+                    profile: {
+                        "enabled": True,
+                        "channel": {"chat_id": "oc_public_fixture"},
+                        "identity": {
+                            "sender_profile": profile,
+                            "bot_app_id": app_id,
+                            "cli_bin": "fake-lark",
+                        },
+                    }
+                }
+            },
+            "binding_payloads": {
+                "goal-alpha": {
+                    "bindings": {
+                        "goal-alpha": {
+                            "goal_id": "goal-alpha",
+                            "provider": "lark",
+                            "enabled": True,
+                            "target_ref": profile,
+                            "topic": {"root_message_id": "om_topic_alpha"},
+                        }
+                    }
+                }
+            },
+            "goal_contexts": {},
+        }
+
+    def fake_stream(**kwargs: Any) -> dict[str, Any]:
+        calls.append(str(kwargs["profile"]))
+        started.set()
+        kwargs["stop"].wait(2)
+        return {"ok": True, "status": "stopped"}
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", fake_stream)
+    first = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot("app-id-profile"),
+        runtime_root=tmp_path / "first",
+        runtime_controller=object(),
+    )
+    second = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot("alias-profile"),
+        runtime_root=tmp_path / "second",
+        runtime_controller=object(),
+    )
+    first.refresh()
+    assert started.wait(1)
+    second.refresh()
+    for _ in range(100):
+        if second.health_snapshot().get("alias-profile", {}).get("status") == "standby":
+            break
+        threading.Event().wait(0.01)
+    assert calls == ["app-id-profile"]
+    assert second.health_snapshot()["alias-profile"]["error_code"] == (
+        "lark_event_consumer_owned_elsewhere"
+    )
+    second.close()
+    first.close()
+
+    successor = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot("alias-profile"),
+        runtime_root=tmp_path / "successor",
+        runtime_controller=object(),
+    )
+    successor.refresh()
+    for _ in range(100):
+        if len(calls) == 2:
+            break
+        threading.Event().wait(0.01)
+    assert calls == ["app-id-profile", "alias-profile"]
+    successor.close()
+
+
+def test_alias_consumer_routes_all_chats_of_its_bot_app() -> None:
+    from loopx.extensions.lark.goal_topic_runtime import _target_for_profile_chat
+    from loopx.extensions.lark.team_plan_confirmation import active_profile_chat_ids
+
+    snapshot = {
+        "target_payload": {
+            "targets": {
+                profile: {
+                    "enabled": True,
+                    "channel": {"chat_id": chat_id},
+                    "identity": {
+                        "sender_profile": profile,
+                        "bot_app_id": "cli_public_fixture",
+                    },
+                }
+                for profile, chat_id in (
+                    ("canonical", "oc_first"),
+                    ("alias", "oc_second"),
+                )
+            }
+        },
+        "binding_payloads": {
+            profile: {
+                "bindings": {
+                    profile: {
+                        "goal_id": profile,
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": profile,
+                    }
+                }
+            }
+            for profile in ("canonical", "alias")
+        },
+    }
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+        )[0]
+        == "alias"
+    )
+    assert active_profile_chat_ids(snapshot, "canonical") == [
+        "oc_first",
+        "oc_second",
+    ]
+    snapshot["target_payload"]["targets"]["canonical"]["channel"]["chat_id"] = "oc_second"
+    for profile in ("canonical", "alias"):
+        snapshot["binding_payloads"][profile]["bindings"][profile]["topic"] = {
+            "root_message_id": f"om_{profile}"
+        }
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+            root_id="om_alias",
+            binding_payloads=snapshot["binding_payloads"],
+        )[0]
+        == "alias"
+    )
+    for profile in ("canonical", "alias"):
+        snapshot["binding_payloads"][profile]["bindings"][profile]["routing"] = {
+            "conversation_kind": "manager"
+        }
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+            binding_payloads=snapshot["binding_payloads"],
+        )
+        is None
+    )
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+            active_target_refs={"alias"},
+        )[0]
+        == "alias"
+    )
+
+
+def test_runtime_service_restarts_profile_when_callback_chats_change(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import LarkGoalTopicRuntimeService
+    from loopx.extensions.lark.team_plan_confirmation import active_profile_chat_ids
+
+    snapshot: dict[str, Any] = {
+        "target_payload": {
+            "targets": {
+                "mew-product": {
+                    "enabled": True,
+                    "channel": {"chat_id": "oc_public_fixture"},
+                    "identity": {
+                        "sender_profile": "mew",
+                        "bot_app_id": "cli_public_fixture",
+                        "cli_bin": "fake-lark",
+                    },
+                },
+                "mew-second": {
+                    "enabled": True,
+                    "channel": {"chat_id": "oc_second_fixture"},
+                    "identity": {
+                        "sender_profile": "mew",
+                        "bot_app_id": "cli_public_fixture",
+                        "cli_bin": "fake-lark",
+                    },
+                },
+            }
+        },
+        "binding_payloads": {
+            "goal-alpha": {
+                "bindings": {
+                    "goal-alpha": {
+                        "goal_id": "goal-alpha",
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": "mew-product",
+                    }
+                }
+            }
+        },
+        "goal_contexts": {},
+    }
+    starts: list[tuple[list[str], threading.Event]] = []
+    stopped: list[threading.Event] = []
+    lifecycle = threading.Condition()
+
+    def poller(profile: str, stop: threading.Event) -> None:
+        with lifecycle:
+            starts.append((active_profile_chat_ids(snapshot, profile), stop))
+            lifecycle.notify_all()
+        stop.wait(2)
+        with lifecycle:
+            stopped.append(stop)
+            lifecycle.notify_all()
+
+    def wait_for_count(values: list[Any], count: int) -> None:
+        with lifecycle:
+            assert lifecycle.wait_for(lambda: len(values) >= count, timeout=1)
+
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path,
+        runtime_controller=object(),
+        action_service=object(),
+        profile_poller=poller,
+    )
+    service.refresh()
+    wait_for_count(starts, 1)
+    assert starts[0][0] == ["oc_public_fixture"]
+
+    snapshot["binding_payloads"]["goal-beta"] = {
+        "bindings": {
+            "goal-beta": {
+                "goal_id": "goal-beta",
+                "provider": "lark",
+                "enabled": True,
+                "target_ref": "mew-second",
+            }
+        }
+    }
+    service.refresh()
+    wait_for_count(starts, 2)
+    wait_for_count(stopped, 1)
+    assert starts[0][1].is_set()
+    assert starts[1][0] == ["oc_public_fixture", "oc_second_fixture"]
+
+    del snapshot["binding_payloads"]["goal-beta"]
+    service.refresh()
+    wait_for_count(starts, 3)
+    wait_for_count(stopped, 2)
+    assert starts[1][1].is_set()
+    assert starts[2][0] == ["oc_public_fixture"]
+
+    service.close()
+
+
 def test_runtime_service_exposes_content_free_listener_health(tmp_path: Path) -> None:
     from loopx.extensions.lark.goal_topic_runtime import LarkGoalTopicRuntimeService
 
@@ -1022,6 +1466,51 @@ def test_runtime_service_exposes_content_free_listener_health(tmp_path: Path) ->
 
     release.set()
     service.close()
+
+
+def test_runtime_service_reconciles_manager_route_before_answer(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import loopx.extensions.lark.goal_topic_runtime as runtime
+
+    observed: list[str] = []
+    stop = threading.Event()
+    snapshot = {
+        "target_payload": {},
+        "binding_payloads": {},
+        "goal_contexts": {"goal-alpha": {"work_dir": str(tmp_path)}},
+    }
+
+    def fake_stream(**kwargs: Any) -> dict[str, Any]:
+        receipt = kwargs["answer"](
+            {
+                "goal_id": "goal-alpha",
+                "conversation_kind": "manager",
+                "session_id": "old-session",
+            },
+            "status",
+        )
+        assert receipt["response_text"] == "done"
+        stop.set()
+        return {"ok": True, "status": "stopped"}
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", fake_stream)
+    monkeypatch.setattr(
+        runtime,
+        "answer_lark_goal_topic",
+        lambda **kwargs: observed.append(str(kwargs["route"]["session_id"])) or "done",
+    )
+    service = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path,
+        runtime_controller=object(),
+        manager_route_reconciler=lambda route: {
+            **route,
+            "session_id": "new-session",
+        },
+    )
+    service._poll_profile("mew", stop)
+    assert observed == ["new-session"]
 
 
 def test_runtime_service_records_safe_failure_code_for_listener_exception(
@@ -1170,6 +1659,221 @@ def test_profile_stream_keeps_one_consumer_open_between_messages(
     assert result == {
         "ok": False,
         "status": "stream_not_ready",
+        "event_count": 0,
+        "replied_count": 0,
+    }
+
+
+def test_profile_stream_dispatches_only_team_plan_callbacks_for_bound_chats(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
+
+    snapshot = {
+        "target_payload": {
+            "targets": {
+                "mew-product": {
+                    "name": "mew-product",
+                    "provider": "lark",
+                    "enabled": True,
+                    "channel": {"chat_id": "oc_public_fixture"},
+                    "identity": {
+                        "sender_profile": "mew",
+                        "bot_app_id": "cli_public_fixture",
+                        "cli_bin": "fake-lark",
+                    },
+                },
+                "mew-second": {
+                    "name": "mew-second",
+                    "provider": "lark",
+                    "enabled": True,
+                    "channel": {"chat_id": "oc_second_fixture"},
+                    "identity": {
+                        "sender_profile": "mew",
+                        "bot_app_id": "cli_public_fixture",
+                        "cli_bin": "fake-lark",
+                    },
+                },
+            }
+        },
+        "binding_payloads": {
+            "goal-alpha": {
+                "bindings": {
+                    "goal-alpha": {
+                        "goal_id": "goal-alpha",
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": "mew-product",
+                    }
+                }
+            },
+            "goal-beta": {
+                "bindings": {
+                    "goal-beta": {
+                        "goal_id": "goal-beta",
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": "mew-second",
+                    }
+                }
+            }
+        },
+    }
+    callback = {
+        "type": "card.action.trigger",
+        "chat_id": "oc_public_fixture",
+        "action_value": {
+            "schema_version": "loopx_team_plan_card_action_v0",
+            "proposal_id": "proposal-" + "a" * 32,
+        },
+    }
+    captured_args: list[list[str]] = []
+    handled: list[Mapping[str, Any]] = []
+    callback_seen = threading.Event()
+
+    class FinishedConsumer:
+        def __init__(self, lines: Any) -> None:
+            self.stdout = iter(lines)
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            raise AssertionError("a completed consumer must not be terminated")
+
+        def kill(self) -> None:
+            raise AssertionError("a completed consumer must not be killed")
+
+    def process_factory(args: list[str]) -> FinishedConsumer:
+        captured_args.append(list(args))
+        if "card.action.trigger" in args:
+            return FinishedConsumer((json.dumps(callback) + "\n",))
+
+        def message_lines():
+            yield "[event] ready event_key=im.message.receive_v1\n"
+            assert callback_seen.wait(2)
+            yield "[event] exited — received 0 event(s) in 1s (reason: timeout)\n"
+
+        return FinishedConsumer(message_lines())
+
+    def handle_callback(event: Mapping[str, Any]) -> dict[str, bool]:
+        handled.append(dict(event))
+        callback_seen.set()
+        return {"ok": True}
+
+    result = stream_lark_goal_topic_profile(
+        profile="mew",
+        snapshot_provider=lambda: snapshot,
+        stop=threading.Event(),
+        runtime_root=tmp_path,
+        answer=lambda _route, _text: "ok",
+        process_factory=process_factory,
+        review_callback_handler=handle_callback,
+    )
+
+    assert result["ok"] is True
+    assert len(captured_args) == 2
+    callback_args = next(args for args in captured_args if "card.action.trigger" in args)
+    assert (
+        'select(.chat_id == "oc_public_fixture" or '
+        '.chat_id == "oc_second_fixture")' in callback_args
+    )
+    assert handled == [callback]
+
+
+def test_profile_stream_restarts_when_the_review_callback_source_disconnects(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
+
+    snapshot = {
+        "target_payload": {
+            "targets": {
+                "mew-product": {
+                    "name": "mew-product",
+                    "provider": "lark",
+                    "enabled": True,
+                    "channel": {"chat_id": "oc_public_fixture"},
+                    "identity": {
+                        "sender_profile": "mew",
+                        "bot_app_id": "cli_public_fixture",
+                        "cli_bin": "fake-lark",
+                    },
+                }
+            }
+        },
+        "binding_payloads": {
+            "goal-alpha": {
+                "bindings": {
+                    "goal-alpha": {
+                        "goal_id": "goal-alpha",
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": "mew-product",
+                    }
+                }
+            }
+        },
+    }
+    released = threading.Event()
+
+    class MessageLines:
+        def __iter__(self):
+            yield "[event] ready event_key=im.message.receive_v1\n"
+            assert released.wait(3)
+
+    class MessageConsumer:
+        stdout = MessageLines()
+
+        def poll(self):
+            return 0 if released.is_set() else None
+
+        def wait(self, timeout=None):
+            assert released.wait(timeout or 3)
+            return 0
+
+        def terminate(self):
+            released.set()
+
+        def kill(self):
+            released.set()
+
+    class DisconnectedCallbackConsumer:
+        stdout = iter(())
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            raise AssertionError("a completed callback consumer must not terminate")
+
+        def kill(self):
+            raise AssertionError("a completed callback consumer must not be killed")
+
+    result = stream_lark_goal_topic_profile(
+        profile="mew",
+        snapshot_provider=lambda: snapshot,
+        stop=threading.Event(),
+        runtime_root=tmp_path,
+        answer=lambda _route, _text: "ok",
+        process_factory=lambda args: (
+            DisconnectedCallbackConsumer()
+            if "card.action.trigger" in args
+            else MessageConsumer()
+        ),
+        review_callback_handler=lambda _event: {"ok": True},
+    )
+
+    assert result == {
+        "ok": False,
+        "error_code": "lark_review_callback_source_disconnected",
+        "status": "source_disconnected",
         "event_count": 0,
         "replied_count": 0,
     }
@@ -1360,11 +2064,11 @@ def test_profile_poll_routes_provider_event_through_existing_reply_path(
     assert state["consume_args"][:3] == ["fake-lark", "--profile", "mew"]
     assert "event" in state["consume_args"]
     projection = state["consume_args"][state["consume_args"].index("--jq") + 1]
-    assert "message_id:(.message_id // .id)" in projection
+    assert "message_id:(.message_id // .message.message_id // .event.message.message_id // .id)" in projection
     assert "root_id:(.root_id // .message.root_id" in projection
     assert "parent_id:(.parent_id // .reply_to" in projection
     assert "thread_id" in projection
-    assert "sender_id:(.sender_id // .sender.id // .sender.sender_id" in projection
+    assert ".event.sender.sender_id.open_id?" in projection
     assert state["reply_text"] == "当前运行的是 LoopX 开发版。"
 
 
@@ -1797,9 +2501,76 @@ def test_manager_receives_reaction_before_answer_and_preserves_sender(tmp_path, 
     assert stages == before
 
 
+def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
+    _seed_legacy_topic(target_path, binding_path)
+    original_decide = runtime.decide_lark_topic_event
+
+    def manager_decision(**kwargs):
+        result = original_decide(**kwargs)
+        result["route"] = {
+            **result["route"],
+            "conversation_kind": "manager",
+            "authority_mode": "turn_authorized",
+            "ingress_mode": "session_queue",
+        }
+        return result
+
+    monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
+    monkeypatch.setattr(
+        runtime, "ensure_lark_event_inbox_received_reaction",
+        lambda **_kwargs: {"ok": True, "status": "already_received"},
+    )
+    entered, release = threading.Event(), threading.Event()
+    answers: list[str] = []
+    state: dict[str, Any] = {}
+
+    def answer(_route, _text):
+        answers.append("answer")
+        entered.set()
+        assert release.wait(5)
+        return "One verified answer."
+
+    kwargs = dict(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
+        event={
+            "event_id": "evt_one_source", "message_id": "om_one_source",
+            "chat_id": "oc_public_fixture", "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z", "content": "@linkmacbot question",
+            "sender_type": "user", "sender_id": "ou_owner_fixture",
+        },
+        runtime_root=tmp_path / "runtime",
+        answer=answer,
+        reply_runner=_reply_runner(state),
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(runtime.process_lark_goal_topic_event, **kwargs)
+        assert entered.wait(5)
+        second = pool.submit(runtime.process_lark_goal_topic_event, **kwargs)
+        try:
+            with pytest.raises(FutureTimeoutError):
+                second.result(timeout=0.1)
+        finally:
+            release.set()
+        assert first.result(timeout=5)["status"] == "replied_and_acknowledged"
+        assert second.result(timeout=5)["status"] == "already_acknowledged"
+    assert answers == ["answer"]
+    sends = [
+        call for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call
+    ]
+    assert len(sends) == 1
+
+
 @pytest.mark.parametrize("error_code,label", [
     ("cyber_policy", "安全策略拦截"),
     ("rate_limit_exceeded", "请求频率限制"),
+    ("server_overloaded", "当前模型繁忙"),
+    ("runtime_unavailable", "本地运行环境初始化失败"),
+    ("resume_failed", "原 Agent 会话恢复失败"),
     ("private-upstream-detail", "管家处理失败"),
 ])
 @pytest.mark.parametrize("reply_ok", [True, False])
@@ -1932,8 +2703,22 @@ def test_manager_untyped_or_empty_answer_gets_bounded_failure_receipt(
 
 @pytest.mark.parametrize(
     "body",
-    ["完整报告" * 400, "x" * 6001, "测" * 40000, "测" * 50000, r"private\nformat"],
-    ids=["report", "long-ascii", "long-unicode", "oversize", "invalid-newlines"],
+    [
+        "完整报告" * 400,
+        "x" * 6001,
+        "测" * 40000,
+        "测" * 50000,
+        r"private\nformat",
+        r"{new_description}\n- 条目",
+    ],
+    ids=[
+        "report",
+        "long-ascii",
+        "long-unicode",
+        "oversize",
+        "repaired-newlines",
+        "unresolved-placeholder",
+    ],
 )
 @pytest.mark.parametrize("reply_ok", [True, False])
 def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
@@ -1983,20 +2768,47 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
     )
     result = runtime.process_lark_goal_topic_event(**kwargs)
     sendable = len(body.encode("utf-8")) < 150_000
-    expected = body.replace(r"\n", "\n")
+    if body == r"private\nformat":
+        # Escaped newlines are repaired before the first send, so the answer is
+        # delivered as markdown (a real bullet list) and is not reported as a
+        # degraded delivery.
+        expected = "private\nformat"
+        expected_repairs = ["escaped_newline"]
+    elif body == r"{new_description}\n- 条目":
+        # A placeholder the template never filled reaches the reader as a typed
+        # marker rather than as raw braces, and the escaped bullet list is a
+        # real list.
+        expected = "[未解析占位符: new_description]\n- 条目"
+        expected_repairs = ["escaped_newline", "unresolved_template_placeholder"]
+    else:
+        expected = body
+        expected_repairs = []
+    assert [
+        incident["code"] for incident in result.get("rich_text_repairs") or []
+    ] == expected_repairs
     if sendable:
         assert state["reply_text"] == expected
         assert result["ok"] is reply_ok
-        assert result.get("format_degraded") is (body == r"private\nformat")
+        assert result.get("format_degraded") is False
     else:
-        assert "reply_text" not in state
-        assert result["ok"] is False
-        assert result["status"] == "reply_delivery_pending"
-        assert result["reason"] == "reply_format_invalid"
-        assert result["source_acknowledged"] is False
+        # Longer than one deliverable message: the persisted answer is sent as a
+        # bounded, ordered sequence of parts that ends with the overflow note,
+        # instead of being left undelivered as `reply_format_invalid`.
+        assert result["ok"] is reply_ok
+        assert result.get("format_degraded") is True
+        if reply_ok:
+            assert result["delivery_part_count"] == MANAGER_REPLY_MAX_PARTS
+            assert result["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
+            assert state["reply_text"].startswith("(8/8) ")
+            assert MANAGER_REPLY_OVERFLOW_NOTE in state["reply_text"]
+        else:
+            assert result["status"] == "reply_delivery_pending"
+            assert result["reason"] == "reply_part_delivery_incomplete"
+            assert result["delivery_parts_sent"] == 0
+            assert result["source_acknowledged"] is False
     pending = inspect_lark_event_inbox(project=kwargs["runtime_root"],
                                       config_path=Path(result["inbox_config_ref"]))
-    if sendable and reply_ok:
+    if reply_ok:
         assert pending["items"] == []
         assert runtime.process_lark_goal_topic_event(**kwargs)["status"] == "already_acknowledged"
         assert len(answered) == 1
@@ -2129,3 +2941,651 @@ def test_manager_delivery_reuses_saved_answer_after_transport_restart(
     assert inspect_lark_event_inbox(
         project=kwargs["runtime_root"], config_path=Path(second["inbox_config_ref"])
     )["items"] == []
+
+
+def test_manager_retries_saved_proposal_delivery_before_source_ack(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
+    _seed_legacy_topic(target_path, binding_path)
+    original_decide = runtime.decide_lark_topic_event
+
+    def manager_decision(**kwargs: Any) -> dict[str, Any]:
+        result = original_decide(**kwargs)
+        result["route"].update(
+            conversation_kind="manager",
+            ingress_mode="session_queue",
+            authority_mode="turn_authorized",
+            event_id=kwargs["event"]["event_id"],
+        )
+        return result
+
+    monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
+    monkeypatch.setattr(
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
+        lambda **_kwargs: {"ok": True, "status": "already_received"},
+    )
+    event = {
+        "event_id": "evt_plan",
+        "message_id": "om_plan",
+        "chat_id": "oc_public_fixture",
+        "root_id": "om_topic_alpha",
+        "create_time": "2026-09-20T00:00:00Z",
+        "content": "@linkmacbot 组建团队",
+        "mentioned": True,
+        "sender_type": "user",
+        "sender_id": "ou_owner_fixture",
+    }
+    answer_calls: list[str] = []
+    proposal_id = "proposal-" + "a" * 32
+
+    def answer(_route: Mapping[str, Any], text: str) -> dict[str, Any]:
+        answer_calls.append(text)
+        return {"response_text": "计划已准备。", "proposal_ids": [proposal_id]}
+
+    delivery_calls: list[tuple[str, ...]] = []
+
+    def deliver(
+        route: Mapping[str, Any], proposal_ids: list[str]
+    ) -> dict[str, Any]:
+        assert route["source_sender_id"] == "ou_owner_fixture"
+        delivery_calls.append(tuple(proposal_ids))
+        if len(delivery_calls) == 1:
+            return {"ok": False, "status": "pending"}
+        return {
+            "schema_version": "lark_team_plan_review_delivery_v0",
+            "ok": True,
+            "status": "team_plan_review_cards_delivered",
+            "proposal_ids": proposal_ids,
+            "proposal_count": 1,
+            "audience_count": 2,
+            "readback_verified": True,
+            "external_write_count": 2,
+        }
+
+    first_state: dict[str, Any] = {}
+    kwargs = {
+        "target_payload": read_goal_channel_targets(target_path),
+        "binding_payloads": {
+            "goal-alpha": read_goal_channel_binding(binding_path)
+        },
+        "event": event,
+        "runtime_root": tmp_path / "runtime",
+        "answer": answer,
+        "reply_runner": _reply_runner(first_state),
+        "proposal_deliverer": deliver,
+    }
+
+    first = runtime.process_lark_goal_topic_event(**kwargs)
+    assert first["status"] == "proposal_delivery_pending"
+    assert first["source_acknowledged"] is False
+    assert answer_calls == [event["content"]]
+    assert delivery_calls == [(proposal_id,)]
+
+    second_state: dict[str, Any] = {}
+    working_runner = _reply_runner(second_state)
+
+    def no_duplicate_reply(args: list[str]) -> dict[str, Any]:
+        if "+messages-reply" in args:
+            raise AssertionError("verified manager text must not be sent twice")
+        return working_runner(args)
+
+    kwargs["reply_runner"] = no_duplicate_reply
+    kwargs["answer"] = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("saved answer and proposal ids must be reused")
+    )
+    second = runtime.process_lark_goal_topic_event(**kwargs)
+
+    assert second["status"] == "replied_and_acknowledged"
+    assert second["saved_response_reused"] is True
+    assert delivery_calls == [(proposal_id,), (proposal_id,)]
+
+
+def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
+    tmp_path, monkeypatch,
+):
+    """The reader already has every part; the delivery must stop saying pending.
+
+    The part loop advances the durable counter only after the provider accepted
+    a part, so a stop between the last part and the caller's own receipt used to
+    leave the answer reported as an incomplete sequence forever: every retry
+    re-sent nothing and the source was never acknowledged.
+    """
+
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.manager_reply_delivery import delivery_path
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
+    _seed_legacy_topic(target_path, binding_path)
+    original_decide = runtime.decide_lark_topic_event
+    # Large enough that the provider refuses the markdown body and the answer
+    # has to be delivered as a bounded part sequence.
+    body = "测" * 60000
+
+    def manager_decision(**kwargs):
+        result = original_decide(**kwargs)
+        result["route"].update(
+            conversation_kind="manager", ingress_mode="session_queue",
+            authority_mode="turn_authorized",
+            event_id=kwargs["event"]["event_id"],
+            connector={"response_policy": "topic_reply"},
+        )
+        return result
+
+    monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
+    monkeypatch.setattr(
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
+        lambda **kw: {"ok": True, "status": "already_received"},
+    )
+    state: dict[str, Any] = {}
+    answered: list[str] = []
+
+    def answer(route, text):
+        answered.append(text)
+        return {
+            "response_text": body,
+            "effect_receipt": runtime._session_turn_effect(route),
+        }
+
+    kwargs = {
+        "target_payload": read_goal_channel_targets(target_path),
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
+        "event": {
+            "event_id": "evt_incoming",
+            "message_id": "om_incoming",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z",
+            "content": "@linkmacbot report",
+            "mentioned": True,
+            "sender_type": "user",
+        },
+        "runtime_root": tmp_path / "runtime",
+        "answer": answer,
+        "reply_runner": _reply_runner(state),
+    }
+    real_write = runtime._write_manager_delivery
+
+    def interrupted_receipt_write(path, payload):
+        if payload.get("status") == "sent_verified":
+            raise OSError("receipt write interrupted")
+        return real_write(path, payload)
+
+    monkeypatch.setattr(runtime, "_write_manager_delivery", interrupted_receipt_write)
+    first = runtime.process_lark_goal_topic_event(**kwargs)
+
+    assert first["status"] == "reply_delivery_receipt_unavailable"
+    assert first["source_acknowledged"] is False
+    config_path = Path(first["inbox_config_ref"])
+    state_path = delivery_path(
+        project=kwargs["runtime_root"], config_path=config_path,
+        message_id="om_incoming",
+    )
+    saved = json.loads(state_path.read_text())
+    assert saved["status"] == "pending"
+    assert saved["delivery_part_count"] == MANAGER_REPLY_MAX_PARTS
+    assert saved["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
+    assert saved[PART_DELIVERY_COMPLETE_KEY] is True
+    assert MANAGER_REPLY_OVERFLOW_NOTE in state["reply_text"]
+    delivered_once = [
+        call for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call
+    ]
+    assert len(delivered_once) == MANAGER_REPLY_MAX_PARTS
+
+    monkeypatch.setattr(runtime, "_write_manager_delivery", real_write)
+    second = runtime.process_lark_goal_topic_event(**kwargs)
+
+    # The whole answer was already on the channel, so the retry re-sends
+    # nothing, settles the delivery and acknowledges the source.
+    assert second["ok"] is True
+    assert second["status"] == "replied_and_acknowledged"
+    assert second["saved_response_reused"] is True
+    assert len(answered) == 1
+    assert [
+        call for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call
+    ] == delivered_once
+    settled = json.loads(state_path.read_text())
+    assert settled["status"] == "acknowledged"
+    assert settled["reply_verified"] is True
+    assert settled["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
+    pending = inspect_lark_event_inbox(project=kwargs["runtime_root"],
+                                      config_path=config_path)
+    assert pending["items"] == []
+
+
+def test_a_part_whose_readback_failed_is_reconciled_instead_of_sent_twice(
+    tmp_path, monkeypatch,
+):
+    """An ambiguous part send must be confirmed, not repeated.
+
+    The provider accepted the first part and returned a message id, but its
+    readback could not confirm it. Re-sending that part would show the reader the
+    same text twice, so the retry verifies the recorded provider locator first.
+    """
+
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.manager_reply_delivery import delivery_path
+    from loopx.extensions.lark.manager_reply_parts import PART_ATTEMPT_KEY
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
+    _seed_legacy_topic(target_path, binding_path)
+    original_decide = runtime.decide_lark_topic_event
+    body = "测" * 60000
+
+    def manager_decision(**kwargs):
+        result = original_decide(**kwargs)
+        result["route"].update(
+            conversation_kind="manager", ingress_mode="session_queue",
+            authority_mode="turn_authorized",
+            event_id=kwargs["event"]["event_id"],
+            connector={"response_policy": "topic_reply"},
+        )
+        return result
+
+    monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
+    monkeypatch.setattr(
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
+        lambda **kw: {"ok": True, "status": "already_received"},
+    )
+    state: dict[str, Any] = {}
+    answered: list[str] = []
+
+    def answer(route, text):
+        answered.append(text)
+        return {
+            "response_text": body,
+            "effect_receipt": runtime._session_turn_effect(route),
+        }
+
+    working_runner = _reply_runner(state)
+    missing_readbacks: list[str] = []
+
+    def ambiguous_runner(args: list[str]) -> dict[str, Any]:
+        if "+messages-mget" in args and not missing_readbacks:
+            missing_readbacks.append("om_reply_fixture")
+            return {
+                "returncode": 0,
+                "stdout": json.dumps({"data": {"items": []}}),
+                "stderr": "",
+            }
+        return working_runner(args)
+
+    kwargs = {
+        "target_payload": read_goal_channel_targets(target_path),
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
+        "event": {
+            "event_id": "evt_incoming",
+            "message_id": "om_incoming",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z",
+            "content": "@linkmacbot report",
+            "mentioned": True,
+            "sender_type": "user",
+        },
+        "runtime_root": tmp_path / "runtime",
+        "answer": answer,
+        "reply_runner": ambiguous_runner,
+    }
+    first = runtime.process_lark_goal_topic_event(**kwargs)
+
+    assert first["status"] == "reply_delivery_pending"
+    config_path = Path(first["inbox_config_ref"])
+    state_path = delivery_path(
+        project=kwargs["runtime_root"], config_path=config_path,
+        message_id="om_incoming",
+    )
+    saved = json.loads(state_path.read_text())
+    assert saved["delivery_parts_sent"] == 0
+    assert saved[PART_ATTEMPT_KEY]["index"] == 0
+    sent_once = [
+        call[call.index("--text") + 1]
+        for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call
+    ]
+    assert len(sent_once) == 1
+
+    kwargs["reply_runner"] = working_runner
+    second = runtime.process_lark_goal_topic_event(**kwargs)
+
+    assert second["ok"] is True
+    assert second["status"] == "replied_and_acknowledged"
+    assert len(answered) == 1
+    sent_total = [
+        call[call.index("--text") + 1]
+        for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call
+    ]
+    assert sent_total.count(sent_once[0]) == 1
+    assert len(sent_total) == MANAGER_REPLY_MAX_PARTS
+    settled = json.loads(state_path.read_text())
+    assert settled["status"] == "acknowledged"
+    assert settled["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
+    assert PART_ATTEMPT_KEY not in settled
+
+
+def test_a_long_manager_answer_is_delivered_as_one_message(
+    tmp_path, monkeypatch,
+):
+    """A 3000-character steward answer is one message, not a bounded sequence.
+
+    The self-imposed 1200-character cap is not a provider limit: the transport
+    already accepts up to the 150 KB provider bound, and every reader-visible
+    split costs an extra message plus a part-sequence record. This pins the
+    single-message outcome so a later change cannot silently reintroduce the
+    split for an ordinary long answer.
+    """
+
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
+    _seed_legacy_topic(target_path, binding_path)
+    original_decide = runtime.decide_lark_topic_event
+    state: dict[str, Any] = {}
+    body = "测" * 3000
+
+    def manager_decision(**kwargs):
+        result = original_decide(**kwargs)
+        result["route"].update(
+            conversation_kind="manager", ingress_mode="session_queue",
+            authority_mode="turn_authorized",
+            event_id=kwargs["event"]["event_id"],
+            connector={"response_policy": "topic_reply"},
+        )
+        return result
+
+    monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
+    monkeypatch.setattr(
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
+        lambda **kw: {"ok": True, "status": "already_received"},
+    )
+
+    kwargs = {
+        "target_payload": read_goal_channel_targets(target_path),
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
+        "event": {
+            "event_id": "evt_long_answer",
+            "message_id": "om_long_answer",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-09-21T15:20:00Z",
+            "content": "@linkmacbot report",
+            "mentioned": True,
+            "sender_type": "user",
+        },
+        "runtime_root": tmp_path / "runtime",
+        "answer": lambda route, text: {
+            "response_text": body,
+            "effect_receipt": runtime._session_turn_effect(route),
+        },
+        "reply_runner": _reply_runner(state),
+    }
+
+    result = runtime.process_lark_goal_topic_event(**kwargs)
+
+    sent = [
+        call[call.index("--text") + 1]
+        if "--text" in call
+        else call[call.index("--content") + 1]
+        for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call
+    ]
+    assert result["status"] in {"replied_and_acknowledged", "acknowledged"}
+    assert len(sent) == 1, sent
+    # One message: the whole body in the rich-text envelope, with no part
+    # marker and no part record.
+    payload = json.loads(sent[0])
+    delivered = payload["zh_cn"]["content"][0][0]["text"]
+    assert delivered == body
+    from loopx.extensions.lark.manager_reply_delivery import delivery_path
+
+    saved = json.loads(
+        delivery_path(
+            project=kwargs["runtime_root"],
+            config_path=Path(result["inbox_config_ref"]),
+            message_id="om_long_answer",
+        ).read_text()
+    )
+    assert "delivery_part_count" not in saved
+
+
+def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
+    tmp_path, monkeypatch,
+):
+    """A partly delivered answer must not look like a complete one.
+
+    Two parts reach the channel and the third cannot be delivered. The reader
+    currently learns nothing more, so after the sequence has already failed more
+    than one attempt it is told how many parts went and where the rest is.
+    """
+
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.manager_reply_parts import PART_STALL_NOTICE_KEY
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
+    _seed_legacy_topic(target_path, binding_path)
+    original_decide = runtime.decide_lark_topic_event
+    body = "测" * 60000
+
+    def manager_decision(**kwargs):
+        result = original_decide(**kwargs)
+        result["route"].update(
+            conversation_kind="manager", ingress_mode="session_queue",
+            authority_mode="turn_authorized",
+            event_id=kwargs["event"]["event_id"],
+            connector={"response_policy": "topic_reply"},
+        )
+        return result
+
+    monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
+    monkeypatch.setattr(
+        runtime,
+        "ensure_lark_event_inbox_received_reaction",
+        lambda **kw: {"ok": True, "status": "already_received"},
+    )
+    state: dict[str, Any] = {}
+    working_runner = _reply_runner(state)
+
+    def part_index(text: str) -> int | None:
+        match = re.match(r"\((\d+)/(\d+)\) ", text)
+        return int(match.group(1)) if match else None
+
+    def stalling_runner(args: list[str]) -> dict[str, Any]:
+        if "+messages-reply" in args and "--dry-run" not in args:
+            text = args[args.index("--text") + 1]
+            index = part_index(text)
+            if index is not None and index >= 3:
+                return {"returncode": 1}
+        return working_runner(args)
+
+    kwargs = {
+        "target_payload": read_goal_channel_targets(target_path),
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
+        "event": {
+            "event_id": "evt_incoming",
+            "message_id": "om_incoming",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z",
+            "content": "@linkmacbot report",
+            "mentioned": True,
+            "sender_type": "user",
+        },
+        "runtime_root": tmp_path / "runtime",
+        "answer": lambda route, text: {
+            "response_text": body,
+            "effect_receipt": runtime._session_turn_effect(route),
+        },
+        "reply_runner": stalling_runner,
+    }
+
+    def delivered_texts() -> list[str]:
+        return [
+            call[call.index("--text") + 1]
+            for call in state["calls"]
+            if "+messages-reply" in call and "--dry-run" not in call
+        ]
+
+    first = runtime.process_lark_goal_topic_event(**kwargs)
+    second = runtime.process_lark_goal_topic_event(**kwargs)
+
+    # Two real retries failed: still quiet, and the delivered parts are recorded.
+    assert first["status"] == "reply_delivery_pending"
+    assert first["delivery_parts_sent"] == 2
+    assert first["delivery_notice_sent"] is False
+    assert second["delivery_parts_sent"] == 2
+    assert second["delivery_notice_sent"] is False
+    assert not [text for text in delivered_texts() if text.startswith("本条答复")]
+
+    third = runtime.process_lark_goal_topic_event(**kwargs)
+
+    assert third["status"] == "reply_delivery_pending"
+    assert third["delivery_notice_sent"] is True
+    notices = [text for text in delivered_texts() if text.startswith("本条答复")]
+    assert len(notices) == 1
+    assert "2/8" in notices[0]
+
+    fourth = runtime.process_lark_goal_topic_event(**kwargs)
+
+    assert fourth["delivery_notice_sent"] is True
+    assert len([text for text in delivered_texts() if text.startswith("本条答复")]) == 1
+    config_path = Path(fourth["inbox_config_ref"])
+    from loopx.extensions.lark.manager_reply_delivery import delivery_path
+
+    saved = json.loads(
+        delivery_path(
+            project=kwargs["runtime_root"], config_path=config_path,
+            message_id="om_incoming",
+        ).read_text()
+    )
+    assert saved[PART_STALL_NOTICE_KEY] is True
+    assert saved["status"] == "pending"
+
+
+@pytest.mark.parametrize("manager", [False, True])
+@pytest.mark.parametrize("thread", [False, True])
+def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
+    tmp_path: Path, manager: bool, thread: bool,
+) -> None:
+    """Real inbox/controller/store; only the external provider/model are fixtures."""
+    import runpy
+    import stat
+
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.extensions.lark.event_collector_runtime import enrich_lark_event_reply_context
+    from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic, process_lark_goal_topic_event
+
+    executable = tmp_path / "codex"
+    fixture = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))
+    executable.write_text(fixture["FAKE_CODEX"], encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    store = ChatSessionStore(tmp_path / "chat")
+    controller = ChatRuntimeController(store=store, codex_bin=str(executable))
+    parent_text = "Dependency review is ready; the draft card has not been approved."
+    messages = {
+        "om_question": {
+            "message_id": "om_question", "chat_id": "oc_public_fixture",
+            "content": "Where is the card?", "root_id": "om_topic_alpha",
+            "parent_id": "om_parent", "mentions": [],
+            "sender": {"sender_type": "user", "id": "ou_owner_fixture"},
+        },
+        "om_parent": {
+            "message_id": "om_parent", "chat_id": "oc_public_fixture",
+            "body": {"content": json.dumps({"text": parent_text})},
+            "sender": {"sender_type": "app", "id": "cli_public_fixture"},
+        },
+    }
+    if thread:
+        # Real formatted provider shape: ancestry is on the event, while mget
+        # supplies a thread position and root expansion rather than parent_id.
+        question = messages["om_question"]
+        question.pop("parent_id")
+        question.pop("root_id")
+        question.update(thread_id="omt_fixture", thread_message_position="2",
+                        mentions=[{"name": "linkmacbot", "id": "cli_public_fixture"}])
+        root = {"message_id": "om_topic_alpha", "chat_id": "oc_public_fixture",
+                "thread_id": "omt_fixture", "thread_message_position": "-1",
+                "content": "Review the initial draft."}
+        revised = {**root, "message_id": "om_revision", "thread_message_position": "1",
+                   "content": parent_text}
+        messages["om_topic_alpha"] = {**root, "thread_replies": [revised, question]}
+
+    def provider(argv: list[str], **_kwargs: Any):
+        mid = argv[argv.index("--message-ids") + 1]
+        return subprocess.CompletedProcess(argv, 0, json.dumps({
+            "ok": True, "data": {"messages": [messages[mid]]},
+        }), "")
+
+    event = enrich_lark_event_reply_context(
+        {"schema_version": "lark_event_inbox_event_v0", "message_id": "om_question",
+         "event_id": "evt_question", "chat_id": "oc_public_fixture",
+         **({"root_id": "om_topic_alpha"} if thread else {})},
+        runner=provider, command_prefix=["lark-cli"], profile="mew",
+        profile_app_id="cli_public_fixture", configured_chat_id="oc_public_fixture",
+    )
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
+    _seed_legacy_topic(target_path, binding_path)
+    state: dict[str, Any] = {}
+
+    def answer(route: Any, text: str):
+        return answer_lark_goal_topic(
+            route={**route, **({"conversation_kind": "manager"} if manager else {})},
+            text=text, work_dir=tmp_path, objective="Inspect dependency review.",
+            runtime_controller=controller,
+        )
+
+    options = dict(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
+        runtime_root=tmp_path / "runtime", answer=answer,
+        reply_runner=_reply_runner(state),
+    )
+    try:
+        result = process_lark_goal_topic_event(**options, event=event)
+        assert result["status"] == "replied_and_acknowledged"
+        session = store.list_sessions()[0]
+        user_messages = [r for r in store.messages(session["session_id"]) if r["role"] == "user"]
+        assert len(user_messages) == 1
+        assert parent_text in user_messages[0]["text"]
+        assert "context only" in user_messages[0]["text"]
+        assert user_messages[0]["text"].endswith("Where is the card?")
+        assert state["reply_text"] == "Runtime response."
+        readback = inspect_lark_event_inbox(
+            project=tmp_path / "runtime", config_path=result["inbox_config_ref"], limit=0,
+        )
+        assert readback["processed_count"] == 1
+        assert process_lark_goal_topic_event(**options, event=event)["status"] == "already_acknowledged"
+        assert len([r for r in store.messages(session["session_id"]) if r["role"] == "user"]) == 1
+    finally:
+        for session in store.list_sessions():
+            controller.close_session(session["session_id"])
+
+
+def test_message_event_projection_preserves_flat_cli_and_raw_provider_provenance():
+    import shutil
+    from loopx.extensions.lark.goal_topic_runtime import _EVENT_PROJECTION
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq runtime is unavailable")
+    expected = {"event_id": "event_fixture", "message_id": "om_fixture", "sender_id": "ou_fixture",
+        "sender_type": "user", "chat_id": "oc_fixture", "chat_type": "p2p", "message_type": "text"}
+    flat = {**expected, "content": "plain rendered text", "create_time": "123"}
+    nested = {"header": {"event_id": expected["event_id"]}, "event": {
+        "sender": {"sender_id": {"open_id": expected["sender_id"]}, "sender_type": "user"},
+        "message": {key: value for key, value in flat.items() if key not in {"event_id", "sender_id", "sender_type"}}}}
+    for payload in [flat, nested]:
+        completed = subprocess.run([jq, "-c", _EVENT_PROJECTION], input=json.dumps(payload), text=True,
+                                   capture_output=True, check=True)
+        row = json.loads(completed.stdout)
+        for key, value in expected.items():
+            assert row[key] == value
+        assert row["content"] == "plain rendered text"

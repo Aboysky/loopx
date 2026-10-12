@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a frozen Monitor baseline and real providers on a read-only Goal snapshot.
+"""Compare Monitor polling and observation updates on a read-only Goal snapshot.
 
 Only disposable copies receive synthetic Monitor/lease records. The report is
 bounded and excludes source text, identifiers, paths and connection strings.
@@ -34,13 +34,14 @@ import {Pool} from 'pg';
 let raw=''; for await (const chunk of process.stdin) raw+=chunk;
 const input=JSON.parse(raw);
 const moduleAt=(root,path)=>import(pathToFileURL(join(root,'loopx/control_plane',path)).href);
-const {pollLocalCoordinationMonitor: current}=await moduleAt(input.repo,'coordination/local_authority_runtime.ts');
-const {pollLocalCoordinationMonitor: baseline}=await moduleAt(input.baseline_repo,'coordination/local_authority_runtime.ts');
+const {pollLocalCoordinationMonitor: current,updateLocalCoordinationTodo: update}=await moduleAt(input.repo,'coordination/local_authority_runtime.ts');
+const {pollLocalCoordinationMonitor: baseline,updateLocalCoordinationTodo: baselineUpdate}=await moduleAt(input.baseline_repo,'coordination/local_authority_runtime.ts');
 const {FileAuthorityStore}=await moduleAt(input.repo,'coordination/file_authority_store.ts');
 const {SqliteAuthorityStore}=await moduleAt(input.repo,'coordination/sqlite_authority_store.ts');
 const {PostgreSqlAuthorityStore,installPostgreSqlAuthorityStoreSchema}=await moduleAt(input.repo,'coordination/postgresql_authority_store.ts');
 const {PostgreSqlAuthorityService}=await moduleAt(input.repo,'coordination/postgresql_authority_service.ts');
 const {selectLocalSqliteAuthority}=await moduleAt(input.repo,'coordination/local_authority_provider.ts');
+const {executeCanonicalTaskLeaseAcquire}=await moduleAt(input.repo,'coordination/task_lease_acquire.ts');
 const {coordinationTodoReadModel}=await moduleAt(input.repo,'coordination/coordination_projection.ts');
 const {canonicalAuthoritySha256: digest}=await moduleAt(input.repo,'coordination/authority_store_codec.ts');
 const {engageLegacyCoordinationWriterFence}=await moduleAt(input.repo,'coordination/legacy_writer_fence.ts');
@@ -111,11 +112,6 @@ try {
     const changed={...request,schema_version:'loopx_coordination_monitor_poll_request_v1',operation_id:'changed',lease_proof:proof,
       observation:{...request.observation,generated_at:'2026-09-01T01:00:00Z',result_hash:'second',material_change:true},
       intent:{next_agent_todo:'Validate isolated change',next_action_kind:'validate'}};
-    if(arm==='baseline') {
-      assert.equal((await poll({...changed,schema_version:request.schema_version},dependencies)).status,'failed');
-      assert.deepEqual(await store.loadAuthority(),before);
-      report[arm]={compatible_no_lease_replay:true,leased_poll:'unsupported_no_write'}; continue;
-    }
     for(const invalid of [null,{...proof,expected_version:2},{...proof,idempotency_key:'wrong'}]) {
       assert.equal((await poll({...changed,lease_proof:invalid},dependencies)).status,'failed');
       assert.deepEqual(await store.loadAuthority(),before);
@@ -138,8 +134,63 @@ try {
       'expired execution cannot commit another observation');
     assert.equal((await poll(changed,dependencies)).status,'replayed');
     assert.deepEqual(await store.loadAuthority(),retired);
-    heads[arm]=retired.head;
-    report[arm]={leased_poll:'applied',replay:'historical',expired_new_poll:'rejected',non_target_unchanged:true};
+    // Completion keeps execution history. Reactivation must retire that history
+    // atomically, before it can become effective against the reopened Todo.
+    const completedTodos=retired.head.todos.map(t=>t.todo_id===target?{...t,status:'done',done:true,
+      completed_at:'2026-09-01T04:00:00Z',no_followup:true,completion_continuation:'no_followup'}:t);
+    const completed={...retired.head,todos:completedTodos,
+      leases:retired.head.leases,handoff_mode:'hard_lease',
+      todo_read_model:coordinationTodoReadModel(completedTodos,retired.head.todo_read_model.schema_version)};
+    assert.equal((await store.commitAuthority({operation_id:'complete-fixture',expected_provider_revision:retired.provider_revision,
+      events:[],receipts:[],next_projection:completed})).status,'applied');
+    const registryPath=join(runtime,'registry.json'),registryText=JSON.stringify({registered_agents:['agent-a','agent-b']});
+    await writeFile(registryPath,registryText);
+    const observation={schema_version:'loopx_local_coordination_todo_update_request_v4',runtime_root:runtime,goal_id:goal,
+      todo_id:target,role:'agent',actor_agent_id:'agent-a',registered_agents:['agent-a','agent-b'],lifecycle_grants:[],
+      registry_source:{path:registryPath,sha256:createHash('sha256').update(registryText).digest('hex')},
+      operation_id:'reactivate',observed_at:'2030-01-01T00:00:00Z',dry_run:false,patch:{},clear_fields:[],
+      planning_intent:{status:'open',no_followup:false},monitor_observation:{generated_at:'2030-01-01T00:00:00Z',
+        result_hash:'second',material_change:true,monitor_effect_id:'reactivate',cadence:'1h'}};
+    const closed=await store.loadAuthority();
+    if(arm==='baseline') {
+      const unsupported=await baselineUpdate(observation,dependencies);
+      assert.equal(unsupported.status,'failed'); assert.equal(unsupported.reason_code,'monitor_reactivation_lease_transition_required');
+      assert.deepEqual(await store.loadAuthority(),closed);
+      report[arm]={poll_parity:true,retained_lease_reactivation:'rejected_no_write'}; continue;
+    }
+    assert.equal((await update({...observation,dry_run:true},dependencies)).status,'planned');
+    assert.deepEqual(await store.loadAuthority(),closed);
+    assert.equal((await update({...observation,patch:{text:'mixed edit'}},dependencies)).status,'failed');
+    assert.deepEqual(await store.loadAuthority(),closed);
+    const resumed=await update(observation,dependencies); assert.equal(resumed.status,'applied',JSON.stringify(resumed));
+    assert.equal(resumed.monitor_poll_transition.material_change_generation,2);
+    const afterResume=await store.loadAuthority(); assert.equal(afterResume.status,'loaded');
+    const resumedTodo=afterResume.head.todos.find(t=>t.todo_id===target);
+    assert.equal(resumedTodo.status,'open'); assert.equal(resumedTodo.done,false);
+    assert(!Object.hasOwn(resumedTodo,'completed_at')); assert(!Object.hasOwn(resumedTodo,'completion_continuation'));
+    assert.equal(afterResume.head.leases.find(l=>l.todo_id===target).status,'released');
+    assert.deepEqual(afterResume.head.leases.filter(l=>l.todo_id!==target),completed.leases.filter(l=>l.todo_id!==target));
+    assert.equal(resumed.monitor_lifecycle_transition.execution_authority_granted,false);
+    const fresh=await executeCanonicalTaskLeaseAcquire(store,{goal_id:goal,todo_id:target,owner:'agent-a',
+      idempotency_key:'fresh-cycle',expected_version:3,ttl_seconds:600,write_scopes:[],
+      registered_agents:['agent-a','agent-b'],now:new Date('2030-01-01T00:00:00Z')});
+    assert.equal(fresh.status,'applied',JSON.stringify(fresh));
+    assert.equal(fresh.lease.version,4); assert.equal(fresh.lease.lease_epoch,3);
+    const acquired=await store.loadAuthority();
+    assert.equal((await update(observation,dependencies)).status,'replayed');
+    assert.deepEqual(await store.loadAuthority(),acquired,'historical replay cannot release the fresh execution');
+    assert.deepEqual(afterResume.head.todos.filter(t=>input.projection.todos.some(old=>old.todo_id===t.todo_id)),input.projection.todos);
+    const closedAgain=afterResume.head.todos.map(t=>t.todo_id===target?{...t,status:'done',done:true,completed_at:'2030-01-01T01:00:00Z'}:t);
+    await store.commitAuthority({operation_id:'complete-again',expected_provider_revision:acquired.provider_revision,
+      events:[],receipts:[],next_projection:{...acquired.head,todos:closedAgain,
+        todo_read_model:coordinationTodoReadModel(closedAgain,afterResume.head.todo_read_model.schema_version)}});
+    const final=await store.loadAuthority();
+    assert.equal((await update(observation,dependencies)).status,'replayed');
+    assert.equal((await update({...observation,operation_id:'stale-new-id'},dependencies)).status,'failed');
+    assert.deepEqual(await store.loadAuthority(),final);
+    heads[arm]=final.head;
+    report[arm]={poll_parity:true,retained_lease_reactivation:'applied',fresh_execution_epoch:3,same_hash_reactivation_generation:2,
+      historical_replay_keeps_completion:true,stale_observation:'rejected',non_target_unchanged:true};
   }
   for(const arm of ['file','sqlite','postgresql']) assert.deepEqual(compatible[arm],compatible.baseline);
   assert.deepEqual(heads.file,heads.sqlite); assert.deepEqual(heads.file,heads.postgresql);

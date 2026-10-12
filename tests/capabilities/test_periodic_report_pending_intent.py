@@ -72,12 +72,15 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
     def no_host(*args, **kwargs):
         pytest.fail("capability action must not invoke a normal host transaction")
 
-    monkeypatch.setattr("loopx.cli_commands.turn.run_loopx_turn_once", no_host)
+    monkeypatch.setattr(
+        "loopx.cli_commands.turn_run_once.execute_turn_run_once",
+        no_host,
+    )
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--scan-path", str(tmp_path)]
     with monkeypatch.context() as read_only:
-        read_only.setattr("loopx.cli_commands.turn.dispatch_goal_lark_turn_start_hooks", no_host)
-        read_only.setattr("loopx.cli_commands.turn.extend_cadence_turn_start_dispatch", no_host)
+        read_only.setattr("loopx.cli_commands.lark_inbox.dispatch_goal_lark_turn_start_hooks", no_host)
+        read_only.setattr("loopx.capabilities.periodic_report.cadence_runtime.extend_cadence_turn_start_dispatch", no_host)
         main([*prefix, "turn", "plan", *scope, "--host", "generic-cli",
               "--execution-mode", "isolated-headless"])
         cold_plan = json.loads(capsys.readouterr().out)
@@ -1907,4 +1910,71 @@ def test_cross_agent_or_malformed_intent_fails_closed(tmp_path: Path) -> None:
             agent_id=AGENT_ID,
         )
         == []
+    )
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_real_cli_editorial_fallback_reads_canonical_work_without_display(
+    tmp_path, monkeypatch, provider
+):
+    """The public command freezes canonical facts and sends nothing externally."""
+    import subprocess
+    import sys
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime = _fixture(tmp_path)
+    state = registry.parent / "ACTIVE_GOAL_STATE.md"
+    records = parse_active_state_todos(state.read_text(), item_limit=None)[
+        "agent_todos"
+    ]["items"]
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=records, handoff_mode="soft_claim"
+    )
+    initialize_canonical_authority(
+        runtime, GOAL_ID, projection, state_path=state, provider=provider
+    )
+    # A runtime override must route both intent IO and the Todo snapshot.
+    config = json.loads(registry.read_text())
+    config["common_runtime_root"] = str(tmp_path / "unused-runtime")
+    registry.write_text(json.dumps(config))
+    state.unlink()
+    command = [
+        sys.executable,
+        "-m",
+        "loopx.cli",
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(runtime),
+        "--format",
+        "json",
+        "periodic-report",
+        "consume-pending",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--execute",
+    ]
+    run = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    assert run.returncode == 0, run.stderr
+    result = json.loads(run.stdout)
+    assert result["status"] == "editorial_required", result
+    frozen = Path(result["editorial_request_path"])
+    before = frozen.read_bytes()
+    request = json.loads(before)
+    assert {fact["source_ref"] for fact in request["facts"]} == {"todo:todo_finished"}
+    assert not state.exists()
+    retry = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    assert retry.returncode == 0, retry.stderr
+    assert frozen.read_bytes() == before, (
+        "retry must retain the same authored-input basis"
     )

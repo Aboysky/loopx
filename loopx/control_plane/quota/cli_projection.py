@@ -26,6 +26,9 @@ QUOTA_CLI_VISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_vision_continuation_compaction_v0"
 )
 QUOTA_CLI_VISION_DETAIL_COMMAND = "quota should-run --include-detail vision"
+QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION = (
+    "quota_cli_replan_action_compaction_v0"
+)
 QUOTA_CLI_CAPABILITY_GATE_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_capability_gate_compaction_v0"
 )
@@ -131,6 +134,7 @@ _RETAINED_MONITOR_POLL_INTERACTION_FIELDS = {
         "spend_after_validation",
         "spend_policy",
         "delivery_workspace_causality",
+        "settlement_resume_ref",
     ),
 }
 _RETAINED_MONITOR_POLL_RESPONSE_PLAN_FIELDS = (
@@ -289,7 +293,9 @@ def _compact_nested_item_lists(
     return compact
 
 
-def _compact_agent_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _compact_agent_todo_summary(
+    summary: dict[str, Any], *, detail_command: str = QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND
+) -> dict[str, Any]:
     compact: dict[str, Any] = {}
     omitted_lanes: dict[str, int] = {}
     for key, value in summary.items():
@@ -323,12 +329,14 @@ def _compact_agent_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
             if lane != "current_agent_blocker_items" or summary.get(lane)
         ),
         "omitted_lanes": omitted_lanes,
-        "full_detail_cold_path": QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND,
+        "full_detail_cold_path": detail_command,
     }
     return compact
 
 
-def _compact_user_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _compact_user_todo_summary(
+    summary: dict[str, Any], *, detail_command: str = QUOTA_CLI_USER_TODO_SUMMARY_DETAIL_COMMAND
+) -> dict[str, Any]:
     compact: dict[str, Any] = {}
     omitted_lanes: dict[str, int] = {}
     for key, value in summary.items():
@@ -355,7 +363,7 @@ def _compact_user_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "schema_version": QUOTA_CLI_USER_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION,
         "retained_item_lanes": sorted(_RETAINED_USER_ITEM_LANES),
         "omitted_lanes": omitted_lanes,
-        "full_detail_cold_path": QUOTA_CLI_USER_TODO_SUMMARY_DETAIL_COMMAND,
+        "full_detail_cold_path": detail_command,
     }
     return compact
 
@@ -450,6 +458,48 @@ def _compact_vision_continuation_audit(
         "mode": "compact_hot_path",
         "omitted_fields": omitted_fields,
         "full_detail_cold_path": QUOTA_CLI_VISION_DETAIL_COMMAND,
+    }
+    return compact
+
+
+def _reference_inline_replan_authoring(
+    packet: dict[str, Any], *, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Reference an identical executable input already present in this response."""
+
+    writeback = packet.get("writeback_contract")
+    if not isinstance(writeback, dict) or not isinstance(
+        writeback.get("vision_authoring"), dict
+    ):
+        return packet
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    plan = cli.get("settlement_plan") if isinstance(cli, dict) else None
+    steps = plan.get("ordered_steps") if isinstance(plan, dict) else None
+    if not isinstance(steps, list):
+        return packet
+    index = next(
+        (index for index, step in enumerate(steps)
+         if isinstance(step, dict) and step.get("kind") == "durable_writeback"
+         and step.get("vision_authoring") == writeback["vision_authoring"]),
+        None,
+    )
+    if index is None:
+        return packet
+    reference = (
+        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps"
+        f"[{index}].vision_authoring"
+    )
+    compact_writeback = dict(writeback)
+    compact_writeback.pop("vision_authoring")
+    compact_writeback["vision_authoring_ref"] = reference
+    compact = dict(packet)
+    compact["writeback_contract"] = compact_writeback
+    compact["payload_compaction"] = {
+        "schema_version": QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION,
+        "mode": "compact_hot_path",
+        "compacted_fields": ["writeback_contract.vision_authoring"],
+        "projection_ref": reference,
     }
     return compact
 
@@ -727,6 +777,14 @@ def compact_quota_should_run_cli_payload(
             source_audit=vision_audit,
             audit_ref=_vision_continuation_ref(compact_vision_audit),
         )
+    replan_action = payload.get("replan_action_packet")
+    if not include_vision_detail and isinstance(replan_action, dict):
+        compact_replan_action = _reference_inline_replan_authoring(
+            replan_action, payload=compact
+        )
+        if compact_replan_action is not replan_action:
+            compact = dict(compact)
+            compact["replan_action_packet"] = compact_replan_action
     if not include_todo_summary_detail:
         action_portfolio = payload.get("action_portfolio")
         if isinstance(action_portfolio, dict):
@@ -755,6 +813,37 @@ def compact_quota_should_run_cli_payload(
             compact = dict(compact)
             compact["goal_route_hint"] = _compact_goal_route_hint(goal_route_hint)
         compact = _compact_shadowed_action_projections(compact)
+    agent_lane_next_action = compact.get("agent_lane_next_action")
+    if isinstance(agent_lane_next_action, dict) and "content_revision" in agent_lane_next_action:
+        compact = dict(compact)
+        agent_lane_next_action = dict(agent_lane_next_action)
+        agent_lane_next_action.pop("content_revision", None)
+        compact["agent_lane_next_action"] = agent_lane_next_action
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )
+
+
+def compact_quota_plan_cli_payload(
+    payload: dict[str, Any], *, detail_sections: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """Bound read-only CLI summaries after complete planning; retain full opt-ins."""
+    if payload.get("mode") not in {"status", "plan"} or not isinstance(payload.get("groups"), dict):
+        return payload
+
+    def project_row(row: dict[str, Any]) -> dict[str, Any]:
+        result = dict(row)
+        for role, compact_summary in (("agent", _compact_agent_todo_summary), ("user", _compact_user_todo_summary)):
+            key = f"{role}_todos"
+            if f"{role}-todos" not in detail_sections and isinstance(row.get(key), dict):
+                result[key] = compact_summary(row[key], detail_command=(
+                    f"quota {payload['mode']} --include-detail {role}-todos"
+                ))
+        return result
+
+    result = dict(payload)
+    result["groups"] = {state: [project_row(row) for row in rows]
+                        for state, rows in payload["groups"].items()}
+    if isinstance(payload.get("next_automatic_turn"), dict):
+        result["next_automatic_turn"] = project_row(payload["next_automatic_turn"])
+    return result

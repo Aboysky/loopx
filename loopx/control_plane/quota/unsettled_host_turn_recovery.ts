@@ -21,21 +21,36 @@ import {
   requireJsonObject,
   requireNonEmptyString,
 } from "../runtime_decode.ts";
-import { readGoalHeartbeatReceipts } from "../rollout_receipt_log.ts";
 import {
-  heartbeatReceiptBinding,
-  heartbeatReceiptFactFromEvent,
+  goalHeartbeatReceiptsFromSnapshot,
+  readGoalRolloutEventSnapshot,
+} from "../rollout_receipt_log.ts";
+import { isCommittedMonitorPollEffect } from "./settlement_phase.ts";
+import {
   normalizeHeartbeatReplanObligationId,
   normalizeHeartbeatTodoId,
   optionalHeartbeatString,
-  selectEffectiveHeartbeatReceipt,
   type HeartbeatReceiptBinding,
-  type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 import {
+  candidateReadbackBinding,
+  MISSING_RECEIPT_NAMES,
+  missingCloseoutReceipts,
+  selectCloseoutCandidates,
+  type PriorHostTurnCloseoutCandidate,
+} from "./prior_turn_closeout.ts";
+import {
+  committedMonitorPollFromSnapshot,
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
-  readQuotaSettlement,
+  readAdmittedQuotaSettlementFromSnapshot,
+  readQuotaSettlementSnapshot,
 } from "./settlement_readback.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaOwnerOwnsProjection,
+  withQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 export const PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA =
   "loopx_prior_host_turn_closeout_preflight_request_v0";
@@ -50,32 +65,23 @@ export const UNSETTLED_HOST_TURN_RECOVERY_SCHEMA_VERSION =
 
 const MONITOR_TASK_CLASS = "continuous_monitor";
 const SETTLED_LIFECYCLE_STATUSES = ["done", "blocked", "deferred"] as const;
-const WRITEBACK_RECEIPT = "durable_writeback_receipt";
-const SPEND_RECEIPT = "quota_spend_receipt";
-const MISSING_RECEIPT_NAMES = [WRITEBACK_RECEIPT, SPEND_RECEIPT] as const;
 
 export const ACCEPTED_CLOSEOUTS = [
   "validated_writeback_and_quota_spend",
+  "typed_blocked_writeback_no_spend",
   "exact_committed_quota_monitor_poll",
   "typed_external_wait_with_runnable_successor",
   "typed_blocker_or_lifecycle_transition",
 ] as const;
 export type AcceptedCloseout = (typeof ACCEPTED_CLOSEOUTS)[number];
 
-export interface PriorHostTurnCloseoutCandidate extends JsonObject {
-  prior_turn_instance_id: string;
-  event_id: string | null;
-  binding_kind: HeartbeatReceiptBinding["binding_kind"];
-  /** The Todo id or autonomous replan obligation id, per `binding_kind`. */
-  binding_id: string;
-  settlement_effect_id: string | null;
-}
-
 interface PreflightRequest {
   runtime_root: string;
   goal_id: string;
   agent_id: string;
   exclude_turn_instance_id: string | null;
+  owner: QuotaAccountingOwner;
+  owner_projection: JsonObject;
 }
 
 function decodePreflightRequest(value: unknown): PreflightRequest {
@@ -85,78 +91,32 @@ function decodePreflightRequest(value: unknown): PreflightRequest {
       "Prior host Turn closeout preflight request schema mismatch",
     );
   }
+  const runtimeRoot = requireNonEmptyString(request.runtime_root, "runtime_root");
+  const goalId = requireNonEmptyString(request.goal_id, "goal_id");
+  const owner = parseQuotaAccountingOwner({
+    goalRefValue: request.goal_ref,
+    sourceAdmissionValue: request.source_admission,
+    runtimeRoot,
+    goalId,
+  });
   return {
-    runtime_root: requireNonEmptyString(request.runtime_root, "runtime_root"),
-    goal_id: requireNonEmptyString(request.goal_id, "goal_id"),
+    runtime_root: runtimeRoot,
+    goal_id: goalId,
     agent_id: requireNonEmptyString(request.agent_id, "agent_id"),
     exclude_turn_instance_id: optionalHeartbeatString(
       request.exclude_turn_instance_id,
     ),
+    owner,
+    owner_projection: owner.kind === "alias"
+      ? {}
+      : {
+        goal_ref: requireJsonObject(request.goal_ref, "goal_ref"),
+        source_admission: requireJsonObject(
+          request.source_admission,
+          "source_admission",
+        ),
+      },
   };
-}
-
-function candidate(
-  binding: HeartbeatReceiptBinding,
-  turnInstanceId: string,
-  fact: HeartbeatReceiptFact,
-): PriorHostTurnCloseoutCandidate {
-  return {
-    prior_turn_instance_id: turnInstanceId,
-    event_id: fact.event_id,
-    binding_kind: binding.binding_kind,
-    binding_id: binding.binding_id,
-    settlement_effect_id: binding.settlement_effect_id,
-  };
-}
-
-/**
- * Select the prior must-attempt Turns that still require a host closeout.
- *
- * Every prior Turn is identity-validated, so a conflicting receipt fails the
- * read instead of being hidden behind a newer Turn. Results are newest first
- * and carry at most one effective receipt per Turn, which is the same single
- * binding the caller's recovery decision may act on.
- */
-function selectCloseoutCandidates(
-  receipts: readonly JsonObject[],
-  goalId: string,
-  agentId: string,
-  excludeTurnInstanceId: string | null,
-): { candidates: PriorHostTurnCloseoutCandidate[]; turnsValidated: number } {
-  const perTurn = new Map<string, HeartbeatReceiptFact[]>();
-  const newestFirst: string[] = [];
-  for (const event of receipts) {
-    const fact = heartbeatReceiptFactFromEvent(event);
-    const turnInstanceId = fact.run_id;
-    if (!turnInstanceId || turnInstanceId === excludeTurnInstanceId) {
-      continue;
-    }
-    const existing = perTurn.get(turnInstanceId);
-    if (existing) existing.push(fact);
-    else perTurn.set(turnInstanceId, [fact]);
-    const position = newestFirst.indexOf(turnInstanceId);
-    if (position !== -1) newestFirst.splice(position, 1);
-    newestFirst.push(turnInstanceId);
-  }
-
-  const candidates: PriorHostTurnCloseoutCandidate[] = [];
-  let validated = 0;
-  for (const turnInstanceId of [...newestFirst].reverse()) {
-    const entries = (perTurn.get(turnInstanceId) ?? []).map((fact) => ({
-      fact,
-      value: fact,
-    }));
-    const effective = selectEffectiveHeartbeatReceipt(goalId, agentId, entries);
-    validated += 1;
-    if (effective === null) continue;
-    // Closeout is opt-in on the persisted receipt, so older receipts from
-    // before this contract cannot become new recovery obligations.
-    if (!effective.closeout_required) continue;
-    const binding = heartbeatReceiptBinding(goalId, agentId, effective);
-    if (binding === null) continue;
-    candidates.push(candidate(binding, turnInstanceId, effective));
-  }
-  return {candidates, turnsValidated: validated};
 }
 
 function settlementReadbackRequest(
@@ -168,26 +128,11 @@ function settlementReadbackRequest(
     runtime_root: request.runtime_root,
     goal_id: request.goal_id,
     agent_id: request.agent_id,
-    todo_id: candidate.binding_kind === "todo" ? candidate.binding_id : null,
-    turn_instance_id: candidate.prior_turn_instance_id,
-    replan_obligation_id: candidate.binding_kind === "autonomous_replan"
-      ? candidate.binding_id
-      : null,
+    ...candidateReadbackBinding(candidate),
     infer_turn_instance_id: false,
     allow_unbound_binding: false,
+    ...request.owner_projection,
   };
-}
-
-function bundleFailed(readback: JsonObject, step: string): boolean {
-  const bundle = jsonObject(readback[step]);
-  const payload = bundle === null ? null : jsonObject(bundle.payload);
-  if (payload === null || typeof payload.ok !== "boolean") {
-    throw new EffectRuntimeRequestError(
-      `quota settlement readback has no ${step} result`,
-      "malformed_settlement_readback",
-    );
-  }
-  return payload.ok !== true;
 }
 
 /**
@@ -198,14 +143,19 @@ function bundleFailed(readback: JsonObject, step: string): boolean {
  * Turn's settlement so a Turn that already settled never makes the caller read
  * bound facts.
  */
-export async function preflightPriorHostTurnCloseout(
-  value: unknown,
+async function preflightPriorHostTurnCloseoutForOwner(
+  request: PreflightRequest,
 ): Promise<JsonObject> {
-  const request = decodePreflightRequest(value);
-  const receipts = await readGoalHeartbeatReceipts(
+  const rolloutSnapshot = await readGoalRolloutEventSnapshot(
     request.runtime_root,
     request.goal_id,
+  );
+  const receipts = goalHeartbeatReceiptsFromSnapshot(
+    rolloutSnapshot,
+    request.goal_id,
     request.agent_id,
+  )?.filter((event) =>
+    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
   );
   const { candidates, turnsValidated } = selectCloseoutCandidates(
     receipts ?? [],
@@ -221,35 +171,67 @@ export async function preflightPriorHostTurnCloseout(
       turns_validated: turnsValidated,
     };
   }
-  const selected = candidates[0]!;
-  const readback = await readQuotaSettlement(
-    settlementReadbackRequest(request, selected),
+  const settlementSnapshot = await readQuotaSettlementSnapshot(
+    request.runtime_root,
+    request.goal_id,
+    rolloutSnapshot,
   );
-  if (readback.found === true && !bundleFailed(readback, "settlement")) {
-    // The Turn has a validated settlement closeout, so it needs no recovery.
+  let newestSettledTurn: string | null = null;
+  let newestAcceptedCloseout: AcceptedCloseout = "validated_writeback_and_quota_spend";
+  for (const selected of candidates) {
+    const readback = readAdmittedQuotaSettlementFromSnapshot(
+      settlementReadbackRequest(request, selected),
+      settlementSnapshot,
+    );
+    const missingReceipts = missingCloseoutReceipts(readback);
+    if (missingReceipts === null) {
+      // A newer settled Turn cannot hide an older missing closeout. Keep
+      // scanning in persisted newest-first order until the first unsettled
+      // candidate is found.
+      newestSettledTurn ??= selected.prior_turn_instance_id;
+      if (newestSettledTurn === selected.prior_turn_instance_id) {
+        const progress = jsonObject(readback.progress);
+        if (progress?.closeout_kind === "typed_blocked_writeback_no_spend") {
+          newestAcceptedCloseout = "typed_blocked_writeback_no_spend";
+        }
+      }
+      continue;
+    }
+    const monitorPoll = selected.binding_kind === "todo"
+      ? committedMonitorPollFromSnapshot(settlementSnapshot, {
+        goal_id: request.goal_id, agent_id: request.agent_id,
+        turn_instance_id: selected.prior_turn_instance_id,
+        todo_id: selected.binding_id,
+      }, request.owner) : null;
     return {
       schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_RESULT_SCHEMA,
-      status: "none",
-      reason: "prior_turn_settlement_validated",
+      status: "candidate",
+      committed_monitor_poll: monitorPoll === null ? null : {
+        effect_id: jsonObject(monitorPoll.quota_monitor_poll_commit)!.effect_id,
+      },
       turns_validated: turnsValidated,
-      prior_turn_instance_id: selected.prior_turn_instance_id,
-      accepted_closeout: "validated_writeback_and_quota_spend",
+      candidate: selected,
+      missing_receipts: missingReceipts,
     };
-  }
-  const missingReceipts: string[] = [];
-  if (readback.found !== true || bundleFailed(readback, "writeback")) {
-    missingReceipts.push(WRITEBACK_RECEIPT);
-  }
-  if (readback.found !== true || bundleFailed(readback, "spend")) {
-    missingReceipts.push(SPEND_RECEIPT);
   }
   return {
     schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_RESULT_SCHEMA,
-    status: "candidate",
+    status: "none",
+    reason: "prior_turn_settlement_validated",
     turns_validated: turnsValidated,
-    candidate: selected,
-    missing_receipts: missingReceipts,
+    prior_turn_instance_id: newestSettledTurn,
+    accepted_closeout: newestAcceptedCloseout,
   };
+}
+
+export async function preflightPriorHostTurnCloseout(
+  value: unknown,
+): Promise<JsonObject> {
+  const request = decodePreflightRequest(value);
+  return await withQuotaAccountingOwner(
+    request.owner,
+    async () => preflightPriorHostTurnCloseoutForOwner(request),
+  );
 }
 
 function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {
@@ -364,16 +346,6 @@ function decodeMissingReceipts(value: unknown): string[] {
   return [...expected];
 }
 
-function committedMonitorPollEffectIds(
-  candidateBinding: PriorHostTurnCloseoutCandidate,
-  goalId: string,
-  agentId: string,
-): string[] | null {
-  if (candidateBinding.binding_kind !== "todo") return null;
-  const base = `quota-monitor-poll:${goalId}:${agentId}:${candidateBinding.prior_turn_instance_id}`;
-  return [base, `${base}:todo:${candidateBinding.binding_id}`];
-}
-
 function acceptedLifecycleCloseout(todo: CandidateTodoFacts | null): AcceptedCloseout | null {
   if (todo === null) return null;
   if (
@@ -389,16 +361,36 @@ function acceptedLifecycleCloseout(todo: CandidateTodoFacts | null): AcceptedClo
   return settled ? "typed_blocker_or_lifecycle_transition" : null;
 }
 
+type RecoveryRepair = "monitor_poll" | "resume_prior_turn" | "lifecycle";
+
+function recoveryRepair(
+  bindingKind: HeartbeatReceiptBinding["binding_kind"],
+  todo: CandidateTodoFacts | null,
+): RecoveryRepair {
+  if (bindingKind !== "todo" || todo === null) return "lifecycle";
+  if (todo.task_class === MONITOR_TASK_CLASS) return "monitor_poll";
+  // Missing receipts do not prove an external dependency. Re-enter
+  // the original guard to recheck eligibility and retain its settlement id.
+  // This is a recovery route, never an accepted closeout or delivery grant.
+  return todo.task_class === "advancement_task" && todo.status === "open" &&
+      !todo.has_resume_when
+    ? "resume_prior_turn"
+    : "lifecycle";
+}
+
 function recoveryObligation(
-  repair: "monitor_poll" | "lifecycle",
+  repair: RecoveryRepair,
   bindingId: string,
 ): JsonObject {
+  const obligation = repair === "resume_prior_turn"
+    ? "reenter_original_guard_then_settle"
+    : "author_typed_closeout_then_continue_successor";
   return {
     lane: "control_plane_recovery",
     next_lane: "advancement_task",
-    obligation: "author_typed_closeout_then_continue_successor",
+    obligation,
     contract: "repair_prior_turn_closeout",
-    contract_obligation: "author_typed_closeout_then_continue_successor",
+    contract_obligation: obligation,
     must_attempt_work: true,
     delivery_allowed: false,
     notify: "DONT_NOTIFY",
@@ -407,9 +399,17 @@ function recoveryObligation(
     reason: "a prior must-attempt heartbeat has no legal closeout receipt",
     recommendation_reason: "prior must-attempt host Turn is missing a legal closeout",
     unsettled_reason: "prior must-attempt host Turn remains unsettled",
-    recommended_action:
-      `Recover prior unsettled host Turn for ${bindingId}; use a typed ` +
-      "lifecycle observation, then rerun quota and continue independent work",
+    recommended_action: repair === "resume_prior_turn"
+      ? `Recover prior unsettled host Turn for ${bindingId}; re-enter its original ` +
+        "guard, inspect existing effects, then resume and settle verified work under " +
+        "that identity before rerunning the current Turn; do not invent an external wait"
+      : repair === "monitor_poll"
+      ? `Recover prior unsettled host Turn for ${bindingId}; record a verified ` +
+        "original observation with monitor-poll, or use the original identity for " +
+        "typed blocked writeback if observation is unavailable; never invent a " +
+        "result hash. Then rerun the current Turn and continue eligible work"
+      : `Recover prior unsettled host Turn for ${bindingId}; use a typed ` +
+        "lifecycle observation, then rerun quota and continue eligible work",
     repair,
   };
 }
@@ -442,15 +442,19 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     );
   }
   const todo = bindingFacts.todo;
-  const acceptedEffectIds = committedMonitorPollEffectIds(selected, goalId, agentId);
   const committedEffectId = bindingFacts.committedMonitorPoll === null
     ? null
     : optionalHeartbeatString(bindingFacts.committedMonitorPoll.effect_id);
   if (
-    acceptedEffectIds !== null &&
+    selected.binding_kind === "todo" &&
     todo?.task_class === MONITOR_TASK_CLASS &&
     committedEffectId !== null &&
-    acceptedEffectIds.includes(committedEffectId)
+    isCommittedMonitorPollEffect(committedEffectId, {
+      goal_id: goalId,
+      agent_id: agentId,
+      turn_instance_id: selected.prior_turn_instance_id,
+      todo_id: selected.binding_id,
+    })
   ) {
     return {
       schema_version: UNSETTLED_HOST_TURN_RECOVERY_RESULT_SCHEMA,
@@ -489,9 +493,7 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     recovery.binding_target_key = todo.target_key;
     recovery.binding_cadence = todo.cadence;
   }
-  const repair = todo?.task_class === MONITOR_TASK_CLASS
-    ? "monitor_poll" as const
-    : "lifecycle" as const;
+  const repair = recoveryRepair(selected.binding_kind, todo);
   // The typed repair lane lets the CLI renderer project its command list
   // without re-deriving which closeout family the Turn belongs to.
   recovery.repair = repair;

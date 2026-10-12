@@ -1,4 +1,5 @@
 import {decodeTaskLeaseProof, type TaskLeaseProof} from "../coordination/task_lease_proof.ts";
+import {monitorPollRequestHash} from "../coordination/todo_monitor_poll.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
@@ -7,6 +8,17 @@ import { basename, dirname, join, resolve } from "node:path";
 import { monitorSuccessorIntent, monitorSuccessorRoute } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
+import {
+  QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+  readQuotaSettlementForAdmittedOwnerFromSnapshot,
+  readQuotaSettlementSnapshot,
+} from "./settlement_readback.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaGoalRef,
+  withBorrowedQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -41,7 +53,7 @@ const MONITOR_TARGET_SCHEMA = "quota_monitor_target_v0";
 const MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v0";
 const LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v1";
 const MONITOR_TODO_WRITEBACK_SCHEMA = "monitor_poll_todo_writeback_v0";
-const MONITOR_PHASES = ["event", "preflight", "commit"] as const;
+const MONITOR_PHASES = ["event", "preflight", "commit", "provider_rejected"] as const;
 const MONITOR_SOURCES = ["heartbeat", "controller", "adapter", "visible-goal"] as const;
 const EXTERNAL_MONITOR_POLICIES = new Set([
   "material_transition_only",
@@ -59,6 +71,7 @@ type MonitorSource = (typeof MONITOR_SOURCES)[number];
 type MonitorStatus =
   | "preview"
   | "provider_required"
+  | "aborted"
   | "written"
   | "replayed"
   | "repaired"
@@ -87,6 +100,8 @@ interface MonitorDecision extends JsonObject {
   vision_wait_state: JsonObject;
   due_monitor_candidates: JsonObject[];
   registry_due_monitor: JsonObject;
+  auxiliary_settlement_todo: JsonObject | null;
+  auxiliary_gate_scope: JsonObject | null;
 }
 
 interface MonitorObservation extends JsonObject {
@@ -126,11 +141,14 @@ interface MonitorRequest {
   observation: MonitorObservation;
   provider_receipt: JsonObject | null;
   status_reload_warning: JsonObject | null;
+  owner: QuotaAccountingOwner;
 }
 
 interface MonitorProviderPlan extends JsonObject {
+  legacy_batch_version?: 1;
   schema_version: typeof MONITOR_TODO_PROVIDER_PLAN_SCHEMA | typeof LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA;
   lease_proof?: TaskLeaseProof;
+  gate_scope_guard?: boolean;
   monitor_effect_id: string;
   goal_id: string;
   generated_at: string;
@@ -309,6 +327,10 @@ function decisionObject(value: unknown): MonitorDecision {
       decision.registry_due_monitor,
       "decision.registry_due_monitor",
     ),
+    auxiliary_gate_scope: decision.auxiliary_gate_scope == null ? null :
+      requiredObject(decision.auxiliary_gate_scope, "decision.auxiliary_gate_scope"),
+    auxiliary_settlement_todo: decision.auxiliary_settlement_todo == null ? null :
+      requiredObject(decision.auxiliary_settlement_todo, "decision.auxiliary_settlement_todo"),
   };
 }
 
@@ -457,6 +479,12 @@ function requestObject(value: unknown): MonitorRequest {
     observation,
     provider_receipt: jsonObject(request.provider_receipt),
     status_reload_warning: jsonObject(request.status_reload_warning),
+    owner: parseQuotaAccountingOwner({
+      goalRefValue: request.goal_ref,
+      sourceAdmissionValue: request.source_admission,
+      runtimeRoot: runtimeRoot ?? "",
+      goalId,
+    }),
   };
 }
 
@@ -535,10 +563,83 @@ interface Admission {
   external: boolean;
 }
 
-function admission(request: MonitorRequest): Admission {
+async function readAuxiliarySettlement(request: MonitorRequest): Promise<JsonObject | null> {
+  if (!request.runtime_root || !request.turn_instance_id ||
+      !request.observation.actor_agent_id || !request.observation.settlement_todo_id) return null;
+  const snapshot = await readQuotaSettlementSnapshot(
+    request.runtime_root,
+    request.goal_id,
+  );
+  return readQuotaSettlementForAdmittedOwnerFromSnapshot({
+    schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+    runtime_root: request.runtime_root, goal_id: request.goal_id,
+    agent_id: request.observation.actor_agent_id, todo_id: request.observation.settlement_todo_id,
+    turn_instance_id: request.turn_instance_id, replan_obligation_id: null,
+    infer_turn_instance_id: false, allow_unbound_binding: false,
+  }, request.owner, snapshot);
+}
+
+async function auxiliaryMonitorAllowed(
+  request: MonitorRequest, historicalAdmission: boolean,
+): Promise<boolean | null> {
+  const { decision, observation } = request;
+  const settlementTodo = observation.settlement_todo_id;
+  if (!settlementTodo || settlementTodo === observation.todo_id) return null;
+  const conflict = () => new EffectRuntimeRequestError(
+    "turn-scoped monitor-poll conflicts with the committed advancement settlement identity: " +
+      `settlement Todo ${settlementTodo}, observation Todo ${observation.todo_id}`,
+    "heartbeat_receipt_identity_conflict",
+  );
+  const todo = decision.auxiliary_settlement_todo;
+  // A verified pending v1 receipt already admitted this exact observation.
+  // Earlier receipts predate the lifecycle-fact field; preserve their recovery
+  // basis, never reuse it for a new effect or a changed settlement binding.
+  if (historicalAdmission && todo === null) return null;
+  if (!request.runtime_root || !request.turn_instance_id || !decision.agent_id ||
+      observation.actor_agent_id !== decision.agent_id ||
+      todo === null || todo.todo_id !== settlementTodo || todo.task_class !== "advancement_task" ||
+      !["open", "done", "blocked"].includes(String(todo.status)) ||
+      (todo.claimed_by != null && todo.claimed_by !== decision.agent_id) ||
+      (todo.excluded_agents != null && (!Array.isArray(todo.excluded_agents) ||
+        todo.excluded_agents.some(value => typeof value !== "string") ||
+        todo.excluded_agents.includes(decision.agent_id)))) throw conflict();
+  if (!historicalAdmission) {
+    const settlement = await readAuxiliarySettlement(request);
+    const progress = jsonObject(settlement?.progress);
+    // The advancement's single debit is not an observation-admission fence.
+    // A settled exact binding still permits independently admitted due Monitors.
+    if (settlement?.found !== true || jsonObject(jsonObject(settlement.identity)?.result)?.failure !== null ||
+        progress?.schema_version !== "quota_settlement_progress_v0" ||
+        progress.state === "identity_required") throw conflict();
+    // A later lifecycle hold cannot invalidate an already settled Turn's
+    // independent observation. An unsettled hold still requires recovery;
+    // neither case grants execution of the held advancement Todo.
+    if (todo.status === "blocked" &&
+        progress.state !== "settled") throw conflict();
+  }
+  const monitor = decision.registry_due_monitor;
+  // Retain ordinary quota/due-work admission and capability/gate projections;
+  // lifecycle lookup must not become a second should-run bypass.
+  const gateScope = decision.auxiliary_gate_scope;
+  const independentGate = decision.safe_bypass_allowed &&
+    decision.safe_bypass_kind === "scoped_user_gate_fallback" &&
+    gateScope?.schema_version === "todo_gate_scope_projection_v0" &&
+    gateScope.agent_id === decision.agent_id && gateScope.todo_id === monitor.todo_id &&
+    gateScope.state === "independent" && typeof gateScope.gate_count === "number" && Number.isInteger(gateScope.gate_count) && gateScope.gate_count > 0;
+  return (!decision.requires_user_action || independentGate) && dueMonitorAllowed(decision, observation) &&
+    monitor.due === true && candidateMatches(monitor, observation) &&
+    (monitor.claimed_by == null || monitor.claimed_by === decision.agent_id);
+}
+
+async function admission(request: MonitorRequest, historicalAdmission = false): Promise<Admission> {
   const blocked = blockedSuccessorAllowed(request.decision);
   const external = externalMonitorAllowed(request.decision);
-  const due = dueMonitorAllowed(request.decision, request.observation);
+  const auxiliary = await auxiliaryMonitorAllowed(request, historicalAdmission);
+  const due = auxiliary ?? dueMonitorAllowed(request.decision, request.observation);
+  if (auxiliary === false) {
+    throw new EffectRuntimeRequestError("auxiliary monitor-poll requires its own due Monitor target",
+      "monitor_poll_admission_rejected");
+  }
   if (
     request.decision.effective_action !== EffectiveAction.MONITOR_QUIET_SKIP &&
     !external && !due && !blocked
@@ -766,6 +867,11 @@ function buildRecord(request: MonitorRequest, allowed: Admission): JsonObject {
     monitor_target: target,
     monitor_event: event,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) {
+    record.goal_ref = goalRef;
+    event.goal_ref = goalRef;
+  }
   if (request.decision.agent_id) {
     record.agent_id = request.decision.agent_id;
     event.agent_id = request.decision.agent_id;
@@ -796,6 +902,7 @@ function requestDigest(request: MonitorRequest): string {
   // projected decision during a retry, while the logical observation remains
   // the same effect. Mutable phase/CAS/provider fields are fenced separately.
   const observation: JsonObject = { ...request.observation };
+  const goalRef = quotaGoalRef(request.owner);
   if (!observation.settlement_todo_id) delete observation.settlement_todo_id;
   return sha256(pythonJson({
     schema_version: request.schema_version,
@@ -804,11 +911,14 @@ function requestDigest(request: MonitorRequest): string {
     goal_id: request.goal_id,
     source: request.source,
     turn_instance_id: request.turn_instance_id,
+    ...(goalRef === null ? {} : { goal_ref: goalRef }),
     observation,
   }));
 }
 
-function providerPlanFor(request: MonitorRequest): MonitorProviderPlan {
+function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
+  request.observation.settlement_todo_id && request.observation.settlement_todo_id !== request.observation.todo_id
+), legacyBatchVersion: 1 | null = 1): MonitorProviderPlan {
   const resultHash = request.observation.result_hash;
   if (!resultHash) {
     throw new EffectRuntimeRequestError("monitor todo writeback requires --result-hash");
@@ -816,6 +926,8 @@ function providerPlanFor(request: MonitorRequest): MonitorProviderPlan {
   return {
     schema_version: request.observation.lease_proof ? LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA : MONITOR_TODO_PROVIDER_PLAN_SCHEMA,
     ...(request.observation.lease_proof ? {lease_proof: request.observation.lease_proof} : {}),
+    ...(gateGuard ? {gate_scope_guard: true} : {}),
+    ...(legacyBatchVersion === 1 ? {legacy_batch_version: 1 as const} : {}),
     monitor_effect_id: request.effect_id,
     goal_id: request.goal_id,
     generated_at: request.generated_at,
@@ -840,11 +952,22 @@ function providerPlanFor(request: MonitorRequest): MonitorProviderPlan {
   };
 }
 
+/** Upgrade uncommitted historical auxiliary dispatch without rewriting its WAL.
+ * Existing business receipts replay the same intended-effect identity first. */
+function providerDispatchPlan(request: MonitorRequest, plan: MonitorProviderPlan): MonitorProviderPlan {
+  return request.observation.settlement_todo_id &&
+    request.observation.settlement_todo_id !== request.observation.todo_id
+    ? {...plan, gate_scope_guard: true} : plan;
+}
+
 function providerPlanObject(value: unknown): MonitorProviderPlan {
   const plan = requiredObject(value, "receipt.provider_plan");
   if (plan.schema_version !== MONITOR_TODO_PROVIDER_PLAN_SCHEMA &&
       plan.schema_version !== LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA) {
     throw new EffectRuntimeRequestError("Monitor Todo provider plan schema mismatch");
+  }
+  if (plan.legacy_batch_version !== undefined && plan.legacy_batch_version !== 1) {
+    throw new EffectRuntimeRequestError("unsupported legacy Monitor batch version");
   }
   const proof = decodeTaskLeaseProof(plan.lease_proof);
   if ((plan.schema_version === LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA) !== (proof !== null)) {
@@ -852,7 +975,9 @@ function providerPlanObject(value: unknown): MonitorProviderPlan {
   }
   return {
     schema_version: plan.schema_version,
+    ...(plan.legacy_batch_version === 1 ? {legacy_batch_version: 1} : {}),
     ...(proof ? {lease_proof: proof} : {}),
+    ...(plan.gate_scope_guard == null ? {} : {gate_scope_guard: requireBoolean(plan.gate_scope_guard, "provider_plan.gate_scope_guard")}),
     monitor_effect_id: requiredString(
       plan.monitor_effect_id,
       "provider_plan.monitor_effect_id",
@@ -1326,6 +1451,20 @@ function matchingIndexRecord(
   return null;
 }
 
+function pendingIndexHistoryIntact(
+  pending: PendingMonitorReceipt,
+  current: Buffer | null,
+): boolean {
+  const expectedBytes = pending.expected_index_bytes;
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0 ||
+      (current?.length ?? 0) < expectedBytes) return false;
+  if (pending.expected_index_digest === null) {
+    return expectedBytes === 0;
+  }
+  return sha256Bytes((current ?? Buffer.alloc(0)).subarray(0, expectedBytes)) ===
+    pending.expected_index_digest;
+}
+
 function indexRecordFor(
   request: MonitorRequest,
   record: JsonObject,
@@ -1350,6 +1489,8 @@ function indexRecordFor(
       request_digest: fingerprint,
     },
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) indexRecord.goal_ref = goalRef;
   for (const [field, value] of Object.entries({
     agent_id: record.agent_id,
     turn_instance_id: record.turn_instance_id,
@@ -1418,14 +1559,30 @@ function successorReceipts(providerReceipt: JsonObject | null): JsonObject[] {
     : [];
 }
 
-function payloadFor(
+async function projectAuxiliaryContinuation(request: MonitorRequest, payload: JsonObject): Promise<void> {
+  const continuation = jsonObject(payload.turn_continuation);
+  if (!request.execute || continuation?.settlement_binding_matches_observation !== false) return;
+  const settlement = await readAuxiliarySettlement(request);
+  if (jsonObject(settlement?.progress)?.state !== "settled") return;
+  // This is current readback, not a change to the historical Monitor receipt
+  // or permission for another advancement. Replays must not reopen a paid Turn.
+  payload.turn_continuation = {
+    ...continuation,
+    current_turn_settled: true,
+    next_turn_required: true,
+    next_action: "rerun quota should-run with a fresh --turn-instance-id before independent work",
+    reason: "the original advancement Turn is already settled; the auxiliary observation adds no spend or delivery identity",
+  };
+}
+
+async function payloadFor(
   request: MonitorRequest,
   record: JsonObject,
   jsonPath: string,
   markdownPath: string,
   indexPath: string,
   options: { appended: boolean; replayed: boolean; repaired: boolean },
-): JsonObject {
+): Promise<JsonObject> {
   const event = requiredObject(record.monitor_event, "record.monitor_event");
   const receipts = successorReceipts(request.provider_receipt);
   const payload: JsonObject = {
@@ -1460,13 +1617,56 @@ function payloadFor(
       : `${request.execute ? "appended" : "dry-run preview"} monitor poll event: ` +
         `${request.goal_id} effective_action=${request.decision.effective_action}`,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) payload.goal_ref = goalRef;
   if (request.turn_instance_id) {
     payload.turn_instance_id = request.turn_instance_id;
     payload.replayed = options.replayed;
+    if (request.execute) {
+      const settlementTodoId = optionalString(
+        event.settlement_todo_id,
+        "monitor_event.settlement_todo_id",
+      )?.trim() ?? null;
+      const observedTodoId = optionalString(
+        event.todo_id,
+        "monitor_event.todo_id",
+      )?.trim() ?? null;
+      const exactSettlement = settlementTodoId !== null &&
+        observedTodoId === settlementTodoId;
+      const auxiliaryObservation = settlementTodoId !== null &&
+        observedTodoId !== null && observedTodoId !== settlementTodoId;
+      payload.turn_continuation = exactSettlement
+        ? {
+          schema_version: "quota_turn_continuation_v0",
+          settlement_binding_matches_observation: true,
+          current_turn_settled: true,
+          same_turn_independent_settlement_allowed: false,
+          next_turn_required: true,
+          next_action:
+            "rerun quota should-run with a fresh --turn-instance-id before independent work",
+          reason: "the committed monitor-poll is this Turn's single settlement identity",
+        }
+        : {
+          schema_version: "quota_turn_continuation_v0",
+          settlement_binding_matches_observation: auxiliaryObservation
+            ? false
+            : null,
+          current_turn_settled: false,
+          same_turn_independent_settlement_allowed: false,
+          next_turn_required: false,
+          next_action: auxiliaryObservation
+            ? "continue the original advancement settlement in this Turn"
+            : "obtain a typed settlement binding before claiming this Turn settled",
+          reason: auxiliaryObservation
+            ? "the committed monitor-poll is an auxiliary observation and does not settle the advancement Turn"
+            : "the committed monitor-poll has no exact Todo settlement binding",
+        };
+    }
   }
   if (request.status_reload_warning) {
     payload.status_reload_warning = request.status_reload_warning;
   }
+  await projectAuxiliaryContinuation(request, payload);
   return payload;
 }
 
@@ -1772,6 +1972,7 @@ async function replayDurableReceipt(
       ? "quota monitor-poll commit repaired its durable transaction artifacts"
       : "replayed existing monitor poll event for the same effect identity",
   };
+  await projectAuxiliaryContinuation(request, replayPayload);
   return result(
     request,
     fingerprint,
@@ -1836,13 +2037,40 @@ function effectConflict(
   );
 }
 
-export async function evaluateQuotaMonitorPollCommit(
-  value: unknown,
+function validateNoEffect(receipt: JsonObject | null, plan: MonitorProviderPlan): void {
+  const proof = receipt?.no_effect as JsonObject | undefined;
+  const observation = Object.fromEntries([
+    "todo_id", "target_key", "result_hash", "material_change", "generated_at",
+    "cadence", "next_due_at", "reason_summary",
+  ].map(key => [key, plan[key]]));
+  const intent = Object.fromEntries([
+    "next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
+    "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",
+  ].map(key => [key, plan[key]]));
+  const hash = monitorPollRequestHash({goal_id: plan.goal_id, actor_agent_id: plan.agent_id,
+    dry_run: !plan.execute, observation, intent, lease_proof: plan.lease_proof});
+  if (receipt?.schema_version !== "loopx_coordination_monitor_poll_result_v0" ||
+      receipt.status !== "failed" || receipt.changed !== false ||
+      receipt.reason_code !== "monitor_poll_rejected" ||
+      !["file_v0", "sqlite_v0", "postgresql_v0"].includes(String(receipt.source_authority)) ||
+      receipt.decision_read_from_provider !== true || receipt.legacy_fallback_used !== false ||
+      proof?.schema_version !== "monitor_poll_no_effect_v0" ||
+      proof.goal_id !== plan.goal_id || proof.operation_id !== plan.monitor_effect_id || proof.request_sha256 !== hash) {
+    throw new EffectRuntimeRequestError("provider rejection does not prove this pending Monitor request had no effect",
+      "monitor_poll_no_effect_unproven");
+  }
+}
+
+async function evaluateQuotaMonitorPollRequest(
+  request: MonitorRequest,
+  indexLockHeld: boolean,
 ): Promise<QuotaMonitorPollCommitResult> {
-  const request = requestObject(value);
   const fingerprint = requestDigest(request);
+  if (request.phase === "provider_rejected" && !request.execute) {
+    throw new EffectRuntimeRequestError("provider rejection recovery requires execute");
+  }
   if (request.phase === "event") {
-    const record = buildRecord(request, admission(request));
+    const record = buildRecord(request, await admission(request));
     return result(
       request,
       fingerprint,
@@ -1863,7 +2091,7 @@ export async function evaluateQuotaMonitorPollCommit(
   if (!request.execute) {
     // A provider may mutate the Todo registry, so previews must pass admission
     // before returning a provider plan.
-    const allowed = admission(request);
+    const allowed = await admission(request);
     if (request.phase === "preflight") {
       const providerPlan = providerPlanFor(request);
       return result(
@@ -1908,7 +2136,7 @@ export async function evaluateQuotaMonitorPollCommit(
       fingerprint,
       "preview",
       record,
-      payloadFor(
+      await payloadFor(
         effectiveRequest,
         record,
         paths.jsonPath,
@@ -1932,7 +2160,7 @@ export async function evaluateQuotaMonitorPollCommit(
   }
   const runsDir = join(request.runtime_root, "goals", request.goal_id, "runs");
   const indexPath = join(runsDir, "index.jsonl");
-  return await withFileMutationLock(indexPath, async () => {
+  const commit = async (): Promise<QuotaMonitorPollCommitResult> => {
     const receiptPath = transactionPath(runsDir, request.effect_id);
     const existing = await readReceipt(receiptPath);
     if (existing) {
@@ -1949,6 +2177,9 @@ export async function evaluateQuotaMonitorPollCommit(
         );
       }
       if (existing.status !== "provider_pending") {
+        if (request.phase === "provider_rejected") {
+          throw new EffectRuntimeRequestError("cannot abort a prepared or committed Monitor effect");
+        }
         return await replayDurableReceipt(
           request,
           fingerprint,
@@ -1956,6 +2187,24 @@ export async function evaluateQuotaMonitorPollCommit(
           existing,
         );
       }
+    }
+
+    if (request.phase === "provider_rejected") {
+      if (!existing || existing.status !== "provider_pending") {
+        throw new EffectRuntimeRequestError("provider rejection recovery requires an exact pending Monitor receipt");
+      }
+      validateNoEffect(request.provider_receipt, providerPlanObject(existing.provider_plan));
+      const bytes = await readOptionalBytes(indexPath);
+      if (!pendingIndexHistoryIntact(existing, bytes) ||
+          matchingIndexRecord(indexRecords(bytes?.toString("utf8") ?? null), request.effect_id)) {
+        throw new EffectRuntimeRequestError("cannot abort Monitor effect with conflicting index history");
+      }
+      // Remove only this proven uncommitted reservation under the effect lock.
+      // Any timeout, unknown outcome, changed request or committed effect keeps
+      // its original recovery fence and never reaches this branch.
+      await rm(receiptPath);
+      return result(request, fingerprint, "aborted", null, {ok: false, appended: false},
+        "provider rejected before commit; pending Monitor reservation released");
     }
 
     // A pending v1 receipt preserves the decision that admitted this effect.
@@ -1972,7 +2221,7 @@ export async function evaluateQuotaMonitorPollCommit(
     }
     let allowed: Admission;
     try {
-      allowed = admission(admittedRequest);
+      allowed = await admission(admittedRequest, existing?.schema_version === MONITOR_PENDING_ADMISSION_SCHEMA);
     } catch (error) {
       if (existing?.schema_version === QUOTA_MONITOR_POLL_COMMIT_RECEIPT_SCHEMA &&
           error instanceof EffectRuntimeRequestError && error.code === "monitor_poll_admission_rejected") {
@@ -2001,6 +2250,13 @@ export async function evaluateQuotaMonitorPollCommit(
       );
     }
     const records = indexRecords(indexContent);
+    if (existing?.status === "provider_pending" && matchingIndexRecord(records, request.effect_id)) {
+      return result(
+        request, fingerprint, "conflict", null, {ok: false, appended: false},
+        "quota monitor-poll effect identity exists while its provider receipt is pending",
+        currentDigest, null, null, {reason_code: "effect_id_conflict"},
+      );
+    }
     if (!existing && matchingIndexRecord(records, request.effect_id)) {
       return result(
         request,
@@ -2017,11 +2273,7 @@ export async function evaluateQuotaMonitorPollCommit(
     }
 
     if (request.phase === "preflight") {
-      if (
-        existing &&
-        (currentDigest !== existing.expected_index_digest ||
-          (indexBytes?.length ?? 0) !== existing.expected_index_bytes)
-      ) {
+      if (existing && !pendingIndexHistoryIntact(existing, indexBytes)) {
         return result(
           request,
           fingerprint,
@@ -2041,7 +2293,7 @@ export async function evaluateQuotaMonitorPollCommit(
       const expectedPlan = providerPlanFor({
         ...request,
         generated_at: plan.generated_at,
-      });
+      }, plan.gate_scope_guard === true, plan.legacy_batch_version ?? null);
       if (pythonJson(plan) !== pythonJson(expectedPlan)) {
         throw new EffectRuntimeRequestError(
           "quota monitor-poll provider plan conflicts with its transaction receipt",
@@ -2070,7 +2322,7 @@ export async function evaluateQuotaMonitorPollCommit(
         { ok: true, dry_run: false, provider_required: true },
         "quota monitor-poll Todo provider is required",
         currentDigest,
-        plan,
+        providerDispatchPlan(request, plan),
       );
     }
 
@@ -2092,17 +2344,14 @@ export async function evaluateQuotaMonitorPollCommit(
       const expectedPlan = providerPlanFor({
         ...request,
         generated_at: plan.generated_at,
-      });
+      }, plan.gate_scope_guard === true, plan.legacy_batch_version ?? null);
       if (pythonJson(plan) !== pythonJson(expectedPlan)) {
         throw new EffectRuntimeRequestError(
           "quota monitor-poll provider plan conflicts with its transaction receipt",
           "malformed_transaction_receipt",
         );
       }
-      if (
-        currentDigest !== existing.expected_index_digest ||
-        (indexBytes?.length ?? 0) !== existing.expected_index_bytes
-      ) {
+      if (!pendingIndexHistoryIntact(existing, indexBytes)) {
         return result(
           request,
           fingerprint,
@@ -2121,8 +2370,12 @@ export async function evaluateQuotaMonitorPollCommit(
         plan,
         validatedProviderReceipt(request.provider_receipt, plan),
       );
-      expectedDigest = existing.expected_index_digest;
-      expectedBytes = existing.expected_index_bytes;
+      // The pending receipt freezes the admitted observation, not the entire
+      // append-only run index. An unrelated run may have committed while the
+      // provider wrote this exact effect. The new prepared WAL fences the
+      // current index under the same lock after its historical prefix passes.
+      expectedDigest = currentDigest;
+      expectedBytes = indexBytes?.length ?? 0;
     } else if (existing?.status === "provider_pending") {
       return effectConflict(request, fingerprint, currentDigest, existing);
     }
@@ -2133,7 +2386,7 @@ export async function evaluateQuotaMonitorPollCommit(
       effectiveRequest.generated_at,
       request.effect_id,
     );
-    const payload = payloadFor(
+    const payload = await payloadFor(
       effectiveRequest,
       record,
       jsonPath,
@@ -2183,5 +2436,19 @@ export async function evaluateQuotaMonitorPollCommit(
       null,
       indexRecord,
     );
-  });
+  };
+  return indexLockHeld
+    ? await commit()
+    : await withFileMutationLock(indexPath, commit);
+}
+
+export async function evaluateQuotaMonitorPollCommit(
+  value: unknown,
+): Promise<QuotaMonitorPollCommitResult> {
+  const request = requestObject(value);
+  return await withBorrowedQuotaAccountingOwner(
+    request.owner,
+    async (indexLockHeld) =>
+      await evaluateQuotaMonitorPollRequest(request, indexLockHeld),
+  );
 }

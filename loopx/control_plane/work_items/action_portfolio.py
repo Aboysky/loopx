@@ -20,6 +20,12 @@ ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION = ACTION_PORTFOLIO_SELECTI
 ACTION_SELECTION_QUALIFICATION_SCHEMA_VERSION = ACTION_PORTFOLIO_SELECTION_RESULT_SCHEMA
 QUOTA_PLANNING_PACKET_REQUEST_SCHEMA_VERSION = ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_SCHEMA
 QUOTA_PLANNING_PACKET_SCHEMA_VERSION = ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA
+RETAINED_ACTION_SELECTION_REENTRY_REQUEST_SCHEMA_VERSION = (
+    "retained_action_selection_reentry_request_v0"
+)
+RETAINED_ACTION_SELECTION_REENTRY_SCHEMA_VERSION = (
+    "retained_action_selection_reentry_v0"
+)
 
 
 def _compact_candidate(value: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -47,10 +53,11 @@ def build_quota_planning_packet(
     capability_gate: Mapping[str, Any] | None,
     blocked_priority_fallback: Mapping[str, Any] | None,
     goal_frontier_projection: Mapping[str, Any] | None,
+    replan_selection_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project every requested planning lens through one TypeScript request."""
 
-    if not projection_enabled and not include_detail:
+    if not projection_enabled and not include_detail and replan_selection_context is None:
         return {}
     inventory_request = build_quota_planning_inventory_request(
         goal_id=goal_id,
@@ -74,6 +81,8 @@ def build_quota_planning_packet(
                 "acceptance_gaps": _frontier_acceptance_gaps(
                     goal_frontier_projection
                 ),
+                **({"replan_selection_context": dict(replan_selection_context)}
+                   if replan_selection_context is not None else {}),
             },
         )
     except EffectRuntimeRejected as exc:
@@ -167,3 +176,37 @@ def qualify_action_selection_from_inventory(
         normal_delivery_allowed=normal_delivery_allowed,
         delivery_preemptions=delivery_preemptions,
     )
+
+
+def reconcile_retained_action_selection(
+    *,
+    retained_todo_id: str,
+    projected_todo_id: str | None,
+    effective_action: str,
+    replan_obligation_id: str | None,
+) -> dict[str, Any]:
+    """Ask the typed owner whether a reentry may bind its new projection."""
+
+    try:
+        result = effect_runtime_result(
+            "work_item.action_selection.reconcile_retained",
+            {
+                "schema_version": (
+                    RETAINED_ACTION_SELECTION_REENTRY_REQUEST_SCHEMA_VERSION
+                ),
+                "retained_todo_id": retained_todo_id,
+                "projected_todo_id": projected_todo_id,
+                "effective_action": effective_action,
+                "replan_obligation_id": replan_obligation_id,
+            },
+        )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    if not isinstance(result, Mapping) or (
+        result.get("schema_version")
+        != RETAINED_ACTION_SELECTION_REENTRY_SCHEMA_VERSION
+    ):
+        raise RuntimeError(
+            "TypeScript retained action-selection reentry shape mismatch"
+        )
+    return dict(result)

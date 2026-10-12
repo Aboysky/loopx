@@ -36,11 +36,13 @@ DEFAULT_AGENT = "cc"
 # registry-driven context, shared with the hooks/MCP
 sys.path.insert(0, str(HERE.parent / "hooks"))
 from goal_state import goal_context, find_registry, loop_md_path  # noqa: E402
+from stdio_utf8 import pin_utf8_stdio  # noqa: E402
 from loopx.control_plane.heartbeat.rules import (  # noqa: E402
     HOST_LOOP_SAFETY_RULE,
     RUNTIME_REPAIR_ROUTING_RULE,
     SCOPE_BOUNDED_WORK_RULE,
 )
+from loopx.history import load_registry  # noqa: E402
 
 
 def gh_prefix():
@@ -83,8 +85,10 @@ def loop_execution_content(goal_id, agent_id) -> str:
         "Use interaction_contract.mcp_channel for tool ownership and vision input limits.\n"
         "At material delivery, compare the Goal's vision/acceptance with actual evidence.\n"
         "Pass the resulting agent_vision or a justified vision_unchanged_reason to\n"
-        "complete_task. If omitted, use review_task_vision on that completed Todo to\n"
-        "repair its missing checkpoint without another spend. This is not a Goal-stop\n"
+        "complete_task. If omitted, call review_task_vision with only that Todo and\n"
+        "Agent to read the basis; rejudge, then submit read_context_id with the decision.\n"
+        "Stale/replaced receipts require rereading; lost replies retry the same receipt\n"
+        "and decision. Recovery never spends again. This is not a Goal-stop\n"
         "shortcut: open acceptance needs replan; vision_closed closes a stage and needs\n"
         "a successor vision; no_followup requires evidence of no remaining scoped work.\n"
         "For new replan work not covered by these tools, use the exact live\n"
@@ -128,7 +132,7 @@ def goal_detail(ctx):
     if reg:
         try:
             regp = Path(reg)
-            data = json.loads(regp.read_text(encoding="utf-8"))
+            data = load_registry(regp)
             entry = next((g for g in data.get("goals", []) if g.get("id") == gid), None)
             sf = (entry or {}).get("state_file")
             if sf:
@@ -273,4 +277,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pin_utf8_stdio()
     main()

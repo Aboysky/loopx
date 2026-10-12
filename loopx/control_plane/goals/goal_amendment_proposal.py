@@ -57,17 +57,17 @@ basis under Stage 1's downgraded naming.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
-from ...event_sourced_state import now_utc_iso
+from ..runtime.time import now_utc_iso
 from ...file_lock import exclusive_file_lock
-from ...history import load_index
+from ...history import load_index, load_registry
 from ...runtime import validate_goal_id_path_segment
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..runtime.time import chronology_key
 from ..status.autonomous_replan_projection import (
     autonomous_replan_obligation_from_runs,
 )
@@ -81,6 +81,7 @@ from .goal_frontier import (
     autonomous_replan_is_required,
     autonomous_replan_scope_decision,
 )
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from .shared_goal_work_source import read_shared_goal_work_source
 from .shared_goal_alignment import (
     DEFAULT_REGISTRY_RELATIVE_PATH,
@@ -109,7 +110,6 @@ GOAL_AMENDMENT_PROPOSAL_ADMISSION_FACTS = (
 )
 AMENDMENT_PROPOSAL_JOURNAL_DIRNAME = "amendment-proposals"
 AMENDMENT_PROPOSAL_JOURNAL_BASENAME = "journal.jsonl"
-_SHA256_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def amendment_proposal_journal_path(
@@ -195,15 +195,11 @@ def admit_goal_amendment_proposal(
         else project / DEFAULT_REGISTRY_RELATIVE_PATH
     )
     try:
-        registry_payload = json.loads(
-            effective_registry_path.read_text(encoding="utf-8")
-        )
+        registry_payload = load_registry(effective_registry_path)
     except (OSError, ValueError):
         raise ValueError(
             f"goal registry is unreadable: {effective_registry_path}"
         ) from None
-    if not isinstance(registry_payload, dict):
-        raise TypeError("goal registry must contain a JSON object")
 
     effective_runtime_root = (
         runtime_root
@@ -319,7 +315,7 @@ def _derive_open_replan_obligation_inventory(
         for _, run in sorted(
             enumerate(runs),
             key=lambda item: (
-                str(item[1].get("generated_at") or ""),
+                *chronology_key(item[1].get("generated_at")),
                 item[0],
             ),
             reverse=True,
@@ -444,7 +440,7 @@ def _check_admission_shape(
         != str(proposal.get("proposal_id") or "").strip().lower()
         or admission.get("base_revision_basis")
         != str(proposal.get("base_revision_basis") or "").strip()
-        or not _SHA256_DIGEST_PATTERN.fullmatch(
+        or not ENVELOPED_SHA256_PATTERN.fullmatch(
             str(admission.get("proposal_digest") or "")
         )
     ):

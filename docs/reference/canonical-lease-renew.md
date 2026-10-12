@@ -25,6 +25,123 @@ uses all retained records, not the bounded operator display. Atomic
 Standalone acquire uses requested scopes; atomic claim retains its existing
 Todo-required scope intent. Neither operation expands a permission grant.
 
+## Repository-relative scope identity
+
+New canonical acquisitions freeze the canonical Todo's normalized
+`task_repository` as `lease.write_repository`. There is no caller repository
+override and no inference from the CLI working directory. Within one Goal,
+overlapping relative paths conflict unless **both** execution grants have known,
+different repository identities, or the caller uses the verified cooperative
+code-edit mode below. Host/path case aliases remain overlapping.
+The existing complete-head scan, owner eligibility, TTL, generations, CAS and
+receipt identities are unchanged; an empty scope set still does not conflict.
+
+Old grants without `write_repository` (or with null) remain unknown and
+conservatively overlap any repository for ordinary exclusive acquisition.
+Reading or renewing them does not
+backfill a namespace from today's Todo. Fresh acquisition after legal retirement
+can freeze the current Todo identity. Malformed frozen identities fail closed.
+Renewal, transfer and release preserve the frozen value and historical receipts.
+Current execution proof, acquire replay and inspection reject known repository
+drift with `lease_repository_divergence`; cleanup still uses exact owner/key/version.
+Changing retained work requirements is not a metadata-edit shortcut.
+
+JSON inspection exposes `lease.write_repository`; Markdown lease readback also
+shows the identity or `unknown (conservative overlap)`. This is a Goal-local,
+logical repository mutex, not a physical filesystem/symlink alias check or a
+cross-Goal lock. Unknown legacy storage remains conservative. No configuration,
+provider promotion or automatic cross-agent dispatch is added. CLI and native
+provider inspection cover this boundary; broader frontend/Lark collaboration
+delivery remains separate work, not an end-to-end completion claim.
+
+### Independent worktree code edits
+
+For edits in an independent Git worktree on a promoted File/SQLite Goal, add
+`--write-worktree` to standalone acquisition:
+
+```bash
+loopx --registry registry.json task-lease acquire \
+  --goal-id example-goal --todo-id todo_work --owner agent-a \
+  --idempotency-key worktree-edit-a --ttl-seconds 600 \
+  --write-scope 'src/**' --write-worktree "$PWD"
+```
+
+The TypeScript entrypoint verifies the caller's Git root, origin against the
+Todo's repository, machine identity and filesystem identity. This selects
+cooperative code editing: overlapping relative file scopes return
+`integration_overlap_advisories` identifying the other Todo and paths, so their
+owners can coordinate and validate the combined changes before merge. The
+other grant may describe a different checkout or omit workspace identity; an
+unknown legacy grant no longer blocks the verified code editor. The advisory
+does not attest the other editor's isolation or rewrite its grant. This is
+cooperative code-edit coordination, not a filesystem access-control mechanism.
+It does not authorize changing shared runtime data, Git administration, remote
+branches, or merging. Use ordinary exclusive leases for those operations.
+
+Accepted origin URLs use the same repository identity rules as Todo declarations:
+explicit default transport ports (including SSH `:22` and Git `:9418`) do not
+create another repository, while nondefault ports remain distinct. Origins with
+passwords or unsafe path segments are rejected before lease acquisition.
+
+Known same-checkout aliases and the same Todo retain existing exclusion, even
+if retained repository metadata differs for that physical checkout.
+Requests without a verified caller workspace retain ordinary exclusive scope
+checks, including against unknown legacy grants. Repository mismatch,
+redirected paths and a non-worktree root fail closed. Verified machine discovery
+currently supports macOS and Linux; other hosts retain ordinary leases. No
+workspace path or machine identifier is stored directly: only opaque digests
+and the existing public repository identity enter the private authority record.
+
+Renewal preserves this identity. Acquire retries must use the same worktree,
+scopes and execution key; an alias resolving to the same worktree is valid.
+To change directories or return to ordinary exclusion, release your current
+lease with its version and acquire a new execution key without
+`--write-worktree`. Other holders need not release their grants to admit an
+isolated code editor. Existing records and historical receipts are retained;
+no foreign ownership, shared-runtime permission or merge authority changes.
+
+**Behavior change:** worktree mode no longer requires both holders to have
+verified sibling-worktree identities. File overlap is an integration advisory
+unless the retained identity positively identifies the same physical checkout.
+The Todo lease still fences the execution instance, exact retries, renewal and
+lifecycle writes; code-file exclusivity is not that instance fence.
+
+## 仓库相对路径的冲突边界
+
+新的 canonical 租约从权威 Todo 的 `task_repository` 冻结
+`lease.write_repository`，不接受调用者覆盖，也不从 CLI 当前目录猜测。同一 Goal
+内，普通独占模式只有双方都是已知且不同的仓库，才隔离同名相对路径；大小写别名仍互斥。
+完整 head 扫描、owner 资格、TTL、generation、CAS 与回执身份保持原规则，空 scope
+仍不产生写冲突。旧记录缺少该字段或为 null 时保持未知，普通独占模式保守互斥，读回和续租不
+回填；合法退役后的新执行才冻结当前仓库。损坏身份拒绝执行，续租、转交和释放
+保留冻结值与原历史回执。当前执行证明、领取重放与 inspect 拒绝已知仓库漂移
+（`lease_repository_divergence`）；清理仍凭精确 owner/key/version，不能借 metadata
+编辑替换已有执行契约。
+
+JSON 与 Markdown 读回同一仓库字段或未知状态。这只是 Goal 内逻辑仓库互斥，
+不识别物理目录、软链接别名，也不是跨 Goal 锁；不新增配置、promotion 或自动
+委派。CLI 与 native provider 检查已覆盖该边界，完整前端/Lark 协作旅程仍需单独交付。
+
+独立 worktree 的 origin URL 与 Todo 声明使用同一仓库身份规则：显式默认端口
+（包括 SSH `:22` 和 Git `:9418`）不产生另一个仓库身份，非默认端口仍须匹配。
+带密码或不安全路径段的 origin 在获取租约前被拒绝。
+
+### 独立 worktree 的协作代码编辑
+
+在独立 Git worktree 根目录使用上方 `--write-worktree "$PWD"`。TS 入口验证
+调用者的仓库、物理目录和主机身份；代码文件的 scope 重叠只返回
+`integration_overlap_advisories`，供集成、评审与合并时协调。对方旧 lease
+缺少 worktree 身份也不阻塞，且不会被改写或被推断成已隔离。已确认同一物理
+checkout 的冲突、同一 Todo 的执行归属仍拒绝；软链接、Git 管理目录和仓库不匹配
+仍在入口拒绝。
+
+这是 worktree 模式的行为变更：文件范围从跨 checkout 的执行锁改为集成提示，
+不再要求双方都先释放、重新绑定 worktree。Todo 实例 lease、CAS、TTL、重放、
+续租及生命周期写入仍按原规则保护。共享运行状态、远端分支和合并权限不由
+此模式授予；未提供经验证的调用者 worktree 时，普通独占规则保持不变。
+如需恢复普通独占，按读回版本释放自己的 lease，再用新的执行 key、不带
+`--write-worktree` 重新取得；无需修改其他角色的 lease。
+
 ## Operate the current lease
 
 Read the current canonical lease and use its owner, execution key and version:
@@ -48,6 +165,74 @@ The example assumes an active lease at version 3 and an unclaimed Todo or a Todo
 already assigned to the eligible receiver. Without `--transfer-claim`, transfer does not reassign the Todo
 claim. Neither form overrides an exclusion or widens write scopes. Use the actual readback
 versions, not these example numbers.
+
+### Action help and argument recovery
+
+Use `loopx task-lease renew --help` to inspect only that action's options;
+all five lease actions support scoped help. Todo `list`, `claim`, `receipt`,
+`result-read`, `plan` and `project-markdown` also show scoped help. Parent help
+and the other Todo actions retain the full option list. Help reads no Goal or
+lease state; conditional requirements and authority checks still apply.
+
+Lease argument errors return `recovery.requires_flags`, `remove_flags` and
+`cli_args`. Review the removed flags, supply missing values, then invoke the
+returned argument tokens. The repair preserves registry/runtime routing,
+caller identities, execution keys and supplied CAS versions. It does not
+execute a retry or authorize work. Irrelevant flags that were previously
+ignored are now rejected before runtime resolution, including an explicit
+zero version on `inspect`. Valid lifecycle requests still use the existing
+lease authority: exact idempotent retries may replay their receipt, while new
+intent cannot bypass the current version or owner checks.
+
+使用 `loopx task-lease renew --help` 只查看当前动作的选项，五种 lease 动作均支持。
+Todo 的 `list`、`claim`、`receipt`、`result-read`、`plan` 和 `project-markdown`
+也支持动作专属帮助；父命令与其他 Todo 动作保留完整选项列表。帮助不读取 Goal
+或租约状态，条件必填项和权限检查仍然有效。
+
+租约参数错误会返回缺失项 `recovery.requires_flags`、冲突项 `remove_flags`
+和重试参数 `cli_args`。先确认删除项、补齐缺失值，再调用这些参数；恢复提示保留
+注册表与运行目录路由、调用者身份、执行 key 和已提供的 CAS 版本，不自动重试，
+也不授予执行权限。此前被忽略的无关选项现在会在解析运行状态之前被拒绝，包括
+`inspect` 上显式提供的零版本。有效请求仍由原租约规则裁决：完全相同的重试可
+重放已有回执，新意图不能绕过当前版本或 owner 检查。
+
+## What inspection proves
+
+`task-lease inspect` uses one TS read owner for legacy files and selected
+File/SQLite authority. Service-owned PostgreSQL uses the same reader through its
+existing identity-fenced factory; the CLI does not gain a PostgreSQL connection
+or enable a service deployment. Promoted inspection reads Todo, lease and mode
+from one complete provider revision, ignoring stale display and lease files.
+
+`lease.status: active` describes the retained record. The top-level `active`
+means its expiry is strictly after the observation clock **and** its current
+owner is eligible for the active, open Todo. An archived record cannot revive
+execution even when imported history retains `status: open` and a future lease.
+Closed, unregistered, excluded and conflicting-claim owners return `active:
+false` with the existing `executor_constraint` diagnostic. Rejection precedence
+and diagnostic fields share the mutation-admission owner.
+
+An active lease with an invalid expiry now fails with `corrupt_lease`, including
+on the legacy route; it no longer looks like an ordinary inactive lease. Missing,
+expired and released leases retain their previous successful inactive response.
+For legacy storage, TS first checks the retained lease and only asks Python for
+a full Todo projection when it is time-active; the final check re-reads the lease
+after that projection. Inactive inspection does not parse the work history.
+Registration-source receipts and the promotion fence are rechecked after the
+read. Source changes trigger at most three host attempts, then an explicit
+`authority_source_changed` failure. Selected-provider failures never fall back.
+
+This is a read-only observation, not an execution grant or a lock across later
+work. A subsequent registration change, provider commit or expiry can invalidate
+it. Mutations must still prove their current owner/key/version and commit under
+their existing fences. Inspection does not repair display, renew a lease, change
+provider selection or spend quota.
+
+检查由 TS 统一解释两条来源路径：`lease.status` 是保留记录的状态，顶层 `active`
+还要求租约未到期、Todo 活跃且未关闭、owner 仍满足注册、排除与认领约束。
+归档但仍标为 open 的历史记录不再产生有效执行资格；损坏的 active 到期时间明确
+报错，不再伪装成正常失效。检查前后校验注册来源与晋升 fence，最多重试三次；
+结果只代表一次观察，后续写操作仍须校验当前执行证明，不获得新的授权。
 
 ## Atomically hand over claimed work
 
@@ -77,8 +262,10 @@ writers reject it instead of attempting two separate writes.
 
 One provider CAS commits `claimed_by`, source actor attribution, lease owner/key,
 version +1, epoch +1, events and the original receipt. Todo ID, dependencies,
-requirements, evidence and lease scopes remain intact. Existing continuation
-notes retain their bytes but become stale when their bound Todo facts change.
+requirements, evidence and lease scopes remain intact. A currently valid explicit continuation note is rebound to the new claim in
+that same CAS; previously stale notes and ordinary notes remain untouched.
+Other work-fact changes still invalidate context. See the
+[leased continuation workflow](../architecture/rfcs/cross-session-memory-substrate-v0.md#leased-execution-continuation).
 A same-agent new execution advances the lease generation without fabricating a
 claim edit. The old execution cannot update/complete the handed-over Todo; the
 recipient still uses the ordinary proof-bearing update and completion commands.
@@ -124,7 +311,9 @@ renewal receipt schema, identity and digest encoding remain compatible.
 
 For maintenance, `status=replayed` and `idempotent=true` return historical results even after a
 later renewal, transfer, release or expiry. They do not grant present execution
-rights or renew again. Freeze the original request after a lost/ambiguous
+rights or renew again. A newly pending or invalid canonical `todo_done` or `resume_at` wait
+rejects renew/transfer retries as well as new requests; the original receipt is
+retained, and release remains available. Freeze the original request after a lost/ambiguous
 response; recover its receipt, then inspect current state before new work.
 
 Acquisition identity binds Goal/Todo/owner/execution key; the request digest
@@ -136,8 +325,106 @@ with the same owner/key/epoch. Replay after renewal returns the current
 version/expiry in `lease`, with the unchanged original decision in
 `original_receipt`; `current_provider_revision/current_cursor` identify that
 readback. A transferred, expired or released execution cannot be revived by its
-old receipt. Claim receipts and maintenance receipts retain their historical
-semantics; they are not acquire responses.
+old receipt. Atomic `todo claim` with `--task-lease-idempotency-key` now uses the
+same current-proof owner after commit/recovery, including receipt-only no-ops.
+A plain claim without an acquisition request and retained maintenance receipts
+do not grant new execution.
+
+For atomic adoption, freeze both identities across an uncertain response:
+
+```bash
+loopx --registry registry.json todo claim \
+  --goal-id example-goal --todo-id todo_work \
+  --claimed-by agent-a --agent-id agent-a \
+  --claim-operation-id adopt-work-a \
+  --task-lease-idempotency-key execution-a --task-lease-expected-version 0
+```
+
+The operation id identifies the claim transaction; the execution key identifies
+the lease generation. Repeating this exact command after renewal returns the
+renewed lease and the original receipt. After release or expiry it fails with
+`idempotency_key_reuse`; after a claim transfer it fails current-owner admission.
+Inspect the current state before choosing a new execution key and operation id.
+If the receipt exists but the current head cannot be read, the command returns
+`ambiguous` with same-operation recovery, not the historical active lease.
+Switching away from `hard_lease` also invalidates atomic claim/acquire success.
+
+| Readback | Meaning | Next action |
+| --- | --- | --- |
+| `replayed`, same epoch, newer lease version | Same execution was renewed | Use the returned current lease version. |
+| `idempotency_key_reuse` | The receipt belongs to a retired execution | Inspect, then request a new execution with a new key. |
+| `owner_conflicts_with_claim` | Current Todo ownership changed | Let the current owner continue or use an authorized handover. |
+| `canonical_acquire_readback_required` | History is known, current proof is unavailable | Restore the provider and retry the same operation. |
+| Acceptance/source rejection | Current control-plane authority changed | Resolve that boundary before attempting work. |
+| `todo_dependency_pending` / `todo_dependency_invalid` | The canonical prerequisite is unfinished, the scheduled resume time has not arrived, or the condition is invalid | Complete the actual prerequisite, wait until the scheduled time, or repair the condition through its authorized Todo owner. |
+
+For canonical File, SQLite and PostgreSQL Goals, `resume_when=todo_done:todo_prerequisite`
+and `resume_when=resume_at:<timezone-aware-rfc3339-timestamp>` fence execution as
+well as runnable selection. The existing TypeScript resume
+rule reads the exact prerequisite from the same provider head: its actual `done`
+status satisfies the wait, including retained archived completion. A cached
+`resume_ready=true`, an old acquisition receipt, or a superseded prerequisite
+cannot authorize execution. Missing targets and unfinished dependency cycles fail closed.
+Date waits use the operation's runtime-clock snapshot and become eligible at or
+after the scheduled instant. An old projected ready flag cannot replace that
+evaluation; reaching the time does not bypass the other authority checks.
+
+While the wait is unsatisfied, standalone and atomic claim/acquire, renew/transfer,
+continuation adoption, Monitor execution and new completion reject it. Inspection
+retains the lease record but reports effective `active=false` with the dependency
+diagnosis. Release, historical terminal readback, authorized supersede, ordinary
+assignment and wait editing retain their existing authority. Other resume-condition kinds keep
+their existing behavior; this repair does not introduce governed amendments.
+
+Inspect the waiting task with `loopx todo list --goal-id example-goal --todo-id todo_work`.
+Complete its prerequisite through the normal validation and lease owner, or wait
+until its scheduled resume time, then
+read the same task again: `resume_ready=true` allows acquisition under the usual
+owner/key/version checks. If the wait itself needs correction, use the existing
+authorized `todo update --resume-when ...` or `--clear-resume-when` operation;
+neither inspecting nor editing the wait grants execution authority.
+In hard-lease mode, ordinary edits still need an active execution proof. After
+release or expiry, use the existing narrow owner pause/reopen lifecycle, with a
+stable operation id, current provider revision and explicit reason:
+
+```bash
+loopx todo update --goal-id example-goal --todo-id todo_work --agent-id owner \
+  --status blocked --clear-resume-when --reason 'Correct the scheduled wait' \
+  --update-operation-id pause-wait --update-expected-provider-revision <readback-revision>
+loopx todo update --goal-id example-goal --todo-id todo_work --agent-id owner \
+  --status open --clear-resume-when --reason 'Resume after correcting the wait' \
+  --update-operation-id reopen-wait --update-expected-provider-revision <fresh-readback-revision>
+```
+
+Read back between operations and acquire a fresh lease before executing. Do not
+attach an old lease proof or bundle ownership, text or work-requirement edits.
+
+在 canonical File、SQLite 和 PostgreSQL Goal 中，`todo_done` 和 `resume_at` 等待同时约束
+实际执行入口，而不只是候选任务展示。必须由真实前置 Todo 的 `done` 状态满足条件，
+保留的已归档完成记录仍有效；缓存的 ready 标志、旧领取收据和 superseded 状态不能
+代替完成。日期等待使用本次操作的 runtime-clock 快照，到达指定时刻后才满足条件；
+旧 ready 投影不能代替实时判断，到期也不跳过其他权限检查。
+等待期间，领取／原子认领、续租／转交、继续执行、Monitor 执行和新完成均
+被拒绝；新等待也会拒绝续租／转交的重试，原收据仍保留。检查保留原 lease 记录，
+但有效 `active=false`。释放、历史完成读回、授权 supersede、普通分配和等待修复
+沿用原规则。前置任务正常完成或到达指定恢复时刻后，重新读回并按原 owner、key、
+version 规则继续执行。其他恢复条件及 governed amendment 的边界保持独立。
+hard-lease 普通编辑仍须提供有效执行 proof。租约释放或到期后，可按上面的既有窄范围
+流程，以明确理由、稳定操作 ID 和当前 provider revision 暂停并清除等待；读回后再用
+新 revision 明确重新打开，最后领取新租约。不能附带旧 proof、文案、归属或工作要求修改，
+也不能把暂停或重新打开当作执行授权。
+
+A successful readback is still a point-in-time proof, not a lock over subsequent
+external effects. Execution must retain its existing mutation fences; this
+change does not close the remaining external-effect fencing work.
+
+Canonical commands recheck their receipt after reading the decision head.
+This handles a peer committing the same operation between the first absent
+receipt and the head read: recovery precedes duplicate-ID, stale-revision,
+Monitor-generation and other new-admission checks. The second read does not
+lock the head; commits after it still resolve through CAS and receipt recovery.
+Archive preview remains a current-state preview with no receipt lookup.
+No provider becomes the default and no legacy writer is re-enabled by this change.
 
 The canonical-only acquire and lifecycle requests are closed and versioned. Joint claim
 transfer uses `loopx_canonical_task_lease_claim_transfer_request_v0`, so an older
@@ -261,8 +548,15 @@ expected-version 0 的原样重试可恢复回执，改变参数会拒绝。
 Acquire 的成功还必须核对当前有效 owner/key/epoch 和资格。同一执行续约后，
 重试返回 `lease` 中的当前版本/到期时间，以及 `original_receipt` 中不可变的原始
 决定；`current_provider_revision/current_cursor` 标识当前读回。已转交、到期或释放
-的旧执行不能凭 receipt 复活。Todo claim 和维护 receipt 仍是历史语义，不能将其
-当成新的 acquire 响应。
+的旧执行不能凭 receipt 复活。携带 lease 请求的原子 Todo claim 也共享这项检查，
+包括首次提交、丢响应恢复、历史重放和只保存 receipt 的 no-op。普通 claim 和维护
+receipt 仍是历史语义，不授予新执行权。当前 head 不可读时返回 ambiguous，要求
+沿用原 operation id 恢复；不能把原 receipt 中的 active lease 当作当前证明。
+
+各 canonical 命令在读 head 后再次查原 receipt，解决另一调用恰在第一次查无回执后
+提交成功的竞争。回执优先于新一轮的重复 ID、陈旧 revision 和 Monitor generation
+校验；之后仍由 CAS 防止覆盖并发更新。归档 dry-run 继续只看当前状态，不重放历史。
+公开参数、provider 默认值和 legacy 路径保持不变。
 
 canonical acquire 与 lifecycle 各有封闭 wire，旧 renew wire 只接受 renew；旧
 runtime 不识别新 acquire schema。fence、provider、注册源变化和 CAS 错误不回退
@@ -276,3 +570,29 @@ L3/R5 的独立领取/接管及维护由此可用，跨外部 effect 的 executo
 锁和自动结果返回仍需各自验收。D2 soak、D3、默认 profile、活动 Goal 迁移和跨主机
 部署没有改变。回滚保留 canonical state/receipt/fence 并恢复兼容代码，不得复活旧
 lease 文件。演练仅修改隔离副本，核对源与无关记录不变，不能代替完整持久性资格。
+
+## Unpromoted lease capture isolation / 未迁移租约的 capture 隔离
+
+For an unpromoted Goal with no enabled runtime shadow and no active durable
+binding, lease acquire, replay, renew, transfer and release do not require the
+legacy shadow producer modules. Python loads capture settlement only when the
+existing typed lease result carries a capture request. The normal CLI keeps
+the original source and registry unchanged, creates no shadow outbox, and
+preserves lease versions, generations, scopes and idempotent receipts. A stale
+renewal still fails without changing the stored lease.
+
+Removing a setting does not retire an active binding: enabled capture and
+active-binding recovery retain durable preparation and delivery. This removes
+an unused default-off dependency; it does not change provider defaults,
+promote a Goal, retire supported Markdown writers, or authorize deleting
+capture history and pending outbox records.
+
+未迁移 Goal 没有启用 runtime shadow、也没有活跃持久 binding 时，领取、重放、
+续约、转交和释放不依赖旧 shadow producer 模块。Python 仅在既有 typed 租约结果
+带有 capture 请求时加载结算适配器。正常 CLI 保持源和 registry 不变，不产生
+shadow outbox，并保留租约版本、generation、scope 及幂等回执；陈旧续约仍须拒绝，
+且不修改已存租约。
+
+移除配置不会退役活跃 binding：启用 capture 及已有 binding 的恢复仍须持久准备
+并送达。本项只移除默认关闭时无用途的依赖，不改变 provider 默认值、不迁移 Goal、
+不删除受支持的 Markdown writer，也不授予删除 capture 历史和待处理 outbox 的权限。

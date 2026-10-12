@@ -1,17 +1,25 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { z } from "zod";
+import {compactWorkspaceText, workspaceAgentTodoFromItem} from "./personal-workspace-model";
+import { todoItemSchema } from "../../data/status";
 import type { WorkspaceAgentTodo, WorkspaceDrawerSelection, WorkspaceGoal } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
 
 const pageSchema = z.object({
   ok: z.literal(true), total: z.number().int().nonnegative(), next_cursor: z.string().nullable(),
-  items: z.array(z.object({ todo_id: z.string(), text: z.string(), claimed_by: z.string().nullable(), evidence: z.string().nullable(), priority: z.string().nullable(), task_class: z.string().nullable() })).max(40),
+  items: z.array(z.object(todoItemSchema.shape).pick({
+    todo_id: true, text: true, done: true, status: true, claimed_by: true,
+    evidence: true, note: true, priority: true, task_class: true, task_domain: true,
+    completed_at: true, resume_when: true, resume_ready: true, resume_condition: true,
+    completion_validation_sha256: true, completion_validation_revision: true,
+    completion_validation_revision_history: true,
+  }).extend({ todo_id: z.string().min(1), done: z.literal(true), status: z.literal("done") })).max(40),
 });
 
 /** Fixed-height previews keep layout/DOM cost bounded; the drawer retains full text. */
-export function CompletedTaskLane({ goal, agentId, seed, enabled, listView = false, onSelect }: {
+export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevision = 0, listView = false, onSelect }: {
   goal: WorkspaceGoal; agentId: string; seed: WorkspaceAgentTodo[]; enabled: boolean;
-  listView?: boolean; onSelect: (selection: WorkspaceDrawerSelection) => void;
+  refreshRevision?: number; listView?: boolean; onSelect: (selection: WorkspaceDrawerSelection) => void;
 }) {
   const { t } = useWorkspaceI18n();
   const historyId = useId();
@@ -36,6 +44,23 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, listView = fal
     observer.observe(element);
     return () => { observer.disconnect(); request.current?.abort(); };
   }, []);
+  // A workspace reread invalidates the independent history snapshot, even if
+  // the directory, selected Goal and completed count did not change. Keep the
+  // user's list expansion; cancel old pages before opening a fresh cursor.
+  const resetSnapshot = useEffectEvent(() => {
+    request.current?.abort();
+    request.current = null;
+    setRows(seed);
+    setTotal(agentId === "all" ? goal.doneTodoCount ?? seed.length : seed.length);
+    setCursor(undefined);
+    setBusy(false);
+    setError(false);
+    setExpired(false);
+    setFocused(null);
+    if (scroll.current) scroll.current.scrollTop = 0;
+    setViewport({ top: 0, height: scroll.current?.clientHeight ?? 600 });
+  });
+  useEffect(() => { resetSnapshot(); }, [refreshRevision]);
   const needsPage = cursor === undefined || viewport.top + viewport.height >= rows.length * rowHeight - rowHeight * 2;
   useEffect(() => {
     if (!enabled || !visible || !needsPage || cursor === null || error || request.current) return;
@@ -46,11 +71,12 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, listView = fal
     if (agentId !== "all") query.set("agent_id", agentId);
     if (cursor) query.set("cursor", cursor);
     void fetch(`/api/chat/completed-todos?${query}`, { signal: controller.signal }).then(async (response) => {
+      if (controller.signal.aborted) return;
       if (response.status === 409) setExpired(true);
       if (!response.ok) throw new Error("history unavailable");
       const page = pageSchema.parse(await response.json());
       if (controller.signal.aborted) return;
-      const next = page.items.map((todo): WorkspaceAgentTodo => ({ todoId: todo.todo_id, text: todo.text, claimedBy: todo.claimed_by, evidence: todo.evidence, priority: todo.priority, taskClass: todo.task_class, done: true, status: "done" }));
+      const next = page.items.map((todo) => workspaceAgentTodoFromItem(todo, todo.todo_id));
       setRows((current) => cursor === undefined ? next : [...current, ...next.filter((todo) => !current.some((existing) => existing.todoId === todo.todoId))]);
       setTotal(page.total);
       setCursor(page.next_cursor);
@@ -74,8 +100,8 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, listView = fal
         {indices.map((index) => {
           const todo = rows[index]!;
           return <div className="personal-task-card personal-completed-row" key={todo.todoId} style={{ top: index * rowHeight, height: rowHeight }}>
-            <button type="button" onFocus={() => setFocused(index)} onBlur={() => setFocused(null)} onClick={() => onSelect({ kind: "todo", item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId } })}>
-              <span className="is-done">✓</span><strong>{todo.text}</strong><small>{todo.claimedBy ?? goal.agentLabel ?? goal.agentId}</small>
+            <button type="button" onFocus={() => setFocused(index)} onBlur={() => setFocused(null)} onClick={() => onSelect({ kind: "todo", item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy } })}>
+              <span className="is-done">✓</span><strong>{compactWorkspaceText(todo.text, 112)}</strong><small>{todo.claimedBy ?? t("drawer.notAssigned")}</small>
             </button>
           </div>;
         })}

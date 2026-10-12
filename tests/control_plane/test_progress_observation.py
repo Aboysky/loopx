@@ -196,6 +196,24 @@ def test_new_probe_family_is_a_semantic_delta_but_new_evidence_alone_is_not() ->
         "new_probe_family"
     ]
     assert semantic_progress_delta(evidence_only, baseline=baseline)["accepted"] is False
+    # The codec also states whether any evidence id is absent from the baseline;
+    # obligation sources that require it behind a renamed identifier read it.
+    assert semantic_progress_delta(new_probe, baseline=baseline)["evidence_novel"] is False
+    assert semantic_progress_delta(evidence_only, baseline=baseline)["evidence_novel"] is True
+    assert semantic_progress_delta(new_probe, baseline=None)["evidence_novel"] is True
+    # With an obligation window, novelty is judged against every claim in it
+    # and a replayed claim is reported as such.
+    windowed = semantic_progress_delta(evidence_only, baseline=baseline, window=[evidence_only, new_probe])
+    assert windowed["evidence_novel"] is False
+    assert windowed["observation_repeated"] is True
+    assert windowed["window_size"] == 2
+    fresh = semantic_progress_delta(
+        normalize_progress_observation(_observation(result_class="advanced", evidence_ids=["evidence-unseen"])),
+        baseline=baseline, window=[evidence_only, new_probe],
+    )
+    assert fresh["evidence_novel"] is True and fresh["observation_repeated"] is False
+    # Malformed window entries are ignored rather than failing the writeback.
+    assert semantic_progress_delta(new_probe, baseline=baseline, window=[{"bogus": True}, "text"])["window_size"] == 0
 
 
 def test_repeated_blocker_cannot_close_replan() -> None:
@@ -222,6 +240,45 @@ def test_repeated_blocker_cannot_close_replan() -> None:
     assert semantic_progress_delta(novel, baseline=baseline)["delta_kinds"] == [
         "new_concrete_blocker"
     ]
+
+
+@pytest.mark.parametrize("history_source", ["coverage", "window", "trigger_window"])
+@pytest.mark.parametrize("evidence_id", ["evidence-route-map", "evidence-readback"])
+def test_known_blocker_does_not_become_new_under_another_work_item(
+    history_source: str, evidence_id: str,
+) -> None:
+    prior = normalize_progress_observation(
+        _observation(result_class="blocked", blocker_id="blocker-permission")
+    )
+    obligation = {
+        "obligation_id": "replan-0123456789abcdef",
+        "triggers": [{"kind": "vision_acceptance_gap"}],
+    }
+    if history_source == "coverage":
+        obligation["replan_context"] = build_replan_context(
+            obligation, goal_id="goal-fixture", agent_id=AGENT_ID,
+            newest_first_runs=[_run("2026-08-13T01:00:00Z", prior)],
+        )
+    elif history_source == "window":
+        obligation["progress_window"] = [prior]
+    else:
+        obligation["triggers"][0]["progress_window"] = [prior]
+    current = normalize_progress_observation(_observation(
+        result_class="blocked", blocker_id="blocker-permission",
+        work_item_id="replan-0123456789abcdef", evidence_ids=[evidence_id],
+    ))
+    result = semantic_delta_from_writeback(
+        obligation=obligation, progress_observation=current,
+    )
+    assert result["accepted"] is False
+    assert "new_concrete_blocker" not in result["satisfying_outcomes"]
+
+    # A genuinely different blocker can be established by the same evidence.
+    novel = semantic_delta_from_writeback(
+        obligation=obligation,
+        progress_observation={**current, "blocker_id": "blocker-runtime"},
+    )
+    assert novel["satisfying_outcomes"] == ["new_concrete_blocker"]
 
 
 def test_exhaustion_requires_coverage_proof() -> None:
@@ -421,7 +478,7 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
     enriched = {**obligation, "replan_context": context}
     packet = build_replan_action_packet(enriched)
 
-    assert context["evidence_source"] == "agent_scoped_evidence_log"
+    assert context["evidence_source"] == "compact_run_history"
     assert context["delivery"] == "host_projected"
     assert context["delivery_receipt"]["status"] == "delivered"
     assert context["coverage_ledger"][0]["fingerprint"] == trigger[
@@ -435,7 +492,13 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         "required_outcome",
         "writeback_contract",
         "allowed_terminal",
+        "planning_guidance",
     }
+    assert len(packet["planning_guidance"]) == 5
+    assert all(
+        isinstance(instruction, str) and instruction
+        for instruction in packet["planning_guidance"]
+    )
     assert packet["writeback_contract"] == {}
     assert packet["allowed_terminal"] == [
         "exploration_exhausted",

@@ -18,7 +18,13 @@ from ..control_plane.coordination.legacy_writer_fence import (
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
+from ..control_plane.effect_runtime import (
+    EffectRuntimeHostPermissionError,
+    EffectRuntimeStartupError,
+)
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
+    CloseoutQueryUnavailableError,
     HeartbeatReceiptIdentityConflictError,
     QuotaActionSelectionConflictError,
     QuotaCommandValidationError,
@@ -74,6 +80,11 @@ def quota_failure_payload(
     verbose_debug = verbose_debug_fields(
         error, verbose=bool(getattr(args, "verbose", False))
     )
+    recommended_action = (
+        error.recommended_action
+        if isinstance(error, EffectRuntimeHostPermissionError)
+        else "fix quota/status collection before spending automatic compute"
+    )
     if command not in QUOTA_EVENT_KINDS:
         return {
             "ok": False,
@@ -95,9 +106,7 @@ def quota_failure_payload(
                     "status": "quota_collection_failed",
                     "waiting_on": "codex",
                     "severity": "high",
-                    "recommended_action": (
-                        "fix quota/status collection before spending automatic compute"
-                    ),
+                    "recommended_action": recommended_action,
                     "source": "quota",
                 }
             ],
@@ -105,9 +114,15 @@ def quota_failure_payload(
             **lock_timeout_fields,
         }
 
+    # A managed-runtime failure already carries a bounded, public-safe message
+    # (which method could not be reached and how long it was given), so publish
+    # it instead of a generic line the caller cannot act on.
     public_reason = (
         str(error)
-        if isinstance(error, HeartbeatReceiptIdentityConflictError)
+        if isinstance(
+            error,
+            (CloseoutQueryUnavailableError, HeartbeatReceiptIdentityConflictError, EffectRuntimeStartupError),
+        )
         else "quota collection failed"
     )
     payload: dict[str, object] = {
@@ -122,27 +137,69 @@ def quota_failure_payload(
         "waiting_on": "codex",
         "status": "quota_collection_failed",
         "source": "quota",
-        "recommended_action": (
-            "fix quota/status collection before spending automatic compute"
-        ),
+        "recommended_action": recommended_action,
         **verbose_debug,
         **lock_timeout_fields,
     }
+    if isinstance(error, HeartbeatReceiptIdentityConflictError):
+        payload.update({
+            "status": "heartbeat_receipt_identity_conflict",
+            "effective_action": EffectiveAction.QUOTA_SKIP.value,
+            "recommended_action": (
+                "Rerun quota should-run with the same --turn-instance-id and without "
+                "--todo-id or --replan-obligation-id to read the bound Turn's recovery "
+                "contract. Settle verified work or record its verified blocked closeout; "
+                "do not replace the committed binding, repair receipt storage, or invent "
+                "a new Turn id. Independent work belongs to the next real host Turn."
+            ),
+        })
+    if isinstance(error, CloseoutQueryUnavailableError):
+        payload.update({
+            "status": error.diagnostic_code,
+            "effective_action": EffectiveAction.CONTROL_PLANE_HEALTH_REPAIR.value,
+            "recommended_action": (
+                "check runtime health, then retry quota should-run with the same "
+                "Turn identity to read the closeout state; do not infer settlement "
+                "or replay work from a missing query response"
+            ),
+        })
     if isinstance(error, QuotaActionSelectionConflictError):
         # The requested Todo could not be reconciled with the projection. Report
         # the real conflict and the next read to make, rather than the generic
         # "quota collection failed" and a pointer at receipt writeback.
+        selection_conflict: dict[str, object] = {
+            "kind": error.kind.value,
+            "requested_todo_id": error.requested_todo_id,
+            "selected_todo_id": error.selected_todo_id,
+            "qualification_state": error.qualification_state,
+        }
+        if error.unsettled_prior_turn_instance_id:
+            selection_conflict["unsettled_prior_turn_instance_id"] = (
+                error.unsettled_prior_turn_instance_id
+            )
+        if error.unsettled_repair:
+            selection_conflict["unsettled_repair"] = error.unsettled_repair
+        if (
+            error.admission_must_attempt is not None
+            or error.admission_delivery_allowed is not None
+        ):
+            selection_conflict["admission"] = {
+                "agent_must_attempt": error.admission_must_attempt,
+                "delivery_allowed": error.admission_delivery_allowed,
+            }
+        if error.retained_selection:
+            selection_conflict["retained_selection"] = True
+            selection_conflict["retained_selection_todo_id"] = error.selected_todo_id
+        if error.receipt_replan_obligation_id:
+            selection_conflict["receipt_replan_obligation_id"] = (
+                error.receipt_replan_obligation_id
+            )
         payload.update(
             {
                 "reason": str(error),
                 "status": "quota_action_selection_conflict",
                 "recommended_action": error.recommended_action,
-                "action_selection_conflict": {
-                    "kind": error.kind.value,
-                    "requested_todo_id": error.requested_todo_id,
-                    "selected_todo_id": error.selected_todo_id,
-                    "qualification_state": error.qualification_state,
-                },
+                "action_selection_conflict": selection_conflict,
             }
         )
     if isinstance(error, QuotaIdentityPreconditionError):

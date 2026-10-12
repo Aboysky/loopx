@@ -16,6 +16,7 @@ import {leaseEpoch, leaseIsActive, leaseVersion, normalizeAgent, normalizeGoalId
   normalizeIdempotencyKey, normalizeOwner, normalizeTodoId,
   normalizeTtl, utcIsoformat, TaskLeaseAcquireError, type LeaseRecord} from "../work_items/task_lease_acquire.ts";
 import {taskLeaseOperationIdentity, taskLeaseOperationRequestDigest} from "../work_items/task_lease_operation_identity.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 // The shipped renewal receipt namespace and request digest stay unchanged.
 const CONTRACTS = {
@@ -105,11 +106,31 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
       }
       return {...payload, fields: {...fields, operation_id: identity.operation_id}};
     }});
+  const currentDependencyProof = async (result: JsonObject): Promise<JsonObject> => {
+    if (input.operation === "release" || !["applied", "no_change", "replayed", "recovered"].includes(String(result.status))) return result;
+    try {
+      const current = await store.loadAuthority();
+      if (current.status !== "loaded") throw new AuthorityStoreProtocolError("current lease authority unavailable");
+      validateCoordinationTodoReadModel(current.head, input.goal_id);
+      const dependency = todoExecutionDependencyRejection(
+        indexCoordinationProjection(current.head, input.goal_id).todos, input.todo_id, input.now);
+      return dependency === null ? result : {...failed(dependency.code, dependency.reason),
+        original_receipt: result.original_receipt, resume_condition: dependency.condition};
+    } catch {
+      return {schema_version: contract.result, status: "ambiguous", changed: false,
+        reason_code: "canonical_lease_readback_required",
+        reason: "Lease mutation is durable but current authority is unavailable; retry the same request",
+        original_receipt: result.original_receipt,
+        recovery: {operation_id: identity.operation_id, retry_with_same_operation_id: true}};
+    }
+  };
   let commit: AuthorityStoreCommit;
   try {
     const replay = await receipt.read(store);
-    if (replay !== null) return replay;
-    const head = await store.loadAuthority();
+    if (replay !== null) return currentDependencyProof(replay);
+    const observation = await receipt.observe(store);
+    if (observation.kind === "receipt") return currentDependencyProof(observation.result);
+    const head = observation.authority;
     if (head.status !== "loaded") return {schema_version: contract.result, ...head, failure_stage: "validation", changed: false};
     const index = indexCoordinationProjection(head.head, input.goal_id);
     validateCoordinationTodoReadModel(head.head, input.goal_id);
@@ -126,12 +147,17 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
       todo: canonicalLeaseTodoFact(claim.todo),
       lease: lease ? {present: true, active: leaseIsActive(lease, input.now), status: String(lease.status),
         owner: normalizeOwner(lease.owner), idempotency_key: normalizeIdempotencyKey(lease.idempotency_key),
-        version: leaseVersion(lease), lease_epoch: leaseEpoch(lease), write_scopes: (lease.write_scopes ?? []) as string[], acquire_ttl_seconds: null} : null,
+        version: leaseVersion(lease), lease_epoch: leaseEpoch(lease), write_scopes: (lease.write_scopes ?? []) as string[],
+        ...(lease.write_repository == null ? {} : {write_repository: String(lease.write_repository)}), acquire_ttl_seconds: null} : null,
       command});
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
       return {...failed(decision.code, `canonical task lease ${input.operation} rejected: ${decision.code}`),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(lease),
         ...(todo ? {todo_status: todo.status, claimed_by: todo.claimed_by ?? null, excluded_agents: excluded} : {})};
+    }
+    if (input.operation !== "release") {
+      const dependency = todoExecutionDependencyRejection(index.todos, input.todo_id, input.now);
+      if (dependency !== null) return failed(dependency.code, dependency.reason);
     }
     const changed = decision.outcome === "apply";
     const next = changed && lease ? materializeTaskLeaseLifecycle(lease, command, decision, input.now) : lease;
@@ -158,7 +184,7 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
   try {
     const result = await receipt.commit(store, commit);
     return ["applied", "no_change", "replayed", "recovered"].includes(String(result.status))
-      ? result : {...result, failure_stage: "durable_writeback"};
+      ? currentDependencyProof(result) : {...result, failure_stage: "durable_writeback"};
   } catch {
     return {schema_version: contract.result, status: "ambiguous", changed: false,
       reason_code: "canonical_lease_recovery_required", reason: "lease response is uncertain; recover the same operation",

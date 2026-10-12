@@ -291,12 +291,22 @@ def stage_codex_app_turn_outcome_candidate(
     ):
         raise ValueError("Codex App reward memory candidate identity is incomplete")
     reflection = _reflection(reflection_json)
-    if reflection is None or reflection.get("status") == "no_evidence":
+    if reflection is None or reflection.get("status") in {
+        "no_evidence",
+        "legacy_no_write",
+    }:
+        legacy = (
+            reflection is not None and reflection.get("status") == "legacy_no_write"
+        )
         return _candidate_base(
             goal_id=goal_id,
             agent_id=agent_id,
             status="no_eligible_evidence",
-            reason_code="app_refresh_declared_no_reward_evidence",
+            reason_code=(
+                "legacy_reflection_requires_transferable_experience"
+                if legacy
+                else "app_refresh_declared_no_reward_evidence"
+            ),
         )
     digest = _reflection_digest(reflection_json)
     candidate_id = "app:" + hashlib.sha256(

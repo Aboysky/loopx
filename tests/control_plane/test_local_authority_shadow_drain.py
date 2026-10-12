@@ -1,3 +1,4 @@
+# Native persistence-window regressions live in shadow_drain.test.ts and the real-process CLI suite.
 from __future__ import annotations
 
 import json
@@ -22,6 +23,46 @@ from loopx.todos import list_goal_todos
 
 
 GOAL_ID = "goal-e2e"
+
+
+def test_shadow_parity_ignores_only_resume_evaluation_observation_clock() -> None:
+    head = {
+        "handoff_mode": "hard_lease",
+        "todos": [{
+            "todo_id": "todo-a",
+            "resume_ready": False,
+            "resume_condition": {
+                "evaluated_at": "2026-09-20T00:00:00Z",
+                "satisfied": False,
+                "availability_reason": "resume_condition_pending",
+            },
+        }],
+        "leases": [],
+    }
+    later_observation = json.loads(json.dumps(head))
+    later_observation["todos"][0]["resume_condition"]["evaluated_at"] = (
+        "2026-09-21T00:00:00Z"
+    )
+
+    assert head_digest(head) == head_digest(later_observation)
+    assert partition_digest({
+        "handoff_mode": head["handoff_mode"],
+        "todos": head["todos"],
+    }) == partition_digest({
+        "handoff_mode": later_observation["handoff_mode"],
+        "todos": later_observation["todos"],
+    })
+
+    changed_decision = json.loads(json.dumps(later_observation))
+    changed_decision["todos"][0]["resume_condition"]["satisfied"] = True
+    assert head_digest(head) != head_digest(changed_decision)
+    assert partition_digest({
+        "handoff_mode": head["handoff_mode"],
+        "todos": head["todos"],
+    }) != partition_digest({
+        "handoff_mode": changed_decision["handoff_mode"],
+        "todos": changed_decision["todos"],
+    })
 
 
 def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -146,35 +187,6 @@ def test_drain_delivers_each_committed_entry_once_in_order_and_verifies_readback
     assert again.ok is True
 
 
-def test_drain_replays_when_store_committed_but_cursor_was_not_written(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    registry, state, runtime_root = _fixture(tmp_path)
-    capture = _record_todo_write(registry, state, runtime_root, "Crash after store commit")
-
-    def crash(*_args: object, **_kwargs: object) -> None:
-        raise OSError("simulated crash before the drain cursor landed")
-
-    monkeypatch.setattr(outbox, "write_cursor", crash)
-    first = _drain(registry, runtime_root)
-    assert first.outcome == "stopped"
-    assert first.reason_code == "shadow_drain_failed"
-    assert first.pending_after == 1
-    monkeypatch.undo()
-
-    calls = _commit_entry_calls(monkeypatch)
-    second = _drain(registry, runtime_root)
-    assert second.ok is True
-    assert "coordination.runtime_shadow.commit_entry" not in calls
-    assert (second.delivered, second.replayed) == (0, 1)
-    assert second.entries[0]["entry_id"] == capture.outcome.entry_id
-    assert second.entries[0]["cursor"] == "2"
-    assert second.pending_after == 0
-    assert second.candidate_readback_verified is True
-    view = adapter.read_local_authority_shadow(runtime_root=runtime_root, goal_id=GOAL_ID, scan_limit=10)
-    assert len(view["scan"]["transactions"]) == 2
-
-
 def test_drain_defers_when_another_drainer_holds_the_lock(tmp_path: Path) -> None:
     registry, state, runtime_root = _fixture(tmp_path)
     _record_todo_write(registry, state, runtime_root, "Pending behind a drainer")
@@ -209,42 +221,6 @@ def test_drain_batch_is_bounded_and_reports_what_it_left(tmp_path: Path) -> None
     view = adapter.read_local_authority_shadow(runtime_root=runtime_root, goal_id=GOAL_ID)
     assert view["cursor"] == "4"
     assert view["head"]["partitions"]["todos"]["seq"] == 3
-
-
-def test_drain_stops_in_order_on_real_candidate_corruption(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    registry, state, runtime_root = _fixture(tmp_path)
-    for index in range(3):
-        _record_todo_write(registry, state, runtime_root, f"Ordered {index}")
-    real = adapter.effect_runtime_result
-    calls: list[str] = []
-    saved: list[bytes] = []
-    candidate = next((runtime_root / "authority-shadow" / "file-v0").glob("authority-store-*.json"))
-
-    def corrupt_before_second_commit(method: str, params: object, **kwargs: object) -> object:
-        if method == "coordination.runtime_shadow.commit_entry":
-            calls.append(method)
-            if len(calls) == 2:
-                saved.append(candidate.read_bytes())
-                candidate.write_text("{malformed candidate history")
-        # The real TypeScript handler and real FileAuthorityStore decide every result.
-        return real(method, params, **kwargs)
-
-    monkeypatch.setattr(adapter, "effect_runtime_result", corrupt_before_second_commit)
-    result = _drain(registry, runtime_root)
-    assert result.outcome == "stopped"
-    assert result.delivered == 1
-    assert result.stopped_at is not None and result.stopped_at["seq"] == 2
-    assert result.stopped_at["outcome"] in {"failed", "unavailable"}
-    assert result.pending_after == 2
-    assert [entry.seq for entry in outbox.list_entries(_todo_dir(runtime_root))] == [2, 3]
-    assert candidate.read_text() == "{malformed candidate history"
-    monkeypatch.undo()
-    candidate.write_bytes(saved[0])
-    recovered = _drain(registry, runtime_root)
-    assert recovered.delivered == 2
-    assert recovered.pending_after == 0
 
 
 def test_prepared_only_entries_resolve_only_under_a_free_primary_lock(tmp_path: Path) -> None:
@@ -408,22 +384,46 @@ def test_status_reports_backlog_candidate_and_growth_facts(tmp_path: Path) -> No
 def test_capture_evidence_v1_reports_measured_facts_only(tmp_path: Path) -> None:
     registry, state, runtime_root = _fixture(tmp_path)
     capture = _record_todo_write(registry, state, runtime_root, "Evidence fact")
+    # A prepared entry and its commit marker are the two files this pass retires.
+    assert len(list(_todo_dir(runtime_root).iterdir())) == 2
     drain = _drain(registry, runtime_root)
     evidence = adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=drain)
-    assert adapter.valid_evidence_v1(evidence, goal_id=GOAL_ID)
     assert evidence["outcome"] == "delivered"
-    assert evidence["entry"]["entry_id"] == capture.outcome.entry_id
+    assert evidence["reason_code"] is None
+    assert evidence["entry"] == {
+        "entry_id": capture.outcome.entry_id,
+        "partition": "todos",
+        "seq": 1,
+        "partition_digest": capture.outcome.partition_digest,
+        "source_bytes_digest": text_digest(state.read_text(encoding="utf-8")),
+    }
     assert evidence["source_transaction_correlated"] is True
     assert evidence["durable_source_outbox"] is True
     assert evidence["source_candidate_compared"] is False
     assert evidence["parity_verdict"] == "not_evaluated"
-    assert evidence["drain"]["candidate_readback_verified"] is True
+    assert evidence["drain"] == {
+        "outcome": "drained",
+        "delivered": 1,
+        "replayed": 0,
+        "reclaimed_residue": 2,
+        "pending_after": 0,
+        "prepared_only_after": 0,
+        "stopped_at": None,
+        "last_cursor": "2",
+        "provider_revision": drain.provider_revision,
+        "candidate_readback_verified": True,
+    }
+    assert evidence["store_identity"] == drain.store_identity
 
     deferred = adapter.DrainResult(goal_id=GOAL_ID, outcome="drain_deferred", reason_code="drain_lock_busy")
-    assert adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=deferred)["outcome"] == "drain_deferred"
+    deferred_evidence = adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=deferred)
+    assert deferred_evidence["outcome"] == "drain_deferred"
+    assert deferred_evidence["reason_code"] == "drain_lock_busy"
+    assert deferred_evidence["drain"]["candidate_readback_verified"] is None
     pending = adapter.capture_evidence(goal_id=GOAL_ID, capture=capture.outcome, drain=None)
     assert pending["outcome"] == "pending"
     assert pending["drain"] is None
+    observed = [evidence, deferred_evidence, pending]
 
     for skipped_reason in ("partition_unchanged", "shadow_disabled"):
         skipped = outbox.CaptureOutcome(partition="todos", skipped_reason=skipped_reason)
@@ -433,109 +433,38 @@ def test_capture_evidence_v1_reports_measured_facts_only(tmp_path: Path) -> None
         # Nothing was recorded, so nothing durable or correlated may be claimed.
         assert no_transaction["durable_source_outbox"] is False
         assert no_transaction["source_transaction_correlated"] is False
-        assert adapter.valid_evidence_v1(no_transaction, goal_id=GOAL_ID)
+        assert no_transaction["entry"] == {
+            "entry_id": None,
+            "partition": "todos",
+            "seq": None,
+            "partition_digest": None,
+            "source_bytes_digest": None,
+        }
+        observed.append(no_transaction)
     failed = outbox.CaptureOutcome(partition="todos", failure={"reason_code": "outbox_prepare_failed", "error_class": "OSError"})
     failed_evidence = adapter.capture_evidence(goal_id=GOAL_ID, capture=failed, drain=None)
     assert failed_evidence["outcome"] == "capture_failed"
     assert failed_evidence["durable_source_outbox"] is False
     assert failed_evidence["source_transaction_correlated"] is False
-    assert adapter.valid_evidence_v1(failed_evidence, goal_id=GOAL_ID)
+    assert failed_evidence["reason_code"] == "outbox_prepare_failed"
+    assert failed_evidence["entry"]["entry_id"] is None
+    observed.append(failed_evidence)
 
-
-def _commit_entry_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    calls: list[str] = []
-    real = adapter.effect_runtime_result
-
-    def counting(method: str, params: object, **kwargs: object) -> object:
-        calls.append(method)
-        return real(method, params, **kwargs)
-
-    monkeypatch.setattr(adapter, "effect_runtime_result", counting)
-    return calls
-
-
-def test_crash_between_the_two_unlinks_leaves_residue_the_next_drain_reclaims(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    registry, state, runtime_root = _fixture(tmp_path)
-    capture = _record_todo_write(registry, state, runtime_root, "Retired but half-removed")
-    real_remove = outbox.reclaim_verified_files
-
-    def crash_between_unlinks(files: object) -> None:
-        batch = list(files)
-        batch[0][0].unlink()
-        raise OSError("simulated crash between the prepared and committed unlinks")
-
-    monkeypatch.setattr(outbox, "reclaim_verified_files", crash_between_unlinks)
-    first = _drain(registry, runtime_root)
-    assert first.outcome == "stopped"
-    assert first.reason_code == "shadow_drain_failed"
-    monkeypatch.setattr(outbox, "reclaim_verified_files", real_remove)
-
-    # On disk: the cursor covers seq 1 and only the committed marker survives.
-    marker_name = outbox.entry_file_name(1, str(capture.outcome.entry_id), "committed")
-    names = sorted(path.name for path in _todo_dir(runtime_root).iterdir())
-    assert names == sorted([marker_name, "drain-cursor.json"])
-    assert outbox.read_cursor(_todo_dir(runtime_root))["last_seq"] == 1
-    # The marker is retired residue, not corruption: listing stays valid.
-    assert len(outbox.list_entries(_todo_dir(runtime_root), allow_committed_only=True)) == 1
-    assert [path.name for path in outbox.retired_residue(_todo_dir(runtime_root))] == [marker_name]
-    summary = outbox.outbox_summary(runtime_root, GOAL_ID)["todos"]
-    assert summary["invalid"] == "outbox_file_invalid"
-    assert len(outbox.retired_residue(_todo_dir(runtime_root))) == 1
-    assert summary["committed_pending"] == 0
-    status = adapter.local_authority_shadow_status(registry_path=registry, runtime_root=runtime_root, goal_id=GOAL_ID)
-    assert status["ok"] is False
-    assert status["outbox"]["todos"]["invalid"] == "outbox_file_invalid"
-
-    calls = _commit_entry_calls(monkeypatch)
-    second = _drain(registry, runtime_root)
-    assert second.ok is True
-    assert second.outcome == "drained"
-    assert second.reclaimed_residue == 1
-    assert (second.delivered, second.replayed) == (0, 1)
-    assert "coordination.runtime_shadow.commit_entry" not in calls
-    assert list(_todo_dir(runtime_root).iterdir()) == [_todo_dir(runtime_root) / "drain-cursor.json"]
-    view = adapter.read_local_authority_shadow(runtime_root=runtime_root, goal_id=GOAL_ID, scan_limit=5)
-    assert view["cursor"] == "2"
-
-    # A later write mints seq 2 from the cursor, never reusing the retired seq.
-    later = _record_todo_write(registry, state, runtime_root, "After the reclaim")
-    assert later.outcome.seq == 2
-    third = _drain(registry, runtime_root)
-    assert third.delivered == 1
-    # The newly delivered transaction also removes its two verified files.
-    assert third.reclaimed_residue == 2
-
-
-def test_crash_after_the_cursor_but_before_any_unlink_is_reclaimed_without_a_store_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    registry, state, runtime_root = _fixture(tmp_path)
-    capture = _record_todo_write(registry, state, runtime_root, "Cursor written, files untouched")
-    real_remove = outbox.reclaim_verified_files
-
-    def crash_before_unlinks(files: object) -> None:
-        raise OSError("simulated crash after the cursor write")
-
-    monkeypatch.setattr(outbox, "reclaim_verified_files", crash_before_unlinks)
-    assert _drain(registry, runtime_root).outcome == "stopped"
-    monkeypatch.setattr(outbox, "reclaim_verified_files", real_remove)
-    names = sorted(path.name for path in _todo_dir(runtime_root).iterdir())
-    entry_id = str(capture.outcome.entry_id)
-    assert names == [
-        outbox.entry_file_name(1, entry_id, "committed"),
-        outbox.entry_file_name(1, entry_id, "prepared"),
-        "drain-cursor.json",
-    ]
-    assert len(outbox.list_entries(_todo_dir(runtime_root), allow_committed_only=True)) == 1
-
-    calls = _commit_entry_calls(monkeypatch)
-    result = _drain(registry, runtime_root)
-    assert result.ok is True
-    assert result.reclaimed_residue == 2
-    assert "coordination.runtime_shadow.commit_entry" not in calls
-    assert list(_todo_dir(runtime_root).iterdir()) == [_todo_dir(runtime_root) / "drain-cursor.json"]
+    # Independent wire expectations: observation never grants candidate authority.
+    common_facts = {
+        "schema_version": "loopx_local_authority_shadow_evidence_v1",
+        "goal_id": GOAL_ID,
+        "capture_kind": "source_transaction_outbox",
+        "source_candidate_compared": False,
+        "parity_verdict": "not_evaluated",
+        "primary_authority": "legacy_local",
+        "candidate_provider": "file",
+        "candidate_read_for_decision": False,
+        "provider_to_local_writes": False,
+        "primary_writeback_preserved": True,
+    }
+    for payload in observed:
+        assert {key: payload[key] for key in common_facts} == common_facts
 
 
 def test_an_orphan_marker_above_the_cursor_is_still_corruption(tmp_path: Path) -> None:

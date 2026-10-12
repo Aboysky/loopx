@@ -1,7 +1,23 @@
+import {registerClaimContentionConformance} from "./claim_contention_conformance.ts";
+import {registerMonitorGateScopeConformance} from "./monitor_gate_scope_conformance.ts";
+import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/source_projection.ts";
+import {registerCanonicalSnapshotConformance} from "./canonical_snapshot_conformance.ts";
+import {registerClaimAcquisitionProofConformance} from "./claim_acquisition_proof_conformance.ts";
+import {registerCommandObservationConformance} from "./command_observation_conformance.ts";
+import {registerPeriodicReportConformance} from "./periodic_report_conformance.ts";
+import {registerIssueFixMonitorReconciliationConformance} from "./issue_fix_monitor_reconciliation_conformance.ts";
+import {registerPromotionRecoveryConformance} from "./promotion_recovery_conformance.ts";
+import {registerTodoConsumerScopeConformance} from "./todo_consumer_scope_conformance.ts";
+import {registerProjectionConfirmationConformance} from "./projection_confirmation_conformance.ts";
+import {registerUserCompletionFollowthroughConformance} from "./user_completion_followthrough_conformance.ts";
+import {registerSuccessionReadConformance} from "./succession_read_conformance.ts";
 import {registerUserCompletionUpdateConformance} from "./user_completion_update_conformance.ts";
+import {registerTerminalSourceConformance} from "./terminal_source_conformance.ts";
+import {registerTerminalReentryConformance} from "./terminal_reentry_conformance.ts";
 import {registerLeaseAcquisitionConformance} from "./lease_acquisition_conformance.ts";
 import {registerClaimTransferConformance} from "./claim_transfer_conformance.ts";
 import {registerLeasedMonitorConformance} from "./monitor_poll_lease_conformance.ts";
+import {registerMonitorObservationUpdateConformance} from "./monitor_observation_update_conformance.ts";
 import {registerLeaseLifecycleConformance} from "./lease_lifecycle_conformance.ts";
 import {registerMonitorConfigurationConformance} from "./monitor_configuration_conformance.ts";
 import {registerAuthorityScanConformance} from "./authority_scan_conformance.ts";
@@ -14,6 +30,8 @@ import test from "node:test";
 import {registerCoordinationReceiptConformance} from "./coordination_receipt_conformance.ts";
 import {registerAuthoritySourceConformance} from "./authority_source_conformance.ts";
 import {registerNativePlanningUpdateConformance} from "./native_planning_update_conformance.ts";
+import {registerCompletionValidationBindingConformance} from "./completion_validation_binding_conformance.ts";
+import {coordinationCommandFixture} from "./coordination_command_fixture.ts";
 
 import type {
   AuthorityStore,
@@ -37,10 +55,12 @@ import {
 } from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import { executeCoordinationTodoClaim } from "../../loopx/control_plane/coordination/todo_claim.ts";
 import { executeCoordinationTodoCreate } from "../../loopx/control_plane/coordination/todo_create.ts";
+import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
+import {executeCanonicalTaskLeaseLifecycle} from "../../loopx/control_plane/coordination/task_lease_lifecycle.ts";
 import {executeCoordinationMonitorPoll} from "../../loopx/control_plane/coordination/todo_monitor_poll.ts";
 import { executeCoordinationTodoUpdate } from "../../loopx/control_plane/coordination/todo_update.ts";
-import { listLocalCoordinationTodos, LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA }
-  from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
+import {LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
+import {listLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 import { sharedGoalWorkFacts } from "../../loopx/control_plane/goals/shared_goal_work.ts";
 import {projectStandingDecisions} from "../../loopx/control_plane/todos/standing_decision.ts";
 import {evaluateTodoResumeConditions} from "../../loopx/control_plane/todos/resume_condition.ts";
@@ -48,7 +68,6 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {
   executeCoordinationTodoTerminalLifecycle,
 } from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
-import { editCoordinationTodo, TODO_COMPATIBILITY_EDIT_SCHEMA } from "../../loopx/control_plane/coordination/todo_compatibility_edit.ts";
 import {
   PRODUCTION_SCALE_VALIDATION_DECLARATION,
   productionScaleCoordinationFixture,
@@ -211,22 +230,190 @@ export function authorityStoreCommitFixture(
   };
 }
 
+/** Promise.all starts both commands, but does not synchronize their reads.
+ * Hold each first real read so the test actually exercises competing CAS. */
+async function withConcurrentAuthorityReads<T>(backends: readonly AuthorityStore[], run: () => Promise<T>): Promise<T> {
+  let releaseReaders: () => void = () => { throw new Error("reader barrier was not initialized"); };
+  const ready = new Promise<void>(resolve => { releaseReaders = resolve; });
+  let readers = 0;
+  const originals = backends.map(backend => {
+    const load = backend.loadAuthority.bind(backend);
+    backend.loadAuthority = async () => {
+      backend.loadAuthority = load;
+      const snapshot = await load();
+      if (++readers === backends.length) releaseReaders();
+      await ready;
+      return snapshot;
+    };
+    return load;
+  });
+  try { return await run(); }
+  finally {
+    releaseReaders();
+    backends.forEach((backend, index) => { backend.loadAuthority = originals[index]!; });
+  }
+}
+
 export function registerAuthorityStoreConformance(
   providerName: string,
   factory: AuthorityStoreConformanceFactory,
+  matchingReplayStatus: "applied" | "conflict" = "conflict",
 ): void {
+  test(`${providerName} conformance: captured complete source survives provider reopen and readback`, async (t) => {
+    const {store, contender} = await factory(t);
+    const goalId = "goal-production-scale";
+    const source = productionScaleCoordinationFixture(goalId, "legacy").projection;
+    const captured = projectCoordinationSource({schema_version: SOURCE_PROJECTION_REQUEST_SCHEMA,
+      kind: "snapshot", goal_id: goalId, handoff_mode: source.handoff_mode ?? "hard_lease",
+      read_model_schema: TODO_CANONICAL_READ_RECORD_SCHEMA,
+      todos: source.todos, leases: [...source.leases as JsonObject[],
+        {goal_id: goalId, todo_id: "retired-source-history", version: 19, status: "released"}],
+    }).projection as JsonObject;
+    assert.equal((captured.todos as JsonObject[]).length, (source.todos as JsonObject[]).length);
+    assert.deepEqual(captured.leases, source.leases);
+    const result = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "capture-source", events: [], next_projection: captured, receipts: []});
+    assert.equal(result.status, "applied");
+    const read = await listLocalCoordinationTodos({schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
+      runtime_root: "/unused", goal_id: goalId, include_leases: true}, {createStore: () => contender});
+    assert.equal(read.status, "loaded");
+    assert.deepEqual(read.todos, captured.todos);
+    assert.deepEqual(read.leases, captured.leases);
+    if (result.status !== "applied") return;
+    const replay = await store.commitAuthority({expected_provider_revision: result.provider_revision,
+      operation_id: "capture-source", events: [], next_projection: captured, receipts: []});
+    assert.equal(replay.status, matchingReplayStatus);
+    if (replay.status === "conflict") assert.equal(replay.conflict_kind, "operation_id_exists");
+    const retained = await contender.readReceipt("capture-source");
+    assert.equal(retained.status, "found");
+    if (retained.status === "found") assert.equal(retained.cursor, "1");
+  });
+  registerProjectionConfirmationConformance(providerName, factory);
+  registerPeriodicReportConformance(providerName, factory);
   registerLeaseLifecycleConformance(providerName, factory);
   registerClaimTransferConformance(providerName, factory);
   registerLeaseAcquisitionConformance(providerName, factory);
+  test(`${providerName} completion rechecks a new dependency after validator planning`, async t => {
+    const {store} = await factory(t);
+    const {invoke, completion_todo_id} = await coordinationCommandFixture(store, "complete");
+    assert.equal((await invoke(store, {pendingValidation: true})).status, "execute_validation");
+    const loaded = await store.loadAuthority();
+    assert.equal(loaded.status, "loaded");
+    if (loaded.status !== "loaded") throw new Error("missing test authority");
+    const todos = loaded.head.todos as JsonObject[];
+    const waiting = todos.find(row => row.todo_id === completion_todo_id)!;
+    const prerequisite = todos.find(row => row.todo_id !== completion_todo_id &&
+      row.role === "agent" && row.status === "open")!;
+    assert.ok(prerequisite);
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: "goal-a",
+      operation_id: "validator-race-add-wait", expected_provider_revision: loaded.provider_revision,
+      projection: loaded.head, mutations: [{kind: "todo_upsert", todo: {...waiting,
+        resume_when: `todo_done:${prerequisite.todo_id}`}}]}))).status, "applied");
+    const before = await store.loadAuthority();
+    assert.equal((await invoke(store, {pendingValidation: true})).reason_code, "todo_dependency_pending");
+    assert.equal((await invoke(store)).reason_code, "todo_dependency_pending");
+    assert.deepEqual(await store.loadAuthority(), before);
+  });
+  test(`${providerName} future date completion and owner pause/reopen use current authority`, async t => {
+    const {store} = await factory(t);
+    const {invoke, completion_todo_id} = await coordinationCommandFixture(store, "complete");
+    assert.equal((await invoke(store, {pendingValidation: true})).status, "execute_validation");
+    const head = await store.loadAuthority();
+    assert.equal(head.status, "loaded");
+    if (head.status !== "loaded") throw Error("missing test authority");
+    const lease = (head.head.leases as JsonObject[]).find(row => row.todo_id === completion_todo_id)!;
+    const authored = await executeCoordinationTodoUpdate(store, {
+      goal_id: "goal-a", todo_id: completion_todo_id, expected_role: "agent",
+      actor_agent_id: "agent-a", registered_agents: productionScaleCoordinationFixture("goal-a").registered_agents,
+      operation_id: "validator-race-author-date", patch: {}, clear_fields: [],
+      planning_intent: {resume_when: "resume_at:2026-09-07T07:00:00.001Z"},
+      lease_idempotency_key: String(lease.idempotency_key), lease_expected_version: Number(lease.version),
+      dry_run: false, now: new Date("2026-09-07T07:00:00Z"),
+    });
+    assert.equal(authored.status, "applied", JSON.stringify(authored));
+    const before = await store.loadAuthority();
+    assert.equal((await invoke(store, {pendingValidation: true})).reason_code, "todo_dependency_pending");
+    assert.equal((await invoke(store)).reason_code, "todo_dependency_pending");
+    assert.deepEqual(await store.loadAuthority(), before);
+    const registered_agents = productionScaleCoordinationFixture("goal-a").registered_agents;
+    const now = new Date("2026-09-07T07:00:00Z");
+    assert.equal((await executeCanonicalTaskLeaseLifecycle(store, {operation: "release", goal_id: "goal-a",
+      todo_id: completion_todo_id, owner: "agent-a", idempotency_key: String(lease.idempotency_key),
+      expected_version: Number(lease.version), ttl_seconds: null, registered_agents, now})).status, "applied");
+    const pausedHead = await store.loadAuthority();
+    assert.equal(pausedHead.status, "loaded");
+    if (pausedHead.status !== "loaded") throw Error("missing released authority");
+    const edit = {goal_id: "goal-a", todo_id: completion_todo_id, expected_role: "agent" as const,
+      actor_agent_id: "agent-a", registered_agents, patch: {}, clear_fields: [], dry_run: false, now};
+    const pause = await executeCoordinationTodoUpdate(store, {...edit, operation_id: "pause-future-date",
+      expected_provider_revision: pausedHead.provider_revision,
+      planning_intent: {status: "blocked", clear_resume_when: true, reason: "Owner paused the dated wait"}});
+    assert.equal(pause.status, "applied", JSON.stringify(pause));
+    const blocked = await store.loadAuthority();
+    assert.equal(blocked.status, "loaded");
+    if (blocked.status !== "loaded") throw Error("missing blocked authority");
+    assert.equal((blocked.head.todos as JsonObject[]).find(row => row.todo_id === completion_todo_id)?.resume_when, undefined);
+    assert.equal((blocked.head.leases as JsonObject[]).find(row => row.todo_id === completion_todo_id)?.status, "released");
+    const acquisition = {goal_id: "goal-a", todo_id: completion_todo_id, owner: "agent-a",
+      idempotency_key: "after-dated-pause", expected_version: Number(lease.version), ttl_seconds: 600,
+      write_scopes: [], registered_agents, now};
+    assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquisition)).reason_code, "todo_not_open");
+    const reopen = await executeCoordinationTodoUpdate(store, {...edit, operation_id: "reopen-future-date",
+      expected_provider_revision: blocked.provider_revision,
+      planning_intent: {status: "open", clear_resume_when: true, reason: "Owner resumed the work"}});
+    assert.equal(reopen.status, "applied", JSON.stringify(reopen));
+    const acquired = await executeCanonicalTaskLeaseAcquire(store, acquisition);
+    assert.equal(acquired.status, "applied", JSON.stringify(acquired));
+  });
+  test(`${providerName} supersede can retire waiting work without satisfying its prerequisite`, async t => {
+    const {store} = await factory(t);
+    const {invoke, completion_todo_id} = await coordinationCommandFixture(store, "supersede");
+    const head = await store.loadAuthority();
+    assert.equal(head.status, "loaded");
+    if (head.status !== "loaded") throw Error("missing test authority");
+    const todos = head.head.todos as JsonObject[];
+    const waiting = todos.find(row => row.todo_id === completion_todo_id)!;
+    const prerequisite = todos.find(row => row.todo_id !== completion_todo_id &&
+      row.role === "agent" && row.status === "open")!;
+    assert.ok(prerequisite);
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: "goal-a",
+      operation_id: "supersede-add-wait", expected_provider_revision: head.provider_revision,
+      projection: head.head, mutations: [{kind: "todo_upsert", todo: {...waiting,
+        resume_when: `todo_done:${prerequisite.todo_id}`}}]}))).status, "applied");
+    const retired = await invoke(store);
+    assert.equal(retired.status, "applied", JSON.stringify(retired));
+    const after = await store.loadAuthority();
+    assert.equal(after.status, "loaded");
+    if (after.status === "loaded") {
+      assert.equal((after.head.todos as JsonObject[]).find(row => row.todo_id === prerequisite.todo_id)?.status,
+        "open");
+      assert.equal((after.head.todos as JsonObject[]).find(row => row.todo_id === completion_todo_id)?.status,
+        "done");
+    }
+  });
+  registerCommandObservationConformance(providerName, factory);
+  registerClaimAcquisitionProofConformance(providerName, factory);
+  registerClaimContentionConformance(providerName, factory);
   registerAuthorityScanConformance(providerName, factory);
   registerOwnershipObservationConformance(providerName, factory);
+  registerSuccessionReadConformance(providerName, factory);
+  registerTodoConsumerScopeConformance(providerName, factory);
   registerNativePlanningUpdateConformance(providerName, factory);
+  registerCompletionValidationBindingConformance(providerName, factory);
   registerUserCompletionUpdateConformance(providerName, factory);
+  registerTerminalSourceConformance(providerName, factory);
+  registerTerminalReentryConformance(providerName, factory);
+  registerUserCompletionFollowthroughConformance(providerName, factory);
   registerMonitorConfigurationConformance(providerName, factory);
+  registerMonitorGateScopeConformance(providerName, factory);
   registerLeasedMonitorConformance(providerName, factory);
+  registerMonitorObservationUpdateConformance(providerName, factory);
+  registerIssueFixMonitorReconciliationConformance(providerName, factory);
   registerCoordinationReceiptConformance(providerName, factory);
   registerAuthoritySourceConformance(providerName, factory);
   registerHandoffModeConformance(providerName, factory);
+  registerPromotionRecoveryConformance(providerName, factory);
+  registerCanonicalSnapshotConformance(providerName, factory);
   for (const native of [false, true]) test(`${providerName} conformance: standing revocation survives canonical ordering and archive (${native ? "native" : "legacy"})`, async (t) => {
     const {store} = await factory(t);
     const goal = "goal-standing";
@@ -517,7 +704,7 @@ export function registerAuthorityStoreConformance(
       lifecycle_grants: [],
       authority_reason: null,
       decision_outcome: null,
-      operation_id: "complete-terminal",
+      operation_identity: {kind: "explicit" as const, operation_id: "complete-terminal"},
       lease_idempotency_key: "terminal-lease",
       lease_expected_version: 1,
       allow_user_gate_auto_acquire: false,
@@ -576,7 +763,7 @@ export function registerAuthorityStoreConformance(
     };
     const dangling = await executeCoordinationTodoTerminalLifecycle(store, {
       ...commitRequest,
-      operation_id: "complete-dangling-successor",
+      operation_identity: {kind: "explicit" as const, operation_id: "complete-dangling-successor"},
       linked_successor_todo_ids: ["todo-missing"],
       successor_intents: [],
     });
@@ -596,6 +783,26 @@ export function registerAuthorityStoreConformance(
         ["applied", "recovered", "replayed", "conflict"].includes(status)),
       JSON.stringify([first, second]),
     );
+    // Pin a receipt lookup before a peer commit and a head read after it.
+    let receiptMiss = true;
+    const crossedRead = new Proxy(contender, {get(target, property) {
+      if (property === "readReceipt") return async (operationId: string) => {
+        if (receiptMiss) {receiptMiss = false; return {status: "missing"};}
+        return target.readReceipt(operationId);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const committedHead = await store.loadAuthority();
+    const crossed = await executeCoordinationTodoTerminalLifecycle(crossedRead, commitRequest);
+    assert.equal(crossed.status, "replayed", JSON.stringify(crossed));
+    assert.equal(crossed.changed, false);
+    const noReceipt = await executeCoordinationTodoTerminalLifecycle(contender,
+      {...commitRequest, operation_identity: {kind: "explicit" as const, operation_id: "unknown-terminal-operation"}});
+    assert.equal(noReceipt.status, "failed");
+    assert.equal(noReceipt.reason_code, "invalid_todo_completion_transaction");
+    assert.deepEqual(await store.loadAuthority(), committedHead);
+
     const committedRevisions = [first, second]
       .filter((item) => item.status !== "conflict")
       .map((item) => item.provider_revision);
@@ -747,6 +954,123 @@ export function registerAuthorityStoreConformance(
     assert.deepEqual(await store.loadAuthority(), after);
   });
 
+  test(`${providerName} conformance: original completion receipt permits only the same-Turn closeout phase`, async t => {
+    const {store} = await factory(t);
+    const goalId = "goal-terminal-phases", turnKey = `${goalId}:agent-a:todo-terminal:original-turn`;
+    const digest = createHash("sha256").update(
+      `loopx-provider-terminal-operation-v0\0complete\0${goalId}\0todo-terminal\0${turnKey}`,
+    ).digest("hex").slice(0, 32);
+    assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-phases",
+      next_projection: todoTerminalProjection(goalId), events: [], receipts: []})).status, "applied");
+    const original = {
+      goal_id: goalId, todo_id: "todo-terminal", expected_role: "agent" as const,
+      command: "complete" as const, actor_agent_id: "agent-a", registered_agents: ["agent-a", "agent-b"],
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      // A pre-upgrade adapter generated this explicit receipt. Its identity and
+      // request digest must remain recoverable after adopting the typed phase.
+      operation_identity: {kind: "explicit" as const, operation_id: `todo-terminal:${digest}`},
+      lease_idempotency_key: "terminal-lease", lease_expected_version: 1, allow_user_gate_auto_acquire: false,
+      requested_no_followup: false, requested_completion_turn_key: turnKey,
+      requested_completion_identity_source: "turn_settlement" as const,
+      linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: "Declared check passed",
+      reason: null, clear_claim: false, validation_declaration: TERMINAL_VALIDATION_DECLARATION,
+      validation_receipt: {schema_version: "issue_fix_validation_command_v0", command_label: "provider conformance validation",
+        passed: true, exit_code: 0, stdout_captured: false, stderr_captured: false, local_path_captured: false},
+      completion_policy_request: null, dry_run: false, now: new Date("2026-09-07T06:02:00Z"),
+    };
+    const completed = await executeCoordinationTodoTerminalLifecycle(store, original);
+    assert.equal(completed.status, "applied", JSON.stringify(completed));
+    assert.equal(completed.completion_continuation, "active_goal");
+    const before = await store.loadAuthority();
+    const closeout = {...original, operation_identity: {kind: "completion_turn" as const},
+      requested_no_followup: true, validation_receipt: null, now: new Date("2026-09-07T09:00:00Z")};
+    for (const change of [{lease_expected_version: 99}, {lease_idempotency_key: "borrowed"},
+      {requested_completion_turn_key: "different-turn"}, {actor_agent_id: "agent-b"},
+      {validation_declaration: {...TERMINAL_VALIDATION_DECLARATION, validation_label: "different check"}}]) {
+      assert.equal((await executeCoordinationTodoTerminalLifecycle(store, {...closeout, ...change})).status, "failed");
+      assert.deepEqual(await store.loadAuthority(), before);
+    }
+    const missingReceipt = new Proxy(store, {get(target, key) {
+      if (key === "readReceipt") return async (id: string) => id === `todo-terminal:${digest}`
+        ? {status: "missing"} : target.readReceipt(id);
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(missingReceipt, closeout)).reason_code,
+      "terminal_completion_receipt_required");
+    assert.deepEqual(await store.loadAuthority(), before);
+    const lostCloseoutResponse = new Proxy(store, {get(target, key) {
+      if (key === "commitAuthority") return async (commit: AuthorityStoreCommit) => {
+        await target.commitAuthority(commit);
+        throw new Error("closeout committed, response lost");
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const closed = await executeCoordinationTodoTerminalLifecycle(lostCloseoutResponse, closeout);
+    assert.equal(closed.status, "recovered", JSON.stringify(closed));
+    assert.equal(closed.completion_continuation, "no_followup");
+    assert.equal(closed.completion_recovery, "same_turn_terminal_closeout");
+    assert.deepEqual(closed.validation_receipt, completed.validation_receipt);
+    const after = await store.loadAuthority();
+    assert.equal(before.status, "loaded"); assert.equal(after.status, "loaded");
+    if (before.status === "loaded" && after.status === "loaded") {
+      assert.deepEqual(after.head.leases, before.head.leases, "no new lease or second release");
+      const oldTodos = before.head.todos as Record<string, unknown>[], newTodos = after.head.todos as Record<string, unknown>[];
+      assert.deepEqual(newTodos.filter(row => row.todo_id !== "todo-terminal"),
+        oldTodos.filter(row => row.todo_id !== "todo-terminal"));
+      assert.equal(newTodos.length, oldTodos.length, "no manufactured successor");
+      const target = newTodos.find(row => row.todo_id === "todo-terminal")!;
+      assert.equal(target.completion_turn_key, turnKey);
+      assert.equal(target.completion_validation_sha256, canonicalAuthoritySha256(TERMINAL_VALIDATION_DECLARATION));
+    }
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(store, closeout)).status, "replayed");
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(store, {...original,
+      operation_identity: {kind: "completion_turn"}})).status, "replayed");
+    assert.deepEqual(await store.loadAuthority(), after);
+  });
+
+  test(`${providerName} conformance: pre-upgrade terminal receipt recovers before current authority access`, async t => {
+    const {store} = await factory(t);
+    const goalId = "goal-historical-terminal", turnKey = `${goalId}:agent-a:todo-terminal:original-turn`;
+    const digest = createHash("sha256").update(
+      `loopx-provider-terminal-operation-v0\0complete\0${goalId}\0todo-terminal\0${turnKey}`,
+    ).digest("hex").slice(0, 32);
+    assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-historical-terminal",
+      next_projection: todoTerminalProjection(goalId), events: [], receipts: []})).status, "applied");
+    const request = {
+      goal_id: goalId, todo_id: "todo-terminal", expected_role: "agent" as const,
+      command: "complete" as const, actor_agent_id: "agent-a", registered_agents: ["agent-a", "agent-b"],
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      operation_identity: {kind: "explicit" as const, operation_id: `todo-terminal:${digest}`},
+      lease_idempotency_key: "terminal-lease", lease_expected_version: 1, allow_user_gate_auto_acquire: false,
+      requested_no_followup: true, requested_completion_turn_key: turnKey,
+      requested_completion_identity_source: "turn_settlement" as const,
+      linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: "Declared check passed",
+      reason: null, clear_claim: false, validation_declaration: TERMINAL_VALIDATION_DECLARATION,
+      validation_receipt: {schema_version: "issue_fix_validation_command_v0", command_label: "provider conformance validation",
+        passed: true, exit_code: 0, stdout_captured: false, stderr_captured: false, local_path_captured: false},
+      completion_policy_request: null, dry_run: false, now: new Date("2026-09-07T06:02:00Z"),
+    };
+    const applied = await executeCoordinationTodoTerminalLifecycle(store, request);
+    assert.equal(applied.status, "applied", JSON.stringify(applied));
+    const before = await store.loadAuthority();
+    const historicalOnly = new Proxy(store, {get(target, key) {
+      if (key === "loadAuthority" || key === "commitAuthority") return async () => {
+        throw new Error("historical recovery must not read current authority or commit");
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const recovered = await executeCoordinationTodoTerminalLifecycle(historicalOnly, {
+      ...request, operation_identity: {kind: "completion_turn"}, now: new Date("2026-09-08T09:00:00Z"),
+    }, async () => {throw new Error("historical recovery precedes current source authorization");});
+    assert.equal(recovered.status, "replayed", JSON.stringify(recovered));
+    assert.deepEqual(recovered.original_receipt, applied.original_receipt);
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(`todo-terminal-closeout:${digest}`)).status, "missing");
+  });
+
   test(`${providerName} conformance: supersede preserves the legacy terminal continuation`, async (t) => {
     const {store} = await factory(t);
     const goalId = "goal-supersede";
@@ -770,7 +1094,7 @@ export function registerAuthorityStoreConformance(
       decision_outcome: null,
       lease_idempotency_key: null,
       lease_expected_version: null,
-      operation_id: "supersede-terminal",
+      operation_identity: {kind: "explicit" as const, operation_id: "supersede-terminal"},
       allow_user_gate_auto_acquire: false,
       requested_no_followup: false,
       requested_completion_turn_key: null,
@@ -897,7 +1221,7 @@ export function registerAuthorityStoreConformance(
       actor_agent_id: "agent-a",
       lease_idempotency_key: fixture.completion_lease_idempotency_key,
       lease_expected_version: fixture.completion_lease_expected_version,
-      operation_id: "complete-production-scale",
+      operation_identity: {kind: "explicit" as const, operation_id: "complete-production-scale"},
       requested_no_followup: true,
       validation_declaration: PRODUCTION_SCALE_VALIDATION_DECLARATION,
       validation_receipt: {
@@ -927,7 +1251,7 @@ export function registerAuthorityStoreConformance(
       actor_agent_id: "agent-b",
       lease_idempotency_key: fixture.supersede_lease_idempotency_key,
       lease_expected_version: fixture.supersede_lease_expected_version,
-      operation_id: "supersede-production-scale",
+      operation_identity: {kind: "explicit" as const, operation_id: "supersede-production-scale"},
       requested_no_followup: false,
       validation_declaration: null,
       validation_receipt: null,
@@ -1026,11 +1350,11 @@ export function registerAuthorityStoreConformance(
       const preview = await executeCoordinationTodoCreate(store, {...request, dry_run: true});
       assert.equal(preview.status, "planned");
       assert.equal((await store.loadAuthority()).status, "loaded");
-      const [first, second] = await Promise.all([
+      const [first, second] = await withConcurrentAuthorityReads([store, contender], () => Promise.all([
         executeCoordinationTodoCreate(store, request),
         executeCoordinationTodoCreate(contender, {...request,
           operation_id: "create-todo-contender", todo: {...todo, text: "Competing create"}}),
-      ]);
+      ]));
       assert.deepEqual(
         [first.status, second.status].sort((left, right) =>
           String(left).localeCompare(String(right))
@@ -1113,105 +1437,6 @@ export function registerAuthorityStoreConformance(
         {...request, operation_id: "bad-projection", todo: {...todo, todo_id: "todo-projection", source_section: "Agent Todo"}},
       ]) assert.equal((await executeCoordinationTodoCreate(store, invalid)).status, "failed");
     });
-    test(`${providerName} conformance: compatibility edit cannot overwrite a concurrent claim (${native ? "native" : "v0"})`, async (t) => {
-      const {store, contender} = await factory(t);
-      const goalId = "goal-claim";
-      const projection = todoClaimProjection(goalId, native);
-      const initialized = await store.commitAuthority({
-        expected_provider_revision: null, operation_id: "init-compatibility",
-        events: [], receipts: [], next_projection: projection,
-      });
-      assert.equal(initialized.status, "applied");
-      if (initialized.status !== "applied") return;
-      const request = {
-        schema_version: TODO_COMPATIBILITY_EDIT_SCHEMA, goal_id: goalId,
-        todo_id: "todo-claim", operation_id: "edit-compatibility",
-        actor_agent_id: "agent-a", registered_agents: ["agent-a", "agent-b"],
-        expected_provider_revision: initialized.provider_revision,
-        patch: {text: "Edited through a compatibility buffer"}, dry_run: false,
-        observed_at: "2026-09-05T05:00:00Z",
-      };
-      assert.equal((await executeCoordinationTodoClaim(contender, {
-        goal_id: goalId, todo_id: "todo-claim", claimed_by: "agent-a",
-        actor_agent_id: "agent-a", expected_role: "agent", registered_agents: ["agent-a", "agent-b"],
-        operation_id: "claim-before-edit", dry_run: false, now: new Date("2026-09-05T04:30:00Z"),
-      })).status, "applied");
-      const current = await store.loadAuthority();
-      assert.equal(current.status, "loaded");
-      if (current.status !== "loaded") return;
-      assert.equal((await editCoordinationTodo(store, request)).status, "conflict");
-      assert.deepEqual(await store.loadAuthority(), current);
-      request.expected_provider_revision = current.provider_revision;
-      const preview = await editCoordinationTodo(store, {...request, dry_run: true});
-      assert.equal(preview.status, "planned");
-      assert.deepEqual(await store.loadAuthority(), current);
-      assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
-      for (const extra of [{claimed_by: "agent-b"}, {archive_state: "archive"}, {source_section: "fake"}]) {
-        assert.equal((await editCoordinationTodo(store, {...request, patch: extra})).status, "failed");
-      }
-      assert.equal((await editCoordinationTodo(store, {...request, actor_agent_id: "agent-b"})).status, "failed");
-      assert.deepEqual(await store.loadAuthority(), current);
-      const applied = await editCoordinationTodo(store, request);
-      assert.equal(applied.status, "applied", JSON.stringify(applied));
-      const after = await store.loadAuthority();
-      assert.equal(after.status, "loaded");
-      if (after.status !== "loaded") return;
-      const old = (current.head.todos as Record<string, unknown>[])[0]!;
-      assert.deepEqual(after.head.todos, [{...old, text: request.patch.text, updated_at: "2026-09-05T05:00:00.000Z"}]);
-      assert.deepEqual(after.head.leases, current.head.leases);
-      assert.equal((await editCoordinationTodo(store, {...request, registered_agents: []})).status, "replayed");
-      assert.deepEqual(await store.loadAuthority(), after);
-      assert.equal((await editCoordinationTodo(store, {...request, patch: {note: "different intent"}})).status, "failed");
-      const noop = {...request, operation_id: "edit-noop", expected_provider_revision: after.provider_revision};
-      assert.equal((await editCoordinationTodo(store, noop)).status, "no_change");
-      const afterNoop = await store.loadAuthority();
-      assert.equal(afterNoop.status, "loaded");
-      if (afterNoop.status !== "loaded") return;
-      assert.deepEqual(afterNoop.head, after.head);
-      assert.equal((await editCoordinationTodo(store, noop)).status, "replayed");
-      assert.deepEqual(await store.loadAuthority(), afterNoop);
-      // Losing the response after commit is recovered by the exact receipt.
-      const ambiguousStore: AuthorityStore = {
-        storeIdentity: () => store.storeIdentity(), loadAuthority: () => store.loadAuthority(),
-        readReceipt: (id) => store.readReceipt(id), scanCommitted: (cursor, limit) => store.scanCommitted(cursor, limit),
-        commitAuthority: async (commit) => {
-          assert.equal((await store.commitAuthority(commit)).status, "applied");
-          return {status: "ambiguous", reason_code: "lost_response", reason: "synthetic lost response"};
-        },
-      };
-      const recover = {...request, operation_id: "edit-recover",
-        expected_provider_revision: afterNoop.provider_revision, patch: {note: "Recovered edit"}};
-      assert.equal((await editCoordinationTodo(ambiguousStore, recover)).status, "recovered");
-      assert.equal((await editCoordinationTodo(store, recover)).status, "replayed");
-      const recoveredHead = await store.loadAuthority();
-      assert.equal(recoveredHead.status, "loaded");
-      if (recoveredHead.status !== "loaded") return;
-      // A competing receipt-only commit after read still invalidates the CAS.
-      const racingStore: AuthorityStore = {...ambiguousStore,
-        commitAuthority: async (commit) => {
-          assert.equal((await contender.commitAuthority({
-            ...commit, operation_id: "concurrent-writer", next_projection: recoveredHead.head,
-            events: [], receipts: [],
-          })).status, "applied");
-          return store.commitAuthority(commit);
-        },
-      };
-      assert.equal((await editCoordinationTodo(racingStore, {...recover,
-        operation_id: "edit-race", expected_provider_revision: recoveredHead.provider_revision,
-        patch: {note: "Must not commit"},
-      })).status, "conflict");
-      const afterRace = await store.loadAuthority();
-      assert.equal(afterRace.status, "loaded");
-      if (afterRace.status !== "loaded") return;
-      assert.deepEqual(afterRace.head, recoveredHead.head);
-      assert.equal((await store.readReceipt("edit-race")).status, "missing");
-      for (const invalid of [{dry_run: "false"}, {patch: {}}, {patch: {text: ""}},
-        {registered_agents: ["agent-a", "agent-a"]}, {observed_at: "yesterday"},
-        {projection: recoveredHead.head}]) {
-        assert.equal((await editCoordinationTodo(store, {...request, ...invalid})).status, "failed");
-      }
-      assert.deepEqual(await store.loadAuthority(), afterRace);
-    });
     test(`${providerName} conformance: Todo claim atomically acquires canonical ownership (${native ? "native" : "v0"})`, async (t) => {
       const {store} = await factory(t);
       const goalId = "goal-atomic-ownership";
@@ -1278,7 +1503,7 @@ export function registerAuthorityStoreConformance(
       assert.deepEqual(afterIdempotent.head, loaded.head);
       assert.equal((await store.readReceipt("claim-and-acquire-idempotent")).status, "found");
     });
-    test(`${providerName} conformance: competing ownership transactions cannot split claim and lease (${native ? "native" : "v0"})`, async (t) => {
+    test(`${providerName} conformance: competing ownership revalidates the winning claim and lease (${native ? "native" : "v0"})`, async (t) => {
       const {store, contender} = await factory(t);
       const goalId = "goal-competing-ownership";
       const projection = {
@@ -1309,37 +1534,15 @@ export function registerAuthorityStoreConformance(
         now: new Date("2026-09-05T04:30:00Z"),
       });
 
-      // Promise.all alone does not guarantee a CAS race: a late reader may
-      // correctly reject the already-claimed Todo before reaching commit.
-      // Hold the first two real reads so both transactions see the same head.
-      let releaseReaders: () => void = () => {
-        throw new Error("reader barrier was not initialized");
-      };
-      const ready = new Promise<void>((resolve) => { releaseReaders = resolve; });
-      let readers = 0;
-      const originals = [store, contender].map((backend) => {
-        const load = backend.loadAuthority.bind(backend);
-        backend.loadAuthority = async () => {
-          backend.loadAuthority = load;
-          const snapshot = await load();
-          if (++readers === 2) releaseReaders();
-          await ready;
-          return snapshot;
-        };
-        return load;
-      });
-      const results = await Promise.all([
+      const results = await withConcurrentAuthorityReads([store, contender], () => Promise.all([
         executeCoordinationTodoClaim(store, request("agent-a")),
         executeCoordinationTodoClaim(contender, request("agent-b")),
-      ]).finally(() => {
-        [store, contender].forEach((backend, index) => {
-          backend.loadAuthority = originals[index]!;
-        });
-      });
+      ]));
       assert.deepEqual(
         results.map((result) => result.status).sort(),
-        ["applied", "conflict"],
+        ["applied", "failed"],
       );
+      assert.equal(results.find(result => result.status === "failed")?.reason_code, "claim_owner_mismatch");
       const winnerIndex = results.findIndex((result) => result.status === "applied");
       assert.notEqual(winnerIndex, -1);
       const winner = winnerIndex === 0 ? "agent-a" : "agent-b";
@@ -1446,7 +1649,7 @@ export function registerAuthorityStoreConformance(
       assert.deepEqual(await store.loadAuthority(), transferred);
     });
     for (const fault of ["lease_replaced", "lost_response"] as const) {
-      test(`${providerName} conformance: hard-lease claim ${fault} (${native ? "native" : "v0"})`, async (t) => {
+      test(`${providerName} conformance: hard-lease claim revalidation ${fault} (${native ? "native" : "v0"})`, async (t) => {
         const {store, contender} = await factory(t);
         const goalId = "goal-claim";
         const projection = {...todoClaimProjection(goalId, native), handoff_mode: "hard_lease"};
@@ -1499,7 +1702,8 @@ export function registerAuthorityStoreConformance(
           },
         };
         const result = await executeCoordinationTodoClaim(intercepted, request);
-        assert.equal(result.status, fault === "lease_replaced" ? "conflict" : "recovered");
+        assert.equal(result.status, fault === "lease_replaced" ? "failed" : "recovered");
+        if (fault === "lease_replaced") assert.equal(result.reason_code, "handoff_mode_requires_lease");
         assert.equal((await store.readReceipt(request.operation_id)).status,
           fault === "lease_replaced" ? "missing" : "found");
         const after = await store.loadAuthority();
@@ -1596,6 +1800,142 @@ export function registerAuthorityStoreConformance(
         assert.equal((await executeCoordinationTodoUpdate(store, {...request,
           operation_id: `reject-clear-${field}`, patch: {}, clear_fields: [field]})).reason_code,
         "invalid_coordination_todo_update");
+      }
+    });
+    test(`${providerName} conformance: validator revision is atomic and replayable (${native ? "native" : "v0"})`, async (t) => {
+      const {store, contender} = await factory(t);
+      const goalId = "goal-validator-revision";
+      const original = {
+        validation_command: null,
+        validation_command_argv: ["python3", "-m", "pytest", "-q", "tests/old.py"],
+        validation_label: "provider conformance validation",
+        validation_timeout_seconds: 5,
+      };
+      const replacement = {
+        ...original,
+        validation_command_argv: ["python3", "-m", "pytest", "-q", "tests/new.py"],
+      };
+      const projection = todoClaimProjection(goalId, native);
+      const todo = (projection.todos as Record<string, unknown>[])[0]!;
+      Object.assign(todo, {
+        claimed_by: "agent-a",
+        completion_validation_required: true,
+        completion_validation_sha256: canonicalAuthoritySha256(original),
+        completion_validation_revision: 0,
+        completion_validation_revision_history: [],
+      });
+      projection.todo_read_model = coordinationTodoReadModel(
+        projection.todos as JsonObject[],
+        (projection.todo_read_model as JsonObject).schema_version,
+      );
+      assert.equal((await store.commitAuthority({
+        expected_provider_revision: null,
+        operation_id: "init-validator-revision",
+        events: [],
+        receipts: [],
+        next_projection: projection,
+      })).status, "applied");
+      const before = await store.loadAuthority();
+      assert.equal(before.status, "loaded");
+      if (before.status !== "loaded") return;
+      const request = {
+        goal_id: goalId,
+        todo_id: "todo-claim",
+        expected_role: "agent",
+        actor_agent_id: "agent-a",
+        registered_agents: ["agent-a", "agent-b"],
+        operation_id: "revise-validator",
+        expected_provider_revision: before.provider_revision,
+        patch: {},
+        clear_fields: [],
+        completion_validation_revision: {
+          schema_version: "loopx_todo_completion_validation_revision_v0",
+          expected_declaration_sha256: canonicalAuthoritySha256(original),
+          declaration: replacement,
+        },
+        dry_run: false,
+        now: new Date("2026-09-05T05:45:00Z"),
+      } as const;
+      const appliedRevision = await executeCoordinationTodoUpdate(store, request);
+      assert.equal(appliedRevision.status, "applied", JSON.stringify(appliedRevision));
+      const replayedRevision = await executeCoordinationTodoUpdate(contender, request);
+      assert.equal(replayedRevision.status, "replayed", JSON.stringify(replayedRevision));
+      const after = await store.loadAuthority();
+      assert.equal(after.status, "loaded");
+      if (after.status !== "loaded") return;
+      const revised = (after.head.todos as Record<string, unknown>[])[0]!;
+      assert.equal(revised.completion_validation_sha256, canonicalAuthoritySha256(replacement));
+      assert.equal(revised.completion_validation_revision, 1);
+      assert.equal(
+        (revised.completion_validation_revision_history as Record<string, unknown>[])[0]!
+          .actor_agent_id,
+        "agent-a",
+      );
+    });
+    test(`${providerName} conformance: malformed validator revision leaves authority unchanged (${native ? "native" : "v0"})`, async (t) => {
+      const {store} = await factory(t);
+      const goalId = "goal-validator-revision-rejection";
+      const original = {
+        validation_command: null,
+        validation_command_argv: ["true"],
+        validation_label: null,
+        validation_timeout_seconds: null,
+      };
+      const projection = todoClaimProjection(goalId, native);
+      const todo = (projection.todos as Record<string, unknown>[])[0]!;
+      Object.assign(todo, {
+        claimed_by: "agent-a",
+        completion_validation_required: true,
+        completion_validation_sha256: canonicalAuthoritySha256(original),
+        completion_validation_revision: 0,
+        completion_validation_revision_history: [],
+      });
+      projection.todo_read_model = coordinationTodoReadModel(
+        projection.todos as JsonObject[],
+        (projection.todo_read_model as JsonObject).schema_version,
+      );
+      assert.equal((await store.commitAuthority({
+        expected_provider_revision: null,
+        operation_id: "init-validator-revision-rejection",
+        events: [],
+        receipts: [],
+        next_projection: projection,
+      })).status, "applied");
+      const before = await store.loadAuthority();
+      assert.equal(before.status, "loaded");
+      if (before.status !== "loaded") return;
+      for (const [index, declaration] of [
+        {unexpected: "accepted"},
+        {...original, validation_command: "true"},
+        {...original, validation_command_argv: '["true"]'},
+        {...original, validation_timeout_seconds: "20"},
+        {...original, validation_label: ""},
+        {...original, validation_command: " true ", validation_command_argv: null},
+        {...original, validation_command_argv: []},
+        {...original, validation_timeout_seconds: 30},
+      ].entries()) {
+        const operationId = `reject-validator-revision-${index}`;
+        const rejected = await executeCoordinationTodoUpdate(store, {
+          goal_id: goalId,
+          todo_id: "todo-claim",
+          expected_role: "agent",
+          actor_agent_id: "agent-a",
+          registered_agents: ["agent-a", "agent-b"],
+          operation_id: operationId,
+          expected_provider_revision: before.provider_revision,
+          patch: {},
+          clear_fields: [],
+          completion_validation_revision: {
+            schema_version: "loopx_todo_completion_validation_revision_v0",
+            expected_declaration_sha256: canonicalAuthoritySha256(original),
+            declaration,
+          },
+          dry_run: false,
+          now: new Date("2026-09-05T05:46:00Z"),
+        });
+        assert.equal(rejected.status, "failed", JSON.stringify(declaration));
+        assert.deepEqual(await store.loadAuthority(), before);
+        assert.equal((await store.readReceipt(operationId)).status, "missing");
       }
     });
     test(`${providerName} conformance: provider-neutral Todo claim transaction (${native ? "native" : "v0"})`, async (t) => {

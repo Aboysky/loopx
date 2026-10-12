@@ -6,6 +6,7 @@ import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "nod
 import { existsSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dashboardDir = resolve(repoRoot, "apps/presentation/dashboard");
@@ -121,13 +122,11 @@ async function copyHomepage(siteDir, base) {
     cwd: homepageDir,
   });
   run(process.execPath, [
-    resolve(homepageDir, "node_modules/vite/bin/vite.js"),
-    "build",
+    resolve(homepageDir, "scripts/build.mjs"),
     "--base",
     base,
     "--outDir",
     buildDir,
-    "--emptyOutDir",
   ], { cwd: homepageDir });
   await cp(buildDir, siteDir, { force: true, recursive: true });
   await rm(buildDir, { force: true, recursive: true });
@@ -135,12 +134,6 @@ async function copyHomepage(siteDir, base) {
 }
 
 async function copyPublicSiteRoutes(siteDir) {
-  const homepage = resolve(siteDir, "index.html");
-  for (const route of ["benchmarks/swe-marathon", "benchmarks/lhtb"]) {
-    const routeDir = resolve(siteDir, route);
-    await mkdir(routeDir, { recursive: true });
-    await copyFile(homepage, resolve(routeDir, "index.html"));
-  }
   const deepSweRouteDir = resolve(
     siteDir,
     "benchmarks/deepswe/behavior-discovery",
@@ -403,13 +396,27 @@ async function collectTextFiles(rootDir) {
   return files;
 }
 
-async function scanPublicBoundary(outDir) {
+// Verified public source citations are exceptions only to the organization-name
+// probe, never to path, host or credential checks. Exact hrefs cannot exempt
+// nearby prose, another repository, a query string or an internal URL.
+const publicSourceHrefs = new Set([
+  "https://github.com/ByteDance-Seed/EdgeBench",
+  "https://github.com/ByteDance-Seed/EdgeBench/pull/14",
+]);
+
+function withoutPublicSourceHrefs(text) {
+  return text.replace(/\bhref=(["'])(https:\/\/[^"'<>\s]+)\1/g, (attribute, quote, href) =>
+    publicSourceHrefs.has(href) ? `href=${quote}${quote}` : attribute,
+  );
+}
+
+export async function scanPublicBoundary(outDir) {
   const patterns = [
     { label: "macOS user path", pattern: /\/Users\// },
     { label: "private temp path", pattern: /\/private\// },
-    { label: "workspace owner name", pattern: new RegExp("byte" + "dance", "i") },
+    { label: "workspace owner name", pattern: new RegExp("byte" + "dance", "i"), publicSourceException: true },
     { label: "internal doc host", pattern: new RegExp("lark" + "office", "i") },
-    { label: "private goal state", pattern: new RegExp("\\.codex/goals|\\.goal-" + "harness") },
+    { label: "private goal state", pattern: new RegExp("\\.(?:codex|loopx)/goals|\\.goal-" + "harness") },
     { label: "raw internal key", pattern: new RegExp("raw_" + "internal_note") },
     { label: "private key material", pattern: /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/ },
     { label: "token assignment", pattern: /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i },
@@ -417,8 +424,8 @@ async function scanPublicBoundary(outDir) {
   const leaks = [];
   for (const path of await collectTextFiles(outDir)) {
     const text = await readFile(path, "utf8");
-    for (const { label, pattern } of patterns) {
-      if (pattern.test(text)) {
+    for (const { label, pattern, publicSourceException } of patterns) {
+      if (pattern.test(publicSourceException ? withoutPublicSourceHrefs(text) : text)) {
         leaks.push(`${relative(outDir, path)}: ${label}`);
       }
     }
@@ -463,7 +470,7 @@ async function main() {
   await copyPublicSiteRoutes(siteDir);
   const interactivePages = await copyInteractiveCasePages(siteDir);
 
-  const projectionOutput = run("python3", [resolve(repoRoot, "examples/goal-channel-frontstage-fixture.py"), "--format", "json"], {
+  const projectionOutput = run(resolveTestPython(), [resolve(repoRoot, "examples/goal-channel-frontstage-fixture.py"), "--format", "json"], {
     capture: true,
     cwd: repoRoot,
   });
@@ -487,7 +494,9 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

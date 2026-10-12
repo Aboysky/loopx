@@ -15,8 +15,30 @@ which layer wins when more than one layer sets a field.
 The credential is its own file, not a machine-configuration namespace:
 
 ```text
-<runtime-root>/machine/credentials/operator_provider.json
+<machine-runtime-root>/machine/credentials/operator_provider.json
 ```
+
+The canonical machine runtime is `~/.loopx` for new installations; a
+legacy-only machine stays on `~/.codex/loopx` until the
+[explicit migration](../product/migrations/local-state-path-migration.md).
+This selection is independent of `CODEX_HOME`
+and any Goal's `common_runtime_root` or Turn `--runtime-root`. Turn planning,
+default host selection, dispatch and delegation readiness use this machine
+store. A Goal-local credential file does not override it. Explicit machine
+credential APIs retain their root parameter for operating an isolated machine
+store; a Goal runtime override is not that parameter.
+
+This corrects the previous behavior where isolated Goal runtimes missed an
+already configured machine credential, and parser defaults consulted only the
+process environment. With a valid machine credential, an otherwise unspecified
+Turn host now consistently resolves to `dsh`; explicit `--host` and
+`LOOPX_TURN_HOST` still win. SDK availability is checked in the launching
+interpreter separately from credential availability.
+
+机器凭证由机器运行目录统一管理，Goal 只决定 Agent 分配、执行配置和授权。
+隔离 Goal 的运行目录不再遮蔽已配置的机器凭证；未指定 Turn host 时，
+有效的机器凭证会按既有规则选择 `dsh`。显式 host 选择保持优先，
+DSH SDK 是否安装仍按实际执行的 Python 环境检查。
 
 The directory is mode `0700` and the file is mode `0600`, written atomically.
 It is deliberately **not** part of `machine/configuration.json`: that document
@@ -106,9 +128,10 @@ through `/api/chat/operator-credential`.
 Two surfaces answer on this machine, and they are selected separately.
 
 - **The steward channel** is the conversation a person talks to: the Dashboard
-  manager channel and the bound Lark/Feishu manager group. Its executor is one
-  machine-level choice, `steward_executor.executor_endpoint`, holding a shipped
-  channel endpoint (`codex`, or `dsh` for the managed host).
+  manager channel and the bound Lark/Feishu manager group. Its machine setting
+  names a primary `steward_executor.executor_endpoint` (`codex`, or `dsh` for
+  the managed host) and a `preferred`, `pinned`, or `flexible` selection policy.
+  Flexible selection is confined to the configured eligible endpoint pool.
 - **A managed Turn or managed agent** is bounded work that runs without a person
   in the loop. Its host resolves from the operator credential: with one stored,
   the shipped default is the managed host `dsh`, and without one it is the
@@ -129,6 +152,9 @@ loopx machine-config describe
 # Read the stored document and the effective steward resolution.
 loopx machine-config inspect
 
+# Read the effective steward binding and the current Session allocation.
+loopx chat-endpoint inspect-steward
+
 # Preview an exact change, then apply it with the plan revision it returned.
 loopx machine-config preview
 loopx machine-config apply
@@ -145,8 +171,11 @@ Every entry point publishes the same readback, so a reader never has to infer
 the host from the name it resolved: `/api/chat/capabilities` reports the
 steward's `executor_endpoint`, its `executor_endpoint_source`
 (`machine_configuration`, `explicit_config` or `product_default`), the
-`execution_profile` (`deepseek-v4-flash@high` on the shipped managed profile),
-`available`, and the bound Session's `session_mode` and `session_status`.
+`execution_profile` (`deepseek-flash@high` on the shipped managed profile),
+`available`, the selection policy and allocation reason, and the bound
+Session's `session_mode` and `session_status`. The Session persists its chosen
+endpoint, model, effort, policy, pool and source revision, so later configuration
+edits apply through a new allocation rather than rewriting an active conversation.
 A connection record stores the resolved endpoint as an observation, so it cannot
 outrank the machine setting.
 

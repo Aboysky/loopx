@@ -26,7 +26,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from .executor import LOOPX_TURN_EXECUTION_SCHEMA_VERSION
 from .host_failure import normalize_host_failure_record, project_host_failure
 from .loop_controller import (
     LOOP_CONTROLLER_DISPOSITION_SCHEMA_VERSION,
@@ -35,6 +34,7 @@ from .loop_controller import (
 )
 from .turn_journal_runtime import interpret_turn_journal_projection
 from .transaction import (
+    LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
     LOOPX_TURN_RECEIPT_VALIDATION_SCHEMA_VERSION,
     LoopXTurnResultKind,
 )
@@ -111,6 +111,8 @@ def _validated_turn_receipt(journal: Mapping[str, Any]) -> ValidatedTurnReceipt:
         "result_kind": result_kind,
         "receipt": dict(receipt),
         "scheduler": _mapping(journal.get("scheduler")),
+        "validation": journal.get("task_validation"),
+        **({"validation_stage": journal["validation_stage"]} if journal.get("validation_stage") else {}),
         **project_host_failure(journal),
     }
     settlement_result = journal.get("settlement_result")

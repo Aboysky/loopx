@@ -199,7 +199,7 @@ function todoRecords(
         ...(index % 8 === 0 ? {watch_only: "true"} : {max_no_change_before_replan: "5"})});
     }
     if (role === "agent" && status === "done" && index < 3) {
-      record.successor_todo_ids = [todoId("agent", envelope.completion_target_index + index)];
+      record.successor_todo_ids = [todoId("agent", PRODUCTION_SCALE_COMPLETION_TARGET_INDEX + index)];
       record.completion_continuation = "successor";
     }
     if (role === "user" && index < envelope.standing_user_decision_count) {
@@ -219,7 +219,7 @@ function todoRecords(
       record.decision_scope = {kind: "direction", granularity: "goal", scope_key: goalId};
       if (index >= partialEnd) {
         record.decision_outcome = "approve";
-        record.unblocks_todo_id = todoId("agent", envelope.completion_target_index);
+        record.unblocks_todo_id = todoId("agent", PRODUCTION_SCALE_COMPLETION_TARGET_INDEX);
       }
     }
     // An explicit rejection is a recorded decision, not absent authority: the
@@ -255,8 +255,8 @@ export function productionScaleCoordinationFixture(
   const archiveDependent = [...agents].reverse().find(item => item.status === "open")!;
   archiveDependent.task_class = "advancement_task";
   archiveDependent.resume_when = `todo_done:${todoId("agent", 3)}`;
-  const completionTodo = agents[envelope.completion_target_index]!;
-  const supersedeTodo = agents[envelope.supersede_target_index]!;
+  const completionTodo = agents[PRODUCTION_SCALE_COMPLETION_TARGET_INDEX]!;
+  const supersedeTodo = agents[PRODUCTION_SCALE_SUPERSEDE_TARGET_INDEX]!;
   completionTodo.task_class = "advancement_task";
   completionTodo.claimed_by = "agent-a";
   completionTodo.completion_validation_required = true;
@@ -354,6 +354,38 @@ function requireSafeCount(value: number, label: string): number {
   }
   return value;
 }
+
+/**
+ * Validate the two envelope fields that address a generated agent Todo.
+ *
+ * The envelope is parsed JSON, so `as` proves nothing about its numbers: the
+ * two target indices below are the only envelope fields a consumer turns into a
+ * positional lookup. They are validated once here, at the boundary, and every
+ * consumer reads the validated constant instead of the raw field, so a drifted
+ * index fails the fixture instead of yielding `undefined` mid-construction.
+ */
+export function requireProductionScaleTargetIndex(
+  value: number,
+  label: string,
+  agentTodoCount: number,
+): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value >= agentTodoCount) {
+    throw new Error(`production fixture ${label} does not address a generated agent Todo`);
+  }
+  return value;
+}
+
+export const PRODUCTION_SCALE_AGENT_TODO_COUNT = statusSeries(
+  envelope.agent_status_counts, envelope.agent_status_order, "agent",
+).length;
+
+export const PRODUCTION_SCALE_COMPLETION_TARGET_INDEX = requireProductionScaleTargetIndex(
+  envelope.completion_target_index, "completion target index", PRODUCTION_SCALE_AGENT_TODO_COUNT,
+);
+
+export const PRODUCTION_SCALE_SUPERSEDE_TARGET_INDEX = requireProductionScaleTargetIndex(
+  envelope.supersede_target_index, "supersede target index", PRODUCTION_SCALE_AGENT_TODO_COUNT,
+);
 
 /**
  * Checked while the module loads, so a drifted history envelope fails every
@@ -541,4 +573,112 @@ export function productionScaleLeasedMonitorFixture(goalId: string,
     now: new Date("2026-09-01T01:00:00Z"),
     proof: {idempotency_key: fixture.completion_lease_idempotency_key,
       expected_version: fixture.completion_lease_expected_version}};
+}
+
+/** A completed watch and its waiting dependent within the full mixed graph. */
+export function productionScaleCompletedMonitorFixture(goalId: string,
+  schema: AuthorityProjectionSchema = "native", retainedLease: "absent" | "active" | "expired" | "released" = "absent") {
+  const fixture = productionScaleLeasedMonitorFixture(goalId, schema);
+  const todos = (fixture.projection.todos as Record<string, unknown>[]).map(todo =>
+    todo.todo_id === fixture.target ? {...todo, status: "done", done: true,
+      completed_at: "2026-09-01T00:30:00Z", no_followup: true,
+      completion_continuation: "no_followup", completion_recovery: "same_turn_terminal_closeout",
+      completion_turn_key: "retired-cycle", watch_only: "true"} : todo);
+  return {...fixture, projection: authorityProjectionFixture(goalId, todos,
+    (fixture.projection.leases as Record<string, unknown>[]).flatMap(lease => lease.todo_id !== fixture.target ? [lease] :
+      retainedLease === "absent" ? [] : [{...lease,
+        status: retainedLease === "released" ? "released" : "active",
+        ...(retainedLease === "expired" ? {expires_at: "2026-09-01T00:20:00Z"} : {}),
+        ...(retainedLease === "released" ? {released_at: "2026-09-01T00:30:00Z"} : {})}]),
+    schema, {source_authority: "synthetic_production_scale_fixture", handoff_mode: retainedLease === "absent" ? "legacy" : "hard_lease"})};
+}
+
+/** User decisions act on an exact dependent inside the full mixed graph.
+ * The second blocker is deliberately beyond the compact display population. */
+export function productionScaleUserCompletionFixture(goalId: string,
+  schema: AuthorityProjectionSchema = "native", otherBlocker = false) {
+  const fixture = productionScaleCoordinationFixture(goalId, schema);
+  const scenario = envelope.semantic_cases.user_completion;
+  const todos = structuredClone(fixture.projection.todos) as Record<string, unknown>[];
+  const target = todos.find(todo => todo.role === "agent" && todo.status === "blocked")!;
+  const source = todos.find(todo => todo.role === "user" && todo.status === "open")!;
+  const scope = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: scenario.scope_key};
+  Object.assign(target, {task_class: "advancement_task", claimed_by: "agent-a", required_decision_scopes: [scope],
+    decision_scope_outcomes: [{schema_version: "todo_decision_scope_outcome_v0", outcome: "reject",
+      decision_scope: scope, source_todo_id: "todo_fixture_prior_decision"}]});
+  Object.assign(source, {task_class: "user_gate", bound_agent: "agent-a", blocks_agent: "agent-a",
+    claimed_by: "agent-a", decision_scope: scope, unblocks_todo_id: target.todo_id});
+  if (otherBlocker) todos.push({...source, todo_id: scenario.other_blocker_id, text: "Independent remaining owner decision"});
+  return {projection: authorityProjectionFixture(goalId, todos, fixture.projection.leases as Record<string, unknown>[],
+    schema, {handoff_mode: "hard_lease"}), source: String(source.todo_id), target: String(target.todo_id),
+    scope, registered_agents: fixture.registered_agents};
+}
+
+/** Complete graph evidence must survive archive, selection and display limits. */
+export function productionScaleSuccessionFixture(goalId: string, schema: AuthorityProjectionSchema = "native") {
+  const fixture = productionScaleCoordinationFixture(goalId, schema);
+  const projection = structuredClone(fixture.projection);
+  const todos = projection.todos as Record<string, unknown>[];
+  const cases = envelope.semantic_cases.succession as Record<string, string>;
+  const base = todos.find(todo => todo.role === "agent")!;
+  const source = (key: string, fields: Record<string, unknown> = {}): Record<string, unknown> => ({...base,
+    todo_id: cases[key], text: "Verify the continuation relationship", index: todos.length + Object.keys(cases).indexOf(key) + 1,
+    status: "done", done: true, archive_state: "active", claimed_by: "agent-a", task_class: "advancement_task",
+    successor_todo_ids: [], superseded_by: null, resume_when: null, unblocks_todo_id: null,
+    no_followup: false, excluded_agents: [], ...fields});
+  const added = [source("inferred_source"), source("archived_target", {archive_state: "archive",
+    resume_when: `todo_done:${cases.inferred_source}`, no_followup: true}),
+    source("missing_source", {successor_todo_ids: ["todo_missing_continuation"]}),
+    source("self_source", {successor_todo_ids: [cases.self_source]}),
+    source("handoff_source", {excluded_agents: ["agent-b"], unblocks_todo_id: cases.inferred_source,
+      successor_todo_ids: [cases.explicit_target]}),
+    source("explicit_target", {status: "open", done: false}),
+    source("closed_source", {no_followup: true})];
+  for (const record of added) {
+    Reflect.deleteProperty(record, "material_change_generation");
+    if (schema === "native") {Reflect.deleteProperty(record, "index"); Reflect.deleteProperty(record, "source_section");}
+    else if (record.archive_state === "archive") record.source_section = "Completed Work Archive";
+  }
+  todos.push(...added);
+  todos.sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
+  const readModel = projection.todo_read_model as Record<string, unknown>;
+  readModel.todo_count = todos.length;
+  readModel.records_sha256 = canonicalAuthoritySha256(todos);
+  return {projection, cases};
+}
+
+/** Retained User addressing in the complete graph, including legacy claims.
+ * Selection must not derive completeness from the short display population. */
+export function productionScaleConsumerScopeFixture(goalId: string, schema: AuthorityProjectionSchema = "native") {
+  const fixture = productionScaleSuccessionFixture(goalId, schema);
+  const extra = [
+    {todo_id: "todo_scope_peer_gate", task_class: "user_gate", claimed_by: "agent-b"},
+    {todo_id: "todo_scope_peer_action", task_class: "user_action", claimed_by: "agent-b"},
+    {todo_id: "todo_scope_explicit_gate", task_class: "user_gate", claimed_by: "agent-b", blocks_agent: "agent-a"},
+    {todo_id: "todo_scope_explicit_action", task_class: "user_action", claimed_by: "agent-b", bound_agent: "agent-a"},
+    {todo_id: "todo_scope_global", task_class: "user_gate", claimed_by: "agent-b", global_gate: true},
+  ].map((item, index) => ({role: "user", status: "open", done: false, archive_state: "active",
+    text: "Review a synthetic result", source_section: "User Todo", index: 2000 + index, ...item}));
+  return {...fixture, projection: authorityProjectionFixture(goalId,
+    [...fixture.projection.todos as Record<string, unknown>[], ...extra],
+    fixture.projection.leases as Record<string, unknown>[], schema, {handoff_mode: "legacy"})};
+}
+
+/** Capability-owned bucket inside a full mixed graph, including a historical
+ * same-target row that must never shadow the current Monitor. */
+export function productionScaleGroupedMonitorFixture(goalId: string,
+  schema: AuthorityProjectionSchema = "native") {
+  const fixture = productionScaleCoordinationFixture(goalId, schema);
+  const targetKey = "github-pr-state-example--repo-checks-pending";
+  const monitor = {schema_version: "todo_domain_record_v0", todo_id: "todo_grouped_monitor",
+    role: "agent", status: "open", done: false, archive_state: "active", text: "Watch the pending PR bucket",
+    task_class: "continuous_monitor", action_kind: "issue_fix_pr_state_checks_pending", target_key: targetKey,
+    claimed_by: "agent-a", cadence: "30m", watch_only: "true", last_checked_at: "2026-09-01T00:00:00Z",
+    result_hash: "previous-membership", material_change_generation: 4, required_write_scopes: []};
+  const projection = authorityProjectionFixture(goalId, [...fixture.projection.todos as Record<string, unknown>[],
+    monitor, {...monitor, todo_id: "todo_grouped_history", status: "done", done: true, archive_state: "archive"}],
+    fixture.projection.leases as Record<string, unknown>[], schema,
+    {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
+  return {projection, target: monitor.todo_id, targetKey, actor: "agent-a", registered_agents: fixture.registered_agents,
+    now: new Date("2026-09-01T01:00:00Z")};
 }

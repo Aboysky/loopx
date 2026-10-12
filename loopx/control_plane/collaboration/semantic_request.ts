@@ -1,6 +1,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
 
@@ -24,6 +25,17 @@ function lines(value: unknown, label: string): string[] {
   return value.map((item, index) => text(item, `${label}[${index}]`, 1000));
 }
 
+export function workspaceRef(value: unknown): string {
+  const ref = text(value, "input.ref", 512);
+  // References never fetch URLs or expose a sender's absolute filesystem path.
+  if (ref.startsWith("/") || ref.includes("\\") || ref.includes(":")
+      || ref.split("/").some((part) => !part || part === "." || part === "..")
+      || /[\x00-\x1f]/.test(ref)) {
+    throw new EffectRuntimeRequestError("input.ref must be a relative workspace file path");
+  }
+  return ref;
+}
+
 /** Semantic content is context, never a Todo edit, execution grant or priority. */
 export function normalizeCollaborationBrief(value: unknown): JsonObject {
   const brief = requireJsonObject(value, "brief");
@@ -40,21 +52,23 @@ export function normalizeCollaborationBrief(value: unknown): JsonObject {
   }
   const inputs = brief.inputs.map((raw) => {
     const input = requireJsonObject(raw, "brief input");
-    exactKeys(input, ["ref", "description", "sha256"], ["ref", "description"]);
-    const ref = text(input.ref, "input.ref", 512);
-    // Shared-workspace files only. The receiver must open and verify them itself;
-    // this record never fetches URLs or copies a sender's private absolute path.
-    if (ref.startsWith("/") || ref.includes("\\") || ref.includes(":")
-        || ref.split("/").some((part) => !part || part === "." || part === "..")
-        || /[\x00-\x1f]/.test(ref)) {
-      throw new EffectRuntimeRequestError("input.ref must be a relative workspace file path");
-    }
+    exactKeys(input, ["ref", "description", "sha256", "delegation"], ["ref", "description"]);
+    const ref = workspaceRef(input.ref);
     const result: JsonObject = { ref, description: text(input.description, "input.description", 1000) };
     if (input.sha256 !== undefined) {
-      if (typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256)) {
+      if (typeof input.sha256 !== "string" || !BARE_SHA256_PATTERN.test(input.sha256)) {
         throw new EffectRuntimeRequestError("input.sha256 must be a SHA256 digest");
       }
       result.sha256 = input.sha256;
+    }
+    if (input.delegation !== undefined) {
+      const source = requireJsonObject(input.delegation, "input.delegation");
+      exactKeys(source, ["operation_id", "ref", "relation"], ["operation_id", "ref", "relation"]);
+      if (typeof source.operation_id !== "string" || !ID.test(source.operation_id)
+          || !["responds_to", "revises", "uses"].includes(String(source.relation)) || !result.sha256) {
+        throw new EffectRuntimeRequestError("delegation input requires operation, artifact, relation and digest");
+      }
+      result.delegation = {...source, ref: workspaceRef(source.ref)};
     }
     return result;
   });
@@ -72,7 +86,7 @@ export function normalizeCollaborationBrief(value: unknown): JsonObject {
 
 export function normalizeCollaborationRequest(value: unknown): JsonObject {
   const request = requireJsonObject(value, "request");
-  exactKeys(request, ["goal_id", "agent_id", "brief"], ["goal_id", "agent_id"]);
+  exactKeys(request, ["goal_id", "agent_id", "brief", "execution_binding_id"], ["goal_id", "agent_id"]);
   const result: JsonObject = {};
   for (const key of ["goal_id", "agent_id"]) {
     const id = requireNonEmptyString(request[key], key);
@@ -80,5 +94,27 @@ export function normalizeCollaborationRequest(value: unknown): JsonObject {
     result[key] = id;
   }
   if (request.brief !== undefined) result.brief = normalizeCollaborationBrief(request.brief);
+  // Selection is data, not a grant. The host separately rechecks the source,
+  // operator binding, canonical task, acceptance and governed Turn admission.
+  if (request.execution_binding_id !== undefined) {
+    if (!result.brief || typeof request.execution_binding_id !== "string" || !ID.test(request.execution_binding_id)) {
+      throw new EffectRuntimeRequestError("execution selection requires an exact binding and semantic brief");
+    }
+    result.execution_binding_id = request.execution_binding_id;
+  }
   return result;
+}
+
+/** Preserve source text while leaving room in the existing 128 KB inbox record. */
+export function normalizeCollaborationSourceContext(input: JsonObject): JsonObject {
+  const source = requireNonEmptyString(input.source_message, "source_message");
+  if (Array.from(source).length > 32000) {
+    throw new EffectRuntimeRequestError("collaboration source context exceeds 32000 characters; use a scoped artifact reference for larger material");
+  }
+  // JSON escaping and UTF-8 differ from character count; reserve the rest for
+  // the existing semantic brief, request identity and receiver instructions.
+  if (new TextEncoder().encode(JSON.stringify(source)).length > 98304) {
+    throw new EffectRuntimeRequestError("collaboration source context exceeds 98304 encoded bytes; use a scoped artifact reference for larger material");
+  }
+  return {source_message: source};
 }

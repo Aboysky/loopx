@@ -5,11 +5,12 @@
 import { createHash } from "node:crypto";
 import {inflateSync} from "node:zlib";
 import type { JsonObject } from "../effect_program.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { requireJsonObject, requireBoolean, requireNonEmptyString, requireStringArray, optionalNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { normalizeTodoAgent, stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { AuthorityStoreProtocolError } from "../coordination/authority_store_codec.ts";
+import {claimAllowsAgent} from "./agent_scope.ts";
 
 const REVISION = "todo_frontier_revision_v0";
 const INDEX = "todo_frontier_revision_index_v0";
@@ -20,12 +21,14 @@ type Checkpoint = { complete: false } | {
 };
 type Row = {
   id: string; claim: string | null; excluded: string[];
-  updated: string; serialized: string; advancement: boolean;
+  updated: string; serialized: string; advancement: boolean; actionable: boolean | null;
 };
 type LongChainObservation = {
   trigger_count: number;
-  count_kind: "selectable_advancement_todos" | "selectable_open_todos";
+  count_kind: "selectable_advancement_todos" | "selectable_open_todos" |
+    "claimed_advancement_todos";
   selectable_open_count: number; selectable_advancement_count: number;
+  current_agent_claimed_open_count: number;
   current_agent_claimed_advancement_count: number; unclaimed_advancement_count: number;
   threshold: 15 | 20; agent_id: string | null;
   frontier_revision: string | null; frontier_revision_complete: boolean;
@@ -33,7 +36,7 @@ type LongChainObservation = {
 };
 type AckDecision = {acknowledged: boolean; rearmed_after_obligation_id: string | null};
 type SuccessorBinding = {kind: "exact"; todo_id: string} |
-  {kind: "predecessor"; todo_id: string; frontier_revision: string};
+  {kind: "predecessor"; todo_id: string; frontier_revision: string; obligation_identity_revision: string};
 type TriggerCheckpoint = {
   kind: string; frontier_revision: string; frontier_owned_identity?: string;
 };
@@ -91,17 +94,47 @@ function decodeRows(value: unknown): Row[] | null {
     if (typeof row.serialized !== "string" || typeof row.advancement !== "boolean") {
       throw new EffectRuntimeRequestError("frontier row codec facts are missing");
     }
+    if (row.actionable !== undefined && typeof row.actionable !== "boolean") {
+      throw new EffectRuntimeRequestError("frontier actionable fact must be boolean");
+    }
     return {id: text(row.id), claim: text(row.claim) || null,
       excluded: strings(row.excluded), updated: text(row.updated),
-      serialized: row.serialized, advancement: row.advancement};
+      serialized: row.serialized, advancement: row.advancement,
+      actionable: typeof row.actionable === "boolean" ? row.actionable : null};
   });
+}
+
+/** Full-source commitment counts, not a claim/exclusion or execution grant.
+ * Historical indexes/row codecs without evaluated actionability keep their
+ * observed lower bounds. Never turn an incomplete codec into an exact total.
+ */
+function claimedAdvancementCounts(rows: Row[] | null): JsonObject | null {
+  if (rows === null || rows.some(row => row.actionable === null || !row.id) ||
+      new Set(rows.map(row => row.id)).size !== rows.length) return null;
+  const counts = new Map<string, number>();
+  for (const row of rows) if (row.claim) {
+    counts.set(row.claim, (counts.get(row.claim) ?? 0) + Number(row.advancement && row.actionable));
+  }
+  return Object.fromEntries([...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+}
+
+export function claimedAdvancementCountFromIndex(value: unknown, agent: string): number | null {
+  const index = object(value);
+  if (index.schema_version !== INDEX || index.claimed_advancement_counts === undefined) return null;
+  const counts = requireJsonObject(index.claimed_advancement_counts, "claimed advancement counts");
+  for (const [claim, total] of Object.entries(counts)) {
+    if (agentId(claim) !== claim || typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) {
+      throw new EffectRuntimeRequestError("invalid claimed advancement count");
+    }
+  }
+  return Object.hasOwn(counts, agent) ? counts[agent] as number : 0;
 }
 
 function checkpoint(rows: Row[] | null, agent: string | null, unclaimedOnly = false): Checkpoint {
   if (rows === null) return {complete: false};
   const selected = rows.filter(row => row.advancement &&
     (!unclaimedOnly || row.claim === null) &&
-    (!agent || ((row.claim === null || row.claim === agent) && !row.excluded.includes(agent))));
+    claimAllowsAgent(row, agent));
   if (selected.length === 0) return {complete: false};
   const ids = new Set<string>();
   let latest: bigint | null = null;
@@ -162,8 +195,12 @@ function successorCheckpoints(request: JsonObject, agent: string | null): JsonOb
   // A new successor changes the revision it was created to settle. Reconstruct
   // only a unique fresh insertion, using a complete source matching the index.
   // The existing obligation-id owner still verifies the predecessor revision.
-  const priorAdvancement = count(trigger.selectable_advancement_count) - 1;
-  const priorOpen = count(trigger.selectable_open_count) - 1;
+  const priorAdvancement = count(agent === null ? trigger.selectable_advancement_count
+    : trigger.current_agent_claimed_advancement_count) - 1;
+  const priorOpen = count(agent === null ? trigger.selectable_open_count
+    : trigger.current_agent_claimed_open_count) - 1;
+  // Retain the former open-count threshold when reading historical obligations.
+  // New Agent-lane observations below count only advancement commitments.
   if (bindings.length === 0 && candidates.length === 1 && triggers.length === 1 &&
       trigger.kind === TRIGGER && trigger.frontier_revision === source.frontier_revision && (priorAdvancement >= 15 || priorOpen >= 20 && priorAdvancement > 0)) {
     const completeSource = indexed === null ? source : checkpoint(rows, agent);
@@ -171,7 +208,8 @@ function successorCheckpoints(request: JsonObject, agent: string | null): JsonOb
       const candidate = candidates[0];
       const prior = checkpoint(rows === null ? null : rows.filter(row => row.id !== candidate.todo_id), agent);
       if (prior.complete && prior.frontier_revision !== source.frontier_revision) {
-        bindings.push({kind: "predecessor", todo_id: text(candidate.todo_id), frontier_revision: prior.frontier_revision});
+        bindings.push({kind: "predecessor", todo_id: text(candidate.todo_id), frontier_revision: prior.frontier_revision,
+          obligation_identity_revision: prior.frontier_owned_identity ?? prior.frontier_revision});
       }
     }
   }
@@ -181,10 +219,62 @@ function successorCheckpoints(request: JsonObject, agent: string | null): JsonOb
   ], bindings};
 }
 
+/** Classify legacy summary views without transporting private Todo content.
+ * An explicit empty executable slot wins. Count floors preserve observation
+ * coverage; they never synthesize selectable rows or an execution grant.
+ */
+function classifyFrontier(request: JsonObject, agent: string | null): JsonObject {
+  const sources = requireJsonObject(request.sources, "frontier sources");
+  const decode = (value: unknown) => {
+    if (value == null) return null;
+    if (!Array.isArray(value)) throw new EffectRuntimeRequestError("frontier source must be an array");
+    return value.map((raw, index) => {
+      const row = requireJsonObject(raw, "frontier classification row");
+      const actionable = requireBoolean(row.actionable, "actionable");
+      const advancement = requireBoolean(row.advancement, "advancement");
+      return {index, claim: optionalNonEmptyString(row.claim, "claim"),
+        excluded: requireStringArray(row.excluded, "excluded"),
+        eligible: actionable && advancement};
+    });
+  };
+  const executable = decode(sources.executable_backlog_items);
+  const free = decode(sources.unclaimed_priority_open_items) ?? [];
+  const claimed = decode(sources.claimed_advancement_open_items) ?? [];
+  const eligible = (row: typeof free[number]) => row.eligible;
+  const excluded = (row: typeof free[number]) => agent !== null && row.excluded.includes(agent);
+  const current = executable !== null
+    ? executable.filter(row => eligible(row) && row.claim !== null && (!agent || claimAllowsAgent(row, agent)))
+    : claimed.filter(row => eligible(row) && (!agent || row.claim === agent) && !excluded(row));
+  const unclaimed = executable !== null
+    ? executable.filter(row => eligible(row) && row.claim === null && !excluded(row))
+    : free.filter(row => eligible(row) && !excluded(row));
+  const others = (executable ?? claimed).filter(row => eligible(row) && agent !== null && row.claim !== null && row.claim !== agent);
+  // Python integer observations may exceed the JSON number precision boundary.
+  // Keep the floor exact in transit; selection still depends only on real rows.
+  const encodedFloor = requireNonEmptyString(request.claimed_count_floor, "claimed_count_floor");
+  if (!/^(0|[1-9][0-9]*)$/.test(encodedFloor)) {
+    throw new EffectRuntimeRequestError("claimed count floor must be canonical nonnegative decimal");
+  }
+  const floor = BigInt(encodedFloor);
+  const currentCount = floor > BigInt(current.length) ? floor : BigInt(current.length);
+  const group = (source: string, rows: typeof free) => ({source, indices: rows.map(row => row.index)});
+  return {groups: {
+    current_agent_claimed_items: group(executable !== null ? "executable_backlog_items" : "claimed_advancement_open_items", current),
+    unclaimed_items: group(executable !== null ? "executable_backlog_items" : "unclaimed_priority_open_items", unclaimed),
+    other_agent_claimed_items: group(executable !== null ? "executable_backlog_items" : "claimed_advancement_open_items", others),
+  }, counts: {
+    current_agent_claimed_advancement_count: currentCount <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(currentCount) : currentCount.toString(),
+    unclaimed_advancement_count: unclaimed.length,
+    other_agent_claimed_advancement_count: Math.max(others.length, (decode(request.diagnostic_peers) ?? []).filter(eligible).length),
+  }};
+}
+
 export function projectAdvancementFrontier(value: unknown): JsonObject {
   const request = requireJsonObject(value, "frontier revision request");
   if (request.schema_version !== "todo_frontier_revision_request_v0") throw new EffectRuntimeRequestError("frontier revision schema mismatch");
   const agent = agentId(request.agent_id);
+  if (request.operation === "classify") return classifyFrontier(request, agent);
   if (request.operation === "trigger_checkpoints") {
     return {trigger_checkpoints: triggerCheckpoints(request.triggers)};
   }
@@ -195,13 +285,42 @@ export function projectAdvancementFrontier(value: unknown): JsonObject {
   const rows = decodeRows(request.rows);
   if (request.operation === "select") return {checkpoint: checkpoint(rows, agent)};
   if (request.operation !== "index") throw new EffectRuntimeRequestError("unsupported frontier revision operation");
+  return {index: frontierIndex(rows)};
+}
+
+function frontierIndex(rows: Row[] | null): JsonObject {
   // An excluded agent can have no claimed rows. It still needs its own lane;
   // falling back to the global unclaimed checkpoint would include excluded work.
   const agents = [...new Set((rows ?? []).filter(row => row.advancement)
     .flatMap(row => [...(row.claim ? [row.claim] : []), ...row.excluded]))].sort();
-  return {index: {schema_version: INDEX, all: checkpoint(rows, null),
+  const counts = claimedAdvancementCounts(rows);
+  return {schema_version: INDEX, ...(counts === null ? {} : {claimed_advancement_counts: counts}),
+    all: checkpoint(rows, null),
     unclaimed: checkpoint(rows, null, true),
-    by_agent: agents.map(agent_id => ({agent_id, ...checkpoint(rows, agent_id)}))}};
+    by_agent: agents.map(agent_id => ({agent_id, ...checkpoint(rows, agent_id)}))};
+}
+
+/** Compose the existing index owner inside an already-required summary read.
+ * Bind the lossless legacy codec to the validated source before selecting;
+ * display limits must never decide replan identity or commitment counts. */
+export function projectSummaryFrontierIndex(value: unknown, source: readonly JsonObject[],
+  indices: readonly number[]): JsonObject {
+  const rows = decodeRows(value);
+  if (rows === null || rows.length !== source.length) {
+    throw new EffectRuntimeRequestError("summary frontier source cardinality mismatch");
+  }
+  for (const [index, row] of rows.entries()) {
+    const fact = source[index];
+    const actionable = fact.status === "open" && !fact.done &&
+      (!fact.has_resume || fact.resume_ready === true) && !fact.acceptance_blocked;
+    if (row.id !== text(fact.todo_id) || row.claim !== (text(fact.claim) || null) ||
+        JSON.stringify(row.excluded) !== JSON.stringify(fact.excluded) ||
+        row.advancement !== (fact.task_class === "advancement_task") ||
+        row.actionable !== actionable || row.updated !== text(fact.updated_at || fact.completed_at)) {
+      throw new EffectRuntimeRequestError("summary frontier facts disagree with the validated source");
+    }
+  }
+  return frontierIndex(indices.map(index => rows[index]));
 }
 
 function classifyAck(observation: LongChainObservation, value: unknown): AckDecision {
@@ -229,19 +348,27 @@ export function evaluateLongTodoChain(value: unknown): JsonObject {
   if (request.schema_version !== "long_todo_chain_request_v0") throw new EffectRuntimeRequestError("long chain schema mismatch");
   if (request.operation !== "observe") throw new EffectRuntimeRequestError("unsupported long chain operation");
   const summary = object(request.summary), frontier = object(request.frontier_counts);
+  const agent = agentId(request.agent_id);
   const current = count(frontier.current_agent_claimed_advancement_count);
   const unclaimed = count(frontier.unclaimed_advancement_count);
   const advancement = current + unclaimed;
   const open = Math.max(advancement, request.summary == null ? count(object(request.agent_counts).open) :
     count(summary.current_agent_claimed_open_count) + count(summary.unclaimed_open_count));
-  const threshold = advancement >= 15 ? 15 : open >= 20 && advancement > 0 ? 20 : null;
+  const claimedOpen = Math.max(current, count(summary.current_agent_claimed_open_count));
+  // A lane replans commitments it owns. Shared candidates remain selectable,
+  // but must not impose a chain obligation with no owned ACK fence.
+  const measuredAdvancement = agent === null ? advancement : current;
+  const threshold = measuredAdvancement >= 15 ? 15
+    : agent === null && open >= 20 && measuredAdvancement > 0 ? 20 : null;
   if (threshold === null) return {observation: null, decision: null};
-  const agent = agentId(request.agent_id);
   const revision = readIndex(summary.advancement_frontier_revision_index, agent)
     ?? checkpoint(decodeRows(request.rows), agent);
-  const observation: LongChainObservation = {trigger_count: threshold === 15 ? advancement : open,
-    count_kind: threshold === 15 ? "selectable_advancement_todos" : "selectable_open_todos",
+  const observation: LongChainObservation = {trigger_count: threshold === 15 ? measuredAdvancement : open,
+    count_kind: agent === null
+      ? threshold === 15 ? "selectable_advancement_todos" : "selectable_open_todos"
+      : "claimed_advancement_todos",
     selectable_open_count: open, selectable_advancement_count: advancement,
+    current_agent_claimed_open_count: claimedOpen,
     current_agent_claimed_advancement_count: current, unclaimed_advancement_count: unclaimed,
     threshold, agent_id: agent, frontier_revision: revision.complete ? revision.frontier_revision : null,
     frontier_revision_complete: revision.complete,
@@ -249,6 +376,8 @@ export function evaluateLongTodoChain(value: unknown): JsonObject {
   const {frontier_revision, frontier_revision_complete, frontier_owned_identity, ...counts} = observation;
   const receipt = triggerCheckpoint({kind: TRIGGER, frontier_revision,
     frontier_revision_complete, frontier_owned_identity});
-  return {observation: {...observation, trigger: {...counts, ...receipt}},
+  return {observation: {...observation, trigger: {...counts, ...receipt,
+    ...(revision.complete ? {obligation_identity_revision:
+      revision.frontier_owned_identity ?? revision.frontier_revision} : {})}},
     decision: classifyAck(observation, request.ack)};
 }

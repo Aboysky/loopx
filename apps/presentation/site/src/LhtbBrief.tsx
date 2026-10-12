@@ -8,7 +8,7 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { usePublicPageNavigation } from "./usePublicPageNavigation";
 import study from "../../../../benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json";
 import taskGroups from "../../../../benchmark/LHTB/studies/five-arm-gpt56sol-max/task-groups.json";
@@ -29,6 +29,19 @@ function promptUrl(task: string) {
 const primaryArms: ArmKey[] = ["plain", "native_goal", "new_heartbeat"];
 const historicalArms: ArmKey[] = ["ssh_goal", "legacy_heartbeat"];
 const baselines: Baseline[] = ["plain", "native_goal"];
+// Derive all three metrics from the same effective task-arm cells.
+const armMetrics = Object.fromEntries((Object.keys(study.arms) as ArmKey[]).map((arm) => {
+  const rewards = study.tasks.map((row) => row[arm]);
+  return [arm, {
+    mean: rewards.reduce((sum, reward) => sum + reward, 0) / rewards.length,
+    strict: rewards.filter((reward) => reward >= study.benchmark.solved_threshold).length,
+    over80: rewards.filter((reward) => reward > 0.8).length,
+  }];
+})) as Record<ArmKey, { mean: number; strict: number; over80: number }>;
+
+function formatRate(count: number) {
+  return `${(count / study.tasks.length * 100).toFixed(1)}%`;
+}
 function compareTasks(tasks: typeof study.tasks, baseline: Baseline) {
   const deltas = tasks.map((row) => row.new_heartbeat - row[baseline]);
   const meanDelta = deltas.reduce((sum, delta) => sum + delta, 0) / deltas.length;
@@ -53,7 +66,7 @@ const contributorLinks = [
   { label: "Wanli Lee", href: "https://wanli-lee.github.io/" },
 ] as const;
 
-const studyUrl = "https://github.com/huangruiteng/loopx/tree/main/benchmark/LHTB";
+const studyUrl = "https://github.com/loopx-project/loopx/tree/main/benchmark/LHTB";
 
 function formatMillions(value: number) {
   return `${(value / 1_000_000).toFixed(2)}M`;
@@ -64,7 +77,7 @@ function formatReward(value: number) {
 }
 
 export function LhtbBrief() {
-  const [language, setLanguage] = usePublicPageNavigation();
+  const [language, setLanguage] = usePublicPageNavigation("lhtb");
   const [query, setQuery] = useState("");
   const [tableMode, setTableMode] = useState<TableMode>("all");
   const [group, setGroup] = useState<GroupKey | "all">("all");
@@ -72,12 +85,6 @@ export function LhtbBrief() {
   const c = copy[language];
   const visibleArms = showHistory ? [...primaryArms, ...historicalArms] : primaryArms;
   const basePath = import.meta.env.BASE_URL;
-
-  useEffect(() => {
-    document.title = language === "zh"
-      ? "LoopX × LHTB：与 Plain、原生 Goal 的对比"
-      : "LoopX × LHTB: compared with Plain and native Goal";
-  }, [language]);
 
   const visibleTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -96,16 +103,14 @@ export function LhtbBrief() {
       <table>
         <thead><tr>{c.summaryColumns.map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
         <tbody>{arms.map((arm) => {
-          const row = study.arms[arm];
-          const tokens = "tokens" in row
-            ? formatMillions(row.tokens)
-            : `${formatMillions(row.input_tokens)} in / ${formatMillions(row.output_tokens)} out`;
-          const cost = "estimated_cost_usd" in row ? row.estimated_cost_usd : row.recorded_cost_usd;
+          const row = armMetrics[arm];
           return (
             <tr className={arm === "new_heartbeat" ? "is-highlight" : undefined} key={arm}>
               <th scope="row"><code>{c.armLabels[arm]}</code><span>{c.armKinds[arm]}</span></th>
-              <td><strong>{row.mean_reward.toFixed(4)}</strong></td>
-              <td>{row.pass_095}/{study.tasks.length}</td><td>{tokens}</td><td>${cost.toFixed(2)}</td>
+              <td><strong>{formatReward(row.mean)}</strong></td>
+              {[row.strict, row.over80].map((count, index) => (
+                <td key={index}><strong>{formatRate(count)}</strong><small>{count}/{study.tasks.length}</small></td>
+              ))}
             </tr>
           );
         })}</tbody>
@@ -122,7 +127,7 @@ export function LhtbBrief() {
           <div key={arm}><dt>{c.armLabels[arm]}</dt><dd>{formatReward(row[arm])}</dd></div>
         ))}</dl>
         <p>{note}</p>
-        <a href={promptUrl(task)} target="_blank" rel="noreferrer">{c.promptLink} <ExternalLink size={11} /></a>
+        <a href={promptUrl(task)} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.promptLink} <ExternalLink size={11} /></a>
       </article>
     );
   });
@@ -139,7 +144,7 @@ export function LhtbBrief() {
             <button aria-pressed={language === "en"} className={language === "en" ? "is-active" : ""} onClick={() => setLanguage("en")} type="button">EN</button>
             <button aria-pressed={language === "zh"} className={language === "zh" ? "is-active" : ""} onClick={() => setLanguage("zh")} type="button">中文</button>
           </div>
-          <a href={studyUrl} target="_blank" rel="noreferrer">
+          <a href={studyUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
             {c.source} <ExternalLink size={13} />
           </a>
         </div>
@@ -156,7 +161,7 @@ export function LhtbBrief() {
               <p className="bm-contributors">
                 <span>{c.contributorsLabel}</span>
                 {contributorLinks.map((person) => (
-                  <a href={person.href} key={person.href} target="_blank" rel="noreferrer">
+                  <a href={person.href} key={person.href} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
                     {person.label}<ExternalLink size={11} />
                   </a>
                 ))}
@@ -178,6 +183,7 @@ export function LhtbBrief() {
             <p>{c.resultBody}</p>
           </div>
           {summaryTable(primaryArms)}
+          <p className="bm-runner-note">{c.metricDefinitions}</p>
           <div className="lhtb-comparisons">
             {comparisons.map((row) => (
               <article key={row.baseline}>
@@ -185,13 +191,28 @@ export function LhtbBrief() {
                 <strong>+{row.meanDelta.toFixed(4)}</strong><span>{c.deltaMean}</span>
                 <p>+{(row.relativeGain * 100).toFixed(1)}% {c.relativeGain}</p>
                 <p>{c.pairCounts.replace("{wins}", String(row.wins)).replace("{ties}", String(row.ties)).replace("{losses}", String(row.losses))}</p>
-                <p>{c.pairSolves.replace("{current}", `${study.arms.new_heartbeat.pass_095}/46`).replace("{baseline}", c.armLabels[row.baseline]).replace("{base}", `${study.arms[row.baseline].pass_095}/46`)}</p>
+                <p>{c.pairSolves.replace("{current}", formatRate(armMetrics.new_heartbeat.strict)).replace("{baseline}", c.armLabels[row.baseline]).replace("{base}", formatRate(armMetrics[row.baseline].strict))}</p>
+                <p>{c.pairOver80.replace("{current}", formatRate(armMetrics.new_heartbeat.over80)).replace("{baseline}", c.armLabels[row.baseline]).replace("{base}", formatRate(armMetrics[row.baseline].over80))}</p>
               </article>
             ))}
           </div>
           <p className="bm-runner-note">{c.comparisonNote}</p>
+          <p className="bm-runner-note">{c.thresholdNote}</p>
           <p className="bm-runner-note"><strong>{c.readingNoteLabel}</strong>{c.readingNote}</p>
           <details className="lhtb-history"><summary>{c.historyTitle}</summary><p>{c.historyBody}</p>{summaryTable(historicalArms)}</details>
+          <details className="lhtb-history">
+            <summary>{c.costTitle}</summary>
+            <div className="bm-table-wrap lhtb-cost-table"><table>
+              <thead><tr>{c.costColumns.map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+              <tbody>{[...primaryArms, ...historicalArms].map((arm) => {
+                const row = study.arms[arm];
+                const tokens = "tokens" in row ? formatMillions(row.tokens)
+                  : `${formatMillions(row.input_tokens)} in / ${formatMillions(row.output_tokens)} out`;
+                const cost = "estimated_cost_usd" in row ? row.estimated_cost_usd : row.recorded_cost_usd;
+                return <tr key={arm}><th scope="row">{c.armLabels[arm]}</th><td>{tokens}</td><td>${cost.toFixed(2)}</td></tr>;
+              })}</tbody>
+            </table></div>
+          </details>
         </section>
 
         <section className="bm-section bm-shell" id="benchmark">
@@ -202,7 +223,7 @@ export function LhtbBrief() {
           </div>
           <div className="lhtb-official-links">
             {c.officialLinks.map(([label, body, href]) => (
-              <a href={href} key={href} target="_blank" rel="noreferrer">
+              <a href={href} key={href} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
                 <div><strong>{label}</strong><p>{body}</p></div><ArrowUpRight size={18} />
               </a>
             ))}
@@ -214,7 +235,7 @@ export function LhtbBrief() {
           </div>
           <div className="lhtb-taxonomy" id="categories">
             <h3>{c.categoriesTitle}</h3>
-            <p>{c.categoriesBody} <a href="https://zli12321.github.io/LHTB/index.html#benchmark" target="_blank" rel="noreferrer">{c.categoriesSource}</a> · <a href="https://github.com/zli12321/LHTB#task-categories-46-tasks" target="_blank" rel="noreferrer">{c.categoriesExamplesSource}</a></p>
+            <p>{c.categoriesBody} <a href="https://zli12321.github.io/LHTB/index.html#benchmark" target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.categoriesSource}</a> · <a href="https://github.com/zli12321/LHTB#task-categories-46-tasks" target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.categoriesExamplesSource}</a></p>
             <div className="bm-table-wrap lhtb-category-table">
               <table>
                 <caption>{c.categoriesTitle}</caption>
@@ -328,7 +349,7 @@ export function LhtbBrief() {
                   const best = Math.max(...visibleArms.map((arm) => row[arm]));
                   return (
                     <tr key={row.task}>
-                      <th scope="row"><a href={promptUrl(row.task)} target="_blank" rel="noreferrer"><code>{row.task}</code></a><span>{c.groupLabels[taskGroup.get(row.task)!]}</span></th>
+                      <th scope="row"><a href={promptUrl(row.task)} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin"><code>{row.task}</code></a><span>{c.groupLabels[taskGroup.get(row.task)!]}</span></th>
                       {visibleArms.map((arm) => (
                         <td className={row[arm] === best ? "is-best" : undefined} key={arm}>{formatReward(row[arm])}</td>
                       ))}
@@ -352,7 +373,7 @@ export function LhtbBrief() {
             {c.programSteps.map(([title, body], index) => (
               <article key={title}><span>{index + 1}</span><div><h3>{title}</h3><p>{body}</p></div></article>
             ))}
-            <a href={c.programUrl} target="_blank" rel="noreferrer">{c.programAction}<ExternalLink size={14} /></a>
+            <a href={c.programUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.programAction}<ExternalLink size={14} /></a>
           </div>
         </section>
 
@@ -376,7 +397,7 @@ export function LhtbBrief() {
           </div>
           <div className="bm-source-list">
             {c.sourceItems.map(([title, body, href], index) => (
-              <a href={href} target="_blank" rel="noreferrer" key={title}>
+              <a href={href} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin" key={title}>
                 <span>0{index + 1}</span><div><strong>{title}</strong><p>{body}</p></div><ExternalLink size={15} />
               </a>
             ))}

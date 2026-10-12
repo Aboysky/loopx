@@ -17,7 +17,6 @@ from loopx.control_plane.coordination.runtime_shadow import (
     RUNTIME_SHADOW_CONFIG_SCHEMA_VERSION,
     bootstrap_coordination_runtime_shadow,
     build_runtime_shadow_source_snapshot,
-    dispatch_coordination_runtime_shadow,
     inspect_coordination_runtime_shadow,
     read_coordination_runtime_shadow_todo_candidate,
     rollback_coordination_runtime_shadow,
@@ -65,6 +64,64 @@ def _journal(effect_id: str) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("occupied_with_directory", [True, False])
+def test_read_info_distinguishes_directory_from_unreadable_runtime_metadata(
+    tmp_path: Path,
+    monkeypatch,
+    occupied_with_directory: bool,
+) -> None:
+    info_path = tmp_path / "runtime-info"
+    if occupied_with_directory:
+        info_path.mkdir()
+    else:
+        info_path.write_text("{}", encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def deny_read(path: Path, *args, **kwargs):
+        if path == info_path:
+            raise PermissionError("synthetic denied read")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_read)
+    if occupied_with_directory:
+        assert effect_runtime._read_info(info_path, fingerprint="fixture") is None
+    else:
+        with pytest.raises(effect_runtime.EffectRuntimeHostPermissionError):
+            effect_runtime._read_info(info_path, fingerprint="fixture")
+
+
+def test_read_info_retries_transient_runtime_locator_permission_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    info_path = tmp_path / "runtime-info"
+    payload = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+        "fingerprint": "fixture",
+        "host": "127.0.0.1",
+        "port": 1234,
+        "token": "runtime-token",
+        "pid": os.getpid(),
+    }
+    info_path.write_text(json.dumps(payload), encoding="utf-8")
+    original_read_text = Path.read_text
+    attempts = 0
+
+    def deny_once(path: Path, *args, **kwargs):
+        nonlocal attempts
+        if path == info_path:
+            attempts += 1
+            if attempts == 1:
+                raise PermissionError("synthetic transient locator read denial")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_once)
+
+    assert effect_runtime._read_info(info_path, fingerprint="fixture") == payload
+    assert attempts == 2
+
+
 def _raw_runtime_response(
     info: dict[str, object],
     payload: bytes,
@@ -98,6 +155,32 @@ def test_runtime_pid_liveness_delegates_to_shared_non_signaling_probe(
 
     assert effect_runtime._pid_is_alive(1234) is True
     assert calls == [1234]
+
+
+def test_default_runtime_request_budget_covers_typed_projection_calls(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    info = {"token": "fixture"}
+    observed: list[tuple[str, float]] = []
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint_for_request", lambda: "fixture")
+    monkeypatch.setattr(effect_runtime, "_runtime_info_path", lambda _: tmp_path / "runtime.json")
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *_args, **_kwargs: info)
+
+    def respond(_info: object, **kwargs: object) -> dict[str, object]:
+        observed.append((str(kwargs["method"]), float(kwargs["timeout"])))
+        return {"result": {"ok": True}}
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", respond)
+    assert effect_runtime.effect_runtime_result("todo.succession.project", {}) == {"ok": True}
+    assert effect_runtime.effect_runtime_request("scheduler.monitor_target.select", {}) == {
+        "result": {"ok": True}
+    }
+    assert observed == [
+        ("todo.succession.project", effect_runtime.DEFAULT_REQUEST_TIMEOUT_SECONDS),
+        ("scheduler.monitor_target.select", effect_runtime.DEFAULT_REQUEST_TIMEOUT_SECONDS),
+    ]
+    assert effect_runtime.DEFAULT_REQUEST_TIMEOUT_SECONDS == 10.0
 
 
 def test_managed_runtime_is_reused_and_restart_safe_for_typed_write(
@@ -156,6 +239,165 @@ def test_managed_runtime_is_reused_and_restart_safe_for_typed_write(
     )
 
 
+def test_response_timeout_keeps_live_runtime_locator_and_never_replays_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "a" * 64
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime, "_start_runtime",
+        lambda **_kwargs: pytest.fail("a response timeout must not start another server"),
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(2)
+        info_path = effect_runtime._runtime_info_path(fingerprint)
+        info = {
+            "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+            "fingerprint": fingerprint,
+            "pid": os.getpid(),
+            "host": "127.0.0.1",
+            "port": listener.getsockname()[1],
+            "token": "fixture-token",
+        }
+        info_path.write_text(json.dumps(info), encoding="utf-8")
+
+        def serve_one() -> int:
+            with listener.accept()[0] as connection:
+                request = b""
+                while b"\n" not in request:
+                    request += connection.recv(4096)
+                time.sleep(0.1)
+                try:
+                    connection.sendall(b'{}\n')
+                except OSError:
+                    pass
+                return 1
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            served = executor.submit(serve_one)
+            with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous) as error:
+                effect_runtime.effect_runtime_request(
+                    "coordination.local_authority.todo_terminal",
+                    {"operation_id": "fixture-operation"},
+                    timeout=0.02,
+                )
+            assert error.value.diagnostic_code == "runtime_response_ambiguous"
+            assert served.result(timeout=2) == 1
+        assert json.loads(info_path.read_text(encoding="utf-8")) == info
+
+
+def test_old_server_close_cannot_remove_replacement_runtime_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    effect_runtime.effect_runtime_result("runtime.ping", {})
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    original = json.loads(info_path.read_text(encoding="utf-8"))
+    replacement = {**original, "pid": os.getpid(), "token": "replacement-token"}
+    info_path.write_text(json.dumps(replacement), encoding="utf-8")
+
+    effect_runtime._request_with_info(
+        original,
+        request_id="shutdown-old-server",
+        method="runtime.shutdown",
+        params={},
+        timeout=2,
+    )
+    deadline = time.monotonic() + 2
+    while effect_runtime._pid_is_alive(original["pid"]) and time.monotonic() < deadline:
+        time.sleep(0.025)
+    assert json.loads(info_path.read_text(encoding="utf-8")) == replacement
+
+
+def test_pre_send_connection_failure_does_not_remove_live_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "b" * 64
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime, "_start_runtime",
+        lambda **_kwargs: pytest.fail("a live locator must not start a replacement"),
+    )
+    info_path = effect_runtime._runtime_info_path(fingerprint)
+    info = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+        "fingerprint": fingerprint,
+        "pid": os.getpid(),
+        "host": "127.0.0.1",
+        "port": 1,
+        "token": "still-live",
+    }
+    info_path.write_text(json.dumps(info), encoding="utf-8")
+    calls = 0
+
+    def refuse_before_send(_info: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise ConnectionRefusedError("fixture refused before send")
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", refuse_before_send)
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as error:
+        effect_runtime.effect_runtime_request("runtime.ping", {}, retry_safe=True)
+    assert error.value.diagnostic_code == "runtime_request_failed"
+    assert calls == 2
+    assert json.loads(info_path.read_text(encoding="utf-8")) == info
+
+
+def test_pre_send_connection_failure_waits_for_retiring_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fingerprint = "c" * 64
+    retiring = {"token": "retiring"}
+    replacement = {"token": "replacement"}
+    observations = iter([retiring, retiring, None, None])
+    requests = []
+
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_read_info",
+        lambda *_args, **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        effect_runtime,
+        "_start_runtime",
+        lambda **_kwargs: replacement,
+    )
+    monkeypatch.setattr(effect_runtime.time, "sleep", lambda _seconds: None)
+
+    def request(info: object, **_kwargs: object) -> dict:
+        requests.append(info)
+        if info == retiring:
+            raise ConnectionRefusedError("fixture retired before send")
+        return {"result": {"ready": True}}
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", request)
+
+    assert effect_runtime.effect_runtime_result("runtime.ping", {}) == {"ready": True}
+    assert requests == [retiring, replacement]
+
+
 def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundary(
     tmp_path: Path,
     monkeypatch,
@@ -172,8 +414,8 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         },
     }
     request = {
-        "goal": goal,
-        "runtime_root": tmp_path / "state",
+        "schema_version": "loopx_coordination_runtime_shadow_commit_v0",
+        "runtime_root": str(tmp_path / "state"),
         "goal_id": "shadow-goal",
         "operation_id": "todo-shadow:cross-runtime",
         "event_kind": "todo_claim",
@@ -192,8 +434,12 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         },
     }
 
-    applied = dispatch_coordination_runtime_shadow(**request)
-    replayed = dispatch_coordination_runtime_shadow(**request)
+    applied = effect_runtime.effect_runtime_result(
+        "coordination.runtime_shadow.commit", request,
+    )
+    replayed = effect_runtime.effect_runtime_result(
+        "coordination.runtime_shadow.commit", request,
+    )
     read_candidate = read_coordination_runtime_shadow_todo_candidate(
         goal=goal,
         runtime_root=tmp_path / "state",
@@ -202,10 +448,11 @@ def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundar
         projection=request["projection"],
     )
 
-    assert applied["status"] == "failed"
-    assert applied["reason_code"] == "legacy_lineage_read_only"
-    assert replayed["status"] == "failed"
-    assert replayed["reason_code"] == "legacy_lineage_read_only"
+    for result in (applied, replayed):
+        assert result["status"] == "failed"
+        assert result["reason_code"] == "legacy_lineage_read_only"
+        assert result["primary_writeback_preserved"] is True
+        assert result["decision_read_from_shadow"] is False
     assert read_candidate["read_candidate_qualified"] is False
     assert read_candidate["decision_read_from_shadow"] is False
     assert not (tmp_path / "state/authority-shadow/file-v0").exists()
@@ -246,6 +493,7 @@ def test_coordination_runtime_shadow_bootstrap_crosses_python_typescript_boundar
         "source_version": "state:1",
         "projection": projection,
         "source_snapshot": source_snapshot,
+        "goal_ref": None,
     }
 
     applied = bootstrap_coordination_runtime_shadow(**request)
@@ -291,6 +539,60 @@ def test_coordination_runtime_shadow_bootstrap_crosses_python_typescript_boundar
     assert after_rollback["status"] == "missing"
 
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+@pytest.mark.parametrize("compile_cache", ["enabled", "disabled"])
+def test_identical_release_does_not_reuse_a_retired_lazy_loader(
+    tmp_path: Path, monkeypatch, compile_cache: str,
+) -> None:
+    """Copied releases have identical bytes, but different live module locations."""
+    source_root = effect_runtime._control_plane_root()
+    roots = [tmp_path / name / "control_plane" for name in ("release # a", "release % b")]
+    for relative in effect_runtime._runtime_source_files(source_root):
+        for root in roots:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root / relative, target)
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    for name in ("NODE_COMPILE_CACHE", "NODE_DISABLE_COMPILE_CACHE", "NODE_V8_COVERAGE"):
+        monkeypatch.delenv(name, raising=False)
+    if compile_cache == "disabled":
+        monkeypatch.setenv("NODE_DISABLE_COMPILE_CACHE", "1")
+    original_info = None
+    monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: roots[0])
+    try:
+        original_fingerprint = effect_runtime._runtime_fingerprint()
+        original = effect_runtime.effect_runtime_result("runtime.ping", {})
+        original_info = effect_runtime._read_info(
+            effect_runtime._runtime_info_path(original_fingerprint),
+            fingerprint=original_fingerprint,
+        )
+        assert original_info is not None
+        # Simulate a cleaned installer candidate while its resident runtime lives.
+        # No business owner has been loaded by the transport-only ping.
+        shutil.rmtree(roots[0])
+        monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: roots[1])
+        replacement = effect_runtime.effect_runtime_result("runtime.ping", {})
+        upgraded = effect_runtime.effect_runtime_result("coordination.authority_archive.manage", {
+            "schema_version": "loopx_authority_archive_admin_request_v0",
+            "action": "upgrade", "runtime_roots": [str(tmp_path / "authority")], "execute": True,
+        })
+        assert upgraded["status"] == "upgraded"
+        assert upgraded["results"] == []
+        assert upgraded["authority_changed"] is False
+        assert not (tmp_path / "authority").exists()
+        assert replacement["pid"] != original["pid"]
+        assert effect_runtime._runtime_fingerprint() != original_fingerprint
+        assert effect_runtime.effect_runtime_result("runtime.ping", {}) == replacement
+    finally:
+        if original_info is not None:
+            effect_runtime._request_with_info(
+                original_info, request_id="stop-retired-release", method="runtime.shutdown",
+                params={}, timeout=5,
+            )
+        effect_runtime.restart_effect_runtime()
 
 
 def test_runtime_decode_change_rotates_identity_and_starts_replacement(
@@ -575,6 +877,52 @@ def test_dead_startup_lock_is_reclaimed_without_waiting_for_age_timeout(
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
+def test_live_startup_lock_is_not_reclaimed_after_age_threshold(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "f" * 64
+    info_path = runtime_dir / "runtime.json"
+    lock = runtime_dir / f"start-{fingerprint[:16]}.lock"
+    lock.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    stale = time.time() - 11
+    os.utime(lock, (stale, stale))
+    clock = {"monotonic": 0.0}
+
+    def unexpected_launch(*_args, **_kwargs):
+        raise AssertionError("a live startup lock owner must not be replaced")
+
+    def sleep(seconds: float) -> None:
+        clock["monotonic"] += seconds
+
+    monkeypatch.setattr(effect_runtime, "_node_executable", lambda: "node")
+    monkeypatch.setattr(effect_runtime.subprocess, "Popen", unexpected_launch)
+    monkeypatch.setattr(effect_runtime, "STARTUP_LOCK_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(effect_runtime, "STARTUP_POLL_SECONDS", 0.005)
+    monkeypatch.setattr(
+        effect_runtime,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock["monotonic"],
+            sleep=sleep,
+            time=time.time,
+        ),
+    )
+
+    with pytest.raises(
+        effect_runtime.EffectRuntimeStartupError,
+        match="startup lock timed out",
+    ):
+        effect_runtime._start_runtime(
+            fingerprint=fingerprint,
+            info_path=info_path,
+        )
+
+    assert lock.read_text(encoding="utf-8") == f"{os.getpid()}\n"
+
+
 def test_runtime_ready_budget_starts_after_start_lock_acquisition(
     tmp_path: Path,
     monkeypatch,
@@ -638,6 +986,131 @@ def test_runtime_ready_budget_starts_after_start_lock_acquisition(
         == ready_info
     )
     assert clock["monotonic"] == 1.5
+
+
+@pytest.mark.parametrize(
+    ("failure", "simulate_permission_denied", "expected_code"),
+    [
+        # Windows rejects replacement of an occupied directory with EPERM/EACCES;
+        # preserve that platform's shared permission diagnostic rather than
+        # requiring the Unix EISDIR classification.
+        (
+            "directory",
+            False,
+            "io_permission_denied" if os.name == "nt" else "io_is_directory",
+        ),
+        # Exercise the Windows Python open-directory error on every platform
+        # through the production runtime request path, retaining the running
+        # platform's native filesystem diagnostic from the managed server.
+        (
+            "directory",
+            True,
+            "io_permission_denied" if os.name == "nt" else "io_is_directory",
+        ),
+        ("live_lock", False, "mutation_lock_timeout"),
+    ],
+)
+def test_locator_publication_failure_surfaces_safe_typed_startup_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+    failure: str,
+    simulate_permission_denied: bool,
+    expected_code: str,
+) -> None:
+    marker = "private-locator-fixture"
+    runtime_dir = tmp_path / marker
+    runtime_dir.mkdir(mode=0o700)
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    lock_path = Path(f"{info_path}.ts-effect.lock")
+    lock_owner = {"pid": os.getpid(), "token": "private-lock-token-fixture"}
+    if failure == "directory":
+        info_path.mkdir()
+    else:
+        lock_path.write_text(json.dumps(lock_owner), encoding="utf-8")
+
+    if simulate_permission_denied:
+        original_read_text = Path.read_text
+
+        def deny_directory_read(path: Path, *args, **kwargs):
+            if path == info_path:
+                raise PermissionError("synthetic denied directory open")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", deny_directory_read)
+
+    captures: list[bytes] = []
+    read_stderr = effect_runtime._read_startup_stderr
+
+    def capture(stream):
+        raw = read_stderr(stream)
+        captures.append(raw)
+        return raw
+
+    monkeypatch.setattr(effect_runtime, "_read_startup_stderr", capture)
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as raised:
+        effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+
+    assert raised.value.diagnostic_code == expected_code
+    assert "could not publish its startup locator" in str(raised.value)
+    assert len(captures) == 1
+    envelope = json.loads(captures[0])
+    assert envelope == {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION,
+        "code": expected_code,
+        "message": str(raised.value),
+    }
+    assert marker not in captures[0].decode()
+    assert lock_owner["token"] not in captures[0].decode()
+    assert not list(runtime_dir.glob("start-*.lock"))
+    if failure == "directory":
+        assert info_path.is_dir(), "startup diagnostics must not repair a foreign locator"
+    else:
+        assert not info_path.exists(), "a failed publisher must not claim readiness"
+        assert json.loads(lock_path.read_text()) == lock_owner
+
+
+def test_runtime_ping_survives_denied_post_publication_chmod(
+    tmp_path: Path,
+    monkeypatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    denied = tmp_path / "post-publication-chmod-denied"
+    preload = tmp_path / "deny-locator-chmod.mjs"
+    preload.write_text("""import fs from 'node:fs';
+import {sep} from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
+const original = fs.promises.chmod;
+fs.promises.chmod = async function(path, mode) {
+  if (String(path).startsWith(process.env.LOOPX_TEST_RUNTIME_DIR + sep) &&
+      String(path).endsWith('.json')) {
+    fs.writeFileSync(process.env.LOOPX_TEST_CHMOD_DENIED, 'denied');
+    const error = new Error('synthetic denied post-publication chmod');
+    error.code = 'EACCES';
+    throw error;
+  }
+  return original.call(this, path, mode);
+};
+syncBuiltinESMExports();
+""", encoding="utf-8")
+    monkeypatch.setenv("NODE_OPTIONS", f"--import={preload.as_uri()}")
+    monkeypatch.setenv("LOOPX_TEST_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("LOOPX_TEST_CHMOD_DENIED", str(denied))
+    request.addfinalizer(effect_runtime.restart_effect_runtime)
+
+    result = effect_runtime.effect_runtime_result(
+        "runtime.ping", {}, retry_safe=False,
+    )
+
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    assert result["pid"] > 0
+    assert json.loads(info_path.read_text(encoding="utf-8"))["pid"] == result["pid"]
+    assert not denied.exists(), "the publisher should not chmod an already private locator"
+    if os.name == "posix":
+        assert info_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_early_runtime_exit_surfaces_stable_startup_diagnostic(
@@ -747,6 +1220,11 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "150")
+    # Keep the tested idle lifecycle independent of client source-scan cost.
+    fingerprint = effect_runtime._runtime_fingerprint()
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint,
+    )
 
     original = effect_runtime.effect_runtime_result("runtime.ping", {})
     original_pid = int(original["pid"])
@@ -765,6 +1243,169 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
     )
 
 
+@pytest.mark.parametrize("shutdown", [False, True], ids=["idle", "shutdown"])
+@pytest.mark.parametrize("disconnect", [False, True], ids=["connected", "timed-out"])
+def test_runtime_drains_admitted_write_before_exit(
+    tmp_path: Path, monkeypatch, shutdown: bool, disconnect: bool,
+) -> None:
+    """Socket lifetime must not define the lifetime of an accepted effect."""
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "250")
+    journal_path = tmp_path / "admitted-turn.json"
+    lock_path = Path(f"{journal_path}.ts-effect.lock")
+    lock_path.write_text(json.dumps({"pid": os.getpid(), "token": "fixture-holder"}))
+    effect_id = _effect_id("drain-before-exit")
+    journal = _journal(effect_id)
+    # This test covers draining an admitted effect, not cold source discovery.
+    # Resolve the unchanged fixture revision before starting the 250 ms idle
+    # window; otherwise client-side scans can retire the server before send.
+    # Source freshness/replacement is exercised separately in this suite.
+    fingerprint = effect_runtime._runtime_fingerprint()
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint,
+    )
+    original = effect_runtime.effect_runtime_result("runtime.ping", {})
+    info_path = effect_runtime._runtime_info_path(fingerprint)
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+
+    def write() -> dict[str, object]:
+        return effect_runtime.effect_runtime_result(
+            "turn_journal.write",
+            {"path": str(journal_path), "journal": journal, "expected_effect_id": effect_id},
+            timeout=0.1 if disconnect else 3,
+            retry_safe=False,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(write)
+            if disconnect:
+                with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous):
+                    pending.result(timeout=2)
+            else:
+                time.sleep(0.1)
+            rejected = _raw_runtime_response(info, (json.dumps({
+                "schema_version": effect_runtime.EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
+                "token": "wrong-token", "request_id": "rejected", "method": "runtime.ping", "params": {},
+            }) + "\n").encode())
+            assert rejected["ok"] is False
+            assert rejected["error"]["code"] == "authentication_failed"
+            # A second, completed request must not mark the outstanding write idle.
+            observed = effect_runtime._request_with_info(
+                info, request_id="still-serving", method="runtime.ping", params={}, timeout=2,
+            )
+            assert observed["result"]["pid"] == original["pid"]
+            if shutdown:
+                effect_runtime._request_with_info(
+                    info, request_id="drain-shutdown", method="runtime.shutdown", params={}, timeout=2,
+                )
+            time.sleep(0.6)  # More than two idle windows while the real lock is held.
+            try:
+                assert effect_runtime._pid_is_alive(original["pid"]), "accepted work was abandoned"
+                assert info_path.exists(), "locator retired before the accepted effect settled"
+                assert not journal_path.exists()
+                if shutdown:
+                    with pytest.raises(OSError):
+                        socket.create_connection((str(info["host"]), int(info["port"])), timeout=0.2)
+            finally:
+                lock_path.unlink(missing_ok=True)
+            if not disconnect:
+                result = pending.result(timeout=3)
+                assert result["appended"] is True and result["replayed"] is False
+            deadline = time.monotonic() + 3
+            while info_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.025)
+            assert not info_path.exists(), "settled runtime must still retire when idle or stopped"
+            assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
+    finally:
+        lock_path.unlink(missing_ok=True)
+        cleanup_deadline = time.monotonic() + 3
+        while time.monotonic() < cleanup_deadline:
+            effect_runtime._reap_exited_runtime_child(info)
+            if not effect_runtime._pid_is_alive(original["pid"]):
+                break
+            time.sleep(0.025)
+        if effect_runtime._pid_is_alive(original["pid"]):
+            os.kill(int(original["pid"]), signal.SIGTERM)
+
+
+def _envelope(code: str, received: str) -> bytes:
+    """Frame one startup rejection the way the managed server publishes it.
+
+    ``ensure_ascii=False`` mirrors ``JSON.stringify``, which leaves U+0085 and
+    the two separators raw while escaping everything below U+0020.
+    """
+
+    return (
+        json.dumps(
+            {
+                "schema_version": (
+                    effect_runtime.EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION
+                ),
+                "code": code,
+                "message": 'idle timeout guidance (received "' + received + '")',
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("received", "label"),
+    [
+        ("\u0085150\u0085", "NEL"),
+        ("\u2028150\u2028", "LINE SEPARATOR"),
+        ("\u2029150\u2029", "PARAGRAPH SEPARATOR"),
+        ("\u001c150\u001c", "FILE SEPARATOR"),
+        (" 150 ", "ASCII space"),
+    ],
+)
+def test_startup_diagnostic_survives_a_padding_value_it_quotes_back(
+    received: str,
+    label: str,
+) -> None:
+    """One envelope is one record, whatever the rejected value contains."""
+
+    envelope = _envelope("invalid_idle_timeout", received)
+
+    recovered = effect_runtime._startup_diagnostic(envelope)
+
+    assert recovered is not None, label
+    code, message = recovered
+    assert code == "invalid_idle_timeout"
+    assert "150" in message
+
+
+def test_startup_diagnostic_recovers_the_envelope_beside_other_output() -> None:
+    """Framing is per record, so earlier noise does not bury the diagnostic."""
+
+    envelope = _envelope("invalid_idle_timeout", " 150 ").decode("utf-8")
+    stderr = (
+        "npm warn ignoring empty lockfile\n"
+        "node:events:496\n" + envelope + "Warning: fsync() failed\n"
+    ).encode("utf-8")
+
+    recovered = effect_runtime._startup_diagnostic(stderr)
+
+    assert recovered is not None
+    assert recovered[0] == "invalid_idle_timeout"
+
+
+def test_startup_diagnostic_ignores_stderr_without_an_envelope() -> None:
+    """A crash trace is not a typed configuration diagnostic."""
+
+    stderr = (
+        "node:internal/process/promises:391\n"
+        "    triggerUncaughtException(err, true);\n"
+        "    ^\n"
+        "Error: listen EACCES\n"
+    ).encode("utf-8")
+
+    assert effect_runtime._startup_diagnostic(stderr) is None
+
+
 @pytest.mark.parametrize(
     "raw_idle_ms",
     [
@@ -777,6 +1418,12 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
         "0x10",
         " 150",
         "150 ",
+        # Echoed back by the runtime without escaping, and honoured as a
+        # newline by str.splitlines(): the two together used to mask the
+        # typed diagnostic behind runtime_exited_before_ready.
+        "\u0085150\u0085",
+        "\u2028150\u2028",
+        "\u2029150\u2029",
         "2147483648",
         "9007199254740993",
     ],
@@ -857,6 +1504,22 @@ def test_oversized_request_is_rejected_before_runtime_dispatch(
         {},
         retry_safe=False,
     )
+
+
+def test_large_local_response_digest_failure_is_ambiguous(tmp_path: Path) -> None:
+    sink = tmp_path / "response.json"
+    sink.write_text('{"untrusted":"response"}', encoding="utf-8")
+    envelope = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION,
+        "request_id": "request-1", "ok": True,
+        "result_ref": {"byte_count": sink.stat().st_size, "sha256": "0" * 64},
+    }
+    with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous) as error:
+        effect_runtime._read_local_snapshot_response(
+            envelope, sink, method="goal.checkpoint_read_context.commit",
+            request_id="request-1", timeout=10,
+        )
+    assert error.value.diagnostic_code == "runtime_response_ambiguous"
 
 
 @pytest.mark.parametrize("unit", [b"x", "界".encode()])

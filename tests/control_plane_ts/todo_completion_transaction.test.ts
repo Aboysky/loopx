@@ -73,7 +73,34 @@ test("open completion commits in one reduction with a stable local identity", ()
   });
   assert.deepEqual(result.metadata_updates, {
     completion_continuation: "active_goal",
+    completion_receipt_id: result.metadata_updates.completion_receipt_id,
   });
+  assert.match(String(result.metadata_updates.completion_receipt_id), /^tcw_[0-9a-f]{64}$/);
+});
+
+test("committed completion receipt ids separate phases and retain stable scope", () => {
+  const ordinaryRequest = request({requested_completion_turn_key: "turn-a",
+    requested_completion_identity_source: "turn_settlement"});
+  const ordinary = reduceTodoCompletionTransaction(ordinaryRequest);
+  const repeated = reduceTodoCompletionTransaction(ordinaryRequest);
+  const closeout = reduceTodoCompletionTransaction(request({
+    todo: {...baseTodo, status: "done", completion_continuation: "active_goal",
+      completion_turn_key: "turn-a"},
+    requested_completion_turn_key: "turn-a",
+    requested_completion_identity_source: "turn_settlement",
+    requested_no_followup: true,
+  }));
+  const anotherTurn = reduceTodoCompletionTransaction({...ordinaryRequest,
+    requested_completion_turn_key: "turn-b"});
+  const anotherGoal = reduceTodoCompletionTransaction({...ordinaryRequest, goal_id: "goal-b"});
+  for (const result of [ordinary, repeated, closeout, anotherTurn, anotherGoal]) {
+    assert.equal(result.decision, "commit");
+    assert.match(String(result.metadata_updates.completion_receipt_id), /^tcw_[0-9a-f]{64}$/);
+  }
+  assert.equal(ordinary.metadata_updates.completion_receipt_id,
+    repeated.metadata_updates.completion_receipt_id);
+  assert.equal(new Set([ordinary, closeout, anotherTurn, anotherGoal].map(
+    result => result.metadata_updates.completion_receipt_id)).size, 4);
 });
 
 test("declared validation is one external effect between two reductions", () => {
@@ -147,6 +174,53 @@ test("declared validation is one external effect between two reductions", () => 
   assert.equal(rejected.decision, "reject");
   assert.equal(rejected.failure.kind, "validation_failed");
   assert.equal(rejected.failure.validation_receipt.passed, false);
+});
+
+test("revised validators reject stale or unbound validation receipts", () => {
+  const todo = {
+    ...baseTodo,
+    validation_command_argv: ["python", "-c", "pass"],
+    validation_label: "revised smoke",
+    completion_validation_revision: 1,
+  };
+  const pending = reduceTodoCompletionTransaction(request({todo}));
+  assert.equal(pending.decision, "execute_validation");
+  if (pending.decision !== "execute_validation") return;
+  const currentDigest = pending.validation_effect.validation_declaration_sha256;
+  assert.match(String(currentDigest), /^[a-f0-9]{64}$/u);
+
+  const receipt = {
+    schema_version: "issue_fix_validation_command_v0",
+    command_label: "revised smoke",
+    exit_code: 0,
+    passed: true,
+    stdout_captured: false,
+    stderr_captured: false,
+    local_path_captured: false,
+  };
+  assert.throws(
+    () => reduceTodoCompletionTransaction(request({todo, validation_receipt: receipt})),
+    /does not match the current validation declaration/,
+  );
+  assert.throws(
+    () => reduceTodoCompletionTransaction(request({
+      todo,
+      validation_receipt: {
+        ...receipt,
+        validation_declaration_sha256: "0".repeat(64),
+      },
+    })),
+    /does not match the current validation declaration/,
+  );
+
+  const committed = reduceTodoCompletionTransaction(request({
+    todo,
+    validation_receipt: {
+      ...receipt,
+      validation_declaration_sha256: currentDigest,
+    },
+  }));
+  assert.equal(committed.decision, "commit");
 });
 
 test("completion policy joins the coarse transaction only at commit", () => {
@@ -243,6 +317,7 @@ test("lifecycle reentry returns the explicit terminal recovery state", () => {
   assert.deepEqual(result.metadata_updates, {
     completion_continuation: "no_followup",
     completion_recovery: "lifecycle_reentry_terminal_closeout",
+    completion_receipt_id: result.metadata_updates.completion_receipt_id,
   });
 });
 

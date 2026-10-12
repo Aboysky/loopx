@@ -4,6 +4,7 @@ from collections.abc import Collection
 from typing import Any
 
 from ...control_plane import control_plane_policy_summary
+from ...control_plane.projection_envelope_facts import render_projection_envelope_markdown
 from ...control_plane.runtime.event_ledger import EVENT_LEDGER_CLASSES
 from ...execution_profile import execution_profile_summary
 from ...long_task_cadence import long_task_cadence_hint_summary
@@ -61,6 +62,7 @@ def append_status_overview_markdown(
             f"- runtime_root: `{payload.get('runtime_root')}`",
             f"- goals: `{payload.get('goal_count')}`",
             f"- runs: `{payload.get('run_count')}`",
+            *render_projection_envelope_markdown(payload.get("projection_envelope")),
         ]
     )
 
@@ -172,7 +174,7 @@ def append_global_registry_findings_markdown(
 
 def append_human_reward_markdown(lines: list[str], goal_id: Any, reward: dict[str, Any]) -> None:
     headline_parts = []
-    for field in ("recorded_at", "decision", "reward"):
+    for field in ("recorded_at", "actor_kind", "decision", "reward"):
         value = reward.get(field)
         if value:
             headline_parts.append(f"{field}={markdown_scalar(value)}")
@@ -1082,6 +1084,15 @@ def append_attention_queue_item_header_markdown(
     active_state_action = markdown_scalar(item.get("active_state_next_action") or "")
     if active_state_action:
         lines.append(f"  - active_state_next_action: {active_state_action}")
+    routes = item.get("agent_next_actions")
+    for route in routes if isinstance(routes, list) else []:
+        if isinstance(route, dict):
+            lines.append(
+                f"  - agent_next_action: {markdown_scalar(route.get('agent_id') or '')} "
+                f"{markdown_scalar(route.get('todo_id') or '')} {markdown_scalar(route.get('text') or '')}"
+            )
+            if route.get("next_step"):
+                lines.append(f"    - next_step: {markdown_scalar(route['next_step'])}")
     latest_run_action = markdown_scalar(item.get("latest_run_recommended_action") or "")
     if latest_run_action:
         lines.append(f"  - latest_run_recommended_action: {latest_run_action}")
@@ -1154,6 +1165,8 @@ def _append_project_asset_agent_lane_markdown(
             f"agent={agent} todo_id={todo_id} selected_by={selected_by} "
             f"confidence={confidence} source=agent_lane_next_action action={action}"
         )
+        if agent_lane_next_action.get("next_step"):
+            lines.append(f"      - next_step: {markdown_scalar(agent_lane_next_action['next_step'])}")
     if agent_lane_frontier_hint:
         lines.append(
             "    - agent_lane_frontier_hint: "
@@ -1266,6 +1279,25 @@ def _append_project_asset_runtime_policy_markdown(
         lines.append(
             "    - orchestration: "
             f"{markdown_scalar(orchestration_policy_summary(asset_orchestration))}"
+        )
+
+    native_child_activity = (
+        project_asset.get("native_child_activity")
+        if isinstance(project_asset.get("native_child_activity"), dict)
+        else {}
+    )
+    if native_child_activity.get("observation") in {"coordinator_reported", "host_observed", "mixed"}:
+        lines.append(
+            "    - native_child_activity: "
+            f"turn={markdown_scalar(native_child_activity.get('turn_instance_id'))} "
+            f"source={native_child_activity.get('observation')} "
+            f"host_attested={str(native_child_activity.get('host_attested')).lower()} "
+            f"configured_max={native_child_activity.get('configured_limit')} "
+            f"starts={native_child_activity.get('launched_count')} "
+            f"skips={native_child_activity.get('skipped_count')} "
+            f"capacity_rejections={native_child_activity.get('capacity_rejected_count')} "
+            f"host_failures={native_child_activity.get('host_failed_count')} "
+            f"parent_accepted={native_child_activity.get('parent_accepted_count')}"
         )
 
     subagent_activity = (

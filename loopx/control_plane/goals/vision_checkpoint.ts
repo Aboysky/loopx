@@ -1,5 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { isBoundedBlockedRetry } from "../quota/settlement_phase.ts";
 import {
   DELIVERY_BOUNDARIES,
   type DeliveryBoundary,
@@ -23,6 +24,8 @@ const GOAL_VISION_BUDGET_ERROR = "vision_budget_exceeded";
 const GOAL_VISION_TOTAL_LIMIT = 1_800;
 const GOAL_VISION_ADVANCEMENT_POLICIES = ["as_needed", "repeat_until_closed"] as const;
 const VISION_UNCHANGED_REASON_LIMIT = 240;
+const VISION_TODO_DELTA_ENTRY_LIMIT = 8;
+const VISION_TODO_DELTA_TEXT_LIMIT = 80;
 const VISION_BUDGET_SUGGESTION_LIMIT = 96;
 
 const GOAL_VISION_FIELD_LIMITS = {
@@ -61,17 +64,41 @@ const GOAL_PATH_DELTA_LIST_LIMITS = {
   evidence_refs: [4, 140],
 } as const;
 
+// Guidance for the existing material-closeout qualification, not a new gate.
+export const VISION_MATERIAL_CLOSEOUT_HINT =
+  "For material semantic_closeout, provide " +
+  "vision_patch.acceptance_summary and top-level path_delta (outcome=continue/no_change/replan, " +
+  "prior_assumption, observed_reality, retained/changed/stopped, evidence_refs). " +
+  "An unchanged reason only reuses an already evidence-linked current vision. " +
+  "Checkpoint satisfied alone does not qualify the outcome.";
+
 /** Authoring hints share the validator's limits; they grant no transition authority. */
 export function visionAuthoringContract(): JsonObject {
   return {
     schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION,
-    fields: {state: "lifecycle token", vision_patch: {...GOAL_VISION_FIELD_LIMITS}},
+    fields: {
+      state: "lifecycle token",
+      vision_patch: {...GOAL_VISION_FIELD_LIMITS},
+      todo_delta: {
+        max_retained_items: VISION_TODO_DELTA_ENTRY_LIMIT,
+        max_item_chars: VISION_TODO_DELTA_TEXT_LIMIT,
+      },
+    },
     common_states: ["vision_patch_proposed", "vision_closed", "no_followup"],
     advancement_policies: [...GOAL_VISION_ADVANCEMENT_POLICIES],
-    minimal_example: {schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed", vision_patch: {
-      vision_summary: "Scoped outcome", acceptance_summary: "Verified evidence and remaining gap",
-    }},
-    authoring_hint: "Fields are optional, not a checklist. Keep the whole decision compact; total includes path_delta. Do not copy the delivery evidence report into every field.",
+    minimal_example: {
+      schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed",
+      vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
+      path_delta: {
+        outcome: "continue", prior_assumption: "Viable route.",
+        observed_reality: "Evidence supports the route.", retained: ["Route"],
+        evidence_refs: ["evidence:verified-result"],
+      },
+    },
+    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
+      "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
+      "checkpoint-context is only for recovery after the original committed Turn writeback; " +
+      "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
     total_text_limit: GOAL_VISION_TOTAL_LIMIT,
     unchanged_reason_limit: VISION_UNCHANGED_REASON_LIMIT,
     path_delta: {
@@ -84,7 +111,7 @@ export function visionAuthoringContract(): JsonObject {
         ([field, [maxItems, maxChars]]) => [field, {item_type: "string", max_items: maxItems, max_item_chars: maxChars}],
       )),
     },
-    rule: "Compare acceptance with evidence. vision_closed closes a stage, not the Goal; no_followup requires no remaining scoped work. A changed mainline needs path_delta; respect the live replan contract.",
+    rule: "Material closeout: acceptance_summary + evidence-linked path_delta. Changed mainline: outcome=replan. vision_closed closes a stage, not Goal; no_followup: no scoped work.",
   };
 }
 // Bounded typed fallback declarations survive prepare unchanged so the
@@ -109,22 +136,62 @@ const GOAL_VISION_STATE_ALIASES: Readonly<Record<string, string>> = {
 // corpus in tests/fixtures/public_safe_text_corpus.json: ordinary governance
 // prose such as "needs owner authorization" must pass, while the header,
 // assignment, and quoted-JSON key credential shapes must be rejected.
+// Refs #5136, direction 2 adds the second tier: a bare credential word is
+// recognized but no longer rejected by this owner, because a checkpoint reason
+// that says the bearer token expired describes a credential rather than carrying
+// one. The value and assignment arms below are what keep a real credential out.
+// The credential-value contract, mirrored from loopx/public_safe_text.py: four
+// independent signals, of which this file owns the two connector arms. A label
+// plus `:` or `=` carries whatever follows, including when the label is a quoted
+// object key (LABELED_CREDENTIAL_ASSIGNMENT below);
+// a label reached through a comma, dash, whitespace or copula carries a value only
+// when the next token looks assembled -- it holds a digit or a base64-only
+// character, or it is a quoted run, or it is an unbroken letter run at or above
+// OPAQUE_VALUE_MIN_LENGTH. An ordinary English word beside the label is prose.
+export const OPAQUE_VALUE_MIN_LENGTH = 16;
 const AUTHORIZATION_CREDENTIAL_SHAPE = /\bAuthorization["']?\s*[:=]/i;
 const BASIC_CREDENTIAL_VALUE =
   /[Bb]asic\s+(?=[A-Za-z0-9+/=]*[a-z])(?=[A-Za-z0-9+/=]*[A-Z])[A-Za-z0-9+/=]{16,}/;
-const PRIVATE_TEXT_PATTERNS = [
+// Literals, not `new RegExp` with interpolated parts: the digest guard
+// (`tests/control_plane_ts/content_digest_single_owner.test.ts`) requires every
+// construction whose pattern it cannot fold to be declared as a second owner of a
+// value shape. The tie between the quantifier and OPAQUE_VALUE_MIN_LENGTH is
+// asserted in the corpus test instead of built into the pattern here.
+export const CONNECTED_CREDENTIAL_VALUE_SHAPE =
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*(?:(?=[A-Za-z0-9._~+\/=-]*[0-9+\/=])[A-Za-z0-9._~+\/=-]+|[A-Za-z]{16,})/i;
+export const QUOTED_CREDENTIAL_VALUE_SHAPE =
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*["'][^"'\n]+["']/i;
+const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)["']?\s*[:=]/i;
+// Ported from the Python owner's two in-policy shape detectors, so one corpus
+// yields one verdict in both runtimes (Refs #5136, direction 4). The third
+// Python detector -- a raw remote location -- is deliberately not ported: it is
+// outside the internal-state policy, and the per-face URL decision is the
+// caller-migration work still open in #5136.
+const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b(?:access|api|secret)[_-]?key[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
+const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/[^\\s`'\\\"<>]+|[A-Za-z]:[\\\\/][^\\s`'\\\"<>]+|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
+export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
+export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
   /\/Users\//,
-  /\/ext_data\//,
+  /\/ext[_]data\//, // Preserve the matcher without matching its own policy source.
   /lark[o]ffice/i, // Equivalent matcher avoids matching its own policy source.
   /docs\.internal/i,
   /\bt-20\d{12}-[a-z0-9]+\b/,
-  /\bBearer\b/i,
+  CONNECTED_CREDENTIAL_VALUE_SHAPE,
+  QUOTED_CREDENTIAL_VALUE_SHAPE,
   AUTHORIZATION_CREDENTIAL_SHAPE,
   BASIC_CREDENTIAL_VALUE,
-  /\btoken\s*=/i,
-  /\bpassword\b/i,
-  /\bsecret\b/i,
-] as const;
+  LABELED_CREDENTIAL_ASSIGNMENT,
+  ...CREDENTIAL_WORD_PATTERNS,
+];
+// This owner validates LoopX's own state, so it rejects every arm except the
+// words. The full PRIVATE_TEXT_PATTERNS list stays the publication-tier mirror of
+// the Python owner's ALL_CATEGORIES, and the corpus test asserts the two lists
+// differ by exactly these three arms so the tiers cannot drift apart silently.
+export const INTERNAL_STATE_SHAPE_PATTERNS: RegExp[] = [SECRET_LIKE_SHAPE, LOCAL_PATH_SHAPE];
+export const INTERNAL_STATE_PRIVATE_TEXT_PATTERNS: RegExp[] = [
+  ...PRIVATE_TEXT_PATTERNS.filter((pattern) => !CREDENTIAL_WORD_PATTERNS.includes(pattern)),
+  ...INTERNAL_STATE_SHAPE_PATTERNS,
+];
 
 interface VisionRefreshPrepareRequest {
   phase: "prepare";
@@ -148,6 +215,7 @@ interface VisionRefreshFinalizeRequest {
   todo_id: string | null;
   completion_todo_id: string | null;
   autonomous_replan_recorded: boolean;
+  blocked_retry: JsonObject | null;
 }
 
 export type VisionCheckpointDecision =
@@ -258,7 +326,7 @@ function publicSafeTextGuidance(label: string): string {
 }
 
 function validatePublicSafeText(label: string, value: string): void {
-  for (const pattern of PRIVATE_TEXT_PATTERNS) {
+  for (const pattern of INTERNAL_STATE_PRIVATE_TEXT_PATTERNS) {
     if (pattern.test(value)) {
       throw new EffectRuntimeRequestError(
         `${label} contains a private-looking value; ${publicSafeTextGuidance(label)}`,
@@ -335,7 +403,9 @@ function normalizeAdvancementPolicy(value: unknown): string {
   return candidate;
 }
 
-function normalizeGoalPathDelta(
+// Reuse the same authoring rule when an optional capability references this
+// explicit packet; callers never recreate its validation or state vocabulary.
+export function normalizeGoalPathDelta(
   value: unknown,
 ): [JsonObject | null, Record<string, number>] {
   if (value === null || value === undefined) return [null, {}];
@@ -576,8 +646,8 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
 
   const todoDelta: string[] = [];
   if (Array.isArray(updatePacket.todo_delta)) {
-    for (const item of updatePacket.todo_delta.slice(0, 8)) {
-      const text = boundedPublicText("todo_delta", item, 80);
+    for (const item of updatePacket.todo_delta.slice(0, VISION_TODO_DELTA_ENTRY_LIMIT)) {
+      const text = boundedPublicText("todo_delta", item, VISION_TODO_DELTA_TEXT_LIMIT);
       if (text) todoDelta.push(text);
     }
   }
@@ -721,6 +791,7 @@ export function decodeVisionCheckpointRequest(
       request.autonomous_replan_recorded,
       "autonomous_replan_recorded",
     ),
+    blocked_retry: optionalObject(request.blocked_retry, "blocked_retry"),
   };
 }
 
@@ -763,10 +834,20 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
   }
   const request = decodeVisionCheckpointRequest(value);
   validateInFlightBoundary(request);
+  if (request.blocked_retry !== null && (
+    request.delivery_outcome !== "outcome_gap" ||
+    request.delivery_boundary !== "semantic_closeout" ||
+    request.todo_id === null ||
+    request.completion_todo_id !== null ||
+    !isBoundedBlockedRetry(request.blocked_retry, request.todo_id)
+  )) {
+    throw new EffectRuntimeRequestError("blocked retry does not bind a typed outcome-gap Todo closeout");
+  }
   const triggers: JsonObject[] = [];
   if (
     isMaterialDeliveryOutcome(request.delivery_outcome) &&
-    request.delivery_boundary === "semantic_closeout"
+    request.delivery_boundary === "semantic_closeout" &&
+    request.blocked_retry === null
   ) {
     triggers.push({
       kind: "material_delivery_outcome",
@@ -830,7 +911,9 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
   }
   if (!satisfied) {
     checkpoint.required_resolution = ["write_vision_patch"];
-    if (checkpoint.missing_baseline !== true) {
+    if (request.existing_agent_vision === null) {
+      checkpoint.missing_baseline = true;
+    } else {
       (checkpoint.required_resolution as string[]).push(
         "record_unchanged_reason",
       );

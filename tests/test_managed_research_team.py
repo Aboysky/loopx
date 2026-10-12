@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -16,6 +19,10 @@ from test_managed_research_scenario import fixture  # noqa: E402
 from loopx.control_plane.goals.acceptance import (  # noqa: E402
     configure_goal_acceptance, inspect_goal_acceptance, verify_goal_acceptance,
 )
+from loopx.chat_completed_todos import (  # noqa: E402
+    CompletedTodoPages, _goal_result_candidates, _verify_goal_result_page,
+)
+from loopx.chat_server import ChatHTTPServer, ChatRequestHandler  # noqa: E402
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -32,6 +39,17 @@ def plan(root, actor, revision):
     return demo.cli(root, "turn", "plan", "--goal-id", demo.GOAL, "--agent-id", actor,
                     "--todo-id", todo_id(actor, revision), "--host", "dsh",
                     "--scan-root", str(root / actor / revision))
+
+
+def listed_results(root):
+    page = CompletedTodoPages().page(
+        scope=("accepted_goal_results", demo.GOAL), cursor="",
+        load=lambda: _goal_result_candidates(runtime_root=root / "runtime", goal_id=demo.GOAL),
+    )
+    return _verify_goal_result_page(
+        page=page, registry_path=root / "registry.json",
+        runtime_root=root / "runtime", goal_id=demo.GOAL,
+    )["items"]
 
 
 def test_canonical_delivery_requires_completed_current_dependencies(team, monkeypatch):
@@ -108,10 +126,61 @@ def test_canonical_delivery_requires_completed_current_dependencies(team, monkey
     with pytest.raises(RuntimeError, match="goal_acceptance_validation_rejected"):
         demo.complete(root, "lead", "report")
     report.write_bytes(original_report)
-    demo.complete(root, "lead", "report")
+    lead_completion = demo.complete(root, "lead", "report")
+    assert lead_completion["completion_result"]["sha256"]
+    result_read = demo.cli(root, "todo", "result-read", "--goal-id", demo.GOAL,
+                           "--todo-id", "todo_lead-report")
+    assert json.loads(result_read["text"]) == json.loads(original_report)
+    assert result_read["result"]["sha256"] == lead_completion["completion_result"]["sha256"]
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path = root / "registry.json"
+    server.runtime_root_override = str(root / "runtime")
+    server.completed_todo_pages = CompletedTodoPages()
+    server.verbose = False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        listing_url = f"http://127.0.0.1:{server.server_port}/api/chat/goal-results?goal_id={demo.GOAL}"
+        report_url = f"http://127.0.0.1:{server.server_port}/api/chat/goal-results/todo_lead-report?goal_id={demo.GOAL}"
+        with urlopen(listing_url) as response:
+            listed = json.load(response)
+        assert [row["todo_id"] for row in listed["items"]] == ["todo_lead-report"]
+        with urlopen(report_url) as response:
+            assert json.load(response)["text"] == result_read["text"]
+        with pytest.raises(HTTPError) as forbidden:
+            urlopen(Request(report_url, headers={"Origin": "https://unrelated.example"}))
+        assert forbidden.value.code == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()
+    report.unlink()
+    assert demo.complete(root, "lead", "report")["idempotent_replay"] is True
+    report.write_bytes(original_report)
+    result_object = root / "runtime" / "goals" / demo.GOAL / "result-objects" / result_read["result"]["sha256"]
+    result_object.write_text("tampered")
+    assert listed_results(root) == []
+    with pytest.raises(RuntimeError, match="completion result bytes no longer match"):
+        demo.cli(root, "todo", "result-read", "--goal-id", demo.GOAL,
+                 "--todo-id", "todo_lead-report")
+    result_object.write_bytes(original_report)
     assert all(row["done"] for row in canonical_tasks(root).values())
     assert verify_goal_acceptance(**route, execute=True)["acceptance_ready"]
+    demo.cli(root, "todo", "archive-completed", "--goal-id", demo.GOAL,
+             "--max-active-done", "0", "--execute")
+    assert [row["todo_id"] for row in listed_results(root)] == ["todo_lead-report"]
+    assert demo.cli(root, "todo", "result-read", "--goal-id", demo.GOAL,
+                    "--todo-id", "todo_lead-report")["text"] == result_read["text"]
     assert json.loads((root / "registry.json").read_text())["goals"][0]["status"] == "active"
+    revised = json.loads((root / "bootstrap.json").read_text())["document"]
+    revised["objective"] = "Revised owner acceptance basis"
+    configure_goal_acceptance(**route, document=revised,
+                              expected_provider_revision=inspect_goal_acceptance(**route)["provider_revision"],
+                              execute=True)
+    with pytest.raises(RuntimeError, match="completion result acceptance basis is stale"):
+        demo.cli(root, "todo", "result-read", "--goal-id", demo.GOAL,
+                 "--todo-id", "todo_lead-report")
+    assert listed_results(root) == []
 
 
 def test_bootstrap_refuses_existing_state(team):
@@ -153,3 +222,50 @@ def test_cloud_member_mcp_requires_bound_identity_and_completed_upstream(tmp_pat
     assert not asyncio.run(call(env)).isError
     assert asyncio.run(call({**env, "LOOPX_TURN_TODO_ID": "todo_someone_else"})).isError
     assert not canonical_tasks(root)["todo_cloud-reviewer-initial"]["done"]
+
+
+@pytest.mark.parametrize("command", ["prepare", "prepare-chat"])
+def test_mixed_team_cli_binds_profiles_and_canonical_acceptance(tmp_path, command):
+    root = tmp_path / "mixed"
+    result = subprocess.run([sys.executable, str(demo.HERE / "research_team.py"), command, str(root),
+                             "--team-size", "2", "1", "1", "--model", "example-model",
+                             "--environment-id", "example-environment"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    config = json.loads((root / "delegation-config.json").read_text())
+    assert len(config["bindings"]) == 4
+    actors = {row["agent_id"] for row in config["bindings"]}
+    assert actors == {"codex-1", "codex-2", "dsh-1", "ark-1"}
+    for binding in config["bindings"]:
+        assert binding["requesters"] == ["lead"]
+        assert Path(binding["workspace"]).is_relative_to(root)
+        if binding["agent_id"].startswith("codex-"):
+            arguments = binding["host_args"]
+            assert arguments[arguments.index("--codex-model") + 1] == "gpt-5.6-luna"
+            assert arguments[arguments.index("--codex-reasoning-effort") + 1] == "max"
+    if command == "prepare-chat":
+        assert json.loads((root / "project" / ".loopx/config/delegations.json").read_text()) == config
+    fixture(root)
+    # A matching downstream artifact is still unaccepted while its exact
+    # upstream canonical task remains open. Production TS owns the rejection.
+    with pytest.raises(RuntimeError, match="goal_acceptance_validation_rejected"):
+        demo.complete(root, "dsh-1", "corrected")
+    for actor, revision in [("codex-1", "initial"), ("dsh-1", "corrected"), ("ark-1", "corrected")]:
+        demo.complete(root, actor, revision)
+    with pytest.raises(RuntimeError, match="goal_acceptance_validation_rejected"):
+        demo.complete(root, "lead", "report")
+    demo.complete(root, "codex-2", "initial")
+    demo.complete(root, "lead", "report")
+    assert all(row["done"] for row in canonical_tasks(root).values())
+
+
+@pytest.mark.parametrize("options", [
+    ["--team-size", "1", "0", "1"],
+    ["--team-size", "1", "1", "1", "--topology", "local-led"],
+])
+def test_cli_rejects_invalid_or_conflicting_composition_before_writes(tmp_path, options):
+    root = tmp_path / "not-created"
+    result = subprocess.run([sys.executable, str(demo.HERE / "research_team.py"), "prepare", str(root),
+                             "--model", "example-model", "--environment-id", "example-environment", *options],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    assert not root.exists()

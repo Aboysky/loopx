@@ -1,4 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  closeSync,
+  fstatSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -54,6 +63,18 @@ async function readFileIdentity(path: string): Promise<CreatedFileIdentity | nul
   } catch {
     return null;
   }
+}
+
+async function publishedMutationLockMatches(
+  lockPath: string,
+  identity: CreatedFileIdentity,
+  ownerPid: number,
+  token: string,
+): Promise<boolean> {
+  if (!sameFileIdentity(identity, await readFileIdentity(lockPath))) return false;
+  const owner = await readMutationLockOwner(lockPath);
+  if (owner?.pid !== ownerPid || owner.token !== token) return false;
+  return sameFileIdentity(identity, await readFileIdentity(lockPath));
 }
 
 function processIsAlive(pid: number): boolean {
@@ -225,16 +246,16 @@ export async function releaseFileMutationLockClaim(
   await removeCreatedFile(claim.claimPath, claim.identity);
 }
 
-async function reclaimStaleMutationLock(path: string): Promise<void> {
+async function reclaimStaleMutationLock(path: string): Promise<boolean> {
   const identity = await readFileIdentity(path);
-  if (!identity) return;
+  if (!identity) return false;
   const owner = await readMutationLockOwner(path);
-  if (owner && processIsAlive(owner.pid)) return;
+  if (owner && processIsAlive(owner.pid)) return false;
   if (!owner) {
     try {
-      if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) return;
+      if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) return false;
     } catch {
-      return;
+      return false;
     }
   }
   const targetPath = path.slice(0, -".ts-effect.lock".length);
@@ -242,29 +263,29 @@ async function reclaimStaleMutationLock(path: string): Promise<void> {
     targetPath,
     owner?.token ?? INVALID_LOCK_CLAIM_TOKEN,
   );
-  if (!claim) return;
+  if (!claim) return false;
   const stalePath = `${path}.stale.${randomUUID()}`;
   try {
     const current = await readMutationLockOwner(path);
-    if (owner && (!current || current.token !== owner.token)) return;
-    if (current && processIsAlive(current.pid)) return;
+    if (owner && (!current || current.token !== owner.token)) return false;
+    if (current && processIsAlive(current.pid)) return false;
     if (!current) {
       try {
         if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) {
-          return;
+          return false;
         }
       } catch {
-        return;
+        return false;
       }
     }
     // The lock pathname is not a compare-and-swap primitive.  Holding the
     // token claim serializes compliant writers; the identity check additionally
     // prevents a replacement inode from being retired after a stale read.
-    if (!sameFileIdentity(identity, await readFileIdentity(path))) return;
+    if (!sameFileIdentity(identity, await readFileIdentity(path))) return false;
     await rename(path, stalePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return;
+    return false;
   } finally {
     if (claim) {
       try {
@@ -275,6 +296,7 @@ async function reclaimStaleMutationLock(path: string): Promise<void> {
     }
   }
   await rm(stalePath, { force: true });
+  return true;
 }
 
 export interface FileMutationLock {
@@ -298,6 +320,7 @@ export async function acquireFileMutationLock(
   const lockPath = `${targetPath}.ts-effect.lock`;
   const token = randomUUID();
   const deadline = Date.now() + timeoutMs;
+  let retriedAfterReclaim = false;
   while (true) {
     try {
       const handle = await open(lockPath, "wx", 0o600);
@@ -322,10 +345,34 @@ export async function acquireFileMutationLock(
         await removeCreatedFile(lockPath, identity);
         throw error;
       }
+      if (!identity) {
+        throw new Error("mutation lock identity was not captured");
+      }
+      if (
+        !(await publishedMutationLockMatches(
+          lockPath,
+          identity,
+          ownerPid,
+          token,
+        ))
+      ) {
+        await removeCreatedFile(lockPath, identity);
+        if (Date.now() >= deadline) {
+          throw new EffectRuntimeLockTimeoutError();
+        }
+        continue;
+      }
       return { targetPath, lockPath, token };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      await reclaimStaleMutationLock(lockPath);
+      const reclaimed = await reclaimStaleMutationLock(lockPath);
+      // Removing a dead owner is progress, not waiting for a live owner. Allow
+      // one immediate acquisition even for a zero-wait caller. Bound the retry
+      // so repeated replacement cannot extend that caller's lock budget.
+      if (reclaimed && !retriedAfterReclaim) {
+        retriedAfterReclaim = true;
+        continue;
+      }
       if (Date.now() >= deadline) {
         throw new EffectRuntimeLockTimeoutError();
       }
@@ -449,12 +496,38 @@ export async function appendJsonLine(
   payload: JsonObject,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const handle = await open(path, "a", 0o600);
+  const handle = await open(path, "a+", 0o600);
   try {
+    const { size } = await handle.stat();
+    if (size > 0) {
+      const finalByte = new Uint8Array(1);
+      await handle.read(finalByte, 0, 1, size - 1);
+      if (finalByte[0] !== 0x0a) await handle.writeFile("\n", "utf8");
+    }
     await handle.writeFile(`${JSON.stringify(payload)}\n`, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
+  }
+}
+
+export function appendJsonLineSync(
+  path: string,
+  payload: JsonObject,
+): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fd = openSync(path, "a+", 0o600);
+  try {
+    const { size } = fstatSync(fd);
+    if (size > 0) {
+      const finalByte = Buffer.alloc(1);
+      readSync(fd, finalByte, 0, 1, size - 1);
+      if (finalByte[0] !== 0x0a) writeFileSync(fd, "\n", "utf8");
+    }
+    writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 

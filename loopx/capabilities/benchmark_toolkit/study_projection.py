@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import statistics
 import tempfile
 from collections.abc import Iterable, Mapping
@@ -15,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ...file_lock import exclusive_file_lock
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from .experiment_board import (
     BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
     benchmark_experiment_board_row_key,
@@ -22,6 +22,12 @@ from .experiment_board import (
     build_benchmark_experiment_board,
     normalize_benchmark_experiment_board_row,
     preview_benchmark_experiment_board_upsert,
+)
+from .factorial_contrast import benchmark_metric_comparison_value
+from .experiment_identity import (
+    ARM_ROLES,
+    experiment_run_key,
+    experiment_token_text as _token,
 )
 from .four_arm_contract import BENCHMARK_FOUR_ARM_CONTRACT_SCHEMA_VERSION
 from .runtime_observation import (
@@ -40,9 +46,6 @@ BENCHMARK_CASE_INSIGHT_PROJECTION_SCHEMA_VERSION = (
 )
 BENCHMARK_STUDY_DASHBOARD_SCHEMA_VERSION = "benchmark_study_dashboard_v0"
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}$")
-_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-_ARM_ROLES = {"baseline", "control", "treatment", "explore"}
 _METRIC_ROLES = {"primary", "guardrail", "supporting"}
 _RECORD_KINDS = {
     "study_manifest",
@@ -61,13 +64,6 @@ def _reject_unknown_fields(
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"{field} contains unsupported fields: {', '.join(unknown)}")
-
-
-def _token(value: Any, *, field: str) -> str:
-    text = str(value or "").strip()
-    if not _TOKEN_RE.fullmatch(text):
-        raise ValueError(f"{field} must be a compact public-safe token")
-    return text
 
 
 def _optional_token(value: Any, *, field: str) -> str | None:
@@ -230,7 +226,7 @@ def normalize_benchmark_study_manifest(
         )
         arm_id = _token(raw_arm.get("arm_id"), field="arm.arm_id")
         arm_role = _token(raw_arm.get("arm_role"), field="arm.arm_role")
-        if arm_role not in _ARM_ROLES:
+        if arm_role not in ARM_ROLES:
             raise ValueError("arm.arm_role is unsupported")
         raw_assignments = raw_arm.get("factor_assignments")
         if not isinstance(raw_assignments, Mapping):
@@ -579,7 +575,7 @@ def normalize_benchmark_upload_envelope(
     if payload.get("record_id") != rebuilt["record_id"]:
         raise ValueError("benchmark upload record_id does not match envelope identity")
     digest = str(payload.get("payload_digest") or "")
-    if not _DIGEST_RE.fullmatch(digest) or digest != rebuilt["payload_digest"]:
+    if not BARE_SHA256_PATTERN.fullmatch(digest) or digest != rebuilt["payload_digest"]:
         raise ValueError("benchmark upload payload digest mismatch")
     return rebuilt
 
@@ -588,7 +584,7 @@ def _read_jsonl_objects(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for index, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
         if not line.strip():
             continue
         try:
@@ -646,17 +642,13 @@ def _validate_case_insight_attachment(
         candidate["payload"]
         for candidate in active_envelopes
         if candidate["record_kind"] == "experiment_board_row"
-        and candidate["benchmark_id"] == envelope["benchmark_id"]
-        and candidate["study_id"] == envelope["study_id"]
-        and candidate["payload"]["run_id"] == insight["run_id"]
+        and experiment_run_key(candidate["payload"]) == experiment_run_key(insight)
     ]
     if len(board_rows) != 1:
         raise ValueError(
             "case-insight upload requires one active exact-run board record"
         )
     run = board_rows[0]
-    if run["case_id"] != insight["case_id"]:
-        raise ValueError("case insight identity does not match its board row")
     if not benchmark_run_status_is_terminal(run["status"]):
         raise ValueError("case-insight upload requires a terminal run")
     if run["status"] != insight["outcome_status"]:
@@ -1023,7 +1015,7 @@ def build_benchmark_study_dashboard(
     ]
     board_rows = [envelope["payload"] for envelope in board_envelopes]
     board_provenance = {
-        envelope["payload"]["run_id"]: {
+        experiment_run_key(envelope["payload"]): {
             key: envelope[key]
             for key in (
                 "record_id",
@@ -1068,7 +1060,7 @@ def build_benchmark_study_dashboard(
         if envelope["record_kind"] == "case_insight_projection"
     ]
     insights = {
-        envelope["payload"]["run_id"]: envelope["payload"]
+        experiment_run_key(envelope["payload"]): envelope["payload"]
         for envelope in insight_envelopes
     }
     insight_records = [envelope["payload"] for envelope in insight_envelopes]
@@ -1191,12 +1183,16 @@ def build_benchmark_study_dashboard(
                     sorted(
                         {
                             failure: sum(
-                                insights.get(row["run_id"], {}).get("failure_class")
+                                insights.get(experiment_run_key(row), {}).get(
+                                    "failure_class"
+                                )
                                 == failure
                                 for row in arm_rows
                             )
                             for failure in {
-                                insights.get(row["run_id"], {}).get("failure_class")
+                                insights.get(experiment_run_key(row), {}).get(
+                                    "failure_class"
+                                )
                                 for row in arm_rows
                             }
                             if failure
@@ -1219,7 +1215,7 @@ def build_benchmark_study_dashboard(
                     "score_countable": row is not None,
                     "metrics": row["metrics"] if row else {},
                     "effort": row["effort"] if row else {},
-                    "insight": insights.get(row["run_id"]) if row else None,
+                    "insight": insights.get(experiment_run_key(row)) if row else None,
                 }
             )
         complete = all(cell["score_countable"] for cell in arm_cells)
@@ -1245,16 +1241,22 @@ def build_benchmark_study_dashboard(
         ranked = [
             comparison
             for comparison in eligible
-            if isinstance(
-                comparison.get("metric_deltas", {})
-                .get(primary_metric, {})
-                .get("delta"),
-                (int, float),
+            if (
+                benchmark_metric_comparison_value(
+                    comparison.get("metric_deltas", {}).get(primary_metric, {})
+                )
+                is not None
             )
         ]
+        # A raw count and a rate have no meaningful shared magnitude ordering.
+        scales = {"delta_rate" in item["metric_deltas"][primary_metric] for item in ranked}
+        if len(scales) > 1:
+            ranked = []
         largest = max(
             ranked,
-            key=lambda item: abs(item["metric_deltas"][primary_metric]["delta"]),
+            key=lambda item: abs(
+                benchmark_metric_comparison_value(item["metric_deltas"][primary_metric]) or 0
+            ),
             default=None,
         )
         case["eligible_comparisons"] = eligible
@@ -1281,7 +1283,9 @@ def build_benchmark_study_dashboard(
                 directions[direction] += 1
             for metric_name, transitions in binary_transitions.items():
                 binary_delta = item.get("metric_deltas", {}).get(metric_name)
-                if not isinstance(binary_delta, Mapping):
+                if not isinstance(binary_delta, Mapping) or binary_delta.get(
+                    "comparison_unavailable_reason"
+                ):
                     continue
                 before, after = (
                     binary_delta.get("baseline_value"),
@@ -1353,8 +1357,8 @@ def build_benchmark_study_dashboard(
         "runs": [
             {
                 **row,
-                "redacted_insight": insights.get(row["run_id"]),
-                "upload_provenance": board_provenance[row["run_id"]],
+                "redacted_insight": insights.get(experiment_run_key(row)),
+                "upload_provenance": board_provenance[experiment_run_key(row)],
             }
             for row in board["runs"]
         ],

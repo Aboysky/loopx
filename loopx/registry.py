@@ -12,6 +12,7 @@ from typing import Any
 from .authority import authority_registry_summary
 from .control_plane import compact_control_plane_policy, control_plane_policy_summary
 from .control_plane.goals.contract_health import contract_error_diagnostic
+from .control_plane.projects.registry_codec import load_registry
 from .execution_profile import compact_execution_profile, execution_profile_summary
 from .explore_graph import compact_explore_graph_policy
 from .orchestration import compact_orchestration_policy, orchestration_policy_summary
@@ -271,7 +272,7 @@ def inspect_registry_boundary(path: Path) -> dict[str, Any]:
             "exists": False,
             "error": "registry file does not exist",
         }
-    payload = read_json(expanded)
+    payload = load_registry(expanded)
     markers = registry_private_markers(payload)
     classification = classify_registry_boundary(expanded, payload, markers)
     git = _registry_git_probe(expanded)
@@ -343,7 +344,7 @@ def inspect_registry(path: Path) -> dict[str, Any]:
             "error": "registry file does not exist",
         }
 
-    payload = read_json(path)
+    payload = load_registry(path)
     goals = payload.get("goals") or []
     if not isinstance(goals, list):
         raise ValueError("goals must be a list")
@@ -470,11 +471,7 @@ def inspect_registry(path: Path) -> dict[str, Any]:
                 "operator_question": raw_goal.get("operator_question"),
                 "recommended_action": raw_goal.get("recommended_action"),
                 "next_handoff_condition": raw_goal.get("next_handoff_condition"),
-                "explore_graph": compact_explore_graph_policy(
-                    raw_goal.get("explore_graph")
-                )
-                if isinstance(raw_goal.get("explore_graph"), dict)
-                else None,
+                "explore_graph": compact_explore_graph_policy(raw_goal.get("explore_graph"), spawn_policy.get("explore_harness")) if raw_goal.get("explore_graph") is not None or (raw_goal.get("spawn_policy") or {}).get("explore_harness") else None,
                 "orchestration": orchestration,
                 "orchestration_mode": orchestration.get("mode"),
                 "spawn_allowed": spawn_policy.get("allowed"),

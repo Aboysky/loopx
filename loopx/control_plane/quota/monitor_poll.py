@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
+from ...agent_registry import registered_agent_ids_from_registry
 from ...turn_identity import normalize_turn_instance_id
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import now_local_iso
@@ -25,8 +25,10 @@ from ..todos.contract import (
 from ..todos.external_wait_contract import (
     build_monitor_advancement_authoring_contract,
 )
+from ..todos.authoring_scope import plan_todo_authoring_scope
 from ..todos.todo_semantics import todo_item_task_class
 from .decision_summary import compact_quota_decision, quota_decision_agent_id
+from .accounting_admission import quota_accounting_admission
 from .spend_sources import DEFAULT_SLOT_SPEND_SOURCE
 
 QUOTA_MONITOR_POLL_CLASSIFICATION = "quota_monitor_poll"
@@ -171,6 +173,19 @@ def _decision_packet(
         }
         if requested not in due_candidates:
             due_candidates.append(requested)
+    gate_scope = None
+    if (before.get("requires_user_action") is True and registry_path is not None
+        and registry_due.get("todo_id")):
+        from ...control_plane.todos.list_readback import list_goal_todos
+        from ..todos.decision_scope import todo_gate_scope_projections
+        snapshot = list_goal_todos(registry_path=registry_path, goal_id=goal_id,
+            runtime_root_arg=str(runtime_root) if runtime_root else None, limit=None)
+        records = snapshot.get("todos") or []
+        targets = [item for item in records if item.get("todo_id") == registry_due["todo_id"]]
+        if len(targets) == 1:
+            gate_scope = todo_gate_scope_projections(
+                [item for item in records if item.get("role") == "user"], targets,
+                agent_id=quota_decision_agent_id(before))[0]
     return {
         **compact_quota_decision(before),
         "goal_id": goal_id,
@@ -188,6 +203,7 @@ def _decision_packet(
         "vision_wait_state": _vision_wait_state(before),
         "due_monitor_candidates": due_candidates,
         "registry_due_monitor": registry_due,
+        **({"auxiliary_gate_scope": gate_scope} if gate_scope is not None else {}),
     }
 
 
@@ -282,6 +298,8 @@ def _request(
     observation: dict[str, Any],
     provider_receipt: Mapping[str, Any] | None = None,
     status_reload_warning: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": ("loopx_quota_monitor_poll_commit_request_v1" if observation.get("lease_proof") is not None
@@ -304,6 +322,12 @@ def _request(
             dict(status_reload_warning)
             if status_reload_warning is not None
             else None
+        ),
+        **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
+        **(
+            {"source_admission": dict(source_admission)}
+            if source_admission is not None
+            else {}
         ),
     }
 
@@ -383,11 +407,12 @@ def _find_monitor_poll_turn(
     turn_instance_id: str,
     todo_id: str | None = None,
     target_key: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
     normalized_target_key = str(target_key or "").strip() or None
     try:
-        lines = index_path.read_text(encoding="utf-8").splitlines()
+        lines = index_path.read_text(encoding="utf-8").split("\n")
     except OSError:
         return None
     for line in reversed(lines):
@@ -402,6 +427,11 @@ def _find_monitor_poll_turn(
             and str(row.get("goal_id") or "") == goal_id
             and str(row.get("agent_id") or "") == agent_id
             and str(row.get("turn_instance_id") or "") == turn_instance_id
+            and (
+                row.get("goal_ref") == dict(goal_ref)
+                if goal_ref is not None
+                else "goal_ref" not in row
+            )
             and (
                 normalized_todo_id is None
                 or normalize_todo_id(row.get("todo_id")) == normalized_todo_id
@@ -424,6 +454,7 @@ def find_quota_monitor_poll_turn(
     turn_instance_id: str,
     todo_id: str | None = None,
     target_key: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return the latest matching monitor observation for one heartbeat turn."""
 
@@ -437,6 +468,7 @@ def find_quota_monitor_poll_turn(
         turn_instance_id=normalized_turn_id,
         todo_id=todo_id,
         target_key=target_key,
+        goal_ref=goal_ref,
     )
 
 
@@ -457,6 +489,7 @@ def _monitor_poll_effect_id(
     turn_instance_id: str | None,
     todo_id: str | None,
     target_key: str | None,
+    goal_ref: Mapping[str, Any] | None,
 ) -> str:
     if not turn_instance_id:
         return f"quota-monitor-poll:{goal_id}:{uuid.uuid4().hex}"
@@ -471,6 +504,7 @@ def _monitor_poll_effect_id(
         turn_instance_id=turn_instance_id,
         todo_id=todo_id,
         target_key=None if todo_id else target_key,
+        goal_ref=goal_ref,
     )
     existing_effect_id = _persisted_monitor_effect_id(existing)
     if existing_effect_id:
@@ -661,6 +695,8 @@ def _provider_writeback(
         agent_id=plan.get("agent_id"),
         task_lease_idempotency_key=(plan.get("lease_proof") or {}).get("idempotency_key"),
         task_lease_expected_version=(plan.get("lease_proof") or {}).get("expected_version"),
+        gate_scope_guard=plan.get("gate_scope_guard") is True,
+        legacy_batch_version=plan.get("legacy_batch_version"),
     )
     if not isinstance(result, dict):
         raise TypeError("monitor Todo provider returned no writeback receipt")
@@ -697,9 +733,12 @@ def record_quota_monitor_poll_for_decision(
     next_claimed_by: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    use_current_task_lease: bool = False,
+    auxiliary_settlement_todo: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     _index_lock_held: bool = False,
     status_reloader: Callable[[], dict[str, Any]] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     del render_markdown
     normalized_turn_id = normalize_turn_instance_id(turn_instance_id)
@@ -719,8 +758,21 @@ def record_quota_monitor_poll_for_decision(
         turn_instance_id=normalized_turn_id,
         todo_id=safe_todo_id,
         target_key=safe_target_key,
+        goal_ref=goal_ref,
     )
-    if execute and (safe_todo_id or safe_target_key):
+    if use_current_task_lease:
+        from .monitor_poll_lease_transport import current_monitor_lease_proof
+
+        if not safe_todo_id or not normalized_turn_id or not decision_agent_id:
+            raise ValueError("current task lease transport requires exact Turn, Todo, and agent identity")
+        task_lease_idempotency_key, task_lease_expected_version = current_monitor_lease_proof(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            todo_id=safe_todo_id,
+            agent_id=decision_agent_id,
+            effect_id=effect_id,
+        )
+    if execute and (safe_todo_id or safe_target_key) and not use_current_task_lease:
         from ..scheduler.provider_monitor_poll import (
             require_monitor_poll_source_available,
         )
@@ -737,6 +789,17 @@ def record_quota_monitor_poll_for_decision(
         registry_path=registry_path,
         runtime_root=runtime_root,
     )
+    if auxiliary_settlement_todo is not None:
+        decision["auxiliary_settlement_todo"] = {
+            key: auxiliary_settlement_todo.get(key)
+            for key in (
+                "todo_id",
+                "task_class",
+                "status",
+                "claimed_by",
+                "excluded_agents",
+            )
+        }
     observation = _observation_packet(
         before=before,
         agent_id=agent_id,
@@ -789,7 +852,9 @@ def record_quota_monitor_poll_for_decision(
                 )
         return payload
 
-    def transact() -> tuple[dict[str, Any], dict[str, Any]]:
+    def transact(
+        source_admission: Mapping[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         common = {
             "effect_id": effect_id,
             "runtime_root": runtime_root,
@@ -801,11 +866,25 @@ def record_quota_monitor_poll_for_decision(
             "turn_instance_id": normalized_turn_id,
             "decision": decision,
             "observation": observation,
+            "goal_ref": goal_ref,
+            "source_admission": source_admission,
         }
         after_status = deepcopy(status_payload)
         provider_needed = bool(safe_todo_id or safe_target_key)
         if not provider_needed:
             return _native_result(_request(phase="commit", **common)), after_status
+
+        # Validate explicit claim routing before quota reserves a pending effect.
+        # Exact retries keep their frozen admission if registry membership changed.
+        receipt_path = (runtime_root / "goals" / goal_id / "runs" / ".transactions" /
+                        "quota-monitor-poll" / f"{hashlib.sha256(effect_id.encode()).hexdigest()[:24]}.json")
+        if next_claimed_by and registry_path is not None and not receipt_path.exists():
+            plan_todo_authoring_scope(
+                command="create", role="agent", goal_id=goal_id,
+                registered_agents=registered_agent_ids_from_registry(registry_path, goal_id),
+                intent={"task_class": "advancement_task", "status": "open",
+                        "actor_agent_id": decision_agent_id, "claimed_by": next_claimed_by},
+            )
 
         native = _native_result(_request(phase="preflight", **common))
         if native.get("status") != "provider_required":
@@ -815,11 +894,21 @@ def record_quota_monitor_poll_for_decision(
             raise TypeError("TypeScript monitor-poll preflight omitted provider plan")
         if registry_path is None:
             raise ValueError("monitor todo writeback requires registry_path")
-        provider_receipt = _provider_writeback(
-            plan,
-            registry_path=registry_path,
-            runtime_root=runtime_root,
-        )
+        from ..coordination.local_authority import LocalCoordinationAuthorityUnavailable
+
+        try:
+            provider_receipt = _provider_writeback(
+                plan,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+            )
+        except LocalCoordinationAuthorityUnavailable as exc:
+            # Transport the owner's typed negative evidence. TypeScript alone
+            # decides whether it releases the exact pending reservation. An
+            # outage/ambiguous commit carries no no-effect proof and is retained.
+            if execute and exc.payload.get("no_effect") is not None:
+                _native_result(_request(phase="provider_rejected", provider_receipt=exc.payload, **common))
+            raise
         status_warning = None
         if execute:
             after_status, status_warning = _reload_status_after_monitor_writeback(
@@ -837,16 +926,22 @@ def record_quota_monitor_poll_for_decision(
         return native, after_status
 
     try:
-        if execute and not _index_lock_held:
-            with exclusive_file_lock(
-                index_path,
-                policy=LockAcquisitionPolicy.MONITOR,
-                agent_id=decision_agent_id or agent_id,
-                operation="quota_monitor_poll_index",
-            ):
-                native, after_status = transact()
+        if _index_lock_held:
+            if goal_ref is not None:
+                raise ValueError(
+                    "exact GoalRef monitor poll requires quota source admission"
+                )
+            native, after_status = transact(None)
         else:
-            native, after_status = transact()
+            with quota_accounting_admission(
+                runtime_root=runtime_root,
+                registry_path=registry_path,
+                goal_id=goal_id,
+                goal_ref=goal_ref,
+                operation="quota_monitor_poll_index",
+                lock_legacy_index=execute,
+            ) as source_admission:
+                native, after_status = transact(source_admission)
     except ValueError as exc:
         payload = failure(
             str(exc),

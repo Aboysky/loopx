@@ -99,6 +99,20 @@ def build_automation_liveness(payload: dict[str, Any]) -> dict[str, Any]:
             "next_trigger": "explicit goal resume or newly projected work",
             "spend_policy": "no quota spend for terminal automation shutdown",
         }
+    if effective_action == EffectiveAction.PEER_COORDINATION_BLOCKED.value:
+        return {
+            **base,
+            "automation_action": "keep_active_peer_coordination_backoff",
+            "reason": (
+                "peer coordination is recoverable from asynchronous peer, runtime, "
+                "configuration, or local-frontier changes"
+            ),
+            "next_trigger": (
+                "peer activation capability, peer runtime readiness, coordinator "
+                "configuration, or newly projected local work"
+            ),
+            "spend_policy": "no quota spend while explicit peer coordination is blocked",
+        }
     if (
         effective_action == EffectiveAction.MONITOR_QUIET_SKIP.value
         or recommended_mode == "monitor_quiet_until_material_transition"

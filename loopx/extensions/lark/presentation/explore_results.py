@@ -80,6 +80,7 @@ from .explore_visual_styles import (
     summarize_explore_visual_sync,
 )
 from .message_card import build_lark_markdown_reply_card
+from .sink_visibility import SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITY_SHARED, SINK_VISIBILITIES
 
 LARK_EXPLORE_SCHEMA_VERSION = "loopx_lark_explore_result_board_v0"
 LARK_EXPLORE_LOCAL_CONFIG_VERSION = "loopx_lark_explore_local_config_v0"
@@ -90,9 +91,6 @@ LARK_EXPLORE_VISUAL_SYNC_VERSION = "loopx_lark_explore_visual_sync_v0"
 LARK_EXPLORE_VISUALS_SYNC_VERSION = "loopx_lark_explore_visuals_sync_v0"
 
 DEFAULT_EXPLORE_BASE_NAME = "LoopX Exploration Results"
-SINK_VISIBILITY_OWNER_ONLY = "owner-only"
-SINK_VISIBILITY_SHARED = "shared"
-SINK_VISIBILITIES = {SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITY_SHARED}
 
 TABLE_NODES = "nodes"
 TABLE_EDGES = "edges"
@@ -1498,7 +1496,7 @@ def _node_record_values(node: Mapping[str, Any], *, goal_id: str, source_id: str
         "Title": str(node.get("title") or ""),
         "Kind": str(node.get("node_kind") or ""),
         "Status": str(node.get("status") or ""),
-        "Summary": str(node.get("summary") or ""),
+        "Summary": "\n".join(part for part in [str(node.get("summary") or ""), str(node.get("research_summary") or "")] if part),
         "Blocked Reason": str(node.get("blocked_reason") or ""),
         "Parent Node": str(node.get("parent_id") or ""),
         "Findings": node.get("finding_count"),

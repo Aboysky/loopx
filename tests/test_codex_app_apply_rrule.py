@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sqlite3
 import tomllib
 from pathlib import Path
 
 import pytest
 
+from loopx.cli import build_parser
 from scripts.codex_app_apply_rrule import (
     _now_ms,
     _parse_args,
     _scheduler_hint_turn_instance_id,
+    _sqlite_row_exists,
     _update_sqlite,
     _update_toml,
     main,
@@ -120,6 +123,8 @@ def test_scheduler_hint_replays_parent_turn_without_synthetic_capabilities(
     assert (
         main(
             [
+                "--agent-id",
+                "codex-fixture",
                 "--automations-root",
                 str(tmp_path / "automations"),
                 "--db-path",
@@ -148,13 +153,22 @@ def test_default_app_stores_follow_codex_home_and_capabilities_are_explicit(
     codex_home = tmp_path / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
-    defaults = _parse_args([])
+    defaults = _parse_args(["--agent-id", "codex-fixture"])
     assert defaults.automations_root == codex_home / "automations"
     assert defaults.db_path == codex_home / "sqlite/codex-dev.db"
     assert defaults.capability == []
 
-    explicit = _parse_args(["--capability", "network"])
+    explicit = _parse_args(
+        ["--agent-id", "codex-fixture", "--capability", "network"]
+    )
     assert explicit.capability == ["network"]
+
+
+def test_scheduler_bridge_requires_explicit_agent_identity() -> None:
+    with pytest.raises(SystemExit) as error:
+        _parse_args([])
+
+    assert error.value.code == 2
 
 
 def test_heartbeat_guide_matches_parent_turn_replay_contract() -> None:
@@ -188,6 +202,8 @@ def test_should_run_failure_reports_structured_stdout(
     with pytest.raises(SystemExit) as raised:
         main(
             [
+                "--agent-id",
+                "codex-fixture",
                 "--automations-root",
                 str(tmp_path / "automations"),
                 "--db-path",
@@ -226,6 +242,8 @@ def test_apply_updates_toml_db_and_runs_ack(
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -268,6 +286,8 @@ def test_dry_run_writes_nothing(tmp_path: Path, monkeypatch) -> None:
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -309,6 +329,8 @@ def test_no_apply_needed_is_quiet_noop(tmp_path: Path, monkeypatch) -> None:
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -446,3 +468,200 @@ def test_apply_creates_missing_automation_toml_and_sqlite(
     assert "/tmp/workspace" in row[3]
     assert any("scheduler-ack-current" in call for call in calls)
     assert list(tmp_path.glob("codex-dev.db.bak-*"))
+
+
+def _write_binding_registry(path: Path, *, bindings: list[dict]) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "goal",
+                        "repo": "/tmp/workspace",
+                        "coordination": {"thread_agent_bindings": bindings},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _install_argv(
+    automations_root: Path, db_path: Path, registry_path: Path
+) -> list[str]:
+    return [
+        "--automations-root",
+        str(automations_root),
+        "--db-path",
+        str(db_path),
+        "--registry",
+        str(registry_path),
+        "--goal-id",
+        "goal",
+        "--agent-id",
+        "agent",
+        "--automation-id",
+        "loopx-goal-agent",
+        "--loopx",
+        "loopx",
+    ]
+
+
+def _stub_loopx(monkeypatch) -> None:
+    def fake_run(command, **kwargs):
+        if "should-run" in command:
+            return _FakeCompleted(_hint_payload(apply_needed=True))
+        if "heartbeat-prompt" in command:
+            return _FakeCompleted({"ok": True, "task_body": "Advance `goal`."})
+        return _FakeCompleted({"ok": True})
+
+    monkeypatch.setattr("scripts.codex_app_apply_rrule.subprocess.run", fake_run)
+
+
+def _install_against_bindings(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    bindings: list[dict],
+) -> str:
+    """First-install the automation for one binding set and return the refusal."""
+
+    automations_root = tmp_path / "automations"
+    db_path = tmp_path / "codex-dev.db"
+    registry_path = tmp_path / "registry.json"
+    sqlite3.connect(str(db_path)).close()
+    _write_binding_registry(registry_path, bindings=bindings)
+    _stub_loopx(monkeypatch)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(_install_argv(automations_root, db_path, registry_path))
+
+    # A refusal leaves no partial automation behind: no manifest, no row.
+    assert not (automations_root / "loopx-goal-agent" / "automation.toml").exists()
+    assert not _sqlite_row_exists(db_path, "loopx-goal-agent")
+    return str(excinfo.value)
+
+
+def test_apply_refuses_automation_without_a_bound_thread(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """An unbound agent has no target thread, so nothing may be installed."""
+
+    message = _install_against_bindings(tmp_path, monkeypatch, bindings=[])
+
+    assert "expected exactly one bound host thread" in message
+    assert "found 0" in message
+
+
+def test_apply_refuses_automation_with_an_ambiguous_bound_thread(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Two threads for one agent cannot be resolved to the automation's target."""
+
+    message = _install_against_bindings(
+        tmp_path,
+        monkeypatch,
+        bindings=[
+            {"agent_id": "agent", "thread_id": "thread-app"},
+            {"agent_id": "agent", "thread_id": "thread-tui"},
+        ],
+    )
+
+    assert "expected exactly one bound host thread" in message
+    assert "found 2" in message
+
+
+_REFUSAL_COMMAND = re.compile(r"`(loopx [^`]+)`")
+
+
+def _advertised_commands(message: str) -> list[list[str]]:
+    """The recovery commands the refusal hands to the operator."""
+
+    return [shlex.split(command) for command in _REFUSAL_COMMAND.findall(message)]
+
+
+@pytest.mark.parametrize(
+    "bindings",
+    [
+        [],
+        [
+            {"agent_id": "agent", "thread_id": "thread-app"},
+            {"agent_id": "agent", "thread_id": "thread-tui"},
+        ],
+    ],
+    ids=["unbound", "ambiguous"],
+)
+def test_the_refusal_advertises_a_command_this_cli_can_run(
+    tmp_path: Path,
+    monkeypatch,
+    bindings: list[dict],
+) -> None:
+    """A repair the parser rejects would leave the operator with a dead end."""
+
+    message = _install_against_bindings(tmp_path, monkeypatch, bindings=bindings)
+    commands = _advertised_commands(message)
+
+    assert {command[1] for command in commands} == {
+        "bind-agent-thread",
+        "unbind-agent-thread",
+    }
+    for command in commands:
+        assert command[0] == "loopx"
+        # Substitute the operator's own thread for the placeholder, then run the
+        # argv through the registered parser: an unregistered path exits here.
+        argv = [
+            "thread-app" if part == "<host-thread-id>" else part
+            for part in command[1:]
+        ]
+        parsed = build_parser().parse_args(argv)
+
+        assert parsed.command == command[1]
+        # Without --execute the advertised command only previews the binding.
+        assert parsed.execute is True
+        assert (
+            parsed.goal_id,
+            parsed.agent_id,
+            parsed.host_surface,
+            parsed.thread_id,
+        ) == ("goal", "agent", "codex-app", "thread-app")
+
+
+def test_a_refused_install_continues_once_the_operator_binds_the_thread(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The advertised repair has to actually unblock the install."""
+
+    automations_root = tmp_path / "automations"
+    db_path = tmp_path / "codex-dev.db"
+    registry_path = tmp_path / "registry.json"
+    sqlite3.connect(str(db_path)).close()
+    _write_binding_registry(registry_path, bindings=[])
+    _stub_loopx(monkeypatch)
+    argv = _install_argv(automations_root, db_path, registry_path)
+
+    with pytest.raises(SystemExit):
+        main(argv)
+
+    # The operator follows the advertised binding, keeping every other argument.
+    _write_binding_registry(
+        registry_path,
+        bindings=[
+            {
+                "agent_id": "agent",
+                "host_surface": "codex-app",
+                "thread_id": "thread-app",
+            }
+        ],
+    )
+
+    assert main(argv) == 0
+
+    manifest = automations_root / "loopx-goal-agent" / "automation.toml"
+    assert tomllib.loads(manifest.read_text(encoding="utf-8"))["target_thread_id"] == (
+        "thread-app"
+    )
+    assert _sqlite_row_exists(db_path, "loopx-goal-agent")

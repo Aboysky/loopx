@@ -93,6 +93,7 @@ def build_run_history(
             {
                 "id": goal.get("id"),
                 "activation_state": goal.get("activation_state") or "active",
+                "registry_goal_digest": goal.get("registry_goal_digest"),
                 "display_name": goal.get("display_name"),
                 "domain": goal.get("domain"),
                 "status": goal.get("status"),
@@ -110,6 +111,7 @@ def build_run_history(
                 "next_probe": goal.get("next_probe"),
                 "authority_registry": goal.get("authority_registry"),
                 "quota": quota_status(goal) if goal.get("registry_member") else None,
+                "index_digest": goal.get("index_digest"),
                 "index_exists": goal.get("index_exists"),
                 "raw_index_records": goal.get("raw_index_records"),
                 "unique_runs": goal.get("unique_runs"),

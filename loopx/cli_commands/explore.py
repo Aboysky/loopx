@@ -19,8 +19,9 @@ from ..capabilities.explore.result_log import (
     build_explore_node_event,
     build_explore_result_projection,
     explore_result_log_path,
-    load_explore_result_events,
+    load_explore_result_events_strict,
 )
+from ..capabilities.explore.research_evidence import append_research_observation
 from ..capabilities.explore.harness_gate import GATE_STATE_DISABLED
 from ..capabilities.explore.resource_portfolio import parse_resource_counts
 from ..capabilities.explore.source_history_reconcile import (
@@ -53,7 +54,7 @@ from ..extensions.runtime import (
 )
 from ..history import load_registry
 from ..paths import resolve_runtime_root
-from ..todos import list_goal_todos
+from ..control_plane.todos.list_readback import list_goal_todos
 from .explore_feishu_commands import (
     FEISHU_SINK_EXPLORE_COMMANDS,
     handle_explore_feishu_command,
@@ -78,6 +79,15 @@ def register_explore_commands(
         help="Record the exploration topology and project it into a Feishu/Lark result board.",
     )
     sub = parser.add_subparsers(dest="explore_command", required=True)
+
+    context = sub.add_parser("turn-context", help="Read bounded enabled Explore evidence and planning guidance for an agent turn.")
+    add_subcommand_format(context)
+    context.add_argument("--goal-id", required=True)
+    context.add_argument("--agent-id", required=True)
+    context.add_argument("--result-limit", type=int, default=3, help="Evidence details per page (1..20); default 3.")
+    context.add_argument("--result-offset", type=int, default=0, help="Continue using the previous page's result_revision.")
+    context.add_argument("--result-node", help="Read evidence for one question node.")
+    context.add_argument("--result-revision", help="Evidence revision returned by the previous page; rejects changed evidence.")
 
     schema = sub.add_parser("schema", help="Print the result-board schema and LoopX mapping.")
     add_subcommand_format(schema)
@@ -132,6 +142,12 @@ def register_explore_commands(
     add_subcommand_format(summary)
     summary.add_argument("--goal-id", required=True)
     _add_projection_limit_args(summary)
+
+    observe = sub.add_parser("observe", help="Record typed research evidence on an existing Explore node; grants no execution or closure authority.")
+    add_subcommand_format(observe)
+    observe.add_argument("--goal-id", required=True)
+    observe.add_argument("--observation-json", required=True, help="File containing a typed_research_observation_v0 envelope.")
+    observe.add_argument("--agent-id")
 
     presentation = sub.add_parser(
         "presentation",
@@ -239,7 +255,7 @@ def _projection_for(
     finding_limit_override: int | None = None,
 ) -> dict[str, object]:
     log_path = explore_result_log_path(runtime_root, args.goal_id)
-    events = load_explore_result_events(log_path, goal_id=args.goal_id)
+    events = load_explore_result_events_strict(log_path, goal_id=args.goal_id)
     finding_limit = (
         int(args.finding_limit)
         if finding_limit_override is None
@@ -299,6 +315,8 @@ def _tree_lines(tree: object, *, indent: int = 0) -> list[str]:
 
 
 def render_explore_markdown(payload: dict[str, object]) -> str:
+    if "graph_enabled" in payload and "harness_enabled" in payload:
+        return "# Explore Harness turn context\n\n```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```\n"
     lines = ["# LoopX Explore", ""]
     if not payload.get("ok"):
         lines.extend([f"- ok: `{payload.get('ok')}`", f"- error: `{payload.get('error')}`", ""])
@@ -320,6 +338,18 @@ def render_explore_markdown(payload: dict[str, object]) -> str:
         if payload.get(key) not in (None, ""):
             lines.append(f"- {key}: `{payload.get(key)}`")
     counts = payload.get("counts")
+    research = payload.get("research_frontier")
+    if isinstance(research, dict):
+        lines.append(f"- research composition (read-only): {research['pending_count']} pending, "
+                     f"{research['observed_count']} observed, {research['ineligible_count']} ineligible")
+        for gap in research["gaps"]:
+            lines.append(f"  - {gap['gap_id']}: {gap['state']} ({gap['reason']})")
+        if research["omitted_count"]:
+            lines.append(f"  - {research['omitted_count']} additional candidates omitted from this bounded view")
+    observation = payload.get("observation")
+    if isinstance(observation, dict):
+        lines.append(f"- research observation: `{observation['explore_node_id']}`; "
+                     f"replayed={payload.get('replayed')}; written={payload.get('written')}")
     if isinstance(counts, dict):
         lines.append(
             f"- map: `{counts.get('node_count')} nodes, {counts.get('edge_count')} edges, "
@@ -475,6 +505,12 @@ def handle_explore_command(
         )
         if args.explore_command == "schema":
             payload = lark_explore_schema_payload()
+        elif args.explore_command == "turn-context":
+            from ..capabilities.explore.turn_context import explore_turn_context
+            payload = explore_turn_context(registry_path=Path(str(source_runtime_route["source_registry"])), runtime_root=runtime_root,
+                                           goal_id=args.goal_id, agent_id=args.agent_id,
+                                           result_limit=args.result_limit, result_offset=args.result_offset,
+                                           result_node=args.result_node, result_revision=args.result_revision)
         elif args.explore_command == "node":
             event = build_explore_node_event(
                 goal_id=args.goal_id,
@@ -520,6 +556,14 @@ def handle_explore_command(
                 supersedes=args.supersedes,
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
+        elif args.explore_command == "observe":
+            observation = json.loads(Path(args.observation_json).read_text(encoding="utf-8"))
+            if not isinstance(observation, dict):
+                raise ValueError("research observation must be an object")
+            payload = append_research_observation(
+                explore_result_log_path(runtime_root, args.goal_id), goal_id=args.goal_id,
+                observation=observation, agent_id=args.agent_id,
+            )
         elif args.explore_command == "summary":
             payload = _projection_for(args, runtime_root=runtime_root)
         elif args.explore_command == "presentation":

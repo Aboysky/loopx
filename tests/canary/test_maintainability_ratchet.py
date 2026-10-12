@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 
 from loopx.canary.maintainability_ratchet import (
+    MODULE_LINE_LIMIT,
     MODULE_METRIC_BASELINE_SCHEMA_VERSION,
     build_control_plane_maintainability_report,
     collect_dependency_debt,
@@ -13,6 +14,7 @@ from loopx.canary.maintainability_ratchet import (
     collect_oversized_decision_functions,
     diff_scoped_module_ceiling_violations,
     evaluate_maintainability_findings,
+    module_metric_baseline,
     module_metrics,
     render_control_plane_maintainability_report,
 )
@@ -26,10 +28,9 @@ def test_current_repository_debt_is_reviewed_without_line_count_pins() -> None:
 
     assert report["ok"] is True, render_control_plane_maintainability_report(report)
     assert report["policy"]["freezes_exact_line_counts"] is False
-    assert (
-        "does not retain a coarse all-file hotspot limit"
-        in report["policy"]["repository_scope_decision"]
-    )
+    assert "coarse 2000-line default hotspot limit" in report["policy"][
+        "repository_scope_decision"
+    ]
     assert report["unreviewed_count"] == 0
     assert report["stale_exception_count"] == 0
     assert set(report["category_counts"]) == {"compatibility_facade"}
@@ -37,20 +38,66 @@ def test_current_repository_debt_is_reviewed_without_line_count_pins() -> None:
     assert report["reviewed_exception_count"] == report["finding_count"]
     # One scan of the immutable checkout owns both debt and metric assertions.
     # Mutated temporary repositories below must still be evaluated afresh.
-    assert report["policy"]["module_line_limit"] == 1500
+    assert report["policy"]["module_line_limit"] == 2000
     assert report["policy"]["module_any_limit"] == 300
     assert report["policy"]["module_dict_any_limit"] == 300
     assert report["category_counts"].get("module_metric_budget", 0) == 0
+
+    baseline = module_metric_baseline(
+        REPOSITORY_ROOT / "loopx" / "canary" / "module_metric_baseline.json"
+    )
+    assert "lines" not in baseline["loopx/extensions/lark/goal_topic_runtime.py"]
+    assert baseline["loopx/heartbeat_prompt.py"]["lines"] == 1199
+    for relative_path, ceilings in baseline.items():
+        if ceilings.get("lines", MODULE_LINE_LIMIT) > MODULE_LINE_LIMIT:
+            assert module_metrics(REPOSITORY_ROOT / relative_path)["lines"] > (
+                MODULE_LINE_LIMIT
+            )
+
+
+def test_module_metric_baseline_rejects_stale_runtime_defaults(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "schema_version": MODULE_METRIC_BASELINE_SCHEMA_VERSION,
+                "default_limits": {
+                    "lines": 1500,
+                    "any_count": 300,
+                    "dict_any_count": 300,
+                },
+                "module_metric_ceilings": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        module_metric_baseline(baseline_path)
+    except ValueError as error:
+        assert "default_limits must match runtime defaults" in str(error)
+    else:
+        raise AssertionError("stale default_limits must be rejected")
 
 
 def test_module_metric_ratchet_detects_new_oversized_module(tmp_path: Path) -> None:
     module_path = tmp_path / "loopx" / "sample.py"
     module_path.parent.mkdir(parents=True)
     module_path.write_text(
-        "\n".join(["# padding"] * 1501),
+        "\n".join(["# padding"] * 2000),
         encoding="utf-8",
     )
     tracked_paths = {module_path}
+
+    assert collect_module_metric_findings(
+        tmp_path,
+        tracked_paths=tracked_paths,
+    ) == []
+
+    module_path.write_text(
+        "\n".join(["# padding"] * 2001),
+        encoding="utf-8",
+    )
 
     findings = collect_module_metric_findings(
         tmp_path,
@@ -60,8 +107,8 @@ def test_module_metric_ratchet_detects_new_oversized_module(tmp_path: Path) -> N
     assert len(findings) == 1
     assert findings[0]["category"] == "module_metric_budget"
     assert findings[0]["path"] == "loopx/sample.py"
-    assert findings[0]["metrics"]["lines"] == 1501
-    assert findings[0]["regressions"] == {"lines": 1501}
+    assert findings[0]["metrics"]["lines"] == 2001
+    assert findings[0]["regressions"] == {"lines": 2001}
 
 
 def test_module_metric_ratchet_rejects_growth_above_checked_in_baseline(
@@ -80,7 +127,7 @@ def test_module_metric_ratchet_rejects_growth_above_checked_in_baseline(
         (
             '{"schema_version": "'
             + MODULE_METRIC_BASELINE_SCHEMA_VERSION
-            + '", "default_limits": {"lines": 1500, "any_count": 300, '
+            + '", "default_limits": {"lines": 2000, "any_count": 300, '
             '"dict_any_count": 300}, "module_metric_ceilings": {'
             '"loopx/sample.py": {"lines": 2, "any_count": 1, "dict_any_count": 1}}}'
         ),
@@ -105,7 +152,7 @@ def test_module_metric_debt_names_the_reviewed_ledger_to_refresh(
 
     module_path = tmp_path / "loopx" / "sample.py"
     module_path.parent.mkdir(parents=True)
-    module_path.write_text("\n".join(["# padding"] * 1501), encoding="utf-8")
+    module_path.write_text("\n".join(["# padding"] * 2001), encoding="utf-8")
 
     payload = evaluate_maintainability_findings(
         collect_module_metric_findings(tmp_path, tracked_paths={module_path}),
@@ -364,7 +411,7 @@ def _write_baseline(repo: Path, ceilings: dict[str, dict[str, int]]) -> None:
         json.dumps(
             {
                 "schema_version": MODULE_METRIC_BASELINE_SCHEMA_VERSION,
-                "default_limits": {"lines": 1500, "any_count": 300, "dict_any_count": 300},
+                "default_limits": {"lines": 2000, "any_count": 300, "dict_any_count": 300},
                 "module_metric_ceilings": ceilings,
             }
         ),

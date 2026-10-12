@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -151,6 +152,62 @@ def test_install_is_idempotent_and_uninstall_removes_managed_skills(
         ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS
     )
     assert not (skills_dir / SKILL_INSTALL_READBACK_FILENAME).exists()
+
+
+def test_failed_skill_publish_preserves_the_previous_install_for_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    target = tmp_path / "skills" / "example"
+    source.mkdir()
+    target.mkdir(parents=True)
+    (source / "SKILL.md").write_text("new\n", encoding="utf-8")
+    (target / "SKILL.md").write_text("old\n", encoding="utf-8")
+    backup = target.with_name(f".{target.name}.previous.{os.getpid()}")
+    real_replace = Path.replace
+
+    def fail_publish_and_restore(path: Path, destination: Path) -> Path:
+        destination = Path(destination)
+        if path == target and destination == backup:
+            return real_replace(path, destination)
+        if destination == target:
+            raise OSError("synthetic skill publish failure")
+        return real_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", fail_publish_and_restore)
+
+    with pytest.raises(OSError, match="synthetic skill publish failure"):
+        install_module._install_one_skill(source, target)
+
+    assert not target.exists()
+    assert (backup / "SKILL.md").read_text(encoding="utf-8") == "old\n"
+
+
+@pytest.mark.parametrize("live_exists", [False, True])
+def test_stale_skill_backup_is_preserved_for_manual_recovery(
+    tmp_path: Path,
+    live_exists: bool,
+) -> None:
+    source = tmp_path / "source"
+    target = tmp_path / "skills" / "example"
+    source.mkdir()
+    target.parent.mkdir()
+    (source / "SKILL.md").write_text("new\n", encoding="utf-8")
+    if live_exists:
+        target.mkdir()
+        (target / "SKILL.md").write_text("current\n", encoding="utf-8")
+    backup = target.with_name(f".{target.name}.previous.interrupted")
+    backup.mkdir()
+    (backup / "SKILL.md").write_text("recoverable\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="backup.*requires inspection"):
+        install_module._install_one_skill(source, target)
+
+    assert target.exists() is live_exists
+    if live_exists:
+        assert (target / "SKILL.md").read_text(encoding="utf-8") == "current\n"
+    assert (backup / "SKILL.md").read_text(encoding="utf-8") == "recoverable\n"
 
 
 def test_install_upgrades_legacy_unversioned_skills(tmp_path: Path) -> None:
@@ -378,6 +435,8 @@ def test_frozen_bundle_install_lifecycle(
     bundled_skills = bundle / layout
     for skill_id in PACKAGED_HOST_SKILL_IDS:
         shutil.copytree(canonical / skill_id, bundled_skills / skill_id)
+    shutil.copy2(Path(install_module.__file__).with_name("lexical_retrieval.py"),
+                 bundled_skills / "loopx-self-repair/scripts/lexical_retrieval.py")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     if with_meipass:
         monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
@@ -412,7 +471,7 @@ def test_frozen_bundle_install_lifecycle(
             target / skill_id,
             ignored_relative_paths=(SKILL_VERSION_MARKER_FILENAME,),
         ) == install_module.hash_skill_tree(
-            canonical / skill_id,
+            bundled_skills / skill_id,
             ignored_relative_paths=(SKILL_VERSION_MARKER_FILENAME,),
         )
     repeated = workflow_skill_install(skills_dir=target, execute=True)
@@ -427,6 +486,18 @@ def test_frozen_bundle_install_lifecycle(
     removed = workflow_skill_install(skills_dir=target, execute=True, uninstall=True)
     assert removed["ok"] is True
     assert sorted(removed["result"]["removed"]) == sorted(ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS)
+
+
+def test_frozen_bundle_missing_shared_scorer_does_not_borrow_ambient_code(tmp_path, monkeypatch):
+    canonical = Path(resolve_workflow_skill_source()["skills_root"])
+    bundle = tmp_path / "incomplete bundle"
+    for skill_id in PACKAGED_HOST_SKILL_IDS:
+        shutil.copytree(canonical / skill_id, bundle / "skills" / skill_id)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+    result = workflow_skill_install(skills_dir=tmp_path / "host skills", execute=True)
+    assert result["ok"] is False
+    assert result["source"]["kind"] == "missing"
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -469,6 +540,10 @@ def test_frozen_bundle_layout_precedence(
             path = tmp_path / layout / skill_id / "SKILL.md"
             path.parent.mkdir(parents=True)
             path.write_text(f"# {layout}: {skill_id}\n", encoding="utf-8")
+        if not layout.startswith("share/") or complete_wheel_layout:
+            scorer = tmp_path / layout / "loopx-self-repair/scripts/lexical_retrieval.py"
+            scorer.parent.mkdir(parents=True)
+            scorer.write_text("# bundled scorer\n", encoding="utf-8")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     source = resolve_workflow_skill_source()

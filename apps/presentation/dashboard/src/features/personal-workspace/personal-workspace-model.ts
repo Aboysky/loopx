@@ -1,14 +1,19 @@
-import type { CollaborationReadback } from "../../data/chat";
+import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import type { TurnStep } from "../../data/turn-steps";
+import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
-import type { WorkspaceLoadError } from "../../data/workspace-progressive-status";
+import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
+import type { TodoItem } from "../../data/status";
+import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import type { DigestAttentionSummary } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
   | "等待条件"
-  | "推进中"
+  | "已安排"
   | "安静运行"
   | "已完成"
   | "已停止";
@@ -16,26 +21,92 @@ export type WorkspaceGoalState =
 export type WorkspaceHomeLane =
   | "needs_you"
   | "running"
+  | "claimed"
   | "observing"
   | "scheduled"
   | "history"
   | "stopped";
 
 export type WorkspaceAgentTodo = {
+  cadence?: string | null;
+  nextDueAt?: string | null;
+  expiresAt?: string | null;
+  lastCheckedAt?: string | null;
+  targetKey?: string | null;
+  watchOnly?: boolean | null;
+  completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
+  resumeInvalidReason?: string | null;
   resumeReceiptId?: string | null;
+  blockedReason?: string | null;
   claimedBy?: string | null;
   dependencies?: string[];
   done: boolean;
   evidence?: string | null;
+  note?: string | null;
   nextTransition?: string | null;
   priority?: string | null;
   status?: string | null;
   taskClass?: string | null;
   taskDomain?: string | null;
+  /** Original request retained when text is shortened for a card. */
+  requestText?: string;
+  /** The authority id, absent when a legacy projection needs a display-only id. */
+  sourceTodoId?: string | null;
+  /** Local map fallback: exact request reading without current-state actions. */
+  detailMode?: "request_only";
   text: string;
   todoId: string;
+  validationDigest?: string | null;
+  validationRevision?: number | null;
+  validationRevisionActor?: string | null;
+};
+
+/** Both active status and retained history carry the same inspector facts. */
+export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
+  "todo_id" | "text" | "done" | "status" | "claimed_by" | "evidence" | "note" | "reason"
+  | "priority" | "task_class" | "task_domain" | "completed_at" | "resume_when"
+  | "resume_ready" | "resume_condition" | "completion_validation_sha256"
+  | "completion_validation_revision" | "completion_validation_revision_history"
+>, fallbackId: string): WorkspaceAgentTodo {
+  const receipt = todo.resume_condition?.resume_receipt;
+  const receiptId = receipt && typeof receipt === "object" && !Array.isArray(receipt)
+    ? (receipt as Record<string, unknown>).receipt_id : null;
+  return {
+    todoId: todo.todo_id?.trim() || fallbackId,
+    sourceTodoId: todo.todo_id?.trim() || null,
+    requestText: todo.text,
+    text: todo.text,
+    done: todo.status === "deferred" ? false : todo.done,
+    status: todo.status ?? null,
+    blockedReason: todo.status === "blocked" ? todo.reason?.trim() || null : null,
+    claimedBy: todo.claimed_by ?? null,
+    evidence: todo.evidence ?? null,
+    note: todo.note ?? null,
+    priority: todo.priority ?? null,
+    taskClass: todo.task_class ?? null,
+    taskDomain: todo.task_domain ?? null,
+    completedAt: todo.completed_at ?? null,
+    resumeWhen: todo.resume_when ?? null,
+    resumeReady: todo.resume_ready ?? null,
+    resumeInvalidReason: typeof todo.resume_condition?.invalid_state === "string"
+      ? todo.resume_condition.invalid_state : null,
+    resumeReceiptId: typeof receiptId === "string" && receiptId.trim() ? receiptId.trim() : null,
+    validationDigest: todo.completion_validation_sha256 ?? null,
+    validationRevision: todo.completion_validation_revision ?? null,
+    validationRevisionActor: todo.completion_validation_revision_history.at(-1)?.actor_agent_id ?? null,
+  };
+}
+
+/** Host-granted workspaces that can scope the steward conversation without a Goal. */
+export type WorkspaceConversationDirectory = {
+  /** null until the host's workspace grants have been read. */
+  projects: ChatProject[] | null;
+  readFailed: boolean;
+  selectedRef: string | null;
+  /** null returns the conversation to the steward scope. */
+  onSelect: (projectRef: string | null) => void;
 };
 
 export type WorkspaceTodo = WorkspaceAgentTodo & {
@@ -61,7 +132,17 @@ export type WorkspaceRepositoryContext = {
 };
 
 export type WorkspaceGoalSubagentConfiguration = {
+  alignCodexHostCapacity?: boolean;
+  codexHostCapacity?: {
+    configuredChildren: number | null;
+    newSessionRequired: boolean;
+    requiredChildren: number;
+    status: string;
+    writeRequired: boolean;
+    written: boolean;
+  };
   modelConfig?: { model: string; reasoning_effort?: string } | null;
+  executionConfig?: string;
   allowedDomains: string[];
   domainCandidates?: Array<{
     domain: string;
@@ -87,22 +168,42 @@ export type WorkspaceGoal = {
   agentLabel?: string;
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
+  /** Host surfaces of threads bound to this Goal; binding proves ownership, never execution. */
+  boundHostSurfaces?: string[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
+  /** Open agent Todo count projected beside a possibly bounded item list. */
+  openTodoCount?: number;
+  execution?: WorkspaceGoalExecution;
   goalId: string;
+  /** Bound host threads as observed from the host's own records. */
+  hostThreadActivity?: GoalHostThreadActivity;
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
   state: WorkspaceGoalState;
   subagentExecution?: WorkspaceGoalSubagentConfiguration;
+  nativeChildActivity?: {
+    turn_instance_id: string;
+    observation: "unknown" | "coordinator_reported" | "host_observed" | "mixed";
+    host_attested: boolean;
+    launched_count: number;
+    skipped_count: number;
+    capacity_rejected_count: number;
+    host_failed_count: number;
+    parent_accepted_count: number;
+  } | null;
   title: string;
   usage?: WorkspaceGoalUsage | null;
 };
 
 export type WorkspaceAttention = {
   details?: AttentionDetails;
+  /** A run-level operator gate has no User Todo to record a decision on. */
+  decisionSource?: "todo" | "run_operator_gate";
   sourceId?: string;
   blocking: boolean;
   evidence?: string | null;
@@ -183,6 +284,8 @@ export type WorkspaceScheduleKind = "heartbeat" | "monitor";
 
 export type WorkspaceSchedule = {
   agentId?: string;
+  expiresAt?: string;
+  watchOnly?: boolean;
   executionHistory?: Array<{
     label: string;
     runId?: string;
@@ -230,6 +333,12 @@ export type WorkspaceActionPreview = {
     nextAction?: string;
     summary: string;
   };
+  // The stored typed action's own times. The workspace restores the list in
+  // `ChatActionStore.list` order, which is (`updated_at`, `proposal_id`)
+  // newest first, while a draft created in this session is appended last; a
+  // reader that needs the newest draft compares these instead of the position.
+  // See proposal-recency.ts.
+  createdAt?: string;
   previewId: string;
   primaryLabel?: string;
   errorMessage?: string;
@@ -240,19 +349,33 @@ export type WorkspaceActionPreview = {
   teamPlanOutcome?: TeamPlanAppliedOutcome;
   teamPlanAssignments?: Array<{ laneId: string; agentId: string; task: string }>;
   teamPlanGapLanes?: Array<{ laneId: string; agentId: string; reasonCode: string; task?: string }>;
+  teamPlanTodoIds?: string[];
   title: string;
   sourceRequest?: WorkspaceActionPreviewRequest;
+  updatedAt?: string;
   workspaceCandidates?: Array<{ label: string; workspaceRef: string }>;
 };
 
 export type WorkspaceMessage = {
+  createdAt?: string;
+  goalDraft?: GoalDraft | null;
+  activity?: string[];
+  steps?: TurnStep[];
   collaboration?: CollaborationReadback;
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
   id: string;
   pending?: boolean;
+  preparing?: boolean;
+  /** Observed request/turn times, independent of component mount or view changes. */
+  startedAt?: number;
+  updatedAt?: number;
+  endedAt?: number;
   returnDelivery?: WorkspaceReturnDelivery;
   role: "assistant" | "user" | "system";
+  sourceTurnId?: string;
+  sourceMessageId?: string;
+  sourceSessionId?: string;
   text: string;
   time?: string;
 };
@@ -292,6 +415,9 @@ export type WorkspaceGoalNotification = {
   configured: boolean;
   enabled: boolean;
   humanGateAutoNotifyEnabled: boolean;
+  stewardNoticeDelivery?: { pending_count: number; failed_count: number };
+  blockedNoticeAutoNotifyEnabled?: boolean;
+  blockedNoticeDelivery?: { deliveredCount: number; unverifiedCount: number; resolvedCount: number };
   lastNotifiedAt?: string | null;
   receiptCount: number;
   targetRef?: string | null;
@@ -343,7 +469,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "settings"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" }
+  | { goalId?: string; kind: "settings"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "steward" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";
@@ -373,8 +499,13 @@ export type PersonalWorkspaceCallbacks = {
   onCorrectRun?: (run: WorkspaceRun, message: string) => void | Promise<void>;
   onCloseRunSession?: (run: WorkspaceRun) => void | Promise<void>;
   onExplainDecision?: (attention: WorkspaceAttention) => void | Promise<void>;
+  /** Open the item's Goal conversation with an editable draft; never sends. */
+  onReplyToAttention?: (attention: WorkspaceAttention, intent: "reply" | "explain") => void;
   onExportOutput?: (output: WorkspaceOutput) => void | Promise<void>;
   onInterruptRun?: (run: WorkspaceRun) => void | Promise<void>;
+  onCancelConversationPreparation?: (contextId: string) => void;
+  onInterruptConversationTurn?: (contextId: string, turnId: string) => Promise<void>;
+  onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
   onOpenGoal?: (goalId: string) => void | Promise<void>;
   onOpenGoalView?: (tab: WorkspaceGoalTab) => void;
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;
@@ -402,7 +533,8 @@ export type PersonalWorkspaceCallbacks = {
   /** Re-read the workspace projection after an applied action. `invalidateGoalIds`
    * names the Goals the action touched, so a peer's snapshot is not re-read for it. */
   onReconcileStatus?: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
-  onRefresh?: () => void | Promise<void>;
+  /** Full refresh by default; error recovery can explicitly read missing Goals only. */
+  onRefresh?: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive?: () => void | Promise<void>;
   onPreviewAction?: (request: WorkspaceActionPreviewRequest) => WorkspaceActionPreview | Promise<WorkspaceActionPreview>;
   onRequestGoalCreate?: () => WorkspaceActionPreview | Promise<WorkspaceActionPreview | void> | void;
@@ -413,16 +545,28 @@ export type PersonalWorkspaceCallbacks = {
   onSendMessage?: (
     message: string,
     agentId: string,
-    goalId: string | null,
+    contextId: string,
     attachments?: WorkspaceImageAttachment[],
-  ) => void | WorkspaceActionPreviewRequest | Promise<void | WorkspaceActionPreviewRequest>;
+  ) => void | WorkspaceSendPreviews | Promise<void | WorkspaceSendPreviews>;
+  onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;
+  onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
+    settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
-  onSelectGoal?: (goalId: string | null) => void;
+  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectView?: (view: WorkspaceGoalTab) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
-  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string; kind?: "human_gate" | "blocked_notice" }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+};
+
+// What one send hands back for review: at most one decision the owner reviews
+// now (it opens the drawer) plus candidate cards left in the conversation, such
+// as an Agent's Todo proposals. One answer may carry both.
+export type WorkspaceSendPreviews = {
+  candidates?: WorkspaceActionPreviewRequest[];
+  decision?: WorkspaceActionPreviewRequest;
 };
 
 export type WorkspaceActionPreviewRequest = {
@@ -464,15 +608,25 @@ export function workspaceSessionStatusLabel(status?: string): string {
   } as Record<string, string>)[status] ?? status;
 }
 
+/** A quiet persistent conversation must not masquerade as waiting work. */
+export function goalHasExecutionSummary(goal: Pick<WorkspaceGoal, "state">): boolean {
+  return ["已安排", "需修复", "等待条件"].includes(goal.state);
+}
+
 /**
- * Project the detailed Goal lifecycle onto the five manager-home buckets.
- * The home keeps four active lanes visible and collapses terminal work into history.
+ * Project the detailed Goal lifecycle onto the manager-home buckets. Execution
+ * is read through the shared claim/execution rule, so a host claim gets its own
+ * lane instead of borrowing the running one. The home shows populated active
+ * lanes and collapses terminal work into history.
  */
 export function workspaceHomeLaneForGoal(goal: WorkspaceGoal): WorkspaceHomeLane {
   if (goal.activationState === "stopped" || goal.state === "已停止") return "stopped";
   if (goal.state === "已完成") return "history";
   if (goal.needsYou || goal.state === "等你") return "needs_you";
-  if (goal.state === "推进中" || goal.state === "需修复") return "running";
+  if (goal.state === "需修复") return "running";
+  const work = goalWorkKind(goal);
+  if (work === "executing") return "running";
+  if (work === "claimed") return "claimed";
   if (goal.state === "安静运行") return "observing";
   return "scheduled";
 }
@@ -556,4 +710,10 @@ export function workerStateLabel(state?: string | null): string {
   if (state === "monitoring") return "监控中";
   if (state === "blocked") return "受阻";
   return "待命";
+}
+
+/** Bounded card copy; the owning item retains its complete detail text. */
+export function compactWorkspaceText(value?: string | null, limit = 132) {
+  const text = (value ?? "").replace(/\s+/g, " ").trim();
+  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
 }

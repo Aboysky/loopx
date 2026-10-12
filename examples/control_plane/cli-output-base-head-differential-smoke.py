@@ -58,12 +58,23 @@ def _run_probe(
     fixture_root: Path,
     receipt_path: Path,
     cwd: Path,
+    enforce_budget: bool,
 ) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(source_root)
-    _run(
-        [
-            sys.executable,
+    # Both revisions measure the same fixture, including implicit machine
+    # defaults. Never let the operator's registry/configuration select a host.
+    isolated_current = str(fixture_root / "host-runtime")
+    isolated_legacy = str(fixture_root / "legacy-runtime")
+    bootstrap = (
+        "import pathlib, runpy, sys; from loopx import paths; "
+        f"paths.DEFAULT_RUNTIME_ROOT=pathlib.Path({isolated_current!r}); "
+        f"paths.LEGACY_RUNTIME_ROOT=pathlib.Path({isolated_legacy!r}); "
+        "sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+    )
+    env["LOOPX_RUNTIME_ROOT"] = isolated_current
+    command = [
+            sys.executable, "-c", bootstrap,
             str(probe_runner),
             "--test-source",
             str(probe_test),
@@ -73,7 +84,11 @@ def _run_probe(
             str(fixture_root),
             "--receipt",
             str(receipt_path),
-        ],
+        ]
+    if not enforce_budget:
+        command.append("--measurement-only")
+    _run(
+        command,
         cwd=cwd,
         env=env,
     )
@@ -171,6 +186,7 @@ def main() -> int:
                 fixture_root=fixture_root,
                 receipt_path=base_receipt,
                 cwd=temp_root,
+                enforce_budget=False,
             )
             _run_probe(
                 source_root=REPO_ROOT,
@@ -180,6 +196,7 @@ def main() -> int:
                 fixture_root=fixture_root,
                 receipt_path=candidate_receipt,
                 cwd=temp_root,
+                enforce_budget=True,
             )
         finally:
             _run(

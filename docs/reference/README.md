@@ -13,6 +13,8 @@ Current groups:
   project-local skill discovery and managed-copy lifecycle.
 - [PostgreSQL authority service admission v0](postgresql-authority-service-v0.md): opt-in
   authentication, tenant authorization, and restore-incarnation rotation.
+- [Usage ping](usage-ping.md): default-on basic usage statistics, disclosure/opt-out and exact
+  payload, opt-out switches, and the published active-installation counts.
 
 High-traffic read paths:
 
@@ -22,3 +24,5 @@ High-traffic read paths:
   read-only Goal acceptance gaps, pending gates, and historical progress
   read from `run_history.goals[].acceptance_observation`, and the Dashboard entry
   that renders them. Partial observations never certify acceptance.
+
+- [Configuration backup and recovery](configuration-backup.md): exact source-owned Goal and machine snapshots, isolated recovery and separate live adoption.

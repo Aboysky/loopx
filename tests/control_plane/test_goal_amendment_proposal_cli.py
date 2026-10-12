@@ -20,19 +20,12 @@ from typing import Any
 import pytest
 
 from loopx.cli import main as cli_main
-from loopx.event_sourced_state import (
-    TODO_ADDED,
-    AppendOnlyStateEventStore,
-    make_state_event,
-)
 from tests.control_plane.test_goal_amendment_proposal import (
     AGENTS,
-    EVENT_LOG_NAME,
     GOAL_ID,
     OTHER_GOAL_ID,
     _ack_run,
     _append_runs,
-    _default_events,
     _derived_obligation,
     _proposal,
     _stall_runs,
@@ -91,7 +84,6 @@ def _write_dual_registry_fixture(root: Path) -> dict[str, Path]:
     """
 
     from tests.control_plane.test_goal_amendment_proposal import (
-        _default_events,
         _default_todo_specs,
         _goal_state_text,
     )
@@ -103,19 +95,6 @@ def _write_dual_registry_fixture(root: Path) -> dict[str, Path]:
     state_file = project / state_relative
     state_file.parent.mkdir(parents=True)
     state_file.write_text(_goal_state_text(_default_todo_specs()), encoding="utf-8")
-    store = AppendOnlyStateEventStore(state_file.with_name(EVENT_LOG_NAME))
-    for event in _default_events():
-        store.append(
-            make_state_event(
-                event_id=event["event_id"],
-                goal_id=GOAL_ID,
-                event_type=TODO_ADDED,
-                actor_agent_id=event["actor_agent_id"],
-                refs={"todo_id": event["todo_id"]},
-                payload={"text": f"Fixture event for {event['todo_id']}."},
-            )
-        )
-
     def _registry(common_runtime_root: Path) -> str:
         return (
             json.dumps(
@@ -166,7 +145,7 @@ def test_cli_submits_proposal_and_lists_journal_json(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -219,6 +198,54 @@ def test_cli_submits_proposal_and_lists_journal_json(
     assert list_payload["count"] == 1
     assert list_payload["rows"][0]["proposal_id"] == "gap_stage2_001"
     assert list_payload["rows"][0]["journal_append_sequence"] == 1
+
+
+def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _write_fixture(tmp_path)
+    proposal = _proposal(paths)
+    proposal_json = _write_submit_inputs(tmp_path, proposal)
+
+    registry = json.loads(paths["registry"].read_text(encoding="utf-8"))
+    goal = next(item for item in registry["goals"] if item["id"] == GOAL_ID)
+    goal["repo"] = str(tmp_path / "missing-registered-project")
+    paths["registry"].write_text(json.dumps(registry), encoding="utf-8")
+
+    # A different current directory happens to contain a same-named Goal
+    # state. It must not replace the project selected by the registry.
+    foreign_project = tmp_path / "foreign-project"
+    foreign_state = foreign_project / Path(goal["state_file"])
+    foreign_state.parent.mkdir(parents=True)
+    foreign_state.write_text(
+        paths["state_file"].read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(foreign_project)
+
+    exit_code, payload, _ = _run_amendment_cli(
+        capsys,
+        paths["registry"],
+        "goal-amendment-proposal",
+        "--proposal-json",
+        str(proposal_json),
+        "--format",
+        "json",
+    )
+
+    journal = (
+        paths["runtime"]
+        / "goals"
+        / GOAL_ID
+        / "amendment-proposals"
+        / "journal.jsonl"
+    )
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert "goal state file is missing" in payload["error"]
+    assert not journal.exists()
 
 
 def test_cli_submit_and_list_share_one_registry_selector(
@@ -285,7 +312,7 @@ def test_cli_single_registry_submit_and_list_positive_control(
     # Positive control: with one registry there is no routing ambiguity —
     # submit and --list agree, including when --project names the registry's
     # own project directory (whose local registry IS the selected registry).
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -321,7 +348,7 @@ def test_cli_submits_proposal_markdown(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -361,7 +388,7 @@ def test_cli_alias_amendment_proposal_matches(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -383,7 +410,7 @@ def test_cli_resubmission_is_idempotent(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -427,7 +454,7 @@ def test_cli_nonexistent_obligation_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths, {"replan_obligation_id": "replan-deadbeefdeadbeef"})
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -453,7 +480,7 @@ def test_cli_unregistered_proposer_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths, {"proposer_agent_id": "agent-z"})
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -475,7 +502,7 @@ def test_cli_list_without_goal_id_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     exit_code, payload, _ = _run_amendment_cli(
         capsys,
@@ -495,7 +522,7 @@ def test_cli_malformed_proposal_json_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal_json = tmp_path / "broken.json"
     proposal_json.write_text('{"schema_version": tru', encoding="utf-8")
 
@@ -523,7 +550,7 @@ def test_cli_submit_without_run_history_fails_closed(
     # No run ledger at all: the obligation inventory is empty and the
     # causal chain cannot be verified from string shape alone. There is no
     # CLI flag that could supply an authority payload instead.
-    paths = _write_fixture(tmp_path, events=_default_events(), runs=[])
+    paths = _write_fixture(tmp_path, runs=[])
     proposal = _proposal(paths, {"replan_obligation_id": "replan-0123456789abcdef"})
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -545,7 +572,7 @@ def test_cli_list_path_traversal_sibling_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     # Place a sibling journal under runtime/goals/victim/amendment-proposals/journal.jsonl
     sibling_journal = (
         paths["runtime"] / "goals" / "victim" / "amendment-proposals" / "journal.jsonl"
@@ -579,7 +606,7 @@ def test_cli_list_path_traversal_dotdot_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     exit_code, payload, _ = _run_amendment_cli(
         capsys,
@@ -601,7 +628,7 @@ def test_cli_list_absolute_path_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     exit_code, payload, _ = _run_amendment_cli(
         capsys,
@@ -623,7 +650,7 @@ def test_cli_list_path_separator_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     exit_code, payload, _ = _run_amendment_cli(
         capsys,
@@ -645,7 +672,7 @@ def test_cli_list_unknown_goal_fails_closed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     exit_code, payload, _ = _run_amendment_cli(
         capsys,
@@ -687,7 +714,7 @@ def test_cli_submit_forged_run_rows_fails_closed(
             "progress_observation": {"result_class": "blocked"},
         },
     ]
-    paths = _write_fixture(tmp_path, events=_default_events(), runs=forged_rows)
+    paths = _write_fixture(tmp_path, runs=forged_rows)
     proposal = _proposal(paths, {"replan_obligation_id": "replan-0123456789abcdef"})
     proposal_json = _write_submit_inputs(tmp_path, proposal)
 
@@ -716,7 +743,7 @@ def test_cli_legacy_receipt_journal_is_inert(
     # The retired receipts.jsonl path is read by nothing: appending a
     # self-minted "open" receipt row there neither admits a proposal nor
     # changes the derived causal id.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     legacy = (
         paths["runtime"] / "goals" / GOAL_ID / "replan-obligations" / "receipts.jsonl"
     )
@@ -761,7 +788,7 @@ def test_cli_submit_after_settlement_ack_run_fails_closed(
     # The real close path: refresh-state appends an autonomous_replan_ack
     # run into the quota ledger, derivation stops there, and a proposal
     # naming the previously open obligation fails closed.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
     obligation_id = _derived_obligation(paths)["obligation_id"]
 
@@ -791,7 +818,6 @@ def test_cli_submit_wrong_goal_obligation_fails_closed(
 ) -> None:
     paths = _write_fixture(
         tmp_path,
-        events=_default_events(),
         with_other_goal=True,
         other_goal_runs=_stall_runs(
             goal_id=OTHER_GOAL_ID, hypothesis="hypothesis-stage2-peer"

@@ -138,7 +138,7 @@ def test_partial_reconciliation_preserves_other_pending_entries(tmp_path, monkey
 
 
 @pytest.mark.parametrize("route_source", ["quota_cli_invocation", "loopx_turn_run_once"])
-def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkeypatch, route_source):
+def test_upgrade_read_projection_preserves_work_authority(tmp_path, monkeypatch, route_source):
     home, path, database, registry, root, _, desired, _ = _deferred(tmp_path, monkeypatch)
     monkeypatch.setattr("loopx.control_plane.scheduler.scheduler_hint.now_utc",
         lambda: datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -157,18 +157,45 @@ def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkey
     baseline = build_live_quota_should_run_decision(status, **kwargs)
     receipt.write_bytes(contents)
     pending = build_live_quota_should_run_decision(status, **kwargs)
-    assert pending["required_reads"][-1]["kind"] == "automation_prompt_upgrade"
-    assert pending["interaction_contract"]["agent_channel"]["required_reads"] == pending["required_reads"]
-    hint = pending["required_reads"][-1]
+    assert any(x.get("kind") == "automation_prompt_upgrade"
+        for x in pending["interaction_contract"]["agent_channel"]["required_reads"])
+    assert "required_reads" not in pending
+    hint = next(x for x in pending["interaction_contract"]["agent_channel"]["required_reads"]
+        if x.get("kind") == "automation_prompt_upgrade")
     assert len(hint["command"]) > 360
-    assert compact_quota_should_run_cli_payload(pending)["required_reads"][-1] == hint
+    assert hint in compact_quota_should_run_cli_payload(pending)["interaction_contract"]["agent_channel"]["required_reads"]
     envelope = build_turn_envelope(pending)
-    assert envelope["required_reads"][-1]["command"] == hint["command"]
+    assert hint in envelope["required_reads"]
     assert envelope["compaction"]["budget_bytes"] == 8192 + 1536
     assert envelope["compaction"]["hook_prompt_budget_bytes"] == 1536
     assert build_turn_envelope(baseline)["compaction"]["budget_bytes"] == 8192
+    assert baseline.get("turn_start_capability_hook_dispatch") is None
+    dispatch = pending["turn_start_capability_hook_dispatch"]
+    assert set(dispatch) == {"required_reads"}
+    assert len(dispatch["required_reads"]) == 1
+    read = dispatch["required_reads"][0]
+    assert read["kind"] == hint["kind"] == "automation_prompt_upgrade"
+    assert read["command"] == hint["command"]
+    assert read["ordering"] == "before_work"
+    assert read["prompt_budget_bytes"] == 1536
+    # Rebuilding for a required read must not lose the selected authority.
+    for command in pending["interaction_contract"]["cli_channel"]["next_cli_actions"]:
+        if command.startswith("loopx "):
+            argv = shlex.split(command)
+            assert argv[argv.index("--registry") + 1] == str(registry)
+            assert argv[argv.index("--runtime-root") + 1] == str(root)
+    # The dispatch names the hook that produced the read, and the projected hint
+    # must still carry every field of that read unchanged.
+    assert read["hook_id"] == "heartbeat.prompt_upgrade"
+    assert read["capability_id"] == "automation-prompt-upgrade"
+    assert {key: read[key] for key in hint} == hint
     for key in baseline.keys() | pending.keys():
-        if key not in {"required_reads", "interaction_contract", "protocol_action_packet"}:
+        if key not in {
+            "required_reads",
+            "interaction_contract",
+            "protocol_action_packet",
+            "turn_start_capability_hook_dispatch",
+        }:
             assert pending.get(key) == baseline.get(key), key
     _set_fixture_prompt(path, database, desired)
     assert build_live_quota_should_run_decision(status, **kwargs) == baseline
@@ -195,7 +222,8 @@ def test_real_quota_cli_exposes_hint_without_bypassing_health_gate(tmp_path, mon
         "--codex-app", "--scan-path", str(tmp_path / "STATE.md")]
     pending_result = subprocess.run(command, capture_output=True, text=True)
     pending = json.loads(pending_result.stdout)
-    assert pending["required_reads"][-1]["kind"] == "automation_prompt_upgrade"
+    assert any(x.get("kind") == "automation_prompt_upgrade"
+        for x in pending["interaction_contract"]["agent_channel"]["required_reads"])
     assert pending["should_run"] is False
     _set_fixture_prompt(path, database, desired)
     current_result = subprocess.run(command, capture_output=True, text=True)

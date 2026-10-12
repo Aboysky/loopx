@@ -1,7 +1,6 @@
 """Transport for the TypeScript-owned prior-host-Turn closeout recovery.
 
-Python reads two provider facts - the exact bound Todo and the committed
-monitor-poll receipt for the prior Turn the typed preflight names - hands them
+Python reads the exact bound Todo the typed preflight names, hands it
 to the typed transaction, and projects the typed verdict back into the
 existing public payload.  It owns no closeout policy: which prior Turn needs a
 closeout, whether its settlement validates, which closeout is accepted, and
@@ -15,22 +14,32 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import (
+    EffectRuntimeRejected,
+    EffectRuntimeResponseAmbiguous,
+    effect_runtime_result,
+)
 from ..scheduler.execution_context import SchedulerExecutionContextResolution
-from ..todos.contract import TODO_TASK_CLASS_MONITOR
 from ..todos.todo_semantics import todo_item_task_class
 from ..work_items.interaction_contract import (
     build_interaction_contract,
-    build_protocol_action_packet,
 )
-from .error_codes import HeartbeatReceiptIdentityConflictError
-from .monitor_poll import find_quota_monitor_poll_turn
+from .error_codes import (
+    CloseoutQueryUnavailableError,
+    HeartbeatReceiptIdentityConflictError,
+)
+from .accounting_admission import quota_accounting_admission
 
 UNSETTLED_HOST_TURN_RECOVERY_SCHEMA_VERSION = "unsettled_host_turn_recovery_v0"
 
 PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD = (
     "quota.prior_host_turn_closeout.preflight"
 )
+# The typed owner reads and indexes the Goal history once, then validates each
+# candidate from that immutable snapshot. Keep this on the ordinary Effect
+# request budget: raising the timeout would hide a return to repeated full-log
+# scans and strand the quota entry again on long-lived Goals.
+PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS = 5.0
 PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA = (
     "loopx_prior_host_turn_closeout_preflight_request_v0"
 )
@@ -57,7 +66,7 @@ def _bound_todo_item(
         return None
     # Reuse the exact-ID read path: presentation lanes omit terminal and
     # blocked rows and cannot prove the absence of a lifecycle transition.
-    from ...todos import list_goal_todos
+    from ..todos.list_readback import list_goal_todos
 
     readback = list_goal_todos(
         registry_path=registry_path,
@@ -70,40 +79,6 @@ def _bound_todo_item(
     if not isinstance(item, Mapping) or item.get("todo_id") != todo_id:
         return None
     return dict(item)
-
-
-def _committed_monitor_poll_fact(
-    *,
-    runtime_root: Path,
-    goal_id: str,
-    agent_id: str,
-    todo_id: str | None,
-    prior_turn_instance_id: str,
-    todo_item: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    """Read the persisted monitor-poll receipt for one prior heartbeat Turn."""
-
-    # Only a monitor-bound Turn can carry this closeout, so the read is elided
-    # for every other Turn.  The transaction still owns the acceptance rule.
-    if (
-        not todo_id
-        or todo_item is None
-        or todo_item_task_class(todo_item) != TODO_TASK_CLASS_MONITOR
-    ):
-        return {}
-    receipt = find_quota_monitor_poll_turn(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        todo_id=todo_id,
-        turn_instance_id=prior_turn_instance_id,
-    )
-    if receipt is None:
-        return {}
-    commit_metadata = receipt.get("quota_monitor_poll_commit")
-    if not isinstance(commit_metadata, Mapping):
-        return {}
-    return {"effect_id": commit_metadata.get("effect_id")}
 
 
 def _todo_binding_facts(item: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -130,7 +105,9 @@ def _prior_closeout_preflight(
     goal_id: str,
     agent_id: str,
     current_turn_instance_id: str | None,
-) -> tuple[dict[str, Any], list[str]] | None:
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str], dict[str, Any]] | None:
     """Ask the typed owner which prior Turn must still be closed out.
 
     The preflight reads the goal's persisted guards and the selected Turn's
@@ -139,16 +116,53 @@ def _prior_closeout_preflight(
     """
 
     try:
-        result = effect_runtime_result(
-            PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
-            {
-                "schema_version": PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
-                "runtime_root": str(runtime_root.expanduser()),
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "exclude_turn_instance_id": current_turn_instance_id,
-            },
-        )
+        with quota_accounting_admission(
+            runtime_root=runtime_root,
+            registry_path=registry_path,
+            goal_id=goal_id,
+            goal_ref=goal_ref,
+            operation="prior-host-turn-closeout-preflight",
+            lock_legacy_index=False,
+        ) as source_admission:
+            request_runtime_root = (
+                runtime_root.expanduser().resolve()
+                if source_admission is not None
+                else runtime_root.expanduser()
+            )
+            result = effect_runtime_result(
+                PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
+                {
+                    "schema_version": (
+                        PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA
+                    ),
+                    "runtime_root": str(request_runtime_root),
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "exclude_turn_instance_id": current_turn_instance_id,
+                    **(
+                        {"goal_ref": dict(goal_ref)}
+                        if goal_ref is not None
+                        else {}
+                    ),
+                    **(
+                        {"source_admission": dict(source_admission)}
+                        if source_admission is not None
+                        else {}
+                    ),
+                },
+                timeout=PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS,
+            )
+    except EffectRuntimeResponseAmbiguous as exc:
+        # This method only reads receipts. A lost query response is not a
+        # possibly committed mutation, and must not send the operator hunting
+        # for a nonexistent preflight write receipt. Do not infer a verdict or
+        # automatically restart/retry the shared runtime.
+        raise CloseoutQueryUnavailableError(
+            f"Read-only {PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD} returned no "
+            f"verifiable response within {PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS:g}s; "
+            "closeout state is unknown. Retry the query after checking runtime health; "
+            "the preflight itself performs no durable writes",
+        ) from exc
     except EffectRuntimeRejected as exc:
         # Keep the public diagnostic the identity rule has always published,
         # even though the rule now lives in the typed owner.
@@ -169,7 +183,13 @@ def _prior_closeout_preflight(
     missing_receipts = result.get("missing_receipts")
     if not isinstance(candidate, Mapping) or not isinstance(missing_receipts, list):
         raise RuntimeError("TypeScript closeout preflight result shape mismatch")
-    return dict(candidate), [str(name) for name in missing_receipts]
+    monitor_poll = result.get("committed_monitor_poll")
+    if monitor_poll is not None and not isinstance(monitor_poll, Mapping):
+        raise RuntimeError("TypeScript closeout monitor-poll fact shape mismatch")
+    return (
+        dict(candidate), [str(name) for name in missing_receipts],
+        dict(monitor_poll) if isinstance(monitor_poll, Mapping) else {},
+    )
 
 
 def _unsettled_host_turn_recovery(
@@ -179,6 +199,7 @@ def _unsettled_host_turn_recovery(
     goal_id: str,
     agent_id: str | None,
     current_turn_instance_id: str | None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id or not current_turn_instance_id:
         return None
@@ -187,10 +208,12 @@ def _unsettled_host_turn_recovery(
         goal_id=goal_id,
         agent_id=agent_id,
         current_turn_instance_id=current_turn_instance_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if preflight is None:
         return None
-    selected, missing_receipts = preflight
+    selected, missing_receipts, monitor_poll = preflight
     # A candidate carries exactly one binding: the Todo it must read, or the
     # autonomous replan obligation that has no Todo to read.
     todo_id = (
@@ -198,9 +221,8 @@ def _unsettled_host_turn_recovery(
         if selected.get("binding_kind") == "todo"
         else ""
     ) or None
-    prior_turn_id = str(selected.get("prior_turn_instance_id") or "")
     # The preflight named this Turn as the one whose bound facts decide the
-    # verdict, so these are the only provider reads this side still performs.
+    # verdict; this is the only provider read this side still performs.
     todo_item = _bound_todo_item(
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -210,14 +232,7 @@ def _unsettled_host_turn_recovery(
     binding_facts: dict[str, Any] = {
         "status": "read",
         "todo": _todo_binding_facts(todo_item),
-        "committed_monitor_poll": _committed_monitor_poll_fact(
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todo_id=todo_id,
-            prior_turn_instance_id=prior_turn_id,
-            todo_item=todo_item,
-        ),
+        "committed_monitor_poll": monitor_poll,
     }
     verdict = effect_runtime_result(
         UNSETTLED_HOST_TURN_RECOVERY_METHOD,
@@ -260,6 +275,7 @@ def apply_unsettled_host_turn_recovery_if_required(
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
@@ -269,9 +285,65 @@ def apply_unsettled_host_turn_recovery_if_required(
         goal_id=goal_id,
         agent_id=agent_id,
         current_turn_instance_id=current_turn_instance_id,
+        goal_ref=goal_ref,
     )
     if verdict is None:
         return False
+    return _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
+        current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_execution_context)
+
+
+def apply_receipt_bound_wait_recovery(
+    payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
+    goal_id: str, agent_id: str, todo_id: str, turn_instance_id: str,
+    available_capabilities: list[str] | None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+    monitor_phase: str | None = None,
+    settlement_progress: dict[str, Any] | None = None,
+) -> bool:
+    """Read full provider facts only when a replay lost its executable binding."""
+    from ..todos.list_readback import list_goal_todos
+    from ..todos.resume_condition import compact_todo_resume_items
+    from ..runtime.time import now_utc_iso
+
+    source = list_goal_todos(
+        registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
+    )
+    # Keep transitive dependencies from this coherent read. A direct-target
+    # slice loses longer cycles; compact facts keep prose out of the RPC.
+    bound: dict[str, Any] = next((row for row in source["todos"] if row.get("todo_id") == todo_id), {})
+    items = compact_todo_resume_items(source["todos"])
+    for row in items:
+        if row.get("todo_id") == todo_id:
+            row["resume_condition"] = bound.get("resume_condition")
+    verdict = effect_runtime_result("quota.settlement.read", {
+        "schema_version": "loopx_quota_receipt_bound_wait_request_v0",
+        "todos": items, "todo_id": todo_id, "agent_id": agent_id,
+        "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
+        "monitor_phase": monitor_phase,
+        "settlement_progress": settlement_progress,
+    })
+    if verdict.get("status") == "none":
+        return False
+    if verdict.get("status") != "recovery_required":
+        raise RuntimeError("TypeScript bound wait recovery result shape mismatch")
+    # This Turn already has a committed Todo binding. A successor's action or
+    # replan projection cannot become part of its recovery contract. Prior-Turn
+    # recovery retains its separate semantic replan observation below.
+    from .settlement_precedence import clear_quota_action_projections
+
+    clear_quota_action_projections(payload)
+    return _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
+        current_turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_execution_context)
+
+
+def _apply_recovery_projection(
+    payload: dict[str, Any], *, verdict: Mapping[str, Any], registry_path: Path, runtime_root: Path,
+    current_turn_instance_id: str | None, available_capabilities: list[str] | None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+) -> bool:
     recovery = verdict["recovery"]
     obligation = verdict["obligation"]
     payload.pop("selected_todo", None)
@@ -287,6 +359,11 @@ def apply_unsettled_host_turn_recovery_if_required(
             "normal_delivery_allowed": False,
             "recovery_delivery_allowed": False,
             "self_repair_allowed": False,
+            "capability_repair_allowed": False,
+            "workspace_repair_allowed": False,
+            "safe_bypass_allowed": False,
+            "safe_bypass_kind": None,
+            "safe_bypass_policy": None,
             "reason": obligation["reason"],
             "recommended_action": obligation["recommended_action"],
             "unsettled_host_turn_recovery": recovery,
@@ -315,7 +392,7 @@ def apply_unsettled_host_turn_recovery_if_required(
                 "must_attempt_work": obligation["must_attempt_work"],
                 "reason_codes": [obligation["reason_code"]],
                 "monitor_policy": "typed_observation_only",
-                "action": "repair the prior Turn closeout without spending quota",
+                "action": obligation["recommended_action"],
             },
             "automation_liveness": {
                 "schema_version": "automation_liveness_v0",
@@ -333,6 +410,7 @@ def apply_unsettled_host_turn_recovery_if_required(
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=current_turn_instance_id,
         runtime_root=str(runtime_root),
+        registry_path=str(registry_path),
     )
     agent_channel = interaction_contract.get("agent_channel")
     if isinstance(agent_channel, dict):
@@ -341,7 +419,8 @@ def apply_unsettled_host_turn_recovery_if_required(
         agent_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     cli_channel = interaction_contract.get("cli_channel")
     if isinstance(cli_channel, dict):
+        cli_channel["spend_policy"] = obligation["spend_policy"]
+        cli_channel["spend_allowed_now"] = obligation.get("spend_allowed_now") is True
         cli_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     payload["interaction_contract"] = interaction_contract
-    payload["protocol_action_packet"] = build_protocol_action_packet(payload)
     return True

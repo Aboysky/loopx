@@ -1,14 +1,23 @@
 ---
 name: loopx-project
-description: Use when connecting a repository or project goal document to LoopX, maintaining project-local goal state, refreshing stale dashboard status, syncing local projects into the shared global registry, or diagnosing LoopX CLI/PATH/status/history issues across multiple repos. For registering durable project materials such as Lark/wiki/design docs, prefer the narrower loopx-doc-registry skill.
+description: "Use for LoopX project lifecycle work: connect or configure a project/Goal, repair project-local state or stale dashboard status, sync registry entries, or diagnose CLI/PATH/status/history routing. Ordinary task execution and routine refresh-state settlement already directed by a current interaction_contract do not require this skill. For registering durable project materials, prefer loopx-doc-registry."
 ---
 
 # LoopX Project Workflow
 
-Use this skill when the task mentions LoopX, loopx, a project goal
-document, multi-project dashboard/status, stale latest run,
-`.loopx/registry.json`, `.codex/goals`, `refresh-state`,
-`sync-global`, or connecting a new repo. If the task is mainly about reading,
+Use this skill when the requested operation changes or diagnoses the project
+lifecycle, Goal configuration, registry routing, or status projection. A LoopX
+mention, registry path, or routine `refresh-state` command in an admitted task
+does not by itself select the project lifecycle workflow.
+
+For ordinary task execution, follow the current `interaction_contract`, its
+required reads and ordered settlement commands. Do not repeat onboarding,
+registry synchronization, or lifecycle discovery merely to execute that packet.
+This routing rule does not replace fresh admission, lease checks, required
+reads, or repair instructions. A missing or contradictory contract still needs
+the relevant diagnosis; an explicit request to use this skill still applies.
+
+If the task is mainly about reading,
 remembering, recording, indexing, or registering a durable project material,
 load `loopx-doc-registry` and use that narrower workflow first.
 
@@ -578,7 +587,11 @@ scheduling policy, not delivery permission. Codex CLI TUI and Claude Code loops
 should run the final quota/replan check from `scheduler_hint` before applying
 their `after_limit`; if the guard changes or returns `run_now`, follow the new
 quota contract instead of stopping. App-hosted heartbeat workers should
-search/use `automation_update` when available. If
+search/use `automation_update` when available. A bootstrap RRULE is the initial
+host cadence; `min_interval_minutes` is a floor, not a fixed recurring interval.
+Keep ACTIVE while applying the current wait/backoff recommendation. Only an
+explicit current fixed-cadence instruction overrides that recommendation; record
+the conflict rather than silently treating a bootstrap preference as an override. If
 `scheduler_hint.action=stop_until_explicit_resume` and
 `scheduler_hint.app_automation.host_action=pause_or_delete_current_heartbeat`, call
 `automation_update` once to pause the current heartbeat (delete only when the
@@ -688,21 +701,48 @@ subcommand:
 loopx --format json review-packet --goal-id <STABLE_GOAL_ID>
 ```
 
-When the human/controller decision is already approved and the only remaining
-step is to relay the target-agent instruction, use the minimal handoff form:
+To relay current target-agent context within existing authorization, use the
+handoff form. Ordinary handoffs add no new approval; actual operator gates
+still apply:
 
 ```bash
 loopx review-packet --goal-id <STABLE_GOAL_ID> --handoff-only
 ```
 
-This command is read-only. It packages the current status into the same Review
-Packet shape as the dashboard; it does not append human reward, append an
-operator gate, refresh state, grant write-control, or authorize production
-actions. `--handoff-only` only strips the human decision wrapper from markdown
-output; JSON output returns a minimized handoff payload with `handoff_text`
-instead of the full operator packet. If the selected queue item is legacy/raw
+This read-only command assembles agent context directly from current status.
+The full Review Packet consumes the same context and adds human presentation.
+Neither path grants authority or changes work state. JSON `handoff_text` and
+`project_agent_handoff` always contain complete prepared text. On overflow,
+`project_agent_handoff_fragments` contains all ordered shards including index 0;
+Markdown prints the shard set. The complete text may exceed 16 lines / 1800
+characters; each shard fits that budget. In-budget output keeps its old shape. If the selected queue item is legacy/raw
 fallback rather than project-asset-backed, do not treat raw queue fields as
 owner, gate, or stop-condition authority.
+
+Collect and restore the entire producer output before using a sharded handoff:
+
+```bash
+loopx --format json review-packet --goal-id <STABLE_GOAL_ID> --handoff-only > handoff.json
+loopx handoff restore --input handoff.json --format json
+```
+
+For raw sharded Markdown use `--input-format markdown`; `--input -` reads stdin.
+JSON avoids relying on a renderer preserving HTML comment envelopes. A fragment
+title without its envelope, or an indented envelope, is rejected rather than
+returned as plain text. If both title and envelope disappear, only the original
+JSON output can establish completeness. Complete unfragmented handoff-only
+Markdown is accepted as plain text without an integrity claim; use JSON for
+unfragmented full Review Packets. Missing,
+reordered, duplicate, mixed or changed parts fail with a nonzero exit and
+`error_code`, without partial text. Obtain the original complete output and
+retry. There is no collector or business-request deduplication by content hash.
+
+A successful restore is content recovery only: it does not execute a command,
+adopt work, change Todo/claim/lease or start a session. Check current goal,
+source freshness, write scope and real gates using existing status/quota and
+ownership workflows. `handoff prepare/inspect/adopt` retains its separate
+ownership contract; restore is not a replacement for it. Do not infer sender
+identity or permission from a checksum.
 
 Read the packet in order:
 
@@ -968,11 +1008,15 @@ loopx reward \
   --dry-run
 ```
 
-Only after the user has explicitly approved recording the reward, rerun without
-`--dry-run`. The durable source of truth is still the run-bound
-`human_reward` overlay. The active-state writeback is a `Progress Ledger`
-summary for future agents; project agents should read the reward through the
-returned `project_agent_visibility.history_command`.
+The preview may stay anonymous. Only after the user has explicitly approved
+recording the reward, rerun without `--dry-run` and add exactly one reviewed
+actor classification: `--actor-kind owner` for the owner's judgment or
+`--actor-kind controller` for an authorized controller's judgment. Never infer
+that classification from the process, Agent id, or command defaults. The
+durable source of truth is still the run-bound `human_reward` overlay. The
+active-state writeback is a `Progress Ledger` summary for future agents;
+project agents should read the reward through the returned
+`project_agent_visibility.history_command`.
 
 ## Multi-Project Status
 
