@@ -146,6 +146,38 @@ def main() -> int:
     ).get("hookSpecificOutput", {}).get("permissionDecision") == "allow", \
         "read-only tools keep their unconditional allow"
 
+    # A decoded cwd can still be unusable as a path: an embedded NUL raises
+    # ValueError inside active_context, which would escape decide as the same
+    # rc=1/no-decision fail-open. The gate must refuse it instead.
+    assert goal_policy.decide(
+        {"cwd": "/bad\u0000cwd", "tool_name": "Bash", "tool_input": {"command": "ls"}}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a session cwd that cannot be resolved as a path must be DENIED"
+
+    # `tool_input` is type-checked before any default: only absent/null gets {};
+    # a present falsy non-object (`[]`, `false`, `0`, `""`) is unreadable and
+    # refused, so an open gate cannot allow it as if it carried no input.
+    for falsy_input in ([], False, 0, ""):
+        assert goal_policy.decide(
+            {"cwd": "/proj", "tool_name": "Bash", "tool_input": falsy_input}
+        ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+            f"falsy non-object tool_input {falsy_input!r} must be DENIED, not coerced"
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Bash"}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "allow", \
+        "an absent tool_input keeps the documented empty-input default"
+
+    # A decoded value the gate cannot use is refused the same way instead of
+    # crashing on `.lower()` / set membership or silently matching the scope.
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": ["Bash"], "tool_input": {}}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a non-string tool_name must be DENIED, not crash the gate"
+    assert goal_policy.decide(
+        {"cwd": "/proj", "tool_name": "Bash", "tool_input": {"command": ["rm", "-rf", "/"]}}
+    ).get("hookSpecificOutput", {}).get("permissionDecision") == "deny", \
+        "a non-string command must be DENIED, not crash the gate"
+
     print("claude-goalmode-hook-policy-smoke ok")
     return 0
 

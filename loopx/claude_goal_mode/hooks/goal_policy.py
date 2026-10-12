@@ -19,9 +19,11 @@ container or VM, which contains the whole process at the environment level.
 
 Behavior (only while goal-mode is ARMED for the event's project):
 - no goal here / goal-mode off            -> {} (no-op; normal permission flow)
-- event unreadable (no session cwd)       -> deny (FAIL-CLOSED)
+- event unreadable                        -> deny (FAIL-CLOSED)
+  (no usable session cwd, no usable tool_name)
 - read-only/safe tools                    -> allow
-- non-read-only tool, unreadable tool_input -> deny (FAIL-CLOSED)
+- non-read-only tool, unreadable event value -> deny (FAIL-CLOSED)
+  (non-object tool_input, non-string command/file path)
 - should_run == false (quota/gate closed) -> deny
 - should_run probe unavailable (error)    -> deny for non-read-only tools (FAIL-CLOSED)
 - should_run == true:
@@ -36,9 +38,10 @@ plane pauses delivery instead of running ungated. Read-only tools stay allowed.
 An event this hook cannot read joins that rule: ``rc=1`` with no decision is a
 non-blocking hook error to Claude Code, which then continues the tool call with
 no gate at all, so an unreadable event (undecodable stdin, malformed or
-non-object JSON, or a missing/unusable session cwd) is answered with an explicit
-deny instead of dying. A non-read-only tool whose ``tool_input`` is not an
-object is refused the same way; read-only tools keep their unconditional allow.
+non-object JSON, no session cwd or one that cannot be resolved as a path, no
+usable tool name, or - for a non-read-only tool - a non-object ``tool_input`` or
+a non-string command/file path field) is answered with an explicit deny instead
+of dying. Read-only tools keep their unconditional allow.
 
 Identity-aware: when the active goal registered an agent (loopx
 ``coordination.registered_agents``), the context carries ``agent_id`` and this
@@ -89,6 +92,22 @@ def within(path: str, root: str) -> bool:
         return r == p or r in p.parents
     except Exception:
         return False
+
+
+def _usable_cwd(value: str) -> bool:
+    """True if a decoded session cwd can be resolved as a filesystem path.
+
+    A string can still be unusable as a path: an embedded NUL makes
+    ``Path.resolve`` raise ``ValueError``, and a lone surrogate raises
+    ``UnicodeEncodeError`` (a ``ValueError``) against the filesystem encoding.
+    ``active_context`` must never receive such a value, or the exception escapes
+    ``decide`` as the rc=1/no-decision hook error the module docstring refuses.
+    """
+    try:
+        Path(value).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
 
 
 def _gh_prefix():
@@ -160,10 +179,11 @@ def decide(ev: dict) -> dict:
     (or {} for no-op). Reused by the CLI hook AND the Agent SDK in-process hook.
 
     The hook is the whole gate (no OS sandbox): should_run (fail-closed) +
-    Edit/Write write_scope + a destructive-Bash denylist. An event without a
-    usable session cwd is refused rather than deferred, because the armed state
-    cannot be resolved from it (the module docstring states the fail-closed
-    rule)."""
+    Edit/Write write_scope + a destructive-Bash denylist. An event value this
+    gate cannot use - no usable session cwd or tool name, or a non-object
+    tool_input / non-string command or file path on a non-read-only tool - is
+    refused rather than deferred, because the event cannot be classified (the
+    module docstring states the fail-closed rule)."""
     def d(decision, reason):
         return {"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -184,6 +204,12 @@ def decide(ev: dict) -> dict:
         # the unreachable-should_run branch below applies. Unreadable events
         # (see main) arrive here as an empty dict.
         return d("deny", "unreadable PreToolUse event (no session cwd) - failing closed under goal-mode")
+    if not _usable_cwd(cwd):
+        # A decoded cwd can still be unusable as a path (embedded NUL, lone
+        # surrogate, OS-level resolution failure). active_context cannot
+        # attribute the event to a project then, so the event stays unreadable
+        # for this gate and is refused instead of raising out of decide.
+        return d("deny", "unreadable PreToolUse event (session cwd is not a usable path) - failing closed under goal-mode")
 
     ctx = active_context(cwd)
     if not ctx:
@@ -193,19 +219,42 @@ def decide(ev: dict) -> dict:
     registry = ctx.get("registry")
     agent_id = ctx.get("agent_id")
     scope = ctx.get("write_scope") or []
-    tool = ev.get("tool_name", "")
-    ti = ev.get("tool_input", {}) or {}
+    tool = ev.get("tool_name")
+    if not isinstance(tool, str) or not tool:
+        # Every real PreToolUse event names its tool; without a usable name the
+        # gate cannot apply its read-only/gated classification (and the set
+        # membership tests below would raise on an unhashable value).
+        return d("deny", "unreadable PreToolUse event (tool_name is not a usable string) - failing closed under goal-mode")
+    ti = ev.get("tool_input")
+    if ti is None:
+        # Only an absent/null field takes the empty-input default. Other falsy
+        # values (`[]`, `false`, `0`, `""`) are present non-objects and must
+        # stay visible to the check below instead of being hidden by `or {}`.
+        ti = {}
 
     if tool in READONLY_TOOLS:
         return d("allow", "read-only/safe tool under goal-mode")
 
     if not isinstance(ti, dict):
-        # `ti` is `{}` for a falsy field, so a non-dict here means a truthy
-        # non-object `tool_input` - the input this gate evaluates below. The
-        # event cannot be read: refuse the non-read-only tool instead of
-        # crashing on `ti.get` (same fail-closed rule as an unreachable
-        # `should_run` probe).
+        # A tool_input that is present but not an object cannot be read: refuse
+        # the non-read-only tool instead of crashing on `ti.get` (same
+        # fail-closed rule as an unreachable `should_run` probe).
         return d("deny", "unreadable PreToolUse event (tool_input is not an object) - failing closed under goal-mode")
+
+    # Every value the gate reads below must be readable before the probe is
+    # consulted, so an unreadable event is refused whether or not the gate is
+    # open (an absent/null field keeps its empty default).
+    if tool in WRITE_TOOLS:
+        file_path = ti.get("file_path")
+        notebook_path = ti.get("notebook_path")
+        if file_path is not None and not isinstance(file_path, str):
+            return d("deny", "unreadable PreToolUse event (tool_input.file_path is not a string) - failing closed under goal-mode")
+        if notebook_path is not None and not isinstance(notebook_path, str):
+            return d("deny", "unreadable PreToolUse event (tool_input.notebook_path is not a string) - failing closed under goal-mode")
+    elif tool == "Bash":
+        command = ti.get("command")
+        if command is not None and not isinstance(command, str):
+            return d("deny", "unreadable PreToolUse event (tool_input.command is not a string) - failing closed under goal-mode")
 
     sr = should_run(registry, goal_id, agent_id)  # True / False / None
     if sr is False:
