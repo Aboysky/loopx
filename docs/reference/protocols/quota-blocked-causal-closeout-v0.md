@@ -116,6 +116,16 @@ non-material poll on that same exact Turn binding before provider writeback,
 including dry-run provider plans. Use a freshly admitted Turn for a new
 observation; its poll cannot change the original frozen closeout. Genuine poll
 replay and independently admitted auxiliary Monitors remain valid.
+A stored poll transaction may already have committed its provider observation
+while its quota ledger is still pending. Unavailable closeout rejects that
+competing outcome until the exact poll is recovered or its owner proves no
+effect. Preserve the original transaction and business receipts; do not erase
+them or close the attempt by claiming that its observation was unavailable.
+New exact-source pending receipts retain their existing GoalRef. Foreign durable
+or scoped pending receipts do not prove a current instance's observation. A
+historical pending receipt lacking GoalRef in an exact-source context requires
+owner reconciliation; it remains preserved. Alias-scope recovery keeps its
+existing compatibility.
 
 Exact replay returns the frozen receipt, with no duplicate writeback or debit.
 After closing the original effect, reenter the current recovery host Turn to
@@ -216,6 +226,12 @@ advancement 等待、material successor、完成或投递声明。旧 advancemen
 non-material poll 在 provider 写回前拒绝，dry-run 也不返回可写入计划。
 新观察须使用重新准入的新 Turn；它的 poll 不改变原冻结结算。
 真实 poll 的幂等重放及独立准入的 auxiliary Monitor 仍可执行。
+持久 poll 事务的 provider 观察可能已经提交，而 quota ledger 仍处于 pending。
+不可观察结算须拒绝这一竞争结果，先恢复原精确 poll 或由其 owner 证明无 effect。
+保留原事务及业务回执；不能删除它们或声称观察不可取得以关闭该尝试。
+新 exact-source pending 回执保留既有 GoalRef；其他实例的 durable 或带作用域的
+pending 回执不证明当前实例的观察。exact-source 环境下，历史 pending 缺 GoalRef
+时须核对原 owner 并保留回执；alias 作用域沿用既有恢复兼容。
 
 精确重放返回冻结回执，不重复写回或扣额；原 effect 关闭后，重新进入当前 recovery
 host Turn 可选择独立合法任务，不新造第三身份或重绑旧 Turn。缺准入能力、缺证或错绑
