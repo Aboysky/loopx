@@ -34,9 +34,11 @@ unavailable. Every v0 audit remains held for incomplete capture/owner metadata;
 unknown state is not relabeled recoverable, and execution authority is always
 false. Limits, rollback and reproduction are in the [backup guide](../../reference/configuration-backup.md#inspect-a-complete-backup-without-activating-it).
 Reports retain measured archive/regular-file bytes and archive-processing and
-owner-read durations; historical readback does not retime them. M1 operational
-qualification remains partial: measurements across the full capacity profile
-still belong to the recovery owner under Section 10.
+owner-read durations; historical readback does not retime them. The backup guide
+records individual native capacity cases, including exact member/history
+boundaries and 128 File/SQLite Goals. History overflow refuses publication.
+M1 operational qualification remains partial: the Section 12 maintainer freeze,
+compound worst cases and broader platform/provider profiles remain open.
 This checkpoint does not qualify M2/M3, live adoption, remote providers or the G1
 team journey. No original identity or receipt is rewritten.
 

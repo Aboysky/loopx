@@ -221,9 +221,56 @@ and virtual tables cannot masquerade as authority tables. WAL-mode copies and
 unsupported/service-owned providers remain unknown and need their existing
 owner; PostgreSQL is never contacted. The normal 2 MiB RPC wire is unchanged;
 only the two complete-manifest checks opt into the existing 64 MiB private-file
-transport. These bounds define this inspection profile; full-capacity
-qualification remains open under the recovery RFC's operational contract.
-No production SLO is claimed.
+transport. These candidate bounds define this inspection profile. The RFC's
+Section 12 maintainer freeze, compound worst-case qualification and broader
+platform/provider qualification remain open. No production SLO is claimed.
+
+### Measured local capacity cases
+
+At source `884eae425c77ae6db9d8042bd98ee19663e7bdd4`, disposable native backups
+were inspected through the real `backup-state verify --execute` CLI after hiding
+their original project/runtime/registry. Measurements used macOS arm64, Python
+3.11.7 and Node 22.22.3. Times below include the verifier command, not backup
+creation; peak RSS is the macOS `time -l` command metric, not a simultaneous
+process-tree total. These are individual synthetic observations under local
+development load, not latency targets or proof that all maxima combine.
+
+| Native input / boundary | Result | Wall seconds | Peak RSS MiB |
+| --- | --- | ---: | ---: |
+| 511 MiB zero-filled regular file | Held audit; captured configuration readable | 4.941 | 97.8 |
+| 512 MiB regular file plus archive metadata | Refused: expanded capacity | 1.931 | 88.2 |
+| 127 MiB seeded incompressible file; 133,212,049 archive bytes | Held audit | 1.284 | 100.6 |
+| Archive input 134,217,729 bytes | Refused before decoding: archive capacity | 0.521 | 81.5 |
+| External manifest padded with JSON whitespace to 16 MiB | Held audit; bounds input bytes, not maximum structured metadata | 0.945 | 113.8 |
+| External manifest 16 MiB + 1 byte | Refused: manifest capacity | 0.520 | 81.4 |
+| Exactly 20,000 archive members | Complete inventory and held audit | 8.698 | 225.8 |
+| Exactly 20,001 archive members | Refused: member capacity | 1.888 | 143.8 |
+| 128 native File Goals, one retained task/commit each | All 128 Goal records readable | 0.843 | 103.5 |
+| 128 native SQLite Goals/databases, one retained task/commit each | All 128 Goal records readable; database bytes historical-only | 1.041 | 107.1 |
+| 129 File Goals | Refused: Goal inventory capacity | 0.738 | 96.8 |
+| 129 SQLite databases | Refused: SQLite inventory capacity | 0.534 | 83.7 |
+
+All refusal cases left no destination or staging directory. The real SQLite
+history regression additionally proves that **20,000 committed transactions
+are fully read**, while **20,001 refuse publication**. An earlier implementation
+incorrectly turned that overflow into an unknown component and published the
+copy. The owner now checks the canonical cursor before scanning and propagates
+the capacity error instead of treating it as unreadable source state:
+
+```bash
+uv run --extra test python -m pytest tests/test_state_recovery.py \
+  -k real_sqlite_history_limit -q
+```
+
+Keep an over-limit backup complete and use the owning storage recovery process;
+do not trim historical transactions to force inspection through this profile.
+The optional browser capacity case accepts a native over-limit archive pair via
+`LOOPX_RECOVERY_HISTORY_OVERFLOW_ARCHIVE` and
+`LOOPX_RECOVERY_HISTORY_OVERFLOW_MANIFEST`, alongside the existing
+`configuration-backup` scenario. It must show refusal and retain the earlier
+historical report. Installed-wheel checks on Python 3.12.13 and 3.13.12 also
+passed normal source-loss inspection and early GNU/PAX sparse/metadata refusal;
+they do not expand the capacity observations or qualify other platforms.
 
 中文：在设置的能力中心选择设备范围，打开既有备份入口并切到“完整归档检查”，
 选择同一份备份的归档与清单，一次明确操作建立隔离副本。可读、仅历史和未知分别

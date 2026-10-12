@@ -27,7 +27,9 @@ M1 的有界路径已包含增量 `backup-state verify`、loopback HTTP 上传�
 File/SQLite Todo/history owner 检查。v0 缺少完整捕获/owner 元数据，因此所有审计仍为
 held，未知状态不改称可恢复，执行权限始终为 false。限制与回退见[备份指南](../../reference/configuration-backup.md#inspect-a-complete-backup-without-activating-it)。
 报告保留实际归档/普通文件字节数及归档处理、owner 读取耗时；历史读回不重新计时。
-M1 的运行资格仍不完整：完整容量范围测量继续由第 10 节的 recovery owner 承接。
+备份指南记录了独立的真实容量案例，包括精确成员/历史边界及 128 个 File/SQLite Goal；
+历史超限在发布前拒绝。M1 的运行资格仍不完整：第 12 节维护者冻结、多个上限组合的
+最坏情形及更广的平台/provider 资格继续开放。
 本检查点不证明 M2/M3、live adoption、远端 provider 或 G1 团队验收，不重写原身份或回执。
 
 
