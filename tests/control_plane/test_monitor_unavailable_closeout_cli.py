@@ -23,7 +23,9 @@ OBSERVATION_FIELDS = (
 
 
 @pytest.mark.parametrize("provider", ["markdown", "file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["unavailable", "capability_restore", "observed", "peer_git"])
+@pytest.mark.parametrize("scenario", [
+    "unavailable", "capability_restore", "observed", "peer_git", "late_nonmaterial", "late_material",
+])
 def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     provider: str, scenario: str,
@@ -160,6 +162,52 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     assert rc == 0 and after["todo"]["status"] == "open", after
     assert {k: after["todo"].get(k) for k in OBSERVATION_FIELDS} == fields
     assert not after["todo"].get("resume_when")
+    if scenario.startswith("late_"):
+        poll_args = ("quota", "monitor-poll", "--goal-id", GOAL_ID, "--codex-app", *binding,
+                     "--target-key", "synthetic-source", "--result-hash", "late-observation",
+                     *lease_args)
+        if scenario == "late_material":
+            poll_args += ("--material-change", "--next-agent-todo", "Inspect the source transition.",
+                          "--next-action-kind", "validate")
+        for execute in (True, False):
+            rc, late = cli(*poll_args, *(("--execute",) if execute else ()))
+            read_rc, current = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID)
+            replay_rc, frozen = cli(*refresh)
+            assert rc != 0 and late["error_code"] == "monitor_poll_admission_rejected", json.dumps({
+                "poll_rc": rc, "appended": late.get("appended"), "error_code": late.get("error_code"),
+                "observation_changed": read_rc == 0 and
+                {k: current["todo"].get(k) for k in OBSERVATION_FIELDS} != fields,
+                "refresh_rc": replay_rc, "refresh_error_code": frozen.get("error_code"),
+            })
+            assert read_rc == 0 and {k: current["todo"].get(k) for k in OBSERVATION_FIELDS} == fields
+            assert replay_rc == 0 and frozen["idempotent_replay"] is True, frozen
+            assert frozen["blocked_retry"] == wait
+        rc, after_late = cli("todo", "list", "--goal-id", GOAL_ID)
+        assert rc == 0, after_late
+        monitor = next(todo for todo in after_late["todos"] if todo["todo_id"] == MONITOR_ID)
+        assert {k: monitor.get(k) for k in OBSERVATION_FIELDS} == fields
+        assert {todo["todo_id"] for todo in after_late["todos"]} == {
+            todo["todo_id"] for todo in listed["todos"]
+        }
+        assert _classification_count(runtime, "monitor_observation_unavailable") == 1
+        assert _classification_count(runtime, "quota_monitor_poll") == 0
+        assert _spend_run_count(runtime) == 0
+        fresh_binding = (*binding[:-1], f"fresh-observation-{provider}")
+        rc, fresh_guard = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *fresh_binding)
+        assert rc == 0 and fresh_guard["should_run"] is True, fresh_guard
+        fresh_poll = list(poll_args)
+        fresh_poll[fresh_poll.index("--turn-instance-id") + 1] = fresh_binding[-1]
+        rc, observed = cli(*fresh_poll, "--execute")
+        assert rc == 0 and observed["appended"] is True, observed
+        rc, poll_replay = cli(*fresh_poll, "--execute")
+        assert rc == 0 and poll_replay["replayed"] is True, poll_replay
+        rc, original_replay = cli(*refresh)
+        assert rc == 0 and original_replay["idempotent_replay"] is True, original_replay
+        assert original_replay["blocked_retry"] == wait
+        assert _classification_count(runtime, "monitor_observation_unavailable") == 1
+        assert _classification_count(runtime, "quota_monitor_poll") == 1
+        assert _spend_run_count(runtime) == 0
+        return
     if scenario == "peer_git":
         assert closed.get("delivery_workspace") is None
         return
