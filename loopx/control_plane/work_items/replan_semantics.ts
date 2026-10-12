@@ -3,6 +3,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
+import {normalizeStrideDecision, normalizeStrideStrategy, strideControlContract, stridePlanningGuidance} from "./stride_policy.ts";
 
 const PROGRESS_OUTCOMES = [
   "new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
@@ -26,7 +27,7 @@ const VISION_TRIGGERS = new Set([
   "vision_successor_required", "required_agent_vision_missing",
 ]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
-const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
+export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
 const VISION_CLI_ARGS = "--agent-vision-json '<path-to-evidence-linked-goal-vision-replan-contract-v0.json>'";
 
@@ -44,7 +45,8 @@ const REPLAN_PLANNING_GUIDANCE = [
     "and hard constraints from provisional agent-created candidate rules; revisit the latter " +
     "when they obstruct the goal. Do not relax frozen acceptance, authority, budget or stops, " +
     "or rewrite criteria after failure.",
-  "Before widening repeated validation, check that the changed intervention reaches the " +
+  "Compare expected goal/information gain with full marginal cost. " +
+    "Before widening repeated validation, check that the changed intervention reaches the " +
     "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; " +
     "scope negative results to tested conditions and local proxies to their coverage. " +
     "Reuse still-applicable evidence instead of repeating checks without a new uncertainty.",
@@ -330,7 +332,10 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
-    return {required_any_of: required, planning_guidance: [...REPLAN_PLANNING_GUIDANCE],
+    const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
+    return {required_any_of: required, planning_guidance: [...REPLAN_PLANNING_GUIDANCE,
+      ...stridePlanningGuidance(object(obligation.replan_context).stride_strategy)],
+      ...(strideControl ? {stride_control: strideControl} : {}),
       ...writebackProjection(required, externalReview)};
   }
   if (request.operation !== "qualify") {
@@ -342,6 +347,14 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const vision = object(request.agent_vision);
   const patch = object(vision.vision_patch);
   const path = object(vision.path_delta);
+  const context = object(obligation.replan_context);
+  const [strideDecision] = normalizeStrideDecision(vision.stride_decision);
+  const structuredReview = normalizeStrideStrategy(context.stride_strategy) !== "off";
+  const freshPath = Boolean(String(patch.acceptance_summary ?? "").trim() &&
+    FRESH_PATH_DISPOSITIONS.has(String(path.outcome ?? "").trim()) && strings(path.evidence_refs).length);
+  const missingStride = structuredReview && freshPath && !strideDecision;
+  const staleStride = !!strideDecision && structuredReview &&
+    strideDecision.reference_obligation_id !== obligation.obligation_id;
   let outcomes = strings(observation.delta_kinds);
   if (outcomes.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value))) {
     throw new EffectRuntimeRequestError("capability evidence must be qualified by its owning capability, not generic progress");
@@ -367,11 +380,10 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const inconsistentTerminal = outcomes.includes("coverage_backed_no_followup") &&
     (vision.state !== "no_followup" || path.outcome !== "stop");
   if (inconsistentTerminal) outcomes = outcomes.filter(outcome => outcome !== "coverage_backed_no_followup");
-  if (String(patch.acceptance_summary ?? "").trim() &&
-      FRESH_PATH_DISPOSITIONS.has(String(path.outcome ?? "").trim()) &&
-      strings(path.evidence_refs).length && !outcomes.includes("fresh_vision_path_outcome")) {
+  if (freshPath && !missingStride && !staleStride && !outcomes.includes("fresh_vision_path_outcome")) {
     outcomes.push("fresh_vision_path_outcome");
   }
+  if (staleStride || missingStride) outcomes = outcomes.filter(outcome => outcome !== "fresh_vision_path_outcome");
   const satisfying = inconsistentTerminal ? [] : outcomes.filter(outcome => required.includes(outcome as SemanticOutcome));
   const replayRefused = (replayed || knownBlocker) && !satisfying.length && !inconsistentTerminal;
   const identityRefused = identityWithoutEvidence && !satisfying.length && !inconsistentTerminal;
@@ -380,13 +392,17 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     outcomes, satisfying_outcomes: satisfying, required_any_of: required,
     observation_fingerprint: observation.observation_fingerprint ?? null,
     reason: satisfying.length ? "writeback changes an outcome accepted by this obligation source"
+      : missingStride ? "enabled stride review requires agent_vision.stride_decision from the delivered control contract"
+      : staleStride ? "stride decision must reference the admitted replan obligation; reassess against its evidence"
       : inconsistentTerminal ? "coverage-backed no-follow-up requires agent_vision.state=no_followup and path_delta.outcome=stop"
       : replayRefused ? (knownBlocker
         ? "replan does not accept a blocker already recorded in its baseline, window or coverage ledger"
         : "external progress review does not accept a typed observation already claimed in the obligation window")
       : identityRefused ? "external progress review accepts a new surface, hypothesis or probe family only with evidence ids absent from the evaluated baseline and every claim in the obligation window"
       : "writeback does not satisfy this obligation's typed outcomes",
-    ...(inconsistentTerminal ? {reason_code: "no_followup_vision_path_inconsistent"}
+    ...(missingStride && !satisfying.length ? {reason_code: "stride_decision_required"}
+      : staleStride && !satisfying.length ? {reason_code: "stride_reference_obligation_mismatch"}
+      : inconsistentTerminal ? {reason_code: "no_followup_vision_path_inconsistent"}
       : replayRefused ? {reason_code: "progress_observation_replayed"}
       : identityRefused ? {reason_code: "progress_identity_without_new_evidence"} : {}),
   };

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startViteDashboardServer } from "../dashboard-browser-smoke-support.mjs";
-import { resolveTestPython } from "../../scripts/test-python.mjs";
+import { testPythonCommand } from "../../scripts/test-python.mjs";
 
 const require = createRequire(import.meta.url);
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -149,7 +149,7 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
   return [
     goalCapability({
       capabilityId: "todo_replan_cadence",
-      displayName: "Goal review cadence",
+      displayName: "Goal review and stride",
       editorScopes: ["machine", "goal"],
       defaultConfiguration: { count_unit: "effective_turns", count: 5 },
       fields: [
@@ -279,8 +279,7 @@ function teamPlanApplyReceipt(proposal) {
 export async function startServer() {
   if (packaged) {
     // An explicit installed interpreter must resolve its own package, not the checkout.
-    const isolation = process.env.LOOPX_PYTHON_BIN ? ["-I"] : [];
-    const server = spawn(resolveTestPython(), [...isolation, "-c", `
+    const backendCommand = testPythonCommand(`
 from pathlib import Path
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
 from loopx.presentation.chat_bundle import validate_bundle
@@ -291,7 +290,8 @@ server.assets_dir = assets
 server.verbose = False
 print("loopx-packaged-smoke-ready", flush=True)
 server.serve_forever()
-`], {
+`);
+    const server = spawn(backendCommand.command, backendCommand.args, {
       cwd: repoRoot,
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -494,6 +494,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     // Applied User action outcomes, so the needs-you projection reads back like canonical status.
     userActionOutcomes: new Map(),
     hostThreadActivity: {},
+    /** Scenario hook applied to every status payload after the shared fixture rules. */
+    transformStatus: null,
     answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
@@ -765,6 +767,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const goal = fixture.run_history.goals.find((item) => item.id === goalId);
       if (goal) goal.host_thread_activity = activity;
     }
+    state.transformStatus?.(fixture);
     fixture.run_history.goals = fixture.run_history.goals.filter(goal => !state.deletedGoalIds.has(goal.id));
     const goalActivationScope = new URL(route.request().url()).searchParams.get("goal_activation");
     const isActiveScope = goalActivationScope === "active";
@@ -960,6 +963,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
     }
+    if (url.pathname === "/api/chat/explore-results") {
+      await route.fulfill({json: {ok: true, goal_id: url.searchParams.get("goal_id"), items: [], total: 0, next_cursor: null}});
+      return;
+    }
     if (url.pathname === "/api/chat/goal-results") {
       await route.fulfill({ json: { ok: true, items: [], total: 0, next_cursor: null, unavailable_count: 0, unavailable_todo_ids: [] } });
       return;
@@ -1043,7 +1050,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           },
           {
             namespace: "todo_replan_cadence",
-            title: "Goal review cadence",
+            title: "Goal review and stride",
             description: "Live review threshold without added turns, quota, or authority.",
             schema_versions: ["todo_replan_cadence_machine_defaults_v0", "todo_replan_cadence_machine_defaults_v1"],
             configuration_template: cadenceConfiguration,
@@ -1900,7 +1907,12 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (apply) {
       state.actionApplies.push(apply[1]);
       if (actionKinds.get(apply[1]) === "heartbeat.bind" && !state.allowNextHeartbeatApply) {
-        await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate: { kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。" }, write_attempted: false }, status: 409 });
+        const gate = {kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。"};
+        // The real owner persists a discovered gate. A later list read must
+        // not resurrect preview_ready and erase the guarded apply result.
+        const proposal = {...actionProposals.get(apply[1]), status: "gated", gate};
+        actionProposals.set(apply[1], proposal);
+        await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate, proposal, write_attempted: false }, status: 409 });
         return;
       }
       if (actionKinds.get(apply[1]) === "heartbeat.bind") state.allowNextHeartbeatApply = false;

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
+import {goalWorkspaceM2Scenario} from "./personal-workspace-browser/goal-workspace-m2.mjs";
+import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-workspace-selection.mjs";
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
 import {privateStewardScopeScenario} from "./personal-workspace-browser/private-steward-scope.mjs";
@@ -63,6 +66,8 @@ import { newestDraftScenario } from "./personal-workspace-browser/newest-draft.m
 import { conversationInputScenario } from "./personal-workspace-browser/conversation-input.mjs";
 import { goalActivityScenario } from "./personal-workspace-browser/goal-activity.mjs";
 import { goalWorkMapScenario } from "./personal-workspace-browser/goal-work-map.mjs";
+import { goalMastheadScenario } from "./personal-workspace-browser/goal-masthead.mjs";
+import { goalShowcaseScenario } from "./personal-workspace-browser/goal-showcase.mjs";
 
 import { stewardGroupTriggerScenario } from "./personal-workspace-browser/steward-group-trigger.mjs";
 
@@ -83,6 +88,8 @@ scenarioCatalog.push(monitorReadbackScenario);
 scenarioCatalog.push(blockedReasonReadbackScenario);
 scenarioCatalog.push(turnStepsScenario);
 scenarioCatalog.push(goalWorkMapScenario);
+scenarioCatalog.push(goalMastheadScenario);
+scenarioCatalog.push(goalShowcaseScenario);
 scenarioCatalog.push(performanceDiagnosisScenario);
 scenarioCatalog.push(blockedNoticeSettingsScenario);
 scenarioCatalog.push(nativeChildActivityScenario);
@@ -95,6 +102,9 @@ scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);
+scenarioCatalog.push(goalWorkspaceM2Scenario);
+scenarioCatalog.push(goalWorkspaceCreateScenario);
+scenarioCatalog.push(goalWorkspaceSelectionScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
