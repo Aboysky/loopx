@@ -918,6 +918,12 @@ root or committing a Todo is not work execution or whole-Goal acceptance.
 Source metadata discovery works while generic status, chat execution and
 unqualified companion settings retain their existing refusal.
 
+Synthetic examples from the packaged interface (not live Goal or model evidence):
+
+![Review the fixed work policy](../../assets/goal-amendment/desktop-preview.png)
+
+[Unknown response and original-operation recovery](../../assets/goal-amendment/unknown-response.png) · [Current revision, peer adoption and replan readback on a narrow screen](../../assets/goal-amendment/mobile-readback.png)
+
 The CLI uses the same owner; writes preview unless `--execute` is supplied:
 
 ```sh

@@ -69,7 +69,7 @@ try {
     lines.on('line', line => {if (line.startsWith('Serving LoopX Chat')) {clearTimeout(timer);accept();}});
   });
   browser = await chromium.launch({headless: true});
-  page = await browser.newPage({viewport: {width: 1512, height: 982}});
+  page = await browser.newPage({viewport: {width: 1512, height: 1600}});
   await page.addInitScript(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
   const exceptions = []; page.on('pageerror', error => exceptions.push(error.message));
   const applies = []; let drop = true;
@@ -102,12 +102,14 @@ try {
   await panel.getByRole('button', {name: '检查本次授权', exact: true}).click();
   await panel.getByRole('button', {name: '确认固定目标与授权', exact: true}).waitFor();
   assert.equal(applies.length, 0);
-  await page.screenshot({path: resolve(output, 'desktop-preview.png'), fullPage: true});
+  await panel.screenshot({path: resolve(output, 'desktop-preview.png')});
   await page.reload();await enter();
   assert.equal(await panel.getByLabel('允许新增的工作', {exact: true}).inputValue(), 'Verify the public contract');
   await panel.getByRole('button', {name: '确认固定目标与授权', exact: true}).click();
   await panel.getByRole('button', {name: '查阅原操作回执', exact: true}).waitFor();
   assert.equal(applies.length, 1);
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].find(button => button.textContent === '查阅原操作回执')?.disabled === false);
+  await panel.screenshot({path: resolve(output, 'unknown-response.png')});
   await page.reload();await enter();
   await panel.getByRole('button', {name: '重试原操作', exact: true}).click();
   await panel.getByText('已固定目标约束 · 版本 1', {exact: true}).waitFor();
@@ -163,11 +165,11 @@ print(json.dumps(call('inspect')))
   await panel.getByRole('button', {name: '读取当前结果', exact: true}).click();
   await panel.getByText('agent-b · 当前版本确认已记录', {exact: true}).waitFor();
   await panel.getByText('agent-a · 对应 replan 已由原有规则验证', {exact: true}).waitFor();
-  await page.setViewportSize({width: 390, height: 844});
+  await page.setViewportSize({width: 390, height: 1100});
   await panel.getByRole('button', {name: '读取当前结果', exact: true}).focus();await page.keyboard.press('Enter');
   await page.waitForFunction(() => [...document.querySelectorAll('button')].find(button => button.textContent === '读取当前结果')?.disabled === false);
   await panel.getByText('已固定目标约束 · 版本 2', {exact: true}).waitFor();
-  await page.screenshot({path: resolve(output, 'mobile-readback.png'), fullPage: true});
+  await panel.screenshot({path: resolve(output, 'mobile-readback.png')});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   const view = await fetch(`http://127.0.0.1:${port}/api/chat/goal-amendment?goal_id=amendment-goal`).then(r => r.json());
   assert.equal(view.intent.goal_revision, 2);assert.equal(view.execution_authority_granted, false);
@@ -177,7 +179,7 @@ print(json.dumps(call('inspect')))
   assert.equal(receipt.status, 'found');assert.equal(receipt.historical_only, true);
   assert.equal(receipt.receipts[0].result.intent_digest, applies[0].preview_digest);
   await page.close();
-  page = await browser.newPage({viewport: {width: 1512, height: 982}});
+  page = await browser.newPage({viewport: {width: 1512, height: 1600}});
   await page.addInitScript(() => localStorage.setItem('loopx-pw-locale', 'en'));
   await page.goto(url);
   await page.locator('.personal-goal-link', {hasText: 'amendment-goal'}).click();
@@ -186,7 +188,7 @@ print(json.dumps(call('inspect')))
   await page.getByText('Goal commitments and governed changes', {exact: true}).click();
   await page.getByText('Goal commitments frozen · revision 2', {exact: true}).waitFor();
   await page.getByText('agent-b · Current basis acknowledged', {exact: true}).waitFor();
-  await page.screenshot({path: resolve(output, 'english-readback.png'), fullPage: true});
+  await page.locator('details').filter({has: page.locator('summary', {hasText: 'Goal commitments and governed changes'})}).screenshot({path: resolve(output, 'english-readback.png')});
   assert.deepEqual(exceptions, []);
   await writeFile(resolve(output, 'result.json'), JSON.stringify({ok: true, scope: 'Packaged Chat; real project registration, SQLite initialization, metadata discovery and amendment HTTP; no model calls',
     generic_runtime_qualified: false, same_operation_replayed: true, peer_cli_commit_and_adoption: true, synthetic_progress_observations: true, view, receipt}, null, 2));

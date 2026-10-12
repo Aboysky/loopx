@@ -755,6 +755,12 @@ manager 验收提供前置，不证明这些 milestone 或 G1 两轮真实协作
 replan 待处理/已结算观察；固定 root、提交 Todo 均不代表执行或整 Goal 验收。
 来源元数据可发现，通用状态、聊天执行和未验证的相邻配置仍保留原拒绝边界。
 
+打包界面的合成示例，不代表真实 Goal 或模型运行证据：
+
+![检查固定工作策略](../../assets/goal-amendment/desktop-preview.png)
+
+[响应未知与原操作恢复](../../assets/goal-amendment/unknown-response.png) · [窄屏查看当前版本、peer 采纳及 replan 回读](../../assets/goal-amendment/mobile-readback.png)
+
 CLI 与界面复用同一 owner；写操作默认仅预览，须显式 `--execute`：
 
 ```sh
