@@ -57,6 +57,7 @@ from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     TERMINAL_TURN_STATES,
     ChatSessionStore,
+    normalize_agent_model_id,
     utc_now,
 )
 from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
@@ -670,6 +671,8 @@ class ChatRuntimeController:
         source_context: dict[str, Any] | None = None,
         agent_model_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
+        if agent_model_id:
+            agent_model_id = normalize_agent_model_id(agent_model_id)
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
@@ -783,20 +786,24 @@ class ChatRuntimeController:
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
                 agent_config={"model": agent_model_id} if agent_model_id else None,
             )
-            persisted = self.store.create_session(
-                goal_id=goal_id,
-                goal_instance_id=goal_instance_id,
-                agent_id=agent_id,
-                executor_endpoint_id=agent_id,
-                adapter_kind=str(capability["adapter_kind"]),
-                upstream_thread_id=adapter.upstream_thread_id,
-                upstream_mode="chat" if agent_id == "codex" else "default",
-                channel_id=selected_channel,
-                codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
-                project_context=project_context,
-                steward_context=steward_context,
-                agent_model_id=agent_model_id,
-            )
+            try:
+                persisted = self.store.create_session(
+                    goal_id=goal_id,
+                    goal_instance_id=goal_instance_id,
+                    agent_id=agent_id,
+                    executor_endpoint_id=agent_id,
+                    adapter_kind=str(capability["adapter_kind"]),
+                    upstream_thread_id=adapter.upstream_thread_id,
+                    upstream_mode="chat" if agent_id == "codex" else "default",
+                    channel_id=selected_channel,
+                    codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
+                    project_context=project_context,
+                    steward_context=steward_context,
+                    agent_model_id=agent_model_id,
+                )
+            except Exception:
+                adapter.close_session()
+                raise
             persisted = self.project_contexts.initialize_bound_scope(self.store, persisted, runtime_root=self.coordination_runtime_root)
             if is_manager_channel(selected_channel):
                 assert manager_runtime is not None

@@ -752,6 +752,7 @@ export type ChatSessionSummary = {
   goal_id: string | null;
   project_ref?: string | null;
   agent_id: string;
+  agent_model_id?: string | null;
   adapter_kind: string;
   channel_id?: string;
   status: string;

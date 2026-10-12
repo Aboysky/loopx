@@ -55,7 +55,7 @@ for line in sys.stdin:
         session_cwd = request["params"]["cwd"]
         result = {"sessionId": session_id, "configOptions": [{
             "id": "model", "name": "Model", "currentValue": "fixture-default",
-            "options": [{"value": "fixture-default", "name": "Fixture default"}, {"value": "fixture-fast", "name": "Fixture fast"}],
+            "options": [{"value": "fixture-default", "name": "Fixture default"}, {"value": "fixture/fast", "name": "Fixture fast"}],
         }]}
     elif method == "session/load":
         assert request["params"]["sessionId"] == session_id
@@ -136,7 +136,7 @@ for line in sys.stdin:
             }, ensure_ascii=False), flush=True)
         result = {"stopReason": "end_turn"}
     elif method == "session/set_config_option":
-        assert request["params"] == {"sessionId": session_id, "configId": "model", "type": "id", "value": "fixture-fast"}
+        assert request["params"] == {"sessionId": session_id, "configId": "model", "type": "id", "value": "fixture/fast"}
         result = {}
     elif method == "session/cancel":
         if active_prompt_id is not None:
@@ -158,12 +158,12 @@ def main() -> None:
         fake = root / "fake-acp"
         fake.write_text(FAKE_ACP, encoding="utf-8")
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-        adapter = ACPStdioAdapter.start(command=(str(fake),), work_dir=root, config_values={"model": "fixture-fast"})
+        adapter = ACPStdioAdapter.start(command=(str(fake),), work_dir=root, config_values={"model": "fixture/fast"})
         assert adapter.upstream_thread_id == "acp:fixture/session"
         assert adapter.capabilities()["resume"] is True
         assert adapter.model_options() == {
-            "id": "model", "label": "Model", "selected": "fixture-fast",
-            "options": [{"value": "fixture-default", "label": "Fixture default"}, {"value": "fixture-fast", "label": "Fixture fast"}],
+            "id": "model", "label": "Model", "selected": "fixture/fast",
+            "options": [{"value": "fixture-default", "label": "Fixture default"}, {"value": "fixture/fast", "label": "Fixture fast"}],
         }
         events: list[tuple[str, dict[str, object]]] = []
         response = adapter.start_turn("检查状态", lambda kind, payload: events.append((kind, payload)))
@@ -231,11 +231,11 @@ def main() -> None:
             objective="Exercise the ACP route.",
             mode="resume_latest",
             channel_id="task.fixture-acp",
-            agent_model_id="fixture-fast",
+            agent_model_id="fixture/fast",
         )
         assert was_resumed is False
         assert session["upstream_thread_id"] == "acp:fixture/session"
-        assert session["agent_model_id"] == "fixture-fast"
+        assert session["agent_model_id"] == "fixture/fast"
         turn, created = first.submit_turn(
             session_id=str(session["session_id"]),
             client_turn_id="fixture-turn",
