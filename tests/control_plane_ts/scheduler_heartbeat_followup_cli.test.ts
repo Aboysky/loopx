@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { isSupportedNodeVersion } from "../../loopx/control_plane/runtime/node_version.ts";
 
 type CleanupContext = {
   after(callback: () => void | Promise<void>): void;
@@ -20,6 +21,14 @@ const entrypoint = fileURLToPath(
 const goalId = "goal-followup-cli";
 const agentId = "agent-followup-cli";
 const turnId = "turn-followup-cli";
+
+test("heartbeat follow-up CLI applies minimum Node prerelease precedence", () => {
+  assert.equal(isSupportedNodeVersion("22.22.2"), false);
+  assert.equal(isSupportedNodeVersion("22.22.3-rc.1"), false);
+  assert.equal(isSupportedNodeVersion("22.22.3"), true);
+  assert.equal(isSupportedNodeVersion("22.22.4-rc.1"), true);
+  assert.equal(isSupportedNodeVersion("22.22.3+build.1"), true);
+});
 
 async function tempRuntime(t: CleanupContext): Promise<string> {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-followup-cli-"));
@@ -94,6 +103,8 @@ function argv(runtimeRoot: string, format = "json"): string[] {
     agentId,
     "-A",
     "--applied-rrule",
+    "FREQ=MINUTELY;INTERVAL=15",
+    "--app-automation-current-rrule",
     "FREQ=MINUTELY;INTERVAL=15",
     "--host-match-observed",
   ];
@@ -187,6 +198,21 @@ test("native host-followup CLI decodes bounded argv facts and writes JSON", asyn
     (result.scheduler_commit as Record<string, unknown>).status,
     "written",
   );
+});
+
+test("native ACK cannot use its pre-update hint as fresh host readback", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceipt(runtimeRoot);
+  for (const observed of ["", "FREQ=MINUTELY;INTERVAL=3"]) {
+    const args = argv(runtimeRoot);
+    args[args.indexOf("--app-automation-current-rrule") + 1] = observed;
+    const child = runCli(args);
+    assert.equal(child.status, 1);
+    const result = JSON.parse(child.stdout) as Record<string, unknown>;
+    assert.equal(result.ok, false);
+    assert.equal(result.reason_code, "rrule_mismatch");
+    assert.equal((result.scheduler_commit as Record<string, unknown>).written, false);
+  }
 });
 
 test("native host-followup CLI preserves the scheduler Markdown surface", async (t) => {

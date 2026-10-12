@@ -61,6 +61,24 @@ can restart the old observer if its setting is still present, so clear the
 setting on installations that must not resume observation after rollback.
 No format rewrite or destructive data cleanup accompanies retirement.
 
+## Retained readback without source producers
+
+`authority-shadow status` reads retained outbox entries and candidate history
+through independent read-only modules. It remains available when the old source
+capture producers are absent. Pending prepared/committed files, cursor residue,
+invalid evidence and the original management binding remain visible. Residue
+counts are diagnostic hints: they do not authorize cleanup or prove delivery.
+A missing candidate stays missing; status never creates a replacement identity,
+repairs bytes, drains an outbox or grants a writer permission.
+
+The retained Python filesystem codecs preserve the existing wire and errors;
+candidate proof and drain effects remain in their TypeScript owners. Supported
+unpromoted writes and `authority-shadow drain` still need their current producer
+and orchestration modules. This separation permits eventual producer retirement
+without discarding historical readback, but does not itself authorize deletion
+or disposition of pending originals. Code rollback restores the previous import
+layout without changing data or restoring retired write authority.
+
 ## Why two matching reads were not a capture guarantee
 
 The observer sampled after the writer released its lock. Another writer could
@@ -87,3 +105,21 @@ This cleanup preserves live source IO, orphan-history inventory, outbox readers
 and codecs, backup import/export and original receipt recovery. It changes no
 provider default or supported migration path and performs no data rewrite.
 Whole-writer retirement still requires its own last-caller and recovery proof.
+
+## Frontier source-adapter cleanup
+
+The unused internal Python standalone frontier-index builder is removed.
+Quota and replan already obtain the complete index from the existing typed
+Todo summary transaction. Their tests now enter through that same producer,
+including exclusion-only Agent lanes, duplicate identities, Unicode and
+microsecond chronology, a complete multi-megabyte source and tail edits beyond
+the display cap. Malformed or missing batched indices fail without a second
+index request. This removes a test-only transport seam; it changes no shipped
+CLI command, checkpoint format or default.
+
+The lossless Python source codec remains: summary composition and long-chain
+replan still use its complete material bytes. The TypeScript frontier owner
+and its versioned wire behavior remain, including historical revision hashes.
+No backup, outbox, receipt or Markdown business writer is deleted. Reverting
+the source change restores the internal import without rewriting stored data;
+whole-writer retirement retains its separate migration and recovery gates.

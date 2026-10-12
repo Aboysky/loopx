@@ -7,19 +7,12 @@ in the typed planner. Retained receipts are outside the archivable Todo blocks.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ..coordination.legacy_writer_fence import legacy_todo_write_transaction
-from ..coordination.runtime_shadow_writer_adapter import (
-    begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture,
-    write_captured_todo_state,
-)
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.local_state_write_correctness import (
     build_local_state_write_correctness_dry_run_packet,
 )
@@ -35,45 +28,12 @@ from ..todos.contract import (
 )
 from ..todos.goal_todo_projection import goal_todo_summaries
 from ..todos.handoff_mode import goal_handoff_mode
-from ..todos.line_update import upsert_todo_metadata
 from ..todos.mutation_response import serialize_added_todo_payload, serialize_todo_update_result
 from ..todos.mutation_authority import authorize_todo_lifecycle_mutation
 from ..todos.next_action_runtime import apply_added_todo_next_action
 from ..todos.path_resolution import resolve_todo_state_path
 from ..todos.todo_semantics import todo_priority_label
-
-
-def _receipt_marker(operation_id: str) -> str:
-    return f"<!-- loopx:monitor-batch:{hashlib.sha256(operation_id.encode()).hexdigest()} "
-
-
-def _read_receipt(text: str, operation_id: str) -> dict[str, Any] | None:
-    marker = _receipt_marker(operation_id)
-    matches = re.findall(re.escape(marker) + r"([A-Za-z0-9+/=]+) -->", text)
-    if text.count(marker) != len(matches):
-        raise ValueError("Monitor batch operation receipt is malformed")
-    if len(matches) > 1:
-        raise ValueError("duplicate Monitor batch operation receipts")
-    if not matches:
-        return None
-    receipt = json.loads(base64.b64decode(matches[0], validate=True))
-    if not isinstance(receipt, dict):
-        raise ValueError("Monitor batch operation receipt must be an object")
-    return receipt
-
-
-def _plan(request: dict[str, Any], **facts: Any) -> dict[str, Any]:
-    try:
-        result = effect_runtime_result("scheduler.monitor_batch.plan", {**request, **facts})
-    except EffectRuntimeRejected as error:
-        raise ValueError(str(error)) from error
-    if not isinstance(result, dict) or result.get("schema_version") != "loopx_monitor_batch_plan_result_v0":
-        raise TypeError("TypeScript Monitor batch plan shape mismatch")
-    return result
-
-
-def _writeback(planned: dict[str, Any]) -> dict[str, Any]:
-    return dict(planned["writeback"])
+from .monitor_batch_receipts import _plan, _read_receipt, _receipt_marker, _writeback
 
 
 def _metadata(record: dict[str, Any]) -> dict[str, Any]:
@@ -183,22 +143,10 @@ def _attach_batch_dry_run(result: dict[str, Any], original: str) -> None:
         todo["local_state_write_correctness"] = packet
 
 
-def replay_legacy_monitor_poll(
-    *, registry_path: Path, request: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Read immutable pre-promotion receipts without reopening a legacy writer."""
-    _, state = resolve_todo_state_path(registry_path=registry_path, goal_id=request["goal_id"],
-                                      require_existing=False)
-    if not state.exists():
-        return None
-    previous = _read_receipt(state.read_text(encoding="utf-8"), request["operation_id"])
-    if previous is None:
-        return None
-    return _writeback(_plan(request, registered_agents=[], todos=[], previous_receipt=previous))
-
-
 def _apply_mutations(lines: list[str], mutations: list[dict[str, Any]],
                      todos: list[dict[str, Any]]) -> None:
+    from ..todos.line_update import upsert_todo_metadata
+
     sources = {todo["todo_id"]: todo for todo in todos}
     for mutation in mutations:
         record = mutation["todo"]
@@ -241,6 +189,11 @@ def apply_legacy_monitor_poll(
         if planned["replayed"]:
             verify_state_text_durable(state, original)
             return _writeback(planned)
+        from ..coordination.runtime_shadow_writer_adapter import (
+            begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture,
+            write_captured_todo_state,
+        )
+
         monitor = next(todo for todo in todos if todo["todo_id"] == planned["writeback"]["todo_id"])
         authority = authorize_todo_lifecycle_mutation(registry_path=registry_path, goal_id=goal_id,
             command="update", todo=monitor, actor_agent_id=request["actor_agent_id"])

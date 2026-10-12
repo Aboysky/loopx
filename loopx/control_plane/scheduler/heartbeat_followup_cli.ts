@@ -5,6 +5,7 @@ import {
   EffectRuntimeRequestError,
 } from "../effect_runtime_errors.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
+import { isSupportedNodeVersion } from "../runtime/node_version.ts";
 import {
   evaluateSchedulerHeartbeatFollowup,
   renderSchedulerHeartbeatFollowupMarkdown,
@@ -91,7 +92,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (valueOptions.has(option)) {
       const [value, next] = optionValue(argv, index, option);
       index = next;
-      if (!value) {
+      if (!value && option !== "--app-automation-current-rrule") {
         throw new EffectRuntimeRequestError(`${option} must not be empty`, "invalid_scheduler_followup_argv");
       }
       if (option === FACTS_FLAG) chunks.push(value);
@@ -249,7 +250,7 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
   if (expectedOperation === "host_failure" && values["--failed-rrule"]) {
     matchingText(facts, "expected_rrule", values["--failed-rrule"], "--failed-rrule");
   }
-  if (neutralObservedRrule || legacyCodexObservedRrule) {
+  if (expectedOperation === "host_failure" && (neutralObservedRrule || legacyCodexObservedRrule)) {
     matchingText(
       facts,
       "observed_host_rrule",
@@ -272,6 +273,9 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
       reason_summary: values["--reason-summary"] ?? null,
       host_facts: {
         ...facts,
+        ...(expectedOperation === "ack" && facts.surface === "codex_app"
+          ? { observed_host_rrule: neutralObservedRrule || legacyCodexObservedRrule }
+          : {}),
         operation: expectedOperation,
         runtime_root: parsed.runtime_root,
         execute: parsed.booleans.has("--execute"),
@@ -304,8 +308,7 @@ async function readRequest(): Promise<unknown> {
 
 async function main(): Promise<number> {
   try {
-    const [major, minor, patch] = process.versions.node.split(".").map(Number);
-    if (major < 22 || (major === 22 && (minor < 22 || (minor === 22 && patch < 3)))) {
+    if (!isSupportedNodeVersion(process.versions.node)) {
       throw new EffectRuntimeRequestError(
         "native scheduler follow-up requires Node.js 22.22.3 or newer",
         "node_unsupported",

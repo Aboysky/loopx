@@ -1,4 +1,5 @@
 import { goalCreateRequest } from "./goal-create-request";
+import { todoCompletionPreviewFeedback } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
 import { useConversationInputState } from "./use-conversation-input-state";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
@@ -35,7 +36,7 @@ import {
   type ManagerRuntimeSessionReadback,
   type TypedActionProposal,
 } from "../../data/chat";
-import { useTypedActionReadback } from "../../data/use-typed-action-readback";
+import { useTypedActionReadback, useTypedActionProposalReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
 import { GoalLoopXMode } from "./goal-loopx-mode";
@@ -50,7 +51,8 @@ import { ContextDrawer } from "./context-drawer";
 import { monitorScheduleReadback } from "./monitor-readback";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
-import { GoalOverview } from "./goal-overview";
+import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
+import { GoalVitals, GoalVitalsSkeleton, type GoalVitalRegion } from "./goal-masthead";
 import { GoalWorkspacePanels } from "./goal-workspace-panels";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import { MarkdownText } from "./markdown";
@@ -678,7 +680,9 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposal.action_kind === "team.plan"
       ? teamPlanFields(proposal.normalized_parameters, t)
       : decision ? []
-      : proposalFields(proposal.normalized_parameters, t),
+      : proposalFields(proposal.normalized_parameters, t).filter(field => !reviewPlan.creationProgress?.goalId
+        || proposal.status === "applied"
+        || ["objective", "completion_criteria", "execution_boundary", "permission", "workspace_ref"].includes(field.key)),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
     impact: reviewPlan.retryOriginal ? t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
       ? operationFrame?.kind === "inactive" ? t(`actionReview.${operationFrame.reason}`)
@@ -1088,6 +1092,11 @@ export function PersonalWorkspacePage({
     && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
   const composerBlocked = steering || (!steeringTurnId && (sending || conversationTurnRunning));
   const quickPromptBlocked = steering || sending || conversationTurnRunning;
+  // The Goal overview is for reading; its composer folds to one line until asked for.
+  const [overviewComposerOpen, setOverviewComposerOpen] = useState(false);
+  useEffect(() => setOverviewComposerOpen(false), [selectedGoalId, selectedGoalTab]);
+  const composerCollapsed = Boolean(selectedGoal) && selectedGoalTab === "overview" && !overviewComposerOpen
+    && !composer.trim() && !actionDraft && !imageAttachments.length && !imageAttachmentError && !sending && !conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
       || (item.kind === "proposal" && (managerSessionProposalIds.includes(item.proposal.previewId)
@@ -1139,6 +1148,20 @@ export function PersonalWorkspacePage({
     );
     return currentRun ? { item: currentRun.run, kind: "run" } : selection;
   }, [items, selection, proposals, workspaceGoals, model.attentionHistory, model.userTodos]);
+
+  const creationProposalId = drawerSelection?.kind === "proposal"
+    && drawerSelection.item.actionKind === "goal.create"
+    && !drawerSelection.item.previewId.startsWith("workspace-choice-")
+      ? drawerSelection.item.previewId : null;
+  const proposalReadback = useTypedActionProposalReadback(readOnly, creationProposalId);
+  useEffect(() => {
+    if (readOnly || !proposalReadback.isSuccess || !proposalReadback.data) return;
+    const canonical = proposalReadback.data;
+    // Readback updates an existing card only; it never discovers foreign cards
+    // or changes the conversation that originally offered this operation.
+    setProposals(current => current[canonical.proposal_id]
+      ? { ...current, [canonical.proposal_id]: workspaceProposal(canonical, t) } : current);
+  }, [readOnly, proposalReadback.data, proposalReadback.dataUpdatedAt, proposalReadback.isSuccess, t]);
 
   useEffect(() => {
     if (readOnly) {
@@ -1255,6 +1278,12 @@ export function PersonalWorkspacePage({
         ? await callbacks.onPreviewAction(request)
         : workspaceProposal(await previewTypedAction(request), t);
     } catch (error) {
+      const completionFeedback = todoCompletionPreviewFeedback(error, request, t);
+      if (completionFeedback !== null && error instanceof ChatApiError) {
+        // All Task entrypoints use this preview route. Keep the owner's code
+        // and diagnostics while explaining why this caller cannot complete.
+        throw new ChatApiError(completionFeedback, error.payload);
+      }
       if (!(error instanceof ChatApiError) || error.payload.error_code !== "action_preview_gate") throw error;
       const rawGate = error.payload.gate && typeof error.payload.gate === "object"
         ? error.payload.gate as Record<string, unknown>
@@ -1295,7 +1324,8 @@ export function PersonalWorkspacePage({
     setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: selectedAgentId });
   }
 
-  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: GoalLifecycleOperation) {
+  /** `keepGoalSelected` reads the result back on the Goal page instead of returning to the directory. */
+  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: GoalLifecycleOperation, { keepGoalSelected = false } = {}) {
     setMobileSidebarOpen(false);
     const reasonByOperation: Record<GoalLifecycleOperation, string> = {
       delete: "Deleted from the owner workspace",
@@ -1339,7 +1369,7 @@ export function PersonalWorkspacePage({
         projectionOwnedByApply = true;
         callbacks.onGoalActivationStateChange?.(goal.goalId, result.activationState);
         setActionFeedback(t("feedback.completed", { title: summaryByOperation[operation] }));
-        if (operation === "stop") selectGoal(null);
+        if (operation === "stop" && !keepGoalSelected) selectGoal(null);
         await reconcileStatus([goal.goalId]);
         return;
       }
@@ -1362,6 +1392,7 @@ export function PersonalWorkspacePage({
         if (proposal.reviewPlan?.interaction === "direct") {
           projectionOwnedByApply = true;
           await applyProposal(proposal, {
+            keepGoalSelected,
             lifecycleProjection: stopProjection ?? undefined,
             presentation: "feedback",
           });
@@ -1390,6 +1421,25 @@ export function PersonalWorkspacePage({
     }
   }
 
+  function focusGoalRegion(region: GoalVitalRegion) {
+    if (!selectedGoal) return;
+    if (region === "usage") {
+      setSelection({ kind: "goal", item: selectedGoal });
+      return;
+    }
+    setSelectedGoalTab(region === "tasks" ? "tasks" : "overview");
+    window.requestAnimationFrame(() => {
+      const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+      const target = region === "attention" ? document.getElementById(goalOverviewAttentionId) : null;
+      if (target) {
+        target.scrollIntoView({ behavior, block: "nearest" });
+        target.focus({ preventScroll: true });
+      } else if (region !== "tasks") {
+        channelScrollRef.current?.scrollTo({ behavior, top: 0 });
+      }
+    });
+  }
+
   function prepareScheduleDraft(kind: "heartbeat" | "monitor", goalId: string | null) {
     setActionDraft({ kind, goalId, goalTitle: workspaceGoals.find((goal) => goal.goalId === goalId)?.title ?? "", agentId: selectedAgentId });
     setSelection(null);
@@ -1405,7 +1455,12 @@ export function PersonalWorkspacePage({
         actionKind: "todo.update",
         context: { goal_id: todo.goalId, kind: "todo", todo_id: todo.todoId },
         idempotencyKey: `workspace-todo-${todo.todoId}-complete-${Date.now().toString(36)}`,
-        normalizedParameters: { goal_id: todo.goalId, operation: "complete", todo_id: todo.todoId },
+        normalizedParameters: {
+          ...(todo.claimedBy ? { agent_id: todo.claimedBy } : {}),
+          goal_id: todo.goalId,
+          operation: "complete",
+          todo_id: todo.todoId,
+        },
         summary: t("tasks.markComplete", { name: todo.text }),
       });
       setActionFeedback(null);
@@ -1438,6 +1493,7 @@ export function PersonalWorkspacePage({
   async function applyProposal(
     proposal: WorkspaceActionPreview,
     options: {
+      keepGoalSelected?: boolean;
       lifecycleProjection?: GoalLifecycleProjection;
       presentation?: "drawer" | "feedback";
     } = {},
@@ -1473,7 +1529,7 @@ export function PersonalWorkspacePage({
         if (showDrawer) setSelection({ item: applied, kind: "proposal" });
         setActionFeedback(t("feedback.completed", { title: proposal.title }));
         if (proposal.actionKind === "goal.lifecycle") {
-          if (proposal.lifecycleOperation === "stop" || proposal.lifecycleOperation === "delete") {
+          if (proposal.lifecycleOperation === "delete" || (proposal.lifecycleOperation === "stop" && !options.keepGoalSelected)) {
             selectGoal(null);
           }
           if (proposal.lifecycleOperation === "delete" && proposal.goalId) {
@@ -1516,10 +1572,10 @@ export function PersonalWorkspacePage({
       setActionFeedback(t("feedback.completed", { title: applied.title }));
       // Keep the success receipt visible for reviewed actions. Direct actions
       // surface the same result through the persistent feedback receipt.
-      if (applied.actionKind === "todo.create") {
+      if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create") {
         await callbacks.onRefresh?.();
       }
-      if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "stop" || applied.lifecycleOperation === "delete")) {
+      if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {
         selectGoal(null);
       }
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
@@ -1535,8 +1591,12 @@ export function PersonalWorkspacePage({
       if (error instanceof ChatApiError && error.payload.error_code === "protected_action") {
         const rawGate = error.payload.gate;
         const gate = rawGate && typeof rawGate === "object" ? rawGate as Record<string, unknown> : {};
+        const returned = typedActionProposalSchema.safeParse(error.payload.proposal);
+        const observed = returned.success && returned.data.proposal_id === proposal.previewId
+          && returned.data.action_kind === proposal.actionKind && returned.data.normalized_parameters.goal_id === proposal.goalId
+          ? workspaceProposal(returned.data, t) : proposal;
         const gated = {
-          ...proposal,
+          ...observed,
           reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: "gated" as const, reason: "authority_gate" as const, canApply: false as const } : undefined,
           impact: proposal.reviewPlan?.retryOriginal ? "" : proposal.impact,
           primaryLabel: proposal.reviewPlan?.retryOriginal ? undefined : proposal.primaryLabel,
@@ -1565,19 +1625,20 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && proposal.actionKind === "team.plan" && !readbackMismatch) {
+      if (!stored && ["team.plan", "goal.create"].includes(proposal.actionKind) && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
-        && (proposal.actionKind !== "team.plan" || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && (!["team.plan", "goal.create"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"
           ? error instanceof Error ? error.message : String(error) : undefined };
         setProposals(current => ({ ...current, [proposal.previewId]: reconciled }));
         setSelection({ item: reconciled, kind: "proposal" });
+        if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
           : observed.reviewPlan?.interaction === "completed" ? t("feedback.completed", { title: observed.title })
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
@@ -1900,6 +1961,28 @@ export function PersonalWorkspacePage({
       />
   ) : null;
 
+  const composerSuggestions = !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey} onKeyDown={(event) => {
+    if (event.key !== "Escape") return;
+    event.currentTarget.open = false;
+    event.currentTarget.querySelector("summary")?.focus();
+  }}>
+              <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
+            {selectedGoal ? (
+              <div className="personal-quick-prompts">
+                <button aria-label={t("composer.nextAction")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
+                <button aria-label={t("composer.agentProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
+                <button aria-label={t("composer.monitor")} disabled={sending} onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title={t("composer.sendMessageHint")} type="button"><CalendarClock size={13} /><span>{t("composer.monitor")}</span></button>
+                <button aria-label={t("composer.blockers")} disabled={quickPromptBlocked || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
+                <button aria-label={t("composer.evidence")} disabled={quickPromptBlocked || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
+              </div>
+            ) : (
+              <div className="personal-quick-prompts">
+                <button aria-label={t("composer.globalTasks")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
+                <button aria-label={t("composer.globalProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
+                <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
+              </div>
+            )}
+            </details> : null;
   return (
     <>
     <div hidden={settingsOpen}>
@@ -1909,9 +1992,11 @@ export function PersonalWorkspacePage({
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && (drawerSelection.item.detailMode === "request_only" || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
-        proposalReadbackUnavailable={actionReadback.isError || !actionReadback.data
-          || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
-        proposalReadbackFetching={actionReadback.isFetching} onRetryProposalReadback={() => void actionReadback.refetch()} onClose={() => {
+        proposalReadbackUnavailable={creationProposalId ? proposalReadback.isError || !proposalReadback.data
+          : actionReadback.isError || !actionReadback.data
+            || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
+        proposalReadbackFetching={creationProposalId ? proposalReadback.isFetching : actionReadback.isFetching}
+        onRetryProposalReadback={() => void (creationProposalId ? proposalReadback.refetch() : actionReadback.refetch())} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
           && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {
@@ -1952,6 +2037,7 @@ export function PersonalWorkspacePage({
             managerChannelBinding={managerChannelBinding}
             managerRuntime={managerRuntime}
             mobileNavigationOpen={mobileSidebarOpen}
+            onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
             onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
@@ -1976,7 +2062,15 @@ export function PersonalWorkspacePage({
             readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={selectedGoal}
             selectedGoalTab={selectedGoalTab}
+            goalLifecycleBusy={selectedGoal ? lifecycleBusyGoalIds.has(selectedGoal.goalId) : false}
+            onOpenWorkspace={() => selectGoal(null)}
+            onRequestGoalLifecycle={selectedGoal && (!readOnly || callbacks.onExecuteGoalLifecycle)
+              ? (operation) => void requestGoalLifecycle(selectedGoal, operation, { keepGoalSelected: true })
+              : undefined}
+            resumeReviewed={!callbacks.onExecuteGoalLifecycle}
           />
+          {selectedGoal && !selectedGoal.loadState ? <GoalVitals goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
+            : selectedGoal?.loadState === "loading" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
             {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
@@ -2147,25 +2241,24 @@ export function PersonalWorkspacePage({
             {conversationOpen && showLatestMessage ? <button className="personal-conversation-latest" type="button" onClick={scrollToLatestMessage}>
               {locale === "zh-CN" ? "回到最新消息 ↓" : "Latest message ↓"}
             </button> : null}
-            {!selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey}>
-              <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
-            {selectedGoal ? (
-              <div className="personal-quick-prompts">
-                <button aria-label={t("composer.nextAction")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
-                <button aria-label={t("composer.agentProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
-                <button aria-label={t("composer.monitor")} disabled={sending} onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title={t("composer.sendMessageHint")} type="button"><CalendarClock size={13} /><span>{t("composer.monitor")}</span></button>
-                <button aria-label={t("composer.blockers")} disabled={quickPromptBlocked || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
-                <button aria-label={t("composer.evidence")} disabled={quickPromptBlocked || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
-              </div>
-            ) : (
-              <div className="personal-quick-prompts">
-                <button aria-label={t("composer.globalTasks")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
-                <button aria-label={t("composer.globalProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
-                <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
-              </div>
-            )}
-            </details> : null}
-            {actionDraft ? <WorkspaceActionForm draft={actionDraft} onClose={() => setActionDraft(null)} onPreview={(request) => createPreview(request)} /> : null}
+            <div className={composerCollapsed ? "personal-composer-folded" : undefined}>
+            {composerCollapsed && selectedGoal ? <>
+              <button className="personal-composer-pill" data-testid="overview-composer-pill" type="button"
+                onClick={() => { setOverviewComposerOpen(true); window.requestAnimationFrame(() => composerRef.current?.focus()); }}>
+                <MessageCircleQuestion aria-hidden size={15} /><span>{t("composer.goalPrompt")}</span>
+              </button>
+            </> : null}
+            {composerSuggestions}
+            </div>
+            {!composerCollapsed ? <>
+            {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} onClose={() => setActionDraft(null)} onPreview={async (request) => {
+              const proposal = await createPreview(request, { select: false });
+              if (proposal.gate?.kind === "workspace_unavailable") {
+                throw new Error(proposal.gate.summary);
+              }
+              if (isCurrentConversation()) setSelection({ item: proposal, kind: "proposal" });
+              return proposal;
+            }} /> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
                 <img alt={attachment.name} src={attachment.dataUrl} />
@@ -2223,6 +2316,7 @@ export function PersonalWorkspacePage({
               : sending && !steeringTurnId
               ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")
               : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
+            </> : null}
             </>}
           </div>
         </div>
