@@ -42,6 +42,27 @@ sys.argv = ['loopx.cli', *sys.argv[1:]]
 runpy.run_module('loopx.cli', run_name='__main__')
 """
 
+_CONCURRENT_RETRY_WRAPPER = """
+import json, os, runpy, sys, time
+from pathlib import Path
+import loopx.quota as quota
+original = quota.resolve_monitor_poll_target
+def synchronized_target(**kwargs):
+    route = original(**kwargs)
+    barrier = Path(os.environ['SYNTHETIC_RETRY_BARRIER'])
+    marker = barrier / os.environ['SYNTHETIC_RETRY_ACTOR']
+    marker.write_text(json.dumps({'route': route, 'pid': os.getpid()}))
+    deadline = time.monotonic() + 15
+    while len(list(barrier.glob('ready-*'))) != 2:
+        if time.monotonic() >= deadline:
+            raise RuntimeError('synthetic retry barrier timed out')
+        time.sleep(0.01)
+    return route
+quota.resolve_monitor_poll_target = synchronized_target
+sys.argv = ['loopx.cli', *sys.argv[1:]]
+runpy.run_module('loopx.cli', run_name='__main__')
+"""
+
 
 def _target_poll(poll: tuple[str, ...], *, material: bool = True) -> tuple[str, ...]:
     args = list(poll)
@@ -119,6 +140,138 @@ def test_target_only_monitor_poll_replays_accepted_identity(
     assert _poll_receipts(runtime) == receipts_after
     assert read_run_index(runtime, GOAL) == index_after
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL) == committed
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('completion', ['committed', 'interrupted'])
+def test_target_only_retry_rejects_changed_provider_actor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    provider: str, completion: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state, monitor, poll = _fixture(tmp_path)
+    peer = 'synthetic-registered-observer'
+    data = json.loads(registry.read_text())
+    data['goals'][0]['coordination']['registered_agents'].append(peer)
+    registry.write_text(json.dumps(data))
+    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
+    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
+        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
+    target_poll = _target_poll(poll, material=False)
+    rc, original = _cli(registry, runtime, *target_poll,
+        fault='quota_commit' if completion == 'interrupted' else None)
+    assert rc == (73 if completion == 'interrupted' else 0), original
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)
+    observed = next(todo for todo in before['todos'] if todo['todo_id'] == monitor)
+    assert not monitor_todo_is_due(observed)
+    receipts = _poll_receipts(runtime)
+    (receipt,) = receipts.values()
+    effect = json.loads(receipt)['effect_id']
+    index_path = runtime / 'goals' / GOAL / 'runs' / 'index.jsonl'
+    index = index_path.read_bytes() if index_path.exists() else None
+    native = monitor_runtime._native_result
+    attempts = []
+
+    def replace_actor(request):
+        # Keep the accounting Agent, Turn and recovered operation unchanged.
+        # The registered provider actor is the only altered wire field.
+        assert request['phase'] == 'preflight'
+        assert request['effect_id'] == effect
+        assert request['decision']['agent_id'] == AGENT
+        assert request['observation']['actor_agent_id'] == AGENT
+        result = native({**request, 'observation': {
+            **request['observation'], 'actor_agent_id': peer}})
+        attempts.append(result)
+        return result
+
+    with monkeypatch.context() as context:
+        context.chdir(registry.parent.parent)
+        context.setenv('LOOPX_USAGE_PING', '0')
+        context.setattr(monitor_runtime, '_native_result', replace_actor)
+        rc = cli_main(['--registry', str(registry), '--runtime-root', str(runtime),
+            '--format', 'json', *target_poll])
+        rejected = json.loads(capsys.readouterr().out)
+    assert rc != 0 and rejected['error_code'] == 'heartbeat_receipt_identity_conflict', rejected
+    assert len(attempts) == 1 and attempts[0]['reason_code'] == 'effect_id_conflict'
+    assert _poll_receipts(runtime) == receipts
+    assert (index_path.read_bytes() if index_path.exists() else None) == index
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL) == before
+    rc, recovered = _cli(registry, runtime, *target_poll)
+    assert rc == 0, recovered
+    events = _poll_events(runtime)
+    assert len(events) == 1 and events[0]['todo_id'] == monitor and events[0]['agent_id'] == AGENT
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL) == before
+    recovered_receipts, recovered_index = _poll_receipts(runtime), index_path.read_bytes()
+    rc, replayed = _cli(registry, runtime, *target_poll)
+    assert rc == 0 and replayed['replayed'] is True, replayed
+    assert _poll_receipts(runtime) == recovered_receipts and index_path.read_bytes() == recovered_index
+    assert not any(row['classification'] == 'quota_slot_spent' for row in read_run_index(runtime, GOAL))
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('competitor', ['duplicate', 'changed_hash'])
+def test_target_only_concurrent_pending_retries_keep_one_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, competitor: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state, monitor, poll = _fixture(tmp_path)
+    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)['todos']
+    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
+        goal_id=GOAL, todos=todos, handoff_mode='soft_claim'), state_path=state, provider=provider)
+    target_poll = _target_poll(poll, material=False)
+    rc, interrupted = _cli(registry, runtime, *target_poll, fault='quota_commit')
+    assert (rc, interrupted) == (73, None)
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)
+    assert not monitor_todo_is_due(next(todo for todo in before['todos'] if todo['todo_id'] == monitor))
+    assert _poll_events(runtime) == []
+    (receipt,) = _poll_receipts(runtime).values()
+    pending = json.loads(receipt)
+    assert pending['status'] == 'provider_pending'
+    effect = pending['effect_id']
+    other_poll = list(target_poll)
+    if competitor == 'changed_hash':
+        other_poll[other_poll.index('--result-hash') + 1] = 'synthetic-other-head'
+    barrier = tmp_path / 'retry-barrier'
+    barrier.mkdir()
+    processes = []
+    try:
+        # Both real CLI writers resolve the same pending route before either
+        # enters quota admission. The barrier changes no business/native rule.
+        for index, args in enumerate((target_poll, other_poll)):
+            processes.append(subprocess.Popen([sys.executable, '-c', _CONCURRENT_RETRY_WRAPPER,
+                '--registry', str(registry), '--runtime-root', str(runtime), '--format', 'json', *args],
+                cwd=REPO, env={**os.environ, 'LOOPX_USAGE_PING': '0',
+                    'SYNTHETIC_RETRY_BARRIER': str(barrier), 'SYNTHETIC_RETRY_ACTOR': f'ready-{index}'},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+        replies = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=60)
+            replies.append((process.returncode, json.loads(stdout) if stdout.strip() else {'stderr': stderr}))
+    finally:
+        # Clean up only this fixture's two children if its bounded wait failed.
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+    arrivals = [json.loads((barrier / f'ready-{index}').read_text()) for index in range(2)]
+    assert [arrival['route'] for arrival in arrivals] == [[monitor, effect], [monitor, effect]]
+    assert [arrival['pid'] for arrival in arrivals] == [process.pid for process in processes]
+    assert arrivals[0]['pid'] != arrivals[1]['pid']
+    assert replies[0][0] == 0, replies
+    if competitor == 'duplicate':
+        assert replies[1][0] == 0, replies
+    else:
+        assert replies[1][0] != 0 and replies[1][1]['error_code'] == 'heartbeat_receipt_identity_conflict', replies
+    events = _poll_events(runtime)
+    assert len(events) == 1 and events[0]['todo_id'] == monitor
+    (receipt,) = _poll_receipts(runtime).values()
+    assert json.loads(receipt)['record']['monitor_event']['result_hash'] == 'synthetic-head-1'
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL) == before
+    receipts, index = _poll_receipts(runtime), read_run_index(runtime, GOAL)
+    rc, replayed = _cli(registry, runtime, *target_poll)
+    assert rc == 0 and replayed['replayed'] is True, replayed
+    assert _poll_receipts(runtime) == receipts and read_run_index(runtime, GOAL) == index
+    assert not any(row['classification'] == 'quota_slot_spent' for row in index)
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
