@@ -170,3 +170,30 @@ ownership, model selection and frontend readback. Real CLI qualification uses
 an isolated database and local model substitute, with real Core and packaged
 frontend entry points. It does not establish live provider billing, Desktop
 attachment, multi-Agent collaboration or general unattended qualification.
+
+
+### Same-owner packaged validation
+
+From a source checkout with test extras and both root and Dashboard npm
+dependencies installed, build the Chat bundle with
+`npm --prefix apps/presentation/dashboard run build`, install Chromium with
+`npm --prefix apps/presentation/dashboard exec playwright install chromium`,
+and run `node examples/zcode-persistent-browser-smoke.mjs`.
+The packaged controls call the production loopback API, Python bridge, Core
+identity/quota admission and persistent TypeScript controller journal. Only
+the vendor NDJSON endpoint is substituted. The journey corrects a missing
+CLI, binds an explicit model, starts, reloads, pauses/resumes, stops and
+reloads again; direct API/journal/vendor readback must agree. Core registry
+and Goal source bytes remain unchanged. This does not qualify a paid model,
+Desktop attachment or an installed release.
+
+For matched shared-off comparison, run
+`examples/personal-workspace-browser/zcode-shared-off-probe.py FIXTURE_ROOT FIXTURE_SOURCE`
+under each immutable source revision with identical inputs and fixture paths.
+Compare the complete JSON observations, including full rendered text and
+before/after file digests. The probe retains schemas and value types, fixing
+only environmental observations, observation clocks, and source/interpreter
+locations. It covers default/Codex doctor, default status, Codex activation,
+Codex installer dry/apply, JSON/Markdown turn planning and normal/overflow/
+timeout process transport. Raw snapshots and screenshots belong in ignored
+validation state; they are not repository fixtures or universal qualifications.

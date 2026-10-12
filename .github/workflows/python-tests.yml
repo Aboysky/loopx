@@ -147,6 +147,14 @@ jobs:
           npm run smoke:personal-workspace-packaged
           npm run smoke:chat-turn-acceptance-retry
           npm run smoke:chat-upgrade
+      - name: Qualify packaged ZCode recovery against its persistent owner
+        env:
+          LOOPX_USAGE_PING: "0"
+          DO_NOT_TRACK: "1"
+        run: |
+          python -m pip install --disable-pip-version-check -e ".[test]"
+          npm ci --ignore-scripts
+          node examples/zcode-persistent-browser-smoke.mjs
 
   kernel-static-checks:
     needs: [changes, chat-bundle]
