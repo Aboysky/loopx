@@ -126,6 +126,8 @@ export const configurationBackupScenario = {
       await verificationDetails.locator("summary").click();
       await verificationDetails.getByText("归档字节:", {exact: false}).waitFor();
       const recordedMeasurements = await verificationDetails.locator("p").innerText();
+      await verificationDetails.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "state-recovery-measurements.png"), animations: "disabled"});
       await verificationDetails.locator("summary").click();
       assert.equal(backend.original_sources_absent, true);
       const registryAfter = JSON.parse(await readFile(join(root, "registry.json"), "utf8"));
