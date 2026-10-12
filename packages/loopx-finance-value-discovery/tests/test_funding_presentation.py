@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from urllib.parse import urlencode, urlunparse
 
 import pytest
 
@@ -104,9 +105,20 @@ def test_missing_leg_all_holds_and_zero_cost_remain_distinct():
         "/Users/example/private.json",
         "password: forbidden",
         "<script>wrong</script>",
-        "https://example.org/source?token=forbidden",
+        urlunparse(
+            (
+                "https",
+                "example.org",
+                "/source",
+                "",
+                urlencode({"token": "synthetic-only"}),
+                "",
+            )
+        ),
         "https://private.example.org/source",
-        "https://user:password@example.org/source",
+        urlunparse(
+            ("https", "synthetic-user:invalid@example.org", "/source", "", "", "")
+        ),
     ],
 )
 def test_safe_projection_rejects_private_and_markup_at_both_apis(value):
