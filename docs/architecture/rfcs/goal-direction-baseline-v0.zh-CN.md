@@ -2,10 +2,10 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** Proposal
+- **交付成熟度：** Partial（M1 纯构建器；M2 producer 与 consumer 未验收）
 - **作者 / 负责人：** LoopX 维护者与贡献者
 - **创建日期：** 2026-09-10
-- **最后规范修订：** 2026-09-10
+- **最后规范修订：** 2026-10-12
 - **实现基线：** `41a95d9`
 - **跟踪 Issue：** [#2831](https://github.com/huangruiteng/loopx/issues/2831)
 - **相关契约：**
@@ -22,8 +22,9 @@
 记录运行时交付前必须决定的问题，其中的建议不等于批准。附录记录非规范性的
 执行、决策、证据与 fixture 计划。
 
-RFC 成熟度与交付成熟度互相独立。本提案不声称 `goal_direction_baseline_v0`、
-它的声明字段或运行时消费者已经存在于 `main`。
+RFC 成熟度与交付成熟度互相独立。M1 TypeScript builder 已基于传入的完整 canonical
+输入实现 `goal_direction_baseline_v0`。生产 receipt writer、声明编写命令与运行时
+consumer 尚未交付；schema 合法的合成回执不证明真实阅读。
 
 独立的[验收合同 v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
 不实现本 RFC 的材料声明或使用回执。#2831 的下一切片是**方向材料版本与验收基线关联**，
@@ -48,8 +49,8 @@ Repository owner 文档只是可选的材料 provider 之一。它不会成为�
 repository 路径也不是协议。私有 wiki、外部文档系统或其他已注册 provider
 可以在不暴露原始内容的情况下满足同一个契约。
 
-本 RFC 只批准文档与 synthetic fixture 计划，不批准新的 writer、scheduler、
-状态 authority、自动 Vision 更新或运行时 gate。
+M1 只提供纯 read model，不引入 writer、scheduler、状态 authority、自动 Vision
+更新或运行时 gate。M2 保留独立的 consumer 与恢复验收。
 
 ## 2. 问题与动机
 
@@ -127,9 +128,9 @@ provider-neutral 材料元数据与当前 Agent 自己的 usage receipt，只暴
 - 当前 `shared_goal_alignment_v0` 绑定的是 event-log 或 canonical Todo
   projection 事实，并非 typed canonical Goal-intent revision。
 
-当前没有类型声明哪些 authority material 定义 Goal 方向，也没有 reducer 把
-这组材料与单个 Agent 的当前 usage receipt 绑定。本 RFC 不会把 shared-alignment
-source digest 或 Markdown state 改名为这个缺失的语义 identity。
+M1 builder 已将声明的方向材料与单个 Agent 的传入回执绑定。生产声明编写与回执
+provenance 仍属于 M2 依赖，不能用 shared-alignment source digest 或 Markdown
+state 代替真实阅读来源。
 
 ## 5. 提议架构
 
@@ -373,22 +374,43 @@ required material。
 | M1 | 基于完整 Goal authority 和 receipt 的 optional pure builder；无 consumer 或 writer。 | 批准第 12 节决策与 schema 限制。 | 确定性 fixture、mutation check；若双 runtime 消费则做 Python/TypeScript parity；public-boundary scan。 | 移除 default-off builder 与 projection。 |
 | M2 | 一个只读 Agent-scoped Vision-gap consumer。 | M1 conformance，并由维护者显式批准 consumer 与 recovery UX。 | 端到端证明 drift 可见、同 revision replay 安静且不修改 Vision/Todo/route。 | 禁用 consumer；保留 canonical registry 与 receipt。 |
 
-合并 M0 不授权后续 milestone。附录 D 的 F2 fixture 已在 M1 前以 conformance
-harness 形式签入
-（[examples/goal-direction-baseline-f2-smoke.py](../../../examples/goal-direction-baseline-f2-smoke.py)）；
-这不授权 M1，也不新增任何 runtime builder、writer 或 consumer。
+M1 实现在 [`direction_baseline.ts`](../../../loopx/control_plane/goals/direction_baseline.ts)。
+现有 [F2 smoke](../../../examples/goal-direction-baseline-f2-smoke.py) 已改为执行真实
+TypeScript 测试与两项源码 mutation，删除原 fixture-local reducer。没有 CLI、
+persistence、consumer、scheduler 或 quota 路径调用这个 builder。M2 保持独立。
 
-## 12. 开放决策
+## 12. 实现决策与剩余验收
 
-1. **Schema 容量。** Goal authority owner 必须在 M1 前选择最大 declaration row
-   与 projected item 数。建议：尽可能复用现有 Material Frontier 限制。所需
-   证据：production-scale synthetic registry fixture。
-2. **Required receipt outcome。** Goal Vision owner 必须决定 `read`、`used`、
-   `verified` 是否都满足方向 requirement，或 v0 是否只接受 `used`/`verified`。
-   建议：M1 保持当前 Material Frontier 语义，只有在具备迁移证据后才收紧。
-3. **首个 consumer。** Control-plane owner 必须批准 M2 是在 Goal Frontier、
-   status 还是其他已有 Agent-scoped view 呈现。建议：选择单个 cold-path read
-   surface，避免 promotion 到 quota/scheduler。
+M1 采用 [#6289](https://github.com/loopx-project/loopx/pull/6289) 中的具体候选包络。
+这些实现选择不代表生产容量 promotion，也不批准 M2 consumer。
+
+1. **容量。** 独立限制 64 条输入声明（去重前）、256 个解析后的不同材料（含可选项）、
+   4,096 条输入回执（去重前）、2 MiB 完整 compact UTF-8 JSON 输入、256 KiB 完整
+   compact UTF-8 JSON 输出。各最大值不能保证同时满足。不得截断。超限返回
+   `blocked` / `direction_capacity_exceeded`、空 items、null digest；计数不是部分
+   authority 摘要。文本宽度沿用 frontier：id/revision 180 个 Unicode 字符，topic 120，
+   purpose 220，显式可用 boundary 80。
+2. **回执选择。** 在选择 scope 前验证所有输入行：准确 v0 schema、identity、
+   `read`/`used`/`verified` 或 `unavailable`、revision 与带时区时间戳。`unavailable`
+   可无 revision。必须同 Goal、Agent 与准确 Todo scope；Todo 回执不满足 Goal-wide
+   read。相同 replay id 去重，冲突 id 拒绝。按纳秒精度选择最新时间；并列观察必须
+   outcome/revision 相同，再确定性选择最小 receipt id。非法/未知行或矛盾并列观察
+   返回完整 blocked 拒绝，不能恢复较老成功。不回显原始输入、部分 items 或 digest。
+   调用者 identity/time 无效时抛出类型化输入错误，因为无法构成有 scope 的投影。
+3. **Authority 元数据。** 登记字段目前允许 prose，M1 不解释自然语言：只有
+   `owner_status=reviewed`、`conflict_rule=owner_wins`、`freshness=current` 与
+   `gate_status=ready|registered|readable` 可以通过；缺失/未知值阻塞。这是有界 reader
+   profile，不重写登记策略。role 仅提供信息。public/public_safe 或显式传入的 available
+   boundary 允许本次读取；传入 envelope 本身不授予访问权限。缺失 boundary 不可访问。
+   要求完整 `project_materials` 与 `topic_authority`；map/list identity 与重复声明必须一致。
+   可选项保留可见，聚合计数与原因仅计算 required 项，可选成功不能遮蔽必需项失败。
+   完整输入中的非法行即使可选或属于 peer，也会拒绝整个投影。
+4. **首个 consumer 仍待交付。** 复用显式 Goal/Agent management cold read 与打包 Goal
+   detail，不接入普通 polling/quota/scheduler。M2 必须验证真实授权读取 → 精确版本回执
+   → 同 Agent 刷新，并通过既有 Goal-instance lifetime 与 acceptance owner 绑定。
+   drift、不可访问、错误 Agent、reload 与 retry 必须可见，Vision/Todo/lease/route 不变。
+   材料基线 current 不能让整 Goal 验收变绿。Lark 单独保持未验收。不新增 v0 receipt
+   字段、第二个 receipt store 或伪造 provenance。
 
 ---
 
@@ -447,14 +469,25 @@ scheduler、Goal-amendment 或 route-write effect。
 | F7 replay stability | 相同 canonical input 与 receipt 改序并投影两次。 | 除显式 `generated_at` 外，normalized item、digest、state 与 reason code 相同。 | Receipt 顺序与重复 declaration 不能制造 churn。 |
 | F8 route ownership | Agent 读取变更 revision 后保持或改变路线。 | 新 receipt 让 baseline 恢复 current。 | 保持路线不产生 path delta；改变路线只有携带有效现有 `goal_path_delta_v0` 才能接受。 |
 
-M1 前应把该表变成 checked-in public-safe fixture 与 mutation test。Mutation arm
-必须故意放松 Agent 或 revision 匹配，并证明 F2 或 F3 会失败，从而避免测试因未
-真正执行 happy path 而误通过。F2 已 checked-in 于
-`examples/goal-direction-baseline-f2-smoke.py` 并带 mutation arm；其余 case
-在 M1 前保持开放。
+真实 builder 的 [TypeScript suite](../../../tests/control_plane_ts/direction_baseline.test.ts)
+覆盖 F1–F8 read-model 断言与容量边界。现有 F2 smoke 在隔离副本中改变实际 revision
+与 Agent 匹配，要求独立测试以断言错误拒绝 mutation。F8 写侧路线验证仍由
+`vision_checkpoint.test.ts` 负责；纯 read model 不能证明 Agent 的真实路线变化或阅读。
 
 ## 附录 E：拒绝或已取代方案
 
 第 6 节记录当前拒绝设计。若证据表明某 provider-specific owner 能保持相同
 authority、privacy 与 no-mutation 不变量，可以新增 profile，但不能分叉 core
 contract。
+
+## M1 源码检查点
+
+可选 TypeScript 纯构建器取代原合成 decision owner。验证覆盖完整 registry 解析、
+准确 Agent/Todo/revision、冲突、时间顺序、输入不可变、输入/输出限额与 public-safe
+投影。用 Node >=22.22.3 执行
+`node --experimental-strip-types --test tests/control_plane_ts/direction_baseline.test.ts`
+与 `uv run --extra test python examples/goal-direction-baseline-f2-smoke.py`；既有
+`vision_checkpoint.test.ts` 验证路线 authority。没有新增平行 Python reducer 或
+Python/TypeScript 双消费路径。生产回执真实性、instance-bound storage、live provider、
+生产容量冻结和 M2 CLI/frontend/Lark 流程仍未验收。回退只移除尚未接入消费者的 builder，
+无需迁移 canonical state。
