@@ -149,7 +149,12 @@ def _project_shared_goal_alignment(
     revision_basis = ("canonical_todo_snapshot" if source.canonical_basis is not None
         else REVISION_BASIS_MARKDOWN_ACTIVE_STATE)
     basis_sequence = 0
-    source_checksum = None
+    # Bind the same typed work/lease facts sent to the reducer. Markdown has
+    # no monotonic revision, but a peer claim can change without updated_at.
+    # Compatibility prose is deliberately outside this observation digest.
+    source_checksum = (
+        _canonical_digest(source.items) if source.canonical_basis is None else None
+    )
 
     source_basis_digest = _canonical_digest(
         _source_basis_facts_envelope(
