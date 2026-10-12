@@ -75,9 +75,10 @@ export function summarizeTimingLog(log: string) {
       else if (value !== undefined) { seconds += value; phaseSeconds[phase] += value; }
     }
     measured += seconds;
-    if (entry.teardown && (entry.call || entry.setup?.outcome !== "passed")) finished++;
+    const caseFinished = !!(entry.teardown && (entry.call || entry.setup?.outcome !== "passed"));
+    if (caseFinished) finished++;
     longest.push({ test_id: testId, display_nodeid: entry.display_nodeid,
-      measured_seconds: seconds, finished: !!entry.teardown });
+      measured_seconds: seconds, finished: caseFinished });
   }
   longest.sort((a, b) => b.measured_seconds - a.measured_seconds || a.test_id.localeCompare(b.test_id));
   return {

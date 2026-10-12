@@ -66,9 +66,16 @@ arrives, before final JUnit or duration summaries exist. To inspect a downloaded
 job log, run `node scripts/ci/pytest_timing.ts JOB_LOG`. The reader reports the
 selected and finished cases, observed elapsed time, measured worker-seconds,
 phase totals and longest observed cases.
-The phase record identifies the full pytest node id by SHA-256 and displays only
-its first 256 characters, so oversized parameter ids do not multiply log growth
-or collapse distinct cases. The existing verbose test output remains available.
+Only collected-item reports supply phase durations. Nested pytest/unittest
+subtests remain in pytest's result output; their cost is already included in
+the parent call, so they do not duplicate timing phases. Logs produced by the
+earlier observer that mixed subtest reports into ordinary phases remain rejected
+as contradictory evidence; the reader does not guess which duplicate to discard.
+The phase record identifies the full pytest node id by SHA-256 and displays the
+parent name without parameter payloads, bounded to 256 characters. Distinct
+parameter cases keep distinct hashes; huge values and hosted secret masking of
+parameter strings cannot expand or corrupt these JSON records. The existing
+verbose pytest result output remains available.
 Missing observations, malformed records or contradictory collections fail
 readback; an interrupted or incomplete run stays
 incomplete. A completed traversal with pytest exit code 1 still has test failures.
@@ -82,12 +89,17 @@ qualification. Missing durations still use the existing equal-weight fallback.
 无需等待最终 JUnit 或耗时汇总。下载单个 job 日志后运行
 `node scripts/ci/pytest_timing.ts JOB_LOG`，可回读选中／完成数量、已观察耗时、
 worker 秒数、各阶段总和与最慢用例。缺失、损坏或矛盾记录拒绝回读；中断与不完整
-运行保持不完整。遍历完成且 exit code 为 1 仍代表测试失败。并发 phase 总和不是
+运行保持不完整。遍历完成且 exit code 为 1 仍代表测试失败。
+仅收集项的报告提供 phase 耗时；pytest/unittest 子测试仍由 pytest 输出结果，
+其成本已包含在父项 call 中，不重复记入 phase。旧 observer 把子测试混入普通 phase
+的日志仍作为矛盾证据拒绝，reader 不猜测应丢弃哪条重复记录。
+并发 phase 总和不是
 runner-minutes、排队时长或 CPU 时间；不完整记录仅给出下界，环境准备与占用须结合
 job/step 时间戳。记录不进入 timing cache、不改变测试选择、不替代门禁；没有耗时
 历史时仍按原等权规则分片。
-完整 pytest node id 用 SHA-256 标识，显示名保留前 256 字符，避免超长参数名成倍
-扩大记录，也不会把前缀相同的不同用例合并。原有详细测试输出仍保留。
+完整 pytest node id 用 SHA-256 标识；显示名去除参数内容并限制为 256 字符。
+不同参数仍有不同 hash；超长参数及宿主对参数字符串的脱敏不会扩大或破坏这些
+JSON 记录。原有 pytest 详细结果输出仍保留。
 
 The aggregate requires every shard to succeed and all four coverage files to
 exist before combining them. The existing full-suite coverage floor remains.

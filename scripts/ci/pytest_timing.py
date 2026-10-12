@@ -12,6 +12,7 @@ import math
 import time
 
 import pytest
+from _pytest.subtests import SubtestReport
 
 
 PREFIX = "LOOPX_PYTEST_TIMING "
@@ -61,12 +62,17 @@ class TimingObserver:
             self.record_collection([item.nodeid for item in session.items])
 
     def pytest_runtest_logreport(self, report):
+        # A subtest is nested within its collected item's call phase. Its
+        # duration is already included there; it is not another selected item
+        # or another call phase. Keep pytest's own subtest result reporting.
+        if isinstance(report, SubtestReport):
+            return
         duration = report.duration
-        # Parameter ids can contain tens of thousands of characters. Preserve
-        # exact identity without repeating that payload for every phase.
+        # Parameter payloads can be huge or trigger hosted secret masking,
+        # corrupting JSON. Hash full identity; display only the parent name.
         self.emit(event="phase", test_id=hashlib.sha256(
             report.nodeid.encode("utf-8", errors="surrogatepass")).hexdigest(),
-                  display_nodeid=report.nodeid[:256], phase=report.when,
+                  display_nodeid=report.nodeid.partition("[")[0][:256], phase=report.when,
                   outcome=report.outcome,
                   seconds=duration if math.isfinite(duration) and duration >= 0 else None)
 
