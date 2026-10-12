@@ -199,7 +199,7 @@
     },
     {
       "site": "loopx/capabilities/explore/research_evidence.py::<module>.append_research_observation::codec_read:load_registry#1",
-      "line": 113,
+      "line": 123,
       "column": 39,
       "kind": "codec_read",
       "api": "load_registry",
@@ -207,7 +207,7 @@
     },
     {
       "site": "loopx/capabilities/explore/research_frontier.py::<module>.hold_research_completion_evidence::codec_read:load_registry#1",
-      "line": 199,
+      "line": 216,
       "column": 31,
       "kind": "codec_read",
       "api": "load_registry",

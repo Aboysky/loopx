@@ -61,13 +61,17 @@ export class ResearchTerminalEvidenceHost {
     try {
       const line = await Promise.race([replies.next().then(row => row.done ? null : row.value),
         this.exited.then(() => null), new Promise<null>(resolve => {timer = setTimeout(() => resolve(null), 20000);})]);
-      if (line === null || Buffer.byteLength(line, "utf8") > 2 * 1024 * 1024) {
+      const oversized = {allowed: false, reason_code: "research_graph_snapshot_oversized",
+        reason: "The current research lineage exceeds the snapshot transport capacity; this is not invalid evidence. Keep retained history, close or archive stale open Todos, then retry this same completion identity."};
+      if (line === null) {
         return {allowed: false, reason_code: "research_graph_snapshot_unavailable", reason: "Current locked research graph is unavailable; retry its source read before closeout."};
       }
+      if (Buffer.byteLength(line, "utf8") > 2 * 1024 * 1024) return oversized;
       const snapshot = requireJsonObject(JSON.parse(line), "research graph snapshot");
       if (snapshot.schema_version !== "research_graph_snapshot_v0" || snapshot.error) {
         if (snapshot.error === "LockAcquireTimeoutError") return {allowed: false, reason_code: "research_graph_busy",
           reason: "An Explore writer owns the graph lock; retry this same completion identity after the writer finishes."};
+        if (snapshot.error === "ResearchTransportCapacityError") return oversized;
         return {allowed: false, reason_code: "research_graph_snapshot_invalid", reason: "The current research graph is invalid; repair its canonical source before closeout."};
       }
       return qualifyResearchCompletion({frontier: snapshot.frontier, todo: context.todo,

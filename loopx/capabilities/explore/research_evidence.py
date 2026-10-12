@@ -12,10 +12,20 @@ from ...control_plane.work_items.progress_result import PROGRESS_OBSERVATION_SCH
 from ...file_lock import exclusive_file_lock
 
 
+class ResearchTransportCapacityError(ValueError):
+    """The bounded research request exceeded transport capacity.
+
+    Valid lineage that does not fit is a capacity condition, never evidence
+    that the graph or its Todo source is invalid.
+    """
+
+
 def _research_result(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
     try:
         result = effect_runtime_result(method, params)
     except EffectRuntimeRemoteError as exc:
+        if getattr(exc, "diagnostic_code", None) == "request_too_large":
+            raise ResearchTransportCapacityError(str(exc)) from exc
         raise ValueError(str(exc)) from exc
     if not isinstance(result, dict):
         raise ValueError("Explore research runtime returned an invalid result")

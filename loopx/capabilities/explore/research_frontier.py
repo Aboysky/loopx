@@ -60,6 +60,23 @@ def research_composition_obligation(gap: Mapping[str, Any], *, agent_id: str | N
     )
 
 
+def _lineage_todo_facts(todos: Sequence[Mapping[str, Any]], obligation_ids: set[str]) -> list[dict[str, Any]]:
+    """Transport the Todo facts the typed lineage join can read; keep the rest local.
+
+    The TypeScript owner reads retained terminal history (done or archived)
+    only through a current gap's obligation: matching, attribution, deferral
+    blockers and retirement blockers all require that obligation or an open,
+    unarchived row. Other retained rows cannot change its result, so they stay
+    in the canonical source instead of growing every request with history.
+    """
+    facts = [_research_todo_facts(todo) for todo in todos]
+    if len({fact.get("todo_id") for fact in facts}) != len(facts):
+        raise ValueError("canonical research node and Todo identities must be unique")
+    return [fact for fact in facts
+            if not (fact.get("status") == "done" or fact.get("archive_state") == "archive")
+            or fact.get("replan_obligation_id") in obligation_ids]
+
+
 def build_research_composition_frontier(
     projection: Mapping[str, Any], *, candidate_sources: list[dict[str, Any]],
     harness: Mapping[str, Any], todos: Sequence[Mapping[str, Any]], agent_id: str | None,
@@ -70,7 +87,7 @@ def build_research_composition_frontier(
     bindings = [{"gap_id": gap["gap_id"], "obligation": research_composition_obligation(gap, agent_id=agent_id)}
                 for gap in facts["gaps"]]
     frontier = _research_result("explore.research.composition", {**params, "bindings": bindings,
-                                "todos": [_research_todo_facts(todo) for todo in todos]})
+        "todos": _lineage_todo_facts(todos, {binding["obligation"]["obligation_id"] for binding in bindings})})
     by_gap = {binding["gap_id"]: binding["obligation"] for binding in bindings}
     # These internal candidates are needed for the original Turn's settlement
     # after its exact successor changes the actionable frontier. They are not
