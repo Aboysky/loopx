@@ -94,6 +94,60 @@ def test_context_scopes_before_read_and_missing_registry_is_unknown(
     assert missing["warnings"] == ["registry_unavailable"]
 
 
+@pytest.mark.parametrize("include_details", [False, True])
+def test_current_agent_work_reaches_prompt_without_extra_detail_reads(
+    monkeypatch, tmp_path, include_details
+):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME, manager_index
+
+    todos = [{"todo_id": f"todo_{i}", "title": f"Implement task {i}",
+              "status": "in-progress", "priority": "P0", "claimed_by": "worker",
+              "readiness": "runnable", "raw_receipt": "excluded"} for i in range(5)]
+    todos[0]["title"] += " with a long constraint" * 100
+    source = {"revision": "sha256:fixture", "latest_recorded_at": "2026-01-01T00:00:00Z"}
+    monkeypatch.setattr(context, "build_goal_portfolio", lambda **_: {
+        "snapshot_id": "fixture", "coverage": {"complete": False},
+        "goals": [{"goal_id": "alpha", "activation_state": "active", "quality": "stale",
+                   "source": source, "agent_coverage": {"attempted": 8, "omitted": 2},
+                   "agents": [{"agent_id": "worker", "source_verified": True, "todos": todos},
+                              {"agent_id": "unread", "source_verified": False, "todos": todos}]}],
+    })
+
+    reads = []
+
+    def details(*args, **kwargs):
+        reads.append("todos")
+        return {"status": "read", "todos": []}
+
+    def history(*args, **kwargs):
+        reads.append("history")
+        return {"status": "read", "deliveries": []}
+
+    monkeypatch.setattr(context, "read_manager_goal_details", details)
+    monkeypatch.setattr(context, "read_manager_delivery_history", history)
+    result = context.manager_turn_context(tmp_path / "registry.json", {"channel_id": "manager"},
+                                         tmp_path, include_details=include_details)
+    assert reads == (["history", "todos"] if include_details else [])
+    index = manager_index(result)
+    row = index["goals"][0]
+    assert row["source"] == source and row["quality"] == "stale"
+    assert row["agent_coverage"] == {"attempted": 8, "omitted": 2}
+    worker, unread = row["agents"]
+    assert worker["todo_count_in_projection"] == 5 and worker["todos_omitted"] == 2
+    assert [t["todo_id"] for t in worker["todos"]] == ["todo_0", "todo_1", "todo_2"]
+    assert all(t["claimed_by"] == "worker" for t in worker["todos"])
+    assert worker["todos"][0]["content_truncated"] is True
+    assert unread["todos"] == [] and unread["todo_count_in_projection"] is None
+    assert "raw_receipt" not in json.dumps(index)
+    assert result["goals"][0]["current_todos"]["status"] == (
+        "read" if include_details else "not_read"
+    )
+    page = ManagerInspection(context=result, registry_path=tmp_path / "registry.json",
+                             runtime_root=tmp_path, owner_scope=True,
+                             scope_valid=lambda: True, record=lambda _: None).read(TOOL_NAME, {"view": "portfolio"})
+    assert page["ok"] and page["rows"][0]["agents"] == row["agents"]
+
+
 def test_external_context_binds_scope_and_evidence_to_goal_instance(
     monkeypatch, tmp_path
 ):
@@ -1214,6 +1268,93 @@ def test_external_authority_is_rechecked_after_same_alias_replacement(
         lambda _session: ["same-alias"],
     )
 
+    assert result["goals"] == []
+    assert result["warnings"] == ["external_authorization_changed"]
+
+
+@pytest.mark.parametrize("change", ["metadata_once", "metadata_always", "replacement", "revocation"])
+def test_external_context_recollects_only_with_unchanged_exact_authority(
+    monkeypatch, tmp_path, change
+):
+    """A snapshot race can recover; churn and changes during recovery cannot."""
+    registry = tmp_path / "registry.json"
+    payload = {"goals": [{"id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}]}
+    registry.write_text(json.dumps(payload))
+    collect = context.build_goal_portfolio
+    calls = []
+    authorized = ["authorized"]
+
+    def racing_collection(**kwargs):
+        result = collect(**kwargs)
+        calls.append(result["inventory_revision"])
+        if len(calls) == 1 or change == "metadata_always":
+            payload["observation_generation"] = len(calls)
+        elif change == "replacement":
+            payload["goals"][0]["goal_instance_id"] = "ginst_" + "b" * 32
+        elif change == "revocation":
+            authorized.clear()
+        registry.write_text(json.dumps(payload))
+        return result
+
+    monkeypatch.setattr(context, "build_goal_portfolio", racing_collection)
+    result = context.collect_manager_turn_context(
+        registry, {"channel_id": "manager.external.fixture"}, tmp_path,
+        lambda _session: list(authorized), include_details=False,
+    )
+    if change == "metadata_once":
+        assert result["authorization_scope_id"] == context.manager_authorization_scope_id([
+            {"goal_id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}
+        ])
+        assert result["goals"][0]["goal_instance_id"] == "ginst_" + "a" * 32
+    else:
+        assert result["goals"] == []
+        assert result["warnings"] == ["external_authorization_changed"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("continued_churn", [False, True])
+def test_external_inventory_recovery_never_repeats_inline_remote_reads(
+    monkeypatch, tmp_path, continued_churn
+):
+    from loopx.capabilities.manager_context.ssh_evidence import configure
+
+    registry = tmp_path / "registry.json"
+    payload = {"goals": [{"id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}]}
+    registry.write_text(json.dumps(payload))
+    channel = "manager.external." + "e" * 24
+    config = tmp_path / "ssh_config"
+    config.write_text("Host research-host\n  HostName research-host.invalid\n")
+    configure(tmp_path, channel=channel, host="research-host", goal_ids=["remote-goal"],
+              execute=True, config_path=config)
+    collect = context.build_goal_portfolio
+    remote = context._remote_evidence
+    collections = []
+    dials = []
+
+    def racing_collection(**kwargs):
+        result = collect(**kwargs)
+        collections.append(result["inventory_revision"])
+        if len(collections) == 1 or continued_churn:
+            payload["observation_generation"] = len(collections)
+            registry.write_text(json.dumps(payload))
+        return result
+
+    def read_with_fixture_config(*args, **kwargs):
+        kwargs["config_path"] = config
+        return remote(*args, **kwargs)
+
+    def failed_ssh(argv, **kwargs):
+        dials.append(argv)
+        return SimpleNamespace(returncode=255, stdout="", stderr="Connection refused")
+
+    monkeypatch.setattr(context, "build_goal_portfolio", racing_collection)
+    monkeypatch.setattr(context, "_remote_evidence", read_with_fixture_config)
+    result = context.collect_manager_turn_context(
+        registry, {"channel_id": channel}, tmp_path, lambda _: ["authorized"],
+        include_details=False, remote_evidence=True, remote_runner=failed_ssh,
+    )
+    assert len(dials) == 1
+    assert len(collections) == 1
     assert result["goals"] == []
     assert result["warnings"] == ["external_authorization_changed"]
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -44,10 +45,28 @@ def _url(value: str) -> tuple[str, str]:
             or parsed.password is not None or parsed.port not in {None, 443}):
         raise ValueError("HTTPS public-source URL required")
     # Coarse input/origin preflight; browser normalization belongs to WHATWG URL.
-    origin = "https://" + parsed.hostname.lower()
+    hostname = parsed.hostname.lower()
+    if ":" in hostname:
+        # urlsplit.hostname removes an IPv6 literal's brackets, but WHATWG
+        # origins require them. Normalize compression to match new URL().origin.
+        if "%" in hostname:
+            raise ValueError("scoped IPv6 source URLs are not supported")
+        address = ipaddress.IPv6Address(hostname)
+        mapped = address.ipv4_mapped
+        if mapped is not None:
+            packed = mapped.packed
+            high = int.from_bytes(packed[:2], "big")
+            low = int.from_bytes(packed[2:], "big")
+            compressed = f"::ffff:{high:x}:{low:x}"
+        else:
+            compressed = address.compressed
+        hostname = f"[{compressed}]"
+    origin = "https://" + hostname
     canonical = origin + (parsed.path or "/")
     if parsed.query:
         canonical += "?" + parsed.query
+    if parsed.fragment:
+        canonical += "#" + parsed.fragment
     return canonical, origin
 
 
@@ -69,12 +88,20 @@ class ReaderConfig:
         if ((space is not None and space <= 0) or not re.fullmatch(r"p[1-9][0-9]*", page)
                 or (space is None and page != "p1")):
             raise ValueError("configure an existing Page or auto with p1")
+        # Enabling this read-only provider permits all HTTPS origins by default.
+        # Explicit origin lists retain their existing scoped behavior.
+        setting = os.environ.get("LOOPX_EGO_READ_ORIGINS", "*").strip()
         origins = set()
-        for entry in os.environ["LOOPX_EGO_READ_ORIGINS"].split(","):
-            canonical, origin = _url(entry.strip())
-            if canonical != origin + "/" or urlsplit(entry.strip()).fragment:
-                raise ValueError("origins cannot contain paths or queries")
-            origins.add(origin)
+        if setting == "*":
+            origins.add("*")
+        else:
+            for entry in setting.split(","):
+                if "*" in entry:
+                    raise ValueError("use * alone for all origins")
+                canonical, origin = _url(entry.strip())
+                if canonical != origin + "/" or urlsplit(entry.strip()).fragment:
+                    raise ValueError("origins cannot contain paths or queries")
+                origins.add(origin)
         return cls(str(executable.resolve(strict=True)), space, page, frozenset(origins))
 
 
@@ -95,10 +122,30 @@ class _OwnedSpace:
         if self.executable is not None and self.executable != config.executable:
             raise ValueError("reader executable changed")
         if self.space is None:
-            # A lost creation receipt is ambiguous: don't create another space
-            # on the next tool call. An operator must inspect/restart the host.
+            # Creation may have succeeded before its receipt was lost. Discover
+            # this process's exact nonce without creating or claiming a space.
             if self.creation_attempted:
-                raise ValueError("reader space creation outcome unknown")
+                script = (
+                    f"const matches=(await listTaskSpaces()).filter(s=>s.name==={json.dumps(self.name)});"
+                    f"console.log({json.dumps(SPACE_MARKER)}+JSON.stringify({{matches:matches.map(s=>"
+                    "({id:s.id,createdBy:s.createdBy,ownership:s.ownership}))}));"
+                )
+                result = _run(config.executable, script, deadline=deadline)
+                values = [line[len(SPACE_MARKER):] for line in (result.stdout + "\n" + result.stderr).splitlines()
+                          if line.startswith(SPACE_MARKER)]
+                if result.returncode or len(values) != 1:
+                    raise ValueError("reader space recovery outcome unknown")
+                value = json.loads(values[0])
+                matches = value.get("matches") if isinstance(value, dict) else None
+                if not isinstance(matches, list) or len(matches) != 1:
+                    raise ValueError("reader space recovery is ambiguous")
+                match = matches[0]
+                if (not isinstance(match, dict) or type(match.get("id")) is not int
+                        or match["id"] <= 0 or match.get("createdBy") != "agent"
+                        or match.get("ownership") != "agent"):
+                    raise ValueError("reader space is not agent-owned")
+                self.space = match["id"]
+                return replace(config, task_space=self.space)
             self.creation_attempted = True
             self.executable = config.executable
             script = (f"const t=await taskSpace({json.dumps(self.name)});"
@@ -124,8 +171,9 @@ class _OwnedSpace:
         space, self.space = self.space, None
         # Only this process's created space, and only while still agent-owned.
         # Never claim/take over a space after the user or another owner stops it.
-        script = (f"const t=await taskSpace({space});"
-                  "if(t.ownership==='agent')await t.finish({keep:[]});")
+        script = (f"const live=(await listTaskSpaces()).find(s=>s.id==={space});"
+                  "if(live?.ownership==='agent'){"
+                  f"const t=await taskSpace({space});await t.finish({{keep:[]}});}}")
         try:
             _run(self.executable, script)
         except (OSError, UnicodeError, subprocess.TimeoutExpired):
@@ -139,26 +187,87 @@ def _run(executable: str, script: str, *, deadline: float | None = None) -> subp
     timeout = TIMEOUT_SECONDS if deadline is None else deadline - time.monotonic()
     if timeout <= 0:
         raise subprocess.TimeoutExpired(executable, TIMEOUT_SECONDS)
-    return subprocess.run(
-        [executable, "nodejs", "-e", script],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
-        timeout=timeout, check=False,
-    )
+    # Ego discards console output on a native control stop, including our
+    # sentinel. Preserve only its stable code outside that buffered channel.
+    with tempfile.TemporaryDirectory(prefix="loopx-source-control-") as directory:
+        stop = Path(directory) / "stop.txt"
+        wrapped = (
+            "try{" + script + "}catch(e){"
+            "if(['EGO_TASK_SPACE_USER_IN_CONTROL','EGO_TASK_SPACE_INACTIVE']"
+            ".includes(e?.error_code)){"
+            f"(await import('node:fs')).writeFileSync({json.dumps(str(stop))},e.error_code);"
+            "}throw e;}"
+        )
+        result = subprocess.run(
+            [executable, "nodejs", "-e", wrapped],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+            timeout=timeout, check=False,
+        )
+        if stop.exists() and stop.read_text(encoding="utf-8") in {
+            "EGO_TASK_SPACE_USER_IN_CONTROL", "EGO_TASK_SPACE_INACTIVE",
+        }:
+            return subprocess.CompletedProcess(
+                result.args, 1,
+                MARKER + '{"error":"source_reader_not_agent_owned"}', "",
+            )
+        return result
 
 
-def _navigation(config: ReaderConfig, url: str) -> str:
+def _navigation(config: ReaderConfig, url: str, *, image: bool = False) -> str:
     # Use the browser's URL rules before navigation, including dot segments and
     # query escaping. The fixed operator-owned script, not page data, supplies
     # this canonical target. Recheck its origin before touching the reserved Page.
     return (
-        f"const requestedUrl={json.dumps(url)};const target=new URL(requestedUrl);target.hash='';"
-        f"const origins={json.dumps(sorted(config.origins))}.map(o=>new URL(o).origin);"
-        "if(!origins.includes(target.origin))throw new Error('source_origin_not_authorized');"
+        f"const requestedUrl={json.dumps(url)};const target=new URL(requestedUrl);"
+        "if(target.protocol!=='https:'||target.username||target.password||target.port)"
+        "throw new Error('source_url_invalid');"
+        f"const allowAllOrigins={json.dumps('*' in config.origins)};"
+        f"const origins={json.dumps(sorted(config.origins - {'*'}))}.map(o=>new URL(o).origin);"
+        "if(!allowAllOrigins&&!origins.includes(target.origin))"
+        "throw new Error('source_origin_not_authorized');"
+        # Ownership on a TaskSpace handle is a snapshot. Observe live control
+        # before resolving the Page; never take over or replace a user's space.
+        f"const live=(await listTaskSpaces()).find(s=>s.id==={config.task_space});"
+        "if(live&&live.ownership!=='agent'){"
+        f"console.log({json.dumps(MARKER)}+JSON.stringify({{error:'source_reader_not_agent_owned'}}));"
+        "throw new Error('source_reader_not_agent_owned');}"
         f"let t;try{{t=await taskSpace({config.task_space});}}catch(e){{"
         "if(/task space not found/i.test(String(e?.message)))"
         f"console.log({json.dumps(SPACE_MARKER)}+JSON.stringify({{closed:true}}));throw e;}}"
         f"const p=t.page({json.dumps(config.page)});"
         "await p.goto(target.href);"
+        # Navigation can finish while an SPA contains only its navigation or
+        # a loading shell. Prefer semantic content, including short posts;
+        # unrelated sidebar/comment spinners must not delay a readable article.
+        "let sourceReady=true;try{await p.waitForFunction((url)=>{"
+        "const current=new URL(location.href);"
+        "if(current.href!==url)return true;"
+        "const ancillary='aside,nav,header,footer,[role=\"complementary\"],"
+        "[role=\"navigation\"],[role=\"banner\"],[role=\"contentinfo\"]';"
+        "const main=Array.from(document.querySelectorAll('main,[role=\"main\"]'))"
+        ".find(n=>!n.closest(ancillary));"
+        "const articles=Array.from((main||document).querySelectorAll('article'))"
+        ".filter(n=>!n.closest(ancillary));"
+        "const roots=articles.length?articles:[main||document.body];"
+        "return roots.some(root=>{"
+        "if(!root||root.closest('[aria-busy=\"true\"]'))return false;"
+        "const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);"
+        "let node,hasText=false;while((node=walker.nextNode())){"
+        "const parent=node.parentElement;"
+        "if(!node.textContent.trim()||!parent||parent.closest(ancillary)"
+        "||getComputedStyle(parent).visibility==='hidden')continue;"
+        "const range=document.createRange();range.selectNodeContents(node);"
+        "if(range.getClientRects().length){hasText=true;break;}}"
+        "const hasImage=Array.from(root.querySelectorAll('img')).some(im=>"
+        "!im.closest(ancillary)&&im.complete&&im.naturalWidth>0&&im.naturalHeight>0&&im.getClientRects().length"
+        "&&getComputedStyle(im).visibility!=='hidden');"
+        f"if(!hasText&&!({json.dumps(image)}&&hasImage))return false;"
+        "return !Array.from(root.querySelectorAll('[role=\"progressbar\"],[aria-busy=\"true\"]'))"
+        ".some(n=>!n.closest(ancillary)&&n.getClientRects().length"
+        "&&getComputedStyle(n).visibility!=='hidden');});"
+        "},target.href,{timeout:10000});}catch(e){"
+        "if(!String(e?.message).includes('page.waitForFunction timed out'))throw e;"
+        "sourceReady=false;}"
     )
 
 
@@ -167,17 +276,18 @@ def _script(config: ReaderConfig, url: str) -> str:
     return (
         _navigation(config, url) +
         "const r=await p.evaluate((request)=>{"
-        "const current=new URL(location.href);current.hash='';"
+        "const current=new URL(location.href);"
         # Fence before reading DOM, atomically with extraction. A raced Page or
         # redirect returns no content, even within another authorized origin.
         "if(current.href!==request.url)return {error:'source_url_changed'};"
+        "if(!request.ready)return {error:'source_content_not_ready'};"
         "const text=document.body?.innerText||'';"
         "return {url:current.href,title:document.title,"
         "text:text.slice(0,request.limit),truncated:text.length>request.limit,"
         "image_count:document.images.length,images:Array.from(document.images).slice(0,128)"
         ".map((im,index)=>({index,alt:im.alt.slice(0,512),"
         "natural_width:im.naturalWidth,natural_height:im.naturalHeight}))};"
-        f"}},{{url:target.href,limit:{MAX_TEXT_CHARS}}});"
+        f"}},{{url:target.href,limit:{MAX_TEXT_CHARS},ready:sourceReady}});"
         f"console.log({json.dumps(MARKER)}+JSON.stringify({{...r,"
         "requested_url:requestedUrl,canonical_url:target.href}));"
     )
@@ -205,8 +315,8 @@ def _result(stdout: str, stderr: str, url: str) -> dict[str, object]:
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") == "source_url_changed":
-            return {"ok": False, "error": "source_url_changed"}
+        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_reader_not_agent_owned"}:
+            return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)
         text, title = value["text"], value["title"]
         if (not isinstance(text, str) or not text.strip()
@@ -247,21 +357,22 @@ def _image_inventory(value: object) -> list[dict[str, object]]:
 
 def _image_script(config: ReaderConfig, url: str, index: int, path: str) -> str:
     # Capture one rendered image region, never a caller-selected path or script.
-    request = f"{{url:target.href,index:{index},edge:{MAX_IMAGE_EDGE}}}"
+    request = f"{{url:target.href,index:{index},edge:{MAX_IMAGE_EDGE},ready:sourceReady}}"
     return (
-        _navigation(config, url) +
+        _navigation(config, url, image=True) +
         f"const request={request};"
         "const initial=await p.evaluate((r)=>{"
-        "const u=new URL(location.href);u.hash='';"
+        "const u=new URL(location.href);"
         "if(u.href!==r.url)return {error:'source_url_changed'};"
+        "if(!r.ready)return {error:'source_content_not_ready'};"
         "const im=document.images[r.index];if(!im)return {error:'source_image_unavailable'};"
         "im.scrollIntoView({block:'center'});return {ok:true};},request);"
         "if(initial.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify(initial));}else{"
-        "await p.waitForFunction((r)=>{const u=new URL(location.href);u.hash='';"
+        "await p.waitForFunction((r)=>{const u=new URL(location.href);"
         "if(u.href!==r.url)return true;const im=document.images[r.index];"
         "return im&&im.complete&&im.naturalWidth>1&&im.naturalHeight>1;},"
         "request,{timeout:10000});"
-        "const before=await p.evaluate((r)=>{const u=new URL(location.href);u.hash='';"
+        "const before=await p.evaluate((r)=>{const u=new URL(location.href);"
         "if(u.href!==r.url)return {error:'source_url_changed'};"
         "const im=document.images[r.index];const b=im.getBoundingClientRect();"
         "if(b.width<2||b.height<2||b.width>r.edge||b.height>r.edge)"
@@ -270,7 +381,7 @@ def _image_script(config: ReaderConfig, url: str, index: int, path: str) -> str:
         "clip:{x:b.left+scrollX,y:b.top+scrollY,width:b.width,height:b.height}};},request);"
         "if(before.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify(before));}else{"
         f"await p.screenshot({{path:{json.dumps(path)},fullPage:true,clip:before.clip}});"
-        "const stable=await p.evaluate((r)=>{const u=new URL(location.href);u.hash='';"
+        "const stable=await p.evaluate((r)=>{const u=new URL(location.href);"
         "if(u.href!==r.url)return false;"
         "const im=document.images[r.index];const b=im?.getBoundingClientRect();"
         "return u.href===r.url&&im?.currentSrc===r.src&&b&&"
@@ -291,7 +402,7 @@ def _image_result(stdout: str, stderr: str, url: str, index: int, path: str) -> 
         value = json.loads(values[0])
         if not isinstance(value, dict):
             raise ValueError("object required")
-        if value.get("error") in {"source_url_changed", "source_image_unavailable",
+        if value.get("error") in {"source_url_changed", "source_content_not_ready", "source_reader_not_agent_owned", "source_image_unavailable",
                                    "source_image_bounds_unsupported"}:
             return {"ok": False, "error": value["error"]}
         final = _result_url(value, url)
@@ -327,7 +438,7 @@ def _read(url: str, image_index: int | None = None, screenshot_path: str = "") -
         config = ReaderConfig.from_environment()
     except (KeyError, OSError, TypeError, ValueError):
         return {"ok": False, "error": "source_reader_not_configured"}
-    if origin not in config.origins:
+    if "*" not in config.origins and origin not in config.origins:
         return {"ok": False, "error": "source_origin_not_authorized"}
     # Concurrent calls within this MCP process do not navigate the reserved Page
     # over one another. Auto mode gives each process a distinct owned space.
@@ -346,6 +457,9 @@ def _read(url: str, image_index: int | None = None, screenshot_path: str = "") -
                 continue
             break
         if result.returncode:
+            stopped = _result(result.stdout, result.stderr, canonical)
+            if stopped.get("error") == "source_reader_not_agent_owned":
+                return stopped
             return {"ok": False, "error": "browser_read_failed",
                     "exit_code": result.returncode}
         if image_index is not None:
@@ -366,6 +480,8 @@ def read_public_url(url: str) -> dict[str, object]:
 
     Images are metadata only here. Use read_public_image for actual pixels.
     A verification wall or truncation is not a complete source read.
+    If source_reader_not_agent_owned, preserve the Page and resume this tool
+    once browser control returns. No extra chat confirmation is required.
     """
     return _read(url)
 
@@ -373,7 +489,7 @@ def read_public_url(url: str) -> dict[str, object]:
 def read_public_image(url: str, index: int) -> list[TextContent | ImageContent]:
     """Read actual pixels of one loaded image by its read_public_url inventory index.
 
-    Uses the same authorized reserved Page. No new origins, login, publishing,
+    Uses the same reserved Page and configured HTTPS origin policy. No login, publishing,
     note edits or downloads of arbitrary URLs. A rendered crop may be occluded;
     it does not prove all article images or referenced sources were read.
     """

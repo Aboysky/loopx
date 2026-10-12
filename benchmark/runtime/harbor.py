@@ -16,8 +16,8 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
-from .codex_offline import CodexOffline
-from .codex import Execution
+from .codex_offline import CodexOffline, stage_portable_python
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
 
 
 _ROOT = "/opt/loopx-benchmark"
@@ -56,9 +56,10 @@ class BenchmarkCodex(CodexOffline):
         scheduler_timeout_sec=5080,
         replan_after_todos=None,
         replan_after_turns=None,
-        task_entry="seeded-todo",
+        task_entry=None,
         planning_timeout_sec=300,
         turn_envelope=False,
+        task_objective=None,
         **kwargs,
     ):
         if isinstance(validation_command, str):
@@ -72,8 +73,8 @@ class BenchmarkCodex(CodexOffline):
             task_entry,
             turn_envelope,
         )
-        self.planning_timeout = float(planning_timeout_sec)
-        if not 0 < self.planning_timeout < float("inf"):
+        self.planning_timeout = None if planning_timeout_sec is None else float(planning_timeout_sec)
+        if self.planning_timeout is not None and not 0 < self.planning_timeout < float("inf"):
             raise ValueError("planning timeout must be finite and positive")
         self.scheduler_timeout = int(scheduler_timeout_sec)
         if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
@@ -84,10 +85,12 @@ class BenchmarkCodex(CodexOffline):
             raise ValueError("Choose replan_after_turns or replan_after_todos, not both")
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
-                    not 1 <= replan_after_turns <= 5):
-                raise ValueError("replan_after_turns must be an integer between 1 and 5")
+                    not 1 <= replan_after_turns <= 6):
+                raise ValueError("replan_after_turns must be an integer between 1 and 6")
             if not self.execution.uses_loopx:
                 raise ValueError("replan_after_turns requires a LoopX execution mode")
+        if replan_after_turns is None and replan_after_todos is None and self.execution.uses_loopx:
+            replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
@@ -95,6 +98,11 @@ class BenchmarkCodex(CodexOffline):
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
+        if task_objective is not None and (not isinstance(task_objective, str)
+                                          or not task_objective.strip()):
+            raise ValueError("Task objective must be a non-empty string")
+        self.task_objective = (task_objective if task_objective is not None else
+                              "Complete the current benchmark task through validated LoopX Todos.")
         super().__init__(*args, **kwargs)
 
     def _replan_configuration(self) -> tuple[str, str, int]:
@@ -163,6 +171,9 @@ class BenchmarkCodex(CodexOffline):
             "LOOPX_INSTALL_OPENCODE": "0",
             "LOOPX_INSTALL_CLAUDE": "0",
             "LOOPX_SKILL_DEDUPE_OTHER_ROOT": "0",
+            # Research trials do not send background usage statistics. Keep
+            # setup and control commands under the same trial policy as tools.
+            "LOOPX_USAGE_PING": "0",
             # Codex tool calls use `bash -lc`, whose login profile may replace
             # PATH. BASH_ENV restores staged tools and the task image toolchain.
             "BASH_ENV": _BASH_ENV,
@@ -187,7 +198,6 @@ class BenchmarkCodex(CodexOffline):
         await super().install(environment)
 
         loopx_src = Path(os.environ["LOOPX_SRC_DIR"]).resolve()
-        portable_python = Path(os.environ["LOOPX_PORTABLE_PYTHON"]).resolve()
         node_root = Path(os.environ["LOOPX_NODE_DIR"]).resolve()
         await self.exec_as_root(
             environment,
@@ -201,7 +211,7 @@ class BenchmarkCodex(CodexOffline):
             timeout_sec=180,
         )
         actual_commit = await self._stage_source(environment, loopx_src)
-        await environment.upload_dir(portable_python, _PYTHON)
+        await stage_portable_python(environment, _PYTHON)
         if self.execution.uses_loopx:
             await environment.upload_dir(node_root, _NODE)
         await self.exec_as_root(
@@ -269,6 +279,7 @@ class BenchmarkCodex(CodexOffline):
             "task_entry": self.execution.task_entry,
             **({"turn_envelope": True} if self.execution.turn_envelope else {}),
             "home_scope": "trial",
+            "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
             "scheduler_terminal_packet_compatibility": True,
             **self._replan_receipt(),
@@ -367,7 +378,7 @@ class BenchmarkCodex(CodexOffline):
                     "--goal-id",
                     _GOAL_ID,
                     "--objective",
-                    "Complete the current benchmark task through validated LoopX Todos.",
+                    self.task_objective,
                     "--goal-doc",
                     _TASK_DOC,
                     "--adapter-kind",
@@ -432,16 +443,16 @@ class BenchmarkCodex(CodexOffline):
 
     async def _seed_phase(self, environment: BaseEnvironment, *, cwd: str) -> None:
         text = (
-            f"[P0] Execute benchmark phase {self._phase_number}. Read the exact "
-            f"current task from {self._task_document}; inspect the workspace, implement and "
-            "validate it."
+            f"[P0] Complete the task in {self._task_document}. Inspect the workspace, "
+            "implement and validate against the task's full requirements and acceptance "
+            "criteria. Keep unmet requirements explicit when judging task completion."
         )
         if self._seeded_todo_id:
             listed = await self._loopx(environment, [
                 "todo", "list", "--goal-id", _GOAL_ID, "--role", "agent",
                 "--todo-id", self._seeded_todo_id,
             ], cwd=cwd)
-            current = next(iter(listed["todos"]), None)
+            current = listed["todo"]
             if current and current.get("status") in {"open", "blocked"}:
                 if current.get("claimed_by") != _AGENT_ID:
                     raise RuntimeError("Seeded task Todo is no longer owned by this agent")
@@ -643,7 +654,9 @@ class BenchmarkCodex(CodexOffline):
             env = self._worker_env(cwd=cwd)
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
-                planning_timeout = min(self.planning_timeout, deadline - time.monotonic() - 30)
+                planning_timeout = deadline - time.monotonic() - 30
+                if self.planning_timeout is not None:
+                    planning_timeout = min(self.planning_timeout, planning_timeout)
                 if planning_timeout <= 0:
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(

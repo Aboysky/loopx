@@ -71,6 +71,16 @@ def test_trial_home_preserves_sessions_and_fixes_nonconversation_inputs(tmp_path
         prepare_codex_home(**(args | {"effort": "medium"}))
 
 
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "heartbeat", "turn", "loopx-goal"])
+def test_trial_shell_tools_disable_usage_ping_for_every_execution_mode(tmp_path, mode):
+    execution = Execution(mode=mode, **({"validation_command": ("true",)} if mode == "turn" else {}))
+    args = settings(tmp_path, execution=execution,
+                    **({"skills": None} if not execution.uses_loopx else {}))
+    prepare_codex_home(**args)
+    config = tomllib.loads((args["home"] / "config.toml").read_text())
+    assert config["shell_environment_policy"]["set"]["LOOPX_USAGE_PING"] == "0"
+
+
 def test_baseline_isolated_from_loopx_skills(tmp_path):
     args = settings(tmp_path, execution=Execution(mode="native-goal"), skills=None)
     prepare_codex_home(**args)
@@ -349,18 +359,22 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert env["LOOPX_EXECUTION_MODE"] == mode
         assert env["LOOPX_PROJECT"] == "/workspace"
         assert env["MODEL_NAME"] == "fixture"
+        assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
 
 
 @pytest.mark.parametrize("existing", [False, True])
-@pytest.mark.parametrize("turns", [None, 2])
-def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing, turns):
+@pytest.mark.parametrize("settings,field,value", [
+    ({}, "replan_after_effective_turns", 6),
+    ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
+    ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
+])
+def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_path, monkeypatch, existing, settings, field, value):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
     from loopx.cli import build_parser
 
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
-                           replan_after_turns=turns)
-    field = "replan_after_effective_turns" if turns else "replan_after_completed_todos"
+                           **settings, task_entry="seeded-todo")
     calls = []
 
     async def write_task(*args, **kwargs):
@@ -374,7 +388,7 @@ def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing
         # launching a model or mutating any active project.
         build_parser().parse_args(args)
         calls.append(args)
-        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: turns or 3}}}
+        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value}}}
 
     monkeypatch.setattr(agent, "_write_task_document", write_task)
     monkeypatch.setattr(agent, "_registry_exists", registry_exists)
@@ -386,11 +400,12 @@ def test_phase_bootstrap_uses_current_public_cli(tmp_path, monkeypatch, existing
     assert any(args[:2] == ["todo", "add"] for args in calls)
     assert any(args[0] == "bootstrap" for args in calls) is not existing
     assert all("--clear-waiting-on" not in args for args in calls)
-    option = "--execution-replan-after-turns" if turns else "--execution-replan-after-todos"
+    option = ("--execution-replan-after-turns" if field == "replan_after_effective_turns"
+              else "--execution-replan-after-todos")
     configured = [args for args in calls if option in args]
-    assert configured and all(args[args.index(option) + 1] == str(turns or 3)
+    assert configured and all(args[args.index(option) + 1] == str(value)
                               for args in configured)
-    assert agent._replan_receipt() == {field: turns or 3}
+    assert agent._replan_receipt() == {field: value}
 
 
 def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monkeypatch):
@@ -474,6 +489,7 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled)
     commands = []
+    command_envs = {}
     async def no_op(*args, **kwargs):
         return None
     async def stage(*args, **kwargs):
@@ -481,6 +497,7 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
         return "fixture"
     async def execute(*args, **kwargs):
         commands.append(kwargs.get("command", ""))
+        command_envs[kwargs.get("command", "")] = kwargs.get("env", {})
         return SimpleNamespace(stdout='{"ok": true}', stderr="", return_code=0)
     for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
         monkeypatch.setenv(key, str(tmp_path))
@@ -499,6 +516,11 @@ def test_harbor_install_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled
     assert "/task/toolchain" in agent._shell_path_restore()
     command = next(c for c in commands if "> /logs/agent/loopx-install.json" in c)
     receipt = json.loads(shlex.split(command)[2])
+    assert receipt["loopx_usage_ping_enabled"] is False
+    for command in commands:
+        if "install-local.sh" in command or " doctor " in command:
+            assert command_envs[command]["LOOPX_USAGE_PING"] == "0"
+    assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
     assert ("turn_envelope" in receipt) is enabled
     if enabled:
         assert receipt["turn_envelope"] is True
