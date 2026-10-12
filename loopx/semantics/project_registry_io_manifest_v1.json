@@ -1438,6 +1438,14 @@
       "classification": "codec_api"
     },
     {
+      "site": "loopx/control_plane/goals/goal_frontier/fallback_source.py::<module>.read_fallback_source_snapshot::codec_read:load_registry#1",
+      "line": 280,
+      "column": 18,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
       "site": "loopx/control_plane/goals/operator_actions.py::<module>.build_goal_action_catalog::codec_read:decode_registry_snapshot#1",
       "line": 92,
       "column": 25,
