@@ -179,7 +179,7 @@ export async function verifySubjects(
   const args = ["--dist-dir", distDir, "--version", c.tag.slice(1)];
   runOwner(["write-checksums", ...args, "--output", manifest]);
   runOwner(["verify-checksums", ...args, "--checksum-file", manifest]);
-  const lines = (await readFile(manifest, "ascii")).trim().split("\n");
+  const lines = (await readFile(manifest, "ascii")).trim().split(/\r?\n/);
   requireValue(lines.length === Object.keys(files).length && lines.every((line) => {
     const [digest, name] = line.split("  "); return files[name] === digest;
   }), "manifest/source subject set mismatch");

@@ -2,11 +2,13 @@
 /** Semantic probe cases. Synthetic CI metadata; real asset owner and disk bytes. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 import { admit, apiGet, assetsInventory, completeJobs, identity, remainingBudget, verifySource, verifySubjects } from "../scripts/ci/desktop_release_preflight.ts";
 
 const sha = "a".repeat(40), now = Date.parse("2026-01-01T12:00:00Z");
@@ -79,12 +81,23 @@ await check("real disk digests and Python manifest owner; missing, extra, stale 
     const inputs = [[w, "Windows", 1], [m, "macOS", 1]];
     // Only cryptographic transport is substituted here. The owner and byte IO are real.
     const owner = new URL("../scripts/desktop_release_artifacts.py", import.meta.url);
-    const runOwner = (args) => execFileSync(process.env.PREFLIGHT_PYTHON ?? "python", [fileURLToPath(owner), ...args], { stdio: "pipe" });
+    const python = resolveTestPython();
+    const runOwner = (args) => execFileSync(python, [fileURLToPath(owner), ...args], { stdio: "pipe" });
     let verifications = 0;
     const verify = () => { verifications++; };
-    await verifySubjects(c, inputs, dist, verify, runOwner);
-    assert.equal(verifications, 6);
-    assert.equal((await readFile(join(dist, "DESKTOP-SHA256SUMS"), "ascii")).trim().split("\n").length, 4);
+    for (const newline of ["\n", "\r\n"]) {
+      const manifest = join(dist, "DESKTOP-SHA256SUMS");
+      // Force each host's bytes after the real writer; the real verifier still runs.
+      const runOwnerWithNewline = (args) => {
+        runOwner(args);
+        if (args[0] === "write-checksums") writeFileSync(manifest, readFileSync(manifest, "ascii").replace(/\r?\n/g, newline), "ascii");
+      };
+      verifications = 0;
+      await verifySubjects(c, inputs, dist, verify, runOwnerWithNewline);
+      assert.equal(verifications, 6);
+      assert.deepEqual((await readFile(manifest, "ascii")).trim().split(/\r?\n/).map((line) => line.split("  ")),
+        names.map((name) => [digestSets[1][name] ?? digestSets[0][name], name]));
+    }
     await assert.rejects(verifySubjects(c, inputs, dist, () => { throw new Error("signature verification failed"); }, runOwner), /signature verification/);
     await writeFile(join(dist, names[0]), "tampered");
     await assert.rejects(verifySubjects(c, inputs, dist, verify, runOwner), /digest mismatch/);

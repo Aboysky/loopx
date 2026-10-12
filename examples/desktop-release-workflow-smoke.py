@@ -153,7 +153,7 @@ def main() -> int:
     subprocess.run(
         ["node", str(REPO_ROOT / "examples/desktop-release-preflight-smoke.mjs")],
         cwd=REPO_ROOT,
-        env={**os.environ, "PREFLIGHT_PYTHON": sys.executable},
+        env={**os.environ, "LOOPX_TEST_PYTHON": sys.executable},
         check=True,
         timeout=30,
     )
