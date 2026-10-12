@@ -558,6 +558,30 @@ Host 会话 owner 和 artifact provider；本 RFC 定义研究实验的一致性
 - source/model/tool/evaluator pins 与已消费的 solver-visible feedback；
 - 剩余总预算、已受理提交历史及原协议下的下一次反馈机会。
 
+捕获接在既有**有效工作 Turn 已结算、下一次工作尚未准入**的边界。按时间请求
+捕获时，等待该边界并记录实际已用预算；不能任意打断工具操作，再把所得文件
+称为一致状态。Runner/Host 持有这道 barrier，各既有参与 owner 分别负责快照：
+
+1. 完成欠账的 Turn 结算，并按原身份 reconcile 未决工具、子任务和 evaluator
+   效果。未决效果使研究点尚未资格化；复制 journal 不等于解决效果。
+2. 在 barrier 记录原生已完成 turn cursor、canonical 研究状态 revision、工作
+   产物 manifest 和 evaluator 机会状态。适用时复用既有 SQLite snapshot owner，
+   不复制活数据库文件；代码与 incumbent/result 绑定分别可验证。
+3. 发布一份不可变 verification unit 前，复查各参与者 revision/cursor 和产物
+   digest。来源移动、缺失成员或中断捕获都留下 incomplete unit，不能成为可用
+   研究点；这只证明所声明 barrier 的一致性，不宣称跨 owner 事务。
+4. 恢复到隔离目标、验证内容，再由既有 owner 准入新 session 和研究工作。
+   Restore 本身不能启动模型、claim 工作、注册 timer 或提交候选。
+
+Host adapter 须在固定版本验证原生历史重建，包括 compaction 和分页存储。
+例如 Codex 的[原生 fork 协议](https://learn.chatgpt.com/docs/app-server)
+可按已完成 turn 限定分支；导出文件仍须通过原生 store 的 import/readback 路径，
+任意文件路径或日志解析成功并不充分。比较重建的历史前缀及被排除的后续历史，
+不只检查返回了 session id。Provider 特有迁移与存储处理不进入通用一致性决策。
+
+截短历史会话不能从终局版本重建当时的代码、研究状态或反馈消费。没有其他参与者
+同时捕获且已资格化的状态时，这类探针只证明 Host 可行性，不能进入同状态干预比较。
+
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和
 submission token 不能变成目标侧权限；未知效果先按原身份 reconcile，再决定
@@ -571,7 +595,9 @@ submission token 不能变成目标侧权限；未知效果先按原身份 recon
 研究消融从**同一份**已资格化研究点分成原策略接续与证据驱动范围复盘，使用
 等额接续预算与资源，只改变一个控制因素；通过 evaluator owner 保留反馈机会数
 与冷却时机。Session 重启、摘要替换、版本升级或策略组合属于额外变量。保留
-所有分支及无效/负结果，比较实际采用的原生成绩、新信息与完整接续成本。结果
+所有分支及无效/负结果。Evaluator 向每个新获授权分支传递剩余冷却和已消费机会，
+不能因新身份多得一次立即提交；捕获到准入之间的墙钟等待不会补充 checkpoint
+的机会额度，也不会延长接续预算。比较实际采用的原生成绩、新信息与完整接续成本。结果
 只资格化这项有范围干预，不证明整个 LoopX 或一个通用最优 stride。
 
 ## 8. 测量模型

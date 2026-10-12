@@ -655,6 +655,41 @@ Record the actual boundary and any skew:
 - remaining total budget, accepted submission history and next feedback
   opportunity under the original protocol.
 
+Capture belongs at the existing **settled work-Turn boundary**, before the next
+work admission. A time-based request waits for that boundary and records its
+actual elapsed budget; it cannot interrupt an arbitrary tool operation and
+label the resulting files consistent. The runner/Host owns this barrier, while
+each existing participant owns its snapshot:
+
+1. Finish owed Turn settlement and reconcile outstanding tool, child-work and
+   evaluator effects by their original identities. Unresolved effects make the
+   point unqualified; copying their journals does not resolve them.
+2. Capture the native completed-turn cursor, canonical research-state revision,
+   working-artifact manifest and evaluator opportunity state at that barrier.
+   Use the existing SQLite snapshot owner where applicable, not a live database
+   file copy. Keep code and incumbent/result bindings independently verifiable.
+3. Recheck each participant's revision/cursor and artifact digests before
+   publishing one immutable verification unit. Any movement, missing member or
+   interrupted capture leaves an incomplete unit, never a usable point. This
+   establishes the declared barrier's consistency, not a cross-owner transaction.
+4. Restore into an isolated destination, verify its contents, then use the
+   existing owners to admit fresh sessions and research work. Restore alone
+   cannot start a model, claim work, register a timer or submit a candidate.
+
+The Host adapter must qualify native history reconstruction at its pinned
+version, including compaction and paginated storage. For example, Codex's
+[native fork protocol](https://learn.chatgpt.com/docs/app-server)
+can bound a branch by a completed turn. An exported file still needs the native
+store's import/readback path; an arbitrary file path or successful log parse is
+insufficient. Compare the reconstructed prefixes and excluded later history,
+not just returned session identifiers. Keep provider-specific migration and
+storage handling outside the generic consistency decision.
+
+Historical conversation truncation cannot reconstruct earlier code, research
+state or feedback consumption from their terminal versions. Without a qualified
+contemporaneous capture of those participants, such a probe establishes Host
+feasibility only and must not enter a same-state intervention comparison.
+
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
 paths. Historical leases, quota, timers, pending effects and submission tokens
@@ -673,6 +708,10 @@ continuation and evidence-conditioned scope review, with equal continuation
 budgets and resources. Change one control factor; preserve feedback opportunity
 counts and cooldown timing through the evaluator owner. Label session restart,
 summary replacement, source upgrades or policy bundles as additional factors.
+The evaluator carries the remaining cooldown and consumed opportunities into
+each newly authorized branch; a fresh identity must not create an extra immediate
+submission. Wall-clock waiting between capture and admission does not replenish
+the checkpoint's opportunity allowance or extend the continuation budget.
 Keep all branches and invalid/negative results; compare adopted native outcomes,
 information gained and full continuation cost. The result qualifies the scoped
 intervention, not all LoopX behavior or an optimal universal stride.
