@@ -46,9 +46,9 @@ export function DesktopUpdate() {
     if (includeState && value.state?.phase) setState(value.state);
   }
 
-  function commitStatus(value: UpdateStatus, generation: number) {
+  function commitStatus(value: UpdateStatus, generation: number, includeState = true) {
     if (generation !== statusGeneration.current) return false;
-    const stateIsCurrent = !busy.current || !value.state?.phase || workingPhases.includes(value.state.phase);
+    const stateIsCurrent = includeState && (!busy.current || !value.state?.phase || workingPhases.includes(value.state.phase));
     readStatus(value, stateIsCurrent);
     return true;
   }
@@ -112,7 +112,17 @@ export function DesktopUpdate() {
       statusGeneration.current++;
       setState(failedUpdate(error, version ? "update_failed" : "desktop_status_unavailable"));
     }
-    finally { busy.current = false; }
+    finally {
+      busy.current = false;
+      // A fast operation can change backup/selection metadata before the first
+      // progress poll. Read it back without replacing the operation's outcome.
+      const generation = ++statusGeneration.current;
+      try {
+        commitStatus(await invoke<UpdateStatus>("desktop_update_status"), generation, false);
+      } catch {
+        // An unavailable status read must not hide the operation's result.
+      }
+    }
   }
   const message: Record<Phase, string> = {
     service_error: zh ? "运行时已安装，但服务尚未连接。可重试更新、修复或恢复上版。" : "Runtime installed, but services are unavailable. Retry updates, repair, or restore the previous version.",
