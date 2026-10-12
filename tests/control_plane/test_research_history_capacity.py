@@ -205,8 +205,9 @@ def test_bounded_lineage_transport_preserves_the_typed_join(tmp_path: Path, monk
             assert bounded[key] == full[key], key
         assert bounded["lineage_gaps"][0]["successor_todo_id"] == "todo_joint"
         # Retirement reads only open, unarchived obligation rows; both views agree.
-        open_rows = lambda frontier: [row for row in frontier["obligation_tasks"]
-                                      if row["archive_state"] != "archive" and row["status"] in {"open", "claimed"}]
+        def open_rows(frontier):
+            return [row for row in frontier["obligation_tasks"]
+                    if row["archive_state"] != "archive" and row["status"] in {"open", "claimed"}]
         assert open_rows(bounded) == open_rows(full)
     finally:
         restart_effect_runtime()
