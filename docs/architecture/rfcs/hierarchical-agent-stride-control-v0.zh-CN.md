@@ -582,6 +582,12 @@ Host adapter 须在固定版本验证原生历史重建，包括 compaction 和�
 截短历史会话不能从终局版本重建当时的代码、研究状态或反馈消费。没有其他参与者
 同时捕获且已资格化的状态时，这类探针只证明 Host 可行性，不能进入同状态干预比较。
 
+第一项实现切片是 [inert 产物捕获](../../../benchmark/README.md#inert-checkpoint-capture)。
+Benchmark adapter 在既有 Turn 结算后请求捕获；typed 产物 owner 封存显式文件/
+目录及已提交 SQLite 快照，复查来源 witness 并验证隔离物化。Manifest 始终声明
+研究点尚未资格化。参与者/效果 reconciliation、原生会话重建、新状态采用及评测
+机会继承仍各自待验收；operator metadata 不能认证这些条件。
+
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和
 submission token 不能变成目标侧权限；未知效果先按原身份 reconcile，再决定

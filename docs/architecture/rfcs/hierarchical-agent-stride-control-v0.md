@@ -690,6 +690,14 @@ state or feedback consumption from their terminal versions. Without a qualified
 contemporaneous capture of those participants, such a probe establishes Host
 feasibility only and must not enter a same-state intervention comparison.
 
+The initial implementation slice is [inert artifact capture](../../../benchmark/README.md#inert-checkpoint-capture).
+The benchmark adapter requests it after the existing Turn settlement; the typed
+artifact owner seals explicit files/directories and committed SQLite snapshots,
+rechecks source witnesses and verifies an isolated materialization. Its manifest
+always declares the research point unqualified. Participant/effect reconciliation,
+native session reconstruction, fresh state adoption and preserved evaluator
+opportunities remain separate acceptance work; operator metadata cannot certify them.
+
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
 paths. Historical leases, quota, timers, pending effects and submission tokens

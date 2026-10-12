@@ -113,3 +113,53 @@ The [DeepSWE GPT xhigh v1 archive note](deepswe-gptxhigh-versions.md) registers
 preserved for inspection; the companion notice governs their current evidence
 status. Neither archive category is the architecture for new work or grants
 runner, verifier, submission, or publication authority.
+
+## Inert checkpoint capture
+
+This is a developer prerequisite for the [research checkpoint contract](../docs/architecture/rfcs/hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation),
+not a qualified research continuation. The programmatic `BenchmarkCodex` and
+heartbeat `SForgeWorker` adapters accept an explicit `checkpoint_request_path`
+to a normalized absolute **guest** JSON file. Stage that file through the existing
+environment transport. Ambient host variables do not enable capture; omitting
+the option disables the hook. The EdgeBench CLI does not expose this option yet.
+
+The request contains exactly these fields; select only authorized private
+artifacts and exclude credentials and hidden evaluation material:
+
+```json
+{
+  "destination": "/logs/agent/checkpoints/research-point",
+  "components": [
+    {"id": "code", "source_path": "/workspace/solution.py"},
+    {"id": "evidence", "source_path": "/control/source-evidence.json"}
+  ],
+  "point_metadata": {"purpose": "inert source capture"}
+}
+```
+
+The destination must be a new direct child of the trial log owner's
+`checkpoints` directory. Capture runs after a successful execute wake's original
+settlement, before the next wake. It uses the remaining phase budget with a
+30-second capture ceiling, preserves SQLite's committed WAL through the existing
+backup owner, rejects observed source changes/symlinks and never overwrites a
+destination. Capture failures are recorded separately in the wake receipt;
+they do not replay work or change its settled outcome. The ceiling bounds
+publication eligibility and RPC waits, not an operating-system I/O cancellation
+guarantee. Capture cost remains part of the trial's elapsed time.
+
+For readback, call the existing `effect_runtime_result` adapter with method
+`runtime.checkpoint_artifacts`, action `verify`, the captured `root` and the
+receipt's `expected_sha256`. Action `materialize` with those fields and a new
+`destination` verifies and copies the unit into isolation. Neither action adopts
+state or starts execution. The new `loopx_checkpoint_artifact_set_v0` manifest
+is an internal artifact contract; `point_metadata` is unverified evidence.
+`research_point_qualified`, `execution_authority_granted` and `privacy_certified`
+remain false. Integrity checks cover the declared members and observed stable
+source boundary, not adversarial filesystem mutation or a cross-owner transaction.
+Native session reconstruction, effect reconciliation, fresh authority admission
+and evaluator cooldown/opportunity inheritance must pass before matched continuation.
+
+这是研究 checkpoint 的开发前置切片。仅 programmatic adapter 的显式 guest
+请求路径会开启捕获，省略该参数即关闭；当前 EdgeBench CLI 尚无此选项。产物
+验证和隔离物化不授予执行权，不代表研究点已资格化。请求中的 metadata 只是
+证据，不能代替会话、效果、状态采用及评测机会的联合验收。
