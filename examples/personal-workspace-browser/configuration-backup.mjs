@@ -122,6 +122,11 @@ export const configurationBackupScenario = {
       await recovery.getByText("隔离副本已核对；Goal 尚未启用。", {exact: true}).waitFor();
       await recovery.getByText("recovery-fixture", {exact: false}).first().waitFor();
       await recovery.getByText("保存的任务: 1", {exact: false}).waitFor();
+      const verificationDetails = recovery.locator("details");
+      await verificationDetails.locator("summary").click();
+      await verificationDetails.getByText("归档字节:", {exact: false}).waitFor();
+      const recordedMeasurements = await verificationDetails.locator("p").innerText();
+      await verificationDetails.locator("summary").click();
       assert.equal(backend.original_sources_absent, true);
       const registryAfter = JSON.parse(await readFile(join(root, "registry.json"), "utf8"));
       assert.deepEqual(registryAfter.goals.map(goal => goal.id), ["fixture"], "inspection must not register the restored Goal");
@@ -154,6 +159,9 @@ export const configurationBackupScenario = {
       await reopened.getByRole("button", {name: "历史检查结果", exact: true}).click();
       await reopened.getByLabel("历史备份检查", {exact: true}).getByRole("button").click();
       await reopened.getByText("已读取历史检查记录；尚未重新验证副本。", {exact: true}).waitFor();
+      await reopened.locator(".personal-recovery-result details summary").click();
+      assert.equal(await reopened.locator(".personal-recovery-result details p").innerText(), recordedMeasurements,
+        "historical readback must retain original measured values, not time the reload");
       await page.getByRole("button", {name: "语言", exact: true}).click();
       await page.getByRole("radio", {name: "English", exact: true}).check();
       await page.locator(".personal-settings-tabs").getByRole("button", {name: /Capabilit/}).click();

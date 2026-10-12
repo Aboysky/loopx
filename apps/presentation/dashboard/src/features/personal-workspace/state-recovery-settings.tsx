@@ -107,6 +107,9 @@ export function StateRecoverySettings() {
         <p>{nextActions[row.next_action]?.[index] ?? (zh ? "请对应 owner 核对。" : "Ask the owning module to review this component.")}</p>
       </li>)}</ul>
       <details><summary>{zh ? "核对信息" : "Verification details"}</summary><code>{audit.recovery_id}</code>
+        {audit.measurements ? <p>{zh ? "归档字节" : "Archive bytes"}: {audit.measurements.archive_bytes.toLocaleString(locale)} · {zh ? "普通文件字节" : "Regular file bytes"}: {audit.measurements.regular_file_bytes.toLocaleString(locale)}<br />
+          {zh ? "归档检查与复制" : "Archive checks and copy"}: {audit.measurements.archive_processing_ms.toLocaleString(locale)} ms · {zh ? "记录读取" : "Owner reads"}: {audit.measurements.owner_read_ms.toLocaleString(locale)} ms</p>
+          : <p>{zh ? "此历史报告未记录数据量和阶段耗时。" : "This historical report has no recorded size or phase durations."}</p>}
         <ul>{audit.components.map(row => <li key={row.component_id}><code>{row.component_id}: {row.reason_code}</code></li>)}</ul>
       </details>
     </div> : null}

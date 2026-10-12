@@ -5,6 +5,12 @@ import {requireJsonObject, type JsonObject} from "./runtime_decode.ts";
 export const STATE_RECOVERY_AUDIT_SCHEMA = "loopx_state_recovery_audit_v0";
 export const RECOVERY_COMPONENT_STATES = ["readable", "historical_only", "unknown"] as const;
 export type RecoveryComponentState = typeof RECOVERY_COMPONENT_STATES[number];
+export interface RecoveryMeasurements extends JsonObject {
+  archive_bytes: number;
+  regular_file_bytes: number;
+  archive_processing_ms: number;
+  owner_read_ms: number;
+}
 export interface RecoveryComponent extends JsonObject {
   component_id: string;
   owner_kind: string;
@@ -25,6 +31,7 @@ export interface StateRecoveryAudit extends JsonObject {
   components: RecoveryComponent[];
   findings: Array<{reason_code: string; owner_kind: string; next_action: string}>;
   summary: Record<RecoveryComponentState, number>;
+  measurements?: RecoveryMeasurements;
 }
 function requireValue(condition: unknown): asserts condition {
   if (!condition) throw new EffectRuntimeRequestError("State recovery audit contract is invalid", "recovery_audit_invalid");
@@ -39,6 +46,13 @@ export function isRecoveryDigest(value: unknown): value is string {
 export function recoveryGoalLabel(value: string): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value) ? value : null;
 }
+export function decodeRecoveryMeasurements(value: unknown): RecoveryMeasurements {
+  const measurements = requireJsonObject(value, "recovery measurements");
+  for (const field of ["archive_bytes", "regular_file_bytes", "archive_processing_ms", "owner_read_ms"]) {
+    requireValue(Number.isSafeInteger(measurements[field]) && Number(measurements[field]) >= 0);
+  }
+  return measurements as RecoveryMeasurements;
+}
 export function decodeStateRecoveryAudit(value: unknown): StateRecoveryAudit {
   const audit = requireJsonObject(value, "state recovery audit");
   requireValue(audit.ok === true && audit.schema_version === STATE_RECOVERY_AUDIT_SCHEMA
@@ -49,6 +63,9 @@ export function decodeStateRecoveryAudit(value: unknown): StateRecoveryAudit {
     && Number.isFinite(Date.parse(audit.observed_at)));
   const workspace = requireJsonObject(audit.workspace, "inert recovery workspace");
   requireValue(workspace.isolation === "inert" && workspace.registered === false);
+  // Earlier reports remain historical observations; absent measurements are
+  // unknown, never synthesized from their timestamp or today's runtime.
+  if (audit.measurements !== undefined) decodeRecoveryMeasurements(audit.measurements);
   const backup = requireJsonObject(audit.backup, "recovery backup basis");
   requireValue(backup.schema_version === "loopx_state_backup_v0"
     && isRecoveryDigest(backup.archive_sha256) && isRecoveryDigest(backup.external_manifest_sha256));

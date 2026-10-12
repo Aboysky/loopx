@@ -12,7 +12,7 @@ import {decodeLocalAuthoritySelection, localAuthorityProviderPaths,
 import {sqliteAuthorityRuntime} from "./coordination/sqlite_runtime.ts";
 import {sqliteAuthorityPath} from "./coordination/sqlite_authority_store.ts";
 import {canonicalTodoCollection} from "./coordination/local_authority_read.ts";
-import {STATE_RECOVERY_AUDIT_SCHEMA, decodeStateRecoveryAudit, isRecoveryDigest, recoveryGoalLabel,
+import {STATE_RECOVERY_AUDIT_SCHEMA, decodeRecoveryMeasurements, decodeStateRecoveryAudit, isRecoveryDigest, recoveryGoalLabel,
   type RecoveryComponent, type RecoveryComponentState} from "./state_recovery_contract.ts";
 
 const MAX_GOALS = 128;
@@ -182,7 +182,10 @@ async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<s
 
 /** Reads only a host-validated inert directory; never registers or repairs a store. */
 async function auditOwners(value: unknown): Promise<JsonObject> {
+  const started = performance.now();
   const request = requireJsonObject(value, "recovery owner audit");
+  const measurements = decodeRecoveryMeasurements({
+    ...requireJsonObject(request.measurements, "host recovery measurements"), owner_read_ms: 0});
   const basis = requireJsonObject(request.verified, "verified recovery basis");
   check(basis.ok === true && basis.manifest_verified === true && basis.schema_version === STATE_RECOVERY_AUDIT_SCHEMA,
     "recovery_basis_invalid");
@@ -254,6 +257,7 @@ async function auditOwners(value: unknown): Promise<JsonObject> {
   components.push(component("remaining_state", "recovery", "unknown", "legacy_owner_inventory_incomplete",
     "classify_remaining_owner_state"));
   const audit = {...basis, status: "held", written: true, observed_at: new Date().toISOString(),
+    measurements: {...measurements, owner_read_ms: Math.floor(performance.now() - started)},
     workspace: {isolation: "inert", registered: false}, components,
     findings: [{reason_code: "legacy_manifest_incomplete", owner_kind: "backup_capture",
       next_action: "review_capture_consistency"}],

@@ -18,6 +18,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 import unicodedata
 import zlib
 from typing import Any, BinaryIO, Iterator, NoReturn
@@ -342,6 +343,7 @@ def verify_state_backup(
     *, archive: Path, manifest: Path, destination: Path, execute: bool = False,
 ) -> dict[str, Any]:
     """Preview or publish one inert audit. This API has no live-adoption operation."""
+    started = time.monotonic_ns()
     _require(os.name == "posix", "recovery_platform_unqualified")
     _physical_parent(destination)
     with _regular_input(manifest, MAX_MANIFEST_BYTES) as manifest_handle:
@@ -365,6 +367,7 @@ def verify_state_backup(
         if not execute:
             return {**verified, "status": "planned", "written": False,
                     "logical_bytes": observation["logical_bytes"], "entry_count": observation["entry_count"],
+                    "archive_processing_ms": (time.monotonic_ns() - started) // 1_000_000,
                     "activation_eligible": False}
         staging = Path(tempfile.mkdtemp(prefix=".loopx-recovery-", dir=destination.parent))
         reserved = False
@@ -375,6 +378,9 @@ def verify_state_backup(
             _require(copied == observation and _sha(archive_handle) == (archive_sha, archive_size),
                      "recovery_input_changed")
             audit = _audit_owners({"data_root": str(data), "verified": verified,
+                "measurements": {"archive_bytes": archive_size,
+                    "regular_file_bytes": copied["logical_bytes"],
+                    "archive_processing_ms": (time.monotonic_ns() - started) // 1_000_000},
                 "sqlite_members": observation["sqlite_members"],
                 "standalone_sqlite_members": observation["standalone_sqlite_members"]})
             audit = _runtime("state.recovery.audit.readback", audit)
@@ -423,9 +429,14 @@ def render_state_recovery_markdown(payload: dict[str, Any]) -> str:
             "Repeat with --execute to create and inspect a new inert copy; this never activates a Goal.",
         ])
     summary = payload.get("summary", {})
-    return "\n".join([
+    lines = [
         f"Backup inspection: {payload['status']}",
         f"Recovery: {payload['recovery_id']}",
         f"Readable: {summary.get('readable', 0)}; historical only: {summary.get('historical_only', 0)}; unknown: {summary.get('unknown', 0)}",
         "The copy is inert. Goal execution and live settings were not activated.",
-    ])
+    ]
+    measurements = payload.get("measurements")
+    if isinstance(measurements, dict):
+        lines.append(f"Archive: {measurements['archive_bytes']} bytes; regular files: {measurements['regular_file_bytes']} bytes; "
+                     f"archive checks/copy: {measurements['archive_processing_ms']} ms; owner reads: {measurements['owner_read_ms']} ms.")
+    return "\n".join(lines)

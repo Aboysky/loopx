@@ -85,6 +85,11 @@ def test_real_backup_recovers_readable_authority_after_original_sources_disappea
     assert audit["execution_authority_granted"] is False and audit["activation_eligible"] is False
     assert audit["workspace"] == {"isolation": "inert", "registered": False}
     assert audit["status"] == "held"
+    assert audit["measurements"]["archive_bytes"] == archive.stat().st_size
+    assert audit["measurements"]["regular_file_bytes"] == preview["logical_bytes"]
+    assert all(type(value) is int and value >= 0 for value in audit["measurements"].values())
+    assert read_state_recovery_audit(destination)["measurements"] == audit["measurements"]
+    assert "archive checks/copy:" in render_state_recovery_markdown(audit)
     [goal] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
     assert goal["state"] == "readable", goal
     assert goal["facts"]["todo_count"] == 1
@@ -157,6 +162,11 @@ def test_changed_audit_and_true_execution_flag_are_not_trusted_on_readback(tmp_p
     destination = tmp_path / "inert"
     result = verify_state_backup(archive=archive, manifest=manifest, destination=destination, execute=True)
     path = destination / "recovery-audit.json"
+    altered_measurement = {**result, "measurements": {**result["measurements"],
+        "owner_read_ms": result["measurements"]["owner_read_ms"] + 1}}
+    path.write_text(json.dumps(altered_measurement))
+    with pytest.raises(StateRecoveryError, match="audit_digest_mismatch"):
+        read_state_recovery_audit(destination)
     changed = {**result, "observed_at": "2020-01-01T00:00:00.000Z"}
     path.write_text(json.dumps(changed))
     with pytest.raises(StateRecoveryError, match="audit_digest_mismatch"):
@@ -178,6 +188,7 @@ def test_missing_selected_storage_is_unknown_without_creation_or_fallback(tmp_pa
     sqlite_files = [path.relative_to(destination / "data").as_posix() for path in selected.glob("*.sqlite")]
     selected.rename(tmp_path / "unavailable-store")
     observed = _audit_owners({"data_root": str(destination / "data"),
+        "measurements": original["measurements"],
         "verified": {key: original[key] for key in ("ok", "schema_version", "recovery_id", "backup", "file_count",
             "file_witnesses_verified", "manifest_verified", "capture_profile", "execution_authority_granted")},
         "sqlite_members": sqlite_files, "standalone_sqlite_members": sqlite_files})

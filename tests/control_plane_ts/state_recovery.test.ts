@@ -73,3 +73,15 @@ test("untrusted owner inspection has no shared-daemon dispatch", async () => {
   const handlers = createEffectRuntimeHandlers({fingerprint: "recovery-isolation", requestShutdown() {}});
   await assert.rejects(() => dispatchEffectRuntimeMethod(handlers, "state.recovery.owners.audit", {}), /unsupported Effect runtime method/);
 });
+
+test("recorded measurements reject invalid values and absent historical measurements remain absent", () => {
+  const input = audit();
+  const measurements = {archive_bytes: 500, regular_file_bytes: 256, archive_processing_ms: 3, owner_read_ms: 2};
+  assert.equal(decodeStateRecoveryAudit(input).measurements, undefined);
+  assert.deepEqual(decodeStateRecoveryAudit({...input, measurements}).measurements, measurements);
+  for (const field of Object.keys(measurements)) {
+    for (const value of [-1, 1.5, "3", null, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => decodeStateRecoveryAudit({...input, measurements: {...measurements, [field]: value}}));
+    }
+  }
+});
