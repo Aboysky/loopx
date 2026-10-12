@@ -731,8 +731,11 @@ by the existing obligation. It does not cover replans first created inside a run
 Host wake. The optional native participant reads complete history through Codex,
 seals its rollout/index/paged stores and verifies native forks at fixed guest paths.
 An explicit checkpoint-aware native judge also exports released public result
-details, accepted counters/clock, remaining cooldown and original trial deadline
-without grading or refilling admission; pending or unreconciled grades reject.
+details, accepted counters/clock, remaining cooldown and original trial deadline,
+plus the opaque native-selected incumbent archive bound to its released result.
+The incumbent can precede the working candidate; native ranking remains the owner.
+Missing bytes, changed capture bindings or mismatched file witnesses reject before
+publication, without grading or refilling admission; pending or unreconciled grades reject.
 Participant/effect reconciliation, fresh research-state adoption, preserved evaluator
 admission and useful continued work remain separate acceptance work; operator
 metadata and native history equality cannot certify them.

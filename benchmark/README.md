@@ -202,11 +202,21 @@ Its default-off factory otherwise preserves the native routes. With
 `"evaluation_opportunity": true` in the worker declaration, the capture hook
 reads that registration's released history and complete public result details,
 next round counters, accepted submission clock, remaining cooldown, task/native
-source identity and original trial deadline. The provider uses the existing
+source identity and original trial deadline. It also preserves the native-selected
+incumbent's opaque submission archive as `evaluation_incumbent`, separate from the
+current working candidate. Native ranking chooses its original released round;
+the result identity, archive digest and byte count bind its download to the same
+judge epoch and consumed-round state. Missing or moved selected bytes reject
+capture; no selected result is explicitly recorded as absent. The transport never
+extracts archive members, overwrites a prior participant or silently accepts a
+truncated response. Its checked file witness must match the descriptor before
+the artifact owner publishes the unit. The provider uses the existing
 native admission/history locks and rejects an outstanding grade, unreconciled
 consumed round, missing result details, automatic-evaluation history or closed
 registration. It never returns tokens or hidden task material and never grades,
-registers or refills an opportunity. The local `sforge_checkpoint_opportunity_v0`
+registers or refills an opportunity. Download is limited to the same registration
+and a matching capture digest; source movement requires a new owned boundary.
+The local `sforge_checkpoint_opportunity_v0`
 artifact records these facts; it grants no restored admission. Disabling capture
 means omitting both the judge flag and worker declaration option on a new run.
 

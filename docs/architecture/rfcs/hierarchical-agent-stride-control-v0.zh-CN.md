@@ -611,7 +611,10 @@ quota guard，在模型调用前捕获 wake 开始已投影的准入 replan，�
 去重；尚不覆盖运行中 Host wake 首次产生的 replan。可选 native 参与者通过
 Codex 读取完整历史，封存 rollout/索引/分页库并验证固定 guest 路径下的原生
 分叉。显式 checkpoint-aware native judge 还可导出已公开结果明细、受理计数/
-时钟、剩余冷却及原试验期限；不评测、不补发机会，未完成或未对账评测会拒绝。
+时钟、剩余冷却及原试验期限，并封存与已公开结果绑定的原生选优 incumbent
+原始 archive。它可能早于工作区候选；排序仍由原生规则决定。缺失源码、捕获
+绑定变化或文件 witness 不符均在发布前拒绝；不评测、不补发机会，未完成或
+未对账评测会拒绝。
 参与者/效果 reconciliation、新研究状态采用、目标侧评测准入及实际有效
 接续仍各自待验收；operator metadata 或历史一致不能认证这些条件。
 
