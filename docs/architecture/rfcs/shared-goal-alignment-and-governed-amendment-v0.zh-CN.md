@@ -28,8 +28,8 @@
 绑定 canonical provider revision。有 state event log 时，`revision_basis=state_event_log`
 仍只表示事件轴；没有时，promoted 读取使用 `canonical_todo_snapshot`、事件序号 0 和
 unbound Agent frontier。即使事件序号为 0，canonical digest 变化也要求 `needs_rebase`。
-Legacy Markdown 现在也绑定 typed reader 使用的已解析 Todo/lease 事实，不包含
-compatibility prose 和 observation time。因此即使 `updated_at` 未变，peer claim
+Legacy Markdown 现在也绑定 typed reader 使用的已解析 Todo/lease 事实，按稳定 Todo id
+排序，不包含 compatibility prose 和 observation time。因此即使 `updated_at` 未变，peer claim
 变化也会改变 basis。此前该路径遗漏这些事实，且在序号 0 时接受任意 digest；现在
 新提交的提案若绑定不同的观测 digest，会要求 `needs_rebase`。应重新读取 alignment，
 用新的 proposal id 提交修订内容；精确重放仍返回原始历史 admission，不是重新判定

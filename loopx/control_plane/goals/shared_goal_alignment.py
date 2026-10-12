@@ -151,9 +151,10 @@ def _project_shared_goal_alignment(
     basis_sequence = 0
     # Bind the same typed work/lease facts sent to the reducer. Markdown has
     # no monotonic revision, but a peer claim can change without updated_at.
-    # Compatibility prose is deliberately outside this observation digest.
+    # Compatibility prose, display order and read time are not work identity.
     source_checksum = (
-        _canonical_digest(source.items) if source.canonical_basis is None else None
+        _canonical_digest(sorted(source.items, key=lambda item: str(item.get("todo_id") or "")))
+        if source.canonical_basis is None else None
     )
 
     source_basis_digest = _canonical_digest(

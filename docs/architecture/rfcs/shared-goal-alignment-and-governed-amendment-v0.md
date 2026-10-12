@@ -32,8 +32,8 @@ With a state event log, `revision_basis=state_event_log` still names only that
 event axis. Without one, promoted reads use `canonical_todo_snapshot` with
 event sequence 0 and an unbound Agent frontier. A changed canonical digest
 requires `needs_rebase` even at sequence 0. Legacy Markdown now also binds the
-parsed Todo/lease facts used by the typed reader, excluding compatibility prose
-and observation time. A peer claim therefore changes the basis even when
+parsed Todo/lease facts used by the typed reader, ordered by stable Todo id and
+excluding compatibility prose and observation time. A peer claim therefore changes the basis even when
 `updated_at` does not change. Previously this path omitted those facts and
 admitted any digest at sequence 0; a new submission with a different observed
 digest now requires `needs_rebase`. Re-read alignment and submit revised content

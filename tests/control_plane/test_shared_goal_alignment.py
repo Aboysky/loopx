@@ -416,6 +416,22 @@ def test_legacy_basis_binds_lease_epoch_but_not_observation_time(tmp_path):
     assert paths["state_file"].read_bytes() == state_bytes
 
 
+def test_legacy_basis_ignores_display_order_of_identical_work(tmp_path):
+    specs = _default_todo_specs()
+    paths = _write_fixture(tmp_path, todo_specs=specs)
+    arguments = dict(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"],
+                     registry_path=paths["registry"], runtime_root=paths["runtime"])
+    before = project_shared_goal_alignment(**arguments)
+    state = paths["state_file"].read_text(encoding="utf-8")
+    blocks = state.split("\n- [")
+    assert len(blocks) == len(specs) + 1
+    paths["state_file"].write_text(blocks[0] + "\n- [" + "\n- [".join(reversed(blocks[1:])),
+                                   encoding="utf-8")
+    after = project_shared_goal_alignment(**arguments)
+    assert before["frontier_counts"] == after["frontier_counts"]
+    assert before["source_basis"] == after["source_basis"]
+
+
 def test_blocked_and_monitor_todos_stay_out_of_unclaimed_work(
     tmp_path: Path,
 ) -> None:
