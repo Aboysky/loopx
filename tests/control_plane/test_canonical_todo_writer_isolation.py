@@ -456,6 +456,7 @@ def test_explicit_source_writer_import_preserves_the_existing_seam(tmp_path):
     result = subprocess.run(
         [sys.executable, "-c", """
 import sys
+import sysconfig
 import loopx.todos as todos
 assert 'loopx.control_plane.todos.line_update' not in sys.modules
 assert 'loopx.control_plane.todos.legacy_mutation' not in sys.modules
