@@ -105,6 +105,10 @@ job/step 时间戳。记录不进入 timing cache、不改变测试选择、不�
 JSON 记录。原有 pytest 详细结果输出仍保留。
 无论使用 quiet（`-q`）还是 verbose（`-v`）进度，串行和 xdist 运行中的观察记录
 都独占一行。reader 仍要求完整行记录，不猜测如何修复旧的进度字符前缀日志。
+The reader accepts a line-leading BOM from concatenated GitHub log chunks before
+timestamp/ANSI framing; phase identity, ordering and completion checks remain strict.
+reader 接受 GitHub 日志分块拼接产生的行首 BOM，再读取时间戳和 ANSI 包装；
+phase 身份、顺序与完整性检查保持严格。
 
 The aggregate requires every shard to succeed and all four coverage files to
 exist before combining them. The existing full-suite coverage floor remains.

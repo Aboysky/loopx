@@ -81,6 +81,13 @@ def test_real_xdist_timings_match_native_pytest_owner(tmp_path, verbosity, worke
         "2026-01-01T00:00:00.0000000Z \x1b[32m" + line + "\x1b[0m"
         for line in lines).encode())
     assert read_log(timestamped) == report
+    # GitHub concatenates log chunks with a BOM before some timestamps.
+    # It is transport framing; the observation and its strict ordering match.
+    chunked = tmp_path / "hosted-chunks.log"
+    chunked.write_text("\n".join(
+        ("\ufeff" if index % 3 == 0 else "") + line
+        for index, line in enumerate(timestamped.read_text().splitlines())), encoding="utf-8")
+    assert read_log(chunked) == report
 
 
 def test_real_pytest_subtest_cost_is_included_once_in_parent_call(tmp_path):
@@ -191,7 +198,11 @@ END = {"event": "end", "exit_code": 0}
     [START, COLLECTION, END, SETUP], [START, {**END, "exit_code": 6}],
 ])
 def test_malformed_or_contradictory_evidence_is_rejected(tmp_path, rows):
-    read_log(rows_log(tmp_path, rows), success=False)
+    log = rows_log(tmp_path, rows)
+    read_log(log, success=False)
+    log.write_text("\n".join("\ufeff2026-01-01T00:00:00.0000000Z " + line
+                             for line in log.read_text().splitlines()), encoding="utf-8")
+    read_log(log, success=False)
 
 
 @pytest.mark.parametrize("rows,finished", [

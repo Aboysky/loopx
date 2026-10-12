@@ -18,7 +18,7 @@ export function summarizeTimingLog(log: string) {
   let selected: number | null = null, exitCode: number | null = null;
   let elapsed = 0, records = 0;
   for (const original of log.split(/\r?\n/)) {
-    const line = original.replace(/\x1b\[[0-9;]*m/g, "")
+    const line = original.replace(/^\uFEFF/, "").replace(/\x1b\[[0-9;]*m/g, "")
       .replace(/^\d{4}-\d{2}-\d{2}T\S+Z\s+/, "");
     if (!line.startsWith(prefix)) continue;
     if (++records > 200_000) throw new Error("Timing log exceeds the observation limit.");
