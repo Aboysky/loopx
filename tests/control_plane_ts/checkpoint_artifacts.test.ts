@@ -138,3 +138,42 @@ test("a committed WAL change after the probe invalidates capture, including a st
     finally {copy.close();}
   } finally {writer.close();}
 });
+
+test("read-only snapshot housekeeping on a closed WAL database is not source movement", async t => {
+  const {root, request} = await fixture(t), {driver} = sqliteAuthorityRuntime();
+  await mkdir(join(root, "state"));
+  const path = join(root, "state/authority.sqlite"), writer = new driver.DatabaseSync(path);
+  writer.exec("PRAGMA journal_mode=WAL; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES('retained')");
+  writer.close();
+  assert.deepEqual(await readdir(join(root, "state")), ["authority.sqlite"]);
+  const components = [{id: "state", source_path: join(root, "state")}];
+  const probe = await checkpointArtifacts({action: "probe", components});
+  const captured = await checkpointArtifacts({...request, components, expected_source_sha256: probe.source_sha256});
+  assert.equal(captured.source_stability_verified, true);
+  const after = await checkpointArtifacts({action: "probe", components});
+  assert.equal(after.source_sha256, probe.source_sha256);
+  assert.deepEqual(await readdir(join(root, "captured/components/state")), ["authority.sqlite"]);
+  const changed = new driver.DatabaseSync(path);
+  try {
+    changed.exec("INSERT INTO evidence VALUES('new committed data')");
+    await assert.rejects(checkpointArtifacts({...request, components, destination: join(root, "must-not-exist"),
+      expected_source_sha256: probe.source_sha256}), /source moved/);
+  } finally {changed.close();}
+  const copy = new driver.DatabaseSync(join(root, "captured/components/state/authority.sqlite"), {readOnly: true});
+  try {assert.equal(copy.prepare("SELECT COUNT(*) AS n FROM evidence").get()?.n, 1);}
+  finally {copy.close();}
+});
+
+test("an explicitly selected sidecar remains a byte artifact rather than disappearing from its witness", async t => {
+  const {root, request} = await fixture(t), {driver} = sqliteAuthorityRuntime();
+  const path = join(root, "authority.sqlite"), writer = new driver.DatabaseSync(path);
+  try {
+    writer.exec("PRAGMA journal_mode=WAL; CREATE TABLE evidence(value TEXT)");
+    const components = [{id: "explicit_index", source_path: path + "-shm"}];
+    const probe = await checkpointArtifacts({action: "probe", components});
+    assert.equal((probe.source_witness as Record<string, unknown[]>).explicit_index.length, 1);
+    const captured = await checkpointArtifacts({...request, components, expected_source_sha256: probe.source_sha256});
+    assert.equal(captured.integrity_verified, true);
+    assert.deepEqual(await readFile(join(root, "captured/components/explicit_index")), await readFile(path + "-shm"));
+  } finally {writer.close();}
+});

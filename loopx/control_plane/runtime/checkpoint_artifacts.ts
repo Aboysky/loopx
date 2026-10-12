@@ -58,9 +58,13 @@ async function members(root: string, sourceObservation: boolean): Promise<Member
   async function visit(path: string, name: string): Promise<void> {
     const stat = await lstat(path);
     if (stat.isSymbolicLink()) throw new Error("checkpoint source contains a symlink");
-    // SQLite shared-memory is a transient reader index, not committed source
-    // data. Opening a read-only backup may update its reader slots.
-    if (sourceObservation && stat.isFile() && await sqliteSidecar(path, ["-shm"])) return;
+    // SQLite's reader index and an empty WAL contain no committed data. A
+    // read-only backup can create either on a closed WAL database. Exclude
+    // only these recognized sidecars, not a nonempty WAL or an explicitly
+    // requested standalone file. Artifact verification excludes nothing.
+    if (sourceObservation && name !== "" && stat.isFile() &&
+        (await sqliteSidecar(path, ["-shm"]) ||
+         (stat.size === 0 && await sqliteSidecar(path, ["-wal"])))) return;
     if (stat.isDirectory()) {
       output.push({path: name, kind: "directory", mode: stat.mode & 0o777});
       for (const child of (await readdir(path)).sort()) await visit(join(path, child), name ? `${name}/${child}` : child);
@@ -207,7 +211,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       for (const member of before[c.id] as Member[]) {
         if (member.kind !== "file") continue;
         const source = (await lstat(c.source_path)).isDirectory() ? join(c.source_path, member.path) : c.source_path + member.path;
-        if (await sqliteFile(source) || await sqliteSidecar(source, ["-wal", "-shm", "-journal"])) continue;
+        if (await sqliteFile(source) || (member.path !== "" && await sqliteSidecar(source, ["-wal", "-shm", "-journal"]))) continue;
         const copied = (artifacts[c.id] as Member[]).find(m => m.path === member.path && m.kind === "file");
         if (!copied || copied.sha256 !== member.sha256 || copied.size !== member.size || copied.mode !== member.mode) {
           throw new Error("checkpoint copied bytes do not match the reviewed source");
