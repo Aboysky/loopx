@@ -740,6 +740,16 @@ Participant/effect reconciliation, fresh research-state adoption, preserved eval
 admission and useful continued work remain separate acceptance work; operator
 metadata and native history equality cannot certify them.
 
+A native fresh registration is not restored admission. In the controlled native
+Docker qualification, one of twelve source submissions was consumed and its
+cooldown remained active. A same-limit fresh registration admitted `agent-1`
+immediately with twelve unused rounds. Regrading the retained archive created a
+new result, without restoring the source history or opportunity state. This is
+valid new-trial behavior; it cannot substitute for a same-point continuation.
+The evaluator owner must separately qualify destination initialization from the
+bound history/counters and remaining cooldown duration, together with the Host's
+remaining total budget. Copying captured token rows is not admission proof.
+
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
 paths. Historical leases, quota, timers, pending effects and submission tokens

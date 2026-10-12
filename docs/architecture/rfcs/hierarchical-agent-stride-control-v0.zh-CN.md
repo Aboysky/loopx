@@ -618,6 +618,13 @@ Codex 读取完整历史，封存 rollout/索引/分页库并验证固定 guest 
 参与者/效果 reconciliation、新研究状态采用、目标侧评测准入及实际有效
 接续仍各自待验收；operator metadata 或历史一致不能认证这些条件。
 
+原生新注册不等于恢复准入。真实原生 Docker 资格测试中，source 已消耗十二次
+中的一次，且冷却仍有效；同额度的新注册却立即受理 `agent-1`，保留十二次未用
+机会。重评已保存 archive 产生新的结果，没有恢复 source 的历史或机会状态。
+这是合法的新试验行为，不能代替同一研究点接续。Evaluator owner 须另行资格化
+从已绑定历史/计数及剩余冷却时长初始化目标状态，同时保留 Host 剩余总预算；
+复制旧 token 行不是准入证明。
+
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和
 submission token 不能变成目标侧权限；未知效果先按原身份 reconcile，再决定
