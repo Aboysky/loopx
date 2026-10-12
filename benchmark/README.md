@@ -174,6 +174,12 @@ work. The after-wake hook cannot substitute a post-decision state. Capture failu
 remain explicit and do not settle or complete the new work.
 The first attempt is also retained: if it fails and the model proceeds, retries
 cannot substitute a later state for that missed pre-decision point.
+Losing, denying access to or corrupting the staged declaration records a capture
+failure while the ordinary wake continues. The Host still obtains and delivers
+the original quota guard; an unavailable admission owner stops work as before.
+If that guard projects a fresh replan, the missed first attempt is retained even
+without readable declaration bytes, so repairing the file cannot capture later
+state under the same obligation. Subsequent distinct replans remain eligible.
 
 Add `"native_session": true` to include Codex's completed native cursor, all
 retained history pages, rollout/compaction records and native index/history SQLite
@@ -197,6 +203,37 @@ explicit checkpoint-aware native judge:
 python -m benchmark.edgebench.checkpoint_judge --checkpoint-capture \
   --tasks-dir /path/to/tasks --log-dir /path/to/private-run-logs
 ```
+
+This adapter's supported SForge source is the public compatibility fork at
+[`0e20fb499ee248f012d6467c00b3dec00a29fe85`](https://github.com/huangruiteng/EdgeBench/commit/0e20fb499ee248f012d6467c00b3dec00a29fe85).
+It exposes the existing native judge/admission owner; the upstream `sforge==1.1.0`
+distribution does not provide that seam. Enabling capture against an unsupported
+provider fails before adding routes. This pin qualifies the capture prerequisite,
+not an upstream release or restored admission. From this LoopX checkout, prepare
+an isolated Python 3.13 environment and verify the actual imported source:
+
+```sh
+CKPT_PROVIDER_ROOT=$(mktemp -d)
+git clone https://github.com/huangruiteng/EdgeBench.git "$CKPT_PROVIDER_ROOT/provider"
+git -C "$CKPT_PROVIDER_ROOT/provider" checkout --detach 0e20fb499ee248f012d6467c00b3dec00a29fe85
+uv venv --python 3.13 "$CKPT_PROVIDER_ROOT/venv"
+uv pip install --python "$CKPT_PROVIDER_ROOT/venv/bin/python" \
+  -e '.[test]' -e "$CKPT_PROVIDER_ROOT/provider" 'httpx>=0.28,<1'
+"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import sforge,loopx; print(sforge.__file__); print(loopx.__file__)'
+"$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q benchmark/tests/test_checkpoint_judge.py
+# Linux with an owned disposable Docker daemon; grades only synthetic fixtures.
+LOOPX_EDGEBENCH_DOCKER_SMOKE=1 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q \
+  benchmark/tests/test_edgebench_feedback_docker.py::test_checkpoint_opportunity_uses_native_admission_and_real_grade
+```
+
+The Docker journey checks a real grade, remaining rounds/cooldown, incumbent bytes,
+and the cold-registration counterexample; it does not restore evaluator authority.
+Native session qualification is separate: the tested Host is `codex-cli 0.160.0`.
+Retain the complete paginated history/compaction and actual native stores from an
+authorized completed source, then run capture and fork in isolation with that
+same binary and fixed guest paths. Compare every retained Turn ID and the full
+history digest, including exclusion of later history; mocked pages alone do not
+qualify this participant. No model call or LoopX registration is implied by fork.
 
 Its default-off factory otherwise preserves the native routes. With
 `"evaluation_opportunity": true` in the worker declaration, the capture hook
@@ -245,6 +282,11 @@ runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 
 路径。省略选项即关闭，Official/native-goal 不接受。产物
 验证和隔离物化不授予执行权，不代表研究点已资格化。请求中的 metadata 只是
 证据，不能代替会话、效果、状态采用及评测机会的联合验收。
+已放入 guest 的声明文件丢失、权限失败或损坏只记录捕获失败，原工作仍按
+完整的原始 quota guard 继续；准入 owner 不可用仍停止。首次 replan 捕获
+失败后，修复声明不得把后来的状态补记成同一原点。评测参与者使用上文明确的
+公开 SForge fork/pin 和 Python 3.13；普通 upstream 安装缺少该 seam 时明确
+拒绝。Codex 原生会话的真实分页/compaction 与隔离 fork 须单独验证。
 
 显式 `"loopx_state": true` 复用现有 state-backup inventory，捕获单 Goal 试验的
 注册状态、项目研究状态、runtime journal 和 registry；File/SQLite authority
