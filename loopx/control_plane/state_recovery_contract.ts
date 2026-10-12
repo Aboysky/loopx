@@ -1,4 +1,5 @@
 /** Shared readback contract for the offline owner and packaged client. */
+import {BARE_SHA256_PATTERN} from "./content_digest.ts";
 import {EffectRuntimeRequestError} from "./effect_runtime_errors.ts";
 import {requireJsonObject, type JsonObject} from "./runtime_decode.ts";
 
@@ -40,7 +41,7 @@ function token(value: unknown): boolean {
   return typeof value === "string" && /^[a-z0-9_:.~-]{1,128}$/.test(value);
 }
 export function isRecoveryDigest(value: unknown): value is string {
-  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  return typeof value === "string" && BARE_SHA256_PATTERN.test(value);
 }
 /** Display only; unsafe labels retain their opaque component identity. */
 export function recoveryGoalLabel(value: string): string | null {
