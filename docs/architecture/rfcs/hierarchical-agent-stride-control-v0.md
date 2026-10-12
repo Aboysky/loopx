@@ -729,7 +729,11 @@ an explicit fresh-replan trigger: it preloads the original quota guard and captu
 an admitted replan projected at wake start before invoking the model, deduplicated
 by the existing obligation. It does not cover replans first created inside a running
 Host wake. The optional native participant reads complete history through Codex,
-seals its rollout/index/paged stores and verifies native forks at fixed guest paths.
+checks the session's actual workspace, and rechecks that history after the byte
+probe. A later source Turn in the read-to-probe gap is rejected; the artifact
+owner's witness checks cover subsequent writes. It seals rollout/index/paged
+stores and verifies native forks at fixed guest paths. These source-basis checks
+are qualified separately from session adoption or research utility.
 An explicit checkpoint-aware native judge also exports released public result
 details, accepted counters/clock, remaining cooldown and original trial deadline,
 plus the opaque native-selected incumbent archive bound to its released result.

@@ -183,7 +183,11 @@ state under the same obligation. Subsequent distinct replans remain eligible.
 
 Add `"native_session": true` to include Codex's completed native cursor, all
 retained history pages, rollout/compaction records and native index/history SQLite
-stores. The adapter uses native readback before sealing these members and excludes
+stores. The adapter verifies the native session's actual workspace, reads its full
+cursor before the byte probe and reads it again after that probe. A changed cursor,
+configuration or participant inventory rejects before publication; the artifact
+owner then verifies the same physical witness through capture. This prevents later
+Turns on the selected source session from being sealed under an earlier cursor. The adapter excludes
 credential files, logs, memories and the symlinked skill installation. Record the
 effective configuration digest and Host version; tools/skills and credentials need
 their existing installation/authentication owners. Native state is opaque and its
@@ -234,6 +238,18 @@ authorized completed source, then run capture and fork in isolation with that
 same binary and fixed guest paths. Compare every retained Turn ID and the full
 history digest, including exclusion of later history; mocked pages alone do not
 qualify this participant. No model call or LoopX registration is implied by fork.
+
+The current cursor/workspace regressions also exercise `codex-cli 0.162.0-alpha.2`
+through real native writer/readback and the actual CLI/typed artifact owners. A
+static localhost response stream supplies synthetic source Turns; this tests the
+storage protocol and capture boundary, not model behavior or research utility.
+Run with an explicit native binary; ordinary runs keep the qualification skip:
+
+```sh
+LOOPX_NATIVE_CHECKPOINT_BIN=/path/to/pinned/codex python -m pytest -q \
+  tests/control_plane/test_research_checkpoint_capture.py::test_real_native_cursor_must_match_sealed_store_basis \
+  benchmark/tests/test_native_checkpoint.py::test_real_native_workspace_readback_rejects_foreign_code_basis
+```
 
 Its default-off factory otherwise preserves the native routes. With
 `"evaluation_opportunity": true` in the worker declaration, the capture hook
