@@ -437,3 +437,126 @@ def test_loopx_participant_preserves_legacy_and_current_owned_goal_directories(t
         parse_checkpoint_request(json.dumps({'destination':'/logs/agent/checkpoints/point',
             'components':[{'id':'code','source_path':'/tmp/solver.py'}], 'point_metadata':{},
             'loopx_state':'true'}).encode())
+
+
+def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover(tmp_path, monkeypatch):
+    """Real CLI/worker/permissions; only the model executable is synthetic."""
+    import os
+    import sys
+    from benchmark.runtime.worker import run_once
+
+    if os.geteuid() == 0:
+        pytest.skip("Real POSIX permission denial requires an unprivileged test user")
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    binary = tmp_path / "codex"
+    binary.write_text(f"#!{sys.executable}\n" +
+        "import json,pathlib,sys\n"
+        "pathlib.Path('host-input.txt').write_text(sys.stdin.read())\n"
+        "pathlib.Path('solution.py').write_text('after_strategy_decision = 999\\n')\n"
+        "print(json.dumps({'type':'thread.started','thread_id':'synthetic-index-session'}))\n")
+    binary.chmod(0o755)
+    logs = tmp_path / "logs"
+    env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(Path(sys.executable).parent / "loopx"),
+        "LOOPX_CODEX_HOME": str(tmp_path / "home"), "LOOPX_WAKE_LOG_DIR": str(logs / "wakes"),
+        "LOOPX_SHARED_SKILLS": str(skills), "CODEX_BIN": str(binary), "MODEL_NAME": "fixture",
+        "REASONING_EFFORT": "high", "OPENAI_BASE_URL": "http://localhost:8123/v1",
+        "OPENAI_API_KEY": "fixture-key", "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_REGISTRY": str(registry), "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID}
+    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", lambda *a, **kw: "original work contract")
+    prior = run_once(env)
+    assert prior["ok"]
+
+    def run(*args):
+        code, packet = cli._run_cli(registry, runtime, *args)
+        assert code == 0, packet
+        return packet
+
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Synthetic work completed; original checkpoint qualification remains."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The original worker remains available.",
+            "observed_reality": "Real worker ran the explicitly synthetic host successfully.",
+            "retained": ["Checkpoint source boundary"], "evidence_refs": ["evidence:index-permission-fixture"]}}))
+    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", prior["turn_id"])
+    run("quota", "should-run", "--goal-id", cli.GOAL_ID, "--codex-app", *binding)
+    run("refresh-state", "--goal-id", cli.GOAL_ID, *binding, "--classification", "worker_fixture_completed",
+        "--delivery-batch-scale", "multi_surface", "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(vision))
+    run("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *binding, "--source", "heartbeat", "--execute")
+    index = runtime / "goals" / cli.GOAL_ID / "runs/index.jsonl"
+    original = index.read_bytes()
+    cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    index.write_bytes(original + index.read_bytes())
+    solution = project / "solution.py"
+    solution.write_text("retained_candidate = 7\n")
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(logs / "checkpoints"),
+        "components": [{"id": "code", "source_path": str(solution)}],
+        "point_metadata": {"purpose": "Original research boundary, not post-decision code"}}))
+    env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
+    attempts = logs / "checkpoints/.replan-attempts"
+    attempts.mkdir(parents=True)
+    attempts.chmod(0o500)
+    try:
+        failed = run_once(env)
+    finally:
+        attempts.chmod(0o700)
+    assert failed["ok"]
+    assert failed["checkpoint"]["reason"] == "capture_failed"
+    assert failed["checkpoint"]["error_kind"] == "PermissionError"
+    assert not list(attempts.iterdir())
+    saved_path = logs / "wakes" / failed["turn_id"] / "receipt.json"
+    saved = json.loads(saved_path.read_text())
+    assert saved == failed
+    assert solution.read_text() == "after_strategy_decision = 999\n"
+    replay = {"turn_id": failed["turn_id"], "mode": "heartbeat", "stage": "execute", "ok": False}
+    body = capture_before_replan(env, replay, "original work contract")
+    assert body.endswith("original work contract")
+    assert not replay["checkpoint"]["captured"], replay
+    assert replay["checkpoint"]["reason"] == "pre_decision_capture_already_attempted", replay
+    assert not list((logs / "checkpoints").glob("replan-*/checkpoint.json"))
+    assert json.loads(saved_path.read_text()) == saved
+    # A new wake on the same outstanding obligation is also a retry, not a
+    # new original point. The durable guard remains evidence without its index.
+    again = run_once(env)
+    assert again["ok"] and again["turn_id"] != failed["turn_id"]
+    assert not again["checkpoint"]["captured"]
+    assert again["checkpoint"]["reason"] == "pre_decision_capture_already_attempted"
+    assert not list((logs / "checkpoints").glob("replan-*/checkpoint.json"))
+    # Settle that actual admitted review, then supply a separately declared
+    # later pair of synthetic observations. The real owner must issue a new
+    # obligation; the lost point must not suppress this distinct boundary.
+    guard = json.loads((logs / "wakes" / again["turn_id"] / "checkpoint-start-guard.json").read_text())
+    old_obligation = guard["replan_action_packet"]["obligation_id"]
+    replan_binding = ("--agent-id", cli.AGENT_ID, "--replan-obligation-id", old_obligation,
+                      "--turn-instance-id", again["turn_id"])
+    data = json.loads(vision.read_text())
+    data["vision_patch"]["acceptance_summary"] = "The missed original point stays missed; later research boundaries still qualify separately."
+    data["path_delta"]["observed_reality"] = "Real permission recovery did not recapture later code as the original research point."
+    data["path_delta"].update(schema_version="goal_path_delta_v0", outcome="replan")
+    vision.write_text(json.dumps(data))
+    run("refresh-state", "--goal-id", cli.GOAL_ID, *replan_binding,
+        "--classification", "missed_original_point_preserved", "--delivery-batch-scale", "multi_surface",
+        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(vision),
+        "--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch",
+        "--progress-result-class", "advanced", "--progress-surface-id", "surface:checkpoint-boundary",
+        "--progress-hypothesis-id", "hypothesis:missed-index", "--progress-probe-kind", "probe:real-permission",
+        "--progress-evidence-id", "evidence:index-recovery")
+    run("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *replan_binding, "--source", "heartbeat", "--execute")
+    from datetime import datetime, timedelta, timezone
+    source_history = index.read_bytes()
+    cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    observations = [json.loads(line) for line in index.read_text().splitlines()]
+    observed_at = datetime.now(timezone.utc)
+    for number, row in enumerate(observations):
+        row["generated_at"] = (observed_at + timedelta(microseconds=number)).isoformat()
+        row["progress_observation"].update(surface_id="surface-later", hypothesis_id="hypothesis-later")
+        Path(row["json_path"]).write_text(json.dumps(row))
+    index.write_bytes(source_history + b"".join((json.dumps(row) + "\n").encode() for row in observations))
+    fresh = run_once(env)
+    assert fresh["ok"] and fresh["checkpoint"]["captured"], fresh
+    point = Path(fresh["checkpoint"]["destination"])
+    assert point.name != old_obligation
+    assert (point / "components/code").read_text() == "after_strategy_decision = 999\n"

@@ -146,6 +146,28 @@ def _mark_replan_attempt(root: Path, obligation_id: str, turn_id: str, request_s
         return False
 
 
+def _prior_replan_guard_seen(env: dict[str, str], current: Path, obligation_id: str) -> bool:
+    """An absent optional index does not erase the original Host preflight.
+
+    Reuse saved guard packets and the typed replan selector. They are already
+    written before optional capture and before the model can decide or work.
+    No separate journal, model-text classifier or new replan owner is needed.
+    """
+    for path in sorted(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/checkpoint-start-guard.json")):
+        if path == current:
+            continue
+        if path.resolve(strict=True) != path:
+            raise ValueError("prior checkpoint guard must be a physical Host file")
+        guard = json.loads(path.read_text())
+        prior = effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "select_replan", "quota": guard, "goal_id": env["LOOPX_GOAL_ID"],
+            "agent_id": env["LOOPX_AGENT_ID"], "turn_instance_id": path.parent.name,
+        })
+        if prior["capture"] and prior["obligation_id"] == obligation_id:
+            return True
+    return False
+
+
 def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
     """Preload the original guard once, then capture before invoking the model.
 
@@ -178,6 +200,10 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     guard = json.loads(guard_run.stdout)
     if not isinstance(guard, dict) or guard.get("ok") is not True:
         raise ValueError("checkpoint requires a successful original quota guard")
+    # A previous preflight on this wake may already have allowed model work,
+    # even if its optional attempt marker (or final receipt) could not be saved.
+    # Such reentry can verify an existing point, but cannot capture a later one.
+    preflight_seen = guard_path.exists()
     guard_path.write_text(guard_run.stdout, encoding="utf-8")
     guard_path.chmod(0o600)
     preloaded_body = (f"Host checkpoint preflight has already executed this wake's original quota guard once. "
@@ -200,9 +226,10 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
             destination = root / intent["obligation_id"]
             if destination.parent != root or destination != destination.resolve():
                 raise ValueError("replan checkpoint identity must select a direct child")
-            if not destination.exists() and not _mark_replan_attempt(
-                root, intent["obligation_id"], receipt["turn_id"], hashlib.sha256(raw).hexdigest(),
-            ):
+            if not destination.exists() and (preflight_seen or
+                    _prior_replan_guard_seen(env, guard_path, intent["obligation_id"]) or
+                    not _mark_replan_attempt(root, intent["obligation_id"], receipt["turn_id"],
+                                             hashlib.sha256(raw).hexdigest())):
                 receipt["checkpoint"]["reason"] = "pre_decision_capture_already_attempted"
                 return preloaded_body
             requested_root = Path(request["destination"])
