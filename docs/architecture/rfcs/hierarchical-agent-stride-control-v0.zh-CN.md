@@ -615,7 +615,7 @@ Codex 读取完整历史，封存 rollout/索引/分页库并验证固定 guest 
 原始 archive。它可能早于工作区候选；排序仍由原生规则决定。缺失源码、捕获
 绑定变化或文件 witness 不符均在发布前拒绝；不评测、不补发机会，未完成或
 未对账评测会拒绝。
-参与者/效果 reconciliation、新研究状态采用、目标侧评测准入及实际有效
+参与者/效果 reconciliation、新研究状态采用、目标侧评测与 Host 联合准入及实际有效
 接续仍各自待验收；operator metadata 或历史一致不能认证这些条件。
 
 原生新注册不等于恢复准入。真实原生 Docker 资格测试中，source 已消耗十二次
@@ -624,6 +624,12 @@ Codex 读取完整历史，封存 rollout/索引/分页库并验证固定 guest 
 这是合法的新试验行为，不能代替同一研究点接续。Evaluator owner 须另行资格化
 从已绑定历史/计数及剩余冷却时长初始化目标状态，同时保留 Host 剩余总预算；
 复制旧 token 行不是准入证明。
+
+[Controller-only native capsule transport](../../../benchmark/README.md#controller-only-native-capsule-transport)
+已将提议中的 native initializer 接入既有 typed 产物 owner：显式 controller
+权限捕获/导入封存 native bank，再请求新的原生注册。controller 配置不进入 solver
+payload 或导出参与者；opaque 内容仍私有且未获隐私认证。此切片保留原生历史、选优 archive、计数及冷却，仍不
+资格化联合 replan barrier、模型/LoopX 状态采用、剩余总预算或实际有效研究。
 
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和

@@ -273,8 +273,66 @@ remains private; inspect the verified inventory before qualifying a complete poi
 The current Host hook cannot capture a new replan created **inside an already
 running model wake** before that decision. Those boundaries still need a qualified
 Host handoff; a later snapshot must not be labeled as the missed point. Complete
-LoopX research-state adoption, restored evaluator admission and useful continued work
+LoopX research-state adoption, joint evaluator/Host admission and useful continued work
 remain open. No automatic retention or extra evaluation opportunity is introduced.
+
+### Controller-only native capsule transport
+
+The read-only participant above does **not** implement the newer native capsule
+API. The separate controller adapter targets
+[EdgeBench PR #23](https://github.com/ByteDance-Seed/EdgeBench/pull/23), pinned at
+`4db79f4ea332ffd30c265ec7cb076f93471bd201`; this is proposed source, not a released
+upstream version. Start that pinned native judge with `sforge serve --checkpoints`.
+Its private controller configuration file has exactly `url`, `admin_secret` and
+`bank_root` (the native log directory's `checkpoints` directory). Keep this file,
+the bank and controller process outside every solver's filesystem/network authority.
+An owner-only mode is a storage precaution, not proof of solver exclusion.
+
+```sh
+python -m benchmark.edgebench.checkpoint_controller \
+  --controller-file /private/source-controller.json capture \
+  --token-file /private/source-token --capture-id 0123456789abcdef0123456789abcdef \
+  --destination /private/new-native-export
+python -m benchmark.edgebench.checkpoint_controller \
+  --controller-file /private/fresh-controller.json restore \
+  --root /private/new-native-export --expected-sha256 EXPORT_DIGEST \
+  --run-id isolated-branch --result-file /private/fresh-registration.json
+```
+
+Use a stable declared capture identity for one point; retries read its original
+native state, including after the source improves. The existing typed artifact
+owner seals and verifies the native capsule. The native owner
+alone validates evaluator compatibility, ranking, released feedback, consumed
+rounds, resources and retained cooldown, then creates a fresh registration.
+The adapter never grades, extracts incumbent archives or adds controller
+configuration/live registration token records to the export. Opaque incumbent
+bytes and released reports still require private handling; privacy is not certified.
+Restore writes its new token only to the explicit
+private result file; stdout contains its path. Wrong authority, corrupt bytes,
+aliases, foreign bank entries, source-run reuse and duplicate native admission
+fail without a fresh evaluation. Redirects cannot forward the admin secret.
+After an uncertain restore response, inspect native readback with the controller;
+do not switch run identities or perform ordinary fresh registration as a retry.
+
+This is an independently usable **native participant transport**, still partial
+relative to full research continuation. It does not join the worker's replan
+barrier, restore Codex/LoopX authority or carry the remaining whole-trial budget.
+Never put its controller configuration in `--checkpoint-request` or a worker
+payload. Omit both these controller operations and the native `--checkpoints`
+flag to disable this transport on a fresh judge; preserved capsules stay inert.
+Synthetic native HTTP tests and an explicitly enabled Docker qualification are:
+
+```sh
+python -m pytest -q benchmark/tests/test_checkpoint_controller.py
+LOOPX_EDGEBENCH_DOCKER_SMOKE=1 python -m pytest -q \
+  benchmark/tests/test_checkpoint_controller.py::test_real_docker_controller_export_import_and_next_grade
+```
+
+新的 controller transport 使用上述 PR #23 固定源及 native `--checkpoints`，
+不复用旧只读接口来伪装接续。admin 配置和 bank 必须由 solver 权限范围外的
+controller 保管，不能放进 worker；0600 不能证明隔离。原生 owner 保留历史、
+已用轮次和剩余冷却，生成新注册；完整研究接续仍需联合会话、LoopX 新权限、
+原点剩余总预算及 replan 前决策边界。此切片不启动研究、不证明收益，也不改历史源。
 
 这是研究 checkpoint 的开发前置切片。EdgeBench CLI 的显式
 `--checkpoint-request` 会把 host JSON 原文安全放入 heartbeat worker，并在

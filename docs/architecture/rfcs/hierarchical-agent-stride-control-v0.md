@@ -736,7 +736,7 @@ plus the opaque native-selected incumbent archive bound to its released result.
 The incumbent can precede the working candidate; native ranking remains the owner.
 Missing bytes, changed capture bindings or mismatched file witnesses reject before
 publication, without grading or refilling admission; pending or unreconciled grades reject.
-Participant/effect reconciliation, fresh research-state adoption, preserved evaluator
+Participant/effect reconciliation, fresh research-state adoption, joint evaluator/Host
 admission and useful continued work remain separate acceptance work; operator
 metadata and native history equality cannot certify them.
 
@@ -749,6 +749,14 @@ valid new-trial behavior; it cannot substitute for a same-point continuation.
 The evaluator owner must separately qualify destination initialization from the
 bound history/counters and remaining cooldown duration, together with the Host's
 remaining total budget. Copying captured token rows is not admission proof.
+
+The [controller-only native capsule transport](../../../benchmark/README.md#controller-only-native-capsule-transport)
+now connects the proposed native initializer to the existing typed artifact owner:
+explicit controller authority captures/imports a sealed native bank and requests
+fresh native registration. Controller configuration stays out of solver payloads
+and exported participants; opaque data remains private and uncertified. This slice preserves native history, selected
+archive, counters and cooldown; it does not yet qualify the joint replan barrier,
+model/LoopX state adoption, remaining whole-trial budget or useful research.
 
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
