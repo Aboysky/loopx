@@ -643,6 +643,26 @@ consistency and comparison requirements, not a second restore authority.
 Before capture, declare the point by elapsed research budget or a semantic event;
 do not choose it retrospectively for a favorable score. A later point such as
 ten hours is an experiment setting, not a product default or automatic pivot.
+
+The proposed automatic capture policy is **off by default; when explicitly
+enabled, capture at each fresh replan node before its strategy decision**. Reuse
+the canonical replan obligation identity: repeated context reads or retries of
+that node do not create another point. Ordinary work Turns do not trigger a full
+capture. A successful point records the replan identity, the completed Host
+cursor, source revisions and current strategy version; these are evidence
+bindings, not authority. Branches can then compare different replan decisions
+from the same retained research state, including a decision to keep the route.
+
+The trigger still waits for the settled boundary below and must precede the
+replan decision and its new work. A replan can occur inside one Host wake, so an
+after-wake hook alone cannot implement this ordering. The replan and Host owners
+must provide that handoff without an extra model call or work settlement. If the
+boundary cannot be qualified, record the missed point and continue under the
+existing execution contract; do not substitute a later state for that node.
+Measure capture time and storage per node before choosing compression, shared
+immutable members or retention limits. Retention must preserve declared study
+points and their branches rather than silently selecting favorable outcomes.
+
 Record the actual boundary and any skew:
 
 - native conversation cursor and a Host-qualified export/fork path; copied log
@@ -694,7 +714,8 @@ The initial implementation slice is [inert artifact capture](../../../benchmark/
 The benchmark adapter requests it after the existing Turn settlement; the typed
 artifact owner seals explicit files/directories and committed SQLite snapshots,
 rechecks source witnesses and verifies an isolated materialization. Its manifest
-always declares the research point unqualified. Participant/effect reconciliation,
+always declares the research point unqualified. This explicit one-point hook
+does not implement the proposed automatic replan trigger. Participant/effect reconciliation,
 native session reconstruction, fresh state adoption and preserved evaluator
 opportunities remain separate acceptance work; operator metadata cannot certify them.
 

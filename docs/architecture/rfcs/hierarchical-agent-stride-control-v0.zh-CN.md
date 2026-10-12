@@ -548,7 +548,22 @@ Host 会话 owner 和 artifact provider；本 RFC 定义研究实验的一致性
 不新建 restore 权威。
 
 捕获前按已分配研究预算或语义事件声明位置，不事后挑分数有利的点。十小时等
-中后期位置属于实验设置，不是产品默认值或自动转向条件。记录实际边界与 skew：
+中后期位置属于实验设置，不是产品默认值或自动转向条件。
+
+自动捕获策略提案是**默认关闭；显式开启后，在每个新的 replan 节点、策略决策
+之前捕获**。复用 canonical replan obligation 身份：重复读取 context 或重试
+同一节点不会生成另一研究点。普通工作 Turn 不触发完整捕获。成功研究点绑定
+replan 身份、已完成 Host cursor、来源 revision 及当前策略版本；这些是证据
+绑定，不是权限。不同分支可从同一份积累比较不同 replan 决策，包括保留原路线。
+
+触发仍须等待下述已结算边界，并先于 replan 决策及其新工作。一次 Host wake
+内部也可能发生 replan，因此单独的 after-wake hook 不能实现这个顺序。Replan
+与 Host owner 须提供该衔接，不增加模型调用或工作结算。边界无法资格化时记录
+缺失研究点，按既有执行契约继续；不能用更晚状态代替该节点。先记录每个节点
+的捕获时间和存储量，再决定压缩、共享不可变成员或保留上限。保留策略须保护
+已声明研究点及其分支，不能静默挑选有利结果。
+
+记录实际边界与 skew：
 
 - 原生会话 cursor 和已资格化的 Host export/fork 路径；复制日志不证明能恢复
   session；
@@ -585,7 +600,8 @@ Host adapter 须在固定版本验证原生历史重建，包括 compaction 和�
 第一项实现切片是 [inert 产物捕获](../../../benchmark/README.md#inert-checkpoint-capture)。
 Benchmark adapter 在既有 Turn 结算后请求捕获；typed 产物 owner 封存显式文件/
 目录及已提交 SQLite 快照，复查来源 witness 并验证隔离物化。Manifest 始终声明
-研究点尚未资格化。参与者/效果 reconciliation、原生会话重建、新状态采用及评测
+研究点尚未资格化。这项显式单点 hook 尚未实现上述自动 replan 触发。参与者/
+效果 reconciliation、原生会话重建、新状态采用及评测
 机会继承仍各自待验收；operator metadata 不能认证这些条件。
 
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
