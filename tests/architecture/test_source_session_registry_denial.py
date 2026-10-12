@@ -13,6 +13,9 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/control_plane/goals/goal_amendment_runtime.py",
     "loopx/control_plane/goals/source_session_registration.py",
     "loopx/presentation/goal_amendment_api.py",
+    "loopx/presentation/goal_direction_api.py",
+    "loopx/presentation/goal_source_routing.py",
+    "loopx/control_plane/goals/direction_runtime.py",
     "loopx/attached_session.py",
     "loopx/bootstrap.py",
     "loopx/capabilities/manager_context/__init__.py",
@@ -79,7 +82,10 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
         "loopx/chat_server.py": {"serve_chat"},
         "loopx/chat_status_api.py": {"_status"},
         "loopx/control_plane/coordination/new_goal_storage_transport.py": {"initialize_goal_storage_target"},
-        "loopx/presentation/goal_amendment_api.py": {"_source_registry", "_amendment_inspect"},
+        "loopx/presentation/goal_amendment_api.py": {"_amendment_inspect"},
+        "loopx/presentation/goal_direction_api.py": {"_direction_route"},
+        "loopx/presentation/goal_source_routing.py": {"source_registry_for_goal"},
+        "loopx/control_plane/goals/direction_runtime.py": {"_source"},
     }
     for relative, functions in named_readers.items():
         tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
