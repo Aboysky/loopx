@@ -138,6 +138,17 @@ export const configurationBackupScenario = {
       await recovery.getByRole("button", {name: "验证并建立隔离副本", exact: true}).click();
       await recovery.getByRole("alert").waitFor();
       assert.equal(await recovery.getByText("保存的任务: 1", {exact: false}).count(), 0, "a changed input must clear the old success view");
+      // Optional real capacity fixture, produced through the normal backup
+      // command. The ordinary browser smoke does not seed 20,001 transactions.
+      if (process.env.LOOPX_RECOVERY_HISTORY_OVERFLOW_ARCHIVE) {
+        assert.ok(process.env.LOOPX_RECOVERY_HISTORY_OVERFLOW_MANIFEST);
+        await recovery.getByLabel("完整归档", {exact: true}).setInputFiles(process.env.LOOPX_RECOVERY_HISTORY_OVERFLOW_ARCHIVE);
+        await recovery.getByLabel("配套清单", {exact: true}).setInputFiles(process.env.LOOPX_RECOVERY_HISTORY_OVERFLOW_MANIFEST);
+        await recovery.getByRole("button", {name: "验证并建立隔离副本", exact: true}).click();
+        await recovery.getByRole("alert").filter({hasText: "20,000"}).waitFor();
+        assert.equal(await recovery.getByText("保存的任务: 1", {exact: false}).count(), 0);
+        await page.screenshot({path: resolve(outputDir, "state-recovery-history-capacity.png"), animations: "disabled"});
+      }
       await recovery.getByRole("button", {name: "历史检查结果", exact: true}).click();
       const history = recovery.getByLabel("历史备份检查", {exact: true});
       await history.getByRole("button").click();
