@@ -1783,7 +1783,18 @@ export async function hasMonitorPollTransaction(
     validateReceiptScope(receipt, runsDir, join(runsDir, "index.jsonl"));
     const facts = receipt.status === "provider_pending" ? receipt.provider_plan : receipt.index_record;
     if (receipt.effect_id !== effectId || facts.goal_id !== identity.goal_id ||
-        facts.agent_id !== identity.agent_id || facts.todo_id !== identity.todo_id) continue;
+        facts.todo_id !== identity.todo_id) continue;
+    if (receipt.status === "provider_pending") {
+      // The provider plan names its actor, not the Turn's accounting Agent.
+      // Legacy pending receipts retain this exact accounting effect identity.
+      if (receipt.schema_version === MONITOR_PENDING_ADMISSION_SCHEMA &&
+          (receipt.admitted_decision.goal_id !== identity.goal_id ||
+           receipt.admitted_decision.agent_id !== identity.agent_id)) {
+        throw new EffectRuntimeRequestError(
+          "stored Monitor admission conflicts with its accounting identity", "malformed_transaction_receipt",
+        );
+      }
+    } else if (facts.agent_id !== identity.agent_id) continue;
     const goalRef = receipt.status === "provider_pending" ? receipt.goal_ref : facts.goal_ref;
     if (receipt.status === "provider_pending" && goalRef === undefined && owner.kind !== "alias") {
       throw new EffectRuntimeRequestError(

@@ -46,6 +46,18 @@ test("competing closeout reads pending and durable transactions under their Goal
         {role: "source_guard", target: join(runtime, "guard"), pid: process.pid, token: "fixture"}]}};
   };
   assert.equal(await hasMonitorPollTransaction(runtime, identity, {kind: "alias"}), true);
+  // Provider actor metadata does not change the pending accounting Agent.
+  const alternateActor = {...pending, provider_plan: {...pending.provider_plan, agent_id: "other-observer"}};
+  await writeFile(path, JSON.stringify(alternateActor));
+  assert.equal(await hasMonitorPollTransaction(runtime, identity, {kind: "alias"}), true);
+  await writeFile(path, JSON.stringify({...alternateActor,
+    admitted_decision: {...pending.admitted_decision, agent_id: "other-accounting-agent"}}));
+  await assert.rejects(hasMonitorPollTransaction(runtime, identity, {kind: "alias"}), /accounting identity/);
+  const legacyActor = {...alternateActor, schema_version: "quota_monitor_poll_commit_receipt_v0"};
+  delete legacyActor.admitted_decision;
+  await writeFile(path, JSON.stringify(legacyActor));
+  assert.equal(await hasMonitorPollTransaction(runtime, identity, {kind: "alias"}), true);
+  await writeFile(path, JSON.stringify(pending));
   await assert.rejects(hasMonitorPollTransaction(runtime, identity, owner(refB)), /lacks GoalRef scope/);
   for (const goalRef of [refA, refB]) {
     await writeFile(path, JSON.stringify({...pending, goal_ref: goalRef}));
