@@ -153,6 +153,28 @@ def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monk
     assert len(staged) == int(profile in {"official", "single"})
 
 
+@pytest.mark.parametrize("capture_path", [None, "/control/checkpoint-request.json"])
+def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profile(tmp_path, monkeypatch, capture_path):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass  # Exercise the real adapter handoff without starting a trial.
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    worker = SForgeWorker(config, profile="heartbeat-explore", cwd="/task", checkpoint_request_path=capture_path)
+    worker.install_stop_hook(None, None, tmp_path, None)
+    env = worker.runtime._worker_env(cwd="/task")
+    profile = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert env.get("LOOPX_CHECKPOINT_REQUEST") == capture_path
+    assert ("checkpoint_capture_enabled" in profile) is (capture_path is not None)
+    assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
+    with pytest.raises(ValueError, match="checkpoint_request_path"):
+        SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
+
+
 @pytest.mark.parametrize("profile,total,expected", [
     ("native-goal", 64800, 64640), ("native-goal", 1800, 1640),
     ("heartbeat-resume", 64800, 64640), ("heartbeat-explore", 64800, 64640),
