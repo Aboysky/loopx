@@ -26,6 +26,7 @@ const errors: Record<string, [string, string]> = {
   recovery_capacity_exceeded: ["备份超过当前检查容量，请使用较小的备份；未建立新副本。", "This backup exceeds the inspection limits. Use a smaller backup; no new copy was published."],
   recovery_input_unavailable: ["上传文件已不可用，请重新选择归档与清单。", "The uploaded files are unavailable. Select the archive and manifest again."],
   recovery_owner_timeout: ["离线检查超时，未发布副本；可使用较小的备份重试。", "Offline verification timed out without publishing a copy. Retry with a smaller backup."],
+  authority_history_capacity: ["单个 Goal 的历史超过 20,000 次提交，未发布副本。请保留完整备份，通过存储 owner 的恢复流程检查。", "One Goal exceeds the 20,000-commit inspection limit; no copy was published. Keep the complete backup and use the storage owner's recovery procedure."],
   member_witness_mismatch: ["保存的文件与清单记录不符，已停止检查。", "Saved files differ from their manifest witnesses. Inspection stopped."],
 };
 

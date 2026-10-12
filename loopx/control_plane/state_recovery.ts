@@ -4,7 +4,7 @@ import {lstat, readFile} from "node:fs/promises";
 import {join, relative} from "node:path";
 import type {JsonObject} from "./effect_program.ts";
 import {requireJsonObject} from "./runtime_decode.ts";
-import {canonicalAuthoritySha256, AuthorityStoreProtocolError} from "./coordination/authority_store_codec.ts";
+import {canonicalAuthoritySha256, AuthorityStoreProtocolError, parseAuthorityCursor} from "./coordination/authority_store_codec.ts";
 import {EffectRuntimeRequestError} from "./effect_runtime_errors.ts";
 import {verifyConfigurationBackup} from "./configuration_backup.ts";
 import {decodeLocalAuthoritySelection, localAuthorityProviderPaths,
@@ -145,6 +145,7 @@ async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<s
     const handle = await openLocalAuthorityStoreHandle(root, goalId, {}, {existingOnly: true});
     const loaded = await handle.store.loadAuthority();
     check(loaded.status === "loaded", "authority_head_unavailable");
+    check(parseAuthorityCursor(loaded.cursor) <= BigInt(MAX_COMMITS), "authority_history_capacity");
     // Byte-valid storage alone is not a readable Goal work model. Reuse the
     // same full-record, lease and acceptance decoder as canonical Todo reads.
     const collection = canonicalTodoCollection(loaded.head, goalId, true);
@@ -174,6 +175,9 @@ async function inspectGoal(root: string, goalId: string, standaloneSqlite: Set<s
         todo_count: collection.projection.todo_ids.length,
         historical_lease_count: collection.leaseIndex?.lease_todo_ids.length ?? 0}, ["configuration"]);
   } catch (error) {
+    // Inspection profile overflow aborts publication; it is not evidence that
+    // this owner's captured state is merely unknown or unreadable.
+    if (error instanceof RecoveryInputError && error.code === "authority_history_capacity") throw error;
     return component(id, "coordination_authority", "unknown",
       error instanceof RecoveryInputError ? error.code : "authority_source_unavailable",
       "inspect_captured_authority_with_owner", goalFacts, ["configuration"]);
