@@ -88,7 +88,7 @@ export function ChannelHeader({
   }, [readOnlySourceLabel, selectedAgentId]);
   const model = modelDiscovery?.model;
   const selectedModel = selectedAgentModelId || model?.selected || model?.options[0]?.value || "";
-  const modelControl = model && selectedModel && model.options.length > 1 ? (
+  const modelControl = model && selectedModel ? (
     <WorkspaceSelect
       ariaLabel={locale === "zh-CN" ? "选择模型" : "Select model"}
       className="personal-agent-select personal-model-select"
@@ -97,10 +97,6 @@ export function ChannelHeader({
       prefixLabel={locale === "zh-CN" ? "模型" : "Model"}
       value={selectedModel}
     />
-  ) : model && selectedModel ? (
-    <span className="personal-agent-model" aria-label={locale === "zh-CN" ? "当前模型" : "Current model"}>
-      <small>{locale === "zh-CN" ? "模型" : "Model"}</small>{model.options.find((option) => option.value === selectedModel)?.label ?? selectedModel}
-    </span>
   ) : modelDiscoveryState === "loading" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "正在读取模型…" : "Reading models…"}</small>
     : modelDiscoveryState === "error" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "无法读取模型" : "Models unavailable"}</small> : null;
   // The chip reports the selected executor, whose credential pays for it, and
