@@ -947,7 +947,9 @@ A successful commit creates unclaimed work and advances the Goal revision in
 one CAS, preserving all prior Todos and leases. Peers must inspect and adopt the
 new basis. `claim` takes that basis, `todo_id`, `expected_provider_revision` and
 `lease_request` (the existing `idempotency_key`, `expected_version`, `ttl_seconds`
-contract). The existing claim owner enforces hard leases. Only the original
+contract). The existing claim owner enforces hard leases. Once its causal binding
+is recorded, reconfirming the claim or reacquiring an expired lease uses that
+owner without reopening the settled replan obligation. Only the original
 proposer's exact causal binding can satisfy its source-derived replan obligation;
 another peer's claim cannot settle it. This is replan consumption, not terminal
 acceptance of the created work. The original amendment receipt keeps its
@@ -959,6 +961,9 @@ original claim operation/receipt. Retry the exact original mutation after a
 lost reply, never a fresh operation. The UI retains the reviewed request across
 reload and can read the original receipt or retry that same request. A missing
 receipt is not proof of no commit; stale basis requires a new inspected preview.
+The typed Goal owner supplies the operation outcome to both transports:
+`no_change` is a successful no-op, while missing current authority cannot make
+inspection or a mutation successful. Restore the original storage before retrying.
 
 Validation covers native registration/CLI/HTTP with real File/SQLite, an existing
 peer lease, stale or retired lifetimes, source commitment preservation,

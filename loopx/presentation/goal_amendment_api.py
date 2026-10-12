@@ -87,7 +87,7 @@ class GoalAmendmentRequestMixin:
             else:
                 result = execute_goal_amendment(registry_path=source, goal_id=goal_ref["goal_id"],
                     goal_instance_id=goal_ref["goal_instance_id"], operation="inspect", actor_agent_id=None)
-            self._send_json({"ok": result.get("status") in {"loaded", "found", "missing"}, **_public(result)})
+            self._send_json(_public(result))
         except (OSError, TypeError, ValueError) as exc:
             self._send_error(redact_local_paths(str(exc)), status=400, error_code="goal_amendment_unavailable")
 
@@ -106,6 +106,9 @@ class GoalAmendmentRequestMixin:
                 raise ValueError("Only initial root policy fields are accepted here")
             common = dict(registry_path=source, goal_id=goal_id, goal_instance_id=str(body["goal_instance_id"]), actor_agent_id=None)
             current = execute_goal_amendment(**common, operation="inspect")
+            if current.get("ok") is not True:
+                self._send_json(_public(current))
+                return
             original = current.get("source_commitments")
             if not isinstance(original, dict):
                 raise ValueError("The original Goal commitments are unavailable; a source-owner migration is required")
@@ -115,14 +118,13 @@ class GoalAmendmentRequestMixin:
             request = {"root_intent": root, "policy": parameters["policy"], "expected_provider_revision": parameters["expected_provider_revision"],
                 "operation_id": str(body["operation_id"])}
             result = execute_goal_amendment(**common, operation="configure", parameters=request)
-            if result.get("status") not in {"planned", "applied", "recovered", "replayed", "no_change"}:
-                self._send_json({"ok": False, **_public(result)})
+            if result.get("ok") is not True:
+                self._send_json(_public(result))
                 return
             if body["execute"]:
                 if not body.get("preview_digest") or result.get("intent_digest") != body["preview_digest"]:
                     raise ValueError("Root configuration changed or is unavailable; inspect and preview it again")
                 result = execute_goal_amendment(**common, operation="configure", parameters=request, execute=True)
-            accepted = result.get("status") in {"planned", "applied", "recovered", "replayed", "no_change"}
-            self._send_json({"ok": accepted, **_public(result)})
+            self._send_json(_public(result))
         except (KeyError, OSError, TypeError, ValueError) as exc:
             self._send_error(redact_local_paths(str(exc)), status=400, error_code="goal_amendment_configuration_failed")

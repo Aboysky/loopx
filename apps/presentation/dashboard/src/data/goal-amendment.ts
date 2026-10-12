@@ -31,7 +31,10 @@ const resultSchema = z.object({ok: z.boolean(), schema_version: z.literal("goal_
   intent_digest: z.string().optional(), reason: z.string().optional(), reason_code: z.string().optional(), execution_authority_granted: z.literal(false),
   current_projection: amendmentViewSchema.omit({ok: true}).optional()});
 export async function fetchAmendment(goalId: string): Promise<AmendmentView> {
-  return amendmentViewSchema.parse(await requestJson<unknown>(`/api/chat/goal-amendment?${new URLSearchParams({goal_id: goalId})}`));
+  const payload = await requestJson<unknown>(`/api/chat/goal-amendment?${new URLSearchParams({goal_id: goalId})}`);
+  const outcome = resultSchema.parse(payload);
+  if (!outcome.ok) throw new Error(outcome.reason ?? "Goal amendment state is unavailable.");
+  return amendmentViewSchema.parse(payload);
 }
 export async function configureAmendment(request: RootRequest, execute: boolean) {
   return resultSchema.parse(await requestJson<unknown>("/api/chat/goal-amendment", {method: "POST", body: JSON.stringify({...request, execute})}));

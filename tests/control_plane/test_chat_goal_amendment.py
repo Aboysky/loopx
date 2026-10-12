@@ -119,3 +119,23 @@ def test_source_discovery_exposes_metadata_but_preserves_full_runtime_refusal(ap
     assert set(directory["goals"][0]) == {"id", "display_name", "activation_state", "registry_member"}
     code, refused = call(path="/status.json?goal_id=" + fixture["ref"]["goal_id"])
     assert code >= 400 and refused["ok"] is False
+
+
+@pytest.mark.parametrize("source_goal", ["file"], indirect=True)
+def test_http_preserves_owner_unavailability_and_original_storage_recovery(api):
+    call, fixture, _ = api
+    request = configuration(call, fixture)
+    documents = list((fixture["runtime"] / "authority/file-v0").glob("authority-store-*.json"))
+    assert len(documents) == 1
+    saved = documents[0].read_bytes()
+    documents[0].unlink()  # This isolated fixture only; no live Goal repair.
+    try:
+        for body in (None, request):
+            code, unavailable = call(body)
+            assert code == 200 and unavailable["ok"] is False, unavailable
+            assert unavailable["reason_code"] == "goal_amendment_source_unavailable"
+            assert "restore its original storage" in unavailable["reason"]
+            assert not documents[0].exists()
+    finally:
+        documents[0].write_bytes(saved)
+    assert call(request)[1]["ok"] is True

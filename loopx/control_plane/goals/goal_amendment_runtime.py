@@ -120,10 +120,11 @@ def execute_goal_amendment(
                 result = effect_runtime_result("goal.amendment.execute", {
                     **parameters, **common, "operation": operation, "dry_run": not execute,
                 }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
-                if isinstance(result, dict) and operation != "receipt" and result.get("status") in {"applied", "recovered", "replayed", "no_change"}:
+                if isinstance(result, dict) and operation != "receipt" and result.get("ok") is True and result.get("status") != "planned":
                     # Current consumption is a separate readback; never rewrite
                     # the original operation's committed receipt or pending fact.
                     result["current_projection"] = inspect()
+                    result["current_projection"].pop("ok", None)
     if not isinstance(result, dict):
         raise TypeError("Goal amendment owner returned an invalid result")
     return result

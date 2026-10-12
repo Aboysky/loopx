@@ -205,6 +205,14 @@ def test_claimed_successor_is_consumed_by_existing_replan_owner(source_goal, tmp
         assert observed[0]["acknowledgement"]["source"] == "todo_replan_successor_transition"
     replay = _call(f, tmp_path, capsys, "claim", claim, agent=claim_agent, operation_id="claim", execute=True)[1]
     assert replay["status"] == "replayed" and replay["original_receipt"] == claimed["original_receipt"]
+    # Reconfirming an existing claim/lease under a fresh operation is a
+    # successful no-op, including after the original replan was consumed.
+    unchanged = {**claim, **_basis(current), "expected_provider_revision": current["provider_revision"]}
+    code, noop = _call(f, tmp_path, capsys, "claim", unchanged, agent=claim_agent, operation_id="same-owner-noop", execute=True)
+    assert code == 0 and noop["ok"] is True and noop["status"] == "no_change", noop
+    assert noop["changed"] is False
+    assert noop["current_projection"]["work_digest"] == current["work_digest"]
+    assert noop["current_projection"]["intent"] == current["intent"]
     # An already-consumed obligation cannot authorize another new proposal.
     next_proposal = {**proposal, **_basis(current), "proposal_id": "not-a-new-obligation"}
     assert _call(f, tmp_path, capsys, "propose", next_proposal, operation_id="duplicate-obligation", execute=True)[0] == 1
@@ -220,3 +228,48 @@ def test_root_initialization_cannot_shrink_source_goal_commitments(source_goal, 
     code, result = _call(f, tmp_path, capsys, "configure", document, agent=None, operation_id="bad-root", execute=True)
     assert code == 1, result
     assert _call(f, tmp_path, capsys, "inspect")[1]["intent"] is None
+
+
+def test_existing_causal_binding_allows_lease_reacquisition_after_replan_settlement(source_goal, tmp_path, capsys, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from loopx.control_plane.goals import goal_amendment_runtime
+
+    f = source_goal
+    test_claimed_successor_is_consumed_by_existing_replan_owner(f, tmp_path, capsys, "agent-a")
+    view = _call(f, tmp_path, capsys, "inspect")[1]
+    assert view["replan_observations"][0]["state"] == "settled"
+    # Advance only the trusted clock input; the real lease decision and provider
+    # must issue a new epoch. No mocked acceptance or active user Goal is used.
+    later = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    monkeypatch.setattr(goal_amendment_runtime, "now_utc_iso", lambda: later)
+    code, continued = _call(f, tmp_path, capsys, "claim", {
+        **_basis(view), "todo_id": view["intent"]["created_todo_ids"][0],
+        "expected_provider_revision": view["provider_revision"],
+        "lease_request": {"idempotency_key": "continuation", "expected_version": 1, "ttl_seconds": 300},
+    }, operation_id="claim-continuation", execute=True)
+    assert code == 0 and continued["status"] == "applied", continued
+    assert continued["lease"]["version"] == 2 and continued["lease"]["lease_epoch"] == 2
+    assert continued["current_projection"]["intent"] == view["intent"]
+    assert continued["current_projection"]["replan_observations"][0]["state"] == "settled"
+
+
+@pytest.mark.parametrize("source_goal", ["file"], indirect=True)
+def test_missing_authority_is_not_successful_inspect_or_configuration(source_goal, tmp_path, capsys):
+    f = source_goal
+    view = _call(f, tmp_path, capsys, "inspect")[1]
+    documents = list((f["runtime"] / "authority/file-v0").glob("authority-store-*.json"))
+    assert len(documents) == 1
+    saved = documents[0].read_bytes()
+    documents[0].unlink()  # Only this disposable fixture's provider document.
+    try:
+        for operation, parameters in [("inspect", None), ("configure", _root(view))]:
+            code, unavailable = _call(f, tmp_path, capsys, operation, parameters,
+                agent=None, operation_id="restore-root" if operation == "configure" else None, execute=operation == "configure")
+            assert code == 1 and unavailable["ok"] is False, unavailable
+            assert not documents[0].exists()
+    finally:
+        documents[0].write_bytes(saved)
+    # Original storage restoration permits the original request, not new state
+    # inferred from an absent provider or mutable Markdown.
+    code, recovered = _call(f, tmp_path, capsys, "configure", _root(view), agent=None, operation_id="restore-root", execute=True)
+    assert code == 0 and recovered["status"] == "applied", recovered

@@ -781,7 +781,8 @@ request-derived 来源。`commit` 只接受保留的 `proposal_id`、`proposal_d
 成功 commit 在一次 CAS 中创建未认领工作并推进 Goal revision，保留原 Todo/lease。
 Peer 须 inspect 并 adopt 新基线。`claim` 接受当前 basis、`todo_id`、
 `expected_provider_revision`、既有 `lease_request` 的 `idempotency_key`、
-`expected_version`、`ttl_seconds`；现有 claim owner 执行硬租约规则。只有原提案者的
+`expected_version`、`ttl_seconds`；现有 claim owner 执行硬租约规则。因果绑定已记录后，再次确认 claim 或在租约过期后
+重新取得租约仍走这个 owner，不要求重新打开已经结算的 replan。只有原提案者的
 精确因果绑定能满足它的 source-derived replan，另一 peer 的 claim 不能替它结算。
 这是 replan 消费，不是新工作终局验收。原 amendment 回执保留历史 pending 字段，
 当前采纳/结算观察单独读取。
@@ -789,7 +790,8 @@ Peer 须 inspect 并 adopt 新基线。`claim` 接受当前 basis、`todo_id`、
 Root/proposal/adoption/commit 历史用 `--governed receipt`，JSON 请求包含
 `receipt_operation_id`；claim 恢复使用原 claim 操作/回执。响应丢失后重试原 mutation，
 不新建 id。界面刷新保留已审阅请求，可读取原回执或重试同一操作。缺回执不证明没有提交；
-过期 basis 需要重新读取和检查。
+过期 basis 需要重新读取和检查。两种 transport 都使用 TS Goal owner 给出的操作结果：
+`no_change` 是成功的无变更操作；当前 authority 缺失不能算读取或写入成功，须先恢复原存储。
 
 验证涵盖真实 File/SQLite 的原生注册/CLI/HTTP、其他 peer 的既有租约、过期/退休实例、
 原始承诺保持、语义损坏、响应丢失、同操作恢复和 claim/replan 隔离。共享 claim 变更另需

@@ -211,8 +211,7 @@ def handle_goal_amendment_proposal_command(
                 goal_instance_id=args.goal_instance_id, operation=args.governed,
                 actor_agent_id=args.agent_id, parameters=parameters,
                 runtime_root=runtime_root, execute=args.execute)
-            accepted = payload.get("status") in {"loaded", "planned", "applied", "recovered", "replayed", "found", "missing"}
-            payload = {"ok": accepted, **payload}
+            accepted = payload.get("ok") is True
             print_payload(payload, output_format(args), render_goal_amendment_proposal_markdown)
             return 0 if accepted else 1
         if any(getattr(args, name, None) for name in ("goal_instance_id", "agent_id", "request_json", "operation_id", "execute")):

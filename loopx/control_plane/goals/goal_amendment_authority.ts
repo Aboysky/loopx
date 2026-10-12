@@ -176,7 +176,7 @@ function readIntent(head: JsonObject): IntentState | null {
   bounded(result); return result;
 }
 function failure(reason_code: string, reason: string): JsonObject & {schema_version: typeof GOAL_AMENDMENT_RESULT_SCHEMA} {
-  return {schema_version: GOAL_AMENDMENT_RESULT_SCHEMA, status: "failed", changed: false, reason_code, reason, execution_authority_granted: false};
+  return {ok: false, schema_version: GOAL_AMENDMENT_RESULT_SCHEMA, status: "failed", changed: false, reason_code, reason, execution_authority_granted: false};
 }
 function amendmentTodoId(goalRef: GoalRef, proposalId: string): string {
   return "todo_" + createHash("sha256").update(canonicalAuthoritySha256({goal_ref: goalRef, proposal_id: proposalId})).digest("hex").slice(0, 24);
@@ -214,6 +214,21 @@ function currentBasis(request: JsonObject, state: IntentState, head: JsonObject)
 /** The source adapter holds the exact Goal lifecycle and registry guards until
  * this call returns. No source-supplied boolean alone can replace that contract. */
 export async function executeGoalAmendment(store: AuthorityStore, value: unknown, sourceCurrent: AuthoritySourceCheck = uncheckedAuthoritySource): Promise<JsonObject> {
+  const request = object(value, "Goal amendment request");
+  const result = await executeAmendmentOperation(store, request, sourceCurrent);
+  // Success is operation-specific: a missing receipt is a completed historical
+  // lookup, but missing authority cannot successfully inspect or perform work.
+  // Transports must not maintain their own, diverging status classifications.
+  const ok = request.operation === "inspect" ? result.status === "loaded"
+    : request.operation === "receipt" ? result.status === "found" || result.status === "missing"
+    : ["planned", "applied", "recovered", "replayed", "no_change"].includes(String(result.status));
+  return {...result, ok, ...(!ok && result.status === "missing" ? {
+    reason_code: "goal_amendment_source_unavailable",
+    reason: "Canonical Goal authority is missing; restore its original storage before retrying.",
+  } : {})};
+}
+
+async function executeAmendmentOperation(store: AuthorityStore, value: unknown, sourceCurrent: AuthoritySourceCheck): Promise<JsonObject> {
   const request = object(value, "Goal amendment request"); bounded(request);
   const op = request.operation as Operation;
   requireValue(Object.hasOwn(OPERATION_FIELDS, op), "unsupported Goal amendment operation");
@@ -264,7 +279,12 @@ export async function executeGoalAmendment(store: AuthorityStore, value: unknown
     const origin = state.proposals.find(p => amendmentTodoId(goalRef, p.proposal_id) === request.todo_id);
     requireValue(origin, "amendment-created work is missing its original proposal");
     const binding = origin.proposer_agent_id === actor ? origin.replan_obligation_id : null;
-    if (binding !== null && prior.status !== "found") requireOpenObligation(source, binding, actor, goalRef);
+    const existingBinding = indexCoordinationProjection(loaded.head, goalRef.goal_id).todos.get(String(request.todo_id))?.replan_obligation_id;
+    // Consume an open obligation only when materializing its binding. Once
+    // bound, ordinary claim/lease continuation must not reopen settled replan.
+    if (binding !== null && existingBinding !== binding && prior.status !== "found") {
+      requireOpenObligation(source, binding, actor, goalRef);
+    }
     const lease = request.lease_request === null ? null : object(request.lease_request, "lease_request") as unknown as CoordinationTodoClaimLeaseRequest;
     const result = await executeCoordinationTodoClaim(store, {goal_id: goalRef.goal_id, todo_id: id(request.todo_id, "todo_id"),
       claimed_by: actor, actor_agent_id: actor, expected_role: "agent", registered_agents: agents,

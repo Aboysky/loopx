@@ -112,6 +112,14 @@ for (const provider of ["file", "sqlite", "postgresql"] as const) {
     assert.equal(task.claimed_by, "agent-a");assert.equal(task.replan_obligation_id, obligation);
     const claimReplay = await executeGoalAmendment(store, claim);assert.equal(claimReplay.status, "replayed");
     assert.deepEqual(claimReplay.original_receipt, claimed.original_receipt);
+    view = await executeGoalAmendment(store, request("inspect"));
+    const continued = await executeGoalAmendment(store, request("claim", {...basis(view),
+      source: {...source, open_replan_obligations: []}, operation_id: "claim-continuation", todo_id: result.todo_id,
+      expected_provider_revision: view.provider_revision, observed_at: "2026-10-12T00:10:00Z",
+      lease_request: {idempotency_key: "continued-work", expected_version: 1, ttl_seconds: 300}}));
+    assert.equal(continued.status, "applied");assert.equal(continued.ok, true);
+    assert.equal((continued.lease as JsonObject).lease_epoch, 2);
+    assert.equal(continued.replan_obligation_id, obligation);
 
   });
 }
