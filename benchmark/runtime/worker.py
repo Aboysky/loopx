@@ -317,6 +317,10 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.sessions import BenchmarkSessionWake
 
             session_wake = BenchmarkSessionWake(env, execution, receipt)
+        if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_CHECKPOINT_REQUEST"):
+            from benchmark.runtime.checkpoint import capture_before_replan
+
+            body = capture_before_replan(env, receipt, body)
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr)

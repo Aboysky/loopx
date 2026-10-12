@@ -93,6 +93,128 @@ def test_native_execution_disposition_uses_real_docker_exit(tmp_path, agent_imag
         backend.client.close()
 
 
+def test_sforge_checkpoint_declaration_is_a_private_guest_artifact(tmp_path, agent_image, monkeypatch):
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+
+    # Existing installation prepares this directory. Substitute installation,
+    # while retaining the production upload, permissions and worker environment.
+    async def installed(self, environment):
+        result = await environment.exec(
+            "mkdir -p /opt/loopx-benchmark/control", user="root")
+        assert result.return_code == 0
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
+    declaration = b'{"destination":"/logs/agent/checkpoints","trigger":"fresh_replan","native_session":true,"components":[{"id":"code","source_path":"/tmp/solver.py"}],"point_metadata":{}}'
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-resume", cwd="/tmp", checkpoint_request=declaration)
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected",
+        logger=logging.getLogger("checkpoint-staging-smoke"), oauth_proxy=True)
+    handle = backend.create_container(agent_image.id, "checkpoint-stage-" + uuid.uuid4().hex[:10],
+                                      cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    try:
+        worker.install_stop_hook(backend, handle, tmp_path, None)
+        path = worker.runtime._worker_env(cwd="/tmp")["LOOPX_CHECKPOINT_REQUEST"]
+        readback = backend.exec_run(handle, ["cat", path], user="agent")
+        assert readback.exit_code == 0 and readback.output.encode() == declaration
+        mode = backend.exec_run(handle, ["stat", "-c", "%a:%U", path], user="root")
+        assert mode.exit_code == 0 and mode.output.strip() == "600:agent"
+    finally:
+        backend.cleanup_container(handle)
+        backend.client.close()
+
+
+def test_checkpoint_opportunity_uses_native_admission_and_real_grade(tmp_path, monkeypatch):
+    import docker
+    import requests
+    import uvicorn
+    from sforge.harness import judge_server
+    from sforge.harness.config import SForgeConfig
+    from benchmark.edgebench.checkpoint_judge import create_app, ROUTE
+    from benchmark.runtime.sforge_checkpoint import capture_opportunity
+
+    name = "checkpoint-judge-" + uuid.uuid4().hex[:10]
+    tag = f"{name}.judge.fixture:fixture"
+    client = docker.from_env()
+    client.images.get("python:3.12-slim").tag(f"{name}.judge.fixture", tag="fixture")
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "BENCHMARK.yaml").write_text(f"name: {name}\nbase_images: {{python: {{}}}}\n")
+    (tasks / "fixture.json").write_text(json.dumps({
+        "task_id": "fixture", "name": "Synthetic checkpoint", "base_image": "python",
+        "platform": "linux/arm64", "cwd": "/tmp", "internet": False,
+        "submit_paths": ["candidate.json"], "submit_exclude": [],
+        "work": {"image_tag": "fixture", "agent_query": "Synthetic fixture"},
+        "judge": {"image_tag": "fixture", "eval_timeout": 15, "parser": "structured_json",
+                  "selection": "score_first", "score_direction": "maximize",
+                  "eval_cmd": "python3 -c 'import json; print(json.dumps(dict(score=7, valid=True)))'"},
+    }))
+    config = SForgeConfig(tasks_dir=tasks, log_dir=tmp_path, judge_cpu_limit=1, judge_mem_limit="256m",
+                          judge_max_outstanding_per_run=1)
+    finish_grade = threading.Event()
+    original_grade = judge_server.judge_submission
+    def held_grade(**kwargs):
+        assert finish_grade.wait(60), "Synthetic native grade was not released"
+        return original_grade(**kwargs)
+    monkeypatch.setattr(judge_server, "judge_submission", held_grade)
+    app = create_app(config, checkpoint_capture=True)
+    with socket.socket() as port_probe:
+        port_probe.bind(("127.0.0.1", 0))
+        port = port_probe.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port,
+                                          log_level="error", access_log=False))
+    thread = threading.Thread(target=server.run)
+    thread.start()
+    try:
+        wait_for(lambda: server.started, timeout=20)
+        registered = requests.post(url + "/api/v1/register", json={"task_id": "fixture",
+            "run_id": "synthetic-source", "admin_secret": app.state.judge.admin_secret,
+            "submission_cooldown": 3600, "max_agent_submissions": 12}, timeout=10)
+        registered.raise_for_status()
+        token = registered.json()["token"]
+        payload = io.BytesIO()
+        with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+            member = tarfile.TarInfo("candidate.json")
+            data = b"{}"
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+        accepted = requests.post(url + "/api/v1/submit", data={"token": token},
+            files={"archive": ("candidate.tar.gz", payload.getvalue())}, timeout=15)
+        accepted.raise_for_status()
+        assert accepted.json()["round_id"] == "agent-1"
+        assert requests.post(url + ROUTE, json={"token": token}, timeout=10).status_code == 409
+        finish_grade.set()
+        wait_for(lambda: not app.state.judge._outstanding_by_run, timeout=60)
+        released = requests.post(url + ROUTE, json={"token": token}, timeout=10)
+        assert released.status_code == 200, released.json()
+        env = {"SFORGE_JUDGE_URL": url, "SFORGE_TOKEN": token,
+               "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 100)}
+        point = capture_opportunity(env, timeout=10)
+        assert point["released_history"][0]["score"] == 7
+        assert point["next_agent_round"] == 2 and 0 < point["remaining_cooldown_seconds"] <= 3600
+        assert 0 < point["remaining_trial_seconds"] <= 100
+        assert point["continuation_qualified"] is False
+        before = app.state.judge.resolve_token(token)
+        assert capture_opportunity(env, timeout=10)["judge_epoch"] == point["judge_epoch"]
+        assert app.state.judge.resolve_token(token) == before
+        cooled = requests.post(url + "/api/v1/submit", data={"token": token},
+            files={"archive": ("candidate.tar.gz", payload.getvalue())}, timeout=15)
+        assert cooled.status_code == 429  # Reading the checkpoint cannot refill admission.
+        assert app.state.judge.resolve_token(token) == before
+        with pytest.raises(ValueError, match="original trial deadline"):
+            capture_opportunity({**env, "LOOPX_PHASE_DEADLINE_EPOCH": "0"}, timeout=10)
+    finally:
+        finish_grade.set()
+        server.should_exit = True
+        thread.join(timeout=60)
+        assert not thread.is_alive(), "Synthetic checkpoint service did not drain"
+        client.images.remove(tag)
+        client.close()
+
+
 def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, monkeypatch):
     """Exercise the actual formatted shell, including its inner GNU timeout."""
     from sforge.harness.config import SForgeConfig

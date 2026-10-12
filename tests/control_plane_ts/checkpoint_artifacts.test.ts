@@ -177,3 +177,33 @@ test("an explicitly selected sidecar remains a byte artifact rather than disappe
     assert.deepEqual(await readFile(join(root, "captured/components/explicit_index")), await readFile(path + "-shm"));
   } finally {writer.close();}
 });
+
+test("replan capture selection requires the original admitted identity and grants no execution", async () => {
+  const id = "replan-0123456789abcdef", turn = "fixture-turn";
+  const identity = {goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    replan_obligation_id: id, binding_kind: "autonomous_replan", binding_id: id,
+    effect_id: `fixture-goal:fixture-agent:autonomous_replan:${id}:${turn}`};
+  const quota = {ok: true, goal_id: "fixture-goal", effective_action: "autonomous_replan_required",
+    replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "replan_required", obligation_id: id},
+    heartbeat_receipt: {status: "committed", turn_instance_id: turn, settlement_identity: identity}};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  const selected = await checkpointArtifacts(request);
+  assert.equal(selected.capture, true);
+  assert.equal(selected.obligation_id, id);
+  assert.equal(selected.execution_authority_granted, false);
+  const todoBound = await checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt: {
+    ...quota.heartbeat_receipt, semantic_replan_obligation_id: id, settlement_identity: {
+      goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn, todo_id: "todo_existing",
+      effect_id: `fixture-goal:fixture-agent:todo_existing:${turn}`}}}});
+  assert.equal(todoBound.capture, true);
+  assert.equal(todoBound.settlement_effect_id, `fixture-goal:fixture-agent:todo_existing:${turn}`);
+  const ordinary = await checkpointArtifacts({...request, quota: {...quota, effective_action: "normal_run"}});
+  assert.equal(ordinary.capture, false);
+  await assert.rejects(checkpointArtifacts({...request, turn_instance_id: "another-turn"}), /admitted identity/);
+  await assert.rejects(checkpointArtifacts({...request, agent_id: "another-agent"}), /admitted identity/);
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, replan_action_packet:
+    {...quota.replan_action_packet, obligation_id: "replan-fedcba9876543210"}}}), /admitted identity/);
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt:
+    {...quota.heartbeat_receipt, settlement_identity: {...identity, todo_id: "todo_conflict"}}}}), /admitted identity/);
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, ok: false}}), /matching current/);
+});

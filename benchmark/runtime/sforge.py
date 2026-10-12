@@ -21,7 +21,7 @@ from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
 from .codex_offline import CodexOffline, stage_portable_python
 from .harbor import (
-    BenchmarkCodex, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
+    BenchmarkCodex, _CONTROL, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
 from .scheduler import worker_command
 
@@ -92,7 +92,8 @@ class SForgeWorker(CodexAgent):
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
-                 checkpoint_request_path: str | None = None):
+                 checkpoint_request_path: str | None = None,
+                 checkpoint_request: bytes | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -138,6 +139,13 @@ class SForgeWorker(CodexAgent):
             stride_strategy = normalize_stride_strategy(stride_strategy)
         self.stride_strategy = stride_strategy
         self.checkpoint_request_path = None
+        self.checkpoint_request = checkpoint_request
+        if checkpoint_request is not None:
+            if checkpoint_request_path is not None or not profile.startswith("heartbeat-"):
+                raise ValueError("checkpoint_request requires a heartbeat profile and no guest-path override")
+            from .checkpoint import parse_checkpoint_request
+            parse_checkpoint_request(checkpoint_request)
+            checkpoint_request_path = f"{_CONTROL}/checkpoint-request.json"
         if checkpoint_request_path is not None:
             if not profile.startswith("heartbeat-"):
                 raise ValueError("checkpoint_request_path requires a heartbeat profile")
@@ -233,6 +241,16 @@ class SForgeWorker(CodexAgent):
                 task_objective=self.task_objective,
             )
             asyncio.run(self.runtime.install(self.environment))
+            if self.checkpoint_request is not None:
+                with tempfile.TemporaryDirectory(prefix="benchmark-checkpoint-") as directory:
+                    declaration = Path(directory) / "request.json"
+                    declaration.write_bytes(self.checkpoint_request)
+                    asyncio.run(self.environment.upload_file(declaration, self.checkpoint_request_path))
+                result = backend.exec_run(handle, ["/bin/bash", "-c",
+                    f"chown agent:agent {shlex.quote(self.checkpoint_request_path)} && "
+                    f"chmod 0600 {shlex.quote(self.checkpoint_request_path)}"], user="root")
+                if result.exit_code:
+                    raise RuntimeError("Could not protect the explicit checkpoint declaration")
         # Prompt replacement describes the policy; the feedback mode owns access.
         if self.feedback != "native":
             result = backend.exec_run(handle, ["rm", "-f", "/usr/local/bin/sforge-submit"], user="root")

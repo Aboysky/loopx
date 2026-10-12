@@ -479,6 +479,8 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("official", ["--stride-strategy", "off"]),
     ("native-goal", ["--stride-strategy", "evidence_conditioned_v1"]),
     ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
+    ("official", ["--checkpoint-request", "missing.json"]),
+    ("native-goal", ["--checkpoint-request", "missing.json"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
@@ -490,6 +492,60 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
               '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
     assert not (tmp_path / 'runs').exists()
+
+
+@pytest.mark.parametrize("protect_fails", [False, True])
+def test_host_checkpoint_declaration_is_staged_verbatim_and_protected(tmp_path, monkeypatch, protect_fails):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass  # Exercise the installation transport; no model or evaluator.
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    staged, commands = [], []
+    def copy(handle, source, target):
+        staged.append((str(target), source.read_bytes()))
+    def command(handle, cmd, **kwargs):
+        commands.append((cmd, kwargs))
+        return SimpleNamespace(exit_code=int(protect_fails))
+    backend = SimpleNamespace(copy_to_container=copy, exec_run=command)
+    declaration = b'{"destination":"/logs/agent/checkpoints","trigger":"fresh_replan", "native_session":true,"components":[{"id":"code","source_path":"/task"}],"point_metadata":{}}'
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh")
+    worker = SForgeWorker(config, profile="heartbeat-resume", cwd="/task", checkpoint_request=declaration)
+    if protect_fails:
+        with pytest.raises(RuntimeError, match="protect the explicit checkpoint declaration"):
+            worker.install_stop_hook(backend, None, tmp_path, None)
+        assert not (tmp_path / "worker-profile.json").exists()
+    else:
+        worker.install_stop_hook(backend, None, tmp_path, None)
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["checkpoint_capture_enabled"]
+    guest_path = "/opt/loopx-benchmark/control/checkpoint-request.json"
+    assert staged == [(guest_path, declaration)]
+    assert worker.runtime._worker_env(cwd="/task")["LOOPX_CHECKPOINT_REQUEST"] == guest_path
+    assert len(commands) == 1 and commands[0][1]["user"] == "root"
+    assert "chmod 0600" in commands[0][0][-1]
+    with pytest.raises(ValueError, match="no guest-path override"):
+        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", checkpoint_request=declaration,
+                     checkpoint_request_path="/other")
+    with pytest.raises(ValueError, match="requires destination"):
+        SForgeWorker(config, profile="heartbeat-resume", cwd="/task", checkpoint_request=b'{}')
+
+
+def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_path):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import main
+    declaration = tmp_path / "request.json"
+    declaration.write_text('{"components":[]}')
+    with pytest.raises(ValueError, match="requires destination"):
+        main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+              "--run-id", "invalid", "--worker", "heartbeat-resume", "--model", "fixture",
+              "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999",
+              "--checkpoint-request", str(declaration)])
+    assert not (tmp_path / "runs").exists()
 
 
 @pytest.mark.parametrize("cadence_args,field,count", [

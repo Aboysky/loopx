@@ -11,6 +11,9 @@ import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256, hasExactAuthorityKeys} from "../coordination/authority_store_codec.ts";
 import {snapshotSqliteDatabase} from "../coordination/sqlite_backup.ts";
 import {durableWriteJson, publishNewDirectory} from "../effect_runtime_io.ts";
+import {settlementIdentity} from "../effect_program.ts";
+import {normalizeHeartbeatReplanObligationId, normalizeHeartbeatTodoId} from "../quota/heartbeat_receipt_identity.ts";
+import {EffectiveAction} from "../quota/effective_action.generated.ts";
 
 const SCHEMA = "loopx_checkpoint_artifact_set_v0";
 type Component = {id: string; source_path: string};
@@ -162,6 +165,36 @@ async function verify(root: string, expected: unknown): Promise<JsonObject> {
 }
 export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint artifacts request");
+  if (request.action === "select_replan") {
+    if (!hasExactAuthorityKeys(request, ["action", "quota", "goal_id", "agent_id", "turn_instance_id"])) {
+      throw new Error("checkpoint replan selection fields are invalid");
+    }
+    const quota = requireJsonObject(request.quota, "checkpoint quota readback");
+    const goal = requireNonEmptyString(request.goal_id, "checkpoint goal");
+    const agent = requireNonEmptyString(request.agent_id, "checkpoint agent");
+    const turn = requireNonEmptyString(request.turn_instance_id, "checkpoint Turn");
+    if (quota.ok !== true || quota.goal_id !== goal) throw new Error("checkpoint requires a matching current quota readback");
+    if (quota.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED) {
+      return {capture: false, reason: "no_fresh_replan", execution_authority_granted: false};
+    }
+    const packet = requireJsonObject(quota.replan_action_packet, "checkpoint replan packet");
+    const id = normalizeHeartbeatReplanObligationId(packet.obligation_id);
+    const receipt = requireJsonObject(quota.heartbeat_receipt, "checkpoint heartbeat receipt");
+    const identity = requireJsonObject(receipt.settlement_identity, "checkpoint settlement identity");
+    const todo = normalizeHeartbeatTodoId(identity.todo_id);
+    const boundReplan = normalizeHeartbeatReplanObligationId(identity.replan_obligation_id);
+    const semanticReplan = normalizeHeartbeatReplanObligationId(receipt.semantic_replan_obligation_id);
+    if (packet.schema_version !== "replan_action_packet_v0" || packet.decision !== "replan_required" ||
+        !id || (receipt.status !== "committed" && receipt.status !== "replayed") || receipt.turn_instance_id !== turn ||
+        identity.goal_id !== goal || identity.agent_id !== agent || identity.turn_instance_id !== turn ||
+        (todo ? boundReplan !== null || semanticReplan !== id : boundReplan !== id) ||
+        identity.effect_id !== settlementIdentity({goal_id: goal, agent_id: agent, todo_id: todo,
+          replan_obligation_id: boundReplan, turn_instance_id: turn}).effect_id) {
+      throw new Error("checkpoint replan does not match the current admitted identity");
+    }
+    return {capture: true, obligation_id: id, settlement_effect_id: identity.effect_id,
+      execution_authority_granted: false};
+  }
   const fields = request.action === "probe" ? ["action", "components"] :
     request.action === "verify" ? ["action", "root", "expected_sha256"] :
     request.action === "capture" ? ["action", "components", "destination", "point_metadata", "expected_source_sha256"] :
