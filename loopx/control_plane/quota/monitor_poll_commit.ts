@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { monitorSuccessorIntent, monitorSuccessorRoute } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
+import { isMonitorUnavailableWait } from "./blocked_wait.ts";
 import {
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   readQuotaSettlementForAdmittedOwnerFromSnapshot,
@@ -563,9 +564,10 @@ interface Admission {
   external: boolean;
 }
 
-async function readAuxiliarySettlement(request: MonitorRequest): Promise<JsonObject | null> {
+async function readMonitorSettlement(request: MonitorRequest): Promise<JsonObject | null> {
+  const todoId = request.observation.settlement_todo_id ?? request.observation.todo_id;
   if (!request.runtime_root || !request.turn_instance_id ||
-      !request.observation.actor_agent_id || !request.observation.settlement_todo_id) return null;
+      !request.observation.actor_agent_id || !todoId) return null;
   const snapshot = await readQuotaSettlementSnapshot(
     request.runtime_root,
     request.goal_id,
@@ -573,7 +575,7 @@ async function readAuxiliarySettlement(request: MonitorRequest): Promise<JsonObj
   return readQuotaSettlementForAdmittedOwnerFromSnapshot({
     schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
     runtime_root: request.runtime_root, goal_id: request.goal_id,
-    agent_id: request.observation.actor_agent_id, todo_id: request.observation.settlement_todo_id,
+    agent_id: request.observation.actor_agent_id, todo_id: todoId,
     turn_instance_id: request.turn_instance_id, replan_obligation_id: null,
     infer_turn_instance_id: false, allow_unbound_binding: false,
   }, request.owner, snapshot);
@@ -604,7 +606,7 @@ async function auxiliaryMonitorAllowed(
         todo.excluded_agents.some(value => typeof value !== "string") ||
         todo.excluded_agents.includes(decision.agent_id)))) throw conflict();
   if (!historicalAdmission) {
-    const settlement = await readAuxiliarySettlement(request);
+    const settlement = await readMonitorSettlement(request);
     const progress = jsonObject(settlement?.progress);
     // The advancement's single debit is not an observation-admission fence.
     // A settled exact binding still permits independently admitted due Monitors.
@@ -632,6 +634,22 @@ async function auxiliaryMonitorAllowed(
 }
 
 async function admission(request: MonitorRequest, historicalAdmission = false): Promise<Admission> {
+  const observation = request.observation;
+  if (observation.todo_id &&
+      (observation.settlement_todo_id ?? observation.todo_id) === observation.todo_id) {
+    const settlement = await readMonitorSettlement(request);
+    // The readback owner verifies admission, exact identity and durable blocked
+    // evidence. A late observation cannot replace that frozen no-spend outcome.
+    // Durable poll replay returns before admission; independent auxiliary
+    // Monitors retain their advancement-bound admission below.
+    if (jsonObject(settlement?.progress)?.closeout_kind === "typed_blocked_writeback_no_spend" &&
+        isMonitorUnavailableWait(jsonObject(settlement?.writeback_run)?.blocked_retry, observation.todo_id)) {
+      throw new EffectRuntimeRequestError(
+        "monitor-poll conflicts with the committed unavailable attempt; use a fresh Turn for a new observation",
+        "monitor_poll_admission_rejected",
+      );
+    }
+  }
   const blocked = blockedSuccessorAllowed(request.decision);
   const external = externalMonitorAllowed(request.decision);
   const auxiliary = await auxiliaryMonitorAllowed(request, historicalAdmission);
@@ -1562,7 +1580,7 @@ function successorReceipts(providerReceipt: JsonObject | null): JsonObject[] {
 async function projectAuxiliaryContinuation(request: MonitorRequest, payload: JsonObject): Promise<void> {
   const continuation = jsonObject(payload.turn_continuation);
   if (!request.execute || continuation?.settlement_binding_matches_observation !== false) return;
-  const settlement = await readAuxiliarySettlement(request);
+  const settlement = await readMonitorSettlement(request);
   if (jsonObject(settlement?.progress)?.state !== "settled") return;
   // This is current readback, not a change to the historical Monitor receipt
   // or permission for another advancement. Replays must not reopen a paid Turn.
