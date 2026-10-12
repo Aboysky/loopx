@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import hashlib
+import os
 import pytest
 import time
 
@@ -210,6 +211,65 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_
     assert (target / "checkpoint.json").read_bytes() == before
     assert goal_state.read_bytes() == retained_goal
     assert len(observed) == int(opportunity)
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
+                    reason="Requires an explicit real native Host binary; static local provider only")
+@pytest.mark.parametrize("source_moves", [False, True])
+def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch, source_moves):
+    """Actual CLI settlement, native completed Turns and TS SQLite artifacts."""
+    from benchmark.tests.test_native_checkpoint import real_native_source
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
+    def run(*args):
+        code, result = cli._run_cli(registry, runtime, *args)
+        assert code == 0, result
+    run("quota", "should-run", "--goal-id", cli.GOAL_ID, "--codex-app", *binding)
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Synthetic source boundary; full continuation remains open."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "Declared source is available.",
+            "observed_reality": "The isolated fixture source is checked.", "retained": ["Original capture acceptance"],
+            "evidence_refs": ["evidence:native-source-fixture"]}}))
+    run("refresh-state", "--goal-id", cli.GOAL_ID, *binding, "--classification", "native_fixture_verified",
+        "--delivery-batch-scale", "multi_surface", "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(vision))
+    run("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *binding, "--source", "heartbeat", "--execute")
+    logs = tmp_path / "logs"
+    wake = logs / "wakes" / cli.TURN_ID
+    wake.mkdir(parents=True)
+    destination = logs / "checkpoints/point"
+    destination.parent.mkdir()
+    candidate = project / "solution.py"
+    candidate.write_text("source_candidate = 7\n")
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"destination": str(destination), "components": [
+        {"id": "code", "source_path": str(candidate)}], "native_session": True,
+        "point_metadata": {"meaning": "Native/CLI/TS fixture, not research or model utility"}}))
+    with real_native_source(tmp_path / "native", os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"], project) as (env, source, complete, calls):
+        env.update(LOOPX_CHECKPOINT_REQUEST=str(request), LOOPX_WAKE_LOG_DIR=str(logs / "wakes"),
+            LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_REGISTRY=str(registry), LOOPX_GOAL_ID=cli.GOAL_ID,
+            LOOPX_AGENT_ID=cli.AGENT_ID)
+        receipt = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": cli.TURN_ID,
+                   "session": {"session_id": source}}
+        injected = []
+        def between_read_and_probe(method, params, **kwargs):
+            if source_moves and params["action"] == "probe" and not injected:
+                injected.append(complete())  # Native writer commits later history before the byte witness.
+            return effect_runtime_result(method, params, **kwargs)
+        monkeypatch.setattr("benchmark.runtime.checkpoint.effect_runtime_result", between_read_and_probe)
+        capture_after_wake(env, receipt)
+        assert receipt["ok"] and candidate.read_text() == "source_candidate = 7\n"
+        assert len(calls) == (2 if source_moves else 1)  # Static local streams only; no implicit new work.
+        if source_moves:
+            assert not receipt["checkpoint"]["captured"], receipt
+            assert "native" in receipt["checkpoint"]["error"] and not destination.exists()
+        else:
+            assert receipt["checkpoint"]["captured"], receipt
+            manifest = json.loads((destination / "checkpoint.json").read_text())
+            assert len(manifest["point_metadata"]["native_session"]["turn_ids"]) == 1
+            assert receipt["checkpoint"]["research_point_qualified"] is False
 
 
 @pytest.mark.parametrize("capture_fails", [False, True])
