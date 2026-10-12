@@ -76,6 +76,9 @@ parent name without parameter payloads, bounded to 256 characters. Distinct
 parameter cases keep distinct hashes; huge values and hosted secret masking of
 parameter strings cannot expand or corrupt these JSON records. The existing
 verbose pytest result output remains available.
+Observation rows occupy their own lines with either quiet (`-q`) or verbose
+(`-v`) progress, including serial and xdist runs. The reader still requires
+line-framed records rather than guessing how to recover old progress-prefixed logs.
 Missing observations, malformed records or contradictory collections fail
 readback; an interrupted or incomplete run stays
 incomplete. A completed traversal with pytest exit code 1 still has test failures.
@@ -100,6 +103,8 @@ job/step 时间戳。记录不进入 timing cache、不改变测试选择、不�
 完整 pytest node id 用 SHA-256 标识；显示名去除参数内容并限制为 256 字符。
 不同参数仍有不同 hash；超长参数及宿主对参数字符串的脱敏不会扩大或破坏这些
 JSON 记录。原有 pytest 详细结果输出仍保留。
+无论使用 quiet（`-q`）还是 verbose（`-v`）进度，串行和 xdist 运行中的观察记录
+都独占一行。reader 仍要求完整行记录，不猜测如何修复旧的进度字符前缀日志。
 
 The aggregate requires every shard to succeed and all four coverage files to
 exist before combining them. The existing full-suite coverage floor remains.

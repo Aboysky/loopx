@@ -32,7 +32,9 @@ def read_log(path, *, success=True):
     return json.loads(result.stdout) if success else result.stderr
 
 
-def test_real_xdist_timings_match_native_pytest_owner(tmp_path):
+@pytest.mark.parametrize("verbosity", ["-v", "-q"])
+@pytest.mark.parametrize("workers", [0, 2])
+def test_real_xdist_timings_match_native_pytest_owner(tmp_path, verbosity, workers):
     (tmp_path / "test_subject.py").write_text(
         "import time, pytest\n"
         "def test_pass(): time.sleep(0.03)\n"
@@ -54,12 +56,14 @@ def test_real_xdist_timings_match_native_pytest_owner(tmp_path):
     log = tmp_path / "job.log"
     with log.open("w") as output:
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-v", "-n", "2",
+            [sys.executable, "-m", "pytest", verbosity, "-n", str(workers),
              "-p", "scripts.ci.pytest_timing", "--store-durations", "--clean-durations",
              "--durations-path", "native.json", "--junitxml=junit.xml"],
             cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
             timeout=30, check=False)
     assert result.returncode == 1
+    assert all(line.startswith(PREFIX) for line in log.read_text().splitlines()
+               if PREFIX in line)
     report = read_log(log)
     # A completed traversal with test failures is not successful qualification.
     assert report["execution_complete"] is True
@@ -119,7 +123,8 @@ def test_real_pytest_subtest_cost_is_included_once_in_parent_call(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group kill; hosted shards are Linux")
-def test_killed_controller_leaves_partial_readable_native_observations(tmp_path):
+@pytest.mark.parametrize("verbosity", ["-v", "-q"])
+def test_killed_controller_leaves_partial_readable_native_observations(tmp_path, verbosity):
     (tmp_path / "test_subject.py").write_text(
         "import time\n"
         "def test_first(): time.sleep(0.03)\n"
@@ -127,7 +132,7 @@ def test_killed_controller_leaves_partial_readable_native_observations(tmp_path)
     log = tmp_path / "killed.log"
     with log.open("w") as output:
         process = subprocess.Popen(
-            [sys.executable, "-m", "pytest", "-v", "-n", "2",
+            [sys.executable, "-m", "pytest", verbosity, "-n", "2",
              "-p", "scripts.ci.pytest_timing", "--junitxml=junit.xml"],
             cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)

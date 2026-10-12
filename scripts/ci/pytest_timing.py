@@ -37,6 +37,10 @@ class TimingObserver:
         reporter = self.config.pluginmanager.get_plugin("terminalreporter")
         if reporter is not None:
             reporter.ensure_newline()
+            # Quiet progress writes directly to the terminal writer without
+            # currentfspath, so ensure_newline alone cannot end that line.
+            if reporter._tw.width_of_current_line:
+                reporter._tw.line()
             reporter.write_line(line)
             reporter._tw.flush()
 
