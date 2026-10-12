@@ -15,6 +15,8 @@
   "include": [
     "loopx/control_plane/capabilities/explore_research.ts",
     "tests/control_plane_ts/explore_research.test.ts",
+    "loopx/control_plane/capabilities/explore_research_execution.ts",
+    "tests/control_plane_ts/explore_research_execution.test.ts",
     "loopx/control_plane/runtime/usage_statistics*.ts",
     "tests/control_plane_ts/usage_statistics.test.ts",
     "tests/control_plane_ts/usage_statistics_delivery.test.ts",
@@ -150,6 +152,7 @@
     "tests/control_plane_ts/scheduler_heartbeat_followup_cli.test.ts",
     "tests/control_plane_ts/scheduler_state_transition_rules.test.ts",
     "tests/control_plane_ts/todo_completion_fence.test.ts",
+    "tests/control_plane_ts/todo_completion_cycle.test.ts",
     "tests/control_plane_ts/todo_completion_state.test.ts",
     "tests/control_plane_ts/todo_completion_validation_plan.test.ts",
     "tests/control_plane_ts/todo_next_action.test.ts",
