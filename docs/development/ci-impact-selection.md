@@ -60,6 +60,35 @@ the whole collection, excluding only the separately executed Stage2c marker.
 No tests are removed. Without timing history the splitter uses equal weights;
 four-way parallelism is not a claim of perfect duration balancing.
 
+The shard command explicitly loads `scripts.ci.pytest_timing`. Its controller
+streams pytest's setup/call/teardown durations to Actions logs as each report
+arrives, before final JUnit or duration summaries exist. To inspect a downloaded
+job log, run `node scripts/ci/pytest_timing.ts JOB_LOG`. The reader reports the
+selected and finished cases, observed elapsed time, measured worker-seconds,
+phase totals and longest observed cases.
+The phase record identifies the full pytest node id by SHA-256 and displays only
+its first 256 characters, so oversized parameter ids do not multiply log growth
+or collapse distinct cases. The existing verbose test output remains available.
+Missing observations, malformed records or contradictory collections fail
+readback; an interrupted or incomplete run stays
+incomplete. A completed traversal with pytest exit code 1 still has test failures.
+Measured worker-seconds sum concurrent test phases and are not runner-minutes,
+queue delay, CPU time or the job's complete elapsed time. A partial log supplies
+only a lower bound; use job/step timestamps for setup and runner occupancy.
+These observations do not become a timing cache, change selection or establish
+qualification. Missing durations still use the existing equal-weight fallback.
+
+分片在 controller 中随 pytest 的 setup/call/teardown 报告写入 Actions 日志，
+无需等待最终 JUnit 或耗时汇总。下载单个 job 日志后运行
+`node scripts/ci/pytest_timing.ts JOB_LOG`，可回读选中／完成数量、已观察耗时、
+worker 秒数、各阶段总和与最慢用例。缺失、损坏或矛盾记录拒绝回读；中断与不完整
+运行保持不完整。遍历完成且 exit code 为 1 仍代表测试失败。并发 phase 总和不是
+runner-minutes、排队时长或 CPU 时间；不完整记录仅给出下界，环境准备与占用须结合
+job/step 时间戳。记录不进入 timing cache、不改变测试选择、不替代门禁；没有耗时
+历史时仍按原等权规则分片。
+完整 pytest node id 用 SHA-256 标识，显示名保留前 256 字符，避免超长参数名成倍
+扩大记录，也不会把前缀相同的不同用例合并。原有详细测试输出仍保留。
+
 The aggregate requires every shard to succeed and all four coverage files to
 exist before combining them. The existing full-suite coverage floor remains.
 No Python or backend TypeScript coverage artifact or Sonar run is manufactured
