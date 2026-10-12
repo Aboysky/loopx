@@ -220,11 +220,18 @@ The local `sforge_checkpoint_opportunity_v0`
 artifact records these facts; it grants no restored admission. Disabling capture
 means omitting both the judge flag and worker declaration option on a new run.
 
-Declare the workspace's authorized code/research files, LoopX runtime and
-registry, effective configuration and installed source/profile pins as separate
-non-overlapping components. The native and opportunity participants do not imply
-that omitted workspace state was saved. Every source remains private; inspect
-the verified member inventory before qualifying a complete research point.
+For an isolated single-Goal trial, `"loopx_state": true` adds the existing
+state-backup owner's inventory: registered active state, project research state,
+runtime authority/effect/quota journals and registry. The declared worker and
+physical routes must match that registry; missing registered state, incomplete
+inventory, symlink routes and narrower overlapping components reject capture.
+File and SQLite authority providers remain inert artifacts after materialization;
+copying their old leases or settlement records grants no new execution authority.
+
+Declare authorized workspace code/research files, effective configuration and
+installed source/profile pins as non-overlapping components. The native and
+opportunity participants do not imply that omitted state was saved. Every source
+remains private; inspect the verified inventory before qualifying a complete point.
 
 The current Host hook cannot capture a new replan created **inside an already
 running model wake** before that decision. Those boundaries still need a qualified
@@ -238,3 +245,8 @@ runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 
 路径。省略选项即关闭，Official/native-goal 不接受。产物
 验证和隔离物化不授予执行权，不代表研究点已资格化。请求中的 metadata 只是
 证据，不能代替会话、效果、状态采用及评测机会的联合验收。
+
+显式 `"loopx_state": true` 复用现有 state-backup inventory，捕获单 Goal 试验的
+注册状态、项目研究状态、runtime journal 和 registry；File/SQLite authority
+物化后仍是惰性历史。缺少来源、共享注册表、路径别名或重叠声明会拒绝，捕获
+不授予新的租约、配额、效果或执行权，不能替代完整接续验收。
