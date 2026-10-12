@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ OBSERVATION_FIELDS = (
 
 
 @pytest.mark.parametrize("provider", ["markdown", "file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["unavailable", "capability_restore", "observed"])
+@pytest.mark.parametrize("scenario", ["unavailable", "capability_restore", "observed", "peer_git"])
 def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     provider: str, scenario: str,
@@ -40,6 +41,11 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         "last_checked_at=1999-01-01T00%3A00%3A00Z next_due_at=2000-01-01T00%3A00%3A00Z "
         f"result_hash={'a' * 64} material_change=false material_change_generation=7",
     ))
+    if scenario == "peer_git":
+        registered = json.loads(registry.read_text())
+        registered["goals"][0]["coordination"]["registered_agents"].append("other-peer")
+        registry.write_text(json.dumps(registered))
+        subprocess.run(["git", "init", str(project)], capture_output=True, check=True)
 
     def cli(*args: str) -> tuple[int, dict]:
         with monkeypatch.context() as context:
@@ -154,6 +160,9 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     assert rc == 0 and after["todo"]["status"] == "open", after
     assert {k: after["todo"].get(k) for k in OBSERVATION_FIELDS} == fields
     assert not after["todo"].get("resume_when")
+    if scenario == "peer_git":
+        assert closed.get("delivery_workspace") is None
+        return
 
     # A newly executable independent advancement belongs to the same recovery
     # host Turn after the original effect is closed, without a third identity.
