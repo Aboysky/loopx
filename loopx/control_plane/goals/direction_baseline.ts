@@ -56,7 +56,7 @@ function row(value: unknown, reason: DirectionReason): Row {
 }
 function text(value: unknown, reason: DirectionReason, limit = 180): string {
   if (typeof value !== "string" || !value.trim() || value !== value.trim()
-      || [...value].length > limit || /[\r\n\t]/.test(value)
+      || [...value].length > limit || value.startsWith("/") || /[\r\n\t]/.test(value)
       || /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(value)
       || INTERNAL_STATE_PRIVATE_TEXT_PATTERNS.some(pattern => pattern.test(value))) refuse(reason);
   return value;

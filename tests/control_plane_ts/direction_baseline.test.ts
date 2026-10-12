@@ -165,7 +165,7 @@ test("public projection drops arbitrary bodies/locators; private-looking project
   const input = fixture(); const clean = result(input);
   Object.assign(input.authority_registry.project_materials.design, {body: "synthetic-private-body", source_url: "https://example.invalid/private", private_prompt: "synthetic-prompt"});
   assert.deepEqual(result(input), clean);
-  for (const revision of ["https://example.invalid/private", "/tmp/private-material", ["Bearer", "synthetic-credential-123456"].join(" ")]) {
+  for (const revision of ["https://example.invalid/private", "/tmp/private-material", "/unregistered-mount/direction.md", ["Bearer", "synthetic-credential-123456"].join(" ")]) {
     input.authority_registry.project_materials.design.revision = revision;
     const value = refused(input, "authority_registry_invalid"); assert.equal(JSON.stringify(value).includes(revision), false);
   }
