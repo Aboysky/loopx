@@ -665,8 +665,9 @@ points and their branches rather than silently selecting favorable outcomes.
 
 Record the actual boundary and any skew:
 
-- native conversation cursor and a Host-qualified export/fork path; copied log
-  text does not establish a resumable session;
+- native conversation cursor and a Host-qualified export/fork path, including
+  compaction records, paginated history and the session index needed for native
+  readback; copied log text does not establish a resumable session;
 - settled LoopX research evidence, original goal/priorities, prior decisions,
   scoped negative results and unresolved questions;
 - exact working code, necessary authorized untracked files, incumbent artifact
@@ -704,6 +705,15 @@ store's import/readback path; an arbitrary file path or successful log parse is
 insufficient. Compare the reconstructed prefixes and excluded later history,
 not just returned session identifiers. Keep provider-specific migration and
 storage handling outside the generic consistency decision.
+
+The Host profile must also declare path portability. A native index can retain
+absolute guest paths: qualification must either preserve those paths inside a
+fresh isolated environment or use the Host's supported import/rebinding API.
+Editing native database rows by hand does not qualify import. Bind the effective
+Host configuration and installed tool/skill versions separately from credentials;
+reauthentication remains with the existing owner. Full research state means the
+declared participants needed to resume useful work, not a copy of every file or
+the model's unobservable internal state.
 
 Historical conversation truncation cannot reconstruct earlier code, research
 state or feedback consumption from their terminal versions. Without a qualified

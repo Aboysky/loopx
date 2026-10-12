@@ -565,8 +565,8 @@ replan 身份、已完成 Host cursor、来源 revision 及当前策略版本；
 
 记录实际边界与 skew：
 
-- 原生会话 cursor 和已资格化的 Host export/fork 路径；复制日志不证明能恢复
-  session；
+- 原生会话 cursor 和已资格化的 Host export/fork 路径，包括 compaction 记录、
+  分页历史及原生读回所需的 session 索引；复制日志不证明能恢复 session；
 - 已结算的 LoopX 研究证据、原目标/优先级、既有决定、有范围负结果及未解问题；
 - 精确工作源码、必要且获授权的未跟踪文件、incumbent 与其 qualifying result；
   尚未测量的候选与 incumbent 分开保留；
@@ -593,6 +593,12 @@ Host adapter 须在固定版本验证原生历史重建，包括 compaction 和�
 可按已完成 turn 限定分支；导出文件仍须通过原生 store 的 import/readback 路径，
 任意文件路径或日志解析成功并不充分。比较重建的历史前缀及被排除的后续历史，
 不只检查返回了 session id。Provider 特有迁移与存储处理不进入通用一致性决策。
+
+Host profile 还须声明路径可移植性。原生索引可能保留绝对 guest 路径：资格化
+须在新隔离环境保留这些路径，或使用 Host 支持的 import/rebinding API；手改
+原生数据库行不能资格化导入。有效 Host 配置及已安装工具/skill 版本须与凭证
+分开绑定，重新认证仍由既有 owner 负责。完整研究状态是继续有效工作所需的
+已声明参与者，不是复制所有文件或模型不可观测的内部状态。
 
 截短历史会话不能从终局版本重建当时的代码、研究状态或反馈消费。没有其他参与者
 同时捕获且已资格化的状态时，这类探针只证明 Host 可行性，不能进入同状态干预比较。
