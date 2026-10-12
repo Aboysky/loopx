@@ -1,3 +1,4 @@
+import { EffectiveAction, type EffectiveActionValue } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, join } from "node:path";
 
@@ -19,6 +20,12 @@ import {
   requireNonEmptyString as requiredString,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaGoalRef,
+  withQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 export const QUOTA_SPEND_COMMIT_REQUEST_SCHEMA =
   "loopx_quota_spend_commit_request_v0";
@@ -44,12 +51,12 @@ export const QUOTA_SPEND_SOURCES = [
 ] as const;
 export type QuotaSpendSource = (typeof QUOTA_SPEND_SOURCES)[number];
 
-const SELF_REPAIR_SPEND_ACTIONS = new Set([
-  "control_plane_health_repair",
-  "control_plane_projection_repair",
-  "state_projection_gap_repair",
-  "boundary_projection_repair",
-  "todo_decision_scope_projection_repair",
+const SELF_REPAIR_SPEND_ACTIONS: ReadonlySet<string> = new Set<EffectiveActionValue>([
+  EffectiveAction.CONTROL_PLANE_HEALTH_REPAIR,
+  EffectiveAction.CONTROL_PLANE_PROJECTION_REPAIR,
+  EffectiveAction.STATE_PROJECTION_GAP_REPAIR,
+  EffectiveAction.BOUNDARY_PROJECTION_REPAIR,
+  EffectiveAction.TODO_DECISION_SCOPE_PROJECTION_REPAIR,
 ]);
 
 type QuotaSpendCommitStatus =
@@ -91,6 +98,7 @@ interface QuotaSpendCommitRequest {
   before: CompactQuotaDecision;
   after: CompactQuotaDecision;
   resolved_agent_id: string | null;
+  owner: QuotaAccountingOwner;
 }
 
 interface QuotaSpendReplayRequest {
@@ -101,6 +109,7 @@ interface QuotaSpendReplayRequest {
   effect_id: string;
   resolved_agent_id: string | null;
   read_only: boolean;
+  owner: QuotaAccountingOwner;
 }
 
 type SpendDisposition =
@@ -223,11 +232,12 @@ function replayRequestObject(value: unknown): QuotaSpendReplayRequest {
   if (!isAbsolute(runtimeRoot)) {
     throw new EffectRuntimeRequestError("runtime_root must be absolute");
   }
+  const goalId = safeGoalId(request.goal_id);
   return {
     schema_version: QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
     operation: "replay",
     runtime_root: runtimeRoot,
-    goal_id: safeGoalId(request.goal_id),
+    goal_id: goalId,
     effect_id: requiredString(request.effect_id, "effect_id").trim(),
     resolved_agent_id: optionalString(
       request.resolved_agent_id,
@@ -236,6 +246,12 @@ function replayRequestObject(value: unknown): QuotaSpendReplayRequest {
     read_only: request.read_only === undefined
       ? false
       : requiredBoolean(request.read_only, "read_only"),
+    owner: parseQuotaAccountingOwner({
+      goalRefValue: request.goal_ref,
+      sourceAdmissionValue: request.source_admission,
+      runtimeRoot,
+      goalId,
+    }),
   };
 }
 
@@ -260,6 +276,12 @@ function requestObject(value: unknown): QuotaSpendCommitRequest {
     `quota slot spend source must be one of: ${QUOTA_SPEND_SOURCES.join(", ")}`,
   );
   const requestedEffectId = optionalString(request.effect_id, "effect_id")?.trim();
+  const owner = parseQuotaAccountingOwner({
+    goalRefValue: request.goal_ref,
+    sourceAdmissionValue: request.source_admission,
+    runtimeRoot: runtimeRoot ?? "",
+    goalId,
+  });
   return {
     schema_version: QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
     effect_id: requestedEffectId || derivedEffectId(
@@ -285,6 +307,7 @@ function requestObject(value: unknown): QuotaSpendCommitRequest {
       request.resolved_agent_id,
       "resolved_agent_id",
     )?.trim() ?? null,
+    owner,
   };
 }
 
@@ -320,6 +343,7 @@ function derivedEffectId(
 }
 
 function requestDigest(request: QuotaSpendCommitRequest): string {
+  const goalRef = quotaGoalRef(request.owner);
   return sha256(canonicalJson({
     schema_version: request.schema_version,
     effect_id: request.effect_id,
@@ -333,6 +357,7 @@ function requestDigest(request: QuotaSpendCommitRequest): string {
     before: request.before,
     after: request.after,
     resolved_agent_id: request.resolved_agent_id,
+    ...(goalRef === null ? {} : { goal_ref: goalRef }),
   }));
 }
 
@@ -364,25 +389,25 @@ function spendDisposition(request: QuotaSpendCommitRequest): SpendDisposition {
     action !== null && SELF_REPAIR_SPEND_ACTIONS.has(action) &&
     request.before.self_repair_allowed;
   const capabilityRepairSpend = request.before.should_run &&
-    action === "capability_bridge_repair" &&
+    action === EffectiveAction.CAPABILITY_BRIDGE_REPAIR &&
     request.before.capability_repair_allowed;
   const eligibleSpend = request.before.should_run &&
     request.before.state === "eligible" &&
-    action !== "external_evidence_observe" &&
+    action !== EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE &&
     !selfRepairSpend && !capabilityRepairSpend &&
     !request.before.workspace_repair_allowed && !deliveryCompletionSpend;
   const safeBypassSpend = request.preview.safe_bypass_spend === true &&
     (
       request.before.state === "operator_gate" ||
       request.before.recovery_delivery_allowed ||
-      action === "outcome_floor_recovery"
+      action === EffectiveAction.OUTCOME_FLOOR_RECOVERY
     ) && request.before.safe_bypass_allowed;
   // A recovered settlement describes work that already happened. The current
   // frontier may now ask for capability or control-plane repair, but that later
   // projection cannot rewrite the attribution of the completed delivery.
   if (deliveryCompletionSpend) return "delivery_completion";
   if (eligibleSpend) return "eligible";
-  if (safeBypassSpend && action === "outcome_floor_recovery") {
+  if (safeBypassSpend && action === EffectiveAction.OUTCOME_FLOOR_RECOVERY) {
     return "outcome_floor_recovery";
   }
   if (selfRepairSpend) return "control_plane_self_repair";
@@ -494,6 +519,11 @@ function buildSpendRecord(
     quota_event: quotaEvent,
     quota_spend_commit: commit,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) {
+    record.goal_ref = goalRef;
+    quotaEvent.goal_ref = goalRef;
+  }
   if (request.resolved_agent_id) {
     record.agent_id = request.resolved_agent_id;
     quotaEvent.agent_id = request.resolved_agent_id;
@@ -534,11 +564,17 @@ async function evaluateQuotaSpendReplay(
     "runs",
     "index.jsonl",
   );
-  const lookup = await lookupQuotaAccountingReplay(
-    "spend",
-    indexPath,
-    request.effect_id,
-    request.read_only,
+  const goalRef = quotaGoalRef(request.owner);
+  const lookup = await withQuotaAccountingOwner(
+    request.owner,
+    async (indexLockHeld) => await lookupQuotaAccountingReplay(
+      "spend",
+      indexPath,
+      request.effect_id,
+      request.read_only,
+      goalRef,
+      indexLockHeld,
+    ),
   );
   const requestFingerprint = sha256(canonicalJson(value));
   if (lookup.resolution.kind === "conflict") {
@@ -562,7 +598,7 @@ async function evaluateQuotaSpendReplay(
         effect_ref: request.effect_id,
         reason: lookup.resolution.reason,
       },
-      reason_code: "effect_id_conflict",
+      reason_code: lookup.resolution.reasonCode,
     };
   }
   const candidate = lookup.resolution.kind === "matched"
@@ -661,6 +697,8 @@ function indexRecordFor(
       request_digest: fingerprint,
     },
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) indexRecord.goal_ref = goalRef;
   for (const field of [
     "agent_id",
     "effect_ref",
@@ -710,6 +748,8 @@ function payloadFor(
       : `${request.execute ? "appended" : "dry-run preview"} quota slot spend event: ` +
         `${request.goal_id} ${request.before.spent_slots}->${request.after.spent_slots} slots`,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) payload.goal_ref = goalRef;
   if (request.execute) {
     payload.before = request.before;
     payload.after = request.after;
@@ -799,40 +839,46 @@ export async function evaluateQuotaSpendCommit(
     );
   }
 
-  const outcome = await commitQuotaAccountingArtifactTransaction({
-    kind: "spend",
-    runsDir,
-    generatedAt: request.generated_at,
-    effectId: request.effect_id,
-    requestDigest: fingerprint,
-    expectedIndexDigest: request.expected_index_digest,
-    prepare: ({ jsonPath, markdownPath, indexPath: lockedIndexPath }) => {
-      const payload = payloadFor(
-        request,
-        record,
-        jsonPath,
-        markdownPath,
-        lockedIndexPath,
-        { appended: true, replayed: false, repaired: false },
-      );
-      return {
-        kind: "prepared",
-        record,
-        indexRecord: indexRecordFor(
+  const goalRef = quotaGoalRef(request.owner);
+  const outcome = await withQuotaAccountingOwner(
+    request.owner,
+    async (indexLockHeld) => await commitQuotaAccountingArtifactTransaction({
+      kind: "spend",
+      runsDir,
+      generatedAt: request.generated_at,
+      effectId: request.effect_id,
+      requestDigest: fingerprint,
+      expectedIndexDigest: request.expected_index_digest,
+      ...(goalRef === null ? {} : { goalRef }),
+      indexLockHeld,
+      prepare: ({ jsonPath, markdownPath, indexPath: lockedIndexPath }) => {
+        const payload = payloadFor(
           request,
           record,
           jsonPath,
           markdownPath,
-          fingerprint,
-        ),
-        markdown: renderQuotaSlotMarkdown(
+          lockedIndexPath,
+          { appended: true, replayed: false, repaired: false },
+        );
+        return {
+          kind: "prepared",
+          record,
+          indexRecord: indexRecordFor(
+            request,
+            record,
+            jsonPath,
+            markdownPath,
+            fingerprint,
+          ),
+          markdown: renderQuotaSlotMarkdown(
+            payload,
+            QUOTA_SLOT_SPENT_CLASSIFICATION,
+          ),
           payload,
-          QUOTA_SLOT_SPENT_CLASSIFICATION,
-        ),
-        payload,
-      };
-    },
-  });
+        };
+      },
+    }),
+  );
 
   if (outcome.status === "conflict") {
     return result(

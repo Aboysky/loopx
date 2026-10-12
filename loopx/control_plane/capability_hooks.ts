@@ -20,6 +20,8 @@ import {
 import { projectRepositoryDeliveryGate } from "./work_items/repository_delivery.ts";
 import { projectPendingCapabilityIntent } from "./work_items/pending_capability_intent.ts";
 
+import {exploreResultWritebackAffordance} from "./capabilities/explore_result_writeback.ts";
+
 export const CAPABILITY_HOOK_REGISTRATION_SCHEMA_VERSION =
   CAPABILITY_HOOK_REGISTRATION_SCHEMA;
 export const INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION =
@@ -334,6 +336,17 @@ export function validateInteractionProjectionHookInvocation(input: {
     case "pending_capability_intent":
       projection = projectPendingCapabilityIntent(result.payload);
       break;
+    case "explore_result_attachment":
+      if (registration.capability_id !== "explore") {
+        throw new Error("Explore attachment projection requires its owning capability");
+      }
+      // The capability supplies presence only; shared typed guidance cannot be
+      // replaced by provider text or converted into a mandatory work gate.
+      if (Object.keys(requiredObject(result.payload, "Explore attachment presence")).length) {
+        throw new Error("Explore attachment presence must be empty");
+      }
+      projection = exploreResultWritebackAffordance();
+      break;
     case "repository_delivery":
       projection = projectRepositoryDeliveryGate(result.payload);
       break;
@@ -349,6 +362,15 @@ export function validateInteractionProjectionHookInvocation(input: {
     projection_slot: projection ? slot : null,
     projection,
   };
+}
+
+/** Optional per-read prompt allowance; never execution or effect authority. */
+export function turnStartPromptBudgetBytes(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 2_048) {
+    throw new Error("turn-start prompt budget must be an integer from 1 to 2048 bytes");
+  }
+  return value;
 }
 
 export function validateTurnStartHookRegistration(
@@ -413,11 +435,10 @@ export function validateTurnStartHookRegistration(
       registration.required_read,
       "turn-start hook required_read",
     );
-    requireExactFields(
-      candidate,
-      TURN_START_REQUIRED_READ_FIELDS,
-      "turn-start hook required_read",
-    );
+    const readFields = new Set(TURN_START_REQUIRED_READ_FIELDS);
+    if ("prompt_budget_bytes" in candidate) readFields.add("prompt_budget_bytes");
+    requireExactFields(candidate, readFields, "turn-start hook required_read");
+    const promptBudget = turnStartPromptBudgetBytes(candidate.prompt_budget_bytes);
     const kind = requiredString(candidate.kind, "turn-start hook required_read kind");
     const command = requiredString(
       candidate.command,
@@ -443,6 +464,12 @@ export function validateTurnStartHookRegistration(
       throw new Error("turn-start hook required_read ordering is invalid");
     }
     requiredRead = { kind, command, reason, ordering: "before_work" };
+    if (promptBudget) {
+      requiredRead.prompt_budget_bytes = promptBudget;
+      if (Buffer.byteLength(JSON.stringify(requiredRead), "utf8") > promptBudget) {
+        throw new Error("turn-start required read exceeds its declared prompt budget");
+      }
+    }
   }
   return {
     ...registration,
@@ -554,6 +581,38 @@ export function validateTurnStartHookInvocation(input: {
     throw new Error("turn-start hook required read route is missing");
   }
   return { ...result };
+}
+
+/** Transport failed context observations to the executor, not only diagnostics.
+ * Missing context never means empty context or a grant to use a stale cache.
+ */
+export function projectTurnStartUnavailableContext(value: unknown): JsonObject | null {
+  if (value === undefined || value === null) return null;
+  const dispatch = requiredObject(value, "turn-start dispatch");
+  const affected: JsonObject[] = [];
+  for (const field of ["results", "failures"] as const) {
+    const rows = dispatch[field] ?? [];
+    if (!Array.isArray(rows)) throw new TypeError(`turn-start ${field} must be an array`);
+    for (const raw of rows) {
+      const row = requiredObject(raw, `turn-start ${field} entry`);
+      const status = field === "failures" ? "failed" : row.status;
+      if (!["partial", "unavailable", "failed"].includes(String(status))) continue;
+      const identity: JsonObject = {};
+      for (const key of ["hook_id", "capability_id", "error_code"] as const) {
+        const token = requiredString(row[key], `turn-start ${key}`);
+        if (token.length > 160 || !TOKEN_RE.test(token)) throw new TypeError(`invalid turn-start ${key}`);
+        identity[key] = token;
+      }
+      affected.push({...identity, status});
+    }
+  }
+  if (affected.length === 0) return null;
+  return {
+    affected_hooks: affected,
+    cache_policy: "invalidate_affected_hook_context",
+    dependent_action_policy: "hold_until_fresh_context",
+    independent_work_policy: "preserve_existing_authority",
+  };
 }
 
 export function validatePostWritebackHookRegistration(

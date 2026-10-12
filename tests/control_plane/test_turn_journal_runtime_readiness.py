@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
 
 from loopx.control_plane import effect_runtime
+from loopx.control_plane.runtime import node_probe
 from loopx.doctor import collect_doctor, render_doctor_markdown
 
 
@@ -104,7 +106,11 @@ def test_runtime_fingerprint_rescans_when_a_discovered_file_disappears(
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
 
     assert len(effect_runtime._runtime_fingerprint()) == 64
-    assert scans == [("kept.ts", "removed.ts"), ("kept.ts",)]
+    assert scans == [
+        ("kept.ts", "removed.ts"),
+        ("kept.ts",),
+        ("kept.ts",),
+    ]
 
 
 def test_runtime_fingerprint_rescans_when_a_snapshotted_file_disappears_while_reading(
@@ -117,19 +123,25 @@ def test_runtime_fingerprint_rescans_when_a_snapshotted_file_disappears_while_re
     later.write_text("export const later = true;\n", encoding="utf-8")
     original_read_bytes = Path.read_bytes
     reads: list[str] = []
+    later_prefetched = Event()
 
-    def remove_later_after_first_read(path: Path) -> bytes:
-        reads.append(path.name)
+    def remove_later_after_prefetch(path: Path) -> bytes:
         content = original_read_bytes(path)
-        if path == first and later.exists():
-            later.unlink()
+        if path == later:
+            reads.append(path.name)
+            later_prefetched.set()
+        else:
+            if later.exists():
+                assert later_prefetched.wait(timeout=5)
+                later.unlink()
+            reads.append(path.name)
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
-    monkeypatch.setattr(Path, "read_bytes", remove_later_after_first_read)
+    monkeypatch.setattr(Path, "read_bytes", remove_later_after_prefetch)
 
     assert len(effect_runtime._runtime_fingerprint()) == 64
-    assert reads == ["first.ts", "later.ts", "first.ts"]
+    assert reads == ["later.ts", "first.ts", "first.ts"]
 
 
 def _install_persistent_stat_read_churn(
@@ -139,25 +151,35 @@ def _install_persistent_stat_read_churn(
     first = tmp_path / "first.ts"
     later = tmp_path / "later.ts"
     first.write_text("export const first = true;\n", encoding="utf-8")
+    later.write_text("export const later = true;\n", encoding="utf-8")
     original_scan = effect_runtime._scan_runtime_source_files
     original_read_bytes = Path.read_bytes
     scans: list[tuple[str, ...]] = []
+    later_prefetched = Event()
+    first_reads = 0
 
-    def restore_then_scan(root: Path) -> tuple[str, ...]:
-        later.write_text("export const later = true;\n", encoding="utf-8")
+    def record_scan(root: Path) -> tuple[str, ...]:
         files = original_scan(root)
         scans.append(files)
         return files
 
-    def remove_later_after_first_read(path: Path) -> bytes:
+    def churn_after_each_first_read(path: Path) -> bytes:
+        nonlocal first_reads
         content = original_read_bytes(path)
-        if path == first:
+        if path == later:
+            later_prefetched.set()
+        else:
+            first_reads += 1
+        if first_reads == 1 and path == first:
+            assert later_prefetched.wait(timeout=5)
             later.unlink()
+        elif first_reads == 2 and path == first:
+            later.write_text("export const later = true;\n", encoding="utf-8")
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
-    monkeypatch.setattr(effect_runtime, "_scan_runtime_source_files", restore_then_scan)
-    monkeypatch.setattr(Path, "read_bytes", remove_later_after_first_read)
+    monkeypatch.setattr(effect_runtime, "_scan_runtime_source_files", record_scan)
+    monkeypatch.setattr(Path, "read_bytes", churn_after_each_first_read)
     return scans
 
 
@@ -166,11 +188,11 @@ def test_runtime_source_churn_has_a_stable_readiness_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scans = _install_persistent_stat_read_churn(tmp_path, monkeypatch)
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
-        lambda *_args, **_kwargs: _Completed(stdout="v22.18.0\n"),
+        lambda *_args, **_kwargs: _Completed(stdout="v22.22.3\n"),
     )
     result = effect_runtime.collect_effect_runtime_readiness()
 
@@ -180,7 +202,11 @@ def test_runtime_source_churn_has_a_stable_readiness_diagnostic(
         result["runtime_lifecycle"]["diagnostic_code"]
         == "packaged_runtime_source_unstable"
     )
-    assert scans == [("first.ts", "later.ts"), ("first.ts", "later.ts")]
+    assert scans == [
+        ("first.ts", "later.ts"),
+        ("first.ts",),
+        ("first.ts", "later.ts"),
+    ]
 
 
 def test_runtime_request_source_churn_raises_a_stable_startup_diagnostic(
@@ -193,13 +219,17 @@ def test_runtime_request_source_churn_raises_a_stable_startup_diagnostic(
         effect_runtime.effect_runtime_request("runtime.ping", {})
 
     assert error.value.diagnostic_code == "packaged_runtime_source_unstable"
-    assert scans == [("first.ts", "later.ts"), ("first.ts", "later.ts")]
+    assert scans == [
+        ("first.ts", "later.ts"),
+        ("first.ts",),
+        ("first.ts", "later.ts"),
+    ]
 
 
 def test_missing_node_blocks_the_typescript_control_plane_and_is_actionable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: None)
 
     result = effect_runtime.collect_effect_runtime_readiness()
 
@@ -207,7 +237,7 @@ def test_missing_node_blocks_the_typescript_control_plane_and_is_actionable(
     assert result["ready"] is False
     assert result["default_cli_blocking"] is True
     assert result["required_for"] == ["control_plane"]
-    assert "Node.js 22.18.0 or newer" in str(result["recommended_action"])
+    assert "Node.js 22.22.3 or newer" in str(result["recommended_action"])
 
 
 def test_missing_node_request_raises_startup_diagnostic(
@@ -215,29 +245,31 @@ def test_missing_node_request_raises_startup_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: None)
 
     with pytest.raises(effect_runtime.EffectRuntimeStartupError) as error:
         effect_runtime.effect_runtime_result("runtime.ping", {})
 
     assert error.value.diagnostic_code == "node_unavailable"
-    assert "Node.js 22.18.0 or newer" in str(error.value)
+    assert "Node.js 22.22.3 or newer" in str(error.value)
 
 
+@pytest.mark.parametrize("version", ["20.19.5", "22.18.0", "22.22.2"])
 def test_old_node_is_reported_without_running_semantic_probe(
+    version: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
-        lambda *_args, **_kwargs: _Completed(stdout="v20.19.5\n"),
+        lambda *_args, **_kwargs: _Completed(stdout=f"v{version}\n"),
     )
 
     result = effect_runtime.collect_effect_runtime_readiness(deep=True)
 
     assert result["status"] == "unsupported"
-    assert result["detected_node_version"] == "20.19.5"
+    assert result["detected_node_version"] == version
     assert result["semantic_probe"] == "not_run"
 
 
@@ -246,11 +278,11 @@ def test_current_node_standard_probe_does_not_execute_rule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
-        lambda *_args, **_kwargs: _Completed(stdout="v22.18.0\n"),
+        lambda *_args, **_kwargs: _Completed(stdout="v22.22.3\n"),
     )
 
     result = effect_runtime.collect_effect_runtime_readiness()
@@ -273,7 +305,7 @@ def test_deep_probe_executes_packaged_semantics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
@@ -307,11 +339,11 @@ def test_deep_probe_executes_packaged_semantics(
 def test_deep_probe_failure_is_public_safe_and_actionable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(node_probe.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         effect_runtime.subprocess,
         "run",
-        lambda *_args, **_kwargs: _Completed(stdout="v22.18.0\n"),
+        lambda *_args, **_kwargs: _Completed(stdout="v22.22.3\n"),
     )
 
     def failed(*_args: object, **_kwargs: object) -> dict[str, object]:
@@ -369,7 +401,7 @@ def test_missing_required_runtime_fails_doctor_health(
         "status": "ready",
         "required_for": ["control_plane"],
         "default_cli_blocking": True,
-        "minimum_node_version": "22.18.0",
+        "minimum_node_version": "22.22.3",
         "detected_node_version": "24.1.0",
         "semantic_probe": "not_requested",
         "recommended_action": None,
@@ -379,7 +411,7 @@ def test_missing_required_runtime_fails_doctor_health(
         "ready": False,
         "status": "missing",
         "detected_node_version": None,
-        "recommended_action": "Install Node.js 22.18.0 or newer.",
+        "recommended_action": "Install Node.js 22.22.3 or newer.",
     }
     monkeypatch.setattr(
         effect_runtime,
@@ -419,7 +451,7 @@ def test_deep_doctor_fails_when_present_runtime_cannot_execute_semantics(
         "status": "probe_failed",
         "required_for": ["control_plane"],
         "default_cli_blocking": True,
-        "minimum_node_version": "22.18.0",
+        "minimum_node_version": "22.22.3",
         "detected_node_version": "24.1.0",
         "semantic_probe": "failed",
         "recommended_action": "Reinstall LoopX.",

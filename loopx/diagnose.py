@@ -8,7 +8,15 @@ from .control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     render_scheduler_execution_args,
 )
+from .control_plane.status.contract_projection import STATUS_CONTRACT_SIGNAL_LIMIT
+from .control_plane.goals.orphaned_goal_state import (
+    ORPHANED_GOAL_STATE_CONNECTION,
+    ORPHANED_GOAL_STATE_REASON,
+    orphaned_goal_state_gate,
+    orphaned_goal_state_projection,
+)
 from .control_plane.todos.contract import normalize_required_capabilities
+from .paths import registry_project_root
 from .presentation.markdown import as_dict as _as_dict
 from .presentation.markdown import as_list as _as_list
 from .presentation.markdown import markdown_scalar
@@ -18,7 +26,10 @@ from .status import collect_status
 
 DIAGNOSIS_SCHEMA_VERSION = "loopx_agent_diagnosis_packet_v0"
 PACKET_KIND = "agent_reasoning_evidence_packet"
-STATUS_CONTRACT_SIGNAL_LIMIT = 3
+ORPHANED_GOAL_STATE_RECOMMENDED_ACTION = (
+    "inspect the listed orphaned state and preview its backup; do not bootstrap "
+    "until an operator explicitly resolves it"
+)
 
 
 USER_DIAGNOSE_PROMPT = (
@@ -109,6 +120,27 @@ def _goal_ids_for_packet(status_payload: dict[str, Any], *, goal_id: str | None,
         if len(ids) >= max(1, limit):
             break
     return ids
+
+
+def _orphaned_goal_state_for_diagnosis(
+    status_payload: dict[str, Any],
+    *,
+    registry_path: Path,
+    goal_id: str,
+) -> dict[str, Any] | None:
+    """Detect an orphan only when the status snapshot says the Goal is unregistered."""
+
+    history = _as_dict(status_payload.get("run_history"))
+    for goal in _as_list(history.get("goals")):
+        if not isinstance(goal, dict) or str(goal.get("id") or "") != goal_id:
+            continue
+        if goal.get("registry_member") is not False:
+            return None
+        return orphaned_goal_state_projection(
+            registry_project_root(registry_path),
+            goal_id,
+        )
+    return None
 
 
 def _quota_for_goal(
@@ -282,6 +314,22 @@ def _compact_interaction_contract(contract: dict[str, Any]) -> dict[str, Any]:
     compact["agent_channel"] = agent_channel
     compact["cli_channel"] = cli_channel
     return compact
+
+
+def _goal_list_view(packet: dict[str, Any], *, selected: bool) -> dict[str, Any]:
+    """Avoid repeating the selected work's source-read plan in the overview."""
+    if not selected:
+        return packet
+    contract = _as_dict(packet.get("interaction_contract"))
+    agent_channel = _as_dict(contract.get("agent_channel"))
+    if not agent_channel.get("required_reads") and not agent_channel.get("work_context"):
+        return packet
+    overview_contract = dict(contract)
+    overview_agent_channel = dict(agent_channel)
+    overview_agent_channel.pop("required_reads", None)
+    overview_agent_channel.pop("work_context", None)
+    overview_contract["agent_channel"] = overview_agent_channel
+    return {**packet, "interaction_contract": overview_contract}
 
 
 def _compact_scheduler_hint(scheduler_hint: dict[str, Any]) -> dict[str, Any]:
@@ -459,6 +507,51 @@ def _build_goal_packet(
     }
 
 
+def _apply_orphaned_goal_state_diagnosis(
+    packet: dict[str, Any],
+    projection: dict[str, Any],
+    *,
+    registry_path: Path,
+) -> None:
+    commands = _as_list(packet.get("agent_commands"))
+    status_command = str(commands[1]) if len(commands) > 1 else "loopx status"
+    gate = orphaned_goal_state_gate(
+        projection,
+        project=str(registry_project_root(registry_path)),
+        command_prefix="loopx",
+        status_command=status_command,
+    )
+    packet.update(
+        {
+            "machine_signal": ORPHANED_GOAL_STATE_CONNECTION,
+            "status": "blocked",
+            "waiting_on": "operator",
+            "severity": "high",
+            "recommended_action": ORPHANED_GOAL_STATE_RECOMMENDED_ACTION,
+            "user_question": (
+                "Resolve the orphaned Goal state before reconnecting this goal id."
+            ),
+            "orphaned_goal_state": gate,
+            "quota_signals": {
+                "ok": False,
+                "decision": "skip",
+                "should_run": False,
+                "state": ORPHANED_GOAL_STATE_CONNECTION,
+                "action_required": True,
+                "requires_user_action": True,
+                "open_count": 0,
+                "reason": ORPHANED_GOAL_STATE_REASON,
+                "recommended_action": ORPHANED_GOAL_STATE_RECOMMENDED_ACTION,
+            },
+            "agent_commands": [
+                str(route.get("command"))
+                for route in gate["resolution_routes"]
+                if isinstance(route, dict) and route.get("command")
+            ],
+        }
+    )
+
+
 def collect_diagnosis(
     *,
     registry_path: Path,
@@ -494,18 +587,28 @@ def collect_diagnosis(
             agent_id=agent_id,
             available_capabilities=available_capabilities,
         )
-        goal_packets.append(
-            _build_goal_packet(
-                status_payload=status_payload,
-                item=item,
-                quota=quota,
-                registry_path=registry_path,
-                scan_roots=scan_roots,
-                limit=limit,
-                agent_id=agent_id,
-                available_capabilities=available_capabilities,
-            )
+        packet = _build_goal_packet(
+            status_payload=status_payload,
+            item=item,
+            quota=quota,
+            registry_path=registry_path,
+            scan_roots=scan_roots,
+            limit=limit,
+            agent_id=agent_id,
+            available_capabilities=available_capabilities,
         )
+        orphaned_goal_state = _orphaned_goal_state_for_diagnosis(
+            status_payload,
+            registry_path=registry_path,
+            goal_id=current_goal_id,
+        )
+        if orphaned_goal_state is not None:
+            _apply_orphaned_goal_state_diagnosis(
+                packet,
+                orphaned_goal_state,
+                registry_path=registry_path,
+            )
+        goal_packets.append(packet)
     selected_item = _select_attention_item(status_payload, goal_id=goal_id)
     selected_goal_id = str((selected_item or {}).get("goal_id") or (goal_ids[0] if goal_ids else ""))
     selected = next((item for item in goal_packets if item.get("goal_id") == selected_goal_id), None)
@@ -523,8 +626,16 @@ def collect_diagnosis(
     contract = _as_dict(status_payload.get("contract"))
     contract_errors = _compact_text_signals(contract.get("errors"))
     contract_warnings = _compact_text_signals(contract.get("warnings"))
-    return {
-        "ok": bool(status_payload.get("ok")),
+    diagnosis_blocked = any(
+        item.get("machine_signal") == ORPHANED_GOAL_STATE_CONNECTION
+        for item in goal_packets
+    )
+    goal_overviews = [
+        _goal_list_view(packet, selected=packet is selected)
+        for packet in goal_packets
+    ]
+    payload = {
+        "ok": bool(status_payload.get("ok")) and not diagnosis_blocked,
         "schema_version": DIAGNOSIS_SCHEMA_VERSION,
         "packet_kind": PACKET_KIND,
         "agent_must_reason": True,
@@ -540,7 +651,7 @@ def collect_diagnosis(
         "run_count": status_payload.get("run_count"),
         "attention_item_count": _as_dict(status_payload.get("attention_queue")).get("item_count"),
         "selected": selected,
-        "goals": goal_packets,
+        "goals": goal_overviews,
         "status_summary": {
             "contract": contract.get("summary"),
             "contract_errors": contract_errors["items"],
@@ -553,6 +664,9 @@ def collect_diagnosis(
         },
         "user_prompt": USER_DIAGNOSE_PROMPT,
     }
+    if diagnosis_blocked:
+        payload["diagnosis_blocked_by"] = ORPHANED_GOAL_STATE_CONNECTION
+    return payload
 
 
 def render_diagnosis_markdown(payload: dict[str, Any]) -> str:
@@ -613,6 +727,29 @@ def render_diagnosis_markdown(payload: dict[str, Any]) -> str:
         scheduler_hint_line = _scheduler_hint_line(_as_dict(quota.get("scheduler_hint")))
         if scheduler_hint_line:
             lines.append(scheduler_hint_line)
+
+    orphaned_goal_state = _as_dict(selected.get("orphaned_goal_state"))
+    if orphaned_goal_state:
+        lines.extend(
+            [
+                "",
+                "## Orphaned Goal State",
+                "",
+                f"- reason: {markdown_scalar(orphaned_goal_state.get('reason'))}",
+                "- state_file_routes: "
+                + ", ".join(
+                    f"`{route}`"
+                    for route in _as_list(orphaned_goal_state.get("state_file_routes"))
+                ),
+                "- forbidden_until_resolved: "
+                + ", ".join(
+                    f"`{item}`"
+                    for item in _as_list(
+                        orphaned_goal_state.get("forbidden_until_resolved")
+                    )
+                ),
+            ]
+        )
 
     contract_errors = _as_list(status_summary.get("contract_errors"))
     contract_warnings = _as_list(status_summary.get("contract_warnings"))

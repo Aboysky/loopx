@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from typing import Any
+from pathlib import Path
 
 from ..doctor import collect_doctor, render_doctor_markdown
 from ..host_loop_activation import SUPPORTED_AGENT_TYPES
@@ -28,6 +30,15 @@ def register_doctor_command(
         action="store_true",
         help="Run slower representative release-candidate checks.",
     )
+    parser.add_argument(
+        "--restart-runtime",
+        action="store_true",
+        help=(
+            "Stop the managed Effect runtime serving this revision so the next "
+            "request resolves Node from PATH again. Use after installing a "
+            "qualified Node when a reused runtime reports SQLite not qualified."
+        ),
+    )
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument(
         "--installation-only",
@@ -45,12 +56,23 @@ def register_doctor_command(
     return parser
 
 
-def handle_doctor_command(args: argparse.Namespace, print_payload: PrintPayload) -> int:
+def handle_doctor_command(
+    args: argparse.Namespace, print_payload: PrintPayload, *, registry_path: Path | None = None,
+) -> int:
+    restart: dict[str, Any] | None = None
+    if bool(getattr(args, "restart_runtime", False)):
+        from ..control_plane.effect_runtime import restart_effect_runtime
+
+        restart = restart_effect_runtime()
     payload = collect_doctor(
         deep=bool(args.deep),
         agent_type=args.agent_type,
         installation_only=bool(getattr(args, "installation_only", False)),
+        registry_path=registry_path,
+        runtime_root_override=getattr(args, "runtime_root", None),
     )
+    if restart is not None:
+        payload["effect_runtime_restart"] = restart
     output_format = getattr(args, "subcommand_format", None) or args.format
     print_payload(payload, output_format, render_doctor_markdown)
     return 0 if payload.get("ok") else 1

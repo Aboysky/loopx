@@ -98,25 +98,13 @@ loopx bootstrap \
 
 `loopx connect` is an alias for the same operation. The command is
 safe to rerun: by default it keeps an existing state file and existing registry
-entry. If the goal only needs an additional write boundary after connection,
-prefer the incremental migration path:
-
-An integration provider that already qualified the project bridge can own the
-one-time connection check explicitly:
-
-```bash
-loopx connect \
-  --goal-id project-goal \
-  --no-onboarding-scan \
-  --onboarding-connection-validation provider-prevalidated
-```
-
-The default remains `agent`, which may create a `loopx check` onboarding Todo
-for generic adapters. `provider-prevalidated` records provider ownership in the
-registry and omits that agent Todo; it does not run validation, grant tools, or
-expand the provider's authority. Use it only when the caller has already
-validated the connection. Repository scanning and connection validation remain
-separate controls.
+entry. Connection registers the goal and writes the active state only: it does
+not create first-connect onboarding Todos, owner-decision gates, or host-loop
+opt-in gates. The caller — or the connected domain adapter — writes the first
+delivery Todo it wants, so an autonomously driven project starts from the
+caller's own work queue instead of a generated onboarding queue. If the goal
+only needs an additional write boundary after connection, prefer the
+incremental migration path:
 
 ```bash
 loopx configure-goal \
@@ -133,7 +121,7 @@ The default files are:
 
 ```text
 .loopx/registry.json
-.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md
+.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md
 ```
 
 The generated registry entry also includes an `execution_profile`. This is the
@@ -213,7 +201,7 @@ loopx connect \
 
 Both entries live in the same local `.loopx/registry.json`, but each goal
 must own its own ignored active state under
-`.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`.
+`.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`.
 Sharing the same `state_file` across two goal ids is treated as a registry
 health error because it lets one lane overwrite or summarize the other's state.
 Do not commit the live `ACTIVE_GOAL_STATE.md`; publish a sanitized template or
@@ -229,7 +217,7 @@ loopx quota should-run --goal-id side-bypass
 
 `read-only-map` is goal-aware for same-repo setups. In addition to the generic
 project inventory, it reports whether the selected goal has a local project
-registry, a `.codex/goals/<goal-id>/` state directory, and the declared active
+registry, a `.loopx/goals/<goal-id>/` state directory, and the declared active
 state file. A missing side-lane state directory produces
 `project_goal_state_dir_not_detected:<goal-id>` plus the legacy
 `project_local_goal_state_not_detected` risk, while a healthy main lane in the
@@ -328,7 +316,7 @@ work state or local evidence, add them to `.gitignore`:
 
 ```gitignore
 .loopx/
-.codex/goals/
+.loopx/goals/
 ```
 
 ## Project Adapter
@@ -434,7 +422,7 @@ parallel when scopes permit.
 All adapters should save compact run history under:
 
 ```text
-~/.codex/loopx/goals/<goal-id>/runs/index.jsonl
+~/.loopx/goals/<goal-id>/runs/index.jsonl
 ```
 
 This gives the app, CLI, heartbeats, and future UI one place to inspect goal
@@ -443,7 +431,7 @@ history.
 Project-local registries should also sync into the shared global registry:
 
 ```text
-~/.codex/loopx/registry.global.json
+~/.loopx/registry.global.json
 ```
 
 `loopx connect` and `loopx refresh-state` do this automatically.
@@ -493,10 +481,11 @@ loopx refresh-state \
 ```
 
 Use `--delivery-batch-scale` for `test_only`, `single_surface`,
-`multi_surface`, or `implementation`. For agent-facing `refresh-state` calls,
-`single_segment` and `bounded_segment` are accepted as input aliases for
-`single_surface`; the recorded run still stores the canonical `single_surface`
-value. `--delivery-outcome` is a structured enum, not a classification string:
+`multi_surface`, or `implementation`. New `refresh-state` writes require one of
+those canonical values: historical `single_segment` and `bounded_segment`
+records remain readable as `single_surface`, but the legacy names are rejected
+for new writes because a bounded segment does not prove how many surfaces it
+changed. `--delivery-outcome` is a structured enum, not a classification string:
 
 | Value | Meaning |
 | --- | --- |
@@ -584,11 +573,16 @@ editing the run JSON by hand:
 ```bash
 loopx reward \
   --goal-id project-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending" \
   --follow-up "promote to the next longer-window check"
 ```
+
+Durable reward writes require an explicit `--actor-kind owner` or
+`--actor-kind controller`; `--dry-run` remains available without an actor.
+The selected kind is stored with the run-bound overlay.
 
 By default the command attaches feedback to the latest compact run for the
 goal. Pass `--run-generated-at <timestamp>` to target an older run. The writer
@@ -615,6 +609,7 @@ overlay instead of creating a separate memory store:
 ```bash
 loopx reward \
   --goal-id project-goal \
+  --actor-kind owner \
   --decision route_correction \
   --reward mixed \
   --reason-summary "fix lifecycle counters before adding more benchmark cases" \
@@ -640,6 +635,7 @@ the durable loop in one CLI call:
 ```bash
 loopx reward \
   --goal-id project-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending" \

@@ -8,21 +8,35 @@ import pytest
 
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
 from loopx.control_plane.coordination import local_authority_shadow_outbox as outbox
+from loopx.control_plane.coordination.coordination_state_contract_generated import (
+    COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA,
+)
 from loopx.control_plane.coordination.local_authority_shadow_projection import (
     ProjectionValueError,
     canonical_bytes,
-    lease_partition_projection,
+    compact_lease,
     partition_digest,
     sha256_digest,
+    source_effect_runtime_result,
     text_digest,
     todo_partition_projection,
 )
 from loopx.control_plane.coordination.runtime_shadow import (
     bootstrap_coordination_runtime_shadow,
     build_runtime_shadow_source_snapshot,
+    RuntimeInvoker,
 )
-from loopx.control_plane.coordination.shadow_management import require_shadow_primary_write_allowed
-from loopx.file_lock import exclusive_file_lock
+from loopx.control_plane.coordination.shadow_goal_scope import shadow_goal_scope
+from loopx.control_plane.coordination.shadow_management import (
+    read_shadow_bootstrap_source_path,
+    read_shadow_management_state,
+    require_shadow_primary_write_allowed,
+    shadow_maintenance_lock_target,
+    shadow_management_directory,
+    shadow_management_state_path,
+)
+from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous, EffectRuntimeRejected
+from loopx.file_lock import exclusive_mutation_file_lock
 from loopx.history import load_registry
 from loopx.registry import find_registry_goal
 
@@ -30,7 +44,13 @@ from loopx.registry import find_registry_goal
 GOAL_ID = "goal-outbox"
 
 
-def _fixture(tmp_path: Path, *, bootstrap: bool = True) -> tuple[Path, Path, Path]:
+def _fixture(
+    tmp_path: Path,
+    *,
+    bootstrap: bool = True,
+    incidental_goal_instance_id: bool = False,
+    runtime_invoker: RuntimeInvoker = source_effect_runtime_result,
+) -> tuple[Path, Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
     state = repo / "ACTIVE_GOAL_STATE.md"
@@ -45,24 +65,25 @@ def _fixture(tmp_path: Path, *, bootstrap: bool = True) -> tuple[Path, Path, Pat
     )
     runtime_root = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
+    goal = {
+        "id": GOAL_ID,
+        "domain": "harness_self_improvement",
+        "status": "active",
+        "repo": str(repo),
+        "state_file": state.name,
+        "adapter": {"kind": "harness_self_improvement"},
+        "coordination": {
+            "agent_model": "peer_v1",
+            "registered_agents": ["agent-a"],
+        },
+    }
+    if incidental_goal_instance_id:
+        goal["goal_instance_id"] = "ginst_0123456789abcdef0123456789abcdef"
     registry.write_text(
         json.dumps(
             {
                 "common_runtime_root": str(runtime_root),
-                "goals": [
-                    {
-                        "id": GOAL_ID,
-                        "domain": "harness_self_improvement",
-                        "status": "active",
-                        "repo": str(repo),
-                        "state_file": state.name,
-                        "adapter": {"kind": "harness_self_improvement"},
-                        "coordination": {
-                            "agent_model": "peer_v1",
-                            "registered_agents": ["agent-a"],
-                        },
-                    }
-                ],
+                "goals": [goal],
             }
         ),
         encoding="utf-8",
@@ -76,15 +97,38 @@ def _fixture(tmp_path: Path, *, bootstrap: bool = True) -> tuple[Path, Path, Pat
             "schema_version": "loopx_coordination_runtime_shadow_config_v0",
             "enabled": True, "provider": "file_v0",
         }}}
-        result = bootstrap_coordination_runtime_shadow(
-            goal=enabled_goal, runtime_root=runtime_root, goal_id=GOAL_ID,
-            operation_id="bootstrap:outbox-test", source_version="source:initial",
-            projection=projection, source_snapshot=snapshot,
-        )
-        # The managed Effect runtime may lose the first response after the
-        # durable bootstrap commit and retry the same operation. Windows CI is
-        # slow enough to exercise that path, so the public success contract is
-        # applied/recovered/replayed rather than applied-only.
+        def bootstrap_or_receipt(method: str, request: dict) -> dict:
+            try:
+                return runtime_invoker(method, request)
+            except EffectRuntimeResponseAmbiguous:
+                # The RPC deadline still applies. Do not resend an uncertain
+                # write; read its exact completed receipt after the existing
+                # maintenance lock releases, using the normal lock budget.
+                with exclusive_mutation_file_lock(shadow_maintenance_lock_target(runtime_root, GOAL_ID)):
+                    journal = read_shadow_management_state(runtime_root, GOAL_ID)
+                    if journal is None:
+                        raise
+                    assert journal["status"] == "active", journal
+                    assert journal["operation"]["operation_id"] == request["operation_id"], journal
+                    assert journal["operation"]["request_digest"] == sha256_digest(request), journal
+                    binding = require_shadow_primary_write_allowed(runtime_root, GOAL_ID)
+                    assert binding is not None, journal
+                    assert read_shadow_bootstrap_source_path(runtime_root, GOAL_ID, binding) == state.resolve()
+                    receipt = journal["result"]
+                    assert receipt["operation_id"] == request["operation_id"], receipt
+                    assert {key: receipt[key] for key in binding} == binding, receipt
+                    return {"schema_version": COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA, **receipt}
+
+        with shadow_goal_scope(registry, goal_id=GOAL_ID) as scope:
+            result = bootstrap_coordination_runtime_shadow(
+                goal=enabled_goal, runtime_root=runtime_root, goal_id=GOAL_ID,
+                operation_id="bootstrap:outbox-test", source_version="source:initial",
+                projection=projection, source_snapshot=snapshot,
+                runtime_invoker=bootstrap_or_receipt,
+                goal_ref=scope.goal_ref,
+            )
+        # Outbox assertions require a verified bootstrap, including an exact
+        # durable receipt when the managed RPC response is ambiguous.
         assert result["status"] in {"applied", "recovered", "replayed"}, result
         assert result["operation_id"] == "bootstrap:outbox-test", result
         assert result["cursor"] == "1", result
@@ -158,8 +202,91 @@ def _record_change(registry: Path, state: Path, runtime_root: Path, text: str) -
     return capture
 
 
+def test_legacy_profile_ignores_an_incidental_goal_instance_id(
+    tmp_path: Path,
+) -> None:
+    registry, state, runtime_root = _fixture(
+        tmp_path,
+        incidental_goal_instance_id=True,
+    )
+
+    capture = _record_change(
+        registry,
+        state,
+        runtime_root,
+        "Capture work through the legacy profile.",
+    )
+
+    assert capture.outcome.failure is None
+    binding = require_shadow_primary_write_allowed(runtime_root, GOAL_ID)
+    assert binding is not None
+    assert "goal_ref" not in binding
+
+
 def _files(directory: Path) -> dict[str, bytes]:
     return {str(path.relative_to(directory)): path.read_bytes() for path in directory.rglob("*") if path.is_file()}
+
+
+def test_outbox_fixture_reads_exact_bootstrap_receipt_after_lost_response(tmp_path: Path) -> None:
+    calls = []
+    committed = {}
+
+    def lose_response(method: str, request: dict) -> dict:
+        result = source_effect_runtime_result(method, request)
+        assert result["status"] in {"applied", "recovered", "replayed"}, result
+        calls.append(request)
+        path = shadow_management_state_path(Path(request["runtime_root"]), GOAL_ID)
+        committed["journal_bytes"] = path.read_bytes()
+        raise EffectRuntimeResponseAmbiguous(method, timeout=10)
+
+    registry, state, runtime_root = _fixture(tmp_path, runtime_invoker=lose_response)
+    assert len(calls) == 1  # A receipt readback must never dispatch another write.
+    assert shadow_management_state_path(runtime_root, GOAL_ID).read_bytes() == committed["journal_bytes"]
+    _record_change(registry, state, runtime_root, "Continue after verified bootstrap readback.")
+    assert _drain(registry, runtime_root).reason_code is None
+
+
+@pytest.mark.parametrize("damage", ["missing", "pending", "other_operation", "changed_request", "changed_manifest"])
+def test_outbox_fixture_rejects_unverified_bootstrap_after_lost_response(tmp_path: Path, damage: str) -> None:
+    calls = []
+
+    def lose_response(method: str, request: dict) -> dict:
+        calls.append(request)
+        if damage != "missing":
+            source_effect_runtime_result(method, request)
+            root = Path(request["runtime_root"])
+            path = shadow_management_state_path(root, GOAL_ID)
+            journal = json.loads(path.read_text(encoding="utf-8"))
+            if damage == "pending":
+                journal.update(status="bootstrapping", binding=None, result=None)
+                journal["operation"]["phase"] = "prepared"
+            elif damage == "other_operation":
+                journal["operation"]["operation_id"] = "bootstrap:another-operation"
+            elif damage == "changed_request":
+                journal["operation"]["request_digest"] = "sha256:" + "0" * 64
+            else:
+                manifest = next((shadow_management_directory(root, GOAL_ID) / "operations").glob("*/manifest.json"))
+                manifest.write_text("{}", encoding="utf-8")
+            path.write_text(json.dumps(journal), encoding="utf-8")
+        raise EffectRuntimeResponseAmbiguous(method, timeout=10)
+
+    with pytest.raises(AssertionError):
+        _fixture(tmp_path, runtime_invoker=lose_response)
+    assert len(calls) == 1
+    assert not _todo_dir(tmp_path / "runtime").exists()
+
+
+def test_outbox_fixture_preserves_semantic_rejection_even_with_a_bootstrap_receipt(tmp_path: Path) -> None:
+    calls = []
+
+    def reject_response(method: str, request: dict) -> dict:
+        source_effect_runtime_result(method, request)
+        calls.append(request)
+        raise EffectRuntimeRejected("deliberate semantic rejection", diagnostic_code="invalid_request")
+
+    with pytest.raises(AssertionError, match="deliberate semantic rejection"):
+        _fixture(tmp_path, runtime_invoker=reject_response)
+    assert len(calls) == 1
 
 
 def test_capture_records_prepared_then_committed_and_skips_prose_only_writes(tmp_path: Path) -> None:
@@ -226,6 +353,32 @@ def test_capture_records_prepared_then_committed_and_skips_prose_only_writes(tmp
     assert [entry.seq for entry in outbox.list_entries(_todo_dir(runtime_root))] == [1, 2]
 
 
+def test_capture_and_drain_use_the_active_binding_digest_through_a_root_alias(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    registry, state, runtime_root = _fixture(alias)
+
+    capture = _record_change(
+        registry, state, runtime_root, "Capture through the runtime alias."
+    )
+    binding = require_shadow_primary_write_allowed(runtime_root, GOAL_ID)
+    assert binding is not None
+    [entry] = outbox.list_entries(_todo_dir(runtime_root))
+    assert entry.prepared["source_root_digest"] == binding["source_root_digest"]
+
+    drained = _drain(registry, runtime_root)
+    assert drained.outcome == "drained"
+    assert drained.delivered == 1
+    assert capture.outcome.entry_id == drained.entries[0]["entry_id"]
+
+
 def test_disabled_capture_creates_nothing(tmp_path: Path) -> None:
     registry, state, runtime_root = _fixture(tmp_path, bootstrap=False)
     capture = _capture(registry, state, runtime_root, original_text="", enabled=False)
@@ -236,96 +389,18 @@ def test_disabled_capture_creates_nothing(tmp_path: Path) -> None:
     assert not (runtime_root / "authority-shadow").exists()
 
 
-def test_event_only_capture_holds_without_inventing_projection_or_retiring_entries(tmp_path: Path) -> None:
-    registry, state, runtime_root = _fixture(tmp_path)
-    _record_change(registry, state, runtime_root, "Baseline coordination fact.")
-    original = state.read_text()
-    before = _files(_todo_dir(runtime_root))
-    for event_id, proposed in (("evt-noop", original), ("evt-change", original + "\n## Operator Notes\nEvent evidence.\n")):
-        capture = _capture(registry, state, runtime_root, original_text=original,
-                           write_class="todo_complete_event_projection")
-        capture.prepare(proposed, event_id=event_id)
-        capture.committed()
-        assert capture.outcome.entry_id is None
-        assert capture.outcome.skipped_reason == "event_log_writer_not_bound"
-        assert _files(_todo_dir(runtime_root)) == before
-    assert [entry.seq for entry in outbox.list_entries(_todo_dir(runtime_root))] == [1]
-
-
-def test_prepared_only_entries_resolve_from_source_probes(tmp_path: Path) -> None:
-    registry, state, runtime_root = _fixture(tmp_path)
-    original = state.read_text(encoding="utf-8")
-    _, new_text = _planned_todo(original, "Crash between write and marker.")
-    capture = _capture(registry, state, runtime_root, original_text=original)
-    capture.prepare(new_text)
-    [entry] = outbox.list_entries(_todo_dir(runtime_root))
-    assert not entry.is_committed
-
-    def resolve(text: str) -> str:
-        return outbox.resolve_prepared_only_entry(
-            entry,
-            markdown_text_reader=lambda: text,
-            lease_bytes_reader=None,
-            event_presence_reader=None,
-        )
-
-    assert resolve(new_text) == "committed"
-    assert resolve(original) == "abandoned"
-    assert resolve(new_text + "\n- [ ] (agent) foreign edit\n") == "unproved"
-
-    event_entry = outbox.OutboxEntry(
-        partition="todos",
-        seq=2,
-        entry_id="local-shadow-tx-" + "0" * 64,
-        prepared_path=tmp_path / "unused.prepared.json",
-        committed_path=None,
-        prepared={"source": {"kind": "state_event_log", "event_id": "evt-9"}},
-        committed=None,
-    )
-    assert outbox.resolve_prepared_only_entry(
-        event_entry, markdown_text_reader=None, lease_bytes_reader=None,
-        event_presence_reader=lambda event_id: event_id == "evt-9",
-    ) == "unproved"
-    assert outbox.resolve_prepared_only_entry(
-        event_entry, markdown_text_reader=None, lease_bytes_reader=None,
-        event_presence_reader=lambda _event_id: False,
-    ) == "abandoned"
-
-    planned = {"todo_id": "todo-a", "version": 2, "lease_epoch": 1, "status": "active", "updated_at": "t2", "owner": "agent-a"}
-    previous = {**planned, "version": 1, "updated_at": "t1"}
-    planned_bytes = canonical_bytes(planned)
-    previous_bytes = canonical_bytes(previous)
-    lease_entry = outbox.OutboxEntry(
-        partition="leases", seq=1, entry_id="local-shadow-tx-" + "1" * 64,
-        prepared_path=tmp_path / "unused.prepared.json", committed_path=None,
-        prepared={"source": {"kind": "task_lease_record", "lease": planned,
-                              "bytes_digest": outbox.raw_bytes_digest(planned_bytes),
-                              "previous_bytes_digest": outbox.raw_bytes_digest(previous_bytes)}},
-        committed=None,
-    )
-
-    def lease_resolve(current: bytes | None) -> str:
-        return outbox.resolve_prepared_only_entry(
-            lease_entry, markdown_text_reader=None, lease_bytes_reader=lambda _todo_id: current,
-            event_presence_reader=None,
-        )
-
-    assert lease_resolve(planned_bytes) == "committed"
-    assert lease_resolve(previous_bytes) == "abandoned"
-    # Equal versions/epochs/statuses never prove different owner or payload bytes.
-    assert lease_resolve(canonical_bytes({**planned, "owner": "agent-b"})) == "unproved"
-    assert lease_resolve(canonical_bytes({**planned, "extra": "unrecorded"})) == "unproved"
-    assert lease_resolve(canonical_bytes({**planned, "version": 9})) == "unproved"
-    assert lease_resolve(None) == "unproved"
 
 
 def test_cursor_allocation_hint_does_not_authorize_a_gap_or_candidate_write(tmp_path: Path) -> None:
     registry, state, runtime_root = _fixture(tmp_path)
     directory = _todo_dir(runtime_root)
     directory.mkdir(parents=True)
-    outbox.write_cursor(directory, partition="todos", last_seq=5,
-                        last_entry_id="local-shadow-tx-" + "a" * 64,
-                        last_partition_digest=None, last_cursor="5", last_provider_revision="rev-5")
+    # Synthetic wire input: only the native drain may publish real cursors.
+    outbox.durable_write_json(outbox.cursor_path(directory), {
+        "schema_version": outbox.DRAIN_CURSOR_SCHEMA, "partition": "todos", "last_seq": 5,
+        "last_entry_id": "local-shadow-tx-" + "a" * 64, "last_partition_digest": None,
+        "last_cursor": "5", "last_provider_revision": "rev-5", "updated_at": "2026-09-05T00:00:00Z",
+    })
     assert outbox.next_seq(directory) == 6
     first = _record_change(registry, state, runtime_root, "Recorded after the cursor hint.")
     second = _record_change(registry, state, runtime_root, "Another source transaction.")
@@ -353,14 +428,12 @@ def test_canonical_projection_rejects_floats_and_bad_lease_identity() -> None:
     assert canonical_bytes({"b": 1, "a": [True, None, "\u00e9"]}) == '{"a":[true,null,"\u00e9"],"b":1}'.encode("utf-8")
     assert sha256_digest({"b": [1, None], "a": "x"}) == sha256_digest({"a": "x", "b": [1, None]})
     with pytest.raises(ProjectionValueError):
-        lease_partition_projection([("todo-a", {"goal_id": "other", "todo_id": "todo-a"})], goal_id=GOAL_ID)
-    projection = lease_partition_projection(
-        [("todo-b", {"goal_id": GOAL_ID, "todo_id": "todo-b", "version": 1, "extra": "retained"}),
-         ("todo-a", {"goal_id": GOAL_ID, "todo_id": "todo-a", "version": 2, "status": "active"})],
-        goal_id=GOAL_ID,
+        compact_lease({"goal_id": "other", "todo_id": "todo-a"}, goal_id=GOAL_ID, file_stem="todo-a")
+    lease = compact_lease(
+        {"goal_id": GOAL_ID, "todo_id": "todo-b", "version": 1, "extra": "retained"},
+        goal_id=GOAL_ID, file_stem="todo-b",
     )
-    assert [lease["todo_id"] for lease in projection["leases"]] == ["todo-a", "todo-b"]
-    assert projection["leases"][1]["extra"] == "retained"
+    assert lease["extra"] == "retained"
 
 
 def test_capture_failure_is_typed_and_preserves_the_primary_result(tmp_path: Path) -> None:
@@ -377,15 +450,6 @@ def test_capture_failure_is_typed_and_preserves_the_primary_result(tmp_path: Pat
     assert capture.outcome.failure is not None
     assert capture.outcome.failure["reason_code"] == "outbox_prepare_failed"
     assert state.read_text() == new_text
-
-
-def test_primary_lock_probe_reports_held_locks(tmp_path: Path) -> None:
-    target = tmp_path / "ACTIVE_GOAL_STATE.md"
-    target.write_text("", encoding="utf-8")
-    assert adapter.primary_lock_is_free(target) is True
-    with exclusive_file_lock(target, timeout_seconds=1.0, operation="test_hold"):
-        assert adapter.primary_lock_is_free(target) is False
-    assert adapter.primary_lock_is_free(target) is True
 
 
 def test_prepared_records_must_bind_their_directory_identity_and_source(tmp_path: Path) -> None:
@@ -445,9 +509,12 @@ def test_cursor_residue_is_diagnostic_and_requires_an_exact_receipt(tmp_path: Pa
     directory = _todo_dir(runtime_root)
     first, second = outbox.list_entries(directory)
     assert outbox.retired_residue(directory) == []
-    outbox.write_cursor(directory, partition="todos", last_seq=first.seq,
-                        last_entry_id=first.entry_id, last_partition_digest=first.recorded_partition_digest(),
-                        last_cursor="2", last_provider_revision="file:2:" + "1" * 24)
+    outbox.durable_write_json(outbox.cursor_path(directory), {
+        "schema_version": outbox.DRAIN_CURSOR_SCHEMA, "partition": "todos", "last_seq": first.seq,
+        "last_entry_id": first.entry_id, "last_partition_digest": first.recorded_partition_digest(),
+        "last_cursor": "2", "last_provider_revision": "file:2:" + "1" * 24,
+        "updated_at": "2026-09-05T00:00:00Z",
+    })
     assert [path.name for path in outbox.retired_residue(directory)] == sorted(
         [first.committed_path.name, first.prepared_path.name]
     )
@@ -477,14 +544,3 @@ def test_exact_receipts_allow_cursor_then_residue_cleanup(tmp_path: Path) -> Non
     assert recovered.reason_code is None, recovered.reason_code
     assert outbox.list_entries(directory) == []
     assert outbox.read_cursor(directory) == cursor
-
-
-def test_reclaim_validates_the_complete_batch_before_any_unlink(tmp_path: Path) -> None:
-    first, second = tmp_path / "first.json", tmp_path / "second.json"
-    first.write_bytes(b"first exact receipt bytes")
-    second.write_bytes(b"second changed after proof")
-    proof = [(first, outbox.raw_bytes_digest(first.read_bytes())), (second, outbox.raw_bytes_digest(b"different bytes"))]
-    with pytest.raises(outbox.OutboxError) as raised:
-        outbox.reclaim_verified_files(proof)
-    assert raised.value.reason_code == "outbox_file_changed"
-    assert first.exists() and second.exists()

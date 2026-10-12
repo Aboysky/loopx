@@ -1,11 +1,67 @@
-## Summary
+## Goal And Delivered Outcome
 
--
+<!-- State the reproduced defect, accepted request or concrete maintenance
+outcome. A public issue, roadmap card or RFC section is optional for a
+self-contained ordinary contribution. Curated board work follows its anchor
+rule; do not invent an issue or roadmap id only to admit a useful repair.
+Catalog entries, behavior-pinning tests and fixture dimensions still need a
+concrete gap and consumer. These author facts are independently reviewed.
+-->
 
-## Issue Or Task
+- Outcome basis / optional anchor:
 
-- Closes #
-- Contributor task ID:
+- Goal/source and gap:
+- Observable before → after, with the validation row that proves it:
+- Issue/task and intended base: <!-- Use Closes only for the issue actually completed; otherwise Related to. -->
+
+## Author Declaration
+
+<!--
+Who wrote this change, and what it was implemented against. A reviewer may be a
+different operator's agent, working from a different host and context: this
+section is the only place it can learn both without guessing, and unlike the
+rest of the body it is published attribution rather than a reviewed claim. Keep
+it to one short line plus the spec rows; do not paste runtime identifiers,
+endpoints, credentials or internal routing detail, and never claim a
+verification you did not run.
+-->
+
+- Written by: <!-- model_agent or human_operator; for an agent, the model and provider in ordinary product-family wording; keep it to one line -->
+
+### Implemented against
+
+<!-- The accepted specification this change was built for: an accepted RFC,
+accepted contract/protocol document, the linked issue or task, or a
+maintainer-agreed review frame. Give the exact file path or public link and the
+revision, so a reviewer can open the same text. One row per criterion the
+specification states, using its own section or identifier when it has one.
+Disposition: implemented | deferred | out_of_scope | not_met — a not_met row
+blocks approval and needs its gap and repair. Write "no written specification;
+the request in this PR is the basis" when none exists. Ignore aspirational or
+future properties; they are not obligations.
+-->
+
+- Specification and revision:
+- Criteria:
+
+| Criterion (spec clause) | Disposition | Symbol / path | Test or command |
+| --- | --- | --- | --- |
+|  |  |  |  |
+
+- Self-check before submission: <!-- What you ran, what you read, and what you deliberately left out. Separate what you verified from what you assumed; "none" with a reason is valid. -->
+
+## Scope And Continuation
+
+<!-- A scoped fix may be complete while the parent program remains open.
+For a staged increment, explain the useful delta, remaining gap, next owner/task
+and why this is an independently testable/reversible boundary. Link existing
+work before creating follow-ups. Docs/research/maintenance need a concrete value,
+not a fabricated runtime caller. Write "complete within this scope" when no
+successor is needed. Do not grade quality from LOC, PR counts or test counts.
+-->
+
+- Completed scope and remaining work:
+- Slice boundary / successor: <!-- N/A with reason when the accepted task is complete. -->
 
 ## Validation
 
@@ -41,7 +97,7 @@ baseline/head comparison and a failing-before or mutation check, not just test c
   Documentation-only changes may use a static/manual row and explain runtime N/A.
   A passing row does not waive required real-path/backend gates. -->
 
-See [validation disclosure guidance](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md#validation-disclosure).
+See [validation disclosure guidance](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md#validation-disclosure).
 
 ## Frontend / Visual Evidence
 
@@ -63,6 +119,8 @@ even when the underlying access was authorized.
 - After:
 - States and viewports shown:
 - Source data: <!-- choose one: none | synthetic | public_fixture -->
+- Attention review: <!-- Per docs/development/design.md: what earns its place through high-value information, essential interaction, or expressive visual presentation? Name consolidation/removal across the whole viewport, and how failures, uncertainty, and one-step controls remain available. -->
+- Craft review: <!-- Per docs/development/design.md#craft-review, judged on showcase-workspace screenshots: one hero, no grouping-only cards, designed loading/unknown/failure states, motion by token, status glyph family, no new raw hex. -->
 
 ## Type of Change
 
@@ -88,16 +146,14 @@ even when the underlying access was authorized.
 
 ## Technical Direction
 
-<!-- Select one. Direction labels route review; they do not imply maturity or merge authority. -->
+<!-- Optional routing: Core control-plane hardening; Long-horizon benchmark evidence;
+Operator surface and IM integration; Shared Goal Authority and cross-host coordination;
+Architecture and research incubator. For cross-cutting work, reference an existing
+roadmap S/G/R or domain acceptance id rather than copying the plan.
+Routing is not maturity or implementation authority.
+-->
 
-- [ ] Core control-plane hardening
-- [ ] Long-horizon benchmark evidence
-- [ ] Operator surface and IM integration
-- [ ] Shared Goal Authority and cross-host coordination
-- [ ] Architecture and research incubator
-
-- Target base branch:
-- Direction tracker or promotion unit:
+- Direction / acceptance reference, when applicable:
 
 ## Shared-authority RFC fixture impact
 

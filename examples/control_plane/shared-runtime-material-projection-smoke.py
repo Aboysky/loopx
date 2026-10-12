@@ -264,7 +264,9 @@ def exercise_split_runtime(root: Path) -> None:
         assert dream_status["run_history"]["goals"][0]["latest_status_run"][
             "classification"
         ] == "dreaming_proposal_deferred"
-        assert dream_status["runtime_projection_routes"] == {"healthy": True}
+        route_health = dream_status["runtime_projection_routes"]
+        assert route_health["healthy"] is True, route_health
+        assert route_health["goal_count"] >= 1, route_health
 
         source_row = read_rows(source_runtime)[-1]
         replay_record, replay_index = build_shared_runtime_material_projection(
@@ -342,8 +344,8 @@ def exercise_route_edges(root: Path) -> None:
     write_target(target_a, source_registry=ambiguous_registry, goal=ambiguous_goal)
     write_target(target_b, source_registry=ambiguous_registry, goal=ambiguous_goal)
     os.environ["LOOPX_RUNTIME_ROOT"] = str(target_a)
-    original_default = route_module.DEFAULT_RUNTIME_ROOT
-    route_module.DEFAULT_RUNTIME_ROOT = target_b
+    original_default = route_module.paths.DEFAULT_RUNTIME_ROOT
+    route_module.paths.DEFAULT_RUNTIME_ROOT = target_b
     try:
         ambiguous = record_operator_gate(
             ambiguous_registry,
@@ -351,7 +353,7 @@ def exercise_route_edges(root: Path) -> None:
             sync_global=True,
         )
     finally:
-        route_module.DEFAULT_RUNTIME_ROOT = original_default
+        route_module.paths.DEFAULT_RUNTIME_ROOT = original_default
         if original_runtime is None:
             os.environ.pop("LOOPX_RUNTIME_ROOT", None)
         else:

@@ -44,6 +44,7 @@ PACKAGED_HOST_SKILL_IDS = [
     "loopx-doc-registry",
     "loopx-benchmark",
     "loopx-self-repair",
+    "loopx-performance-diagnosis",
 ]
 ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS = [
     "loopx",
@@ -292,7 +293,7 @@ def _git_value(root: Path, *args: str) -> str | None:
             ["git", "-C", str(root), *args],
             check=False,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
     except OSError:
         return None

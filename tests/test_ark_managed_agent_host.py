@@ -169,7 +169,7 @@ def test_host_requires_host_managed_loopx_skill_delivery(monkeypatch) -> None:
     assert contract["install_script"] == "scripts/install-local.sh"
     assert (
         contract["no_clone_install_command"] == "curl -fsSL "
-        "https://huangruiteng.github.io/loopx/install.sh"
+        "https://loopx-project.github.io/loopx/install.sh"
         " | env LOOPX_SKILLS_DIR=./.agents/skills "
         "LOOPX_ENTRY_HOST_SURFACE=ark-managed-agent "
         "LOOPX_INSTALL_SLASH_COMMANDS=0 bash"
@@ -502,7 +502,7 @@ def test_fresh_host_reconstructs_frontier_from_durable_loopx_state(
     assert replacement_host["selected_todo"]["todo_id"] == CONTINUITY_TODO_ID
     selected = next(
         item
-        for item in todo_readback["agent_todos"]["items"]
+        for item in todo_readback["todos"]
         if item["todo_id"] == CONTINUITY_TODO_ID
     )
     assert selected["note"] == "phase A validated; resume from the durable frontier"

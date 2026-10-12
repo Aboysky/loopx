@@ -17,6 +17,7 @@ from tests.control_plane.test_quota_settlement_cli import (
     GOAL_ID,
     TODO_ID,
     TURN_ID,
+    _initialize_git_checkout,
     _run_cli,
     _write_fixture,
     _spend_run_count,
@@ -24,10 +25,12 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 def _assert_checkpoint_instructions(rendered: str) -> None:
+    assert "checkpoint-context" in rendered
+    assert "--checkpoint-read-context" in rendered
     assert "same Goal, Agent, Todo/obligation, Turn, and delivery fields" in rendered
     assert "Remove previously executed state-mutation options" in rendered
     for option in (
-        "--next-action", "--autonomous-replan-recorded", "--repair-delta-kind",
+        "--next-action", "--next-action-basis", "--autonomous-replan-recorded", "--repair-delta-kind",
         "--usage-json", "--usage-codex-session",
     ):
         assert option in rendered
@@ -126,7 +129,7 @@ def test_recovery_markdown_preserves_routing_and_error_precedence(decision):
 
 
 @pytest.mark.parametrize("decision", ["unchanged", "patch"])
-def test_same_turn_checkpoint_supplement_is_idempotent(tmp_path: Path, decision: str):
+def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_path: Path, decision: str):
     project, runtime, registry = _write_fixture(tmp_path)
     rc, initial = _run_cli(
         registry,
@@ -210,7 +213,9 @@ def test_same_turn_checkpoint_supplement_is_idempotent(tmp_path: Path, decision:
     state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     original_state = state_path.read_bytes()
     if mutation:
-        assert mutation[1] in original_state.decode("utf-8")
+        assert mutation[1] not in original_state.decode("utf-8")
+        assert first["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
+        assert first["recommended_action_resolution"]["recommended_action"] == mutation[1]
     supplement = (
         (
             "--vision-unchanged-reason",
@@ -229,6 +234,9 @@ def test_same_turn_checkpoint_supplement_is_idempotent(tmp_path: Path, decision:
         assert Path(first["json_path"]).read_bytes() == original_bytes
         assert state_path.read_bytes() == original_state
         assert _spend_run_count(runtime) == 0
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID, *binding, cwd=project)
+    assert rc == 0, context
+    supplement += ("--checkpoint-read-context", context["read_context_id"])
     rc, preview = _run_cli(
         registry, runtime, *args, *supplement, "--dry-run", cwd=tmp_path
     )
@@ -290,6 +298,149 @@ def test_same_turn_checkpoint_supplement_is_idempotent(tmp_path: Path, decision:
         rc, result = _run_cli(registry, runtime, *spend, cwd=project)
         assert rc == 0, result
     assert _spend_run_count(runtime) == 1
+
+
+def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_git_checkout(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    selected_marker = (
+        f"todo_id={TODO_ID} status=open "
+        "task_class=advancement_task action_kind=validate "
+        "-->"
+    )
+    assert selected_marker in state_text
+    turn_id = "turn-checkpoint-open-validator"
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+    rc, guard = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+    assert rc == 0, guard
+    assert guard["decision"] == "run"
+    assert guard["selected_todo"]["todo_id"] == TODO_ID
+
+    delivery = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--classification",
+        "validated_progress",
+        "--progress-scope",
+        "goal",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
+        "--progress-result-class",
+        "advanced",
+        "--progress-surface-id",
+        "surface:checkpoint-recovery",
+        "--progress-probe-kind",
+        "probe:checkpoint-recovery",
+        "--progress-evidence-id",
+        "evidence:checkpoint-recovery",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    mutations = (
+        "--next-action",
+        "Inspect the remaining checkpoint recovery scope.",
+    )
+    rc, first = _run_cli(registry, runtime, *delivery, *mutations, cwd=project)
+    assert rc == 0, first
+    assert first["appended"] is True
+    assert first["vision_checkpoint"]["decision"] == "missing_required"
+
+    checkpoint = first["vision_checkpoint"]
+    assert checkpoint["missing_baseline"] is True
+    assert checkpoint["required_resolution"] == ["write_vision_patch"]
+    instructions = render_state_refresh_markdown(first)
+    _assert_checkpoint_instructions(instructions)
+    assert "No persisted vision baseline is available" in instructions
+    assert "--vision-unchanged-reason" not in instructions
+
+    # A controller may install completion validation before checkpoint repair.
+    # The supplement repairs the existing receipt while the Todo remains open.
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            selected_marker,
+            selected_marker.replace(" -->", " validation_command=pytest -->"),
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    vision = (
+        "--vision-summary",
+        "Continue the accepted checkpoint recovery scope.",
+        "--vision-acceptance",
+        "The exact recovery preserves validation and identity fences.",
+    )
+    rc, rejected = _run_cli(
+        registry, runtime, *delivery, *mutations, *vision, cwd=project
+    )
+    assert rc == 1, rejected
+    assert (
+        rejected["refresh_recovery"]["reason"]
+        == "checkpoint_supplement_must_not_repeat_mutations"
+    )
+
+    wrong_binding = list(delivery)
+    wrong_todo_index = wrong_binding.index(TODO_ID)
+    wrong_binding[wrong_todo_index] = "todo_chain_000000000001"
+    rc, wrong_identity = _run_cli(
+        registry, runtime, *wrong_binding, *vision, cwd=project
+    )
+    assert rc == 1, wrong_identity
+    assert "settlement binding does not match" in wrong_identity["error"]
+
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID, *binding, cwd=project)
+    assert rc == 0, context
+    rc, repaired = _run_cli(registry, runtime, *delivery, *vision,
+        "--checkpoint-read-context", context["read_context_id"], cwd=project)
+    assert rc == 0, repaired
+    assert repaired["appended"] is True
+    assert repaired["refresh_recovery"]["decision"] == "supplement_checkpoint"
+    assert repaired["vision_checkpoint"]["satisfied"] is True
+    assert repaired["settlement_identity"] == first["settlement_identity"]
+
+    rc, conflict = _run_cli(
+        registry,
+        runtime,
+        *delivery,
+        "--vision-summary",
+        "Choose a conflicting recovery path.",
+        cwd=project,
+    )
+    assert rc == 1, conflict
+    assert (
+        conflict["refresh_recovery"]["reason"]
+        == "committed_vision_decision_conflict"
+    )
+    assert _spend_run_count(runtime) == 0
 
 
 def test_invalid_supplement_leaves_original_writeback_intact(tmp_path: Path):

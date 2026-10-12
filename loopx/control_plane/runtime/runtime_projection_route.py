@@ -14,7 +14,8 @@ from ..goals.activation import (
     normalize_goal_activation_state,
 )
 from ...history import load_index, load_registry
-from ...paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from ... import paths
+from ...paths import global_registry_path, resolve_runtime_root
 from ...registry import registry_goals
 
 
@@ -240,7 +241,11 @@ def runtime_projection_candidate_roots(
         configured = str(os.environ.get("LOOPX_RUNTIME_ROOT") or "").strip()
         if configured:
             roots.append(Path(configured).expanduser())
-        roots.append(DEFAULT_RUNTIME_ROOT)
+        # Discovery inspects candidates; it does not select an implicit write
+        # authority. An explicitly routed command must remain usable while the
+        # two machine roots coexist. Duplicate declarations are classified by
+        # resolve_runtime_projection_route rather than hidden by choosing one.
+        roots.extend((paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT))
     else:
         roots.extend(Path(root).expanduser() for root in candidate_roots)
     roots.append(source_runtime_root.expanduser())
@@ -490,6 +495,8 @@ def _route_projection_is_current(
         and row[marker_field].get("runtime_projection_route_id")
         == route_id
         and row[marker_field].get("source_generated_at") == source_generated_at
+        and row.get("json_exists") is True
+        and row.get("markdown_exists") is True
         for row in rows
     )
 
@@ -501,8 +508,10 @@ def _source_routes_for_registry(
     goal_id: str | None,
     activation_state_filter: GoalActivationState | str | None = None,
     source_registry_read_timeout_seconds: float = SOURCE_REGISTRY_READ_TIMEOUT_SECONDS,
+    registry: dict[str, Any] | None = None,
 ) -> list[tuple[Path, Path, str, str | None]]:
-    registry = load_registry(registry_path)
+    if registry is None:
+        registry = load_registry(registry_path)
     is_global = bool(registry.get("registry_role") == "global-local") or _same_path(
         registry_path,
         global_registry_path(runtime_root),
@@ -598,6 +607,7 @@ def collect_runtime_projection_route_diagnostics(
     goal_id: str | None = None,
     activation_state_filter: GoalActivationState | str | None = None,
     source_registry_read_timeout_seconds: float = SOURCE_REGISTRY_READ_TIMEOUT_SECONDS,
+    registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     source_routes = _source_routes_for_registry(
@@ -606,8 +616,10 @@ def collect_runtime_projection_route_diagnostics(
         goal_id=goal_id,
         activation_state_filter=activation_state_filter,
         source_registry_read_timeout_seconds=source_registry_read_timeout_seconds,
+        registry=registry,
     )
-    registry = load_registry(registry_path)
+    if registry is None:
+        registry = load_registry(registry_path)
     registry_is_global = bool(registry.get("registry_role") == "global-local") or _same_path(
         registry_path,
         global_registry_path(runtime_root),
@@ -694,6 +706,13 @@ def collect_runtime_projection_route_diagnostics(
     }
     return {
         "schema_version": RUNTIME_PROJECTION_ROUTE_DIAGNOSTICS_SCHEMA_VERSION,
+        "registry": str(registry_path.resolve()),
+        "runtime_root": str(runtime_root.resolve()),
+        "goal_filter": goal_id,
+        "activation_state_filter": (
+            normalize_goal_activation_state(activation_state_filter).value
+            if activation_state_filter is not None else None
+        ),
         "available": bool(items),
         "goal_count": len(items),
         "healthy": not any(

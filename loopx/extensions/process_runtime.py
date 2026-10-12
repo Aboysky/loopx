@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ class CappedProcessResult:
     failure_kind: str | None = None
 
 
-def _wait_for_process(process: subprocess.Popen[bytes], timeout: float) -> bool:
+def _wait_for_process(process: subprocess.Popen[bytes] | subprocess.Popen[str], timeout: float) -> bool:
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -30,24 +31,61 @@ def _wait_for_process(process: subprocess.Popen[bytes], timeout: float) -> bool:
     return True
 
 
-def _terminate_posix_process_group(process: subprocess.Popen[bytes]) -> None:
+def _darwin_owned_group_has_exited(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> bool:
+    # Darwin can report EPERM rather than ESRCH for a now-empty process group.
+    # A reaped leader alone does not prove its descendants have exited.
+    if sys.platform != "darwin" or process.poll() is None:
+        return False
+    try:
+        snapshot = subprocess.run(
+            ["/bin/ps", "-axo", "pgid="], capture_output=True, text=True,
+            encoding="utf-8", check=False, timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return False
+    groups = snapshot.stdout.split()
+    return (
+        snapshot.returncode == 0
+        and bool(groups)
+        and all(group.isdecimal() for group in groups)
+        and str(process.pid) not in groups
+    )
+
+
+def _terminate_posix_process_group(
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float
+) -> None:
     process_group_id = process.pid
     try:
-        os.killpg(process_group_id, signal.SIGTERM)
+        os.killpg(
+            process_group_id,
+            signal.SIGKILL if grace_seconds <= 0 else signal.SIGTERM,
+        )
     except ProcessLookupError:
         process.wait()
         return
-    _wait_for_process(process, _PROCESS_TERMINATE_GRACE_SECONDS)
-    try:
-        os.killpg(process_group_id, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    except PermissionError:
+        if not _darwin_owned_group_has_exited(process):
+            raise
+        process.wait()
+        return
+    if grace_seconds > 0:
+        _wait_for_process(process, grace_seconds)
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if not _darwin_owned_group_has_exited(process):
+                raise
     if process.poll() is None:
         process.kill()
         process.wait()
 
 
-def _terminate_windows_process_tree(process: subprocess.Popen[bytes]) -> None:
+def _terminate_windows_process_tree(
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float
+) -> None:
     if process.poll() is not None:
         return
     subprocess.run(
@@ -56,7 +94,7 @@ def _terminate_windows_process_tree(process: subprocess.Popen[bytes]) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if _wait_for_process(process, _PROCESS_TERMINATE_GRACE_SECONDS):
+    if _wait_for_process(process, grace_seconds):
         return
     subprocess.run(
         ["taskkill", "/PID", str(process.pid), "/T", "/F"],
@@ -67,17 +105,25 @@ def _terminate_windows_process_tree(process: subprocess.Popen[bytes]) -> None:
     process.wait()
 
 
-def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+def terminate_process_tree(
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float
+) -> None:
+    """Stop an owned, previously isolated process tree and reap its leader.
+
+    POSIX callers must launch with ``start_new_session=True``. Zero grace sends
+    one force-kill signal, not TERM followed by KILL against an exiting group.
+    This is OS transport only; callers own deadlines and failure decisions.
+    """
     if os.name == "posix":
-        _terminate_posix_process_group(process)
+        _terminate_posix_process_group(process, grace_seconds)
         return
     if os.name == "nt":  # pragma: no cover - exercised on Windows hosts.
-        _terminate_windows_process_tree(process)
+        _terminate_windows_process_tree(process, grace_seconds)
         return
     if process.poll() is not None:  # pragma: no cover - unsupported platform fallback.
         return
     process.terminate()
-    if not _wait_for_process(process, _PROCESS_TERMINATE_GRACE_SECONDS):
+    if not _wait_for_process(process, grace_seconds):
         process.kill()
         process.wait()
 
@@ -86,18 +132,14 @@ def run_capped_process(
     argv: Sequence[str],
     *,
     stdin: bytes,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     output_limit_bytes: int,
     env: Mapping[str, str] | None = None,
     cwd: str | Path | None = None,
+    termination_grace_seconds: float = _PROCESS_TERMINATE_GRACE_SECONDS,
 ) -> CappedProcessResult:
     """Run a provider while bounding both output streams during execution."""
 
-    process_options: dict[str, object] = {}
-    if os.name == "posix":
-        process_options["start_new_session"] = True
-    elif os.name == "nt":  # pragma: no cover - exercised on Windows hosts.
-        process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     process = subprocess.Popen(
         list(argv),
         stdin=subprocess.PIPE,
@@ -106,9 +148,14 @@ def run_capped_process(
         bufsize=0,
         env=dict(env) if env is not None else None,
         cwd=cwd,
-        **process_options,
+        start_new_session=os.name == "posix",
+        creationflags=(
+            int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"))
+            if os.name == "nt" else 0
+        ),
     )
-    assert process.stdin is not None
+    stdin_stream = process.stdin
+    assert stdin_stream is not None
     assert process.stdout is not None
     assert process.stderr is not None
 
@@ -144,12 +191,12 @@ def run_capped_process(
 
     def write_stdin() -> None:
         try:
-            process.stdin.write(stdin)
+            stdin_stream.write(stdin)
         except (BrokenPipeError, OSError, ValueError):
             pass
         finally:
             try:
-                process.stdin.close()
+                stdin_stream.close()
             except (OSError, ValueError):
                 pass
 
@@ -177,26 +224,31 @@ def run_capped_process(
     for thread in threads:
         thread.start()
 
-    deadline = time.monotonic() + timeout_seconds
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     timed_out = False
-    while process.poll() is None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            timed_out = True
-            _terminate_process_tree(process)
-            break
-        if limit_event.wait(timeout=min(0.05, remaining)):
-            _terminate_process_tree(process)
-            break
+    try:
+        while process.poll() is None:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                timed_out = True
+                terminate_process_tree(process, termination_grace_seconds)
+                break
+            if limit_event.wait(timeout=0.05 if remaining is None else min(0.05, remaining)):
+                terminate_process_tree(process, termination_grace_seconds)
+                break
+    except BaseException:
+        terminate_process_tree(process, termination_grace_seconds)
+        raise
+    finally:
+        for thread in threads:
+            thread.join(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+        for stream in (process.stdout, process.stderr):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
 
     returncode = process.wait()
-    for thread in threads:
-        thread.join(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
-    for stream in (process.stdout, process.stderr):
-        try:
-            stream.close()
-        except (OSError, ValueError):
-            pass
     return CappedProcessResult(
         returncode=returncode,
         stdout=bytes(stdout),

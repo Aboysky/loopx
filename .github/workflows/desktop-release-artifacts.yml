@@ -23,11 +23,12 @@ permissions:
 
 concurrency:
   group: desktop-release-artifacts-${{ github.event.release.tag_name || inputs.tag || github.ref }}
-  cancel-in-progress: false
+  # Superseded PR validation may stop; publication retains its serialized lane.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
-    if: github.repository == 'huangruiteng/loopx'
+    if: github.repository == 'loopx-project/loopx'
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30

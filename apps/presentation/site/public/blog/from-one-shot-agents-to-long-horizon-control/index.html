@@ -6,22 +6,22 @@
   <meta name="theme-color" content="#fafafa">
   <title>From one-shot agents to long-horizon control · LoopX</title>
   <meta name="description" content="How LoopX uses goals, a state kernel, and Effect Programs to carry work across sessions, preserve human judgment, and recover from interruptions.">
-  <link rel="canonical" href="https://huangruiteng.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
-  <link rel="alternate" hreflang="en" href="https://huangruiteng.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
-  <link rel="alternate" hreflang="zh-CN" href="https://huangruiteng.github.io/loopx/blog/zh/from-one-shot-agents-to-long-horizon-control/">
-  <link rel="alternate" hreflang="x-default" href="https://huangruiteng.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
+  <link rel="canonical" href="https://loopx-project.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
+  <link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
+  <link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/from-one-shot-agents-to-long-horizon-control/">
+  <link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="LoopX">
   <meta property="og:locale" content="en_US">
   <meta property="og:title" content="From one-shot agents to long-horizon control">
   <meta property="og:description" content="How LoopX uses goals, a state kernel, and Effect Programs to carry work across sessions, preserve human judgment, and recover from interruptions.">
-  <meta property="og:url" content="https://huangruiteng.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
+  <meta property="og:url" content="https://loopx-project.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/">
   <meta name="twitter:card" content="summary_large_image">
-  <meta property="og:image" content="https://huangruiteng.github.io/loopx/blog/assets/long-horizon-control-en.png">
+  <meta property="og:image" content="https://loopx-project.github.io/loopx/blog/assets/long-horizon-control-en.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="From one-shot agents to long-horizon control: maximize agent output, minimize human attention.">
-  <meta name="twitter:image" content="https://huangruiteng.github.io/loopx/blog/assets/long-horizon-control-en.png">
+  <meta name="twitter:image" content="https://loopx-project.github.io/loopx/blog/assets/long-horizon-control-en.png">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="../../blog/blog.css">
 </head>
@@ -77,12 +77,10 @@
 <p>A model has a finite working context. Summarization and subagents can help manage it, but a summary alone cannot reliably enforce ownership, concurrency, permissions, or idempotency. A project that crosses sessions needs durable answers to a different set of questions:</p>
 <ul><li>What is the current objective, and what would count as acceptance?</li><li>Which facts and decisions are still current?</li><li>Who is responsible for each piece of work, and which actions are authorized?</li><li>Did an external operation actually happen?</li><li>Is another turn worth its cost, and what should happen after it?</li></ul>
 <p>These questions define the semantic control plane. It owns durable boundaries, authority, acceptance, and state transitions; it does not take every domain judgment away from the model. A useful way to locate it in the agent stack is to separate four kinds of recovery.</p>
-<figure class="stack"><ol>
-<li><b>04 · Semantic control plane</b><span>Goals, evidence, authority, acceptance, replanning</span></li>
-<li><b>03 · Work coordination</b><span>Todos, claims, leases, handoffs</span></li>
-<li><b>02 · Durable workflow</b><span>Steps, retries, waiting, recovery</span></li>
-<li><b>01 · Execution substrate</b><span>Processes, containers, sessions, workspaces</span></li>
-</ol><figcaption>Each layer preserves a different part of the work. They can be composed.</figcaption></figure>
+<figure class="architecture-figure" id="architecture-position" aria-labelledby="position-caption">
+<div class="architecture-viewport" role="region" aria-label="Where LoopX fits in agentic software" tabindex="0"><a href="../images/long-horizon-control/position-en.svg" target="_blank" rel="noopener"><img src="../images/long-horizon-control/position-en.svg" alt="Where LoopX fits in agentic software" loading="lazy" decoding="async" width="1280" height="850" /></a></div>
+<figcaption id="position-caption"><b>A / Where LoopX fits in agentic software</b> — LoopX and the agent/harness exchange boundaries and evidence. Workflow and runtime layers recover different kinds of state. <a href="../images/long-horizon-control/position-en.svg" target="_blank" rel="noopener">Open full-size diagram ↗</a><span class="architecture-hint">Scroll on narrow screens, or open the full-size diagram.</span></figcaption>
+</figure>
 <p>A runtime restores the execution environment. LoopX preserves what the agent is doing, why it is doing it, what has been proved, and whether the next step is permitted. Codex threads, Claude Code sessions, and CLI runners can act as replaceable workers around that shared state. “Worker” describes the execution boundary, not a model with no judgment: the model still interprets goals, forms hypotheses, and chooses routes within the boundary.</p>
 <p>Four terms keep the accounting precise:</p>
 <pre><code>Turn       = a bounded execution window
@@ -103,14 +101,6 @@ Progress   = a durable transition relevant to acceptance</code></pre>
 <tr><td>Shared loop</td><td>Accept or reject state changes and make them available to the next turn</td><td>Submit a verifiable proposal and revise the route when new facts arrive</td></tr>
 </tbody></table></div>
 <p>An accepted transition is not the Kernel reinventing the model’s judgment. It is a proposal that has passed capability validation, authority checks, and identity checks becoming durable fact; the insight itself still comes from the model, domain tools, and human judgment.</p>
-<pre><code>Kernel provides the current boundary and runnable space
-        ↓
-Model reasons within that space and proposes the next step
-        ↓
-Capability / provider produces facts and readback
-        ↓
-Kernel validates and accepts or rejects the durable transition
-        ↺</code></pre>
 <p>“A stateful distributed job system” is therefore a useful metaphor for lifecycle, recovery, and settlement boundaries, not a central planner that thinks on the model’s behalf. The model is neither the sole owner allowed to mutate authority nor a dumb worker that only follows a script; it is the semantic proposer in a shared decision loop.</p>
 
 </section>
@@ -128,15 +118,10 @@ Kernel validates and accepts or rejects the durable transition
   → quota and the current runnable frontier</code></pre>
 <p>Human decisions belong in the same durable model. “Wait for my review” or “This route may continue” has a particular scope. The <a href="https://github.com/huangruiteng/loopx/blob/41a35880fc63ed8b51696e08ec1f17b5369b1a4b/docs/reference/protocols/decision-scope-v0.md">Decision Scope contract</a> binds that authority to an action, lane, goal, or project. An independent authorized task can continue while one path waits.</p>
 <p>Completion also needs an explicit boundary. Closing a Todo supplies evidence about one piece of work; it does not automatically satisfy the goal. If the runnable frontier is exhausted while acceptance remains open, the control plane needs a new route or an evidence-backed explanation of why no follow-up is appropriate.</p>
-<figure class="diagram" aria-labelledby="truth-caption">
-<p class="diagram-label">01 / A shared source of truth</p>
-<div class="diagram-node"><b>Human goals and judgment</b><span>Acceptance criteria · scoped decisions</span></div>
-<div class="connector" aria-hidden="true">↓</div>
-<div class="diagram-node kernel"><b>Canonical state / kernel</b><span>Goal · evidence · authority · current route</span></div>
-<div class="diagram-branch"><span>↓ Selection and authority</span><span>↓ Read-only projection</span></div>
-<div class="diagram-pair"><div class="diagram-node"><b>Quota → agent → capability</b><span>Bounded work, followed by provider readback</span></div><div class="diagram-node"><b>Status / Dashboard</b><span>Displays facts; grants no authority of its own</span></div></div>
-<div class="return-path">↳ Observation → validated proposal → accepted kernel transition ↺</div>
-<figcaption id="truth-caption">Work returns to the same source of truth. A dashboard label or an agent narrative cannot substitute for an accepted transition.</figcaption></figure>
+<figure class="architecture-figure" id="architecture-components" aria-labelledby="components-caption">
+<div class="architecture-viewport" role="region" aria-label="Semantic control-plane components and feedback" tabindex="0"><a href="../images/long-horizon-control/components-en.svg" target="_blank" rel="noopener"><img src="../images/long-horizon-control/components-en.svg" alt="Semantic control-plane components and feedback" loading="lazy" decoding="async" width="1200" height="1020" /></a></div>
+<figcaption id="components-caption"><b>B / Semantic control-plane components and feedback</b> — Goals, scope, budget and coordination govern execution; validated evidence supports transitions. Edges show responsibilities and information flow; each domain retains state ownership. <a href="../images/long-horizon-control/components-en.svg" target="_blank" rel="noopener">Open full-size diagram ↗</a><span class="architecture-hint">Scroll on narrow screens, or open the full-size diagram.</span></figcaption>
+</figure>
 <p>In the inference example, “wait before publishing” applies to the release. It does not erase the authorization to analyze profiles or validate compatibility. A useful projection can show three facts together: a kernel candidate meets its local checks, the service-level latency target remains unproved, and publication awaits a decision. A single “blocked” label would hide runnable analysis; “done” would hide the unclosed acceptance gap.</p>
 
 </section>
@@ -197,6 +182,10 @@ Authority: bounded experiments allowed; publication remains gated</code></pre>
 <h2>6. Knowing when to work, wait, and replan</h2>
 <h3>Quota compiles an interaction contract, not a full domain plan</h3>
 <p><code>quota should-run</code> considers health and safety, operator gates, evidence waits, and focus waits before compute budget. It combines the selected work, capabilities, workspace, and scheduler state into an interaction contract. It decides whether work can happen now, whether to wait, whether a person is needed, and whether repair is required, while constraining the current turn; it does not choose the model’s technical hypothesis or complete route. See <a href="https://github.com/huangruiteng/loopx/blob/41a35880fc63ed8b51696e08ec1f17b5369b1a4b/docs/quota-allocation.md">quota allocation</a>.</p>
+<figure class="architecture-figure" id="architecture-controller" aria-labelledby="controller-caption">
+<div class="architecture-viewport" role="region" aria-label="Long-horizon controller routing" tabindex="0"><a href="../images/long-horizon-control/controller-en.svg" target="_blank" rel="noopener"><img src="../images/long-horizon-control/controller-en.svg" alt="Long-horizon controller routing" loading="lazy" decoding="async" width="1280" height="1190" /></a></div>
+<figcaption id="controller-caption"><b>C / Long-horizon controller routing</b> — Each iteration selects a route from a validated receipt and a fresh decision. Stopping an iteration does not terminate the Goal; dashed edges represent reassessment by the outer loop. <a href="../images/long-horizon-control/controller-en.svg" target="_blank" rel="noopener">Open full-size diagram ↗</a><span class="architecture-hint">Scroll on narrow screens, or open the full-size diagram.</span></figcaption>
+</figure>
 <p>Validated durable writeback precedes quota spend. Quiet skips, preflight failures, and dry runs do not count as delivery spend. A spend record must remain attributable to the work just completed, even if a refresh has already selected a different next action.</p>
 <h3>A small planning horizon around the current task</h3>
 <p>A typed planning inventory supports several views. The action portfolio offers a few current candidates. The planning horizon shows nearby successors, dependencies, resume links, and acceptance gaps. On-demand Todo detail expands the cold path, while a task graph supports diagnosis.</p>
@@ -315,7 +304,7 @@ loopx status</code></pre>
 </ul>
 </section>
 
-  <p class="edition">Public blog edition. Implementation references are pinned to <a href="https://github.com/huangruiteng/loopx/tree/41a35880fc63ed8b51696e08ec1f17b5369b1a4b">41a3588</a>; use the current documentation for operating instructions.</p>
+  <p class="edition">Public blog edition. Original implementation references are pinned to <a href="https://github.com/huangruiteng/loopx/tree/41a35880fc63ed8b51696e08ec1f17b5369b1a4b">41a3588</a>; architecture figures A–C refer to <a href="https://github.com/huangruiteng/loopx/tree/503991dd216211db6427047dc0c958d411128771">503991d</a>. Use the current documentation for operating instructions.</p>
   </article>
 </div>
 </main>

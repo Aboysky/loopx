@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path
+from .paths import global_registry_path, select_default_runtime_root
 from .registry import registry_goals
 
 
@@ -21,7 +21,7 @@ def _run_git(project: Path, *args: str) -> subprocess.CompletedProcess[str] | No
     try:
         return subprocess.run(
             ["git", "-C", str(project), *args],
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
@@ -65,7 +65,7 @@ def _primary_repo_from_common_dir(common_dir: Path | None) -> Path | None:
 
 def _default_global_registry_path() -> Path:
     runtime_env = os.environ.get("LOOPX_RUNTIME_ROOT")
-    runtime_root = Path(runtime_env).expanduser() if runtime_env else DEFAULT_RUNTIME_ROOT
+    runtime_root = Path(runtime_env).expanduser() if runtime_env else select_default_runtime_root()
     return global_registry_path(runtime_root)
 
 

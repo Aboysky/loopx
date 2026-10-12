@@ -375,7 +375,7 @@ def main() -> int:
             check=False,
         )
         assert unexplained_inline_drift.returncode == 1, unexplained_inline_drift
-        assert "provide goal_path_delta_v0 with outcome=replan" in payload(
+        assert "provide path_delta with schema_version=goal_path_delta_v0 and outcome=replan" in payload(
             unexplained_inline_drift
         )["error"], unexplained_inline_drift.stdout
 
@@ -391,7 +391,7 @@ def main() -> int:
             check=False,
         )
         assert unexplained_drift.returncode == 1, unexplained_drift
-        assert "provide goal_path_delta_v0 with outcome=replan" in payload(
+        assert "provide path_delta with schema_version=goal_path_delta_v0 and outcome=replan" in payload(
             unexplained_drift
         )["error"], unexplained_drift.stdout
 
@@ -513,12 +513,6 @@ def main() -> int:
             registry_path,
             runtime,
             inline_vision_args=["--vision-unchanged-reason", "x" * 241],
-            extra_args=[
-                "--next-action",
-                "This rejected refresh must not replace the durable action.",
-                "--progress-scope",
-                "goal",
-            ],
             dry_run=False,
             check=False,
         )
@@ -609,6 +603,10 @@ def main() -> int:
         assert "limit is 80" in long_todo["error"], long_todo
         assert "suggested compact value" in long_todo["error"], long_todo
 
+        from loopx.todos import add_goal_todo
+        add_goal_todo(registry_path=registry_path, goal_id=GOAL_ID, role="agent",
+            text="Validate the scoped delivery evidence.", task_class="advancement_task",
+            claimed_by=AGENT_ID)
         local_next_action = "/Users/example/private/raw-task-note"
         private_next_action_result = payload(
             run_cli(
@@ -624,12 +622,11 @@ def main() -> int:
             )
         )
         assert private_next_action_result["ok"] is True, private_next_action_result
-        assert private_next_action_result["active_state_next_action_update"][
-            "next_action"
+        assert private_next_action_result["recommended_action_resolution"][
+            "recommended_action"
         ] == local_next_action, private_next_action_result
-        assert private_next_action_result["active_state_next_action_update"][
-            "would_update"
-        ] is True, private_next_action_result
+        assert private_next_action_result["recommended_action_source"] == "agent_lane_step"
+        assert "active_state_next_action_update" not in private_next_action_result
 
         secret_next_action_result = run_cli(
             registry_path,

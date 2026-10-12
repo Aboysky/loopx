@@ -112,6 +112,7 @@ def register_heartbeat_control_commands(
             "generic_cli",
             "claude_code",
             "kunluncode",
+            "kiro_cli",
             "local_scheduler",
         ],
         help="Host surface embedded in the generated quota guard.",
@@ -154,6 +155,11 @@ def register_heartbeat_control_commands(
         "--thin",
         action="store_true",
         help="Generate the thinnest generic dispatcher body for trusted agents that inspect LoopX state themselves.",
+    )
+
+    heartbeat_prompt_parser.add_argument(
+        "--decision-output-root",
+        help="Opt into the short TurnEnvelope with full local captures; requires thin mode and an explicit host-owned Turn ID.",
     )
 
     heartbeat_prequota_parser = subparsers.add_parser(

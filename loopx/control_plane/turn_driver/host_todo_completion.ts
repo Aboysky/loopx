@@ -1,3 +1,4 @@
+import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { createHash } from "node:crypto";
 
 import {
@@ -8,6 +9,7 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { normalizeVisionUnchangedReason } from "../goals/vision_checkpoint.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { projectMcpInteraction } from "./host_interaction.ts";
 import {
   requireBoolean,
@@ -26,7 +28,7 @@ export const HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION =
 export const HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION =
   "host_adapter_todo_settlement_v0";
 
-const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "project_guard"] as const;
+const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "vision_context", "project_guard"] as const;
 const STEP_KINDS = [
   "guard",
   "lifecycle_completion",
@@ -53,6 +55,8 @@ interface HostTodoCompletionRequest {
   no_follow_up: boolean;
   vision_path: string | null;
   vision_unchanged_reason: string | null;
+  checkpoint_read_context_id: string | null;
+  goal_instance_id: string | null;
   provider_outcomes: readonly ProviderOutcome[];
 }
 
@@ -129,19 +133,41 @@ function decodeRequest(
     ? null : requireNonEmptyString(value[field], field);
   const visionPath = optionalText("vision_path");
   const unchanged = normalizeVisionUnchangedReason(optionalText("vision_unchanged_reason"));
+  const readContextId = optionalText("checkpoint_read_context_id");
   if (visionPath && unchanged) {
     throw new EffectRuntimeRequestError("choose a vision patch or an unchanged reason, not both");
   }
-  if ((visionPath || unchanged || phase === "vision_refresh") &&
+  if ((visionPath || unchanged || readContextId || phase === "vision_refresh" || phase === "vision_context") &&
       value.schema_version !== HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION) {
     throw new EffectRuntimeRequestError("host vision authoring requires v1");
   }
   if (phase === "vision_refresh" && !visionPath && !unchanged) {
     throw new EffectRuntimeRequestError("vision refresh requires an authored decision");
   }
+  if (phase === "vision_context" && (visionPath || unchanged || readContextId)) {
+    throw new EffectRuntimeRequestError("vision context reads cannot submit a decision or receipt");
+  }
+  if (readContextId && phase !== "vision_refresh") {
+    throw new EffectRuntimeRequestError("checkpoint read context belongs only to vision recovery");
+  }
+  const goalId = requireNonEmptyString(value.goal_id, "goal_id");
+  const parsedGoalRef = value.goal_ref === undefined
+    ? null
+    : parseExactGoalRef(value.goal_ref);
+  if (parsedGoalRef?.kind === "invalid") {
+    throw new EffectRuntimeRequestError("host Todo completion GoalRef is malformed");
+  }
+  if (
+    parsedGoalRef?.kind === "parsed"
+    && parsedGoalRef.value.goalId.value !== goalId
+  ) {
+    throw new EffectRuntimeRequestError(
+      "host Todo completion GoalRef does not match goal_id",
+    );
+  }
   const request: HostTodoCompletionRequest = {
     phase,
-    goal_id: requireNonEmptyString(value.goal_id, "goal_id"),
+    goal_id: goalId,
     agent_id: requireNonEmptyString(value.agent_id, "agent_id"),
     todo_id: todoId,
     runtime_profile: requireNonEmptyString(
@@ -167,6 +193,10 @@ function decodeRequest(
     no_follow_up: requireBoolean(value.no_follow_up, "no_follow_up"),
     vision_path: visionPath,
     vision_unchanged_reason: unchanged,
+    checkpoint_read_context_id: readContextId,
+    goal_instance_id: parsedGoalRef?.kind === "parsed"
+      ? parsedGoalRef.value.goalInstanceId.value
+      : null,
     provider_outcomes: [],
   };
   if (phase === "finalize") {
@@ -176,11 +206,17 @@ function decodeRequest(
 }
 
 function turnInstanceId(request: HostTodoCompletionRequest): string {
+  const identityParts = request.goal_instance_id === null
+    ? [request.goal_id, request.agent_id, request.todo_id]
+    : [
+      "loopx_host_todo_completion_exact_v1",
+      request.goal_id,
+      request.goal_instance_id,
+      request.agent_id,
+      request.todo_id,
+    ];
   const digest = createHash("sha256")
-    .update(
-      [request.goal_id, request.agent_id, request.todo_id].join("\0"),
-      "utf8",
-    )
+    .update(identityParts.join("\0"), "utf8")
     .digest("hex")
     .slice(0, 32);
   return `mcp-${digest}`;
@@ -334,10 +370,14 @@ function writebackArgs(request: HostTodoCompletionRequest, identity: JsonObject)
     "--classification", "mcp_completed_turn_writeback",
     "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
     "--todo-id", request.todo_id, "--turn-instance-id", String(identity.turn_instance_id),
+    ...(request.goal_instance_id
+      ? ["--goal-instance-id", request.goal_instance_id]
+      : []),
     "--completion-todo-id", request.todo_id, "--completion-turn-key", String(identity.effect_id),
     "--no-global-sync", "--suppress-external-sinks",
     ...(request.vision_path ? ["--agent-vision-json", request.vision_path] : []),
     ...(request.vision_unchanged_reason ? ["--vision-unchanged-reason", request.vision_unchanged_reason] : []),
+    ...(request.checkpoint_read_context_id ? ["--checkpoint-read-context", request.checkpoint_read_context_id] : []),
   ];
 }
 
@@ -357,10 +397,16 @@ function providerSteps(
     request.todo_id,
     "--turn-instance-id",
     turnId,
+    ...(request.goal_instance_id
+      ? ["--goal-instance-id", request.goal_instance_id]
+      : []),
   ];
   const lifecycleArgs = request.completion_args.filter(
     (arg) => arg !== "--no-follow-up",
   );
+  if (request.goal_instance_id) {
+    lifecycleArgs.push("--goal-instance-id", request.goal_instance_id);
+  }
   const steps: ProviderStep[] = [
     {
       step_kind: "guard",
@@ -406,6 +452,9 @@ function providerSteps(
         request.todo_id,
         "--turn-instance-id",
         turnId,
+        ...(request.goal_instance_id
+          ? ["--goal-instance-id", request.goal_instance_id]
+          : []),
       ],
       legacy_args: null,
       continue_when: request.no_follow_up
@@ -416,7 +465,14 @@ function providerSteps(
   if (request.no_follow_up) {
     steps.push({
       step_kind: "terminal_closeout",
-      args: [...request.completion_args, "--turn-instance-id", turnId],
+      args: [
+        ...request.completion_args,
+        "--turn-instance-id",
+        turnId,
+        ...(request.goal_instance_id
+          ? ["--goal-instance-id", request.goal_instance_id]
+          : []),
+      ],
       legacy_args: null,
       continue_when: null,
     });
@@ -590,7 +646,7 @@ function guardSelection(value: string): GuardSelection {
   }
   if (
     guard.should_run === false &&
-    guard.effective_action === "terminal_no_followup"
+    guard.effective_action === EffectiveAction.TERMINAL_NO_FOLLOWUP
   ) {
     return {
       state: "terminal_no_selection",
@@ -965,6 +1021,17 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
   const request = decodeRequest(value, phase);
   if (phase === "finalize") return finalize(request);
   const { payload: identity } = expectedIdentity(request);
+  if (phase === "vision_context") {
+    return {
+      schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION,
+      phase, identity, args: ["checkpoint-context", "--goal-id", request.goal_id,
+        "--agent-id", request.agent_id, "--todo-id", request.todo_id,
+        "--turn-instance-id", String(identity.turn_instance_id),
+        ...(request.goal_instance_id
+          ? ["--goal-instance-id", request.goal_instance_id]
+          : [])],
+    };
+  }
   if (phase === "vision_refresh") {
     return {
       schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION,

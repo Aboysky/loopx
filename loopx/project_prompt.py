@@ -4,7 +4,15 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from .bootstrap import default_goal_id
+from .control_plane.projects.identity import default_goal_id
+from .control_plane.projects.registry_codec import load_registry
+from .paths import (
+    registered_goal_state_file,
+    rel_or_abs,
+    resolve_runtime_root,
+    shell_selected_global_registry,
+)
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     SchedulerRuntimeProfile,
@@ -19,7 +27,6 @@ DEFAULT_HANDOFF_DOMAIN = "<DOMAIN>"
 DEFAULT_HANDOFF_ADAPTER_KIND = "read_only_project_map_v0"
 DEFAULT_HANDOFF_ADAPTER_STATUS = "connected-read-only"
 DEFAULT_HANDOFF_NEXT_PROBE = "(omit --next-probe until a read-only pre-tick command exists)"
-SHARED_GLOBAL_REGISTRY = '"$HOME/.codex/loopx/registry.global.json"'
 CODEX_CLI_VISIBLE_SCHEDULER_CONTEXT = {
     "host_surface": "codex_cli",
     "scheduler_owner": "agent_cli_loop",
@@ -41,17 +48,20 @@ def render_cli_command_prefix(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
 ) -> str:
     prefix = shell_arg(cli_bin)
     if runtime_root is not None:
         prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
+    if registry_path is not None:
+        prefix += f" --registry {shell_arg(str(registry_path))}"
     return prefix
 
 
 def _render_global_registry_arg(runtime_root: str | Path | None) -> str:
     if runtime_root is not None:
         return ""
-    return f"--registry {SHARED_GLOBAL_REGISTRY} "
+    return f"--registry {shell_selected_global_registry()} "
 
 
 def render_goal_start_bootstrap_command(
@@ -72,9 +82,7 @@ def render_goal_start_bootstrap_command(
         f"  --goal-id {shell_arg(goal_id)} \\",
         f"  --objective {shell_arg(objective)} \\",
         f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
-        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)} \\",
-        "  --no-onboarding-scan \\",
-        "  --codex-app-heartbeat ask",
+        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)}",
     ]
     if display_name:
         lines.insert(-1, f"  --display-name {shell_arg(display_name)} \\")
@@ -164,6 +172,7 @@ def render_quota_guard_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
     runtime_profile: str | None = None,
@@ -200,10 +209,10 @@ def render_quota_guard_command(
     else:
         turn_arg = ""
     registry_arg = (
-        _render_global_registry_arg(runtime_root) if include_shared_registry else ""
+        _render_global_registry_arg(runtime_root) if include_shared_registry and registry_path is None else ""
     )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} --format json "
         f"{registry_arg}"
         f"quota should-run --goal-id {shell_arg(goal_id)}{agent_arg}"
         f"{capability_args}{scheduler_args}{turn_arg}"
@@ -216,14 +225,15 @@ def render_quota_spend_command(
     source: str = "adapter",
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
 ) -> str:
     agent_arg = f" --agent-id {shell_arg(agent_id)}" if agent_id else ""
     capability_args = render_available_capability_args(available_capabilities)
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
-        f"{_render_global_registry_arg(runtime_root)}"
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} --format json "
+        f"{_render_global_registry_arg(runtime_root) if registry_path is None else ''}"
         "quota spend-slot "
         f"--goal-id {shell_arg(goal_id)} "
         f"--slots 1 --source {shell_arg(source)} --execute{agent_arg}{capability_args}"
@@ -235,6 +245,7 @@ def render_refresh_state_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     project: str | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
@@ -261,7 +272,7 @@ def render_refresh_state_command(
         else ""
     )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} "
         f"refresh-state --goal-id {shell_arg(goal_id)}"
         f"{project_arg}{classification_arg}{scale_arg}{outcome_arg}{agent_arg}{scope_arg}"
     )
@@ -272,6 +283,7 @@ def render_accountable_progress_refresh_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
     classification: str = "<PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
@@ -282,6 +294,7 @@ def render_accountable_progress_refresh_command(
         goal_id,
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
         agent_id=agent_id,
         progress_scope=progress_scope,
         classification=classification,
@@ -370,10 +383,11 @@ def render_connect_command(
     allowed_domains: list[str],
     write_scope: list[str],
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
 ) -> str:
     lines = [
         f"cd {shell_arg(project)}",
-        f"{shell_arg(cli_bin)} connect \\",
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} connect \\",
         f"  --goal-id {shell_arg(goal_id)} \\",
         f"  --objective {shell_arg(objective)} \\",
         f"  --domain {shell_arg(domain)} \\",
@@ -416,6 +430,21 @@ def build_new_project_prompt(
     resolved_objective = objective or DEFAULT_HANDOFF_OBJECTIVE
     resolved_domain = domain or DEFAULT_HANDOFF_DOMAIN
     resolved_next_probe = next_probe or DEFAULT_HANDOFF_NEXT_PROBE
+    project_registry_path = project.expanduser() / ".loopx" / "registry.json"
+    existing_registry = (
+        load_registry(project_registry_path)
+        if project_registry_path.is_file()
+        else None
+    )
+    declared_runtime_root = (
+        str(resolve_runtime_root(existing_registry, registry_path=project_registry_path))
+        if isinstance(existing_registry, dict) and existing_registry.get("common_runtime_root")
+        else None
+    )
+    active_state_path = rel_or_abs(
+        registered_goal_state_file(project.expanduser(), resolved_goal_id, existing_registry),
+        project.expanduser(),
+    )
     allowed_domains = allowed_domains or []
     write_scope = write_scope or []
     connect_command = render_connect_command(
@@ -431,22 +460,25 @@ def build_new_project_prompt(
         allowed_domains=allowed_domains,
         write_scope=write_scope,
         cli_bin="loopx",
+        runtime_root=declared_runtime_root,
     )
     quota_guard_command = render_quota_guard_command(
         resolved_goal_id,
+        runtime_root=declared_runtime_root,
         scheduler_execution_context=(
             GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT
         ),
     )
-    quota_spend_command = render_quota_spend_command(resolved_goal_id)
-    refresh_command = render_refresh_state_command(resolved_goal_id)
+    quota_spend_command = render_quota_spend_command(resolved_goal_id, runtime_root=declared_runtime_root)
+    refresh_command = render_refresh_state_command(resolved_goal_id, runtime_root=declared_runtime_root)
     progress_refresh_command = render_accountable_progress_refresh_command(
-        resolved_goal_id
+        resolved_goal_id, runtime_root=declared_runtime_root
     )
     prompt = render_prompt_text(
         project=project_text,
         goal_doc=goal_doc_text,
         goal_id=resolved_goal_id,
+        active_state_path=active_state_path,
         objective=resolved_objective,
         domain=resolved_domain,
         adapter_kind=adapter_kind,
@@ -458,7 +490,7 @@ def build_new_project_prompt(
         quota_spend_command=quota_spend_command,
         refresh_command=refresh_command,
         progress_refresh_command=progress_refresh_command,
-        cli_bin="loopx",
+        cli_bin=render_cli_command_prefix(runtime_root=declared_runtime_root),
         spawn_allowed=spawn_allowed,
         allowed_domains=allowed_domains,
         write_scope=write_scope,
@@ -547,19 +579,19 @@ def build_codex_cli_bootstrap_message(
         resolved_goal_id,
         cli_bin=cli_bin,
         agent_id=agent_id,
-        progress_scope="agent_lane" if agent_id else None,
+        progress_scope=AGENT_LANE_PROGRESS_SCOPE if agent_id else None,
     )
     progress_refresh_command = render_accountable_progress_refresh_command(
         resolved_goal_id,
         cli_bin=cli_bin,
         agent_id=agent_id,
-        progress_scope="agent_lane" if agent_id else None,
+        progress_scope=AGENT_LANE_PROGRESS_SCOPE if agent_id else None,
     )
     first_run_validation_checklist = [
         f"{cli_bin} doctor passed after PyPI install repair or an existing install",
         "repo bootstrap/connect completed conservatively or a concrete install/connect blocker was shown",
         f"thin heartbeat task_body generated from {cli_bin} heartbeat-prompt --thin, not hand-written",
-        "host loop surface activated from the thin task_body: Codex CLI /goal or Codex App heartbeat automation initially every 3 minutes, then following quota scheduler_hint",
+        "host loop surface activated from the thin task_body: Codex CLI /goal or Codex App heartbeat automation initially at max(3 minutes, owner cadence floor), then following quota scheduler_hint",
         "setup was not reported complete from registry/quota identity alone; missing host-loop mutation was reported as a concrete gate",
         "quota/status guard checked with the registered agent id when available after bootstrap/connect",
         "current goal, concrete user gate or none, top todos, and next safe action shown in the TUI",
@@ -813,8 +845,9 @@ it conservatively:
 {connect_command}
 ```
 
-If the connect output includes onboarding candidate todos, summarize them in
-this TUI and ask me which ones to accept before starting autonomous delivery.
+`connect` only registers the goal and its active state. It does not create
+first-connect todos, so choose the first delivery todo explicitly (for example
+with `todo add`) instead of waiting for onboarding candidates.
 
 4. Generate the thin loop prompt after route reuse or bootstrap/connect, not before. Do not
 hand-write or copy an old heartbeat body:
@@ -899,6 +932,7 @@ def render_prompt_text(
     project: str,
     goal_doc: str,
     goal_id: str,
+    active_state_path: str,
     objective: str,
     domain: str,
     adapter_kind: str,
@@ -932,10 +966,8 @@ def render_prompt_text(
 {goal_doc}
 
 请你按下面步骤推进，不要停在方案讨论；如果信息缺失，先从目标文档和项目结构中做保守抽取，并在最后说明假设。
-重要：`{cli_bin} connect` 默认会做一次快速 onboarding scan，基于 git status、最近 commit、顶层项目信号生成候选 agent todo。
-接入后不要直接开始 delivery；先把候选 todo 展示给我，并问我两件事：
-1. 接受、编辑或拒绝哪些候选 agent todo；
-2. 是否允许你从接受的 todo 开始自主推进。
+重要：`{cli_bin} connect` 只登记 goal 和 active state，不会生成首连 onboarding todo。
+接入后先只读核对状态与目标文档，把第一个交付 todo 的候选写给我确认，再开始 delivery。
 
 0. 先确认当前 shell 能调用 LoopX CLI；如果提示 `loopx` 不在 PATH，运行本机安装脚本再继续：
 
@@ -969,17 +1001,13 @@ def render_prompt_text(
 {connect_command}
 ```
 
-4. 确认 `.loopx/registry.json` 和 `.codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md` 已创建或更新。
-   阅读输出里的 `Onboarding Scan`、`Proposed Onboarding Candidates`、`Accept Candidate Commands`
-   和 `Autonomy Choice`。不要让用户手动执行这些命令；你应当用中文简要解释候选 todo，
-   然后询问用户：
-   - 接受哪些编号，是否需要改写；
-   - 是否 `autonomous=yes`，允许你在 quota guard 通过后开始执行第一个接受的 agent todo。
-   如果用户接受候选 todo，用输出里的 `{cli_bin} todo add ...` 命令写入 agent todo；
-   如果用户允许自主推进，先运行 quota guard，再执行第一个已接受 agent todo。
-   如果用户不允许自主推进，只写入接受的 todo 并运行 `{refresh_command}`，
-   然后停下来汇报。
-   如果目标状态包含私有证据，把 `.loopx/` 和 `.codex/goals/` 加入该项目 `.gitignore`。
+4. 确认 `.loopx/registry.json` 和 `{active_state_path}` 已创建或更新。
+   接入输出里不再有 onboarding 扫描、候选 todo 或自主推进选择项；首连之后状态里
+   没有可执行的 agent todo。请只读核对目标文档和 registry 的 `execution_profile`，
+   用中文给出 1-3 个第一个交付 todo 的候选，问用户确认后，用
+   `{cli_bin} todo add ...` 写入被接受的条目，再运行 `{refresh_command}` 并汇报。
+   在用户确认前不要开始 delivery。
+   如果目标状态包含私有证据，把 `.loopx/` 加入该项目 `.gitignore`；旧项目仍需忽略 `.codex/goals/`。
    `{cli_bin} connect` 默认会同步到共享全局 registry；不要手动编辑其他项目的 registry。
    接入后检查 registry 里的 `execution_profile`：它是本项目后续 heartbeat / adapter 的执行画像。
    默认 cadence 是 `bounded_progress_segment`，连续小步达到阈值后，下一轮必须扩展到
@@ -1045,7 +1073,7 @@ def render_prompt_text(
 7. 如果要给这个项目设置 recurring Codex App heartbeat，默认每 3 分钟一次，后续跟随 `quota should-run.scheduler_hint` 降频；不要手抄 guard 和 spend 协议；先生成 task body，再把输出复制进 automation：
 
 ```bash
-{cli_bin} heartbeat-prompt --goal-id {goal_id} --active-state .codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md
+{cli_bin} heartbeat-prompt --goal-id {goal_id} --active-state {shell_arg(active_state_path)}
 ```
 
 8. 生成一个 read-only project map 或 first pre-tick run。不要启动线上任务、不同步外部系统、不要写生产状态，除非目标文档明确授权。通用接入优先跑：

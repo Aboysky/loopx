@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
-from ...paths import DEFAULT_RUNTIME_ROOT, resolve_runtime_root
-from ...registry import read_json
+from ...history import load_registry
+from ...paths import resolve_runtime_root, select_default_runtime_root
 from .git_hook import (
     EnforcementLevel,
     git_hook_provider_status,
@@ -203,7 +203,7 @@ def register_repository_change_window_commands(
 
 def _runtime_root(registry_path: Path, runtime_root_arg: str | None) -> Path:
     if registry_path.is_file():
-        registry = read_json(registry_path)
+        registry = load_registry(registry_path)
         return Path(
             resolve_runtime_root(
                 registry,
@@ -214,7 +214,7 @@ def _runtime_root(registry_path: Path, runtime_root_arg: str | None) -> Path:
     return (
         Path(runtime_root_arg).expanduser()
         if runtime_root_arg
-        else DEFAULT_RUNTIME_ROOT
+        else select_default_runtime_root()
     )
 
 

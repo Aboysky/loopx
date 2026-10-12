@@ -16,6 +16,7 @@ from loopx.doctor import (
     python_distribution_install,
 )
 from loopx.doctor_git import git_revision_relation, trusted_release_ref_for_root
+from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
 
 
 class _FakeDistributionFile:
@@ -62,10 +63,11 @@ def _commit(root: Path, text: str) -> str:
 
 
 def _write_required_skills(root: Path) -> None:
-    for skill_name, phrases in REQUIRED_INSTALLED_SKILL_PHRASES.items():
+    for skill_name in PACKAGED_HOST_SKILL_IDS:
+        phrases = REQUIRED_INSTALLED_SKILL_PHRASES.get(skill_name, ())
         skill_path = root / skill_name / "SKILL.md"
         skill_path.parent.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text("\n".join(phrases) + "\n", encoding="utf-8")
+        skill_path.write_text("\n".join(phrases) + f"\n# {skill_name}\n", encoding="utf-8")
 
 
 def _freshness(
@@ -209,7 +211,7 @@ def test_main_channel_upgrade_command_preserves_source_ref(tmp_path: Path) -> No
         assert "install-windows.ps1" in command
     else:
         assert (
-            "curl -fsSL https://huangruiteng.github.io/loopx/install.sh "
+            "curl -fsSL https://loopx-project.github.io/loopx/install.sh "
             "| env LOOPX_REF=main bash"
         ) in command
     assert freshness["upgrade_command"] == command
@@ -232,7 +234,7 @@ def test_stable_channel_upgrade_command_keeps_public_default(tmp_path: Path) -> 
     if os.name == "nt":
         assert "install-windows.ps1" in command
     else:
-        assert "huangruiteng.github.io/loopx/install.sh | bash" in command
+        assert "loopx-project.github.io/loopx/install.sh | bash" in command
     assert freshness["upgrade_command"] == command
 
 
@@ -357,7 +359,7 @@ def test_python_distribution_uses_pip_native_upgrade_path(tmp_path: Path) -> Non
     if os.name == "nt":
         assert "install-windows.ps1" in str(freshness["no_clone_upgrade_command"])
     else:
-        assert "huangruiteng.github.io" in str(freshness["no_clone_upgrade_command"])
+        assert "loopx-project.github.io" in str(freshness["no_clone_upgrade_command"])
 
 
 def test_pipx_distribution_preserves_the_pipx_owner(tmp_path: Path) -> None:

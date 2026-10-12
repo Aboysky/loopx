@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -66,14 +67,14 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
         )
     else:
         assert "`user_channel.notify` controls OUTPUT only" in body
-        assert "NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出" in body
-        assert "Due/peer非用户动作" in body
-        assert "NOTIFY缺动作→" in body
-        assert "具体user todo未投影" in body
-        assert "需修复LoopX状态投影" in body
-        assert "静默时内部修复" in body
+        assert "NOTIFY=show; DONT_NOTIFY=no output" in body
+        assert "Due/peer work is not a user prompt" in body
+        assert "Missing NOTIFY action:" in body
+        assert "user Todo unprojected" in body
+        assert "repair LoopX state projection" in body
+        assert "under DONT_NOTIFY repair internally" in body
         if mode == "brief":
-            assert "仅 `user_channel.notify=NOTIFY` 时输出，否则静默。" in body
+            assert "Output only under `user_channel.notify=NOTIFY`; otherwise stay quiet." in body
     return {
         "authority": "interaction_contract.user_channel.notify",
         "external": "NOTIFY",
@@ -84,8 +85,13 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
 
 def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     body = normalized(task_body)
-    assert "no-change=`surface_only`/no spend; unchanged->" in body, mode
-    assert "`--vision-unchanged-reason`; material->actual outcome." in body, mode
+    assert "no-change=surface_only/no spend" not in body, mode
+    assert "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work." in body, mode
+    assert "Admitted work: settlement_plan even if artifacts unchanged." in body, mode
+    assert "Writeback=outcome+vision" in body, mode
+    assert "After committed writeback: same-turn checkpoint-context" in body, mode
+    assert "add evidence; stale->reread" in body, mode
+    assert "unchanged->truthful --vision-unchanged-reason" in body, mode
 
     if mode == "full":
         assert (
@@ -109,11 +115,14 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
         return
 
     if mode == "brief":
-        assert "仅 `user_channel.notify=NOTIFY` 时输出，否则静默。" in body
+        assert "Output only under `user_channel.notify=NOTIFY`; otherwise stay quiet." in body
         return
 
     assert mode == "thin", mode
-    assert "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出。" in body
+    assert (
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; "
+        "DONT_NOTIFY=no output."
+    ) in body
 
 
 def assert_peer_scope_notification_authority(task_body: str) -> None:
@@ -314,12 +323,12 @@ def main() -> int:
     assert "full" not in payload, payload
     assert "Observed capabilities -> `--available-capability`; never user gates." in thin_task, thin_task
     assert payload["quota_guard_command"] == (
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
         'quota should-run --goal-id public-heartbeat-goal '
         '--turn-instance-id "${LOOPX_TURN:?}"'
     ), payload
     assert payload["quota_spend_command"] == (
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
         "quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute"
     ), payload
     assert compact_payload["compact"] is True, compact_payload
@@ -462,7 +471,7 @@ def main() -> int:
         "Compact policy: registry/state/adapter/`goal_boundary`",
         "Detail:",
         "loopx heartbeat-prompt --full --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "state=operator_gate",
         "notify_user_on_open_todo=true",
         "`user_channel.notify=NOTIFY`",
@@ -491,7 +500,7 @@ def main() -> int:
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_gate|user_action",
         "owner todos and `--role agent` for agent todos, not prose",
         "Done->successor; final->refresh/spend/no-follow-up",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
         "Account actual class/scale/outcome",
         "once unpiped; never retry",
         "Optional state-only post-spend",
@@ -576,27 +585,29 @@ def main() -> int:
         "Equal peer `codex-product-capability` (peer_v1)",
         "Agent-facing CLI output budgets, deterministic control-plane qualification, "
         "model-behavior shadow evaluation, and release outcome baseline correctness",
-        "Claim/lease first",
-        "independent repo worktree",
-        "todo continuation",
-        "no cross-agent authority",
-        "no scope in todo metadata",
+        "current quota claim/lease and workspace contract plus repository rules",
+        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "Size by task/evidence/risk within authority/budget, not ops/files/wakes",
+        "calls/writeback ≠ completion; obey stop/replan",
+        "Task-scoped coordination grants no authority over other agents",
+        "Keep scope in this prompt, not todo metadata",
         "Normal turns use CLI `interaction_contract`; use `loopx-project` for "
         "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
         "use selection_command when required",
         "heartbeat-prequota",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run '
         "--goal-id loopx-meta --agent-id codex-product-capability --available-capability network "
         "--available-capability external_evidence_poll",
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
-        "Due/peer非用户动作",
-        "NOTIFY缺动作→",
-        "具体user todo未投影",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        "Due/peer work is not a user prompt",
+        "Missing NOTIFY action:",
+        "user Todo unprojected",
         "Observed capabilities -> `--available-capability`; never user gates",
         "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend)",
         "else RRULE/projected-fallback_hint/ack/fail",
-        "no-change=`surface_only`/no spend",
-        "unchanged->`--vision-unchanged-reason`",
+        "Exact monitor settlement=no refresh/spend",
+        "Admitted work: settlement_plan even if artifacts unchanged",
+        "unchanged->truthful --vision-unchanged-reason",
         "guard; 2 stalls->replan",
         "`agent_read_required`",
         "drain/read/triage before work; settle/ACK",
@@ -609,7 +620,7 @@ def main() -> int:
         "Agent identity and scope",
         "model: peer_v1",
         "equal peer agent",
-        "independent worktree",
+        "current quota claim/lease and workspace contract plus repository rules",
         "Task-scoped coordination",
         "agent_id `codex-side-bypass`",
         "control-plane coordination and todo claim ergonomics",
@@ -624,7 +635,7 @@ def main() -> int:
     assert "single primary agent" not in primary_task, primary_task
     thin_scoped_task = normalized(str(thin_scoped_payload["task_body"]))
     assert "(peer_v1)" in thin_scoped_task, thin_scoped_task
-    assert "independent repo worktree" in thin_scoped_task, thin_scoped_task
+    assert "current quota claim/lease and workspace contract plus repository rules" in thin_scoped_task, thin_scoped_task
     assert "primary_agent" not in thin_scoped_task, thin_scoped_task
     assert "--active-state" not in registry_default_payload["expanded_prompt_command"], registry_default_payload
     assert brief_payload["brief"] is True, brief_payload
@@ -640,33 +651,33 @@ def main() -> int:
     )
     brief_task = normalized(str(brief_payload["task_body"]))
     for phrase in (
-        "Brief 详情：",
+        "Brief detail:",
         "loopx heartbeat-prompt --compact --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
         "Run assignment and guard as separate statements in one shell",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
-        "Due/peer非用户动作",
-        "Todo验收非结算",
-        "NOTIFY缺动作→",
-        "具体user todo未投影",
-        "按 user channel",
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        "Due/peer work is not a user prompt",
+        "Todo acceptance is not settlement",
+        "Missing NOTIFY action:",
+        "user Todo unprojected",
+        "follow user channel",
         "monitor_quiet_skip",
-        "记 receipt/stall",
-        "同 id 重试",
-        "只读一次",
-        "outcome-floor recovery",
-        "推进 evidence",
+        "records receipt/stall",
+        "retry the same id",
+        "one read-only poll",
+        "Outcome-floor recovery",
+        "evidence or blocker",
         "status --limit 3",
         "review-packet --handoff-only",
         "heartbeat_recommendation.agent_must_attempt",
-        "遵守 quota 权限/结果/handoff",
-        "交付并验证",
+        "obey quota authority/outcome/handoff",
+        "After validated delivery",
         "execution_obligation.must_attempt_work",
         "interaction_contract.cli_channel.settlement_plan.ordered_steps",
-        "精确 identity/effect 顺序结算",
-        "不使用旧 refresh/spend 配方",
-        "仅 terminal no-follow-up 收尾",
-        "静默跳过、preflight 失败、blocker-push 提问、dry-run、重复记账均不扣额",
+        "exact identity/effect order",
+        "never old refresh/spend",
+        "Finish only on terminal no-follow-up",
+        "Do not spend for quiet skips, preflight failures, blocker-push questions",
         "No learning queue unless asked.",
         "No permission asks in a trusted session.",
     ):
@@ -691,14 +702,15 @@ def main() -> int:
         "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
         "use selection_command when required",
         "quota should-run",
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
-        "Due/peer非用户动作",
-        "NOTIFY缺动作→",
-        "具体user todo未投影",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        "Due/peer work is not a user prompt",
+        "Missing NOTIFY action:",
+        "user Todo unprojected",
         "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend)",
         "else RRULE/projected-fallback_hint/ack/fail",
-        "no-change=`surface_only`/no spend",
-        "unchanged->`--vision-unchanged-reason`",
+        "Exact monitor settlement=no refresh/spend",
+        "Admitted work: settlement_plan even if artifacts unchanged",
+        "unchanged->truthful --vision-unchanged-reason",
         "guard; 2 stalls->replan",
         "P0 blocked: safe P1/P2",
         "monitor quiet/no-spend",
@@ -712,9 +724,11 @@ def main() -> int:
         ("brief", brief_task),
         ("thin", thin_task),
     ):
-        assert "no-change=`surface_only`/no spend" in task, label
-        assert "`--vision-unchanged-reason`" in task, label
-        assert "material->actual outcome" in task, label
+        assert "no-change=surface_only/no spend" not in task, label
+        assert "Exact monitor settlement=no refresh/spend" in task, label
+        assert "Admitted work: settlement_plan even if artifacts unchanged" in task, label
+        assert "--vision-unchanged-reason" in task, label
+        assert "Writeback=outcome+vision" in task, label
     assert "if absent say" not in thin_task, thin_task
     assert "If false/0: quiet/no-user-todo" not in thin_task, thin_task
 
@@ -731,9 +745,13 @@ def main() -> int:
         'export PATH="$HOME/.local/bin:$PATH"',
         'install_script="$HOME/loopx/scripts/install-local.sh"',
         "loopx doctor >/dev/null",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
         "project non-basic capabilities that are actually present",
         "without guessing capabilities the host does not have",
+        "All generic heartbeat and native Goal bodies match the user's current language",
+        "fall back to English when no user language is available",
+        "do not mix languages unless the user asks or a scoped capability requires bilingual",
+        "Capability-specific bilingual contracts remain authoritative",
         "If that preflight still fails",
         "should_run=false",
         "state=operator_gate",
@@ -750,8 +768,8 @@ def main() -> int:
         "non-blocking means the agent may continue independent work",
         'Never say only "owner gate"',
         "Only when `notify=DONT_NOTIFY`",
-        '"无用户待办/无需通知"',
-        "具体 user todo 未投影，需修复 LoopX 状态投影",
+        '"no user action required" in the user\'s language',
+        "specific user Todo is not projected; repair LoopX state projection",
         "NOTIFY",
         "notify_user_on_open_todo=true",
         "blocker-push opportunity",
@@ -834,7 +852,7 @@ def main() -> int:
         "loopx todo add --goal-id <GOAL_ID> --role user --task-class user_action",
         "Use `--role agent` for project-agent follow-up work",
         "docs/project-agent-todo-contract.md",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
         "loopx refresh-state --goal-id <GOAL_ID>",
         "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
         "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>",
@@ -856,7 +874,7 @@ def main() -> int:
         'export PATH="$HOME/.local/bin:$PATH"',
         'install_script="$HOME/loopx/scripts/install-local.sh"',
         "loopx doctor >/dev/null",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "If that preflight still fails",
         "should_run=false",
         "state=operator_gate",
@@ -865,11 +883,13 @@ def main() -> int:
         "user_todo_summary",
         "user_todo_summary.open_count > 0",
         "never say \"no new user action\"",
+        "Language=user; fallback=English; mix only if asked/scoped-bilingual",
         "`interaction_contract.user_channel.notify` controls output",
-        "`should_run`/due monitor and other-agent scoped todos",
-        "are not user prompts",
-        "`action_required` without an action",
-        "具体 user todo 未投影，需修复 LoopX 状态投影",
+        "`should_run`/due monitor/other-agent todos are not user prompts",
+        "Only under NOTIFY, `action_required` without an action",
+        "specific user Todo is not projected",
+        "repair LoopX state projection",
+        "repair the projection internally and stay quiet",
         "NOTIFY",
         "notify_user_on_open_todo=true",
         "blocker-push",
@@ -926,7 +946,9 @@ def main() -> int:
         "2 consecutive eligible heartbeats are no-progress loops",
         "self-cancel turn",
         "repair path is",
-        "授权/预算内推进可验证结果",
+        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "Size by task/evidence/risk within authority/budget, not ops/files/wakes",
+        "calls/writeback ≠ completion; obey stop/replan",
         "a focused correction may suffice",
         "Stay inside `goal_boundary` when present",
         "Follow user authority and repository rules",
@@ -937,7 +959,7 @@ def main() -> int:
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_gate",
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_action",
         "docs/project-agent-todo-contract.md",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
         "loopx refresh-state --goal-id public-heartbeat-goal",
         "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
         "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>",
@@ -959,7 +981,7 @@ def main() -> int:
             "Before spending delivery compute, first make the LoopX CLI reachable",
             'export PATH="$HOME/.local/bin:$PATH"',
             "loopx doctor >/dev/null",
-            'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
+            'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
             "If that preflight still fails",
             "If the result says should_run=false",
             "state=operator_gate",
@@ -990,7 +1012,7 @@ def main() -> int:
             "Public-safe repo publication is not an operator gate by itself",
             "Run validation proportionate to the change and risk",
             "loopx refresh-state --goal-id <GOAL_ID>",
-            'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
+            'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
             "If the dashboard or controller needs a state-only update after spend",
             "Return a compact final report",
         ),
@@ -1101,11 +1123,14 @@ def main() -> int:
     assert "do not infer" in project_skill, project_skill
     assert "reason to paste one-off control logic into the scheduler" in project_skill, project_skill
 
+    cli_registry = (ACTIVE_STATE.parent / "registry.json").resolve()
     cli_json = subprocess.run(
         [
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1124,6 +1149,7 @@ def main() -> int:
         goal_id=GOAL_ID,
         active_state=ACTIVE_STATE,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_payload["task_body"] == cli_expected_payload["task_body"], cli_payload
     assert set(cli_payload) == {
@@ -1141,6 +1167,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1161,6 +1189,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         full=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_full_payload["task_body"] == cli_full_expected_payload["task_body"], cli_full_payload
     assert cli_full_payload["thin"] is False, cli_full_payload
@@ -1172,6 +1201,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1192,6 +1223,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         compact=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_compact_payload["task_body"] == cli_compact_expected_payload["task_body"], cli_compact_payload
     assert cli_compact_payload["compact"] is True, cli_compact_payload
@@ -1201,6 +1233,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1221,6 +1255,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         brief=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_brief_payload["task_body"] == cli_brief_expected_payload["task_body"], cli_brief_payload
     assert cli_brief_payload["brief"] is True, cli_brief_payload
@@ -1231,6 +1266,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1251,6 +1288,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         thin=True,
         reward_memory_enabled=False,
+        registry_path=cli_registry,
     )
     assert cli_thin_payload["task_body"] == cli_thin_expected_payload["task_body"], cli_thin_payload
     assert cli_thin_payload["schema_version"] == HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION
@@ -1261,6 +1299,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "loopx.cli",
+            "--registry",
+            str(cli_registry),
             "--format",
             "json",
             "heartbeat-prompt",
@@ -1280,11 +1320,18 @@ def main() -> int:
     cli_canary_payload = json.loads(cli_canary_json.stdout)
     assert cli_canary_payload["cli_bin"] == "loopx-canary", cli_canary_payload
     assert "loopx-canary doctor" in cli_canary_payload["cli_preflight"], cli_canary_payload
-    assert "loopx-canary --format json" in cli_canary_payload["quota_guard_command"], cli_canary_payload
-    assert "loopx-canary heartbeat-prompt --compact" in cli_canary_payload["task_body"], cli_canary_payload
+    canary_prefix = f"loopx-canary --registry {shlex.quote(str(cli_registry))}"
+    assert f"{canary_prefix} --format json" in cli_canary_payload["quota_guard_command"], cli_canary_payload
+    assert f"{canary_prefix} heartbeat-prompt --compact" in cli_canary_payload["task_body"], cli_canary_payload
 
     with tempfile.TemporaryDirectory() as raw_tmp:
         root = Path(raw_tmp)
+        long_profile_scope = (
+            "Investigate product and runtime reliability, coordinate bounded peer work, "
+            "preserve task identity, qualify evidence and acceptance, and return actionable "
+            "results to the original conversation without claiming another agent's authority."
+        )
+        assert 180 < len(long_profile_scope) <= 320
         project = root / "project"
         state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
         registry_path = project / ".loopx" / "registry.json"
@@ -1310,6 +1357,10 @@ def main() -> int:
                                 "registered_agents": ["codex-main-control", "codex-side-bypass"],
                                 "agent_model": "peer_v1",
                                 "agent_profiles": {
+                                    "codex-main-control": {
+                                        "schema_version": "agent_profile_v1",
+                                        "scope_summary": long_profile_scope,
+                                    },
                                     "codex-side-bypass": {
                                         "schema_version": "agent_profile_v1",
                                         "scope_summary": "productization showcase docs lane",
@@ -1385,11 +1436,13 @@ def main() -> int:
         assert "sink_activation" not in cli_registry_default_payload
         assert "Explore Graph" not in cli_registry_default_payload["task_body"]
         assert "Generic Kanban" not in cli_registry_default_payload["task_body"]
-        assert cli_registry_default_payload["expanded_prompt_command"] == (
-            "loopx heartbeat-prompt --full --goal-id public-heartbeat-goal "
+        registry_prefix = f"loopx --registry {shlex.quote(str(registry_path.resolve()))}"
+        assert "expanded_prompt_command" not in cli_registry_default_payload, cli_registry_default_payload
+        assert cli_registry_default_payload["brief_prompt_command"] == (
+            f"{registry_prefix} heartbeat-prompt --brief --goal-id public-heartbeat-goal "
             "--agent-id codex-main-control --agent-scope 'primary review and coordination'"
         ), cli_registry_default_payload
-        assert "loopx heartbeat-prompt --compact --goal-id public-heartbeat-goal" in (
+        assert f"{registry_prefix} heartbeat-prompt --compact --goal-id public-heartbeat-goal" in (
             cli_registry_default_payload["task_body"]
         ), cli_registry_default_payload
         assert "--active-state" not in cli_registry_default_payload["task_body"], cli_registry_default_payload
@@ -1517,6 +1570,61 @@ def main() -> int:
         assert "productization showcase docs lane" in normalized(cli_profile_scoped_payload["task_body"]), (
             cli_profile_scoped_payload
         )
+
+        long_profile_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "--registry",
+                str(registry_path),
+                "heartbeat-prompt",
+                "--goal-id",
+                GOAL_ID,
+                "--thin",
+                "--agent-id",
+                "codex-main-control",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert long_profile_result.returncode == 0, long_profile_result.stdout
+        long_profile_payload = json.loads(long_profile_result.stdout)
+        assert long_profile_payload["ok"] is True, long_profile_payload
+        assert long_profile_scope in normalized(long_profile_payload["task_body"]), long_profile_payload
+
+        explicit_scope_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "--registry",
+                str(registry_path),
+                "heartbeat-prompt",
+                "--goal-id",
+                GOAL_ID,
+                "--thin",
+                "--agent-id",
+                "codex-main-control",
+                "--agent-scope",
+                "explicit bounded task",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert explicit_scope_result.returncode == 0, explicit_scope_result.stdout
+        explicit_scope_payload = json.loads(explicit_scope_result.stdout)
+        assert explicit_scope_payload["ok"] is True, explicit_scope_payload
+        assert "explicit bounded task" in explicit_scope_payload["task_body"], explicit_scope_payload
+        assert long_profile_scope not in explicit_scope_payload["task_body"], explicit_scope_payload
 
         cli_unknown_scoped = subprocess.run(
             [

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shlex
 from typing import Any
 
 from .control_plane import compact_control_plane_policy
@@ -23,7 +24,6 @@ from .control_plane.effect_program import (
     ReceiptBoundReplayPhase,
     ReceiptBoundTerminalPhase,
 )
-from .control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
 from .control_plane.quota.goal_boundary import (
     registry_goal_by_id as _registry_goal_by_id,
 )
@@ -34,10 +34,10 @@ from .control_plane.quota.policy_constants import (
 from .control_plane.quota.monitor_poll import (
     QUOTA_MONITOR_POLL_CLASSIFICATION as QUOTA_MONITOR_POLL_CLASSIFICATION,
     build_quota_monitor_poll_event as build_quota_monitor_poll_event,
-    find_quota_monitor_poll_turn,
     record_quota_monitor_poll_for_decision,
     resolve_due_monitor_candidate,
 )
+from .control_plane.quota.blocked_retry import overlay_active_turn_retries
 from .control_plane.quota.recent_runs import (
     goal_latest_run as _goal_latest_run,
 )
@@ -58,21 +58,11 @@ from .control_plane.quota.settlement import (
     read_heartbeat_settlement,
     settlement_result_payload,
 )
-from .control_plane.quota.slot_accounting import (
+from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
-    build_quota_slot_preview_for_decision,
-    build_quota_slot_spend_event as _build_quota_slot_spend_event,
-    load_quota_event_from_run,
-    record_quota_slot_spend_from_preview,
-)
-from .control_plane.quota.spend_commit import replay_quota_spend_by_effect_ref
-from .control_plane.quota.void_commit import (
-    build_quota_slot_void_event as build_quota_slot_void_event,
-    build_quota_slot_void_preview_for_decision,
-    commit_quota_slot_void,
-    normalize_quota_void_goal_id as _normalize_quota_void_goal_id,
-    record_quota_slot_void_from_preview as record_quota_slot_void_from_preview,
+    net_quota_slot_spend,
+    quota_slot_contribution,
 )
 from .control_plane.quota.spend_sources import (
     DEFAULT_SLOT_SPEND_SOURCE,
@@ -88,17 +78,14 @@ from .control_plane.quota.policy_constants import (
     FOCUS_WAIT_REASON,
     SELF_REPAIR_SPEND_ACTIONS,
 )
-from .control_plane.runtime.time import parse_timestamp as _parse_timestamp
+from .control_plane.runtime.time import now_utc_iso, parse_timestamp as _parse_timestamp
 from .control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
 )
 from .control_plane.scheduler.state import (
-    CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
     CODEX_APP_SURFACE,
 )
 from .control_plane.todos.contract import (
-    TODO_TASK_CLASS_ADVANCEMENT,
-    TODO_TASK_CLASS_MONITOR,
     normalize_todo_claimed_by,
     normalize_todo_id,
 )
@@ -127,6 +114,26 @@ _PUBLIC_COMPAT_REEXPORTS = {
     "record_quota_slot_void_from_preview": "loopx.control_plane.quota.void_commit",
     "render_quota_slot_preview_markdown": "loopx.presentation.renderers.quota_event_markdown",
 }
+_LAZY_PUBLIC_COMPAT_REEXPORTS = frozenset({
+    "build_quota_slot_void_event",
+    "record_quota_slot_void_from_preview",
+})
+
+
+def __getattr__(name: str) -> Any:
+    # Only legacy exports from execution adapters are lazy. Return their real
+    # objects, not wrappers or a second implementation of quota transactions.
+    if name not in _LAZY_PUBLIC_COMPAT_REEXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    value = getattr(import_module(_PUBLIC_COMPAT_REEXPORTS[name]), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_PUBLIC_COMPAT_REEXPORTS))
 
 
 AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS = {
@@ -184,11 +191,14 @@ def _int_number(value: Any, *, default: int) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return default
     if isinstance(value, str):
         try:
             return int(float(value.strip()))
-        except ValueError:
+        except (ValueError, OverflowError):
             return default
     return default
 
@@ -356,10 +366,6 @@ def goal_quota_config(goal: dict[str, Any] | None) -> dict[str, Any]:
     return payload
 
 
-def _quota_event_run_key(run: dict[str, Any], event: dict[str, Any]) -> str:
-    return str(event.get("run_generated_at") or run.get("generated_at") or "")
-
-
 def goal_quota_with_spend_ledger(
     goal: dict[str, Any] | None,
     runs: list[dict[str, Any]],
@@ -372,8 +378,7 @@ def goal_quota_with_spend_ledger(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
     window_start = current_time - timedelta(hours=int(payload["window_hours"]))
-    spent_by_run: dict[str, int] = {}
-    voided_by_run: dict[str, int] = {}
+    contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
     void_event_count = 0
 
@@ -382,6 +387,25 @@ def goal_quota_with_spend_ledger(
             continue
         if str(run.get("goal_id") or goal_id) != goal_id:
             continue
+        goal_instance_id = (
+            str(goal.get("goal_instance_id") or "").strip()
+            if goal is not None
+            else ""
+        )
+        run_goal_ref = (
+            run.get("goal_ref")
+            if isinstance(run.get("goal_ref"), Mapping)
+            else None
+        )
+        if goal_instance_id:
+            if (
+                run_goal_ref is None
+                or run_goal_ref.get("goal_id") != goal_id
+                or run_goal_ref.get("goal_instance_id") != goal_instance_id
+            ):
+                continue
+        elif run_goal_ref is not None:
+            continue
         generated_at = _parse_timestamp(run.get("generated_at"))
         if (
             generated_at is None
@@ -389,32 +413,17 @@ def goal_quota_with_spend_ledger(
             or generated_at > current_time
         ):
             continue
-        event = load_quota_event_from_run(run)
-        if not event:
+        contribution = quota_slot_contribution(run)
+        if contribution is None:
             continue
-        event_type = str(event.get("event_type") or "")
-        slots = max(0, _int_number(event.get("slots"), default=0))
-        if slots <= 0:
-            continue
-        if event_type == QUOTA_SLOT_SPENT_CLASSIFICATION:
-            run_key = _quota_event_run_key(run, event)
-            if not run_key:
-                continue
-            spent_by_run[run_key] = spent_by_run.get(run_key, 0) + slots
+        kind, run_key, slots = contribution
+        contributions.append((run_key, kind, slots))
+        if kind == "spent":
             spend_event_count += 1
-        elif event_type == QUOTA_SLOT_VOIDED_CLASSIFICATION:
-            voided_run_generated_at = str(event.get("voided_run_generated_at") or "")
-            if not voided_run_generated_at:
-                continue
-            voided_by_run[voided_run_generated_at] = (
-                voided_by_run.get(voided_run_generated_at, 0) + slots
-            )
+        else:
             void_event_count += 1
 
-    spent_slots = 0
-    for run_key, slots in spent_by_run.items():
-        spent_slots += max(0, slots - voided_by_run.get(run_key, 0))
-    payload["spent_slots"] = spent_slots
+    payload["spent_slots"] = sum(net_quota_slot_spend(contributions).values())
     payload["spend_source"] = "runtime_events"
     payload["spend_event_count"] = spend_event_count
     if void_event_count:
@@ -802,6 +811,7 @@ def build_quota_plan(
             "agent_todos",
             "active_state_next_action",
             "active_state_next_action_entries",
+            "recommendation_context",
             "standing_decision_authority",
             "long_task_cadence_hint",
             "stale_latest_run_warning",
@@ -839,7 +849,7 @@ def build_quota_plan(
     if groups.get("unknown"):
         summary["states"]["unknown"] = len(groups["unknown"])
 
-    return {
+    result = {
         "ok": status_payload.get("ok"),
         "mode": mode,
         "registry": status_payload.get("registry"),
@@ -851,6 +861,34 @@ def build_quota_plan(
         "groups": groups,
         "health_items": health_items,
     }
+    return _describe_quota_observation(result, status_payload, mode=mode)
+
+
+def _describe_quota_observation(
+    result: dict[str, Any], status_payload: dict[str, Any], *, mode: str
+) -> dict[str, Any]:
+    """Carry read-only selection and source proof without changing execution plans."""
+    if mode not in {"status", "plan"}:
+        return result
+    goal_filter = status_payload.get("goal_filter")
+    if goal_filter:
+        result["goal_filter"] = goal_filter
+        if not any(
+            item["goal_id"] == goal_filter
+            for group in result["groups"].values()
+            for item in group
+        ):
+            result.update(
+                ok=False,
+                status="goal_not_found",
+                reason="goal is not present in the registered quota plan",
+                recommended_action="run `loopx registry` and connect or sync the selected goal",
+            )
+    if isinstance(status_payload.get("projection_envelope"), dict):
+        # Freshness and coverage remain owned by the typed status envelope,
+        # including when this observation was served from an explicit cache.
+        result["status_projection_envelope"] = status_payload["projection_envelope"]
+    return result
 
 
 def _build_quota_plan_for_goal(
@@ -886,8 +924,12 @@ def build_quota_should_run(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None = None,
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
+    receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_guard_recorded_at: str | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
+    workspace_path: Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -910,9 +952,36 @@ def build_quota_should_run(
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+        receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        workspace_path=workspace_path,
+        goal_ref=goal_ref,
     )
+
+
+def _quota_spend_index_basis(
+    status_payload: Mapping[str, Any],
+    *,
+    goal_id: str,
+) -> tuple[bool, str | None]:
+    run_history = status_payload.get("run_history")
+    if not isinstance(run_history, Mapping):
+        return False, None
+    goals = run_history.get("goals")
+    if not isinstance(goals, list):
+        return False, None
+    for goal in goals:
+        if not isinstance(goal, Mapping) or str(goal.get("id") or "") != goal_id:
+            continue
+        if "index_digest" not in goal:
+            return False, None
+        digest = goal.get("index_digest")
+        if digest is not None and not isinstance(digest, str):
+            raise ValueError("quota status index digest must be a string or null")
+        return True, digest
+    return False, None
 
 
 def build_quota_slot_preview(
@@ -932,8 +1001,16 @@ def build_quota_slot_preview(
     turn_instance_id: str | None = None,
     effect_ref: str | None = None,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    safe_goal_id = str(goal_id or "").strip()
+    from .control_plane.quota.slot_accounting import build_quota_slot_preview_for_decision
+
+    safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
+    basis_available, expected_index_digest = _quota_spend_index_basis(
+        status_payload,
+        goal_id=safe_goal_id,
+    )
     before = build_quota_should_run(
         status_payload,
         goal_id=safe_goal_id,
@@ -963,7 +1040,11 @@ def build_quota_slot_preview(
         replan_obligation_id=replan_obligation_id,
         turn_instance_id=turn_instance_id,
         source=source,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
+    if preview.get("ok") and basis_available:
+        preview["expected_index_digest"] = expected_index_digest
     if not effect_ref:
         return preview
     return {**preview, "effect_ref": str(effect_ref).strip()}
@@ -977,7 +1058,7 @@ def record_quota_scheduler_ack(
     agent_id: str | None = None,
     available_capabilities: Any = None,
     surface: str = CODEX_APP_SURFACE,
-    state_key: str = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+    state_key: str | None = None,
     applied_rrule: str | None = None,
     reset_token: str | None = None,
     identity_signature: str | None = None,
@@ -1016,7 +1097,7 @@ def record_quota_scheduler_ack(
         agent_id=safe_agent_id,
         execute=execute,
         surface=str(surface or CODEX_APP_SURFACE).strip() or CODEX_APP_SURFACE,
-        state_key=str(state_key or CODEX_APP_STATEFUL_BACKOFF_STATE_KEY).strip(),
+        state_key=str(state_key).strip() if state_key is not None else None,
         applied_rrule=applied_rrule,
         reset_token=reset_token,
         identity_signature=identity_signature,
@@ -1032,6 +1113,8 @@ def build_quota_slot_spend_event(
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
+    from .control_plane.quota.spend_commit import build_quota_slot_spend_event as _build_quota_slot_spend_event
+
     return _build_quota_slot_spend_event(
         preview,
         self_repair_spend_actions=SELF_REPAIR_SPEND_ACTIONS,
@@ -1065,6 +1148,9 @@ def record_quota_monitor_poll(
     next_user_todo: str | None = None,
     next_user_task_class: str | None = None,
     next_claimed_by: str | None = None,
+    task_lease_idempotency_key: str | None = None,
+    task_lease_expected_version: int | None = None,
+    use_current_task_lease: bool = False,
     turn_instance_id: str | None = None,
     receipt_bound_todo_id: str | None = None,
     scheduler_execution_context: Mapping[str, Any]
@@ -1075,6 +1161,7 @@ def record_quota_monitor_poll(
         Callable[..., Mapping[str, Any] | None] | None
     ) = None,
     status_reloader: Callable[[], dict[str, Any]] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     normalized_requested_todo_id = normalize_todo_id(todo_id) if todo_id else None
@@ -1114,6 +1201,13 @@ def record_quota_monitor_poll(
                         **current_status,
                         "bounded_research_frontier": dict(frontier),
                     }
+        # Automatic stall writeback must see the same receipt-owned wait as
+        # live selection. Keep the canonical Todo and monitor clocks untouched;
+        # re-evaluate after writeback so an expired/superseded wait is not kept.
+        decision_status = overlay_active_turn_retries(
+            decision_status, goal_id=safe_goal_id, agent_id=agent_id,
+            observed_at=now_utc_iso(),
+        )
         return build_quota_should_run(
             decision_status,
             goal_id=safe_goal_id,
@@ -1122,90 +1216,34 @@ def record_quota_monitor_poll(
             scheduler_execution_context=scheduler_execution_context,
             operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             receipt_bound_todo_id=normalized_receipt_todo_id,
+            goal_ref=goal_ref,
         )
 
     before = should_run(status_payload)
+    auxiliary_settlement_todo = None
     if (
         normalized_receipt_todo_id
         and normalized_observation_todo_id
         and normalized_observation_todo_id != normalized_receipt_todo_id
     ):
-        selected = (
-            before.get("selected_todo")
-            if isinstance(before.get("selected_todo"), Mapping)
-            else {}
-        )
-        lane = (
-            before.get("work_lane_contract")
-            if isinstance(before.get("work_lane_contract"), Mapping)
-            else {}
-        )
-        summary = (
-            before.get("agent_todo_summary")
-            if isinstance(before.get("agent_todo_summary"), Mapping)
-            else {}
-        )
-        candidate_values = [
-            *(lane.get("monitor_due_items") or []),
-            *(summary.get("monitor_due_items") or []),
-        ]
-        normalized_agent_id = normalize_todo_claimed_by(agent_id)
-        auxiliary_due_monitor = any(
-            isinstance(candidate, Mapping)
-            and normalize_todo_id(candidate.get("todo_id"))
-            == normalized_observation_todo_id
-            and candidate.get("task_class") == TODO_TASK_CLASS_MONITOR
-            and normalize_todo_claimed_by(candidate.get("claimed_by"))
-            in {None, normalized_agent_id}
-            for candidate in candidate_values
-        )
-        auxiliary_registry_due = bool(
-            resolved_monitor
-            and normalize_todo_claimed_by(resolved_monitor.get("claimed_by"))
-            in {None, normalized_agent_id}
-        )
-        existing_observation = (
-            find_quota_monitor_poll_turn(
-                Path(str(raw_runtime_root)).expanduser(),
+        # Discovery/selection is an open-work projection, not the committed
+        # Turn's lifecycle authority. Read the exact bound record, including
+        # completed history; TS monitor admission owns its interpretation.
+        from .control_plane.todos.list_readback import list_goal_todos
+
+        if registry_path is not None:
+            bound_records = list_goal_todos(
+                registry_path=registry_path,
+                runtime_root_arg=str(runtime_root) if runtime_root else None,
                 goal_id=safe_goal_id,
-                agent_id=normalized_agent_id or "",
-                turn_instance_id=str(turn_instance_id or ""),
-                todo_id=normalized_observation_todo_id,
+                todo_id=normalized_receipt_todo_id,
+                role="agent",
             )
-            if raw_runtime_root and agent_id and turn_instance_id
-            else None
-        )
-        auxiliary_replay = bool(
-            isinstance(existing_observation, Mapping)
-            and normalize_todo_id(existing_observation.get("todo_id"))
-            == normalized_observation_todo_id
-            and normalize_todo_id(
-                existing_observation.get("settlement_todo_id")
-            )
-            == normalized_receipt_todo_id
-        )
-        auxiliary_observation_allowed = bool(
-            normalize_todo_id(selected.get("todo_id"))
-            == normalized_receipt_todo_id
-            and selected.get("task_class") == TODO_TASK_CLASS_ADVANCEMENT
-            and selected.get("selection_binding") == "heartbeat_receipt"
-            and (
-                auxiliary_due_monitor
-                or auxiliary_registry_due
-                or auxiliary_replay
-            )
-        )
-        if not auxiliary_observation_allowed:
-            raise HeartbeatReceiptIdentityConflictError(
-                "turn-scoped monitor-poll Todo conflicts with the committed "
-                "heartbeat receipt: expected settlement Todo "
-                f"{normalized_receipt_todo_id}, requested observation Todo "
-                f"{normalized_observation_todo_id}"
-            )
+            auxiliary_settlement_todo = bound_records.get("todo")
     effective_todo_id = normalized_observation_todo_id or (
         normalized_receipt_todo_id if not target_key else None
     )
-    return record_quota_monitor_poll_for_decision(
+    result = record_quota_monitor_poll_for_decision(
         before,
         status_payload,
         goal_id=safe_goal_id,
@@ -1217,6 +1255,7 @@ def record_quota_monitor_poll(
         reason_summary=reason_summary,
         agent_id=agent_id,
         settlement_todo_id=normalized_receipt_todo_id,
+        auxiliary_settlement_todo=auxiliary_settlement_todo,
         todo_id=effective_todo_id,
         target_key=target_key,
         result_hash=result_hash,
@@ -1232,9 +1271,97 @@ def record_quota_monitor_poll(
         next_user_todo=next_user_todo,
         next_user_task_class=next_user_task_class,
         next_claimed_by=next_claimed_by,
+        task_lease_idempotency_key=task_lease_idempotency_key,
+        task_lease_expected_version=task_lease_expected_version,
+        use_current_task_lease=use_current_task_lease,
         turn_instance_id=turn_instance_id,
         status_reloader=status_reloader,
+        goal_ref=goal_ref,
     )
+    continuation = result.get("turn_continuation") or {}
+    if (
+        result.get("ok") is True
+        and continuation.get("settlement_binding_matches_observation") is False
+    ):
+        # The open-work readback may now select another Todo. Render the
+        # original receipt's closeout separately; never borrow that selection
+        # to construct this Turn's refresh/spend commands.
+        from .control_plane.agents.capability_gate import (
+            runtime_capabilities_for_cli_projection,
+        )
+        from .control_plane.quota.settlement import (
+            attach_settlement_progress,
+            build_turn_scoped_cli_settlement_plan,
+        )
+
+        readback = read_heartbeat_settlement(
+            runtime_root,
+            goal_id=safe_goal_id,
+            agent_id=agent_id,
+            todo_id=normalized_receipt_todo_id,
+            turn_instance_id=turn_instance_id,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
+        )
+        if readback is None or readback.identity.value is None:
+            raise RuntimeError(
+                "auxiliary monitor receipt lost its original settlement readback"
+            )
+        attach_settlement_progress(
+            result, readback, registry_path=registry_path, runtime_root=runtime_root,
+            goal_ref=goal_ref,
+        )
+        identity = readback.identity.value
+        prefix = "loopx"
+        if registry_path is not None:
+            prefix += f" --registry {shlex.quote(str(registry_path))}"
+        prefix += f" --runtime-root {shlex.quote(str(runtime_root))}"
+        scoped_args = "".join(
+            f" --available-capability {shlex.quote(capability)}"
+            for capability in runtime_capabilities_for_cli_projection(
+                available_capabilities
+            )
+        )
+        plan = build_turn_scoped_cli_settlement_plan(
+            goal_id=identity.goal_id,
+            agent_id=identity.agent_id,
+            todo_id=identity.todo_id,
+            turn_instance_id=identity.turn_instance_id,
+            replan_obligation_id=identity.replan_obligation_id,
+            command_prefix=prefix,
+            scoped_cli_args=scoped_args,
+            lifecycle_actor_args="",
+            quota_spend_source=readback.progress["quota_spend_source"],
+            goal_ref=goal_ref,
+        )
+        result["settlement_resume"] = {
+            "schema_version": "auxiliary_monitor_settlement_resume_v0",
+            "identity": identity.as_dict(),
+            "progress_ref": "$.settlement_progress",
+            "next_step": next(
+                (
+                    step for step in plan.as_dict()["ordered_steps"]
+                    if step["kind"] == readback.progress["next_step"]
+                ),
+                None,
+            ),
+            "grants_new_delivery": False,
+        }
+        # A later discovery projection is not a second settlement plan. The
+        # top-level resume/readback above owns this original Turn's closeout.
+        after = result.get("after") or {}
+        cli = (after.get("interaction_contract") or {}).get("cli_channel")
+        if (
+            isinstance(cli, dict)
+            and (after.get("selected_todo") or {}).get("todo_id") != identity.todo_id
+        ):
+            cli.pop("settlement_plan", None)
+            cli.pop("next_cli_actions", None)
+            cli.update(
+                spend_allowed_now=False, spend_after_validation=False,
+                settlement_resume_ref="$.settlement_resume",
+            )
+    return result
 
 
 def build_quota_slot_void_preview(
@@ -1245,6 +1372,11 @@ def build_quota_slot_void_preview(
     agent_id: str | None = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    from .control_plane.quota.void_commit import (
+        build_quota_slot_void_preview_for_decision,
+        normalize_quota_void_goal_id as _normalize_quota_void_goal_id,
+    )
+
     safe_goal_id = _normalize_quota_void_goal_id(goal_id)
     before = build_quota_should_run(
         status_payload,
@@ -1270,7 +1402,14 @@ def void_quota_slot(
     reason_summary: str | None = None,
     agent_id: str | None = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from .control_plane.quota.void_commit import (
+        commit_quota_slot_void,
+        normalize_quota_void_goal_id as _normalize_quota_void_goal_id,
+    )
+
     safe_goal_id = _normalize_quota_void_goal_id(goal_id)
     before = build_quota_should_run(
         status_payload,
@@ -1286,6 +1425,8 @@ def void_quota_slot(
         execute=execute,
         source=source,
         reason_summary=reason_summary,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
 
 
@@ -1307,7 +1448,12 @@ def spend_quota_slot(
     replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
     effect_ref: str | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from .control_plane.quota.spend_commit import replay_quota_spend_by_effect_ref
+    from .control_plane.quota.slot_accounting import record_quota_slot_spend_from_preview
+
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     normalized_effect_ref = str(effect_ref or "").strip()
     raw_runtime_root = status_payload.get("runtime_root")
@@ -1337,6 +1483,8 @@ def spend_quota_slot(
             effect_ref=normalized_effect_ref,
             agent_id=agent_id,
             read_only=not execute,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         if replay.get("replay_found"):
             if not replay.get("ok"):
@@ -1361,6 +1509,11 @@ def spend_quota_slot(
                 "agent_id": replay.get("agent_id"),
                 "effect_ref": normalized_effect_ref,
                 "reason": "quota spend replayed for the same provider effect",
+                **(
+                    {"goal_ref": dict(goal_ref)}
+                    if goal_ref is not None
+                    else {}
+                ),
             }
     if turn_instance_id and source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
         return {
@@ -1396,6 +1549,8 @@ def spend_quota_slot(
             turn_instance_id=None,
             infer_turn_instance_id=True,
             allow_unbound_binding=recover_unbound_visible_goal,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         inferred_result = (
             settlement_readback.identity
@@ -1432,6 +1587,8 @@ def spend_quota_slot(
                 todo_id=todo_id,
                 turn_instance_id=turn_instance_id,
                 replan_obligation_id=replan_obligation_id,
+                registry_path=registry_path,
+                goal_ref=goal_ref,
             )
         if settlement_readback is None:
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -1467,6 +1624,11 @@ def spend_quota_slot(
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
                 "reason": "quota spend receipt replayed for the same settlement identity",
+                **(
+                    {"goal_ref": dict(goal_ref)}
+                    if goal_ref is not None
+                    else {}
+                ),
             }
         prior_spend_run = settlement_readback.spend_run
         if prior_spend_run is not None:
@@ -1484,6 +1646,11 @@ def spend_quota_slot(
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
                 "reason": "quota spend run exists; repair its missing settlement receipt",
+                **(
+                    {"goal_ref": dict(goal_ref)}
+                    if goal_ref is not None
+                    else {}
+                ),
             }
     preview = build_quota_slot_preview(
         status_payload,
@@ -1499,6 +1666,8 @@ def spend_quota_slot(
         turn_instance_id=turn_instance_id,
         effect_ref=normalized_effect_ref or None,
         source=source,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if not preview.get("ok"):
         return preview
@@ -1509,4 +1678,6 @@ def spend_quota_slot(
         goal_id=safe_goal_id,
         execute=execute,
         source=source,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )

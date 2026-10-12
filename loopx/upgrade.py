@@ -14,9 +14,8 @@ from .agent_registry import (
 )
 from .execution_profile import execution_profile_turn_granularity
 from .heartbeat_prompt import build_heartbeat_prompt
-from .control_plane.reward_memory import reward_memory_goal_policy
 from .history import load_registry
-from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from .registry import registry_goals, resolve_state_file
 from .control_plane.agents.legacy_migration import (
     completed_peer_agent_runtime_migration,
@@ -62,6 +61,59 @@ _AUTOMATION_PARSE_ERROR_LIMIT = 20
 
 def prompt_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def goal_heartbeat_prompt(
+    goal: dict[str, Any],
+    *,
+    cli_bin: str,
+    mode: str,
+    agent_id: str | None,
+    available_capabilities: Any = None,
+) -> dict[str, Any]:
+    """Build the prompt one Goal's ``mode`` heartbeat target installs.
+
+    The prompt inputs come from the Goal's own registration (state file, agent
+    profile, registered agents, turn granularity, Reward Memory policy), so the
+    upgrade plan and every release check that must agree with it byte-for-byte
+    have to build the prompt through this single owner. Rebuilding the argument
+    list at a second call site is how a digest check drifts the moment the
+    product gains one more input.
+    """
+    goal_id = str(goal.get("id") or "")
+    repo = Path(str(goal.get("repo") or ".")).expanduser()
+    state_file = resolve_state_file(repo, goal.get("state_file"))
+    registered_agents = registered_agent_ids_for_goal(goal)
+    reward_memory_enabled = False
+    if agent_id is not None:
+        from .capabilities.reward_memory.configuration import (
+            reward_memory_automatic_ingest_for_agent,
+        )
+
+        reward_memory_enabled = reward_memory_automatic_ingest_for_agent(
+            goal, agent_id
+        )
+    return build_heartbeat_prompt(
+        goal_id=goal_id,
+        active_state=None,
+        active_state_source="registry",
+        resolved_active_state=state_file,
+        compact=mode == "compact",
+        brief=mode == "brief",
+        thin=mode == "thin",
+        cli_bin=cli_bin,
+        agent_id=agent_id,
+        agent_profile=agent_profile_for_goal(goal, agent_id),
+        registered_agents=registered_agents or None,
+        available_capabilities=available_capabilities,
+        runtime_profile="codex_app_heartbeat",
+        turn_granularity=execution_profile_turn_granularity(
+            goal.get("execution_profile")
+            if isinstance(goal.get("execution_profile"), dict)
+            else None
+        ),
+        reward_memory_enabled=reward_memory_enabled,
+    )
 
 
 def prompt_summary(prompt: dict[str, Any], mode: str) -> dict[str, Any]:
@@ -692,7 +744,7 @@ def build_upgrade_plan(
     registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_override)
     if not registry_path.exists():
-        fallback = global_registry_path(runtime_root or DEFAULT_RUNTIME_ROOT)
+        fallback = global_registry_path(runtime_root or select_default_runtime_root())
         if fallback.exists():
             registry_path = fallback
             registry = load_registry(registry_path)
@@ -717,16 +769,6 @@ def build_upgrade_plan(
             deferred.append(stage_deferred_goal_summary(goal, state_file))
             continue
         registered_agents = registered_agent_ids_for_goal(goal)
-        reward_memory_policy = reward_memory_goal_policy(goal)
-        reward_memory_enabled = bool(
-            reward_memory_policy["enabled"]
-            and reward_memory_policy["automation"].get("automatic_ingest") is True
-        )
-        turn_granularity = execution_profile_turn_granularity(
-            goal.get("execution_profile")
-            if isinstance(goal.get("execution_profile"), dict)
-            else None
-        )
         prompt_summaries: dict[str, dict[str, Any]] = {}
         installed: dict[str, dict[str, Any]] = {}
         prompt_targets = [
@@ -742,23 +784,12 @@ def build_upgrade_plan(
                 entry = installed_by_key.get((goal_id, mode, ""))
                 legacy_unscoped = entry is not None
             available_capabilities = installed_entry_available_capabilities(entry)
-            agent_profile = agent_profile_for_goal(goal, agent_id)
-            prompt = build_heartbeat_prompt(
-                goal_id=goal_id,
-                active_state=None,
-                active_state_source="registry",
-                resolved_active_state=state_file,
-                compact=mode == "compact",
-                brief=mode == "brief",
-                thin=mode == "thin",
+            prompt = goal_heartbeat_prompt(
+                goal,
                 cli_bin=cli_bin,
+                mode=mode,
                 agent_id=agent_id,
-                agent_profile=agent_profile,
-                registered_agents=registered_agents or None,
                 available_capabilities=available_capabilities,
-                runtime_profile="codex_app_heartbeat",
-                turn_granularity=turn_granularity,
-                reward_memory_enabled=reward_memory_enabled,
             )
             summary = prompt_summary(prompt, mode)
             summary["agent_id"] = agent_id

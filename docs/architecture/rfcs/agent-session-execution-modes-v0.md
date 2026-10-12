@@ -1,6 +1,7 @@
 # RFC: Agent Session Execution Modes (v0)
 
-- **RFC status:** Draft, under maintainer review.
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Partial. The attached-host binding, broker, and runtime
   fencing already ship on `main`; the cross-host admission contract below is
   proposed and only partially enforced.
@@ -182,6 +183,7 @@ Audited at `6c3da75ca`. These are current facts, not proposed behavior.
 | Attached broker | [`loopx/attached_session.py`](../../../loopx/attached_session.py) implements bind, claim, and complete under `loopx_attached_agent_session_broker_v0`, adapter kind `attached_host_session`, upstream mode `host_broker`, with a bounded claim wait of 1800 seconds, duplicate-safe claim and completion receipts, and per-binding file locks. |
 | Runtime fencing | [`loopx/chat_runtime.py`](../../../loopx/chat_runtime.py) never starts a managed adapter for an attached session and fails closed with typed errors such as `attached_session_live_steering_unavailable`, `live_steering_requires_active_turn`, and `live_steering_session_not_attached`. |
 | CLI surface | `loopx worker-bridge attached-session-bind`, `-list`, `-claim`, and `-complete` exist in [`loopx/cli_commands/worker_bridge.py`](../../../loopx/cli_commands/worker_bridge.py), documented in the [broker guide](../../integrations/attached-agent-session-broker.md) and the [worker-bridge install contract](../../integrations/worker-bridge-install-contract.md). |
+| Existing-session delegation | [`loopx delegation`](../../reference/local-delegation.md#use-an-existing-agent-conversation-through-its-shell) exposes the same explicitly bound work as MCP to an existing shell-capable Agent. `operations` recovers requester-scoped work without remembered IDs, rechecks acceptance and exposes unavailable items and further pages. Newly tool-equipped Goal Chat consumes the same inventory; resumed native threads keep their original tool schema. It does not provision an Agent, migrate a host or install an automatic wake policy. |
 | Focused tests | [`tests/test_attached_session_cli.py`](../../../tests/test_attached_session_cli.py) and `tests/test_chat_codex_home.py::test_attached_session_uses_existing_host_not_managed_adapter` cover bind/claim/complete and the no-managed-adapter fence. |
 | Product-level proposal | The [Desktop execution frontends RFC](desktop-execution-frontends-v0.md) owns the Mode A/Mode B product comparison, the connector and event-source orthogonality, and the Desktop non-goals. |
 | Host-side loop guidance | [Codex CLI TUI loop](../../product/runtimes/codex-cli/codex-cli-tui-loop.md) documents session-attached automation and resume options for one visible host. |
@@ -220,6 +222,159 @@ Forbidden alternate authorities: a host-local store as Goal, Todo, quota,
 monitor, or lifecycle truth; conversation text as a receipt; a second scheduler
 for the same binding; a Goal-wide default binding; and a mode change inferred
 from a probe, a transport, or a prompt.
+
+### Reusable Agent operations and continuation ownership
+
+The existing frontend Goal Chat is the baseline conversational coordinator. The
+owner may instead assign peer task coordination to a registered Agent; that role
+does not itself create an Agent, transfer work authority or activate a driver.
+The local steward retains cross-Goal intake and owner attention. Conversation
+and peer coordinators reuse scoped delegation, independent acceptance and return.
+
+The [explicit Goal Chat continuation](../../reference/goal-chat-continuation.md)
+slice connects the composer’s explicit LoopX mode to Codex native continuation,
+host-bound shared delegation, queue/inbox/steer and pause/recovery. First enable
+upgrades an idle executor’s tools while preserving local history; unfinished
+native Goals cannot be replaced. Member Turns retain TS acceptance authority.
+Native completion does not settle the canonical Goal or report Todo. Other lead
+drivers, Lark parity, unattended service and the broader multi-Agent acceptance
+rows below remain separate qualification requirements.
+
+This proposed extension refines the managed-team delivery contract; it does not
+add CLI flags, promote a host, or change existing session/profile defaults.
+Keep three identities separate: the registered Agent, its current host session
+and execution generation, and each work request/attempt. Creating an Agent is
+not starting a process, attaching a session is not claiming work, and a returned
+artifact is not accepted work.
+
+| Operation family | Existing owner to reuse | Required observation |
+| --- | --- | --- |
+| Discover/create/reuse an Agent | Registry, directory, onboarding and configured execution profile | Stable Agent identity, effective scope and supported capabilities; repeated creation does not duplicate the identity |
+| Attach/start/resume/stop | This RFC's binding and the selected host adapter | Exact session/generation, actual running or blocked state, cancellation and replacement readback; attached hosts never acquire a substitute executor |
+| Send/receive/return | Collaboration request owner and the [ingress policies](desktop-execution-frontends-v0.md#agent-scoped-bot-ingress-modes) | Requested/effective inbox, queue or steer semantics; delivery, consumption and work adoption remain distinct |
+| Claim/validate/settle | Existing Todo, lease, acceptance and quota owners | Current execution proof and independent acceptance; a host cannot certify its own completion |
+
+These are semantic operation families, not a new universal adapter API. Both a
+lead Agent and an authorized managed worker may call them. Host lifecycle
+differences remain explicit; a coordination role grants no extra authority.
+
+**Continuation ownership is a separate axis from session mode and provider.**
+Each binding has one qualified owner of the next execution opportunity:
+
+- **LoopX-governed Turn:** the existing runtime/scheduler admits a complete
+  bounded work unit; the host runs its own model/tool loop and returns a typed
+  candidate for independent validation and settlement. Local and cloud hosts
+  may implement the same contract. A Turn is not one model call or a scripted
+  business phase; the Agent may investigate, delegate and revise within scope.
+- **Native Goal runtime:** submit one Goal/task body and let that runtime own
+  continuation, with qualified handling of LoopX continue/defer/complete,
+  cancellation, budget and result readback. A prompt alone is not a scheduler;
+  provider Goal evaluation does not replace LoopX work acceptance.
+- **Same-session host driver:** an explicitly activated host integration can
+  obtain fresh LoopX admission and enqueue the next task in the existing
+  session. Qualify this separately from a provider's native Goal evaluator.
+
+Never wrap a self-continuing native Goal in repeated externally driven Turns on
+the same binding. To change the continuation owner, stop new admission, reconcile
+pending tools and uncertain effects, fence the old executor, and read back the
+new binding before execution. Disconnection does not authorize that switch.
+
+For the first mixed managed cohort, qualify a cloud adapter against the same
+governed Turn contract as the local worker before expanding native Goal profiles.
+This is a delivery priority, not a default migration. The
+[harness selection RFC](harness-selection-dsh-pi-v0.md) owns provider qualification.
+Reuse the existing profile editor and session projections; do not add a
+manager-only creation service, task ledger or scheduling loop.
+
+### Model selection within Agent creation and attachment
+
+This is a proposed refinement of the reusable Agent operations above, not a
+shipped model-catalog API. Model selection belongs to an Agent's execution
+profile and binding, independently of whether that Agent coordinates others.
+Reuse the existing managed execution profile, subagent launch preferences and
+profile editor; the steward's machine defaults are one caller's defaults, not
+the universal configuration owner. A model change does not create a new logical
+Agent or grant permission to launch one.
+
+| Step | Owner and required observation |
+| --- | --- |
+| Discover choices | The selected executor/provider adapter reports model IDs, supported parameters, capability limits, discovery scope and freshness. Keep provider catalog presence, managed-host compatibility and account authorization separate; unknown or failed discovery is not an empty supported list. |
+| Request and resolve a profile | The shared typed TS boundary validates caller scope, allowed profiles, budget constraints and explicit configuration precedence. Retain the requested model and parameters separately from resolved values and their sources. SDK/network discovery remains in the adapter; do not copy selection or admission rules into each Python launcher. |
+| Create or attach | Creation uses the resolved profile through the selected adapter. Attachment observes the existing host's actual profile; it cannot silently change its model, start a replacement executor or claim that a requested preference already took effect. Repeated creation reuses the existing identity/binding contract. |
+| Start and read back | Bind the profile revision to the execution generation and read back the provider-reported model and effective parameters. A visible catalog row or successful Agent-definition creation does not establish that an inference session can run. A mismatch or unsupported option produces an actionable failure, never an implicit model fallback. |
+
+Parameter support is provider-specific: the same reasoning-effort label need
+not have the same meaning across hosts, and speed, thinking mode, context limits
+and tool support are not universal knobs. Use a small common selection contract
+with validated provider-owned options rather than a core list of vendor models
+or one global parameter enum. Credentials remain in the selected provider's
+credential scope and never enter an Agent profile or public projection.
+
+Mutable model aliases require explicit readback. Record a resolved version only
+when the provider exposes it; otherwise record that the backing version is
+unknown rather than treating the alias as a reproducible snapshot. Profile
+changes use the existing binding revision/generation and rebind boundary;
+running work retains its admitted profile until a qualified transition occurs.
+Changing the parent profile does not silently change existing children. An
+authorized child coordinator may choose only within its inherited profile and
+budget scope, using the same operation as the lead.
+
+The next implementation slice must connect discovery, selection, creation or
+attachment, launch and readback for both a local and a cloud executor. Qualify
+unsupported parameters, stale discovery, unavailable authorization, retry,
+mutable aliases, and profile changes during active work. Reuse the existing
+CLI, frontend and Lark configuration owners/projections where affected; a
+backend field alone does not complete that user journey. Existing defaults and
+explicit host choices remain unchanged until a disclosed implementation lands.
+
+### Effective launch context and recoverable presence
+
+Refine creation/attachment in the existing profile and binding owners; this is
+proposed qualification, not a new factory API or an implemented residency policy.
+Three independent inputs must remain distinguishable:
+
+| Input | Resolution and readback |
+| --- | --- |
+| Context selection | A bounded semantic brief or a host-supported history projection, with source revision, coverage and omissions. A history fork is not a process checkpoint or a copy of pending tools, claims or authority. Rebuild receiver instructions; do not inherit a parent coordinator role as a grant. |
+| Execution preferences | Resolve model, effort and supported tools from the current effective profile, not a stale initial configuration. The shared resolver owns explicit/omitted/clear intent and precedence; record requested, resolved and provider-observed values plus their source. A role name or parseable option is not evidence it took effect. |
+| Execution authority | Reapply the current resource, tool, environment and budget scope after preference resolution. Role/context inheritance cannot broaden it. Workspace sharing or isolation is an explicit host fact; a separate model context does not imply a separate worktree or sandbox. |
+
+Readiness requires both the actual binding's capabilities and permission to use
+them. Model catalog availability, exposed tool schema, owner activation and
+successful host readback are different observations. A child capable of inference
+may still lack delegation or steering. Discover that before dispatch and return
+the missing condition; do not repair it by silently changing provider or authority.
+Use the same resolution for a steward, project coordinator and nested member.
+
+Do not collapse identity, residency and execution into a single Agent status:
+
+| Dimension | Existing source and invariant |
+| --- | --- |
+| Registered identity | Registry/directory owns identity and scope. A missing live-runtime row or a truncated display cannot prove the Agent was deleted. |
+| Loaded runtime | Host supervisor observes resident, unloaded, unavailable or unknown instances. These are conceptual distinctions, not new registry enum values. |
+| Active execution | Binding/Turn owner identifies the active execution and its generation. Turn completion or interruption does not itself delete identity, release a work lease or prove all descendant effects stopped. |
+
+Any future capacity controller must declare what it counts: active executions,
+resident instances, pending reservations and root inclusion are distinct from
+registered identity count and display limits. Do not introduce eviction merely
+to expose these observations. If a host later supports unloading, qualify it only
+after no active execution/pending input and a durable recovery basis are verified.
+Capacity exhaustion returns an explicit disposition; it does not promise a queue.
+
+Creation retries first reconcile the original operation and provider identity;
+a lost response cannot justify a second runtime. Recovery rechecks binding
+version/generation, current scope, environment and durable context before an
+execution effect. Restoring an identity roster does not start every member.
+Unavailable history or an unsupported resume leaves a specific gap and preserves
+pending work; use the separately qualified replacement path, never a guessed
+session or broader policy. This reuses the existing operation journal and
+supervisor, not another lifecycle ledger.
+
+The creation/profile slice must exercise changed parent preferences, unsupported
+child tools, filtered/compacted context, shared workspace assumptions, ambiguous
+creation response, unloaded versus absent identity, and revoked scope on resume.
+Use actual local and cloud adapter readback; list length and role prose are not
+acceptance evidence.
 
 ### State model and schema
 
@@ -307,11 +462,12 @@ it may not claim an executing session binding.
 
 ### Capability and delivery-mode orthogonality
 
-Five axes that are frequently confused, each with one owner:
+Six axes that are frequently confused, each with one owner:
 
 | Axis | Values | Owner |
 | --- | --- | --- |
 | Execution mode | `managed_runtime`, `attached_host` | This RFC |
+| Continuation owner (proposed) | LoopX Turn driver, native Goal runtime, same-session host driver | This RFC; qualification per selected profile, never inferred from provider or location |
 | Transport | web chat, Lark, CLI | Desktop frontends RFC; transports never change mode |
 | Event source | group message, document comment, monitor observation, inbound file | Connector and collaboration contracts |
 | Ingress/delivery mode | `live_steering`, `session_queue`, `async_inbox` | Desktop frontends RFC, gated per binding |
@@ -433,6 +589,14 @@ future evidence and must not be reported as green.
 Deterministic package tests are not sufficient for admission. A new host needs
 at least one real-host row: a live process, a real bind, and a real restart.
 
+The proposed continuation extension also requires an installed local/cloud pair
+to use the same admission/result/independent-validation contract, a managed
+worker to request and adopt another worker's artifact, and a driver-switch race
+to reject the old executor. Test ordinary waiting, pending tools, budget
+exhaustion and native Goal defer/terminal handling separately. None of these
+rows is qualified by registration, HTTP acknowledgement or a fixed phase script.
+Preserve feature-off behavior for every existing profile and entrypoint.
+
 ## 11. Operational contract
 
 - **Observability.** Session readback exposes mode, host surface, executor
@@ -453,6 +617,22 @@ at least one real-host row: a live process, a real bind, and a real restart.
   and never move work to another executor.
 - **Recovery.** An interrupted executor turn is reconciled before retry. A
   validated result is journaled before lifecycle writeback.
+
+### Long-horizon managed route (2026-09-16)
+
+[Roadmap](loopx-overall-roadmap-v0.md) R2 first qualifies a steward and 2–3 actual managed workers across Turns; R6 qualifies local/cloud execution on one authority, then R7 expands active scale. M1–M4 here retain host admission ownership. Team-plan `ready` cannot replace binding, qualification, claim/lease or actual process readback.
+
+DSH steward Chat is currently single-segment, read-only and without cross-turn host sessions; `turn run-once` is a separate bounded execution path. The next slice proves successor wake, cancellation/stop, crash recovery and returning stale-executor fences with packaged frontend/CLI/Lark readback. An executor name, one segment or multiple registrations cannot establish continuous managed execution. Disconnection never switches attached hosts to managed, and unqualified hosts retain their existing boundary.
+
+The opt-in [local delegation interface](../../reference/local-delegation.md)
+now provides durable operations around bounded Turns, including member-to-member
+launch grants and TS task acceptance. Its Ark process-loss drill resumes the
+original Session/input after cloud tool waiting; it does not resend acknowledged
+effects or reset the deadline. This qualifies local execution recovery, not
+successor wake, attached-host takeover or full fleet cancellation. Provider file
+profiles preserve the existing model/tool configuration boundary; the general
+Agent creation/model discovery proposal above remains separate.
+
 
 ## 12. Normative delivery plan
 

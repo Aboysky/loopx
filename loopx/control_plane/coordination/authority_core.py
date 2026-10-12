@@ -4,9 +4,10 @@ Adapters normalize their persisted state while holding the existing lock, call
 ``decide``, and only then perform their current write.  A returned transition is
 a proposal, not proof that any write committed.  Durable execution results and
 storage outcomes deliberately live outside this module. Todo lifecycle admission,
-ownership routing, terminal fences and task-lease acquire/renew/transfer/release
-adapt to canonical pure TypeScript decisions;
-Python retains typed snapshot/result projection rather than a second rule set.
+ownership routing and terminal fences adapt to canonical TypeScript decisions.
+Lease and handoff writers use their whole native transactions directly; their
+unconsumed Python decision facades and lease-mode input are retired. Python
+retains the live Todo snapshot/result adaptation, not a second lease rule.
 """
 
 from __future__ import annotations
@@ -32,13 +33,6 @@ class TodoAction(StrEnum):
     UPDATE = "update"
     COMPLETE = "complete"
     SUPERSEDE = "supersede"
-
-
-class LeaseAction(StrEnum):
-    ACQUIRE = "acquire"
-    RENEW = "renew"
-    TRANSFER = "transfer"
-    RELEASE = "release"
 
 
 class DecisionOutcome(StrEnum):
@@ -97,14 +91,6 @@ class LeaseSnapshot:
 
 
 @dataclass(frozen=True)
-class OtherLeaseSnapshot:
-    todo_id: str
-    active: bool
-    effective: bool
-    write_scopes: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class CoordinationSnapshot:
     handoff_mode: HandoffMode = HandoffMode.LEGACY
     registered_agents: tuple[str, ...] = ()
@@ -112,9 +98,6 @@ class CoordinationSnapshot:
     todo: TodoSnapshot | None = None
     decision_target: TodoSnapshot | None = None
     lease: LeaseSnapshot | None = None
-    other_leases: tuple[OtherLeaseSnapshot, ...] = ()
-    active_claimed_todo_ids: tuple[str, ...] = ()
-    active_lease_todo_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,67 +116,6 @@ class TodoMutationCommand:
 
 
 @dataclass(frozen=True)
-class LeaseAcquireCommand:
-    owner: str
-    idempotency_key: str
-    ttl_seconds: int
-    write_scopes: tuple[str, ...] = ()
-    expected_version: int | None = None
-
-
-@dataclass(frozen=True)
-class LeaseRenewCommand:
-    owner: str
-    idempotency_key: str
-    ttl_seconds: int
-    expected_version: int | None = None
-
-
-@dataclass(frozen=True)
-class LeaseTransferCommand:
-    owner: str
-    idempotency_key: str
-    new_owner: str
-    new_idempotency_key: str
-    ttl_seconds: int
-    expected_version: int | None = None
-
-
-@dataclass(frozen=True)
-class LeaseReleaseCommand:
-    owner: str
-    idempotency_key: str
-    expected_version: int | None = None
-
-
-@dataclass(frozen=True)
-class LeaseOwnerEligibilityCommand:
-    owner: str | None
-
-
-@dataclass(frozen=True)
-class LeaseModeGateCommand:
-    action: LeaseAction
-
-
-@dataclass(frozen=True)
-class HandoffModeTransitionCommand:
-    requested_mode: HandoffMode
-
-
-CoordinationCommand = (
-    TodoMutationCommand
-    | LeaseAcquireCommand
-    | LeaseRenewCommand
-    | LeaseTransferCommand
-    | LeaseReleaseCommand
-    | LeaseOwnerEligibilityCommand
-    | LeaseModeGateCommand
-    | HandoffModeTransitionCommand
-)
-
-
-@dataclass(frozen=True)
 class TransitionPlan:
     outcome: DecisionOutcome
     code: str
@@ -202,37 +124,6 @@ class TransitionPlan:
     ownership_gate: OwnershipGate = OwnershipGate.NOT_REQUIRED
     lease_fence: LeaseFence = LeaseFence.NOT_REQUIRED
     idempotent: bool = False
-
-
-def _result(
-    outcome: DecisionOutcome,
-    code: str,
-    *,
-    next_snapshot: CoordinationSnapshot | None = None,
-    authority_mode: str | None = None,
-    ownership_gate: OwnershipGate = OwnershipGate.NOT_REQUIRED,
-    lease_fence: LeaseFence = LeaseFence.NOT_REQUIRED,
-    idempotent: bool = False,
-) -> TransitionPlan:
-    return TransitionPlan(
-        outcome=outcome,
-        code=code,
-        next_snapshot=next_snapshot,
-        authority_mode=authority_mode,
-        ownership_gate=ownership_gate,
-        lease_fence=lease_fence,
-        idempotent=idempotent,
-    )
-
-
-def _invalid_lease_snapshot(lease: LeaseSnapshot | None) -> bool:
-    """Reject contradictory normalized states at the pure-core boundary."""
-
-    return bool(
-        lease is not None
-        and lease.active
-        and (not lease.present or lease.status == "released")
-    )
 
 
 def write_scopes_overlap(
@@ -328,8 +219,6 @@ def _typescript_todo_decision(
     """Project the typed lifecycle decision; storage and locks stay with callers."""
 
     todo = snapshot.todo
-    if todo is None:
-        return _result(DecisionOutcome.REJECTED, "todo_not_found")
     terminal = command.action in {TodoAction.COMPLETE, TodoAction.SUPERSEDE}
     operation = "terminal" if terminal else "mutation"
     payload = effect_runtime_result(
@@ -347,7 +236,7 @@ def _typescript_todo_decision(
                 }
                 for grant in snapshot.lifecycle_grants
             ],
-            "todo": _todo_fact_payload(todo),
+            "todo": _todo_fact_payload(todo) if todo is not None else None,
             "decision_target": (
                 _todo_fact_payload(snapshot.decision_target)
                 if snapshot.decision_target is not None
@@ -380,7 +269,9 @@ def _typescript_todo_decision(
         ) from exc
     next_snapshot = None
     if outcome is DecisionOutcome.APPLY:
-        if payload.get("next_todo_status") != ("done" if terminal else todo.status):
+        if todo is None or payload.get("next_todo_status") != (
+            "done" if terminal else todo.status
+        ):
             raise RuntimeError(
                 "TypeScript Todo lifecycle decision returned invalid next Todo state"
             )
@@ -444,384 +335,12 @@ def ownership_gate_requirement(
     return OwnershipGate(payload["ownership_gate"])
 
 
-def _lease_handoff_rejection(snapshot: CoordinationSnapshot) -> str | None:
-    if snapshot.handoff_mode is HandoffMode.SOFT_CLAIM:
-        return "handoff_mode_forbids_lease"
-    return None
-
-
-def _decide_lease_mode_gate(
-    snapshot: CoordinationSnapshot,
-    command: LeaseModeGateCommand,
-) -> TransitionPlan:
-    if (
-        command.action is not LeaseAction.RELEASE
-        and (rejection := _lease_handoff_rejection(snapshot)) is not None
-    ):
-        return _result(DecisionOutcome.REJECTED, rejection)
-    return _result(
-        DecisionOutcome.APPLY,
-        "lease_mutation_allowed",
-        next_snapshot=snapshot,
-    )
-
-
-def _decide_lease_owner_eligibility(
-    snapshot: CoordinationSnapshot,
-    command: LeaseOwnerEligibilityCommand,
-) -> TransitionPlan:
-    payload = effect_runtime_result(
-        "task_lease.owner_eligibility",
-        {
-            "todo": _todo_fact_payload(snapshot.todo) if snapshot.todo else None,
-            "owner": command.owner,
-            "registered_agents": list(snapshot.registered_agents),
-        },
-    )
-    if not isinstance(payload, dict) or payload.get("schema_version") != "task_lease_owner_eligibility_v0":
-        raise RuntimeError("TypeScript lease owner eligibility result shape mismatch")
-    if payload.get("outcome") == "rejected":
-        return _result(DecisionOutcome.REJECTED, str(payload["code"]))
-    if payload.get("outcome") != "apply" or payload.get("code") != "lease_owner_allowed":
-        raise RuntimeError("TypeScript lease owner eligibility verdict mismatch")
-    return _result(
-        DecisionOutcome.APPLY,
-        "lease_owner_allowed",
-        next_snapshot=snapshot,
-    )
-
-
-def _decide_acquire(
-    snapshot: CoordinationSnapshot,
-    command: LeaseAcquireCommand,
-) -> TransitionPlan:
-    todo = snapshot.todo
-    lease = snapshot.lease
-    payload = effect_runtime_result(
-        "task_lease.acquire.decide",
-        {
-            "handoff_mode": snapshot.handoff_mode.value,
-            "registered_agents": list(snapshot.registered_agents),
-            "todo": (
-                {
-                    "todo_id": todo.todo_id,
-                    "status": todo.status,
-                    "claimed_by": todo.claimed_by,
-                    "excluded_agents": sorted(todo.excluded_agents),
-                }
-                if todo is not None
-                else None
-            ),
-            "lease": (
-                {
-                    "present": lease.present,
-                    "active": lease.active,
-                    "status": lease.status,
-                    "owner": lease.owner,
-                    "idempotency_key": lease.idempotency_key,
-                    "version": lease.version,
-                    "lease_epoch": lease.lease_epoch,
-                    "write_scopes": list(lease.write_scopes),
-                    "acquire_ttl_seconds": lease.acquire_ttl_seconds,
-                }
-                if lease is not None
-                else None
-            ),
-            "other_leases": [
-                {
-                    "todo_id": other.todo_id,
-                    "active": other.active,
-                    "effective": other.effective,
-                    "write_scopes": list(other.write_scopes),
-                }
-                for other in snapshot.other_leases
-            ],
-            "command": {
-                "owner": command.owner,
-                "idempotency_key": command.idempotency_key,
-                "ttl_seconds": command.ttl_seconds,
-                "write_scopes": list(command.write_scopes),
-                "expected_version": command.expected_version,
-            },
-        },
-    )
-    if not isinstance(payload, dict):
-        raise RuntimeError("native task-lease acquire decision must return an object")
-    raw_outcome = payload.get("outcome")
-    raw_code = payload.get("code")
-    raw_idempotent = payload.get("idempotent")
-    if (
-        not isinstance(raw_outcome, str)
-        or not isinstance(raw_code, str)
-        or not isinstance(raw_idempotent, bool)
-    ):
-        raise RuntimeError("native task-lease acquire decision shape mismatch")
-    try:
-        outcome = DecisionOutcome(raw_outcome)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"native task-lease acquire decision has unsupported outcome: {raw_outcome}"
-        ) from exc
-    next_snapshot: CoordinationSnapshot | None = None
-    if outcome is DecisionOutcome.APPLY:
-        raw_next = payload.get("next_lease")
-        if not isinstance(raw_next, dict):
-            raise RuntimeError("native task-lease acquire apply result omitted next_lease")
-        next_lease = _native_acquire_lease_snapshot(raw_next)
-        next_snapshot = replace(snapshot, lease=next_lease)
-    elif outcome is DecisionOutcome.NO_CHANGE:
-        next_snapshot = snapshot
-    return _result(
-        outcome,
-        raw_code,
-        next_snapshot=next_snapshot,
-        idempotent=raw_idempotent,
-    )
-
-
-def _native_acquire_integer(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise RuntimeError(f"native task-lease acquire {label} must be non-negative")
-    return int(value)
-
-
-def _native_acquire_string(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise RuntimeError(f"native task-lease acquire {label} must be non-empty")
-    return value
-
-
-def _native_acquire_lease_snapshot(value: dict[str, Any]) -> LeaseSnapshot:
-    if value.get("present") is not True or value.get("active") is not True:
-        raise RuntimeError("native task-lease acquire apply lease must be active")
-    raw_scopes = value.get("write_scopes")
-    if not isinstance(raw_scopes, list) or any(
-        not isinstance(scope, str) for scope in raw_scopes
-    ):
-        raise RuntimeError("native task-lease acquire write_scopes shape mismatch")
-    return LeaseSnapshot(
-        present=True,
-        active=True,
-        status=_native_acquire_string(value.get("status"), "status"),
-        owner=_native_acquire_string(value.get("owner"), "owner"),
-        idempotency_key=_native_acquire_string(
-            value.get("idempotency_key"), "idempotency_key"
-        ),
-        version=_native_acquire_integer(value.get("version"), "version"),
-        lease_epoch=_native_acquire_integer(
-            value.get("lease_epoch"), "lease_epoch"
-        ),
-        write_scopes=tuple(raw_scopes),
-        acquire_ttl_seconds=_native_acquire_integer(
-            value.get("acquire_ttl_seconds"), "acquire_ttl_seconds"
-        ),
-    )
-
-
-def _native_lifecycle_lease_snapshot(value: dict[str, Any]) -> LeaseSnapshot:
-    present = value.get("present")
-    active = value.get("active")
-    if not isinstance(present, bool) or not isinstance(active, bool):
-        raise RuntimeError(
-            "native task-lease lifecycle lease presence must be boolean"
-        )
-    status = value.get("status")
-    owner = value.get("owner")
-    idempotency_key = value.get("idempotency_key")
-    if status is not None and not isinstance(status, str):
-        raise RuntimeError("native task-lease lifecycle status must be a string")
-    if owner is not None and not isinstance(owner, str):
-        raise RuntimeError("native task-lease lifecycle owner must be a string")
-    if idempotency_key is not None and not isinstance(idempotency_key, str):
-        raise RuntimeError(
-            "native task-lease lifecycle idempotency_key must be a string"
-        )
-    raw_scopes = value.get("write_scopes")
-    if not isinstance(raw_scopes, list) or any(
-        not isinstance(scope, str) for scope in raw_scopes
-    ):
-        raise RuntimeError("native task-lease lifecycle write_scopes shape mismatch")
-    raw_ttl = value.get("acquire_ttl_seconds")
-    if raw_ttl is not None:
-        raw_ttl = _native_acquire_integer(raw_ttl, "acquire_ttl_seconds")
-    return LeaseSnapshot(
-        present=present,
-        active=active,
-        status=status,
-        owner=owner,
-        idempotency_key=idempotency_key,
-        version=_native_acquire_integer(value.get("version"), "version"),
-        lease_epoch=_native_acquire_integer(
-            value.get("lease_epoch"), "lease_epoch"
-        ),
-        write_scopes=tuple(raw_scopes),
-        acquire_ttl_seconds=raw_ttl,
-    )
-
-
-def _decide_native_lifecycle(
-    snapshot: CoordinationSnapshot,
-    command: LeaseRenewCommand | LeaseTransferCommand | LeaseReleaseCommand,
-) -> TransitionPlan:
-    todo = snapshot.todo
-    lease = snapshot.lease
-    if isinstance(command, LeaseRenewCommand):
-        operation = "renew"
-        ttl_seconds: int | None = command.ttl_seconds
-        new_owner: str | None = None
-        new_idempotency_key: str | None = None
-    elif isinstance(command, LeaseTransferCommand):
-        operation = "transfer"
-        ttl_seconds = command.ttl_seconds
-        new_owner = command.new_owner
-        new_idempotency_key = command.new_idempotency_key
-    else:
-        operation = "release"
-        ttl_seconds = None
-        new_owner = None
-        new_idempotency_key = None
-    payload = effect_runtime_result(
-        "task_lease.lifecycle.decide",
-        {
-            "handoff_mode": snapshot.handoff_mode.value,
-            "registered_agents": list(snapshot.registered_agents),
-            "todo": (
-                {
-                    "todo_id": todo.todo_id,
-                    "status": todo.status,
-                    "claimed_by": todo.claimed_by,
-                    "excluded_agents": sorted(todo.excluded_agents),
-                }
-                if todo is not None
-                else None
-            ),
-            "lease": (
-                {
-                    "present": lease.present,
-                    "active": lease.active,
-                    "status": lease.status,
-                    "owner": lease.owner,
-                    "idempotency_key": lease.idempotency_key,
-                    "version": lease.version,
-                    "lease_epoch": lease.lease_epoch,
-                    "write_scopes": list(lease.write_scopes),
-                    "acquire_ttl_seconds": lease.acquire_ttl_seconds,
-                }
-                if lease is not None
-                else None
-            ),
-            "command": {
-                "operation": operation,
-                "owner": command.owner,
-                "idempotency_key": command.idempotency_key,
-                "expected_version": command.expected_version,
-                "ttl_seconds": ttl_seconds,
-                "new_owner": new_owner,
-                "new_idempotency_key": new_idempotency_key,
-            },
-        },
-    )
-    if not isinstance(payload, dict):
-        raise RuntimeError("native task-lease lifecycle decision shape mismatch")
-    raw_outcome = payload.get("outcome")
-    raw_code = payload.get("code")
-    raw_idempotent = payload.get("idempotent")
-    if not isinstance(raw_outcome, str) or not isinstance(raw_code, str):
-        raise RuntimeError("native task-lease lifecycle decision omitted outcome")
-    if not isinstance(raw_idempotent, bool):
-        raise RuntimeError(
-            "native task-lease lifecycle decision idempotent must be boolean"
-        )
-    try:
-        outcome = DecisionOutcome(raw_outcome)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"native task-lease lifecycle decision has unsupported outcome: {raw_outcome}"
-        ) from exc
-    next_snapshot: CoordinationSnapshot | None = None
-    if outcome is DecisionOutcome.APPLY:
-        raw_next = payload.get("next_lease")
-        if not isinstance(raw_next, dict):
-            raise RuntimeError(
-                "native task-lease lifecycle apply result omitted next_lease"
-            )
-        next_snapshot = replace(
-            snapshot,
-            lease=_native_lifecycle_lease_snapshot(raw_next),
-        )
-    elif outcome is DecisionOutcome.NO_CHANGE:
-        next_snapshot = snapshot
-    return _result(
-        outcome,
-        raw_code,
-        next_snapshot=next_snapshot,
-        idempotent=raw_idempotent,
-    )
-
-
-def _decide_renew(
-    snapshot: CoordinationSnapshot,
-    command: LeaseRenewCommand,
-) -> TransitionPlan:
-    return _decide_native_lifecycle(snapshot, command)
-
-
-def _decide_transfer(
-    snapshot: CoordinationSnapshot,
-    command: LeaseTransferCommand,
-) -> TransitionPlan:
-    return _decide_native_lifecycle(snapshot, command)
-
-
-def _decide_release(
-    snapshot: CoordinationSnapshot,
-    command: LeaseReleaseCommand,
-) -> TransitionPlan:
-    return _decide_native_lifecycle(snapshot, command)
-
-
-def _decide_handoff_transition(
-    snapshot: CoordinationSnapshot,
-    command: HandoffModeTransitionCommand,
-) -> TransitionPlan:
-    result = effect_runtime_result("coordination.handoff_mode.plan", {
-        "schema_version": "loopx_handoff_mode_plan_request_v0",
-        "previous_mode": snapshot.handoff_mode.value,
-        "requested_mode": command.requested_mode.value,
-        "active_claimed_todo_ids": list(snapshot.active_claimed_todo_ids),
-        "active_lease_todo_ids": list(snapshot.active_lease_todo_ids),
-    })
-    if not isinstance(result, dict) or result.get("schema_version") != "loopx_handoff_mode_plan_result_v0":
-        raise RuntimeError("TypeScript handoff mode plan shape mismatch")
-    outcome = DecisionOutcome(result["outcome"])
-    return _result(outcome, str(result["code"]),
-        next_snapshot=(None if outcome is DecisionOutcome.REJECTED else
-                       replace(snapshot, handoff_mode=command.requested_mode)),
-        idempotent=result["idempotent"])
-
-
 def decide(
     snapshot: CoordinationSnapshot,
-    command: CoordinationCommand,
+    command: TodoMutationCommand,
 ) -> TransitionPlan:
     """Evaluate one normalized command without reading or writing state."""
 
-    if isinstance(command, LeaseAcquireCommand):
-        return _decide_acquire(snapshot, command)
-    if _invalid_lease_snapshot(snapshot.lease):
-        return _result(DecisionOutcome.REJECTED, "invalid_lease_snapshot")
     if isinstance(command, TodoMutationCommand):
         return _typescript_todo_decision(snapshot, command)
-    if isinstance(command, LeaseRenewCommand):
-        return _decide_renew(snapshot, command)
-    if isinstance(command, LeaseTransferCommand):
-        return _decide_transfer(snapshot, command)
-    if isinstance(command, LeaseReleaseCommand):
-        return _decide_release(snapshot, command)
-    if isinstance(command, LeaseOwnerEligibilityCommand):
-        return _decide_lease_owner_eligibility(snapshot, command)
-    if isinstance(command, LeaseModeGateCommand):
-        return _decide_lease_mode_gate(snapshot, command)
-    if isinstance(command, HandoffModeTransitionCommand):
-        return _decide_handoff_transition(snapshot, command)
     raise TypeError(f"unsupported coordination command: {type(command).__name__}")

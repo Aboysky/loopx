@@ -28,18 +28,26 @@ authorized: a diff read, green CI, or pull-request metadata is not a substitute.
    surface.
 2. Apply `completion_gate` literally, and re-read the remote head immediately
    before the decision.
-3. Immediately before the merge, run `loopx --format json pr-review --repo
-   OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only when it
-   returns `ready=true` for that unchanged head.
+3. Immediately before the merge, run `loopx --format json pr-review --goal-id
+   GOAL --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only
+   when it returns `ready=true` for that unchanged head; this records the
+   compact Goal readiness observation consumed by future review queues.
 
 A rebase or head update restarts review, and admin bypass never overrides this
 gate: it needs explicit owner authorization and never substitutes for the
 evidence.
 
+## Configured CI Waiting
+
+Pass `--goal-id GOAL` for managed merges and follow resolved `wait_for_ci`.
+The default is true. When false, do not query, poll, or wait for CI; complete
+required local validation and exact-head review/thread checks. GitHub `BLOCKED`
+then reports separately authorized admin bypass, never permission to merge.
+
 ## Decision Workflow
 
 1. Read the repository `AGENTS.md`, the pull-request diff, the changed paths, the
-   checks, and the latest comments.
+   local validation results, and the latest comments.
 2. Confirm that the repository's own self-merge policy covers the changed
    surfaces. The usual LoopX shape is single-purpose and validated work with no
    private state, no public evidence-policy change, no destructive git action,
@@ -50,7 +58,12 @@ evidence.
 4. Decide: approve, self-merge with owner authorization, request changes, or
    hold for the maintainer path. Record the decision on the pull request with
    the changed surfaces, the checks that ran, failures and skips, manual holds,
-   and the reason that coverage is enough.
+   and the reason that coverage is enough. Record it as a published review on
+   the exact head, not as a summary in another channel: on an author-owned PR
+   GitHub blocks formal self-approval, so the record is the `COMMENTED` review
+   carrying the approval conclusion and the English verdict. A self-merge whose
+   head carries no such record is a process gap to repair, not an authorized
+   merge.
 5. After the merge, sync the local default branch, leave unrelated dirty
    worktree state alone, and update LoopX todo or evidence when the work is
    tracked.

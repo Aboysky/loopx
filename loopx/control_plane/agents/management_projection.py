@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..todos.todo_semantics import todo_priority_rank
+
 from typing import Any, Iterable
 
 from ..runtime.public_safety import public_safe_compact_text
@@ -10,6 +12,7 @@ from ..todos.contract import (
     normalize_todo_id,
 )
 from ..todos.summary_item import TODO_SUMMARY_SOURCE_KEYS
+from ...thread_agent_binding import collect_accepted_bindings
 from .material_frontier import AGENT_MATERIAL_FRONTIER_SCHEMA_VERSION
 from .material_handoff import (
     build_material_handoff_note_v1,
@@ -23,13 +26,16 @@ AGENT_MANAGEMENT_MODE = "read_only"
 MAX_AGENT_ROWS = 24
 MAX_AGENT_TODOS = 8
 MAX_REFS = 1
+MAX_SESSION_BINDING_CANDIDATES = 3
 MAX_WORKSPACE_SCOPES = 4
 STALE_CLAIM_THRESHOLD_HOURS = 36
 MATERIAL_LIFECYCLE_CAPABILITY = "material_lifecycle"
+LEASE_STATUS_UNAVAILABLE = "unavailable"
 
 _TODO_GROUP_LIST_KEYS = tuple(
     dict.fromkeys(
         (
+            "items",
             *TODO_SUMMARY_SOURCE_KEYS,
             "executable_backlog_items",
             "deferred_items",
@@ -38,14 +44,6 @@ _TODO_GROUP_LIST_KEYS = tuple(
     )
 )
 
-_PRIORITY_RANK = {
-    "P0": 0,
-    "P0-LOCAL": 0,
-    "P0-USER": 0,
-    "P0-DECISION": 0,
-    "P1": 1,
-    "P2": 2,
-}
 
 
 def _compact(value: Any, *, limit: int = 220) -> str | None:
@@ -84,11 +82,11 @@ def _todo_status(todo: dict[str, Any]) -> str:
 
 
 def _is_done(todo: dict[str, Any]) -> bool:
-    return bool(todo.get("done")) or _todo_status(todo) in {"done", "archive", "archived"}
+    # A deferred Todo can carry a checked legacy display flag. Explicit state
+    # wins; the checkbox fallback belongs only to rows without a status.
+    return _todo_status(todo) in {"done", "archive", "archived"}
 
 
-def _priority_rank(todo: dict[str, Any]) -> int:
-    return _PRIORITY_RANK.get(str(todo.get("priority") or "").strip().upper(), 9)
 
 
 def _index_rank(todo: dict[str, Any]) -> int:
@@ -100,7 +98,7 @@ def _index_rank(todo: dict[str, Any]) -> int:
 
 def _todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, int, str]:
     done_rank = 1 if _is_done(todo) else 0
-    return (done_rank, _priority_rank(todo), _index_rank(todo), str(todo.get("todo_id") or ""))
+    return (done_rank, todo_priority_rank(todo), _index_rank(todo), str(todo.get("todo_id") or ""))
 
 
 def _is_monitor_todo(todo: dict[str, Any]) -> bool:
@@ -143,7 +141,7 @@ def _current_todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, int, int, in
         runnable_advancement_rank,
         selected_rank,
         _current_todo_execution_rank(todo),
-        _priority_rank(todo),
+        todo_priority_rank(todo),
         _index_rank(todo),
         str(todo.get("todo_id") or ""),
     )
@@ -192,6 +190,50 @@ def _registered_agents(status_payload: dict[str, Any]) -> dict[str, dict[str, An
             if goal_id and goal_id not in row["_goal_ids"]:
                 row["_goal_ids"].append(goal_id)
     return rows
+
+
+def projected_agent_goals(
+    status_payload: dict[str, Any],
+) -> dict[str, dict[str, dict[str, list[str]]]]:
+    """Return ``goal_id -> agent_id -> {spellings, open_todo_ids}`` for this view's agents.
+
+    The execution facts collector reads one Turn lane per Goal and agent and the
+    leases on open Todos, so it needs the same agents this projection rows: each
+    Goal's registered agents and its open-Todo claimants. Registered ids keep
+    their registry spelling next to the normalized one, because the Turn
+    envelope names a lane with the former while Todo claims carry the latter.
+    """
+
+    goals: dict[str, dict[str, dict[str, list[str]]]] = {}
+
+    def add(goal_id: Any, raw_agent: Any, *, todo_id: str | None = None) -> None:
+        goal = str(goal_id or "").strip()
+        agent_id = normalize_todo_claimed_by(raw_agent)
+        if not goal or not agent_id:
+            return
+        work = goals.setdefault(goal, {}).setdefault(
+            agent_id, {"spellings": [agent_id], "open_todo_ids": []}
+        )
+        raw = str(raw_agent or "").strip()
+        if raw and raw not in work["spellings"]:
+            work["spellings"].append(raw)
+        if todo_id and todo_id not in work["open_todo_ids"]:
+            work["open_todo_ids"].append(todo_id)
+
+    run_history = _as_dict(status_payload.get("run_history"))
+    for goal in _as_list(run_history.get("goals")):
+        if not isinstance(goal, dict):
+            continue
+        for raw_agent in _as_list(_as_dict(goal.get("coordination")).get("registered_agents")):
+            add(goal.get("id"), raw_agent)
+    for todo in _iter_status_todos(status_payload):
+        if not _is_done(todo):
+            add(
+                todo.get("goal_id"),
+                _todo_agent_id(todo),
+                todo_id=normalize_todo_id(todo.get("todo_id")),
+            )
+    return goals
 
 
 def _agent_material_frontiers(
@@ -276,35 +318,42 @@ def _iter_next_action_todo(
 
 def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
     queue = _as_dict(status_payload.get("attention_queue"))
+    todo_index = _as_dict(status_payload.get("todo_index"))
+    unavailable_goals = set(_as_list(todo_index.get("unavailable_goal_ids")))
+    unavailable_goals.update(
+        item.get("goal_id") for item in _as_list(queue.get("items"))
+        if isinstance(item, dict) and item.get("todo_source") == "unavailable"
+    )
+    candidates: list[dict[str, Any]] = []
+    hints: list[dict[str, Any]] = []
     for item in _as_list(queue.get("items")):
         if not isinstance(item, dict):
             continue
         goal_id = _compact(item.get("goal_id"), limit=180)
-        yield from _iter_next_action_todo(
+        hints.extend(_iter_next_action_todo(
             item,
             goal_id=goal_id,
             source="attention_queue.agent_lane_next_action",
-        )
+        ))
         group = _as_dict(item.get("agent_todos"))
-        yield from _iter_todo_group_items(
+        candidates.extend(_iter_todo_group_items(
             group,
             goal_id=goal_id,
             source="attention_queue.agent_todos",
-        )
+        ))
         project_asset = _as_dict(item.get("project_asset"))
-        yield from _iter_next_action_todo(
+        hints.extend(_iter_next_action_todo(
             project_asset,
             goal_id=goal_id,
             source="project_asset.agent_lane_next_action",
-        )
+        ))
         group = _as_dict(project_asset.get("agent_todos"))
-        yield from _iter_todo_group_items(
+        candidates.extend(_iter_todo_group_items(
             group,
             goal_id=goal_id,
             source="project_asset.agent_todos",
-        )
+        ))
 
-    todo_index = _as_dict(status_payload.get("todo_index"))
     for todo in _as_list(todo_index.get("items")):
         if (
             isinstance(todo, dict)
@@ -313,7 +362,25 @@ def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any
         ):
             row = dict(todo)
             row.setdefault("source", "todo_index")
-            yield row
+            candidates.append(row)
+
+    # Display text, ordinals and Next Action hints are not Task identity. Keep
+    # current source rows before their shorter aliases and historical hints;
+    # both management and its execution-facts reader consume this one view.
+    selected = {_todo_identity(todo): todo for todo in hints}
+    seen: set[tuple[str, str, str, str]] = set()
+    for row in [*candidates, *hints]:
+        if row.get("goal_id") in unavailable_goals:
+            continue
+        identity = _todo_identity(row)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        hint = selected.get(identity)
+        if hint and hint.get("selected_by"):
+            row = dict(row)
+            row.setdefault("selected_by", hint["selected_by"])
+        yield row
 
 
 def _todo_agent_id(todo: dict[str, Any]) -> str | None:
@@ -324,11 +391,12 @@ def _todo_agent_id(todo: dict[str, Any]) -> str | None:
 
 
 def _todo_identity(todo: dict[str, Any]) -> tuple[str, str, str, str]:
+    todo_id = str(todo.get("todo_id") or "").strip()
     return (
         str(todo.get("goal_id") or ""),
-        str(todo.get("todo_id") or ""),
-        str(todo.get("index") or ""),
-        str(todo.get("text") or todo.get("title") or ""),
+        todo_id,
+        "" if todo_id else str(todo.get("index") or ""),
+        "" if todo_id else str(todo.get("text") or todo.get("title") or ""),
     )
 
 
@@ -474,21 +542,123 @@ def _refs_from_todo(todo: dict[str, Any]) -> tuple[list[str], list[str]]:
     return evidence_refs[:MAX_REFS], handoff_refs[:MAX_REFS]
 
 
-def _agent_state(todos: list[dict[str, Any]], *, current: dict[str, Any] | None = None) -> str:
+def _agent_state(
+    todos: list[dict[str, Any]],
+    *,
+    current: dict[str, Any] | None = None,
+    has_session_binding: bool = False,
+    execution: dict[str, Any] | None = None,
+) -> str:
+    """Derive the worker lifecycle state from existing facts only.
+
+    The state is a projection over registry membership, todo claims,
+    session bindings and execution facts.  It does not introduce a second
+    source of truth: every input is already owned by another contract
+    (registry, todo, session binding, Turn lane, delegation lock, lease).
+
+    State priority (highest first):
+    1. blocked      — current todo is blocked or a blocker
+    2. monitoring / waiting — monitor-only or non-open current work
+    3. executing    — the Turn lane is live or a delegation worker holds its lock
+    4. unknown      — the lane or lease cannot be checked here, or an active
+                      lease has expired while nothing is live; consumers fail
+                      closed on it
+    5. bound        — has session binding and active todo
+    6. launchable   — has active todo, no session binding
+    7. addressable  — has session binding but no active todo
+    8. registered   — registered in registry, no binding or todo
+
+    A Todo timestamp never makes a worker `executing`: activity age stays in
+    `last_activity_at` and `stale_claim_hint`, where it is a hint, not liveness.
+    """
     open_todos = [todo for todo in todos if not _is_done(todo)]
-    if not open_todos:
-        return "waiting" if todos else "unknown"
+
+    # Blocked takes priority: a blocked worker cannot launch or execute.
+    # This only applies to the current todo, not all open todos, per the
+    # protocol contract: "blocker remains visible without making the whole
+    # peer appear blocked."
     if current and not _is_done(current):
         if _todo_status(current) == "blocked" or current.get("task_class") == "blocker":
-            return "blocked"
+            return WORKER_LIFECYCLE_STATE_BLOCKED
+
+    if current and not _is_done(current):
         if _is_monitor_todo(current):
             return "monitoring"
-        return "running"
-    if any(_todo_status(todo) == "blocked" or todo.get("task_class") == "blocker" for todo in open_todos):
-        return "blocked"
-    if all(_is_monitor_todo(todo) for todo in open_todos):
-        return "monitoring"
-    return "running"
+        if _todo_status(current) != "open":
+            return "waiting"
+
+    facts = execution or {}
+    lane = str(facts.get("lane") or "")
+    if lane == EXECUTION_LANE_LIVE or facts.get("delegation_worker_active") is True:
+        return WORKER_LIFECYCLE_STATE_EXECUTING
+    lease = _as_dict(facts.get("lease"))
+    if lane in EXECUTION_LANE_UNKNOWN_STATES or (
+        lease.get("status") == LEASE_STATUS_UNAVAILABLE
+        or (lease.get("status") == "active" and lease.get("expired") is True)
+    ):
+        return WORKER_LIFECYCLE_STATE_UNKNOWN
+
+    # Bound: has session binding and active todo.
+    if current and not _is_done(current) and has_session_binding:
+        return WORKER_LIFECYCLE_STATE_BOUND
+
+    # Launchable: has active todo, no session binding.
+    if open_todos:
+        return WORKER_LIFECYCLE_STATE_LAUNCHABLE
+
+    # Addressable: has session binding but no active todo.
+    if has_session_binding:
+        return WORKER_LIFECYCLE_STATE_ADDRESSABLE
+
+    # Registered: in registry, no binding or todo.
+    return WORKER_LIFECYCLE_STATE_REGISTERED
+
+
+# Worker lifecycle state vocabulary for R2 small-team execution qualification.
+# These states are derived from existing facts only; they do not introduce a
+# second source of truth.  The projection reads registry membership, todo
+# claims, session bindings and execution facts (Turn lane liveness, delegation
+# worker locks, task leases) -- nothing else.
+WORKER_LIFECYCLE_STATE_REGISTERED = "registered"
+WORKER_LIFECYCLE_STATE_ADDRESSABLE = "addressable"
+WORKER_LIFECYCLE_STATE_BOUND = "bound"
+WORKER_LIFECYCLE_STATE_LAUNCHABLE = "launchable"
+WORKER_LIFECYCLE_STATE_EXECUTING = "executing"
+WORKER_LIFECYCLE_STATE_BLOCKED = "blocked"
+WORKER_LIFECYCLE_STATE_UNKNOWN = "unknown"
+
+# Execution-fact lane states this projection switches on. `live` is the only
+# evidence of execution; the two unknowns are lanes whose holder this machine
+# cannot vouch for, so the row must not read as idle either.
+EXECUTION_LANE_LIVE = "live"
+EXECUTION_LANE_UNKNOWN_STATES = frozenset({"foreign_host", "unreadable"})
+
+
+def _execution_row(facts: Any) -> dict[str, Any] | None:
+    """Project one agent's execution facts as read-only evidence for its state."""
+
+    if not isinstance(facts, dict):
+        return None
+    row: dict[str, Any] = {}
+    lane = _compact(facts.get("lane"), limit=40)
+    if lane:
+        row["lane"] = lane
+    holder = _as_dict(facts.get("lane_holder"))
+    if holder:
+        row["lane_holder"] = {
+            key: holder[key]
+            for key in ("host", "pid", "acquired_at")
+            if holder.get(key) not in (None, "")
+        }
+    if facts.get("delegation_worker_active") is True:
+        row["delegation_worker_active"] = True
+    lease = _as_dict(facts.get("lease"))
+    lease_status = _compact(lease.get("status"), limit=40)
+    if lease_status:
+        row["lease"] = {"status": lease_status}
+        if isinstance(lease.get("expired"), bool):
+            row["lease"]["expired"] = lease["expired"]
+    return row or None
 
 
 def _last_activity(todos: list[dict[str, Any]]) -> str | None:
@@ -508,16 +678,51 @@ def _safe_next_action(todo: dict[str, Any] | None) -> str:
     return "Inspect projected todo."
 
 
+def _collect_session_binding_candidates(
+    status_payload: dict[str, Any],
+) -> dict[str, list[dict[str, str]]]:
+    """Group one Agent's accepted session bindings by the owner's agent identity.
+
+    Session bindings come from run_history.coordination.thread_agent_bindings
+    and are the only source for addressable/bound lifecycle states. They are
+    read through the binding owner's `collect_accepted_bindings`, so this row
+    counts the same bindings the peer directory publishes as routes instead of
+    normalising a second time here; that also keys the candidates by the same
+    agent identity this projection uses for its rows. The display budget is not
+    an identity key: the owner accepts thread identifiers to 128 characters and
+    host surfaces to 64, both wider than what this projection shows, so two
+    accepted bindings that share a visible prefix are still two routes.
+    Identity stays whole, and `_compact` only renders it.
+    """
+
+    candidates: dict[str, list[dict[str, str]]] = {}
+    run_history = _as_dict(status_payload.get("run_history"))
+    for binding in collect_accepted_bindings(_as_list(run_history.get("goals"))):
+        candidates.setdefault(binding["agent_id"], []).append(
+            {
+                "thread_id": _compact(binding["thread_id"], limit=120),
+                "host_surface": _compact(binding["host_surface"], limit=60),
+            }
+        )
+    return candidates
+
+
 def build_agent_management_projection(
     status_payload: dict[str, Any],
     *,
     available_capabilities: Any = None,
+    execution_facts: Any = None,
 ) -> dict[str, Any]:
     """Build a read-only agent management view from a status payload.
 
     This is a projection over existing LoopX status/todo/history state. It does
     not allocate tasks, dispatch agents, reclaim stale claims, or expose write
     actions.
+
+    ``execution_facts`` maps agent id to the facts `collect_agent_execution_facts`
+    reads (Turn lane liveness, delegation worker lock, task lease). Without them
+    no row can be `executing` or `unknown`: the projection then says what the
+    durable state proves and nothing more.
     """
 
     rows_by_agent = _registered_agents(status_payload)
@@ -530,15 +735,19 @@ def build_agent_management_projection(
         else {}
     )
     goal_filter = _compact(status_payload.get("goal_filter"), limit=180)
-    seen_todos: set[tuple[str, str, str, str]] = set()
+
+    # Session bindings come from run_history.coordination.thread_agent_bindings.
+    # This is the only source for addressable/bound lifecycle states. One Agent
+    # can hold several historical bindings, and an omitted one is not disproved:
+    # keep a bounded candidate summary plus the full count, so no consumer can
+    # read the surviving row as the only route to that peer.
+    session_binding_candidates = _collect_session_binding_candidates(status_payload)
+    facts_by_agent = execution_facts if isinstance(execution_facts, dict) else {}
+
     for todo in _iter_status_todos(status_payload):
         agent_id = _todo_agent_id(todo)
         if not agent_id:
             continue
-        identity = _todo_identity(todo)
-        if identity in seen_todos:
-            continue
-        seen_todos.add(identity)
         row = rows_by_agent.setdefault(
             agent_id,
             {
@@ -576,17 +785,32 @@ def build_agent_management_projection(
             for ref in todo_handoffs:
                 if ref not in handoff_refs:
                     handoff_refs.append(ref)
+        last_activity = _last_activity(todos)
+        execution = _execution_row(facts_by_agent.get(agent_id))
+        agent_state = _agent_state(
+            all_todos,
+            current=current,
+            has_session_binding=agent_id in session_binding_candidates,
+            execution=execution,
+        )
         agent_row: dict[str, Any] = {
             "agent_id": agent_id,
             "agent_model": raw_row.get("agent_model") or "unregistered",
-            "state": _agent_state(all_todos, current=current),
+            "state": agent_state,
             "current_todo": _todo_row(current) if current else None,
             "next_action": _safe_next_action(current),
-            "last_activity_at": _last_activity(todos),
+            "last_activity_at": last_activity,
+            "execution": execution,
             "evidence_refs": evidence_refs[:MAX_REFS],
             "handoff_refs": handoff_refs[:MAX_REFS],
             "goal_ids": _as_list(raw_row.get("_goal_ids"))[:MAX_REFS],
         }
+        binding_candidates = session_binding_candidates.get(agent_id)
+        if binding_candidates:
+            agent_row["session_binding_candidates"] = binding_candidates[
+                :MAX_SESSION_BINDING_CANDIDATES
+            ]
+            agent_row["session_binding_count"] = len(binding_candidates)
         material_frontier_key = _agent_material_frontier_key(
             raw_row=raw_row,
             current=current,
@@ -636,6 +860,10 @@ def build_agent_management_projection(
     }
     if material_frontiers:
         source_summary["material_frontier_count"] = len(material_frontiers)
+    if isinstance(execution_facts, dict):
+        # One flag: readers only need to tell "facts collected, none found"
+        # from "no facts collected"; each row carries its own evidence.
+        source_summary["execution_facts_collected"] = True
 
     projection: dict[str, Any] = {
         "schema_version": AGENT_MANAGEMENT_PROJECTION_SCHEMA_VERSION,

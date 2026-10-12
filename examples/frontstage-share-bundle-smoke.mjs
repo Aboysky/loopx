@@ -2,10 +2,14 @@
 // Smoke-test the public-safe frontstage static export bundle.
 
 import { spawnSync } from "node:child_process";
-import { readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateBilingualBlog } from "./blog-bilingual-index-smoke.mjs";
+import { scanPublicBoundary } from "./export-frontstage-share-bundle.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = resolve("/tmp", "loopx-frontstage-share-bundle-smoke");
@@ -35,21 +39,19 @@ function assertExists(path) {
   }
 }
 
-function assertNoLeak(text, label) {
-  const forbidden = [
-    /\/Users\//,
-    /\/private\//,
-    new RegExp("byte" + "dance", "i"),
-    new RegExp("lark" + "office", "i"),
-    new RegExp("\\.codex/goals|\\.goal-" + "harness"),
-    new RegExp("raw_" + "internal_note"),
-    /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/,
-    /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i,
-  ];
-  const hit = forbidden.find((pattern) => pattern.test(text));
-  if (hit) {
-    throw new Error(`${label} leaked forbidden pattern: ${hit}`);
+// Relative references in the exported editorial pages point at either another
+// exported page directory or a shipped static asset. Page references must own
+// an index.html; asset references must resolve to the asset file itself.
+const relativeAssetReferencePattern =
+  /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|mjs|mp4|pdf|png|svg|txt|webm|webp|woff2?|xml|zip)$/i;
+const nonBundleReferencePattern = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i;
+
+function assertRelativeReferenceExists(pagePath, target) {
+  if (relativeAssetReferencePattern.test(target)) {
+    assertExists(resolve(dirname(pagePath), target));
+    return;
   }
+  assertExists(resolve(dirname(pagePath), target, "index.html"));
 }
 
 function collectFakePrivateMarkers(text) {
@@ -73,6 +75,34 @@ async function collectGeneratedTextFiles(rootDir) {
   }
   await visit(rootDir);
   return files;
+}
+
+// Exercise the real exporter guard, with independent accept/reject inputs.
+const boundaryProbeDir = await mkdtemp(resolve(tmpdir(), "loopx-public-source-smoke-"));
+try {
+  const publicCitation = '<a href="https://github.com/ByteDance-Seed/EdgeBench">Benchmark source</a>';
+  const probePath = resolve(boundaryProbeDir, "index.html");
+  await writeFile(probePath, publicCitation);
+  await scanPublicBoundary(boundaryProbeDir);
+  for (const unsafe of [
+    "byte" + "dance internal workspace",
+    '<a href="https://github.com/ByteDance-Seed/private-work">unverified source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench?access_token=secret">source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench/private">source</a>',
+    '<a href="https://github.com/ByteDance-Seed/EdgeBench.evil">source</a>',
+    "/Users/fixture/private-work",
+    "/private/fixture/private-work",
+    "https://fixture." + "lark" + "office.com/docx/private",
+    ".loopx/goals/private-fixture",
+    "raw_" + "internal_note",
+    "-----BEGIN PRIVATE KEY-----",
+    "access_token=fixture-secret",
+  ]) {
+    await writeFile(probePath, `${publicCitation}<p>${unsafe}</p>`);
+    await assert.rejects(scanPublicBoundary(boundaryProbeDir), /Public boundary scan failed/);
+  }
+} finally {
+  await rm(boundaryProbeDir, { recursive: true, force: true });
 }
 
 await rm(outDir, { force: true, recursive: true });
@@ -102,33 +132,71 @@ const siteDir = resolve(outDir, "site");
 assertExists(resolve(siteDir, "index.html"));
 assertExists(resolve(siteDir, "frontstage/index.html"));
 assertExists(resolve(siteDir, "benchmarks/swe-marathon/index.html"));
+assertExists(resolve(siteDir, "benchmarks/lhtb/index.html"));
 assertExists(resolve(siteDir, "benchmarks/deepswe/behavior-discovery/index.html"));
+// Static research articles must remain readable and navigable in the shipped
+// bundle without falling back to the homepage SPA.
+for (const route of ["benchmarks/deepswe-sol/"]) {
+  const pagePath = resolve(siteDir, route, "index.html");
+  const html = await readFile(pagePath, "utf8");
+  if (!/<h1\b/.test(html) || html.includes('<div id="root">') || html.includes("<script")) {
+    throw new Error(`Research article must ship static content: ${route}`);
+  }
+  for (const match of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
+    const target = match[1].split(/[?#]/)[0];
+    if (target && !nonBundleReferencePattern.test(target)) assertRelativeReferenceExists(pagePath, target);
+  }
+}
 // Editorial pages must ship their text and locale navigation without an SPA
 // fallback or client-side execution, including on repository-base hosting.
-const blogArticle = "from-one-shot-agents-to-long-horizon-control/";
+const blogDir = resolve(siteDir, "blog");
+const { articleSlugs: englishBlogArticles } = await validateBilingualBlog(blogDir);
 for (const locale of ["", "zh/"]) {
-  for (const article of ["", blogArticle]) {
+  const articles = ["", ...englishBlogArticles.map((slug) => `${slug}/`)];
+  for (const article of articles) {
     const pagePath = resolve(siteDir, "blog", locale, article, "index.html");
     assertExists(pagePath);
     const html = await readFile(pagePath, "utf8");
     const language = locale ? "zh-CN" : "en";
-    if (!html.includes(`<html lang="${language}">`) || !html.includes("<h1>") || html.includes("<script")) {
+    const interactive = article === "application-scenarios/";
+    const catalog = article === "";
+    if (!html.includes(`<html lang="${language}">`) || !html.includes("<h1>") || (!interactive && !catalog && html.includes("<script"))) {
       throw new Error(`Blog must provide static content in ${language}: ${pagePath}`);
     }
-    for (const hreflang of ["en", "zh-CN", "x-default"]) {
-      if (!html.includes(`hreflang="${hreflang}"`)) throw new Error(`Missing Blog language alternate: ${hreflang}`);
+    if (catalog) {
+      const scriptHref = locale ? "../../blog/blog-index.js" : "../blog/blog-index.js";
+      const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((match) => match[0]);
+      if (scripts.length !== 1 || scripts[0] !== `<script type="module" src="${scriptHref}"></script>`) {
+        throw new Error("Blog catalog may only enhance its static listings with the shared sorting module");
+      }
+      assertExists(resolve(dirname(pagePath), scriptHref));
+    }
+    if (interactive) {
+      const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((match) => match[0]);
+      if (scripts.length !== 1 || scripts[0] !== '<script src="presentation.js" defer></script>') {
+        throw new Error("Application article must keep enhancement in its local deferred script");
+      }
+      assertExists(resolve(dirname(pagePath), "presentation.js"));
     }
     const stylesheet = html.match(/<link rel="stylesheet" href="([^"]+)"/);
     if (!stylesheet) throw new Error("Blog stylesheet is missing");
     assertExists(resolve(dirname(pagePath), stylesheet[1]));
     for (const match of html.matchAll(/<a[^>]+href="([^"]+)"/g)) {
       const href = match[1];
-      if (/^(https?:|#)/.test(href)) continue;
+      if (nonBundleReferencePattern.test(href)) continue;
       if (href.startsWith("/")) throw new Error("Blog navigation must preserve the hosting base");
       const target = href.split(/[?#]/)[0];
       // MkDocs pages are built later by the publication workflow.
       if (target.includes("docs/")) continue;
-      assertExists(resolve(dirname(pagePath), target, "index.html"));
+      assertRelativeReferenceExists(pagePath, target);
+    }
+    // Embedded diagrams are the primary content of these pages, so their local
+    // sources must ship in the bundle too.
+    for (const match of html.matchAll(/<img[^>]+src="([^"]+)"/g)) {
+      const src = match[1];
+      if (nonBundleReferencePattern.test(src)) continue;
+      if (src.startsWith("/")) throw new Error("Blog images must preserve the hosting base");
+      assertRelativeReferenceExists(pagePath, src.split(/[?#]/)[0]);
     }
   }
 }
@@ -155,8 +223,8 @@ if (!routerSource.includes("basepath:") || !routerSource.includes("import.meta.e
 }
 
 const homepageHtml = await readFile(resolve(siteDir, "index.html"), "utf8");
-if (!homepageHtml.includes('<div id="root"></div>')) {
-  throw new Error("homepage root must be the compiled React entry");
+if (!homepageHtml.includes('<div id="root">') || !homepageHtml.includes("<h1>")) {
+  throw new Error("homepage must include prerendered content inside its React root");
 }
 if (!homepageHtml.includes('src="/loopx/site-assets/') || !homepageHtml.includes('href="/loopx/site-assets/')) {
   throw new Error("homepage compiled assets did not resolve against the GitHub Pages base");
@@ -186,8 +254,12 @@ if (publishedInstaller !== canonicalInstaller) {
 const homepageSource = await readFile(resolve(repoRoot, "apps/presentation/site/src/App.tsx"), "utf8");
 const homepageStyles = await readFile(resolve(repoRoot, "apps/presentation/site/src/styles.css"), "utf8");
 const benchmarkHtml = await readFile(resolve(siteDir, "benchmarks/swe-marathon/index.html"), "utf8");
-if (benchmarkHtml !== homepageHtml) {
-  throw new Error("SWE-Marathon static route must reuse the compiled public-site entry");
+if (benchmarkHtml === homepageHtml || !benchmarkHtml.includes("<h1")) {
+  throw new Error("SWE-Marathon must publish its own prerendered research content");
+}
+const lhtbHtml = await readFile(resolve(siteDir, "benchmarks/lhtb/index.html"), "utf8");
+if (lhtbHtml === homepageHtml || !lhtbHtml.includes("<h1")) {
+  throw new Error("LHTB must publish its own prerendered research content");
 }
 const deepSweBehaviorHtml = await readFile(
   resolve(siteDir, "benchmarks/deepswe/behavior-discovery/index.html"),
@@ -201,16 +273,6 @@ if (deepSweBehaviorHtml !== canonicalDeepSweBehaviorHtml) {
   throw new Error("DeepSWE behavior article route must be byte-identical to the reviewed standalone source");
 }
 for (const sourceContract of [
-  "Your agents keep",
-  'secondPrefix: "the "',
-  'secondAccent: "night shift"',
-  'thirdPrefix: "You keep the "',
-  'thirdAccent: "judgment"',
-  'secondPrefix: "Agent "',
-  'secondAccent: "持续推进"',
-  'thirdPrefix: "判断始终"',
-  'thirdAccent: "由你掌握"',
-  "Provider-neutral",
   "Get started",
   "开始使用",
   "See in action",
@@ -227,7 +289,6 @@ for (const sourceContract of [
   "Prefer the shell? Install LoopX manually.",
   "Developer book",
   "benchmarks/swe-marathon/",
-  "Iowan Old Style",
   "Pi",
 ]) {
   if (!homepageSource.includes(sourceContract) && !homepageStyles.includes(sourceContract)) {
@@ -322,6 +383,7 @@ if (manifest.base !== "/loopx/") {
 if (
   manifest.homepage_entry !== "site/index.html" ||
   manifest.swe_marathon_brief_entry !== "site/benchmarks/swe-marathon/index.html" ||
+  manifest.lhtb_brief_entry !== "site/benchmarks/lhtb/index.html" ||
   manifest.deepswe_behavior_article_entry !== "site/benchmarks/deepswe/behavior-discovery/index.html" ||
   manifest.frontstage_entry !== "site/frontstage/index.html" ||
   manifest.installer_entry !== "site/install.sh"
@@ -333,6 +395,9 @@ if (manifest.content_sources?.public_homepage !== "apps/presentation/site") {
 }
 if (manifest.content_sources?.swe_marathon_brief !== "benchmark/swe-marathon") {
   throw new Error(`manifest benchmark brief source mismatch: ${JSON.stringify(manifest.content_sources)}`);
+}
+if (manifest.content_sources?.lhtb_brief !== "benchmark/LHTB/studies/five-arm-gpt56sol-max") {
+  throw new Error(`manifest LHTB brief source mismatch: ${JSON.stringify(manifest.content_sources)}`);
 }
 if (
   manifest.content_sources?.deepswe_behavior_article !==
@@ -393,12 +458,12 @@ if (fakePrivateTrapMarkers.length < 6) {
 }
 for (const path of await collectGeneratedTextFiles(outDir)) {
   const text = await readFile(path, "utf8");
-  assertNoLeak(text, path);
   const leakedTrapMarkers = fakePrivateTrapMarkers.filter((marker) => text.includes(marker));
   if (leakedTrapMarkers.length) {
     throw new Error(`${path} leaked fake-private frontstage trap markers: ${leakedTrapMarkers.join(", ")}`);
   }
 }
+await scanPublicBoundary(outDir);
 
 const readmeText = await readFile(resolve(outDir, "README.md"), "utf8");
 if (readmeText.includes("?statusUrl=")) {
@@ -412,6 +477,9 @@ if (!readmeText.includes("frontstage/")) {
 }
 if (!readmeText.includes("benchmarks/swe-marathon/")) {
   throw new Error("share bundle README must publish the SWE-Marathon research brief entry");
+}
+if (!readmeText.includes("benchmarks/lhtb/")) {
+  throw new Error("share bundle README must publish the LHTB research brief entry");
 }
 if (!readmeText.includes("benchmarks/deepswe/behavior-discovery/")) {
   throw new Error("share bundle README must publish the DeepSWE behavior article entry");

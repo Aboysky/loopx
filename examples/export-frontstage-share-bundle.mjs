@@ -6,6 +6,7 @@ import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "nod
 import { existsSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dashboardDir = resolve(repoRoot, "apps/presentation/dashboard");
@@ -17,6 +18,7 @@ const showcaseCatalogPath = "docs/showcases/showcase-catalog.json";
 const projectionFixturePath = "examples/goal-channel-frontstage-fixture.py";
 const installerScriptPath = "scripts/install-from-github.sh";
 const deepSweBehaviorArticlePath = "benchmark/deepswe/behavior-discovery/index.html";
+const deepSweSolArticlePath = "apps/presentation/site/public/benchmarks/deepswe-sol/index.html";
 const homepageEvidenceAssets = [
   "docs/assets/long-running-loop-openviking-trajectory.png",
   "docs/assets/long-running-loop-ml-experiment-trajectory.png",
@@ -120,13 +122,11 @@ async function copyHomepage(siteDir, base) {
     cwd: homepageDir,
   });
   run(process.execPath, [
-    resolve(homepageDir, "node_modules/vite/bin/vite.js"),
-    "build",
+    resolve(homepageDir, "scripts/build.mjs"),
     "--base",
     base,
     "--outDir",
     buildDir,
-    "--emptyOutDir",
   ], { cwd: homepageDir });
   await cp(buildDir, siteDir, { force: true, recursive: true });
   await rm(buildDir, { force: true, recursive: true });
@@ -134,12 +134,6 @@ async function copyHomepage(siteDir, base) {
 }
 
 async function copyPublicSiteRoutes(siteDir) {
-  const homepage = resolve(siteDir, "index.html");
-  for (const route of ["benchmarks/swe-marathon"]) {
-    const routeDir = resolve(siteDir, route);
-    await mkdir(routeDir, { recursive: true });
-    await copyFile(homepage, resolve(routeDir, "index.html"));
-  }
   const deepSweRouteDir = resolve(
     siteDir,
     "benchmarks/deepswe/behavior-discovery",
@@ -267,6 +261,7 @@ async function writeShareReadme(outDir, base, interactivePages) {
   const homepageUrl = base;
   const frontstageUrl = `${base}frontstage/`;
   const sweMarathonBriefUrl = `${base}benchmarks/swe-marathon/`;
+  const lhtbBriefUrl = `${base}benchmarks/lhtb/`;
   const deepSweBehaviorArticleUrl = `${base}benchmarks/deepswe/behavior-discovery/`;
   const previewBlock = base === "/"
     ? `## Try It Locally
@@ -282,6 +277,7 @@ Then open the homepage or showcase:
 http://127.0.0.1:8080${homepageUrl}
 http://127.0.0.1:8080${frontstageUrl}
 http://127.0.0.1:8080${sweMarathonBriefUrl}
+http://127.0.0.1:8080${lhtbBriefUrl}
 http://127.0.0.1:8080${deepSweBehaviorArticleUrl}
 \`\`\`
 `
@@ -297,6 +293,7 @@ Hosted entries:
 ${homepageUrl}
 ${frontstageUrl}
 ${sweMarathonBriefUrl}
+${lhtbBriefUrl}
 ${deepSweBehaviorArticleUrl}
 \`\`\`
 `;
@@ -321,7 +318,9 @@ ${previewBlock}
   catalog-declared interactive case pages.
 - Homepage source: \`apps/presentation/site\`.
 - SWE-Marathon research brief: \`${sweMarathonBriefUrl}\`, built from the pinned public-safe aggregate and case-insight projection under \`benchmark/swe-marathon/\`.
+- LHTB research brief: \`${lhtbBriefUrl}\`, built from the public-safe five-arm aggregate under \`benchmark/LHTB/studies/five-arm-gpt56sol-max/\`.
 - DeepSWE behavior discoveries: \`${deepSweBehaviorArticleUrl}\`, copied byte-for-byte from the reviewed standalone article at \`${deepSweBehaviorArticlePath}\`.
+- DeepSWE × Sol research brief: \`${base}benchmarks/deepswe-sol/\`, a static historical-study interpretation from \`${deepSweSolArticlePath}\`.
 - Homepage evidence assets: ${homepageEvidenceAssets.map((path) => `\`${path}\``).join(", ")}.
 - Personal Workspace demo and guide: docs/guides/personal-workspace-user-guide/.
 - Legacy Frontstage URLs redirect to the case directory without loading a dashboard or forwarding status parameters.
@@ -343,7 +342,9 @@ async function writeManifest(outDir, base, interactivePages) {
     status_fixture: `site/${statusFileName}`,
     homepage_entry: "site/index.html",
     swe_marathon_brief_entry: "site/benchmarks/swe-marathon/index.html",
+    lhtb_brief_entry: "site/benchmarks/lhtb/index.html",
     deepswe_behavior_article_entry: "site/benchmarks/deepswe/behavior-discovery/index.html",
+    deepswe_sol_article_entry: "site/benchmarks/deepswe-sol/index.html",
     installer_entry: "site/install.sh",
     frontstage_entry: "site/frontstage/index.html",
     frontstage_redirect: "docs/showcases/index.en.html",
@@ -351,7 +352,9 @@ async function writeManifest(outDir, base, interactivePages) {
     content_sources: {
       public_homepage: "apps/presentation/site",
       swe_marathon_brief: "benchmark/swe-marathon",
+      lhtb_brief: "benchmark/LHTB/studies/five-arm-gpt56sol-max",
       deepswe_behavior_article: deepSweBehaviorArticlePath,
+      deepswe_sol_article: deepSweSolArticlePath,
       installer_script: installerScriptPath,
       homepage_evidence_assets: homepageEvidenceAssets,
       primary_public_story: showcaseCatalogPath,
@@ -393,13 +396,27 @@ async function collectTextFiles(rootDir) {
   return files;
 }
 
-async function scanPublicBoundary(outDir) {
+// Verified public source citations are exceptions only to the organization-name
+// probe, never to path, host or credential checks. Exact hrefs cannot exempt
+// nearby prose, another repository, a query string or an internal URL.
+const publicSourceHrefs = new Set([
+  "https://github.com/ByteDance-Seed/EdgeBench",
+  "https://github.com/ByteDance-Seed/EdgeBench/pull/14",
+]);
+
+function withoutPublicSourceHrefs(text) {
+  return text.replace(/\bhref=(["'])(https:\/\/[^"'<>\s]+)\1/g, (attribute, quote, href) =>
+    publicSourceHrefs.has(href) ? `href=${quote}${quote}` : attribute,
+  );
+}
+
+export async function scanPublicBoundary(outDir) {
   const patterns = [
     { label: "macOS user path", pattern: /\/Users\// },
     { label: "private temp path", pattern: /\/private\// },
-    { label: "workspace owner name", pattern: new RegExp("byte" + "dance", "i") },
+    { label: "workspace owner name", pattern: new RegExp("byte" + "dance", "i"), publicSourceException: true },
     { label: "internal doc host", pattern: new RegExp("lark" + "office", "i") },
-    { label: "private goal state", pattern: new RegExp("\\.codex/goals|\\.goal-" + "harness") },
+    { label: "private goal state", pattern: new RegExp("\\.(?:codex|loopx)/goals|\\.goal-" + "harness") },
     { label: "raw internal key", pattern: new RegExp("raw_" + "internal_note") },
     { label: "private key material", pattern: /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/ },
     { label: "token assignment", pattern: /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i },
@@ -407,8 +424,8 @@ async function scanPublicBoundary(outDir) {
   const leaks = [];
   for (const path of await collectTextFiles(outDir)) {
     const text = await readFile(path, "utf8");
-    for (const { label, pattern } of patterns) {
-      if (pattern.test(text)) {
+    for (const { label, pattern, publicSourceException } of patterns) {
+      if (pattern.test(publicSourceException ? withoutPublicSourceHrefs(text) : text)) {
         leaks.push(`${relative(outDir, path)}: ${label}`);
       }
     }
@@ -453,7 +470,7 @@ async function main() {
   await copyPublicSiteRoutes(siteDir);
   const interactivePages = await copyInteractiveCasePages(siteDir);
 
-  const projectionOutput = run("python3", [resolve(repoRoot, "examples/goal-channel-frontstage-fixture.py"), "--format", "json"], {
+  const projectionOutput = run(resolveTestPython(), [resolve(repoRoot, "examples/goal-channel-frontstage-fixture.py"), "--format", "json"], {
     capture: true,
     cwd: repoRoot,
   });
@@ -470,13 +487,16 @@ async function main() {
     site_dir: siteDir,
     homepage_url: args.base,
     swe_marathon_brief_url: `${args.base}benchmarks/swe-marathon/`,
+    lhtb_brief_url: `${args.base}benchmarks/lhtb/`,
     deepswe_behavior_article_url: `${args.base}benchmarks/deepswe/behavior-discovery/`,
     frontstage_url: `${args.base}frontstage/`,
     status_fixture: `site/${statusFileName}`,
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

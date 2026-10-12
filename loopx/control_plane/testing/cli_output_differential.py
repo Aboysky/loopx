@@ -12,6 +12,7 @@ from ..quota.turn_envelope import (
     ACTION_SIGNATURE_COVERAGE_V2,
     ACTION_SIGNATURE_COVERAGE_V3,
     ACTION_SIGNATURE_COVERAGE_V4,
+    ACTION_SIGNATURE_COVERAGE_V5,
 )
 
 
@@ -23,9 +24,8 @@ ACTION_PORTFOLIO_SCHEMA_VERSION_V1 = "quota_action_portfolio_v1"
 ACTION_PORTFOLIO_SCHEMA_VERSION_V2 = "quota_action_portfolio_v2"
 PLANNING_HORIZON_SCHEMA_VERSION_V0 = "quota_planning_horizon_v0"
 GUIDED_TODO_DELTA_SCHEMA_VERSION_V0 = "loopx_guided_todo_delta_v0"
-PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0 = (
-    "todo_planning_inventory_detail_v0"
-)
+PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0 = "todo_planning_inventory_detail_v0"
+TODO_WORK_COUNTS_SCHEMA_VERSION_V0 = "todo_work_counts_v0"
 
 Metric = Literal["chars", "utf8_bytes", "lines", "compact_payload_chars"]
 
@@ -154,11 +154,21 @@ _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
     "compact_payload_chars": 1_024,
 }
 
-# Explicit runtime-root command routing repeats one bounded command prefix per
+# Source-complete Todo counts add one compact scope/completeness envelope to
+# the existing Todo, status, and quota projections. The allowance is bound to
+# the none-to-v0 schema transition; v0-to-v0 changes use the ordinary budgets.
+_TODO_WORK_COUNTS_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
+    "chars": 320,
+    "utf8_bytes": 320,
+    "lines": 10,
+    "compact_payload_chars": 192,
+}
+
+# Explicit registry/runtime-root routing repeats one bounded command argument per
 # executable action. The allowance covers the prefix and its JSON projection;
 # it is per newly observed route, not per row, so unrelated output growth still
 # fails under the normal hot-path policy.
-_RUNTIME_ROOT_COMMAND_ROUTE_GROWTH_PER_ROUTE: dict[Metric, int] = {
+_COMMAND_ROUTE_GROWTH_PER_ROUTE: dict[Metric, int] = {
     "chars": 160,
     "utf8_bytes": 160,
     "lines": 0,
@@ -176,6 +186,71 @@ _REWARD_MEMORY_OUTCOME_PROMPT_V1_MIGRATION_ALLOWANCE: dict[Metric, int] = {
     "lines": 5,
     "compact_payload_chars": 640,
 }
+
+# Replacing fixed Chinese heartbeat instructions with user-language policy
+# grows the installed prompt once. These per-mode limits cover the measured
+# same-fixture base/head delta plus 24-28 characters of variation; the brief
+# renderer also adds five lines. Absolute output ceilings still apply, and
+# once v1 is in the baseline ordinary growth limits apply again.
+_HEARTBEAT_USER_LANGUAGE_V1_MIGRATION_ALLOWANCE: dict[str, dict[Metric, int]] = {
+    "heartbeat_prompt_thin": {"chars": 400, "compact_payload_chars": 400},
+    "heartbeat_prompt_brief": {
+        "chars": 720,
+        "lines": 6,
+        "compact_payload_chars": 720,
+    },
+    "heartbeat_prompt_compact": {"chars": 288, "compact_payload_chars": 288},
+    "heartbeat_prompt_full": {"chars": 288, "compact_payload_chars": 288},
+}
+
+# Two reviewed causes grow the Turn plan readback once, and both are consequences
+# of the same declared behavior change:
+#
+# 1. the plan adds one bounded managed-executor binding so a caller sees which
+#    executor a planned Turn would use and whether it can launch here, instead
+#    of inferring it from the host id;
+# 2. the default host becomes the managed `dsh` host, so the plan's host
+#    projection, scheduler execution context, and controller-owned
+#    `next_cli_actions` rendering change with it (a bounded-headless plan hands
+#    the next steps back to the outer controller instead of to the agent CLI
+#    loop).
+#
+# The allowance is bound to the rejected-then-accepted
+# none-to-v0 transition and to the Turn surfaces that quote it; quota, status,
+# and every other agent-facing surface keep the ordinary budget. It is one
+# time: once v0 is the baseline a v0-to-v0 change receives no allowance.
+_TURN_HOST_AND_MANAGED_EXECUTOR_BINDING_V0_GROWTH_ALLOWANCE: dict[Metric, int] = {
+    "chars": 832,
+    "utf8_bytes": 832,
+    "lines": 14,
+    "compact_payload_chars": 768,
+}
+
+_MANAGED_EXECUTOR_BINDING_SURFACES = frozenset(
+    {
+        "loopx_turn_plan",
+        "loopx_turn_plan_transaction_detail",
+        "loopx_turn_run_once_preview",
+    }
+)
+
+
+def _turn_host_and_managed_executor_binding_allowance(
+    row_id: str,
+    base: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    metric: Metric,
+) -> int:
+    surface = row_id.partition("/")[2].partition("/")[0]
+    if (
+        row_id.startswith(("surface/", "variant/"))
+        and surface in _MANAGED_EXECUTOR_BINDING_SURFACES
+        and base.get("managed_executor_binding_revision") is None
+        and candidate.get("managed_executor_binding_revision")
+        == "managed_executor_binding_v0"
+    ):
+        return _TURN_HOST_AND_MANAGED_EXECUTOR_BINDING_V0_GROWTH_ALLOWANCE[metric]
+    return 0
 
 
 def _reward_memory_outcome_prompt_allowance(
@@ -201,6 +276,42 @@ def _reward_memory_outcome_prompt_allowance(
         return _REWARD_MEMORY_OUTCOME_PROMPT_V1_MIGRATION_ALLOWANCE[metric]
     return 0
 
+
+def _heartbeat_peer_admission_migration_allowance(
+    row_id: str, base: dict[str, Any], candidate: dict[str, Any], metric: Metric,
+) -> int:
+    # Readable peer admission adds 117 chars on the same CLI fixture. Admit
+    # this reviewed transition once; ordinary growth limits resume at v1.
+    if (
+        row_id.startswith("surface/heartbeat_prompt_thin/")
+        and base.get("heartbeat_peer_admission_prompt_revision") is None
+        and candidate.get("heartbeat_peer_admission_prompt_revision")
+        == "heartbeat_peer_admission_v1"
+        and metric in {"chars", "utf8_bytes", "compact_payload_chars"}
+    ):
+        return 160
+    return 0
+
+
+def _heartbeat_user_language_migration_allowance(
+    row_id: str,
+    base: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    metric: Metric,
+) -> int:
+    surface = row_id.partition("/")[2].partition("/")[0]
+    if (
+        row_id.startswith(("surface/", "variant/"))
+        and base.get("heartbeat_user_language_prompt_revision") is None
+        and candidate.get("heartbeat_user_language_prompt_revision")
+        == "heartbeat_user_language_v1"
+    ):
+        return _HEARTBEAT_USER_LANGUAGE_V1_MIGRATION_ALLOWANCE.get(surface, {}).get(
+            metric, 0
+        )
+    return 0
+
+
 # loopx_guided_todo_delta_v0 adds the continuation-aware Todo authoring
 # decision contract (reuse/update/link_successor/add_new plus a bounded
 # runnable-frontier summary) to the guided start-goal packet when an
@@ -215,19 +326,21 @@ _GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
 }
 
 
-def _runtime_root_route_growth_allowances(
+def _command_route_growth_allowances(
     base: dict[str, Any], candidate: dict[str, Any]
-) -> tuple[int, dict[Metric, int]]:
-    base_routes = base.get("runtime_root_command_route_count")
-    candidate_routes = candidate.get("runtime_root_command_route_count")
-    if type(base_routes) is not int or type(candidate_routes) is not int:
-        return 0, {}
-    added_routes = max(0, candidate_routes - base_routes)
-    if not added_routes:
-        return 0, {}
-    return added_routes, {
-        metric: added_routes * allowance
-        for metric, allowance in _RUNTIME_ROOT_COMMAND_ROUTE_GROWTH_PER_ROUTE.items()
+) -> tuple[dict[str, int], dict[Metric, int]]:
+    additions: dict[str, int] = {}
+    for option in ("runtime_root", "registry"):
+        field = f"{option}_command_route_count"
+        before, after = base.get(field), candidate.get(field)
+        # Missing, malformed or negative observations never grant an allowance.
+        if type(before) is int and type(after) is int and 0 <= before < after:
+            additions[option] = after - before
+    if not additions:
+        return {}, {}
+    return additions, {
+        metric: sum(additions.values()) * allowance
+        for metric, allowance in _COMMAND_ROUTE_GROWTH_PER_ROUTE.items()
     }
 
 
@@ -266,6 +379,30 @@ def _removed(base: dict[str, Any], candidate: dict[str, Any], field: str) -> lis
     return sorted(base_values - candidate_values)
 
 
+def _has_decision_evidence(row: dict[str, Any]) -> bool:
+    paths = set(row.get("json_shape_paths") or [])
+    return any(path.endswith(".replan_context.core_goal") and
+               path.removesuffix("core_goal") + "evidence" in paths and
+               path.removesuffix("core_goal") + "coverage_ledger" in paths for path in paths)
+
+
+def _decision_evidence_migration_allowance(base: dict[str, Any], candidate: dict[str, Any], metric: Metric) -> int:
+    # One-time, measured transition from coverage-only to dense decision context.
+    # Future dense->dense edits and ordinary guard rows keep their original budget.
+    if candidate.get("format") != "json" or _has_decision_evidence(base) or not _has_decision_evidence(candidate):
+        return 0
+    row_id = str(candidate["row_id"])
+    if row_id == "surface/quota_should_run/crowded/json":
+        limits = (7_000, 7_000, 96, 6_000)
+    elif row_id == "surface/diagnose/crowded/json":
+        limits = (15_000, 15_000, 190, 12_000)
+    elif row_id == "variant/review_packet_full/small/json":
+        limits = (800, 800, 24, 650)
+    else:
+        return 0
+    return dict(zip(("chars", "utf8_bytes", "lines", "compact_payload_chars"), limits))[metric]
+
+
 def _action_signature_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
@@ -282,6 +419,11 @@ def _action_signature_migration(
         (ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V4),
         (ACTION_SIGNATURE_COVERAGE_V2, ACTION_SIGNATURE_COVERAGE_V4),
         (ACTION_SIGNATURE_COVERAGE_V3, ACTION_SIGNATURE_COVERAGE_V4),
+        (ACTION_SIGNATURE_COVERAGE_V0, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V2, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V3, ACTION_SIGNATURE_COVERAGE_V5),
+        (ACTION_SIGNATURE_COVERAGE_V4, ACTION_SIGNATURE_COVERAGE_V5),
     }
     if not (
         isinstance(base_coverages, list)
@@ -330,9 +472,7 @@ def _planning_horizon_schema_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
     base_versions = tuple(base.get("planning_horizon_schema_versions") or [])
-    candidate_versions = tuple(
-        candidate.get("planning_horizon_schema_versions") or []
-    )
+    candidate_versions = tuple(candidate.get("planning_horizon_schema_versions") or [])
     if base_versions == () and candidate_versions == (
         PLANNING_HORIZON_SCHEMA_VERSION_V0,
     ):
@@ -344,9 +484,7 @@ def _guided_todo_delta_schema_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
     base_versions = tuple(base.get("guided_todo_delta_schema_versions") or [])
-    candidate_versions = tuple(
-        candidate.get("guided_todo_delta_schema_versions") or []
-    )
+    candidate_versions = tuple(candidate.get("guided_todo_delta_schema_versions") or [])
     if base_versions == () and candidate_versions == (
         GUIDED_TODO_DELTA_SCHEMA_VERSION_V0,
     ):
@@ -357,9 +495,7 @@ def _guided_todo_delta_schema_migration(
 def _planning_inventory_detail_schema_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
-    base_versions = tuple(
-        base.get("planning_inventory_detail_schema_versions") or []
-    )
+    base_versions = tuple(base.get("planning_inventory_detail_schema_versions") or [])
     candidate_versions = tuple(
         candidate.get("planning_inventory_detail_schema_versions") or []
     )
@@ -367,6 +503,16 @@ def _planning_inventory_detail_schema_migration(
         PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0,
     ):
         return f"none -> {PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0}"
+    return None
+
+
+def _todo_work_counts_schema_migration(
+    base: dict[str, Any], candidate: dict[str, Any]
+) -> str | None:
+    base_versions = tuple(base.get("todo_work_counts_schema_versions") or [])
+    candidate_versions = tuple(candidate.get("todo_work_counts_schema_versions") or [])
+    if base_versions == () and candidate_versions == (TODO_WORK_COUNTS_SCHEMA_VERSION_V0,):
+        return f"none -> {TODO_WORK_COUNTS_SCHEMA_VERSION_V0}"
     return None
 
 
@@ -382,11 +528,14 @@ class _SchemaMigrationState:
     inventory_detail_schema_migration: str | None
     guided_todo_delta_schema_changed: bool
     guided_todo_delta_schema_migration: str | None
+    todo_work_counts_schema_changed: bool
+    todo_work_counts_schema_migration: str | None
     portfolio_growth_migration: bool
     horizon_growth_migration: bool
     agent_context_growth_migration: bool
     inventory_detail_growth_migration: bool
     guided_todo_delta_growth_migration: bool
+    todo_work_counts_growth_migration: bool
 
 
 def _schema_migration_state(
@@ -394,8 +543,7 @@ def _schema_migration_state(
 ) -> _SchemaMigrationState:
     base_signature = base.get("action_signature_sha256")
     signature_changed = bool(
-        base_signature
-        and candidate.get("action_signature_sha256") != base_signature
+        base_signature and candidate.get("action_signature_sha256") != base_signature
     )
     signature_migration = (
         _action_signature_migration(base, candidate) if signature_changed else None
@@ -430,13 +578,20 @@ def _schema_migration_state(
         if inventory_detail_schema_changed
         else None
     )
-    guided_todo_delta_schema_changed = (
-        tuple(base.get("guided_todo_delta_schema_versions") or [])
-        != tuple(candidate.get("guided_todo_delta_schema_versions") or [])
-    )
+    guided_todo_delta_schema_changed = tuple(
+        base.get("guided_todo_delta_schema_versions") or []
+    ) != tuple(candidate.get("guided_todo_delta_schema_versions") or [])
     guided_todo_delta_schema_migration = (
         _guided_todo_delta_schema_migration(base, candidate)
         if guided_todo_delta_schema_changed
+        else None
+    )
+    todo_work_counts_schema_changed = tuple(
+        base.get("todo_work_counts_schema_versions") or []
+    ) != tuple(candidate.get("todo_work_counts_schema_versions") or [])
+    todo_work_counts_schema_migration = (
+        _todo_work_counts_schema_migration(base, candidate)
+        if todo_work_counts_schema_changed
         else None
     )
     return _SchemaMigrationState(
@@ -450,6 +605,8 @@ def _schema_migration_state(
         inventory_detail_schema_migration=inventory_detail_schema_migration,
         guided_todo_delta_schema_changed=guided_todo_delta_schema_changed,
         guided_todo_delta_schema_migration=guided_todo_delta_schema_migration,
+        todo_work_counts_schema_changed=todo_work_counts_schema_changed,
+        todo_work_counts_schema_migration=todo_work_counts_schema_migration,
         portfolio_growth_migration=bool(
             output_format == "json"
             and (
@@ -485,7 +642,227 @@ def _schema_migration_state(
         guided_todo_delta_growth_migration=bool(
             output_format == "json" and guided_todo_delta_schema_migration
         ),
+        todo_work_counts_growth_migration=bool(
+            output_format == "json" and todo_work_counts_schema_migration
+        ),
     )
+
+
+def _schema_migration_growth_allowance(
+    migration: _SchemaMigrationState,
+    metric: Metric,
+) -> int:
+    allowances: list[int] = []
+    if migration.portfolio_growth_migration:
+        allowances.append(_ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.horizon_growth_migration:
+        allowances.append(_PLANNING_HORIZON_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.agent_context_growth_migration:
+        allowances.append(_AGENT_CONTEXT_V4_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.inventory_detail_growth_migration:
+        allowances.append(
+            _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE[metric]
+        )
+    if migration.guided_todo_delta_growth_migration:
+        allowances.append(_GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.todo_work_counts_growth_migration:
+        allowances.append(_TODO_WORK_COUNTS_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    return max(allowances, default=0)
+
+
+# The unchanged status matrix adds 2,801 pretty JSON chars / 102 lines /
+# 1,910 compact chars for five source rows. This reviewed one-time transition
+# leaves headroom without changing absolute ceilings or ordinary v0-to-v0 growth.
+_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
+    ratio=0,
+    json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_048},
+    markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
+)
+
+
+def _projection_envelope_migration(
+    base: dict[str, Any], candidate: dict[str, Any], *, output_format: str,
+) -> tuple[dict[Metric, int], list[str], list[str]]:
+    """Qualify the one-time status schema transition, never unrelated growth."""
+    before = tuple(base.get("projection_envelope_schema_versions") or [])
+    after = tuple(candidate.get("projection_envelope_schema_versions") or [])
+    if before == after:
+        return {}, [], []
+    row_id = str(base["row_id"])
+    if (row_id.startswith(("surface/status/", "variant/status_task_graph_detail/"))
+            and before == () and after == ("loopx_projection_envelope_v0",)):
+        allowance = (_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.json
+                     if output_format == "json" else _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.markdown)
+        return allowance, [], ["projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
+    return {}, ["projection envelope schema coverage changed"], []
+
+
+def _task_step_read_fence_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[Metric, int], list[str]]:
+    """Bound the first read-fence projection, not later growth or other views."""
+    before = base.get("next_action_basis_count", 0)
+    after = candidate.get("next_action_basis_count", 0)
+    row_id = str(base["row_id"])
+    if not (base["format"] == "json"
+        and row_id.startswith(("surface/status/", "surface/quota_should_run/", "variant/status_task_graph_detail/"))
+        and type(before) is int and before == 0
+        and type(after) is int and 0 < after <= 4):
+        return {}, []
+    # Each ordinary fence is 100 pretty / 94 compact chars. The unchanged
+    # two-peer detail fixture adds 457 / 346 chars including task/actor rows.
+    per_fence: dict[Metric, int] = (
+        {"chars": 256, "utf8_bytes": 256, "lines": 8, "compact_payload_chars": 192}
+        if row_id.startswith("variant/status_task_graph_detail/") else
+        {"chars": 192, "utf8_bytes": 192, "lines": 6, "compact_payload_chars": 144}
+    )
+    return {metric: value * after for metric, value in per_fence.items()}, [
+        "task-bound recommendation read fences added; bounded one-time JSON growth",
+    ]
+
+
+def _authoring_input_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[Metric, int], list[str]]:
+    """Bound only the observed addition; an already upgraded base gets none."""
+    surface = str(base["row_id"]).partition("/")[2].partition("/")[0]
+    before = base.get("authoring_inputs") or {}
+    after = candidate.get("authoring_inputs") or {}
+    limits: dict[Metric, int] = {}
+    reason = ""
+    if (surface in {"start_goal_guided", "start_goal_guided_command_pack_detail"}
+            and before.get("complete_todo_readback") is False
+            and after.get("complete_todo_readback") is True):
+        # Same fixture: JSON +948 chars/+894 compact/+6 lines; Markdown
+        # +436 chars/+2 lines. Preserve full-body and authority guidance.
+        limits = (
+            {"chars": 1_000, "utf8_bytes": 1_000, "lines": 8, "compact_payload_chars": 960}
+            if base.get("format") == "json" else
+            {"chars": 480, "utf8_bytes": 480, "lines": 3, "compact_payload_chars": 0}
+        )
+        reason = "complete Todo readback step added"
+    elif (surface in {"quota_should_run", "loopx_turn_plan"}
+            and base.get("format") == "json"
+            and before.get("vision_cli_authoring") is False
+            and after.get("vision_cli_authoring") is True):
+        # Default required-replan quota gains the full authoring input:
+        # +3,049 chars/+1,807 compact/+94 lines. Turn already had the schema
+        # and gains only +237 chars of first-write/recovery guidance.
+        limits = (
+            {"chars": 3_200, "utf8_bytes": 3_200, "lines": 96, "compact_payload_chars": 1_920}
+            if surface == "quota_should_run" else
+            {"chars": 256, "utf8_bytes": 256, "lines": 0, "compact_payload_chars": 256}
+        )
+        reason = "Vision CLI authoring input added"
+    return limits, [reason + "; bounded one-time growth"] if limits else []
+
+
+def _compare_row_growth(
+    base: dict[str, Any], candidate: dict[str, Any], *,
+    migration: _SchemaMigrationState,
+    command_route_allowances: dict[Metric, int],
+) -> tuple[dict[str, int | None], dict[str, int | None], list[str], list[str]]:
+    """Compare output cost independently of contract and semantic coverage."""
+    row_id = str(base["row_id"])
+    policy = str(base.get("qualification_policy") or "")
+    output_format = str(base.get("format") or "")
+    failures: list[str] = []
+    review_signals: list[str] = []
+    projection_allowance, projection_failures, projection_signals = _projection_envelope_migration(
+        base, candidate, output_format=output_format,
+    )
+    failures.extend(projection_failures)
+    review_signals.extend(projection_signals)
+    fence_allowance, fence_signals = _task_step_read_fence_migration(base, candidate)
+    review_signals.extend(fence_signals)
+    authoring_allowance, authoring_signals = _authoring_input_migration(base, candidate)
+    review_signals.extend(authoring_signals)
+    deltas: dict[str, int | None] = {}
+    allowances: dict[str, int | None] = {}
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        base_value = base.get(metric)
+        candidate_value = candidate.get(metric)
+        if not isinstance(base_value, int) or not isinstance(candidate_value, int):
+            deltas[metric] = None
+            allowances[metric] = None
+            continue
+        delta = candidate_value - base_value
+        allowance = max(
+            _growth_limit(
+                policy=policy,
+                output_format=output_format,
+                metric=metric,
+                base=base_value,
+            ),
+            _reward_memory_outcome_prompt_allowance(
+                row_id,
+                base,
+                candidate,
+                metric,
+            ),
+            _heartbeat_peer_admission_migration_allowance(row_id, base, candidate, metric),
+            _heartbeat_user_language_migration_allowance(
+                row_id,
+                base,
+                candidate,
+                metric,
+            ),
+            _turn_host_and_managed_executor_binding_allowance(
+                row_id,
+                base,
+                candidate,
+                metric,
+            ),
+            _schema_migration_growth_allowance(migration, metric),
+            _decision_evidence_migration_allowance(base, candidate, metric),
+            projection_allowance.get(metric, 0),
+            fence_allowance.get(metric, 0),
+            authoring_allowance.get(metric, 0),
+        )
+        # Thin installed prompts contain bilingual lifecycle instructions. A
+        # small character-level clarification can cost three bytes per CJK
+        # character. Keep character, line and absolute output ceilings intact;
+        # do not relax quota or other agent-facing surfaces with this allowance.
+        if (
+            row_id.startswith("surface/heartbeat_prompt_thin/")
+            and metric == "utf8_bytes"
+        ):
+            allowance = max(allowance, 192)
+        if (
+            row_id.startswith(("surface/", "variant/"))
+            and row_id.partition("/")[2].partition("/")[0]
+            in {
+                "heartbeat_prompt_thin",
+                "heartbeat_prompt_brief",
+                "heartbeat_prompt_compact",
+            }
+            and base.get("host_prompt_static_safety_revision") is None
+            and candidate.get("host_prompt_static_safety_revision")
+            == "host_prompt_static_safety_v1"
+        ):
+            # Authorized static safety + executable shell bootstrap restoration.
+            # Absolute ceilings stay enforced by the probe; once merged, v1->v1
+            # receives no allowance. Quota/status and other surfaces are excluded.
+            allowance = max(
+                allowance,
+                {
+                    "chars": 512,
+                    "utf8_bytes": 640,
+                    "lines": 5,
+                    "compact_payload_chars": 512,
+                }[metric],
+            )
+        if command_route_allowances:
+            allowance = max(
+                allowance,
+                command_route_allowances[metric],
+            )
+        deltas[metric] = delta
+        allowances[metric] = allowance
+        if delta > allowance:
+            failures.append(f"{metric} grew by {delta}; allowance is {allowance}")
+
+    return deltas, allowances, failures, review_signals
 
 
 def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
@@ -518,85 +895,16 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         candidate,
         output_format=output_format,
     )
-    added_runtime_root_routes, runtime_root_route_allowances = (
-        _runtime_root_route_growth_allowances(base, candidate)
+    added_command_routes, command_route_allowances = (
+        _command_route_growth_allowances(base, candidate)
     )
 
-    deltas: dict[str, int | None] = {}
-    allowances: dict[str, int | None] = {}
-    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
-        base_value = base.get(metric)
-        candidate_value = candidate.get(metric)
-        if not isinstance(base_value, int) or not isinstance(candidate_value, int):
-            deltas[metric] = None
-            allowances[metric] = None
-            continue
-        delta = candidate_value - base_value
-        allowance = max(
-            _growth_limit(
-                policy=policy,
-                output_format=output_format,
-                metric=metric,
-                base=base_value,
-            ),
-            _reward_memory_outcome_prompt_allowance(
-                row_id,
-                base,
-                candidate,
-                metric,
-            ),
-        )
-        # Thin installed prompts contain bilingual lifecycle instructions. A
-        # small character-level clarification can cost three bytes per CJK
-        # character. Keep character, line and absolute output ceilings intact;
-        # do not relax quota or other agent-facing surfaces with this allowance.
-        if row_id.startswith("surface/heartbeat_prompt_thin/") and metric == "utf8_bytes":
-            allowance = max(allowance, 192)
-        if (row_id.startswith(("surface/", "variant/"))
-                and row_id.partition("/")[2].partition("/")[0] in {
-                    "heartbeat_prompt_thin", "heartbeat_prompt_brief", "heartbeat_prompt_compact"}
-                and base.get("host_prompt_static_safety_revision") is None
-                and candidate.get("host_prompt_static_safety_revision") == "host_prompt_static_safety_v1"):
-            # Authorized static safety + executable shell bootstrap restoration.
-            # Absolute ceilings stay enforced by the probe; once merged, v1->v1
-            # receives no allowance. Quota/status and other surfaces are excluded.
-            allowance = max(allowance, {"chars": 512, "utf8_bytes": 640,
-                                       "lines": 5, "compact_payload_chars": 512}[metric])
-        if migration.portfolio_growth_migration:
-            allowance = max(
-                allowance,
-                _ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
-            )
-        if migration.horizon_growth_migration:
-            allowance = max(
-                allowance,
-                _PLANNING_HORIZON_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
-            )
-        if migration.agent_context_growth_migration:
-            allowance = max(
-                allowance, _AGENT_CONTEXT_V4_MIGRATION_GROWTH_ALLOWANCE[metric]
-            )
-        if migration.inventory_detail_growth_migration:
-            allowance = max(
-                allowance,
-                _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE[
-                    metric
-                ],
-            )
-        if migration.guided_todo_delta_growth_migration:
-            allowance = max(
-                allowance,
-                _GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
-            )
-        if runtime_root_route_allowances:
-            allowance = max(
-                allowance,
-                runtime_root_route_allowances[metric],
-            )
-        deltas[metric] = delta
-        allowances[metric] = allowance
-        if delta > allowance:
-            failures.append(f"{metric} grew by {delta}; allowance is {allowance}")
+    deltas, allowances, growth_failures, growth_signals = _compare_row_growth(
+        base, candidate, migration=migration,
+        command_route_allowances=command_route_allowances,
+    )
+    failures.extend(growth_failures)
+    review_signals.extend(growth_signals)
 
     if output_format == "json":
         missing = _removed(base, candidate, "semantic_json_keys")
@@ -655,10 +963,10 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 "planning inventory detail schema migrated: "
                 f"{migration.inventory_detail_schema_migration}"
             )
-    if runtime_root_route_allowances:
+    for option, count in added_command_routes.items():
         review_signals.append(
-            "runtime-root command route coverage added: "
-            f"{added_runtime_root_routes} executable route(s)"
+            f"{option.replace('_', '-')} command route coverage added: "
+            f"{count} executable route(s)"
         )
     if migration.guided_todo_delta_schema_changed:
         if migration.guided_todo_delta_schema_migration is None:
@@ -667,6 +975,14 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             review_signals.append(
                 "guided todo delta schema migrated: "
                 f"{migration.guided_todo_delta_schema_migration}"
+            )
+    if migration.todo_work_counts_schema_changed:
+        if migration.todo_work_counts_schema_migration is None:
+            failures.append("Todo work-count schema coverage changed")
+        else:
+            review_signals.append(
+                "Todo work-count schema migrated: "
+                f"{migration.todo_work_counts_schema_migration}"
             )
 
     return {
@@ -701,14 +1017,22 @@ def compare_cli_output_receipts(
                 }
             )
         elif candidate is None:
+            parts = row_id.split("/")
+            replacement = next((row for key, row in candidate_rows.items()
+                                if key.startswith(("variant/review_packet_full/", "surface/quota_should_run/"))
+                                and _has_decision_evidence(row)), None)
+            retired_evidence_command = bool(
+                len(parts) == 4 and parts[:2] == ["surface", "evidence_log_thin"]
+                and replacement and _has_decision_evidence(replacement)
+            )
             results.append(
                 {
                     "row_id": row_id,
-                    "status": "failed",
+                    "status": "passed" if retired_evidence_command else "failed",
                     "deltas": {},
                     "allowances": {},
-                    "failures": ["qualified base row is missing from candidate"],
-                    "review_signals": [],
+                    "failures": [] if retired_evidence_command else ["qualified base row is missing from candidate"],
+                    "review_signals": ["evidence-log retired; scoped decision evidence is delivered by replan_context"] if retired_evidence_command else [],
                 }
             )
         else:

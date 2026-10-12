@@ -1,5 +1,7 @@
 from __future__ import annotations
-
+from ..quota.blocked_transition_notice import blocked_priority_fallback_owner_reason
+from ..quota.effective_action import EffectiveAction
+from ..effect_runtime import effect_runtime_result
 import shlex
 import typing
 from collections.abc import Mapping
@@ -17,6 +19,7 @@ from ..quota.settlement import (
 from ..quota.spend_sources import (
     build_quota_spend_action,
     host_goal_turn_reentry_action,
+    quota_spend_source_for_execution_context,
 )
 from ..scheduler.execution_context import (
     APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES,
@@ -43,6 +46,8 @@ from . import action_selection_contract as selection
 from . import runtime_capability_reentry as capability_reentry_adapter
 from .primary_action import (
     build_primary_action_projection,
+    interaction_execution_flags,
+    interaction_quiet_noop_allowed,
     protocol_action_label as _protocol_action_label,
     protocol_action_text,
     protocol_first_candidate_action as _protocol_first_candidate_action,
@@ -54,8 +59,12 @@ from .user_action_frontier import user_action_owns_empty_agent_lane
 
 INTERACTION_CONTRACT_SCHEMA_VERSION = "loopx_interaction_contract_v0"
 INTERACTION_RESPONSE_PLAN_SCHEMA_VERSION = "interaction_response_plan_v0"
-PROTOCOL_ACTION_PACKET_SCHEMA_VERSION = "protocol_action_packet_v0"
 PROTOCOL_ACTION_PACKET_LLM_POLICY = "no_api"
+AUXILIARY_MONITOR_POLL_CLI_SCHEMA_VERSION = "auxiliary_monitor_poll_cli_v0"
+AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION = (
+    "auxiliary_monitor_observation_input_v0"
+)
+AUXILIARY_MONITOR_RESULT_HASH_ENV = "LOOPX_MONITOR_RESULT_HASH"
 
 
 class _InteractionContractRequired(typing.TypedDict):
@@ -143,6 +152,8 @@ def user_channel_notice_todo_actions(summary: Any, *, limit: int = 3) -> list[st
 
 
 def user_channel_action_required(payload: dict[str, Any]) -> bool:
+    if payload.get("effective_action") == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
+        return False
     if payload.get("agent_work_mode") == "monitor_only":
         return False
     if _user_gate_scope_projection_repair_active(payload):
@@ -197,6 +208,7 @@ def finalize_user_gate_notification_cooldown(
     ) = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> None:
     scheduler_hint = payload.get("scheduler_hint")
     cooldown = (
@@ -218,6 +230,7 @@ def finalize_user_gate_notification_cooldown(
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        registry_path=registry_path,
     )
     attach_user_action_compat_fields(payload)
 
@@ -227,6 +240,8 @@ def projected_user_channel_actions(
     *,
     limit: int = 3,
 ) -> list[str]:
+    if payload.get("effective_action") == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
+        return []
     if payload.get("agent_work_mode") == "monitor_only":
         return []
     if _user_gate_scope_projection_repair_active(payload):
@@ -432,14 +447,6 @@ def render_protocol_action_packet_summary(fields: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-def build_protocol_action_packet(payload: dict[str, Any]) -> dict[str, Any]:
-    fields = protocol_action_packet_fields(payload)
-    return {
-        "schema_version": PROTOCOL_ACTION_PACKET_SCHEMA_VERSION,
-        "summary": render_protocol_action_packet_summary(fields),
-    }
-
-
 def _interaction_mode(payload: dict[str, Any]) -> str:
     execution_obligation = (
         payload.get("execution_obligation")
@@ -454,23 +461,25 @@ def _interaction_mode(payload: dict[str, Any]) -> str:
     kind = str(execution_obligation.get("kind") or "")
     effective_action = str(payload.get("effective_action") or "")
     state = str(payload.get("state") or "")
-    if effective_action == "governed_capability_intent":
+    if effective_action == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
+        return "heartbeat_settled_skip"
+    if effective_action == EffectiveAction.GOVERNED_CAPABILITY_INTENT.value:
         return effective_action
-    if effective_action == "unsettled_host_turn_recovery":
+    if effective_action == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
         return effective_action
-    if effective_action == "agent_monitor_only":
+    if effective_action == EffectiveAction.AGENT_MONITOR_ONLY.value:
         return "agent_monitor_only"
-    if effective_action == "monitor_due":
+    if effective_action == EffectiveAction.MONITOR_DUE.value:
         return "monitor_due"
-    if effective_action == "terminal_no_followup" or state == "terminal_no_followup":
+    if effective_action == EffectiveAction.TERMINAL_NO_FOLLOWUP.value or state == "terminal_no_followup":
         return "terminal_no_followup"
-    if effective_action == "peer_coordination_blocked":
+    if effective_action == EffectiveAction.PEER_COORDINATION_BLOCKED.value:
         return effective_action
     if payload.get("scoped_user_gate_fallback"):
         return "scoped_user_gate_fallback"
     if _user_gate_notification_suppressed(payload):
         return "user_gate_cooldown_wait"
-    if effective_action == "automation_prompt_upgrade_required":
+    if effective_action == EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value:
         return "automation_prompt_upgrade"
     if user_channel_action_required(payload):
         if (
@@ -495,22 +504,20 @@ def _interaction_mode(payload: dict[str, Any]) -> str:
         return "external_evidence_observation"
     if kind == AUTONOMOUS_REPLAN_REQUIRED_MODE:
         return "autonomous_replan"
-    if effective_action == "coordinate_task_bundle":
+    if effective_action == EffectiveAction.COORDINATE_TASK_BUNDLE.value:
         return "task_orchestration"
     agent_scope_action = _agent_scope_frontier_action(effective_action)
     if agent_scope_action is not None:
         return agent_scope_action.value
-    if effective_action == "monitor_quiet_skip":
+    if effective_action == EffectiveAction.MONITOR_QUIET_SKIP.value:
         return "monitor_quiet_skip"
-    if effective_action == "heartbeat_settled_skip":
-        return "heartbeat_settled_skip"
-    if payload.get("recovery_delivery_allowed") or effective_action == "outcome_floor_recovery":
+    if payload.get("recovery_delivery_allowed") or effective_action == EffectiveAction.OUTCOME_FLOOR_RECOVERY.value:
         return "outcome_floor_recovery"
-    if effective_action == "capability_bridge_repair":
+    if effective_action == EffectiveAction.CAPABILITY_BRIDGE_REPAIR.value:
         return "capability_bridge_repair"
-    if effective_action == "agent_workspace_repair":
+    if effective_action == EffectiveAction.AGENT_WORKSPACE_REPAIR.value:
         return effective_action
-    if effective_action == "boundary_projection_repair":
+    if effective_action == EffectiveAction.BOUNDARY_PROJECTION_REPAIR.value:
         return "boundary_projection_repair"
     if payload.get("self_repair_allowed"):
         return "control_plane_self_repair"
@@ -544,6 +551,26 @@ def _scoped_cli_args(
     return f" --agent-id {agent_id}{capability_args}"
 
 
+def _goal_ref_cli_arg(payload: Mapping[str, Any]) -> str:
+    value = payload.get("goal_ref")
+    if value is None:
+        return ""
+    if not isinstance(value, Mapping):
+        raise ValueError("interaction GoalRef must be an object")
+    from ..goals.source_session_registry_state import exact_goal_ref
+
+    goal_ref = exact_goal_ref(
+        str(value.get("goal_id") or ""),
+        str(value.get("goal_instance_id") or ""),
+    )
+    if goal_ref["goal_id"] != str(payload.get("goal_id") or "").strip():
+        raise ValueError("interaction GoalRef does not match goal_id")
+    return (
+        " --goal-instance-id "
+        + shlex.quote(goal_ref["goal_instance_id"])
+    )
+
+
 def _turn_scoped_cli_settlement_context(
     payload: dict[str, Any],
     *,
@@ -553,6 +580,7 @@ def _turn_scoped_cli_settlement_context(
     ),
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if selection.action_portfolio_requires_explicit_selection(payload):
         return None, None
@@ -596,7 +624,7 @@ def _turn_scoped_cli_settlement_context(
         ),
         goal_id=goal_id,
         agent_id=agent_id,
-        command_prefix=selection.render_cli_command_prefix(runtime_root=runtime_root),
+        command_prefix=selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path),
         todo_id=todo_id,
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
@@ -606,6 +634,11 @@ def _turn_scoped_cli_settlement_context(
             str(selected_todo.get("delivery_boundary"))
             if selected_todo.get("delivery_boundary")
             == "in_flight_continuation"
+            else None
+        ),
+        goal_ref=(
+            payload.get("goal_ref")
+            if isinstance(payload.get("goal_ref"), Mapping)
             else None
         ),
     )
@@ -661,6 +694,53 @@ def _terminal_cli_actions(
     return ["no quota spend without validated transition/blocker writeback"]
 
 
+def _selection_recovery_command(
+    payload: dict[str, Any], *, available_capabilities: Any,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+    turn_instance_id: str | None, runtime_root: str | None,
+    registry_path: str | None = None,
+) -> str:
+    identity = payload.get("agent_identity") if isinstance(payload.get("agent_identity"), dict) else {}
+    return selection.action_selection_recovery_command(
+        goal_id=str(payload.get("goal_id") or "<GOAL_ID>"),
+        agent_id=identity.get("agent_id"), runtime_root=runtime_root,
+        registry_path=registry_path,
+        turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
+        scheduler_args=render_scheduler_execution_args(scheduler_execution_context=scheduler_execution_context),
+    ) + _goal_ref_cli_arg(payload)
+
+
+def _render_replan_successor_closeout_guard(
+    *, settlement_plan: Mapping[str, Any] | None,
+    scheduler_args: str, typed_quota_guard: str, settlement_args: str,
+) -> str | None:
+    """Render this host's guard for an existing TS-owned pure replan identity."""
+    if not scheduler_args or not settlement_plan:
+        return None
+    identity = settlement_plan.get("identity")
+    if not isinstance(identity, Mapping) or identity.get("binding_kind") != "autonomous_replan":
+        # Todo-bound replans retain their distinct closeout path.
+        return None
+    return typed_quota_guard + settlement_args
+
+
+def _dependency_cycle_cli_actions(
+    frontier: dict[str, Any], *, command_prefix: str, goal_id: str,
+    lifecycle_actor_args: str, typed_quota_guard: str,
+) -> list[str]:
+    """Render the typed cycle repair without adding selection policy here."""
+    candidates = frontier.get("dependency_cycle_candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return []
+    todo_id = str(candidates[0]["todo_id"])
+    return [
+        f"{command_prefix} todo list --goal-id {goal_id} --todo-id {todo_id}{lifecycle_actor_args}",
+        str(frontier["recommended_action"]),
+        f"{command_prefix} task-lease inspect --goal-id {goal_id} --todo-id {todo_id}",
+        typed_quota_guard,
+    ]
+
+
 def interaction_next_cli_actions(
     payload: dict[str, Any],
     *,
@@ -674,9 +754,17 @@ def interaction_next_cli_actions(
     settlement_plan: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> list[str]:
+    if unadmitted_action_selection(payload):
+        return [_selection_recovery_command(
+            payload, available_capabilities=available_capabilities,
+            scheduler_execution_context=scheduler_execution_context,
+            turn_instance_id=turn_instance_id, runtime_root=runtime_root,
+            registry_path=registry_path,
+        )]
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
-    command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root)
+    command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path)
     agent_identity = payload.get("agent_identity") if isinstance(payload.get("agent_identity"), dict) else {}
     scoped_cli_args = _scoped_cli_args(
         agent_identity,
@@ -694,6 +782,7 @@ def interaction_next_cli_actions(
             scheduler_execution_context=scheduler_execution_context,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         )
     settlement_args = settlement_binding_args(settlement_plan)
     try:
@@ -708,12 +797,14 @@ def interaction_next_cli_actions(
         scheduler_args=scheduler_args,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        registry_path=registry_path,
     )
     if selection_command_template:
-        return [selection_command_template]
+        return [selection_command_template + _goal_ref_cli_arg(payload)]
+    goal_ref_arg = _goal_ref_cli_arg(payload)
     typed_quota_guard = (
         f"{command_prefix} --format json quota should-run --goal-id {goal_id}"
-        f"{scoped_cli_args}{scheduler_args}"
+        f"{scoped_cli_args}{scheduler_args}{goal_ref_arg}"
         if scheduler_args
         else "rerun the typed quota_guard from the current host packet"
     )
@@ -723,7 +814,7 @@ def interaction_next_cli_actions(
         return [turn_reentry_action]
     typed_monitor_poll = (
         f"{command_prefix} quota monitor-poll --goal-id {goal_id}{scoped_cli_args}"
-        f"{scheduler_args} --execute"
+        f"{scheduler_args}{goal_ref_arg} --execute"
         if scheduler_args
         else "use the current host packet's typed monitor command"
     )
@@ -837,6 +928,11 @@ def interaction_next_cli_actions(
             if isinstance(payload.get("agent_scope_frontier"), dict)
             else {}
         )
+        if cycle_actions := _dependency_cycle_cli_actions(
+            agent_scope_frontier, command_prefix=command_prefix, goal_id=goal_id,
+            lifecycle_actor_args=lifecycle_actor_args, typed_quota_guard=typed_quota_guard,
+        ):
+            return cycle_actions
         monitor_candidates = (
             agent_scope_frontier.get("monitor_blocked_resume_candidates")
             if isinstance(agent_scope_frontier.get("monitor_blocked_resume_candidates"), list)
@@ -880,7 +976,7 @@ def interaction_next_cli_actions(
             (
             f"{command_prefix} todo update --goal-id {goal_id} --todo-id {todo_id}"
             f"{lifecycle_actor_args} --status open --clear-resume-when "
-            "--note '<public-safe successor replan reason>'"
+            "--reason '<public-safe successor replan reason>'"
             ),
             f"{command_prefix} refresh-state --goal-id {goal_id} --classification successor_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
             quota_spend_action,
@@ -938,6 +1034,10 @@ def interaction_next_cli_actions(
             command_prefix=command_prefix,
             lifecycle_actor_args=lifecycle_actor_args,
             runtime_root=runtime_root,
+            successor_closeout_guard=_render_replan_successor_closeout_guard(
+                settlement_plan=settlement_plan, scheduler_args=scheduler_args,
+                typed_quota_guard=typed_quota_guard, settlement_args=settlement_args,
+            ),
         )
     return _terminal_cli_actions(
         mode=mode,
@@ -951,19 +1051,41 @@ def interaction_next_cli_actions(
     )
 
 
-def _interaction_required_reads(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _interaction_required_reads(
+    payload: dict[str, Any], contract: dict[str, Any], *,
+    runtime_root: str | None, registry_path: str | None,
+) -> list[dict[str, Any]]:
+    """Transport source/admission facts to the existing typed interaction owner."""
     reads = payload.get("required_reads")
-    if not isinstance(reads, list):
-        return []
-    result: list[dict[str, Any]] = []
-    for item in reads:
-        if not isinstance(item, dict):
-            continue
-        command = protocol_action_text(item.get("command"), limit=360)
-        if not command:
-            continue
-        result.append({**item, "command": command})
-    return result
+    summary = payload.get("agent_todo_summary") or {}
+    acceptance = summary.get("goal_acceptance_contract") or {}
+    replan = payload.get("replan_action_packet") or {}
+    selected = payload.get("selected_todo") or {}
+    orchestration = payload.get("task_orchestration_contract") or {}
+    result = effect_runtime_result("work_item.interaction_reads.project", {
+        "required_reads": [dict(item) for item in reads if isinstance(item, dict) and item.get("command")]
+            if isinstance(reads, list) else [],
+        "goal_id": payload.get("goal_id"),
+        "goal_state_file": payload.get("goal_state_file"),
+        "goal_acceptance_enabled": acceptance.get("enabled") is True,
+        "selected_todo": {"todo_id": selected.get("todo_id")},
+        "task_orchestration_contract": {field: orchestration.get(field)
+            for field in ("schema_version", "mode", "primary_todo_id")},
+        "should_run": payload.get("should_run") is True,
+        "delivery_allowed": contract["agent_channel"].get("delivery_allowed") is True,
+        "selection_required": contract["cli_channel"].get("selection_required") is True,
+        "has_replan": bool(replan), "settlement_only": replan.get("settlement_only") is True,
+        "effective_action": payload.get("effective_action"),
+        "command_prefix": selection.render_cli_command_prefix(
+            runtime_root=runtime_root or payload.get("runtime_root"),
+            registry_path=registry_path or payload.get("registry")),
+    })
+    projected = result.get("required_reads")
+    if not isinstance(projected, list) or any(
+        not isinstance(item, dict) or not item.get("command") for item in projected
+    ):
+        raise RuntimeError("TypeScript interaction required reads are malformed")
+    return projected
 
 
 def _interaction_spend_policy(
@@ -1035,74 +1157,11 @@ def _blocked_priority_fallback_user_reason(payload: dict[str, Any]) -> str | Non
         and fallback.get("notify_user") is not True
     ):
         return None
-    reason = str(fallback.get("reason") or "").strip()
-    return reason or None
-
-
-def _interaction_must_attempt(
-    execution_obligation: dict[str, Any],
-    *,
-    mode: str,
-    user_required: bool,
-    scoped_user_gate_fallback: bool,
-    bounded_delivery_with_user_notice: bool,
-) -> bool:
-    if mode == "governed_capability_intent":
-        return bool(execution_obligation.get("must_attempt_work"))
-    if user_required and not (
-        scoped_user_gate_fallback or bounded_delivery_with_user_notice
-    ):
-        return False
-    return bool(execution_obligation.get("must_attempt_work"))
-
-
-def _interaction_delivery_allowed(
-    payload: dict[str, Any],
-    execution_obligation: dict[str, Any],
-    *,
-    mode: str,
-    user_required: bool,
-    scoped_user_gate_fallback: bool,
-    bounded_delivery_with_user_notice: bool,
-) -> bool:
-    if mode == "governed_capability_intent":
-        return bool(execution_obligation.get("must_attempt_work"))
-    if mode == "mapped_noop_if_unchanged":
-        return False
-    if user_required and not (
-        scoped_user_gate_fallback or bounded_delivery_with_user_notice
-    ):
-        return False
-    return bool(
-        execution_obligation.get(
-            "delivery_allowed",
-            payload.get("normal_delivery_allowed")
-            or payload.get("recovery_delivery_allowed")
-            or payload.get("self_repair_allowed")
-            or payload.get("should_run"),
-        )
-    )
-
-
-def _interaction_quiet_noop_allowed(
-    *,
-    mode: str,
-    user_required: bool,
-    must_attempt: bool,
-) -> bool:
-    if user_required or must_attempt:
-        return False
-    return _agent_scope_frontier_action(mode) is not None or mode in {
-        "monitor_quiet_skip",
-        "mapped_noop_if_unchanged",
-        "quota_throttled",
-        "blocked_wait",
-        "user_gate_cooldown_wait",
-        "terminal_no_followup",
-        "peer_coordination_blocked",
-        "agent_monitor_only",
-        "skip",
-    }
+    # The typed notice carries what #4381 asks the owner to be told — the task,
+    # the concrete cause, the impact, who can resolve it, the recovery
+    # condition and the next action — and it takes precedence over the generic
+    # fallback prose. The rendering lives with the notice contract.
+    return blocked_priority_fallback_owner_reason(fallback)
 
 
 def _interaction_spend_after_validation(mode: str) -> bool:
@@ -1183,6 +1242,15 @@ def _build_interaction_agent_channel(
         "quiet_noop_allowed": quiet_noop_allowed,
     }
     channel.update(build_primary_action_projection(payload, mode=mode))
+    work_lane = (
+        payload.get("work_lane_contract")
+        if isinstance(payload.get("work_lane_contract"), Mapping)
+        else {}
+    )
+    if isinstance(work_lane.get("auxiliary_monitor_poll"), Mapping):
+        channel["auxiliary_monitor_poll"] = dict(
+            work_lane["auxiliary_monitor_poll"]
+        )
     if isinstance(payload.get("action_portfolio"), dict):
         channel["action_portfolio_ref"] = "$.action_portfolio"
     selection.apply_action_selection_agent_gate(channel, payload)
@@ -1257,6 +1325,26 @@ def _build_interaction_response_plan(
     }
 
 
+def _auxiliary_monitor_receipt_binding_required(payload: Mapping[str, Any]) -> bool:
+    """Whether this Turn's own receipt is intentionally identity-less.
+
+    A guard whose portfolio requires an explicit turn binding commits a receipt
+    with no settlement identity, and the turn-scoped poll refuses to observe
+    through a receipt that binds nothing. Advertising `ready` for that Turn
+    would offer a command whose only possible outcome is an identity refusal, so
+    the projection has to say which binding is missing instead.
+    """
+
+    portfolio = payload.get("action_portfolio")
+    policy = (
+        portfolio.get("selection_policy") if isinstance(portfolio, Mapping) else None
+    )
+    return (
+        isinstance(policy, Mapping)
+        and policy.get("requires_explicit_turn_binding") is True
+    )
+
+
 def _build_interaction_cli_channel(
     payload: dict[str, Any],
     execution_obligation: dict[str, Any],
@@ -1271,7 +1359,15 @@ def _build_interaction_cli_channel(
     capability_reentry: dict[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> dict[str, Any]:
+    if unadmitted_action_selection(payload):
+        return selection.action_selection_recovery_cli_channel(_selection_recovery_command(
+            payload, available_capabilities=available_capabilities,
+            scheduler_execution_context=scheduler_execution_context,
+            turn_instance_id=turn_instance_id, runtime_root=runtime_root,
+            registry_path=registry_path,
+        ))
     spend_after_selection = selection.delivery_spend_allowed(payload, spend_after_validation)
     settlement_plan, replan_settlement_contract = (
         _turn_scoped_cli_settlement_context(
@@ -1280,6 +1376,7 @@ def _build_interaction_cli_channel(
             scheduler_execution_context=scheduler_execution_context,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         )
     )
     channel = {
@@ -1293,6 +1390,7 @@ def _build_interaction_cli_channel(
             settlement_plan=settlement_plan,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         ),
         "spend_allowed_now": False,
         "spend_after_validation": spend_after_selection,
@@ -1303,9 +1401,131 @@ def _build_interaction_cli_channel(
             spend_after_validation=spend_after_selection,
         ),
     }
+    work_lane = (
+        payload.get("work_lane_contract")
+        if isinstance(payload.get("work_lane_contract"), Mapping)
+        else {}
+    )
+    auxiliary_monitor = (
+        work_lane.get("auxiliary_monitor_poll")
+        if isinstance(work_lane.get("auxiliary_monitor_poll"), Mapping)
+        else None
+    )
+    if auxiliary_monitor is not None:
+        selected_monitor_id = normalize_todo_id(
+            auxiliary_monitor.get("selected_todo_id")
+        )
+        try:
+            auxiliary_scheduler_args = render_scheduler_execution_args(
+                scheduler_execution_context=scheduler_execution_context,
+            )
+        except ValueError:
+            auxiliary_scheduler_args = ""
+        if selected_monitor_id:
+            command_prefix = selection.render_cli_command_prefix(
+                runtime_root=runtime_root, registry_path=registry_path,
+            )
+            agent_identity = (
+                payload.get("agent_identity")
+                if isinstance(payload.get("agent_identity"), dict)
+                else {}
+            )
+            safe_turn_instance_id = str(turn_instance_id or "").strip()
+            auxiliary_projection: dict[str, Any] = {
+                **dict(auxiliary_monitor),
+                "schema_version": AUXILIARY_MONITOR_POLL_CLI_SCHEMA_VERSION,
+                "input_contract": {
+                    "schema_version": (
+                        AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION
+                    ),
+                    "result_hash": {
+                        "required": True,
+                        "environment_variable": AUXILIARY_MONITOR_RESULT_HASH_ENV,
+                        "source": "fresh_external_observation_digest",
+                    },
+                    "material_change": {
+                        "required": True,
+                        "unchanged_command_key": "command",
+                        "changed_command_key": "material_change_command",
+                    },
+                    "task_lease_proof": {
+                        "required_when": "canonical_hard_lease",
+                        "source": "canonical_lease_or_same_turn_receipt",
+                        "acquires_or_renews_lease": False,
+                    },
+                },
+            }
+            replan_binding = (
+                replan_settlement_contract.get("settlement_binding")
+                if isinstance(replan_settlement_contract, Mapping)
+                else None
+            )
+            if _auxiliary_monitor_receipt_binding_required(payload):
+                auxiliary_projection.update(
+                    {
+                        "availability": "receipt_binding_required",
+                        "reason_code": "auxiliary_monitor_receipt_not_bound",
+                        "next_step": (
+                            "this Turn's own receipt binds no Todo, so a "
+                            "turn-scoped observation cannot be admitted for it; "
+                            "bind the Turn to a claimed Todo and observe from "
+                            "that Turn"
+                        ),
+                    }
+                )
+            elif not safe_turn_instance_id:
+                auxiliary_projection.update(
+                    {
+                        "availability": "turn_binding_required",
+                        "reason_code": "auxiliary_monitor_turn_instance_id_missing",
+                    }
+                )
+            elif isinstance(replan_binding, Mapping) and replan_binding.get("kind") == "autonomous_replan":
+                auxiliary_projection.update(
+                    {
+                        "availability": "receipt_binding_required",
+                        "reason_code": "auxiliary_monitor_replan_receipt_binding",
+                        "next_step": (
+                            "settle the current autonomous replan Turn, then "
+                            "observe the due monitor from a Todo-bound Turn"
+                        ),
+                    }
+                )
+            elif (payload.get("requires_user_action") is True and
+                  (not isinstance(auxiliary_monitor.get("gate_scope"), Mapping) or
+                   auxiliary_monitor["gate_scope"].get("state") != "independent")):
+                auxiliary_projection.update(availability="gate_scope_blocked",
+                    reason_code="auxiliary_monitor_gate_scope_unqualified")
+            else:
+                monitor = next((row for row in auxiliary_monitor.get("monitor_due_items", [])
+                    if isinstance(row, Mapping) and row.get("todo_id") == selected_monitor_id), {})
+                target_args = (f" --target-key {shlex.quote(str(monitor['target_key']))}"
+                    if monitor.get("target_key") else "")
+                command = (
+                    f"{command_prefix} quota monitor-poll --goal-id "
+                    f"{shlex.quote(str(payload.get('goal_id') or '<GOAL_ID>'))}"
+                    f"{_scoped_cli_args(agent_identity, available_capabilities=available_capabilities)}"
+                    f"{auxiliary_scheduler_args} --turn-instance-id "
+                    f"{shlex.quote(safe_turn_instance_id)} --todo-id "
+                    f"{shlex.quote(selected_monitor_id)}{target_args} --use-current-task-lease --result-hash "
+                    f'"${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}"'
+                    f"{_goal_ref_cli_arg(payload)}"
+                )
+                auxiliary_projection.update(
+                    {
+                        "availability": "ready",
+                        "turn_instance_id": safe_turn_instance_id,
+                        "command": f"{command} --execute",
+                        "material_change_command": (
+                            f"{command} --material-change --execute"
+                        ),
+                    }
+                )
+            channel["auxiliary_monitor_poll"] = auxiliary_projection
     selection.apply_action_selection_cli_gate(channel, payload)
     if settlement_plan is not None and spend_after_selection:
         channel["settlement_plan"] = settlement_plan
+        channel["quota_spend_source"] = quota_spend_source_for_execution_context(scheduler_execution_context)
     if settlement_plan is not None and replan_settlement_contract is not None:
         channel["replan_settlement_contract"] = replan_settlement_contract
     if capability_reentry is not None:
@@ -1319,10 +1539,14 @@ def _build_interaction_cli_channel(
         if isinstance(payload.get("selected_todo"), Mapping)
         else {}
     )
-    if spend_after_selection and selected_todo.get("task_repository"):
+    if spend_after_selection and selected_todo.get("todo_id"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
-            "refresh": "delivery_workspace; otherwise --delivery-workspace-path",
+            "refresh": (
+                "delivery_workspace; otherwise --delivery-workspace-path"
+                if selected_todo.get("task_repository")
+                else "registered local Goal target; when caller cwd differs, refresh with --delivery-workspace-path for the actual target; spend uses the recorded delivery workspace"
+            ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",
         }
@@ -1333,10 +1557,8 @@ def _attach_interaction_required_reads(
     contract: dict[str, Any],
     required_reads: list[dict[str, Any]],
 ) -> None:
-    if not required_reads:
-        return
+    # One execution-fact carrier; CLI actions do not duplicate agent reads.
     contract["agent_channel"]["required_reads"] = required_reads
-    contract["cli_channel"]["required_reads"] = required_reads
 
 
 def _attach_interaction_post_writeback_actions(
@@ -1429,6 +1651,22 @@ def _interaction_fallback_policy_required(payload: dict[str, Any], *, mode: str)
     } or bool(payload.get("blocked_priority_fallback"))
 
 
+def unadmitted_action_selection(payload: dict[str, Any]) -> bool:
+    """Use the same current-obligation facts as interaction and CLI preflight."""
+    qualification = payload.get("action_selection_qualification")
+    if not isinstance(qualification, Mapping) or qualification.get("state") not in {"deferred", "rejected"}:
+        return False
+    mode = _interaction_mode(payload)
+    user_required = False if payload.get("agent_work_mode") == "monitor_only" else user_channel_action_required(payload)
+    must_attempt, delivery_allowed = interaction_execution_flags(
+        payload, mode=mode, user_required=user_required,
+        blocked_successor_wait_observation=_blocked_successor_wait_observation_required(payload),
+    )
+    return selection.action_selection_needs_recovery(
+        payload, agent_must_attempt=must_attempt, agent_delivery_refused=delivery_allowed is False,
+    )
+
+
 def build_interaction_contract(
     payload: dict[str, Any],
     *,
@@ -1438,6 +1676,7 @@ def build_interaction_contract(
     ) = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> InteractionContractPacket:
     execution_obligation = (
         payload.get("execution_obligation")
@@ -1452,28 +1691,11 @@ def build_interaction_contract(
     mode = _interaction_mode(payload)
     monitor_only = payload.get("agent_work_mode") == "monitor_only"
     user_required = False if monitor_only else user_channel_action_required(payload)
-    scoped_user_gate_fallback = mode == "scoped_user_gate_fallback"
-    bounded_delivery_with_user_notice = mode == "bounded_delivery_with_user_notice"
-    must_attempt = _interaction_must_attempt(
-        execution_obligation,
-        mode=mode,
-        user_required=user_required,
-        scoped_user_gate_fallback=scoped_user_gate_fallback,
-        bounded_delivery_with_user_notice=bounded_delivery_with_user_notice,
+    must_attempt, delivery_allowed = interaction_execution_flags(
+        payload, mode=mode, user_required=user_required,
+        blocked_successor_wait_observation=_blocked_successor_wait_observation_required(payload),
     )
-    if mode == "automation_prompt_upgrade":
-        must_attempt = True
-    if _blocked_successor_wait_observation_required(payload):
-        must_attempt = True
-    delivery_allowed = _interaction_delivery_allowed(
-        payload,
-        execution_obligation,
-        mode=mode,
-        user_required=user_required,
-        scoped_user_gate_fallback=scoped_user_gate_fallback,
-        bounded_delivery_with_user_notice=bounded_delivery_with_user_notice,
-    )
-    quiet_noop_allowed = _interaction_quiet_noop_allowed(
+    quiet_noop_allowed = interaction_quiet_noop_allowed(
         mode=mode,
         user_required=user_required,
         must_attempt=must_attempt,
@@ -1482,7 +1704,6 @@ def build_interaction_contract(
         _interaction_spend_after_validation(mode)
         and todo_lifecycle_settlement_obligation(payload) is None
     )
-    required_reads = _interaction_required_reads(payload)
     capability_reentry = capability_reentry_adapter.build_runtime_capability_reentry_packet(
         payload,
         available_capabilities=available_capabilities,
@@ -1502,14 +1723,31 @@ def build_interaction_contract(
             "notify": "DONT_NOTIFY",
             "reason": payload.get("reason"),
         }
-    agent_channel = _build_interaction_agent_channel(
-        payload,
-        mode=mode,
-        must_attempt=must_attempt,
-        delivery_allowed=delivery_allowed,
-        quiet_noop_allowed=quiet_noop_allowed,
-        capability_reentry=capability_reentry,
-    )
+    if unadmitted_action_selection(payload):
+        agent_channel = {
+            "must_attempt": False, "delivery_allowed": False,
+            "quiet_noop_allowed": quiet_noop_allowed,
+            "primary_action": _selection_recovery_command(
+                payload, available_capabilities=available_capabilities,
+                scheduler_execution_context=scheduler_execution_context,
+                turn_instance_id=turn_instance_id, runtime_root=runtime_root,
+                registry_path=registry_path,
+            ),
+        }
+    else:
+        agent_channel = _build_interaction_agent_channel(
+            payload,
+            mode=mode,
+            must_attempt=must_attempt,
+            delivery_allowed=delivery_allowed,
+            quiet_noop_allowed=quiet_noop_allowed,
+            capability_reentry=capability_reentry,
+        )
+    retry_wait = execution_obligation.get("wait")
+    if execution_obligation.get("kind") == EffectiveAction.BLOCKED_WAIT.value and isinstance(retry_wait, dict):
+        agent_channel["wait"] = retry_wait
+        agent_channel["primary_action"] = execution_obligation["reason"]
+        user_channel["non_gating_notice"] = True
     contract: dict[str, Any] = {
         "schema_version": INTERACTION_CONTRACT_SCHEMA_VERSION,
         "mode": mode,
@@ -1526,6 +1764,7 @@ def build_interaction_contract(
             capability_reentry=capability_reentry,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         ),
     }
     response_plan = _build_interaction_response_plan(
@@ -1534,7 +1773,8 @@ def build_interaction_contract(
     )
     if response_plan is not None:
         contract["response_plan"] = response_plan
-    _attach_interaction_required_reads(contract, required_reads)
+    _attach_interaction_required_reads(contract, _interaction_required_reads(
+        payload, contract, runtime_root=runtime_root, registry_path=registry_path))
     _attach_interaction_post_writeback_actions(contract, payload)
     _attach_interaction_vision_continuation_audit(contract, payload)
     _attach_interaction_vision_wait_state(contract, payload)

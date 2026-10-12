@@ -162,7 +162,7 @@ def register_status_commands(
         "review-packet",
         help=(
             "Generate a CLI-visible Review Packet from the current status contract, "
-            "including agent-scoped evidence-log read hints when available."
+            "including bounded replan context when available."
         ),
     )
     review_packet_parser.add_argument(
@@ -204,7 +204,8 @@ def register_status_commands(
         action="store_true",
         help=(
             "Print only the target project-agent handoff in markdown output; "
-            "JSON output returns a minimized handoff payload."
+            "JSON output returns a minimized handoff payload with complete text. "
+            "Overflow Markdown carries all shards; verify with loopx handoff restore."
         ),
     )
     review_packet_parser.add_argument(

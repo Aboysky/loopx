@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -117,7 +118,7 @@ def handle_opencode2_goal_worker_command(
             node_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         payload = {
@@ -129,9 +130,9 @@ def handle_opencode2_goal_worker_command(
         print_payload(payload, args.format, _render_worker_markdown)
         return 1
 
-    log_path = Path(
-        tempfile.mkstemp(prefix="loopx-oc2-worker-", suffix=".log")[1]
-    )
+    fd, raw_log_path = tempfile.mkstemp(prefix="loopx-oc2-worker-", suffix=".log")
+    os.close(fd)
+    log_path = Path(raw_log_path)
     worker_log_tail = ""
 
     def _drain(stream: Iterable[str]) -> None:

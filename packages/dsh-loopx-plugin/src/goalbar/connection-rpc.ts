@@ -19,20 +19,12 @@ export const GOALBAR_RPC_CHANNEL = '/loopx' as const
 export const GOALBAR_SHARED_API_CHANNEL = '/api' as const
 const GOALBAR_SHARED_API_ENDPOINT = 'loopx.goalbar' as const
 
-interface ConnectionFetchRoute {
-  readonly path: string
-  readonly methods: readonly ['POST']
-  readonly requestBody: 'buffered'
-  readonly fetch: (request: Request) => Promise<Response>
-}
-
-interface SharedApiConnection extends HostConnectionHandle {
-  readonly fetch: {
-    register(route: ConnectionFetchRoute): () => Promise<void>
-  }
-}
-
 type ConnectionRpcResult = Awaited<ReturnType<ConnectionRpcHandler>>
+// The business adapter consumes no Peer identity. Connection owns admission;
+// its 0.2 RPC carrier may supply a fourth Peer argument to this same callback.
+type GoalBarConnectionHandler = (
+  endpoint: string, payload: unknown, signal: AbortSignal,
+) => ReturnType<ConnectionRpcHandler>
 
 function badRequestCarrier(): ConnectionRpcResult {
   return {
@@ -53,12 +45,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function hasSharedApiFetch(
-  connection: HostConnectionHandle,
-): connection is SharedApiConnection {
-  return Reflect.has(connection, 'fetch')
-}
-
 function responseEnvelope(rpcId: string, result: ConnectionRpcResult): Response {
   return Response.json({ type: 'server-response', rpcId, result })
 }
@@ -76,7 +62,7 @@ function invalidEnvelope(rpcId = 'invalid-request'): Response {
 
 async function handleSharedApiRequest(
   request: Request,
-  handler: ConnectionRpcHandler,
+  handler: GoalBarConnectionHandler,
 ): Promise<Response> {
   if (request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
     !== 'application/json') {
@@ -126,7 +112,7 @@ async function handleSharedApiRequest(
  */
 export function createGoalBarConnectionHandler(
   service: GoalBarServiceHandle,
-): ConnectionRpcHandler {
+): GoalBarConnectionHandler {
   return async (endpoint, payload, signal) => {
     let request: GoalBarRequestV1 | undefined
     try {
@@ -145,29 +131,19 @@ export function createGoalBarConnectionHandler(
   }
 }
 
+/** @deprecated Explicit legacy registration; the plugin uses the shared API. */
 export function registerGoalBarConnectionRpc(
-  connection: HostConnectionHandle,
+  connection: Pick<HostConnectionHandle, 'rpc'>,
   service: GoalBarServiceHandle,
 ): () => Promise<void> {
-  return connection.rpc.handle(
-    GOALBAR_RPC_CHANNEL,
-    createGoalBarConnectionHandler(service),
-    { authority: 'loopback' },
-  )
+  return connection.rpc.handle(GOALBAR_RPC_CHANNEL, createGoalBarConnectionHandler(service))
 }
 
-/**
- * Register GoalBar on the carrier supported by the installed DSH generation.
- * DSH 0.1.5 owns extension routes inside its authenticated shared `/api`
- * bridge; earlier compatible releases expose the legacy standalone channel.
- */
+/** Register on the authenticated shared API required by the DSH peer floor. */
 export function registerGoalBarConnectionTransport(
-  connection: HostConnectionHandle,
+  connection: Pick<HostConnectionHandle, 'fetch'>,
   service: GoalBarServiceHandle,
 ): () => Promise<void> {
-  if (!hasSharedApiFetch(connection)) {
-    return registerGoalBarConnectionRpc(connection, service)
-  }
   const handler = createGoalBarConnectionHandler(service)
   return connection.fetch.register({
     path: `${GOALBAR_SHARED_API_CHANNEL}/${GOALBAR_SHARED_API_ENDPOINT}`,

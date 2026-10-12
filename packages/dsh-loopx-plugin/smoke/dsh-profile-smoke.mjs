@@ -36,6 +36,7 @@ const packedStaticEntries = new Set([
   'package/lib/types/driver.d.ts',
   'package/lib/types/goalbar/connection-rpc.d.ts',
   'package/lib/types/goalbar/events.d.ts',
+  'package/lib/types/goalbar/project-registry-wire.d.ts',
   'package/lib/types/goalbar/protocol.d.ts',
   'package/lib/types/goalbar/read-model.d.ts',
   'package/lib/types/goalbar/service.d.ts',
@@ -136,21 +137,40 @@ async function assertClientDiscovery(installed, manifest) {
   const registry = Object.create(ClientModuleRegistry.prototype)
   registry.pkgMeta = new Map()
   registry.table = new Map()
-  registry.resolvePkgJson = specifier => installedRequire.resolve(`${specifier}/package.json`)
+  registry.sources = new Map()
+  registry.dirty = new Set()
+  registry.initialRevisionNonce = 'profile-smoke-nonce'
+  registry.nextInitialRevision = 0
+  const baseUrl = pathToFileURL(join(installed, 'package.json')).href
+  // 0.1.5 resolves the mounted row through the Loader's own `internal`
+  // resolver and reads the base URL from the entry's tree context.
   registry.ctx = {
+    logger: { warn() {} },
     loader: {
+      internal: {
+        version: 'v1',
+        resolveSync: specifier => ({
+          url: pathToFileURL(installedRequire.resolve(`${specifier}/package.json`)).href,
+        }),
+      },
       entries: () => [{
         options: { name: packageId },
+        parent: { tree: { ctx: { baseUrl } } },
         fiber: {},
         disabled: false,
       }],
     },
   }
-  const meta = registry.resolveMeta(packageId)
-  assert.equal(meta.clientPath, join(installed, 'lib', 'client.js'))
-  assert.deepEqual(meta.inject, manifest.dsh.client.inject)
-  assert.equal(registry.processOne(packageId), true)
-  assert.match(registry.table.get(packageId)?.entry.rev ?? '', /^[0-9a-f]{12}$/u)
+  // 0.1.5 returns the located manifest beside the parsed client declaration,
+  // and the initial row revision is an opaque allocation rather than a hash.
+  const resolved = registry.resolveMeta(packageId, baseUrl)
+  assert.equal(resolved.meta.clientPath, join(installed, 'lib', 'client.js'))
+  assert.deepEqual(resolved.meta.inject, manifest.dsh.client.inject)
+  assert.equal(registry.processOne(packageId, error => { throw error }), true)
+  const entry = registry.table.get(packageId)?.entry
+  assert.equal(typeof entry?.rev, 'string')
+  assert(entry.rev.length > 0, 'DSH omitted the client revision')
+  assert.equal(new URL(entry.url, 'http://localhost').searchParams.get('rev'), entry.rev)
   const client = await readFile(join(installed, 'lib', 'client.js'), 'utf8')
   assert(client.startsWith('window.__ModuleLoader__.load({'))
   assert(client.includes('id: "dsh-loopx-plugin"'))
@@ -187,7 +207,7 @@ async function exerciseInstalled(installed) {
         throw new hostModule.LoopXCliError('aborted', 'cancelled', false)
       }
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx smoke\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         return {
@@ -252,7 +272,7 @@ async function exerciseInstalled(installed) {
   assert.equal(followups.length, 1)
   assert.equal(followups[0].role, 'user')
   assert.deepEqual(followups[0].source, {
-    kind: 'plugin',
+    kind: 'loopx-initialization',
     plugin: 'dsh-loopx-plugin/init-command',
   })
   assert.notDeepEqual(followups[0].source, {
@@ -269,13 +289,13 @@ async function exerciseInstalled(installed) {
   const session = {
     id: 'inactive-session',
     header: { id: 'inactive-session', cwd: installed },
-    events: [],
+    snapshotEvents: () => [],
   }
   const inactiveAgent = {
     id: 'inactive-session',
     status: 'idle',
     session,
-    inbox: { hasPending: false },
+    inbox: { nextTurn: [], nextStep: [] },
     followup(message) {
       followupMessages.push(message)
     },

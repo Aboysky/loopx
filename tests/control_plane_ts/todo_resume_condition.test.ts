@@ -7,6 +7,7 @@ import {
   TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
   TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
   evaluateTodoResumeConditions,
+  compactTodoResumeMergeEvidence,
   diagnoseTodoResumeCondition,
   normalizeTodoResumeWhen,
   planTodoExternalWaitTransition,
@@ -203,6 +204,48 @@ test("one reducer evaluates Todo, PR, capacity, monitor, and date resume conditi
   assert.equal(conditions.todo_wait_date.material_change_generation, 1);
 });
 
+test("PR merge source aliases bridge a repository redirect without weakening repository binding", () => {
+  const request = {
+    schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: [
+      todo("todo_old_repo", "deferred", "advancement_task", {
+        resume_when: "pr_merged:#4344",
+        task_repository: "git:github.com/huangruiteng/loopx",
+      }),
+      todo("todo_unrelated_repo", "deferred", "advancement_task", {
+        resume_when: "pr_merged:#4344",
+        task_repository: "git:github.com/example/loopx",
+      }),
+    ],
+    source_items: [],
+    rollout_events: [{
+      event_id: "event-redirected-merge-4344",
+      event_kind: "pr_merge",
+      pr_ref: "loopx-project/loopx#4344",
+      source_refs: [
+        {kind: "pull_request", ref: "huangruiteng/loopx#4344"},
+        {kind: "pull_request", ref: "example/loopx#9999"},
+      ],
+      recorded_at: "2026-09-13T13:45:34Z",
+    }],
+    available_capabilities: [],
+    evaluated_at: "2026-09-20T00:00:00Z",
+  };
+  const result = evaluateTodoResumeConditions(request);
+  const conditions = Object.fromEntries(
+    (result.conditions as Array<Record<string, unknown>>).map((row) => [
+      row.todo_id,
+      row.condition,
+    ]),
+  ) as Record<string, Record<string, unknown>>;
+  assert.equal(conditions.todo_old_repo.satisfied, true);
+  assert.equal(
+    conditions.todo_old_repo.matched_pr_ref,
+    "huangruiteng/loopx#4344",
+  );
+  assert.equal(conditions.todo_unrelated_repo.satisfied, false);
+});
+
 test("monitor resume is generation-fenced and fail-closed without a baseline", () => {
   const result = evaluateTodoResumeConditions({
     schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
@@ -330,4 +373,33 @@ test("a satisfied monitor fence must be cleared before it can be re-armed", () =
       todo("todo_fallback001", "open"),
     ],
   }), /clear the satisfied resume_when/);
+});
+
+test("complete PR evidence keeps every exact dependency and original alias proof", () => {
+  const items = Array.from({length: 300}, (_, index) => todo(`todo_wait_${index}`, "open", "advancement_task",
+    {resume_when: `pr_merged:owner/repo#${index + 1}`}));
+  const events = items.map((_, index) => ({event_kind: "pr_merge", event_id: `first-${index}`,
+    pr_ref: `owner/repo#${index + 1}`, recorded_at: "2026-10-01T00:00:00Z"}));
+  const evidence = compactTodoResumeMergeEvidence(items, [...events,
+    ...events.map(row => ({...row, event_id: `repeat-${row.event_id}`})),
+    {event_kind: "validation", pr_ref: "owner/repo#301"}]);
+  assert.equal(evidence.length, 300);
+  assert.equal(evidence[0].event_id, "first-0");
+  const result = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items, source_items: [], rollout_events: evidence});
+  assert.ok((result.conditions as Array<{condition: Record<string, unknown>}>).every(row => row.condition.satisfied));
+
+  const waits = [todo("todo_alias", "open", "advancement_task", {resume_when: "pr_merged:old/repo#42"}),
+    todo("todo_wrong", "open", "advancement_task", {resume_when: "pr_merged:unrelated/repo#42"}),
+    todo("todo_missing", "open", "advancement_task", {resume_when: "pr_merged:#42"})];
+  const facts = compactTodoResumeMergeEvidence(waits, [{event_kind: "PR_MERGE", event_id: "alias-proof",
+    pr_ref: "new/repo#42", source_refs: [{kind: "pr", ref: "https://github.com/old/repo/pull/42"}]}]);
+  const aliases = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: waits, source_items: [], rollout_events: facts});
+  const conditions = (aliases.conditions as Array<{condition: Record<string, unknown>}>).map(row => row.condition);
+  assert.equal(conditions[0].matched_event_id, "alias-proof");
+  assert.equal(conditions[0].satisfied, true);
+  assert.equal(conditions[1].satisfied, false);
+  assert.equal(conditions[2].satisfied, false);
+  assert.equal(conditions[2].repository_binding_state, "ambiguous");
 });

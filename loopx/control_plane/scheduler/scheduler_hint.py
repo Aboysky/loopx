@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import base64
 import hashlib
 import json
@@ -11,6 +13,8 @@ from datetime import timedelta
 from typing import Any
 
 from ..quota.decision_summary import compact_quota_decision
+from ..effect_runtime import effect_runtime_result
+from ..quota.effective_action import EffectiveAction
 from ..runtime.time import now_utc, utc_isoformat
 from ..todos.frontier_deadline import build_frontier_recheck_plan
 from .arbitration import (
@@ -46,7 +50,7 @@ from .state import (
     rrule_for_minutes,
     scheduler_rrule_interval_minutes,
 )
-from .state_transition_rules import decide_scheduler_backoff_state
+from .state_transition_rules import decide_scheduler_backoff_state, project_settled_replay_schedule
 from .time import parse_scheduler_timestamp
 
 SCHEDULER_HINT_SCHEMA_VERSION = "scheduler_hint_v0"
@@ -624,6 +628,37 @@ def build_codex_app_scheduler_fallback_hint(
     }
 
 
+def _pending_retry_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = _dict_or_empty(payload.get("agent_todo_summary"))
+    deadline = _dict_or_empty(summary.get("frontier_deadline"))
+    retry = summary.get("blocked_retry_wait") or (deadline.get("blocked_retry")
+        if deadline.get("source") == "turn_settlement" else None)
+    if not isinstance(retry, dict):
+        return {}
+    return {"pending_retry": {**retry, "execution_authority_granted": False,
+        "recheck": "rerun quota at or after due_at; current gates and owner cadence still apply"}}
+
+
+def _receipt_retry_wait_profile(
+    payload: dict[str, Any], cadence_class: str, interval_minutes: int,
+) -> dict[str, Any] | None:
+    # This is a wakeup recommendation. TS cadence admission still owns the
+    # floor; a deadline never changes claims, leases or execution authority.
+    retry = _pending_retry_projection(payload).get("pending_retry")
+    current_time = now_utc()
+    due = parse_scheduler_timestamp(retry.get("due_at")) if retry else None
+    if (cadence_class not in {"human_gate", "quiet_wait", "agent_scope_wait", "monitor_wait"}
+            or due is None or due <= current_time):
+        return None
+    horizon = max(1, math.ceil((due - current_time).total_seconds() / 60))
+    frontier = build_frontier_recheck_plan(payload, current_time=current_time)
+    if frontier:
+        # The retry explains the wait, but an independent earlier clock still
+        # owns the next wakeup. The owner cadence floor is applied afterward.
+        horizon = min(horizon, max(1, math.ceil(frontier["frontier_recheck_after_seconds"] / 60)))
+    return {"interval_minutes": horizon, "retry": retry} if horizon < interval_minutes else None
+
+
 @dataclass(frozen=True)
 class _SchedulerHintBuilder:
     payload: dict[str, Any]
@@ -643,6 +678,36 @@ class _SchedulerHintBuilder:
                 return None
             current = current.get(part)
         return current
+
+    def _cadence_projections(
+        self, interval: int, maximum: int, multiplier: int, override: list[int] | None,
+    ) -> dict[str, Any]:
+        """Keep legacy profile selection separate from the owner constraint projection."""
+        local = override or [min(interval * multiplier**step, maximum) for step in range(3)]
+        app_max = min(max(1, maximum), CODEX_APP_MAX_INTERVAL_MINUTES)
+        app: list[int] = []
+        for value in local:
+            bounded = min(max(1, int(value)), app_max)
+            if not app or app[-1] != bounded:
+                app.append(bounded)
+        projections = {"local": local, "app": app, "app_max": app_max, "local_max": maximum, "floor": 0}
+        policy = _dict_or_empty(self.payload.get("automation_cadence"))
+        floor = policy.get("min_interval_minutes")
+        return effect_runtime_result("quota.automation_cadence.schedule", {
+            **projections, "min_interval_minutes": floor,
+        }) if floor else projections
+
+    def _wait_cadence(
+        self, cadence_class: str, interval: int, maximum: int, multiplier: int,
+        progression: list[int] | None, reset: dict[str, Any] | None,
+        detail: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+        retry_wait = _receipt_retry_wait_profile(self.payload, cadence_class, interval)
+        if retry_wait:
+            interval = retry_wait["interval_minutes"]
+            progression, reset = [interval], None
+            detail = {**(detail or {}), "blocked_retry": retry_wait["retry"]}
+        return self._cadence_projections(interval, maximum, multiplier, progression), reset, detail
 
     def build(
         self,
@@ -667,18 +732,18 @@ class _SchedulerHintBuilder:
             if context is not None and context.app_automation_applicable
             else CODEX_APP_SURFACE
         )
-        local_cadence_progression = cadence_progression_override or [
-            min(codex_interval * (multiplier**step), codex_max) for step in range(3)
-        ]
-        app_host_max = min(max(1, codex_max), CODEX_APP_MAX_INTERVAL_MINUTES)
-        app_cadence_progression: list[int] = []
-        for interval in local_cadence_progression:
-            bounded_interval = min(max(1, int(interval)), app_host_max)
-            if (
-                not app_cadence_progression
-                or app_cadence_progression[-1] != bounded_interval
-            ):
-                app_cadence_progression.append(bounded_interval)
+        # The TS store has already validated this scope. Preserve it through
+        # both host projections, including a legacy-only Codex installation.
+        app_state_key = (
+            (self.codex_app_scheduler_state or {}).get("state_key")
+            or APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+        )
+        cadence, reset_profile_snapshot_override, cadence_context_detail = self._wait_cadence(
+            cadence_class, codex_interval, codex_max, multiplier, cadence_progression_override,
+            reset_profile_snapshot_override, cadence_context_detail,
+        )
+        local_cadence_progression, app_cadence_progression = cadence["local"], cadence["app"]
+        app_host_max, codex_max, floor = cadence["app_max"], cadence["local_max"], cadence["floor"]
         app_initial_interval = app_cadence_progression[0]
         local_initial_interval = local_cadence_progression[0]
         final_replan_check = {
@@ -813,7 +878,7 @@ class _SchedulerHintBuilder:
             "progression_minutes": app_cadence_progression,
             "current_interval_minutes": current_interval,
             "host_max_interval_minutes": app_host_max,
-            "coarser_wait_fallback": "local_scheduler_only",
+            "coarser_wait_fallback": "hold_affected_automation" if floor else "local_scheduler_only",
             "host_update_failure": "cache_recent_failed_target_and_observed_host_pairs_then_suppress_each_exact_repeat_until_host_changes_ack_or_expiry",
             "ack_required_after_apply": apply_needed,
             "ack_required_from_host_match": host_match_ack_needed,
@@ -870,7 +935,7 @@ class _SchedulerHintBuilder:
             ),
             "stateful_backoff": {
                 "schema_version": APP_AUTOMATION_STATEFUL_BACKOFF_SCHEMA_VERSION,
-                "state_key": APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+                "state_key": app_state_key,
                 "identity_signature": identity_signature,
                 "reset_token": reset_token,
                 "progression_index": current_index,
@@ -881,6 +946,11 @@ class _SchedulerHintBuilder:
             },
             "no_spend_for_cadence_change": True,
         }
+        if floor:
+            app_automation["execution_interval_policy"] = self.payload["automation_cadence"]
+            app_automation["guarantee"] = cadence["guarantee"]
+            if host_failure_suppressed:
+                app_automation.update(host_action="pause_current_heartbeat", apply="pause_affected_automation")
         stateful_backoff = app_automation["stateful_backoff"]
         if host_update_failures:
             stateful_backoff["host_update_failures"] = [
@@ -906,7 +976,7 @@ class _SchedulerHintBuilder:
                 "goal_id": str(goal_id),
                 "agent_id": str(agent_id),
                 "surface": app_surface,
-                "state_key": APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+                "state_key": app_state_key,
                 "reset_token": reset_token,
                 "identity_signature": identity_signature,
                 "progression_index": current_index,
@@ -925,6 +995,7 @@ class _SchedulerHintBuilder:
             app_automation["recommended_rrule"] = current_rrule
             if goal_id and agent_id:
                 app_automation["failure_hint"] = build_app_automation_scheduler_failure_hint(
+                    state_key=app_state_key,
                     goal_id=goal_id,
                     agent_id=agent_id,
                     failed_rrule=current_rrule,
@@ -942,7 +1013,7 @@ class _SchedulerHintBuilder:
                     scheduler_before=self.payload,
                     surface=app_surface,
                 )
-                if app_surface == CODEX_APP_SURFACE:
+                if app_surface == CODEX_APP_SURFACE and not floor:
                     app_automation["fallback_hint"] = build_codex_app_scheduler_fallback_hint(
                         goal_id=goal_id,
                         agent_id=agent_id,
@@ -950,6 +1021,7 @@ class _SchedulerHintBuilder:
                     )
         if ack_needed and goal_id and agent_id:
             app_automation["ack_hint"] = build_app_automation_scheduler_ack_hint(
+                state_key=app_state_key,
                 goal_id=goal_id,
                 agent_id=agent_id,
                 applied_rrule=current_rrule,
@@ -957,7 +1029,7 @@ class _SchedulerHintBuilder:
                 identity_signature=identity_signature,
                 available_capabilities=self.scheduler_ack_capabilities,
                 after=(
-                    "automation_update_rrule_success"
+                    ("automation_update_then_readback_actual_rrule" if floor else "automation_update_rrule_success")
                     if apply_needed
                     else "matching_host_rrule_observed"
                 ),
@@ -1033,6 +1105,7 @@ class _SchedulerHintBuilder:
                 "contains": detail_contains,
             },
         }
+        scheduler_hint.update(_pending_retry_projection(self.payload))
         if app_surface == CODEX_APP_SURFACE:
             scheduler_hint["codex_app"] = build_codex_app_compatibility_projection(
                 app_automation,
@@ -1141,6 +1214,82 @@ def _monitor_bounded_wait_profile(
         "reset_profile_snapshot_override": monitor_reset_profile,
         "cadence_context_detail": monitor_plan,
     }
+
+
+def _automatic_cadence_wait_eligibility(
+    payload: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Return the validated owner wait projected by quota, not an arbitrary wait."""
+
+    if (
+        payload.get("decision") != "wait"
+        or payload.get("effective_action") != EffectiveAction.BLOCKED_WAIT.value
+    ):
+        return None
+    readback = payload.get("automation_cadence_readback")
+    if not isinstance(readback, Mapping):
+        return None
+    eligibility = readback.get("eligibility")
+    if not isinstance(eligibility, Mapping):
+        return None
+    next_at = eligibility.get("next_eligible_at_ms")
+    if (
+        eligibility.get("state") != "waiting"
+        or eligibility.get("reason") != "minimum_interval_wait"
+        or eligibility.get("eligible_now") is not False
+        or isinstance(next_at, bool)
+        or not isinstance(next_at, int)
+        or next_at < 0
+    ):
+        return None
+    return eligibility
+
+
+def _build_automatic_cadence_wait_hint(
+    *,
+    execution_context: SchedulerExecutionContextResolution,
+    arbitration: SchedulerArbitration,
+    eligibility: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep the current App timer untouched while atomic admission owns readiness."""
+
+    spend_policy = (
+        "no quota spend while automatic execution waits for the owner minimum interval"
+    )
+    return apply_scheduler_execution_context(
+        {
+            "schema_version": SCHEDULER_HINT_SCHEMA_VERSION,
+            "source": "quota.should-run",
+            "action": "backoff_until_state_change",
+            "cadence_class": "quiet_wait",
+            "reason_code": arbitration.reason_code,
+            "reason": "automatic execution minimum interval has not elapsed",
+            "spend_policy": spend_policy,
+            "app_automation": {
+                "apply": "none",
+                "host_action": "none",
+                "host_action_required": False,
+                "ack_required": False,
+                "next_eligible_at_ms": eligibility["next_eligible_at_ms"],
+                "no_spend_for_cadence_change": True,
+            },
+            "unchanged_poll": {
+                "local_scheduler": "continue",
+                "codex_cli_tui": "continue",
+                CODEX_APP_SSH_GOAL_RUNTIME_KEY: "continue",
+                "claude_code_loop": "continue",
+                "final_quota_replan_check_enabled": False,
+                "spend_policy": spend_policy,
+            },
+            "unchanged_identity_keys": list(
+                _scheduler_identity_keys(
+                    cadence_class="quiet_wait",
+                    execution_context=execution_context,
+                )
+            ),
+        },
+        execution_context,
+    )
 
 
 def build_scheduler_hint(
@@ -1296,6 +1445,18 @@ def build_scheduler_hint(
         payload,
         agent_scope_frontier_actions=agent_scope_action_set,
     )
+    automatic_cadence_wait = _automatic_cadence_wait_eligibility(payload)
+    if (
+        automatic_cadence_wait is not None
+        and execution_context.context is not None
+        and execution_context.context.app_automation_applicable
+        and arbitration.disposition == SchedulerDisposition.QUIET_WAIT
+    ):
+        return _build_automatic_cadence_wait_hint(
+            execution_context=execution_context,
+            arbitration=arbitration,
+            eligibility=automatic_cadence_wait,
+        )
 
     if arbitration.disposition == SchedulerDisposition.TERMINAL_STOP:
         return _build_scheduler_stop_hint(
@@ -1313,24 +1474,10 @@ def build_scheduler_hint(
             unchanged_spend_policy="no quota spend for terminal loop stop",
         )
 
-    if arbitration.disposition == SchedulerDisposition.PEER_COORDINATION_STOP:
-        cadence_class = "peer_coordination_blocked"
-        return _build_scheduler_stop_hint(
-            execution_context=execution_context,
-            action="return_to_owner_until_material_change",
-            cadence_class=cadence_class,
-            reason_code=arbitration.reason_code,
-            reason=(
-                "explicit peer coordination has no executable peer lane or local "
-                "fallback; recurring polling must stop until its inputs change"
-            ),
-            spend_policy=("no quota spend while explicit peer coordination is blocked"),
-            resume_trigger=(
-                "peer activation capability, peer runtime readiness, coordinator "
-                "configuration, or newly projected local work"
-            ),
-            ssh_goal_runtime_action="return_to_owner",
-            unchanged_spend_policy=("no quota spend for blocked coordination stop"),
+    if arbitration.disposition == SchedulerDisposition.SETTLED_REPLAY:
+        return apply_scheduler_execution_context(
+            project_settled_replay_schedule(observed_host_rrule=codex_app_current_rrule),
+            execution_context,
         )
 
     builder = _SchedulerHintBuilder(
@@ -1344,6 +1491,21 @@ def build_scheduler_hint(
         codex_app_automation_id=codex_app_automation_id,
         include_detail=include_detail,
     )
+    if arbitration.disposition == SchedulerDisposition.PEER_COORDINATION_WAIT:
+        return builder.build(
+            action="backoff_until_reassigned",
+            cadence_class="peer_coordination_wait",
+            reason=(
+                "explicit peer coordination has no executable peer lane or local "
+                "fallback; keep a bounded no-spend observer because peer readiness, "
+                "configuration, or the local frontier can change asynchronously"
+            ),
+            codex_interval=10,
+            codex_max=60,
+            cli_limit=3,
+            claude_limit=3,
+            cadence_progression_override=[10, 20, 30, 60],
+        )
     if arbitration.disposition == SchedulerDisposition.AGENT_MONITOR_ONLY_WAIT:
         return builder.build(
             action="backoff_agent_monitor_only",
@@ -1476,13 +1638,16 @@ def build_scheduler_hint(
             action="backoff_until_state_change",
             cadence_class="quiet_wait",
             reason=(
+                "the receipt-owned retry is pending; recheck its original due time "
+                "and current admission gates without waiting on the non-blocking user notice"
+                if arbitration.reason_code == "blocked_wait" else
                 "quota blocks delivery and no immediate user/monitor-specific path "
                 "is projected; poll at a slower cadence until the status changes"
             ),
-            codex_interval=30,
-            codex_max=120,
             cli_limit=3,
             claude_limit=3,
+            codex_interval=30,
+            codex_max=120,
         )
 
     raise AssertionError(f"unhandled scheduler disposition: {arbitration.disposition}")

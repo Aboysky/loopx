@@ -50,6 +50,7 @@ from pathlib import Path
 # "armed" = the project's .claude/loop.md exists (see goal_state.py). The registry
 # is the single source of truth; there is no separate active-state file.
 from goal_state import active_context
+from stdio_utf8 import pin_utf8_stdio
 
 # Read-only tools are always allowed under goal-mode. Edit/Write are scoped to
 # write_scope; Bash is gated by a destructive-command denylist. (No OS sandbox in
@@ -126,14 +127,14 @@ def should_run(registry, goal_id, agent_id=None) -> bool | None:
         out = subprocess.run(
             [*cmd, *CLAUDE_RUNTIME_PROFILE_ARGS],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=10,
         )
         if _runtime_profile_flag_is_unsupported(out):
             out = subprocess.run(
                 [*cmd, *CLAUDE_LEGACY_SCHEDULER_ARGS],
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=10,
             )
     except Exception:
@@ -209,4 +210,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pin_utf8_stdio()
     main()

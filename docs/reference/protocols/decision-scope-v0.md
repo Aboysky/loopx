@@ -9,8 +9,8 @@ whether a safe fallback may continue, or whether the projection itself needs
 repair.
 
 This contract turns the interaction catalog's Decision Scope Model into a
-machine-facing schema. It does not implement the runtime migration by itself;
-CLI/state/status/quota consumers should use this shape as the migration target.
+machine-facing schema. The shared TypeScript decision-dependency owner evaluates
+it for status/quota; Python adapters normalize inputs and validate responses.
 
 ## Fields
 
@@ -110,6 +110,19 @@ comparison and notification behavior.
 
 ## Status And Quota Rules
 
+### Typed transport boundary
+
+The internal `todo.decision_scope.evaluate` transport retains `consistency`,
+`standing`, `relation`, `relations`, `fallback`, and `gate_scopes`. The unused
+scalar operations `covers`, `scope_relation`, and `exact_relation`, and their
+Python adapters, have been removed; those operation requests fail explicitly.
+The underlying TypeScript coverage and exact-target rules remain part of the
+combined evaluation, including rejection of conflicting exact targets.
+
+This retirement changes an internal transport surface, not Todo metadata,
+user-facing CLI operations, provider defaults, permissions, or approval
+consumption. Existing input codecs and response schema/cardinality checks remain.
+
 Status and quota should read decision scopes in this order:
 
 1. explicit `decision_scope`, `required_decision_scopes`, and `safety_class`;
@@ -145,8 +158,15 @@ runtime.
 This consumption also applies when the target todo is already `open`, such as
 publication performed immediately after approval. A completed `user_action`
 may still use the exact unblock relation for compatibility, but it does not
-consume decision authority. `todo supersede` records replacement or rejection;
+consume decision authority. `todo supersede` records replacement;
 it never implies approval and therefore never consumes a required scope.
+
+Completion consumes requirements only on active, nonterminal Agent targets.
+A blocked target resumes only when no active linked User Todo, unresolved
+requirement or recorded negative outcome remains; explicit blockers still need
+repair. Completed/deferred/archived targets are unchanged. File, SQLite and the
+service-owned PostgreSQL transaction commit these effects with the source
+completion. See [linked effects and historical recovery](../canonical-todo-completion-update.md#linked-user-completion-effects).
 
 ## Standing Approval Receipts
 

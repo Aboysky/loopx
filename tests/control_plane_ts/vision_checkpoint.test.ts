@@ -5,6 +5,7 @@ import {
   buildVisionCheckpoint,
   VISION_REFRESH_PREPARED_SCHEMA_VERSION,
   VISION_REFRESH_REQUEST_SCHEMA,
+  visionAuthoringContract,
 } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 
 function finalizeRequest(overrides: Record<string, unknown> = {}) {
@@ -89,6 +90,34 @@ test("prepare owns packet normalization, budgets, and path delta", () => {
     budget_checked: true,
     budget_status: "ok",
   });
+});
+
+test("authoring rejects misplaced declared deltas without classifying telemetry", () => {
+  const delta = {schema_version: "goal_path_delta_v0", outcome: "replan",
+    prior_assumption: "Keep the route.", observed_reality: "A dependency changed.",
+    changed: ["Use the successor."]};
+  const patch = {vision_summary: "Deliver the successor."};
+  for (const extra of [
+    {goal_path_delta_v0: delta}, {comparison: delta},
+    {path_delta: delta, comparison: delta},
+    {vision_patch: {...patch, path_delta: delta}},
+  ]) {
+    assert.throws(() => buildVisionCheckpoint(prepareRequest({
+      agent_vision_packet: {vision_patch: patch, ...extra},
+    })), /must be supplied as agent_vision.path_delta/);
+  }
+  const telemetry = {outcome: "ok", evidence_refs: ["evidence:probe"]};
+  const baseline = buildVisionCheckpoint(prepareRequest({agent_vision_packet: {vision_patch: patch}}));
+  assert.deepEqual(buildVisionCheckpoint(prepareRequest({
+    agent_vision_packet: {vision_patch: patch, telemetry},
+  })), baseline);
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {
+    vision_patch: patch, path_delta: {...delta, schema_version: "unsupported"},
+  }})), /path_delta.schema_version must be goal_path_delta_v0/);
+  const accepted = buildVisionCheckpoint(prepareRequest({agent_vision_packet: {
+    vision_patch: patch, path_delta: delta, telemetry,
+  }}));
+  assert.deepEqual((accepted.agent_vision as Record<string, unknown>).path_delta, delta);
 });
 
 test("structured replans have a bounded 1800-character budget including path evidence", () => {
@@ -183,11 +212,14 @@ test("prepare merges a patch and requires an explicit durable replan", () => {
       merge_patch: true,
       require_path_delta_for_durable_change: true,
     })),
-    /provide goal_path_delta_v0 with outcome=replan/,
+    /provide path_delta with schema_version=goal_path_delta_v0 and outcome=replan/,
   );
 });
 
 test("prepare rejects identity drift, private text, and typed budget overflow", () => {
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({
+    agent_vision_packet: {vision_summary: "Read /ext" + "_data" + "/artifact.txt"},
+  })), /contains a private-looking value/);
   assert.throws(
     () => buildVisionCheckpoint(prepareRequest({
       agent_vision_packet: {
@@ -384,9 +416,75 @@ test("semantic closeout retains the strict material vision checkpoint", () => {
   assert.equal(result.required, true);
   assert.equal(result.satisfied, false);
   assert.equal(result.decision, "missing_required");
+  assert.equal(result.missing_baseline, true);
+  assert.deepEqual(result.required_resolution, ["write_vision_patch"]);
   assert.deepEqual(result.triggers, [
     { kind: "material_delivery_outcome", delivery_outcome: "outcome_progress" },
   ]);
+});
+
+test("missing checkpoint offers unchanged only with a persisted vision", () => {
+  const baseline = {state: "vision_active", generated_at: "2026-09-01T10:00:00Z"};
+  const missing = buildVisionCheckpoint(finalizeRequest({
+    existing_agent_vision: baseline,
+  }));
+  assert.equal(missing.satisfied, false);
+  assert.deepEqual(missing.required_resolution, [
+    "write_vision_patch", "record_unchanged_reason",
+  ]);
+  assert.equal("missing_baseline" in missing, false);
+  assert.equal(buildVisionCheckpoint(finalizeRequest({
+    existing_agent_vision: baseline,
+    vision_unchanged_reason: "The verified scope is still current.",
+  })).satisfied, true);
+  const rejected = buildVisionCheckpoint(finalizeRequest({
+    vision_unchanged_reason: "The verified scope is still current.",
+  }));
+  assert.equal(rejected.satisfied, false);
+  assert.equal(rejected.missing_baseline, true);
+  assert.deepEqual(rejected.required_resolution, ["write_vision_patch"]);
+});
+
+test("advertised Todo delta limits match retained items and item validation", () => {
+  const fields = visionAuthoringContract().fields as Record<string, unknown>;
+  assert.deepEqual(fields.todo_delta, {max_retained_items: 8, max_item_chars: 80});
+  const packet = (todo_delta: string[]) => prepareRequest({
+    agent_vision_packet: {vision_summary: "Deliver the scoped result.", todo_delta},
+  });
+  const deltas = Array.from({length: 9}, (_, index) => String(index).repeat(80));
+  const vision = buildVisionCheckpoint(packet(deltas)).agent_vision as Record<string, unknown>;
+  assert.deepEqual(vision.todo_delta, deltas.slice(0, 8));
+  assert.throws(() => buildVisionCheckpoint(packet(["x".repeat(81)])),
+    /todo_delta uses 81 chars; limit is 80/);
+});
+
+test("a bounded blocked retry does not invent a vision change", () => {
+  const blockedRetry = {
+    schema_version: "quota_blocked_retry_v0",
+    source: "turn_settlement",
+    todo_id: "todo_current001",
+    observed_at: "2026-09-24T14:00:00Z",
+    due_at: "2026-09-24T14:05:00Z",
+    resume_when: "resume_at:2026-09-24T14:05:00Z",
+  };
+  const blocked = buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap", blocked_retry: blockedRetry,
+  }));
+  assert.equal(blocked.required, false);
+  assert.equal(blocked.satisfied, true);
+  assert.equal(blocked.decision, "not_required");
+  assert.deepEqual(blocked.triggers, []);
+
+  const changedAction = buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap", blocked_retry: blockedRetry,
+    active_state_next_action_would_update: true,
+  }));
+  assert.equal(changedAction.required, true);
+  assert.deepEqual(changedAction.triggers, [{kind: "durable_next_action_update"}]);
+  assert.throws(() => buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap",
+    blocked_retry: {...blockedRetry, todo_id: "todo_other"},
+  })), /blocked retry does not bind/);
 });
 
 test("explicit in-flight progress records continuity without vision repetition", () => {

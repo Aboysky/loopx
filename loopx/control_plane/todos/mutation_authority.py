@@ -32,6 +32,21 @@ TODO_LIFECYCLE_AUTHORITY_ACTIONS = frozenset(
 )
 
 
+def todo_lifecycle_facts(
+    registry_path: Path, goal_id: str,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Project the existing registry owner for all canonical Todo mutations."""
+    goal = load_goal_from_registry(registry_path, goal_id)
+    registered = registered_agent_ids_for_goal(goal)
+    coordination = goal.get("coordination") if isinstance(goal, Mapping) else None
+    grants = normalize_todo_lifecycle_authority(
+        coordination.get("todo_lifecycle_authority")
+        if isinstance(coordination, Mapping) else None,
+        registered_agents=registered,
+    )
+    return registered, grants
+
+
 def normalize_todo_lifecycle_authority(
     values: Any,
     *,
@@ -81,24 +96,6 @@ def normalize_todo_lifecycle_authority(
         )
         seen_agents.add(agent_id)
     return normalized
-
-
-def todo_lifecycle_authority_for_goal(
-    goal: Mapping[str, Any] | None,
-    *,
-    agent_id: str,
-    registered_agents: list[str],
-) -> dict[str, Any] | None:
-    if not isinstance(goal, Mapping):
-        return None
-    coordination = goal.get("coordination")
-    if not isinstance(coordination, Mapping):
-        return None
-    grants = normalize_todo_lifecycle_authority(
-        coordination.get("todo_lifecycle_authority"),
-        registered_agents=registered_agents,
-    )
-    return next((grant for grant in grants if grant["agent_id"] == agent_id), None)
 
 
 def todo_update_authority_action(

@@ -1,16 +1,128 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from ...control_plane.operator_inbox_binding import local_private_config_digest
-from ...control_plane.reward_memory import reward_memory_goal_policy
+from ...control_plane.operator_inbox_binding import (
+    local_private_config_digest,
+    operator_inbox_binding,
+)
+from ...control_plane.reward_memory import (
+    reward_memory_goal_policy,
+    reward_memory_host_coverage,
+)
 from .experiment import (
     load_reward_memory_experiment_config,
     preflight_reward_memory_experiment_config,
+    resolve_goal_reward_memory_experiment,
 )
+
+
+def reward_memory_goal_configuration_summary(
+    goal: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reconcile the declared policy with live, read-only runtime admission.
+
+    The configuration catalog and the settings summary need one projection that
+    separates the desired automation and historical receipts from the effective
+    binding. Effective availability reuses runtime admission (same digest,
+    isolation and receipt checks) so a drifted or unverified config cannot be
+    reported as currently verified. No provider is contacted and nothing is
+    written.
+    """
+
+    policy = reward_memory_goal_policy(goal)
+    binding_revision = ""
+    if policy["config_path"] and policy["config_digest"]:
+        binding_revision = "sha256:" + hashlib.sha256(
+            (
+                f"{policy['config_path']}\0{policy['config_digest']}\0"
+                + "\0".join(policy["enabled_agents"])
+            ).encode("utf-8")
+        ).hexdigest()
+    binding = operator_inbox_binding(
+        project=str(goal.get("repo") or ""),
+        config_path=policy["config_path"],
+        expected_digest=policy["config_digest"],
+    )
+    recorded_verified_agents = sorted(
+        agent_id
+        for agent_id, receipt in policy["enablement_receipts"].items()
+        if receipt.get("status") == "verified"
+        and receipt.get("writability_verified") is True
+        and receipt.get("exact_readback_verified") is True
+    )
+    effective_verified_agents: list[str] = []
+    configured_automatic_ingest = False
+    configured_automatic_recall = False
+    for agent_id in recorded_verified_agents:
+        try:
+            status, _ = resolve_goal_reward_memory_experiment(
+                goal=goal, agent_id=agent_id
+            )
+        except ValueError:
+            continue
+        if status.get("available") is True:
+            effective_verified_agents.append(agent_id)
+            configured_automatic_ingest = (
+                configured_automatic_ingest
+                or status.get("automatic_ingest") is True
+            )
+            configured_automatic_recall = (
+                configured_automatic_recall
+                or status.get("automatic_recall") is True
+            )
+    effective_available = bool(effective_verified_agents)
+    return {
+        "enabled": policy["enabled"],
+        "binding_status": binding["status"],
+        "effective_available": effective_available,
+        "desired_automation": dict(policy["automation"]),
+        "recorded_verified_agents": recorded_verified_agents,
+        "experimental": policy["experimental"],
+        "config_pointer_registered": bool(policy["config_path"]),
+        "binding_revision": binding_revision,
+        "automatic_ingest": policy["automation"].get("automatic_ingest") is True
+        and configured_automatic_ingest,
+        "automatic_recall": policy["automation"].get("automatic_recall") is True
+        and configured_automatic_recall,
+        "automation_intent": dict(policy["automation_intent"]),
+        "host_coverage": reward_memory_host_coverage(),
+        "enabled_agents": list(policy["enabled_agents"]),
+        "enablement_verified_agents": effective_verified_agents,
+    }
+
+
+def reward_memory_automatic_ingest_for_agent(
+    goal: Mapping[str, Any], agent_id: str | None
+) -> bool:
+    """Return whether one Agent may receive automatic-ingest prompt guidance.
+
+    Desired policy is a cheap off switch. Active admission reuses the runtime
+    resolver so the prompt requires this exact Agent's current config binding
+    and verified enablement receipt. The resolver is read-only and never calls
+    the configured provider.
+    """
+
+    policy = reward_memory_goal_policy(goal)
+    if (
+        not policy["enabled"]
+        or policy["automation"].get("automatic_ingest") is not True
+        or not isinstance(agent_id, str)
+        or not agent_id.strip()
+    ):
+        return False
+    try:
+        status, _ = resolve_goal_reward_memory_experiment(
+            goal=goal, agent_id=agent_id
+        )
+    except ValueError:
+        # Legacy alias-only registrations and malformed identities fail closed.
+        return False
+    return status.get("available") is True and status.get("automatic_ingest") is True
 
 
 def plan_reward_memory_goal_configuration(

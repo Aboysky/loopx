@@ -1,7 +1,8 @@
 from __future__ import annotations
+from .effective_action import EffectiveAction
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from ..work_items.delivery_outcome import (
 )
 from .monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
 from .scheduler_ack import QUOTA_SCHEDULER_ACK_CLASSIFICATION
+from ..effect_program import SettlementBindingKind
 from .settlement import (
     SettlementFailureKind,
     SettlementIdentity,
@@ -50,9 +52,14 @@ from .void_commit import (
     build_quota_slot_void_preview_for_decision as build_quota_slot_void_preview_for_decision,
     record_quota_slot_void_from_preview as record_quota_slot_void_from_preview,
 )
-
-QUOTA_SLOT_SPENT_CLASSIFICATION = "quota_slot_spent"
-QUOTA_SLOT_VOIDED_CLASSIFICATION = "quota_slot_voided"
+from .ledger_readback import (
+    QUOTA_SLOT_SPENT_CLASSIFICATION as QUOTA_SLOT_SPENT_CLASSIFICATION,
+    QUOTA_SLOT_VOIDED_CLASSIFICATION as QUOTA_SLOT_VOIDED_CLASSIFICATION,
+    _int_number,
+    load_quota_event_from_run as load_quota_event_from_run,
+    net_quota_slot_spend as net_quota_slot_spend,
+    quota_slot_contribution as quota_slot_contribution,
+)
 
 QuotaDecisionBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 QuotaStatusBuilder = Callable[..., dict[str, Any]]
@@ -68,6 +75,7 @@ def _todo_binding_error(
     requested_replan_obligation_id: str | None,
     agent_id: str | None,
     settlement_identity: SettlementIdentity | None = None,
+    delivery_run: dict[str, Any] | None = None,
 ) -> str | None:
     selected = (
         before.get("selected_todo")
@@ -91,6 +99,7 @@ def _todo_binding_error(
             todo_id=requested_todo_id,
             agent_id=agent_id,
             selected_todo=selected,
+            delivery_run=delivery_run,
         )
     selected_todo_id = normalize_todo_id(selected.get("todo_id"))
     if requested_todo_id and selected_todo_id and requested_todo_id != selected_todo_id:
@@ -115,6 +124,21 @@ def _todo_binding_error(
         todo_id=requested_todo_id,
         agent_id=agent_id,
         selected_todo=selected,
+        delivery_run=None,
+    )
+
+
+def _receipt_committed(
+    result: SettlementResult[Any] | None,
+    step_kind: SettlementStepKind,
+) -> bool:
+    """Report whether one settlement step already owns a committed receipt."""
+
+    if result is None or result.failure is not None:
+        return False
+    return any(
+        receipt.step_kind is step_kind and receipt.status == "committed"
+        for receipt in result.receipts
     )
 
 
@@ -127,6 +151,8 @@ def _resolve_preview_settlement(
     todo_id: str | None,
     replan_obligation_id: str | None,
     turn_instance_id: str | None,
+    registry_path: Path | None,
+    goal_ref: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     if turn_instance_id and source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
         result = SettlementResult.failed(
@@ -157,9 +183,26 @@ def _resolve_preview_settlement(
             and not todo_id
             and not replan_obligation_id
         ),
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if readback is None:
         return {}
+    if (
+        isinstance(readback.progress, dict)
+        and readback.progress.get("closeout_kind")
+        == "typed_blocked_writeback_no_spend"
+    ):
+        return {
+            "identity": readback.identity.value,
+            "result": readback.settlement,
+            "delivery_run": readback.writeback_run,
+            "reason": (
+                "this Turn already closed with an exact typed blocked writeback "
+                "and must not consume a quota slot; retry the Todo only after "
+                "its external blocker changes or a bounded backoff"
+            ),
+        }
     result = readback.identity
     identity = result.value if result.failure is None else None
     if identity is not None:
@@ -170,6 +213,12 @@ def _resolve_preview_settlement(
         "delivery_run": result.value if result.failure is None else None,
         "delivery_workspace_causality": readback.workspace_causality,
         "reason": result.failure.reason if result.failure is not None else None,
+        "writeback_committed": _receipt_committed(
+            readback.writeback, SettlementStepKind.DURABLE_WRITEBACK
+        ),
+        "spend_committed": _receipt_committed(
+            readback.spend, SettlementStepKind.QUOTA_SPEND
+        ),
     }
 
 
@@ -257,21 +306,6 @@ def _validate_goal_id_path_segment(goal_id: str) -> str:
     return value
 
 
-def _int_number(value: Any, *, default: int) -> int:
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(float(value.strip()))
-        except ValueError:
-            return default
-    return default
-
-
 def _queue_item_for_goal(status_payload: dict[str, Any], *, goal_id: str) -> dict[str, Any]:
     queue = status_payload.get("attention_queue") if isinstance(status_payload.get("attention_queue"), dict) else {}
     queue_items = queue.get("items") if isinstance(queue.get("items"), list) else []
@@ -308,7 +342,7 @@ def _load_goal_run_index_records(runtime_root: Path, goal_id: str) -> list[dict[
         return []
     records: list[dict[str, Any]] = []
     try:
-        lines = index_path.read_text(encoding="utf-8").splitlines()
+        lines = index_path.read_text(encoding="utf-8").split("\n")
     except OSError:
         return []
     for line in lines:
@@ -342,6 +376,7 @@ def _latest_unspent_turn_settlement_run(
     goal_id: str,
     *,
     agent_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return the latest same-agent Turn settlement that still needs accounting.
 
@@ -355,6 +390,10 @@ def _latest_unspent_turn_settlement_run(
 
     safe_agent_id = normalize_todo_claimed_by(agent_id)
     for run in reversed(_load_goal_run_index_records(runtime_root, goal_id)):
+        if goal_ref is None and "goal_ref" in run:
+            continue
+        if goal_ref is not None and run.get("goal_ref") != dict(goal_ref):
+            continue
         run_agent_id = normalize_todo_claimed_by(run.get("agent_id"))
         if safe_agent_id and run_agent_id and safe_agent_id != run_agent_id:
             continue
@@ -489,6 +528,41 @@ def _missing_delivery_workspace_preview(
     }
 
 
+DELIVERY_COMPLETION_SPEND_STATES = frozenset(
+    {"waiting", "focus_wait", "operator_gate", "eligible"}
+)
+TERMINAL_NO_FOLLOWUP_DECISION_STATE = "terminal_no_followup"
+
+
+def _admits_delivery_completion_spend_state(
+    *,
+    before: Mapping[str, Any],
+    identity: SettlementIdentity | None,
+    settlement: Mapping[str, Any],
+) -> bool:
+    """Admit the decision states one delivery-completion spend may settle from.
+
+    ``terminal_no_followup`` is admitted only for the autonomous-replan
+    settlement whose own durable writeback derived that frontier and which has
+    not yet recorded its spend. The terminal guard therefore stays strict for
+    every new, unrelated, or already-accounted spend, while the remaining step
+    of the settlement that produced the terminal frontier is no longer
+    stranded. See the ``terminal_settlement_ordering_gap`` repair pattern.
+    """
+
+    state = str(before.get("state") or "")
+    if state in DELIVERY_COMPLETION_SPEND_STATES:
+        return True
+    if state != TERMINAL_NO_FOLLOWUP_DECISION_STATE:
+        return False
+    return (
+        identity is not None
+        and identity.binding_kind is SettlementBindingKind.AUTONOMOUS_REPLAN
+        and settlement.get("writeback_committed") is True
+        and settlement.get("spend_committed") is not True
+    )
+
+
 def build_quota_slot_preview_for_decision(
     status_payload: dict[str, Any],
     *,
@@ -504,6 +578,8 @@ def build_quota_slot_preview_for_decision(
     replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     safe_slots = max(1, _int_number(slots, default=1))
@@ -552,6 +628,8 @@ def build_quota_slot_preview_for_decision(
         todo_id=normalized_todo_id,
         replan_obligation_id=normalized_replan_obligation_id,
         turn_instance_id=turn_instance_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     settlement_identity = settlement.get("identity")
     settlement_result = settlement.get("result")
@@ -587,6 +665,9 @@ def build_quota_slot_preview_for_decision(
         requested_replan_obligation_id=normalized_replan_obligation_id,
         agent_id=safe_requested_agent_id,
         settlement_identity=settlement_identity,
+        delivery_run=(
+            delivery_completion_run if settlement_identity is not None else None
+        ),
     )
     if binding_error:
         return {
@@ -606,13 +687,13 @@ def build_quota_slot_preview_for_decision(
         (
             before.get("state") == "operator_gate"
             or before.get("recovery_delivery_allowed") is True
-            or before.get("effective_action") == "outcome_floor_recovery"
+            or before.get("effective_action") == EffectiveAction.OUTCOME_FLOOR_RECOVERY.value
         )
         and before.get("safe_bypass_allowed") is True
     )
     self_repair_spend = before.get("effective_action") in self_repair_spend_actions
     capability_repair_spend = (
-        before.get("effective_action") == "capability_bridge_repair"
+        before.get("effective_action") == EffectiveAction.CAPABILITY_BRIDGE_REPAIR.value
         and before.get("capability_repair_allowed") is True
     )
     delivery_completion_run = delivery_completion_run or (
@@ -620,6 +701,7 @@ def build_quota_slot_preview_for_decision(
             Path(str(raw_runtime_root)).expanduser(),
             safe_goal_id,
             agent_id=safe_requested_agent_id,
+            goal_ref=goal_ref,
         )
         if raw_runtime_root
         else None
@@ -715,7 +797,7 @@ def build_quota_slot_preview_for_decision(
         }
     delivery_workspace_validated = bool(delivery_workspace)
     workspace_repair_no_spend = (
-        before.get("effective_action") == "agent_workspace_repair"
+        before.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
         and before.get("workspace_repair_allowed") is True
         and not delivery_workspace_validated
     )
@@ -745,15 +827,19 @@ def build_quota_slot_preview_for_decision(
         and (
             settlement_identity is not None
             or not before.get("should_run")
-            or before.get("effective_action") == "external_evidence_observe"
+            or before.get("effective_action") == EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE.value
             or (
-                before.get("effective_action") == "agent_workspace_repair"
+                before.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
                 and delivery_workspace_validated
             )
         )
-        and before.get("effective_action") != "automation_prompt_upgrade_required"
+        and before.get("effective_action") != EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value
         and not safe_bypass_spend
-        and str(before.get("state") or "") in {"waiting", "focus_wait", "operator_gate", "eligible"}
+        and _admits_delivery_completion_spend_state(
+            before=before,
+            identity=settlement_identity,
+            settlement=settlement,
+        )
     )
     if delivery_completion_spend:
         capability_repair_spend = False
@@ -884,29 +970,3 @@ def build_quota_slot_preview_for_decision(
         "settlement_workspace_requirement": settlement_workspace_requirement,
         "delivery_workspace_validated": delivery_workspace_validated,
     }
-
-
-def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
-    if str(run.get("classification") or "") not in {
-        QUOTA_SLOT_SPENT_CLASSIFICATION,
-        QUOTA_SLOT_VOIDED_CLASSIFICATION,
-    }:
-        return None
-    event = run.get("quota_event") if isinstance(run.get("quota_event"), dict) else None
-    if event:
-        return event
-
-    raw_json_path = str(run.get("json_path") or "")
-    if not raw_json_path:
-        return None
-    json_path = Path(raw_json_path).expanduser()
-    if not json_path.exists():
-        return None
-    try:
-        record = json.loads(json_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(record, dict):
-        return None
-    event = record.get("quota_event") if isinstance(record.get("quota_event"), dict) else None
-    return event

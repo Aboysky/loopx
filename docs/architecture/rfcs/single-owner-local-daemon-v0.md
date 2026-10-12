@@ -1,6 +1,7 @@
 # RFC: Single-Owner Local Daemon (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Proposal
 - **Authors / owners:** Contributor proposal; lifecycle decisions require maintainer acceptance.
 - **Created:** 2026-09-07
@@ -76,6 +77,21 @@ describes release fingerprints, foreign-listener rejection, and ports 8766 and
 immediate startup/double-owner path while explicitly preserving two services.
 These facts do not establish the profile or unified-daemon contract below.
 
+The existing macOS helper additionally preserves an explicitly selected Chat
+runtime directory and idle/hard timeouts across installation and restart, with
+legacy argv recovery and validation before replacing either plist. The
+[installation guide](../../guides/installing-loopx.md#macos-service-identity-and-workspace-selection)
+describes the operator selection. This closes a configuration-retention gap in
+the current two-service path; fixture/native storage readback does not establish
+login/reboot recovery, the proposed unified daemon or full profile migration.
+
+The same helper gives its full status-contract read a bounded 15-second total
+deadline. A real HTTP regression retains schema/read-only facts after a
+six-second response and rejects HTTP errors and a hung feed; old-schema
+warnings remain intact. This repairs a diagnostic false-negative in the
+existing path. It does not reduce collection latency, close sustained-operation
+acceptance or qualify the proposed readiness/profile API.
+
 ## 5. Proposed architecture
 
 ### Ownership and identity
@@ -111,6 +127,17 @@ Children inherit explicit profile and release bindings. They have no independent
 LaunchAgent and cannot detach or self-relaunch. The platform adapter must prove
 child containment after supervisor death before promotion; a process group alone
 is not sufficient proof on every platform.
+
+Managed team supervision must also respect the
+[session continuation owner](agent-session-execution-modes-v0.md#reusable-agent-operations-and-continuation-ownership).
+One service-profile process owner does not prove one executor per Agent binding;
+the session/work owners still enforce their own identity, admission and fences.
+A daemon may deliver admitted work, wake an eligible session, drain queues and
+recover receipts. It must not encode a team's business phases or compete with
+an active native Goal/same-session driver for the next execution opportunity.
+Local and cloud host adapters reuse this composition rather than installing a
+manager-specific daemon. Readiness must distinguish service health from a
+worker's launchability, pending tool, deferred work and terminal result.
 
 ### Read contract
 

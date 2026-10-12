@@ -12,6 +12,7 @@ import {
 import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { TURN_ENVELOPE_SECTION_TARGETS } from "../../loopx/control_plane/quota/turn_envelope_budget.ts";
+import { projectPeerOrchestration } from "../../loopx/control_plane/quota/peer_orchestration.ts";
 
 function payload(): Record<string, unknown> {
   return {
@@ -72,6 +73,209 @@ const protocolActionFields = {
   agent_action: "advance one bounded segment",
 };
 
+test("capability facts retain exact current and historical source fields", () => {
+  for (const fields of [
+    {required: ["network", "filesystem_write"], missing: ["network"]},
+    {required: ["network"], missing: []},
+    {required_capabilities: ["network"], missing_capabilities: ["network"]},
+  ]) {
+    const source = payload();
+    source.capability_gate = {action: "repair_bridge", reason: "Unavailable capability",
+      ...fields, runnable_candidates: [{private_detail: "not in compact context"}], available: ["shell"]};
+    const before = structuredClone(source);
+    const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+      scheduler_execution_args: ""});
+    assert.deepEqual((envelope.boundary as JsonObject).capability_gate,
+      {action: "repair_bridge", reason: "Unavailable capability", ...fields});
+    assert.deepEqual(source, before);
+    assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields),
+      turnEnvelopeActionSignatureDocument(envelope));
+    const changed = structuredClone(envelope);
+    ((changed.boundary as JsonObject).capability_gate as JsonObject)[Object.keys(fields)[1]] = ["different"];
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed), turnEnvelopeActionSignatureDocument(envelope));
+  }
+});
+
+test("optional memory participation is compact, verified and signed", () => {
+  const plain = payload();
+  const build = (source: JsonObject) => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const ordinary = build(plain);
+  const memory = {enabled: true, configured_for_agent: true, experiment_available: true,
+    automatic_recall: true, automatic_ingest: false, config_path: "private-config",
+    enablement_receipt: {diagnostic: "not-host-context"}};
+  for (const flag of ["enabled", "configured_for_agent", "experiment_available"]) {
+    const source = payload();
+    (source.goal_boundary as JsonObject).capabilities = {reward_memory: {...memory, [flag]: false}};
+    assert.deepEqual(build(source).boundary, ordinary.boundary);
+  }
+  for (const [recall, ingest] of [[true, false], [false, true], [true, true], [false, false]]) {
+    const source = payload();
+    (source.goal_boundary as JsonObject).capabilities = {reward_memory: {...memory,
+      automatic_recall: recall, automatic_ingest: ingest}};
+    const envelope = build(source);
+    const projected = (envelope.boundary as JsonObject).capabilities;
+    assert.deepEqual(projected, recall || ingest ? {reward_memory: {
+      automatic_recall: recall, automatic_ingest: ingest,
+    }} : undefined);
+    assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields),
+      turnEnvelopeActionSignatureDocument(envelope));
+    if (recall || ingest) {
+      const signed = JSON.parse(JSON.stringify(turnEnvelopeActionSignatureDocument(envelope)));
+      ((projected as JsonObject).reward_memory as JsonObject).automatic_ingest = !ingest;
+      assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), signed);
+    }
+  }
+});
+
+test("settlement-only replans preserve owed commands and do not demand another outcome", () => {
+  const prefix = "loopx --runtime-root /" + "long-path/".repeat(50);
+  for (const commands of [
+    [prefix + " refresh-state --goal-id goal-turn-envelope --turn-instance-id turn-original",
+      prefix + " quota spend-slot --goal-id goal-turn-envelope --turn-instance-id turn-original --execute"],
+    [prefix + " quota spend-slot --goal-id goal-turn-envelope --turn-instance-id turn-original --execute"],
+  ]) {
+    const source = payload();
+    const interaction = source.interaction_contract as JsonObject;
+    (interaction.cli_channel as JsonObject).next_cli_actions = commands;
+    (interaction.agent_channel as JsonObject).primary_action = "Finish only the original Turn settlement; do not execute its successor.";
+    source.replan_action_packet = {schema_version: "replan_action_packet_v0",
+      obligation_id: "replan-1111111111111111", settlement_only: true,
+      successor_todo_id: "todo_independent_successor", decision: "settlement_pending",
+      writeback_contract: {rule: "Finish only the original Turn settlement; do not execute its successor."}};
+    const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+    assert.deepEqual((envelope.writeback as JsonObject).next_cli_actions, commands);
+    assert.equal((envelope.replan_action_packet as JsonObject).settlement_only, true);
+    assert.match(String((envelope.action as JsonObject).recommended_action), /original Turn settlement/);
+    assert.equal((envelope.action as JsonObject).primary_action, (interaction.agent_channel as JsonObject).primary_action);
+    assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+  }
+});
+
+test("a projected successor preserves its original closeout guard in the compact envelope", () => {
+  const source = payload();
+  const successor = "loopx todo add --goal-id goal-turn-envelope --replan-obligation-id replan-1111111111111111";
+  const guard = "loopx --runtime-root /" + "long-path/".repeat(50) +
+    " quota should-run --codex-app --goal-id goal-turn-envelope --turn-instance-id turn-original";
+  const interaction = source.interaction_contract as JsonObject;
+  (interaction.cli_channel as JsonObject).next_cli_actions = ["execute replan_action_packet.writeback_contract.successor_command", guard,
+    "finish only the original Turn before ending; do not execute its successor"];
+  source.replan_action_packet = {schema_version: "replan_action_packet_v0",
+    obligation_id: "replan-1111111111111111", writeback_contract: {successor_command: successor}};
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  assert.deepEqual((envelope.writeback as JsonObject).next_cli_actions, [successor, guard]);
+  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+});
+
+test("receipt-bound settlement recovery transports the original executable command intact", () => {
+  const source = payload();
+  const command = "loopx --runtime-root /" + "long-path/".repeat(50) +
+    " quota spend-slot --goal-id goal-turn-envelope --agent-id agent-ts --todo-id todo-1" +
+    " --turn-instance-id turn-original --execute";
+  const interaction = source.interaction_contract as JsonObject;
+  Object.assign(interaction.agent_channel as JsonObject, {delivery_allowed: false});
+  Object.assign(interaction.cli_channel as JsonObject, {next_cli_actions: [command], spend_allowed_now: true});
+  source.unsettled_host_turn_recovery = {schema_version: "unsettled_host_turn_recovery_v0",
+    scope: "current_turn", repair: "quota_spend", binding_kind: "todo", binding_id: "todo-1",
+    turn_instance_id: "turn-original"};
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  assert.equal((envelope.action as JsonObject).delivery_allowed, false);
+  assert.deepEqual((envelope.writeback as JsonObject).next_cli_actions, [command]);
+  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+});
+
+test("large peer inventories retain scoped gates and signed detail without hiding tasks", () => {
+  const source = payload();
+  const items = Array.from({ length: 50 }, (_, i) => ({ todo_id: `todo_${i}`,
+    claimed_by: "worker", status: "open", task_class: "advancement_task",
+    title: "Inspect independent source and return verified evidence" }));
+  for (const available of [[], ["peer_agent_activation"]]) {
+    const peer = projectPeerOrchestration({ agent_id: "parent", registered_agents: ["worker"],
+      items, available_capabilities: available, agents: [{ agent_id: "worker", state: "running" }] })!;
+    for (const nested of [false, true]) {
+      source.task_orchestration_contract = nested
+        ? { mode: "adaptive", execution_state: "ready", eligible_child_lanes: [{ todo_id: "local-child" }], peer_activation_diagnostic: peer }
+        : peer;
+      const render = () => buildTurnEnvelope({ payload: source,
+        protocol_action_fields: protocolActionFields, scheduler_execution_args: " --available-capability shell" });
+      const envelope = render();
+      const contract = envelope.task_orchestration_contract as JsonObject;
+      const compact = (nested ? contract.peer_activation_diagnostic : contract) as JsonObject;
+      assert.equal(compact.execution_scope, "peer_agent_activation");
+      assert.equal(compact.execution_state, available.length ? "ready" : "blocked");
+      assert.equal(compact.activation_allowed, available.length > 0);
+      assert.equal(Number(compact.eligible_peer_count) + Number(compact.blocked_peer_count), 50);
+      assert.equal(compact.read_required, true);
+      assert.equal(compact.eligible_peer_lanes, undefined);
+      assert.equal((peer.eligible_peer_lanes as unknown[]).length + (peer.blocked_peer_lanes as unknown[]).length, 50);
+      assert.equal((envelope.compaction as JsonObject).within_budget, true);
+      assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+      const rows = (available.length ? peer.eligible_peer_lanes : peer.blocked_peer_lanes) as JsonObject[];
+      rows[0].todo_id = `changed-identity-${nested}`;
+      assert.notEqual((render().action_signature as JsonObject).source_hash, (envelope.action_signature as JsonObject).source_hash);
+      if (nested) assert.deepEqual(contract.eligible_child_lanes, [{ todo_id: "local-child" }]);
+    }
+  }
+});
+
+test("Turn preserves checkpointed scope approval without lifting other gates", () => {
+  const source = payload();
+  const scope = source.goal_boundary as Record<string, unknown>;
+  scope.requires_parent_approval = ["write", "publish", "production-action"];
+  const render = () => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const baseline = render();
+  scope.checkpointed_boundary_authority = {
+    schema_version: "checkpointed_boundary_authority_v0", active_count: 1,
+    active_write_scope: ["src/**"], entries: [{source: "operator-decision"}],
+  };
+  const approved = render();
+  const boundary = approved.boundary as Record<string, unknown>;
+  assert.deepEqual(boundary.checkpointed_boundary_authority, {
+    schema_version: "checkpointed_boundary_authority_v0", active_count: 1,
+    active_write_scope: ["src/**"],
+  });
+  assert.deepEqual(boundary.requires_parent_approval, ["write", "publish", "production-action"]);
+  for (const inactive of [
+    {schema_version: "checkpointed_boundary_authority_v0", active_count: 0, active_write_scope: []},
+    {schema_version: "unknown", active_count: 1, active_write_scope: ["**"]},
+    {schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: ["x".repeat(181)]},
+  ]) {
+    scope.checkpointed_boundary_authority = inactive;
+    assert.deepEqual(render().boundary, baseline.boundary);
+  }
+  delete scope.checkpointed_boundary_authority;
+  assert.deepEqual(render(), baseline);
+});
+
+test("required commands remain intact independently of additive hook prompt budgets", () => {
+  const source = payload();
+  const baseline = buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" });
+  const command = "loopx inspect --registry /" + "route/".repeat(80) + "registry.json";
+  const read = { kind: "fixture_read", command, reason: "Read the pending observation",
+    source: "turn_start_capability_hook" };
+  source.required_reads = [read];
+  const ordinary = buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" });
+  assert.equal((ordinary.compaction as JsonObject).budget_bytes, 8_192);
+  assert.equal((ordinary.required_reads as JsonObject[])[0].command, command);
+  assert.equal((ordinary.compaction as JsonObject).hook_prompt_budget_bytes, undefined);
+  source.required_reads = [{ ...read, prompt_budget_bytes: 1_536 }];
+  const active = buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" });
+  assert.equal((active.required_reads as JsonObject[])[0].command, command);
+  assert.equal((active.compaction as JsonObject).budget_bytes, 8_192 + 1_536);
+  assert.equal((active.compaction as JsonObject).hook_prompt_budget_bytes, 1_536);
+  assert.equal((active.compaction as JsonObject).envelope_utf8_bytes, Buffer.byteLength(JSON.stringify(active)));
+  for (const field of ["action", "user", "scheduler", "execution_policy", "writeback"]) {
+    assert.deepEqual(active[field], baseline[field]);
+  }
+  source.required_reads = [{ ...read, source: "other", prompt_budget_bytes: 1_536 }];
+  const unrelated = buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" });
+  assert.equal((unrelated.compaction as JsonObject).budget_bytes, 8_192);
+  delete source.required_reads;
+  assert.deepEqual(buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" }), baseline);
+});
+
 test("pending capability action outranks stale replan commands and remains signed", () => {
   const source = payload();
   const command = "loopx periodic-report consume-pending --goal-id goal-turn-envelope --agent-id agent-ts --execute";
@@ -92,7 +296,8 @@ test("pending capability action outranks stale replan commands and remains signe
   const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
   assert.equal(envelope.replan_action_packet, null);
   assert.deepEqual((envelope.writeback as JsonObject).next_cli_actions, [command]);
-  const signed = turnEnvelopeActionSignatureDocument(envelope);
+  assert.equal((envelope.required_reads as JsonObject[]).some(read => read.source === "selected_todo"), false);
+  const signed = JSON.parse(JSON.stringify(turnEnvelopeActionSignatureDocument(envelope)));
   assert.deepEqual((signed.action as JsonObject).capability_intent, source.pending_capability_intent);
   (source.pending_capability_intent as JsonObject).command = "untrusted replacement";
   assert.throws(() => buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
@@ -194,8 +399,44 @@ test("Trae App Turn envelope preserves app automation without a Codex alias", ()
   );
   assert.deepEqual(app.failure_cli_args_detail_ref, {
     reason: "cold_path_until_host_update_failure",
-    request: "loopx quota should-run --include-detail scheduler",
+    detail_ref: "full_decision.scheduler_hint.app_automation.failure_hint.cli_args",
   });
+});
+
+test("scheduler omitted argv resolves the captured source carrier, never a new quota command", () => {
+  for (const carrier of ["app_automation", "codex_app"]) {
+    const source = payload();
+    const ack = ["quota", "scheduler-ack-current", "--registry", "r".repeat(513)];
+    const failure = ["quota", "scheduler-fail-current", "--execute"];
+    source.scheduler_hint = {action: "run_now", [carrier]: {
+      host_surface: "codex_app", ack_hint: {cli_args: ack}, failure_hint: {cli_args: failure},
+    }};
+    if (carrier === "app_automation") {
+      (source.scheduler_hint as JsonObject).codex_app = {ack_hint: {cli_args: ["different-alias"]}};
+    }
+    const before = structuredClone(source);
+    const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+      scheduler_execution_args: " --codex-app", captured_decision_path: "/tmp/capture/decision.json"});
+    const app = (envelope.scheduler as JsonObject)[carrier] as JsonObject;
+    if (carrier === "app_automation") assert.deepEqual((envelope.scheduler as JsonObject).codex_app, app);
+    assert.equal(app.ack_cli_args, undefined);
+    for (const [field, expected] of [["ack", ack], ["failure", failure]] as const) {
+      const ref = app[`${field}_cli_args_detail_ref`] as JsonObject;
+      assert.equal(ref.request, undefined);
+      assert.equal(ref.detail_ref, `full_decision.scheduler_hint.${carrier}.${field}_hint.cli_args`);
+      const resolved = String(ref.detail_ref).split(".").slice(1)
+        .reduce<unknown>((value, key) => (value as JsonObject)[key], source);
+      assert.deepEqual(resolved, expected);
+    }
+    assert.equal((envelope.detail_ref as JsonObject).full_decision, "cat -- /tmp/capture/decision.json");
+    assert.deepEqual(source, before);
+    assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields),
+      turnEnvelopeActionSignatureDocument(envelope));
+    const changed = structuredClone(envelope);
+    ((((changed.scheduler as JsonObject)[carrier] as JsonObject).ack_cli_args_detail_ref) as JsonObject)
+      .detail_ref = "full_decision.scheduler_hint.wrong.ack_hint.cli_args";
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed), turnEnvelopeActionSignatureDocument(envelope));
+  }
 });
 
 test("monitor-only capsule preserves the non-runnable non-monitor count", () => {
@@ -324,7 +565,7 @@ test("signature key ordering preserves Python Unicode code-point compatibility",
   );
 });
 
-test("selected Todo text references preserve Unicode casefold compatibility", () => {
+test("selected Todo text preserves case-sensitive requirements", () => {
   const source = payload();
   source.recommended_action = "STRASSE";
   (source.selected_todo as Record<string, unknown>).text = "Straße";
@@ -337,8 +578,37 @@ test("selected Todo text references preserve Unicode casefold compatibility", ()
   });
   const selectedTodo = (envelope.action as Record<string, unknown>)
     .selected_todo as Record<string, unknown>;
-  assert.equal(selectedTodo.text_ref, "action.recommended_action");
-  assert.equal(selectedTodo.text, undefined);
+  assert.equal(selectedTodo.text_ref, undefined);
+  assert.equal(selectedTodo.text, "Straße");
+});
+
+test("selected work retains trailing requirements beyond every display limit", () => {
+  const source = payload();
+  const work = "Repair the cursor boundary. " + "Keep the existing query semantics. ".repeat(70) +
+    "Acceptance: no omitted or duplicate records; add a regression and preserve cancellation.";
+  source.recommended_action = work.slice(0, 477) + "...";
+  (source.selected_todo as Record<string, unknown>).text = work;
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const selected = (envelope.action as Record<string, unknown>).selected_todo as Record<string, unknown>;
+  assert.equal(selected.text, work);
+  assert.equal(selected.text_ref, undefined);
+  assert.equal((envelope.action_signature as Record<string, unknown>).matches, true);
+  const signed = structuredClone(turnEnvelopeActionSignatureDocument(envelope));
+  selected.text = work.replace("preserve cancellation", "ignore cancellation");
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), signed);
+});
+
+test("selected work aliases only an exact complete recommendation", () => {
+  const source = payload();
+  const work = "Preserve case-sensitive API names: CursorA and cursora.";
+  source.recommended_action = work;
+  (source.selected_todo as Record<string, unknown>).text = work;
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const selected = (envelope.action as Record<string, unknown>).selected_todo as Record<string, unknown>;
+  assert.equal(selected.text_ref, "action.recommended_action");
+  assert.equal(selected.text, undefined);
 });
 
 test("signature document fails closed to the canonical signed dimensions", () => {
@@ -422,4 +692,173 @@ test("transaction boundary rejects malformed prepared facts", () => {
     }),
     EffectRuntimeRequestError,
   );
+});
+
+
+test("required reads prefer the agent channel and retain obligation identity", () => {
+  const source = payload();
+  const read = {
+    kind: "agent_preferences", command: "loopx inspect --fresh",
+    source: "turn_start_capability_hook", ordering: "before_work",
+    hook_id: "semantic_preference.agent_context", capability_id: "semantic-preference",
+  };
+  const agent = (source.interaction_contract as JsonObject).agent_channel as JsonObject;
+  agent.required_reads = [read];
+  (source.interaction_contract as JsonObject).required_reads = [{command: "old root read"}];
+  source.required_reads = [{command: "old payload read"}];
+  const render = () => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const result = render();
+  assert.deepEqual(result.required_reads, [read]);
+  const tampered = structuredClone(result);
+  ((tampered.required_reads as JsonObject[])[0]).ordering = "after_work";
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(tampered),
+    quotaActionSignatureDocument(source, protocolActionFields));
+  agent.required_reads = [];
+  assert.deepEqual(render().required_reads, []);
+  delete agent.required_reads;
+  assert.deepEqual(render().required_reads, [{command: "old root read"}]);
+  delete (source.interaction_contract as JsonObject).required_reads;
+  assert.deepEqual(render().required_reads, [{command: "old payload read"}]);
+});
+
+test("all required reads survive compaction and later reads affect the signature", () => {
+  const source = payload();
+  // The sixth read used to disappear; long quoted routes were also rewritten.
+  const reads = Array.from({length: 12}, (_, index) => ({
+    kind: index === 5 ? "agent_preferences" : `fixture_${index}`,
+    command: `loopx --registry '/${"workspace  dir/".repeat(45)}registry.json' inspect --item ${index}`,
+    source: "turn_start_capability_hook", reason: "Read before work",
+    ...(index === 11 ? {prompt_budget_bytes: 1_536} : {}),
+  }));
+  (source.interaction_contract as JsonObject).required_reads = reads;
+  const render = () => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const result = render();
+  assert.deepEqual((result.required_reads as JsonObject[]).map(x => x.command), reads.map(x => x.command));
+  assert.equal((result.compaction as JsonObject).budget_bytes, 8_192 + 1_536);
+  assert.equal((result.compaction as JsonObject).within_budget, false);
+  assert.equal((result.action_signature as JsonObject).matches, true);
+  const tampered = structuredClone(result);
+  (tampered.required_reads as JsonObject[]).pop();
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(tampered), quotaActionSignatureDocument(source, protocolActionFields));
+  reads[5].command += " --fresh";
+  assert.notEqual((render().action_signature as JsonObject).source_hash, (result.action_signature as JsonObject).source_hash);
+});
+
+test("required read ordering and hook identity survive legacy carriers without private diagnostics", () => {
+  const source = payload();
+  const read = {command: "loopx context read", ordering: "before_work",
+    hook_id: "fixture.context", capability_id: "fixture",
+    private_detail: "provider payload is not an execution fact"};
+  source.required_reads = [read];
+  const result = buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  assert.deepEqual(result.required_reads, [{command: read.command, ordering: read.ordering,
+    hook_id: read.hook_id, capability_id: read.capability_id}]);
+  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields),
+    turnEnvelopeActionSignatureDocument(result));
+});
+
+
+test("unavailable hook context is signed without suppressing independent work", () => {
+  const source = payload();
+  const render = () => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const baseline = render();
+  source.turn_start_capability_hook_dispatch = {results: [], failures: []};
+  assert.deepEqual(turnEnvelopeActionSignatureDocument(render()), turnEnvelopeActionSignatureDocument(baseline));
+  for (const [status, field] of [["unavailable", "results"], ["partial", "results"], ["failed", "failures"]]) {
+    const row = {hook_id: "fixture.context", capability_id: "fixture", status, error_code: "provider_failed", private_detail: "must not leak"};
+    source.turn_start_capability_hook_dispatch = {[field]: [row]};
+    const result = render();
+    const missing = (result.contract_capsule as JsonObject).unavailable_context as JsonObject;
+    assert.deepEqual(missing, {affected_hooks: [{hook_id: "fixture.context", capability_id: "fixture", status, error_code: "provider_failed"}],
+      cache_policy: "invalidate_affected_hook_context", dependent_action_policy: "hold_until_fresh_context",
+      independent_work_policy: "preserve_existing_authority"});
+    for (const key of ["action", "boundary", "execution_policy", "writeback"]) assert.deepEqual(result[key], baseline[key]);
+    assert.equal(JSON.stringify(result).includes("must not leak"), false);
+    assert.equal((result.action_signature as JsonObject).matches, true);
+    assert.notEqual((result.action_signature as JsonObject).source_hash, (baseline.action_signature as JsonObject).source_hash);
+    missing.cache_policy = "reuse_cached_context";
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(result), quotaActionSignatureDocument(source, protocolActionFields));
+  }
+});
+
+
+test("captured details reuse one observation without changing action or default projection", () => {
+  const source = payload();
+  source.heartbeat_receipt = { turn_instance_id: "turn-observed" };
+  const request = { payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" };
+  const before = JSON.stringify(source);
+  const original = buildTurnEnvelope(request);
+  const captured = buildTurnEnvelope({ ...request, captured_decision_path: "/tmp/capture/decision.json" });
+  assert.deepEqual(captured.action_signature, original.action_signature);
+  assert.deepEqual(captured.writeback, original.writeback);
+  assert.deepEqual(captured.action, original.action);
+  const detail = captured.detail_ref as JsonObject;
+  assert.equal(detail.full_decision, "cat -- /tmp/capture/decision.json");
+  assert.equal((detail.captured_decision as JsonObject).turn_instance_id, "turn-observed");
+  assert.match(String((detail.captured_decision as JsonObject).instruction), /no fresh authority/);
+  assert.equal(detail.todo_detail, (original.detail_ref as JsonObject).todo_detail);
+  assert.equal(JSON.stringify(source), before);
+  assert.deepEqual(buildTurnEnvelope({ ...request, captured_decision_path: undefined }), original);
+  assert.equal((original.detail_ref as JsonObject).captured_decision, undefined);
+  for (const invalid of [null, false, 4, {}, [], "", " ", "\0bad"]) {
+    assert.throws(() => buildTurnEnvelope({ ...request, captured_decision_path: invalid }), EffectRuntimeRequestError);
+  }
+});
+
+
+test("envelope consumes the canonical channel read list and signs every source route", () => {
+  const source = payload();
+  source.registry = "/tmp/selected work/registry.json";
+  source.runtime_root = "/tmp/selected work/runtime";
+  (source.selected_todo as JsonObject).todo_id = "todo_exact_work";
+  const interaction = source.interaction_contract as JsonObject;
+  const sharedReads = [
+    {command: "cat -- '/tmp/selected work/state.md'", source: "goal_state"},
+    {command: "loopx --registry '/tmp/selected work/registry.json' --runtime-root '/tmp/selected work/runtime' --format json todo list --goal-id goal-turn-envelope --todo-id todo_exact_work", source: "selected_todo"},
+  ];
+  (interaction.agent_channel as JsonObject).required_reads = sharedReads;
+  interaction.required_reads = [{command: "obsolete-fallback", source: "existing"}];
+  source.required_reads = [{command: "payload-fallback", source: "existing"}];
+  const build = () => buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const envelope = build();
+  const reads = envelope.required_reads as JsonObject[];
+  assert.deepEqual(reads, sharedReads);
+  const read = reads.find(item => item.source === "selected_todo")!;
+  assert.equal(read.command, "loopx --registry '/tmp/selected work/registry.json' --runtime-root '/tmp/selected work/runtime' --format json todo list --goal-id goal-turn-envelope --todo-id todo_exact_work");
+  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+  const signed = structuredClone(turnEnvelopeActionSignatureDocument(envelope));
+  read.command = String(read.command).replace("todo_exact_work", "todo_wrong_work");
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), signed);
+
+  const goalTampered = structuredClone(envelope);
+  (goalTampered.required_reads as JsonObject[])[0].command = "cat -- /tmp/wrong-goal.md";
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(goalTampered), signed);
+  // Even an explicit empty canonical list takes precedence over historical fallbacks.
+  (interaction.agent_channel as JsonObject).required_reads = [];
+  assert.deepEqual(build().required_reads, []);
+  delete (interaction.agent_channel as JsonObject).required_reads;
+  assert.deepEqual(build().required_reads, interaction.required_reads);
+  delete interaction.required_reads;
+  assert.deepEqual(build().required_reads, source.required_reads);
+});
+
+test("envelope never independently invents requirement reads from work or admission", () => {
+  for (const change of [
+    (source: JsonObject) => {source.should_run = false;},
+    (source: JsonObject) => {source.selected_todo = null;},
+    (source: JsonObject) => {((source.interaction_contract as JsonObject).agent_channel as JsonObject).delivery_allowed = false;},
+    (source: JsonObject) => {((source.interaction_contract as JsonObject).cli_channel as JsonObject).selection_required = true;},
+    (source: JsonObject) => {source.replan_action_packet = {settlement_only: true};},
+  ]) {
+    const source = payload();
+    change(source);
+    const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+      scheduler_execution_args: ""});
+    assert.deepEqual(envelope.required_reads, []);
+  }
 });

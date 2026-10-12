@@ -30,7 +30,8 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def assert_contains(text: str, needle: str, label: str) -> None:
-    if needle not in text:
+    # Help wrapping can split words at hyphens; only whitespace is incidental here.
+    if "".join(needle.split()) not in "".join(text.split()):
         raise AssertionError(f"{label} missing {needle!r}")
 
 
@@ -113,6 +114,8 @@ def assert_todo_error_payload() -> None:
             "json",
             "--registry",
             str(Path(tmp) / "missing-registry.json"),
+            "--runtime-root",
+            tmp,
             "todo",
             "add",
             "--goal-id",
@@ -133,6 +136,8 @@ def assert_todo_error_payload() -> None:
             "json",
             "--registry",
             str(Path(tmp) / "missing-registry.json"),
+            "--runtime-root",
+            tmp,
             "todo",
             "complete",
             "--goal-id",
@@ -151,6 +156,8 @@ def assert_todo_markdown_error_payload() -> None:
         result = run_cli(
             "--registry",
             str(Path(tmp) / "missing-registry.json"),
+            "--runtime-root",
+            tmp,
             "todo",
             "add",
             "--goal-id",

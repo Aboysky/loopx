@@ -70,3 +70,74 @@ def test_full_budget_roundtrips_without_erasing_replan_or_partial_writes(tmp_pat
     assert "total_agent_vision uses 1801 chars; limit is 1800" in fixture.payload(rejected)["error"]
     assert index.read_bytes() == before_index
     assert state.read_bytes() == before_state
+
+
+def test_misplaced_delta_rejects_before_write_and_corrected_packet_roundtrips(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "examples/project/goal-vision-refresh-state-budget-smoke.py"
+    spec = importlib.util.spec_from_file_location("vision_packet_fixture", source)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    registry, runtime, project = fixture.write_fixture(tmp_path)
+    state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    before = state.read_bytes()
+    delta = {"schema_version": "goal_path_delta_v0", "outcome": "replan",
+             "prior_assumption": "Keep the route.", "observed_reality": "A dependency changed.",
+             "changed": ["Use the successor."]}
+    packet = {"vision_patch": {"vision_summary": "Deliver the successor."},
+              "goal_path_delta_v0": delta}
+    path = tmp_path / "vision.json"
+    fixture.write_json(path, packet)
+    rejected = fixture.run_cli(registry, runtime, vision_path=path, check=False,
+                               dry_run=False, autonomous_replan_recorded=False)
+    assert rejected.returncode == 1
+    assert "must be supplied as agent_vision.path_delta" in fixture.payload(rejected)["error"]
+    assert state.read_bytes() == before
+    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
+    assert not index.exists()
+    packet["path_delta"] = packet.pop("goal_path_delta_v0")
+    packet["telemetry"] = {"outcome": "ok", "evidence_refs": ["evidence:probe"]}
+    fixture.write_json(path, packet)
+    result = fixture.payload(fixture.run_cli(registry, runtime, vision_path=path, check=True,
+        dry_run=False, autonomous_replan_recorded=False))
+    assert result["agent_vision"]["path_delta"] == delta
+    assert json.loads(index.read_text().splitlines()[-1])["agent_vision"]["path_delta"] == delta
+
+
+@pytest.mark.parametrize("omitted", [None, "path_delta", "evidence_refs"])
+def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path, omitted):
+    from loopx.control_plane.work_items.progress_observation import replan_writeback_requirements
+
+    source = Path(__file__).resolve().parents[2] / "examples/project/goal-vision-refresh-state-budget-smoke.py"
+    spec = importlib.util.spec_from_file_location("vision_closeout_fixture", source)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    registry, runtime, _ = fixture.write_fixture(tmp_path)
+    contract = replan_writeback_requirements({
+        "satisfying_semantic_outcomes": ["fresh_vision_path_outcome"],
+    })["writeback_contract"]["vision_authoring"]
+    # Consumer test: execute the projected example, but derive the expected
+    # acceptance independently: missing a path or evidence must still replan.
+    packet = copy.deepcopy(contract["minimal_example"])
+    if omitted == "path_delta":
+        packet.pop("path_delta", None)
+    elif omitted == "evidence_refs":
+        packet.get("path_delta", {}).pop("evidence_refs", None)
+    path = tmp_path / "vision.json"
+    fixture.write_json(path, packet)
+    result = fixture.payload(fixture.run_cli(
+        registry, runtime, vision_path=path, check=True,
+        dry_run=False, autonomous_replan_recorded=False,
+    ))
+    assert result["vision_checkpoint"]["satisfied"] is True
+    quota = fixture.run_quota(registry, runtime)
+    gaps = quota["goal_frontier_projection"]["acceptance_gaps"]
+    outcome_gaps = [g for g in gaps if g["kind"] == "vision_outcome_checkpoint_required"]
+    assert bool(outcome_gaps) is (omitted is not None)
+    if omitted:
+        checks = outcome_gaps[0]["component_checks"]
+        assert checks["evidence_refs_present"] is False
+        assert checks["path_outcome_valid"] is (omitted == "evidence_refs")
+    else:
+        persisted = result["agent_vision"]
+        assert persisted["path_delta"]["outcome"] == "continue"
+        assert persisted["path_delta"]["evidence_refs"]

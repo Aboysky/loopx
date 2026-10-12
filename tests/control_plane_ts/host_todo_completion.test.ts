@@ -17,13 +17,80 @@ test("vision refresh shares the original delivery command and identity without a
   const authored = {schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
     vision_path: "fixture-vision.json"};
   const first = prepare(authored);
-  const recovery = evaluateHostTodoCompletion(request("prepare", {...authored, phase: "vision_refresh"}));
+  const recovery = evaluateHostTodoCompletion(request("prepare", {...authored, phase: "vision_refresh",
+    checkpoint_read_context_id: "receipt-a"}));
   const steps = (first.provider_effect as {steps: {step_kind: string; args: string[]}[]}).steps;
-  assert.deepEqual(recovery.args, steps.find(step => step.step_kind === "durable_writeback")!.args);
+  assert.deepEqual(recovery.args, [...steps.find(step => step.step_kind === "durable_writeback")!.args,
+    "--checkpoint-read-context", "receipt-a"]);
   assert.deepEqual(recovery.identity, first.identity);
   assert.equal(recovery.provider_effect, undefined);
   assert.equal((recovery.args as string[]).includes("spend-slot"), false);
   assert.equal((recovery.args as string[]).includes("--next-action"), false);
+});
+
+test("host context read uses the original identity and cannot carry a decision", () => {
+  const input = {schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION, phase: "vision_context"};
+  const context = evaluateHostTodoCompletion(request("prepare", input));
+  const identity = prepare().identity as Record<string, unknown>;
+  assert.deepEqual(context.identity, identity);
+  assert.deepEqual(context.args, ["checkpoint-context", "--goal-id", "goal",
+    "--agent-id", "agent", "--todo-id", todoId, "--turn-instance-id", identity.turn_instance_id]);
+  assert.equal(context.provider_effect, undefined);
+  for (const field of ["vision_path", "vision_unchanged_reason", "checkpoint_read_context_id"]) {
+    assert.throws(() => evaluateHostTodoCompletion(request("prepare", {...input, [field]: "value"})),
+      /cannot submit/);
+  }
+  assert.throws(() => prepare({schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
+    checkpoint_read_context_id: "receipt-a"}), /only to vision recovery/);
+});
+
+test("host settlement commands preserve an exact GoalRef", () => {
+  const instanceId = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const goalRef = {goal_id: "goal", goal_instance_id: instanceId};
+  const prepared = prepare({goal_ref: goalRef});
+  const steps = (
+    prepared.provider_effect as {steps: {args: string[]}[]}
+  ).steps;
+  for (const step of steps) {
+    assert.deepEqual(
+      step.args.slice(step.args.indexOf("--goal-instance-id"), step.args.indexOf("--goal-instance-id") + 2),
+      ["--goal-instance-id", instanceId],
+    );
+  }
+  const context = evaluateHostTodoCompletion(request("prepare", {
+    schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
+    phase: "vision_context",
+    goal_ref: goalRef,
+  }));
+  assert.deepEqual(
+    (context.args as string[]).slice(-2),
+    ["--goal-instance-id", instanceId],
+  );
+});
+
+test("host settlement identity is stable within and isolated across Goal instances", () => {
+  const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const instanceB = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const exact = (goalInstanceId: string) => identityFrom(prepare({
+    goal_ref: {goal_id: "goal", goal_instance_id: goalInstanceId},
+  }));
+  const firstA = exact(instanceA);
+  const secondA = exact(instanceA);
+  const identityB = exact(instanceB);
+  const turnInstanceIdA = `mcp-${createHash("sha256")
+    .update(["loopx_host_todo_completion_exact_v1", "goal", instanceA, "agent", todoId].join("\0"), "utf8")
+    .digest("hex")
+    .slice(0, 32)}`;
+
+  assert.deepEqual(firstA, secondA);
+  assert.equal(firstA.turn_instance_id, turnInstanceIdA);
+  assert.notEqual(firstA.turn_instance_id, identityB.turn_instance_id);
+  assert.notEqual(firstA.effect_id, identityB.effect_id);
+  const crossInstance = finalize(providerOutcomes(firstA), {
+    goal_ref: {goal_id: "goal", goal_instance_id: instanceB},
+  });
+  assert.equal(crossInstance.decision, "blocked");
+  assert.match(JSON.stringify(crossInstance.result), /settlement identity/);
 });
 
 test("vision decisions require v1 and cannot combine patch with unchanged", () => {

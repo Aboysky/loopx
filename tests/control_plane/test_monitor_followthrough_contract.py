@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -25,7 +23,12 @@ from loopx.control_plane.work_items.work_lane import (
 )
 from loopx.quota import build_quota_should_run, record_quota_monitor_poll
 from loopx.status import collect_status
-from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
+from loopx.todos import (
+    add_goal_todo,
+    complete_goal_todo,
+    list_goal_todos,
+    update_goal_todo,
+)
 
 
 GOAL_ID = "monitor-followthrough-fixture"
@@ -76,55 +79,6 @@ def _add_monitor(
             "watch_only": "true",
         },
     )
-
-
-def _create_independent_delivery_worktree(
-    project: Path,
-    *,
-    destination: Path,
-) -> Path:
-    (project / ".gitignore").write_text(
-        ".codex/\n.loopx/\n",
-        encoding="utf-8",
-    )
-    subprocess.run(
-        ["git", "init", "--quiet", "--initial-branch", "main"],
-        cwd=project,
-        check=True,
-    )
-    subprocess.run(
-        [
-            "git",
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/huangruiteng/loopx.git",
-        ],
-        cwd=project,
-        check=True,
-    )
-    subprocess.run(["git", "add", ".gitignore"], cwd=project, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=LoopX Test",
-            "-c",
-            "user.email=loopx-test@example.invalid",
-            "commit",
-            "--quiet",
-            "-m",
-            "monitor settlement fixture",
-        ],
-        cwd=project,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "worktree", "add", "--quiet", "--detach", str(destination)],
-        cwd=project,
-        check=True,
-    )
-    return destination
 
 
 def test_exact_todo_id_precedes_ambiguous_target_key(tmp_path: Path) -> None:
@@ -569,7 +523,7 @@ def test_turn_scoped_monitor_poll_preserves_receipt_todo_after_capability_reentr
     assert admitted["todo_id"] in conflict["reason"]
 
 
-def test_same_turn_should_run_settles_polled_monitor_before_successor_reselection(
+def test_same_turn_material_monitor_poll_is_no_spend_closeout_before_successor(
     tmp_path: Path,
 ) -> None:
     registry, runtime, _state = _write_fixture(tmp_path)
@@ -646,164 +600,63 @@ def test_same_turn_should_run_settles_polled_monitor_before_successor_reselectio
     )
     successor_id = poll["successor_todo_ids"][0]
     assert poll["after"]["selected_todo"]["todo_id"] == admitted["todo_id"]
+    assert poll["turn_continuation"] == {
+        "schema_version": "quota_turn_continuation_v0",
+        "settlement_binding_matches_observation": True,
+        "current_turn_settled": True,
+        "same_turn_independent_settlement_allowed": False,
+        "next_turn_required": True,
+        "next_action": (
+            "rerun quota should-run with a fresh --turn-instance-id before "
+            "independent work"
+        ),
+        "reason": "the committed monitor-poll is this Turn's single settlement identity",
+    }
+
+    # The production CLI must not confuse an observation row with a committed
+    # closeout. Keep the exact guard and Todo fixed while corrupting only the
+    # commit evidence in this disposable runtime.
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    committed_index = index.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in committed_index.splitlines()]
+    for metadata in (None, {}, {"effect_id": "quota-monitor-poll:wrong-turn"}):
+        mutated = [
+            {**row, "quota_monitor_poll_commit": metadata}
+            if row["classification"] == "quota_monitor_poll" else row
+            for row in rows
+        ]
+        index.write_text(
+            "".join(json.dumps(row) + "\n" for row in mutated), encoding="utf-8"
+        )
+        incomplete = run_json_cli(*guard_args, registry_path=registry, runtime_root=runtime)
+        assert incomplete["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "poll_due"
+        assert incomplete["execution_obligation"]["must_attempt_work"] is True
+    index.write_text(committed_index, encoding="utf-8")
 
     replay = run_json_cli(
         *guard_args,
         registry_path=registry,
         runtime_root=runtime,
     )
+    assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == admitted["todo_id"]
     assert replay["selected_todo"]["todo_id"] == admitted["todo_id"]
-    assert replay["selected_todo"]["selection_binding"] == "heartbeat_receipt"
-    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == (
-        "settlement_pending"
-    )
-    assert replay["work_lane_contract"]["obligation"] == (
-        "settle_receipt_bound_monitor"
-    )
-    assert replay["work_lane_contract"]["selected_todo_id"] == admitted["todo_id"]
-    assert replay["work_lane_contract"]["deferred_work_lane"]["lane"] == (
-        "advancement_task"
-    )
-    assert "do not poll again" in replay["work_lane_contract"]["action"]
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
+    assert replay["should_run"] is False
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay["heartbeat_recommendation"]["agent_must_attempt"] is False
+    assert replay["interaction_contract"]["mode"] == "heartbeat_settled_skip"
+    assert replay["interaction_contract"]["user_channel"]["notify"] == "DONT_NOTIFY"
+    assert replay["automation_liveness"]["automation_action"] == "keep_active_quiet"
     assert replay["heartbeat_receipt"]["status"] == "replayed"
 
-    delivery_worktree = _create_independent_delivery_worktree(
-        registry.parents[1],
-        destination=tmp_path / "delivery-worktree",
-    )
-    vision_packet = tmp_path / "monitor-successor-vision.json"
-    vision_packet.write_text(
-        json.dumps(
-            {
-                "schema_version": "goal_vision_replan_contract_v0",
-                "state": "vision_active",
-                "vision_patch": {
-                    "vision_summary": (
-                        "Validate the successor created by the material monitor "
-                        "transition."
-                    ),
-                    "acceptance_summary": (
-                        "The exact successor target is validated before closeout."
-                    ),
-                },
-                "todo_delta": [f"create:{successor_id}"],
-                "path_delta": {
-                    "schema_version": "goal_path_delta_v0",
-                    "outcome": "continue",
-                    "prior_assumption": (
-                        "The receipt-bound monitor remained the active work lane."
-                    ),
-                    "observed_reality": (
-                        "The material poll created an exact successor todo."
-                    ),
-                    "retained": ["Validate the exact merged release head."],
-                    "evidence_refs": [f"todo:{successor_id}"],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    refresh_args = (
-        "refresh-state",
-        "--goal-id",
-        GOAL_ID,
-        "--classification",
-        "validated_monitor_transition",
-        "--delivery-batch-scale",
-        "single_surface",
-        "--delivery-outcome",
-        "outcome_progress",
-        "--delivery-boundary",
-        "semantic_closeout",
-        "--next-action",
-        "Validate the exact merged release head.",
-        "--progress-scope",
-        "goal",
-        "--agent-vision-json",
-        str(vision_packet),
-        "--agent-id",
-        AGENT_ID,
-        "--todo-id",
-        admitted["todo_id"],
-        "--turn-instance-id",
-        turn_id,
-        "--delivery-workspace-path",
-        str(delivery_worktree),
-        "--no-global-sync",
-        "--suppress-external-sinks",
-    )
-    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
-    before_refresh = index.read_text(encoding="utf-8").splitlines()
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        refreshes = list(pool.map(
-            lambda _: run_json_cli(
-                *refresh_args, registry_path=registry, runtime_root=runtime
-            ),
-            range(2),
-        ))
-    assert sum(result["appended"] for result in refreshes) == 1
-    refresh = next(result for result in refreshes if result["appended"])
-    assert refresh["refresh_recovery"]["reason"] == "complete_material_monitor_writeback"
-    assert refresh["vision_checkpoint"]["satisfied"] is True
-    after_refresh = index.read_text(encoding="utf-8").splitlines()
-    assert len(after_refresh) == len(before_refresh) + 1
-    assert after_refresh[:len(before_refresh)] == before_refresh
-    assert next(result for result in refreshes if not result["appended"])["idempotent_replay"]
-    assert refresh["settlement_result"]["ok"] is True
-    spend = run_json_cli(
-        "quota",
-        "spend-slot",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--runtime-profile",
-        "generic_cli",
-        "--todo-id",
-        admitted["todo_id"],
-        "--turn-instance-id",
-        turn_id,
-        "--slots",
-        "1",
-        "--source",
-        "heartbeat",
-        "--available-capability",
-        "network",
-        "--available-capability",
-        "external_evidence_poll",
-        "--execute",
-        registry_path=registry,
-        runtime_root=runtime,
-        cwd=delivery_worktree,
-    )
-    assert spend["settlement_result"]["ok"] is True
-
-    settled_replay = run_json_cli(
-        *guard_args,
-        registry_path=registry,
-        runtime_root=runtime,
-    )
-    assert settled_replay["selected_todo"]["todo_id"] == admitted["todo_id"]
-    assert settled_replay["agent_lane_next_action"][
-        "receipt_bound_monitor_phase"
-    ] == "settled"
-    assert settled_replay["work_lane_contract"]["obligation"] == (
-        "finish_settled_receipt_bound_monitor_turn"
-    )
-    assert settled_replay["should_run"] is False
-    assert settled_replay["effective_action"] == "heartbeat_settled_skip"
-    assert settled_replay["execution_obligation"]["must_attempt_work"] is False
-    assert settled_replay["heartbeat_recommendation"]["agent_must_attempt"] is False
-    assert settled_replay["interaction_contract"]["mode"] == (
-        "heartbeat_settled_skip"
-    )
-    assert settled_replay["interaction_contract"]["user_channel"]["notify"] == (
-        "DONT_NOTIFY"
-    )
-    assert settled_replay["automation_liveness"]["automation_action"] == (
-        "keep_active_quiet"
-    )
-    assert settled_replay["heartbeat_receipt"]["status"] == "replayed"
+    classifications = [
+        row["classification"]
+        for row in map(json.loads, index.read_text(encoding="utf-8").splitlines())
+    ]
+    assert classifications.count("quota_monitor_poll") == 1
+    assert "state_refreshed" not in classifications
+    assert "quota_slot_spent" not in classifications
 
     next_turn_args = list(guard_args)
     next_turn_args[next_turn_args.index(turn_id)] = "2026-08-21T09:51:02.405Z"
@@ -946,19 +799,143 @@ def test_same_turn_unchanged_monitor_poll_is_already_settled(tmp_path: Path) -> 
         runtime_root=runtime,
     )
     assert poll["material_change"] is False
+    assert poll["turn_continuation"]["settlement_binding_matches_observation"] is True
+    assert poll["turn_continuation"]["current_turn_settled"] is True
+    for mode in ("full", "compact", "brief", "thin"):
+        prompt = run_json_cli(
+            "heartbeat-prompt", f"--{mode}", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--runtime-profile", "generic_cli",
+            registry_path=registry, runtime_root=runtime,
+        )
+        assert "Exact monitor settlement=no refresh/spend" in prompt["task_body"]
+        assert "auxiliary poll: continue work" in prompt["task_body"]
 
     replay = run_json_cli(
         *guard_args,
         registry_path=registry,
         runtime_root=runtime,
     )
+    assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == monitor["todo_id"]
     assert replay["selected_todo"]["todo_id"] == monitor["todo_id"]
-    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == (
-        "settled"
-    )
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
     assert replay["effective_action"] == "heartbeat_settled_skip"
     assert replay["execution_obligation"]["must_attempt_work"] is False
     assert replay["heartbeat_recommendation"]["agent_must_attempt"] is False
+
+
+def test_completing_bound_monitor_keeps_receipt_identity_without_work_projection(
+    tmp_path: Path,
+) -> None:
+    """The receipt is durable; the two work-lane projections are conditional.
+
+    Completing the bound Monitor makes the receipt-bound settled lane
+    unreconstructible. The committed receipt must still carry the historical
+    identity, while `selected_todo` and `agent_lane_next_action` legitimately
+    disappear instead of promising a current work item that no longer exists.
+    """
+
+    registry, runtime, _state = _write_fixture(tmp_path)
+    monitor = _add_monitor(
+        registry,
+        text="[P1] Poll a public release target, then complete it.",
+        target_key="public-release:completed-readback",
+        next_due_at="2000-01-01T00:00:00+00:00",
+    )
+    turn_id = "2026-08-21T10:49:02.405Z"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--runtime-profile",
+        "generic_cli",
+        "--turn-instance-id",
+        turn_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    admitted = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert admitted["selected_todo"]["todo_id"] == monitor["todo_id"]
+    settlement_identity = admitted["heartbeat_receipt"]["settlement_identity"]
+
+    poll = run_json_cli(
+        "quota",
+        "monitor-poll",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--runtime-profile",
+        "generic_cli",
+        "--turn-instance-id",
+        turn_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+        "--todo-id",
+        monitor["todo_id"],
+        "--target-key",
+        "public-release:completed-readback",
+        "--result-hash",
+        "completed-readback",
+        "--execute",
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert poll["turn_continuation"]["current_turn_settled"] is True
+
+    before = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert before["selected_todo"]["todo_id"] == monitor["todo_id"]
+    assert before["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
+
+    completed = complete_goal_todo(
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        goal_id=GOAL_ID,
+        todo_id=monitor["todo_id"],
+        agent_id=AGENT_ID,
+        role="agent",
+        no_followup=True,
+    )
+    assert completed["changed"] is True
+
+    replay = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    # Durable historical identity survives through the committed receipt.
+    assert replay["heartbeat_receipt"]["settlement_identity"] == settlement_identity
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    # Work-lane projections are conditional on the lane being reconstructible.
+    assert replay.get("selected_todo") is None
+    assert replay.get("agent_lane_next_action") is None
+    # No re-open, no new execution and no second spend from completion.
+    assert replay["should_run"] is False
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay["heartbeat_recommendation"]["agent_must_attempt"] is False
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    classifications = [
+        json.loads(line)["classification"]
+        for line in index.read_text(encoding="utf-8").splitlines()
+    ]
+    assert classifications.count("quota_monitor_poll") == 1
+    assert "state_refreshed" not in classifications
+    assert "quota_slot_spent" not in classifications
 
 
 def test_turn_scoped_monitor_poll_requires_committed_receipt(tmp_path: Path) -> None:

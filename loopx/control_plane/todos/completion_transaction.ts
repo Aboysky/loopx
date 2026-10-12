@@ -1,4 +1,5 @@
 import type { JsonObject } from "../effect_program.ts";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {
   effectRuntimeErrorPayload,
   EffectRuntimeRequestError,
@@ -36,6 +37,7 @@ import {
   resolveTodoCompletionPolicy,
   type TodoCompletionPolicyResult,
 } from "./completion_policy.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const TODO_COMPLETION_TRANSACTION_REQUEST_SCHEMA =
   "loopx_todo_completion_transaction_v0";
@@ -45,7 +47,7 @@ export const TODO_COMPLETION_POLICY_FAILURE_SCHEMA =
   "loopx_todo_completion_policy_failure_v0";
 const CALLER_VALIDATION_RECEIPT_SCHEMA = "issue_fix_validation_command_v0";
 
-const PROJECTION_SOURCES = ["materialized", "event_log"] as const;
+const PROJECTION_SOURCES = ["materialized"] as const;
 const COMPLETION_IDENTITY_SOURCES = [
   "turn_settlement",
   "unscoped_completion",
@@ -62,6 +64,7 @@ interface CallerValidationReceipt extends JsonObject {
   stdout_captured: false;
   stderr_captured: false;
   local_path_captured: false;
+  validation_declaration_sha256?: string;
 }
 
 interface CompletionStateProjection extends JsonObject {
@@ -83,6 +86,7 @@ export interface TodoCompletionValidationEffect extends JsonObject {
   validation_label: string | null;
   validation_timeout_seconds: number | null;
   task_repository: string | null;
+  validation_declaration_sha256?: string;
 }
 
 export interface TodoCompletionExecuteValidation
@@ -172,6 +176,14 @@ function optionalString(value: unknown, label: string): string | null {
   return value;
 }
 
+function optionalDigest(value: unknown, label: string): string | null {
+  const normalized = optionalString(value, label);
+  if (normalized !== null && !BARE_SHA256_PATTERN.test(normalized)) {
+    throw new EffectRuntimeRequestError(`${label} must be a SHA-256 digest or null`);
+  }
+  return normalized;
+}
+
 function requireFalse(value: unknown, label: string): false {
   if (requireBoolean(value, label) !== false) {
     throw new EffectRuntimeRequestError(`${label} must be false`);
@@ -224,6 +236,10 @@ function decodeValidationReceipt(
       receipt.local_path_captured,
       "validation_receipt.local_path_captured",
     ),
+    ...(optionalDigest(
+      receipt.validation_declaration_sha256,
+      "validation_receipt.validation_declaration_sha256",
+    ) === null ? {} : {validation_declaration_sha256: receipt.validation_declaration_sha256 as string}),
   };
 }
 
@@ -400,6 +416,15 @@ export function reduceTodoCompletionTransaction(
   }
 
   if (validationPlan.effect === "run") {
+    const validationDeclarationSha256 = canonicalAuthoritySha256({
+      validation_command: validationPlan.validation_command,
+      validation_command_argv: validationPlan.validation_argv,
+      validation_label: validationPlan.validation_label,
+      validation_timeout_seconds: validationPlan.validation_timeout_seconds,
+    });
+    const validationRevision = request.todo.completion_validation_revision;
+    const requiresDigest = Number.isSafeInteger(validationRevision) &&
+      Number(validationRevision) > 0;
     if (request.validation_receipt === null) {
       return {
         ...base,
@@ -415,6 +440,9 @@ export function reduceTodoCompletionTransaction(
             request.todo.task_repository,
             "todo.task_repository",
           ),
+          ...(requiresDigest
+            ? {validation_declaration_sha256: validationDeclarationSha256}
+            : {}),
         },
       };
     }
@@ -423,6 +451,13 @@ export function reduceTodoCompletionTransaction(
     if (request.validation_receipt.command_label !== expectedLabel) {
       throw new EffectRuntimeRequestError(
         "validation_receipt.command_label does not match the authorized effect",
+      );
+    }
+    if (requiresDigest &&
+        request.validation_receipt.validation_declaration_sha256 !==
+          validationDeclarationSha256) {
+      throw new EffectRuntimeRequestError(
+        "validation_receipt does not match the current validation declaration",
       );
     }
     if (!request.validation_receipt.passed) {
@@ -467,6 +502,15 @@ export function reduceTodoCompletionTransaction(
     metadataResult.updates,
     "completion metadata updates",
   );
+  // Checkpoint the committed phase, not its clock tick. Persisting this id
+  // lets crash recovery and later reads retain the original hook identity.
+  updates.completion_receipt_id = `tcw_${canonicalAuthoritySha256({
+    goal_id: request.goal_id,
+    todo_id: request.todo_id,
+    completion_identity_key: identity.key,
+    continuation: completionStateResult.continuation,
+    recovery: completionStateResult.recovery,
+  })}`;
   const completionPolicy = evaluateCompletionPolicy(
     request.completion_policy_request,
   );

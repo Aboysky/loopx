@@ -1,6 +1,7 @@
 # RFC: Per-Goal Usage, Token, and Cost Surfacing v0
 
-- Status: Draft
+- Status: Accepted
+- Supersedes / closes: none
 - Scope: core `usage_summary` token / cost / duration capture and existing-dashboard surfacing
 - Decision type: bounded public-contract change plus a provider-neutral capture layer
 
@@ -190,6 +191,11 @@ The slice must prove:
 4. Whether to add a dedicated `/usage.json` endpoint or continue surfacing
    through the existing status payload (this RFC assumes the latter).
 5. The duration capture anchor — which run boundary events delimit wall-time.
+6. Lifetime and coverage. The [Goal workspace](goal-workspace-surface-v0.md)
+   vitals show window-labeled cost and Agent time (its D2/D4). Should this owner
+   add an aggregate since Goal creation, with retention disclosure, and an
+   explicit field for measured versus observed runtimes? Until then consumers
+   must not sum windows into a lifetime figure or render absent cost as zero.
 
 ## Public References
 

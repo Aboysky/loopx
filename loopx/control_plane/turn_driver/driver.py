@@ -1,8 +1,10 @@
 from __future__ import annotations
+from .turn_contract_generated import LoopXTurnRoute  # compatibility re-export
+from ..quota.effective_action import EffectiveAction
 
 import json
 from collections.abc import Mapping
-from enum import Enum
+from enum import StrEnum
 from hashlib import sha256
 from typing import Any
 
@@ -15,7 +17,10 @@ from .subagent_execution_topology import (
     bind_child_operations_to_topology,
     build_subagent_execution_topology,
 )
-from ..quota.turn_envelope import turn_envelope_action_signature_document
+from ..quota.turn_envelope import (
+    TURN_ENVELOPE_SCHEMA_VERSION,
+    turn_envelope_action_signature_document,
+)
 from ..scheduler.execution_context import (
     scheduler_execution_context_for_turn,
 )
@@ -28,33 +33,94 @@ LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION = (
     "loopx_iteration_context_policy_v0"
 )
 LOOPX_CHILD_HOST_OPERATION_SCHEMA_VERSION = "loopx_child_host_operation_v0"
-TURN_ENVELOPE_SCHEMA_VERSION = "loopx_turn_envelope_v0"
 SUPPORTED_HOSTS = {"codex-cli", "claude-code", "dsh", "generic-cli"}
 SUPPORTED_EXECUTION_MODES = {"interactive-visible", "isolated-headless"}
-SUPPORTED_ITERATION_CONTEXT_POLICIES = {"fresh", "resume_if_available"}
+SUPPORTED_ITERATION_CONTEXT_POLICIES = {"fresh", "resume"}
+
+
+class SessionBindingScope(StrEnum):
+    TODO = "todo"
+    AGENT = "agent"
+
+
+def session_identity_fields(scope: str) -> tuple[str, ...]:
+    """Conversation identity is independent of a Turn's settlement identity."""
+    selected = SessionBindingScope(scope)
+    if selected is SessionBindingScope.TODO:
+        return ("goal_id", "agent_id", "todo_id")
+    return ("goal_id", "agent_id")
+
+
 REPLAN_ACTIONS = {
     "autonomous_replan",
     "autonomous_replan_required",
     "successor_replan_required",
 }
-REPAIR_ACTIONS = {
-    "capability_repair",
-    "projection_repair",
-    "self_repair",
-    "state_projection_repair",
-    "workspace_repair",
-}
+REPAIR_ACTIONS: frozenset[EffectiveAction] = frozenset(
+    {
+        EffectiveAction.AGENT_WORKSPACE_REPAIR,
+        EffectiveAction.BOUNDARY_PROJECTION_REPAIR,
+        EffectiveAction.CAPABILITY_BRIDGE_REPAIR,
+        EffectiveAction.CONTROL_PLANE_HEALTH_REPAIR,
+        EffectiveAction.CONTROL_PLANE_PROJECTION_REPAIR,
+        EffectiveAction.CONTROL_PLANE_REPAIR,
+        EffectiveAction.RUNTIME_USER_GATE_PROJECTION_REPAIR,
+        EffectiveAction.STATE_PROJECTION_GAP_REPAIR,
+        EffectiveAction.TODO_DECISION_SCOPE_PROJECTION_REPAIR,
+    }
+)
+# Registered actions that run on a Host. The root should-run/Envelope slot is a
+# disjoint union of the decision vocabulary and the frontier vocabulary, and
+# every value either owner can carry is classified: replan above, repair above,
+# capability intent in its own branch, and the rest named here. Host execution
+# is therefore a stated classification rather than the absence of a branch, so
+# a newly registered action cannot inherit it silently -- the accompanying test
+# fails until the new value is classified deliberately.
+HOST_EXECUTION_ACTIONS: frozenset[str] = frozenset(
+    {
+        # Decision vocabulary.
+        EffectiveAction.AGENT_MONITOR_ONLY.value,
+        EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value,
+        EffectiveAction.BLOCKED_HEALTH.value,
+        EffectiveAction.BLOCKED_WAIT.value,
+        EffectiveAction.COORDINATE_TASK_BUNDLE.value,
+        EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE.value,
+        EffectiveAction.HEARTBEAT_RECEIPT_WRITE_FAILED.value,
+        EffectiveAction.HEARTBEAT_SETTLED_SKIP.value,
+        EffectiveAction.LARK_INBOX_REPLY_DUE.value,
+        EffectiveAction.MONITOR_DUE.value,
+        EffectiveAction.MONITOR_QUIET_SKIP.value,
+        EffectiveAction.NORMAL_RUN.value,
+        EffectiveAction.OPERATOR_GATE_NOTIFY.value,
+        EffectiveAction.OPERATOR_INBOX_MATERIAL_REVIEW_DUE.value,
+        EffectiveAction.OUTCOME_FLOOR_RECOVERY.value,
+        EffectiveAction.PEER_COORDINATION_BLOCKED.value,
+        EffectiveAction.QUOTA_SKIP.value,
+        EffectiveAction.SCOPED_USER_GATE_FALLBACK.value,
+        EffectiveAction.TERMINAL_NO_FOLLOWUP.value,
+        EffectiveAction.THROTTLED_SKIP.value,
+        EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value,
+        # Frontier vocabulary. These are not EffectiveAction members, so they
+        # are named by value rather than through the enum.
+        "agent_scope_exhausted",
+        "agent_scope_wait",
+        "reassignment_required",
+    }
+)
 
 
-class LoopXTurnRoute(str, Enum):
-    READY_FOR_HOST = "ready_for_host"
-    CAPABILITY_ACTION_REQUIRED = "capability_action_required"
-    REPAIR_REQUIRED = "repair_required"
-    REPLAN_REQUIRED = "replan_required"
-    USER_ACTION_REQUIRED = "user_action_required"
-    WAIT = "wait"
-    BLOCKED = "blocked"
-    CONTRACT_ERROR = "contract_error"
+def unregistered_route(effective_action: str) -> LoopXTurnRoute:
+    """Classify an action no registered owner declares.
+
+    Legacy payloads and forward-compatible writers can carry a value this
+    driver does not know. Such a value still runs on a Host: narrowing what the
+    driver accepts is an admission-domain change that needs its own approval and
+    version boundary, so this keeps the previous behaviour. Naming the path
+    separates "this classification was chosen" from "this value was not
+    recognised", which the earlier bare fallthrough could not express.
+    """
+
+    return LoopXTurnRoute.READY_FOR_HOST
 
 
 class FailedTurnSessionRecoveryError(ValueError):
@@ -94,7 +160,11 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
     if should_run:
         if not delivery_allowed or not must_attempt:
             return LoopXTurnRoute.BLOCKED
-        if effective_action == "governed_capability_intent":
+        try:
+            registered_action = EffectiveAction(effective_action)
+        except ValueError:
+            registered_action = None
+        if registered_action is EffectiveAction.GOVERNED_CAPABILITY_INTENT:
             intent = _mapping(action.get("capability_intent"))
             if (intent.get("schema_version") != "pending_capability_intent_projection_v0"
                 or intent.get("goal_id") != envelope.get("goal_id")
@@ -104,11 +174,11 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
             return LoopXTurnRoute.CAPABILITY_ACTION_REQUIRED
         if effective_action in REPLAN_ACTIONS:
             return LoopXTurnRoute.REPLAN_REQUIRED
-        if effective_action in REPAIR_ACTIONS or effective_action.endswith(
-            ("_repair", "_repair_required")
-        ):
+        if registered_action in REPAIR_ACTIONS:
             return LoopXTurnRoute.REPAIR_REQUIRED
-        return LoopXTurnRoute.READY_FOR_HOST
+        if effective_action in HOST_EXECUTION_ACTIONS:
+            return LoopXTurnRoute.READY_FOR_HOST
+        return unregistered_route(effective_action)
     if user.get("action_required") is True:
         return LoopXTurnRoute.USER_ACTION_REQUIRED
     if action.get("quiet_noop_allowed") is True:
@@ -167,7 +237,15 @@ def _session_plan(
     lineage: Mapping[str, str],
     session_binding: Mapping[str, Any] | None,
     iteration_context_policy: str,
+    session_scope: str = "agent",
 ) -> tuple[dict[str, Any], str | None]:
+    identity_fields = session_identity_fields(session_scope)
+    context_policy = {
+        "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
+        "mode": iteration_context_policy,
+        "scope": "iteration",
+        **({"binding_scope": session_scope} if session_scope != "todo" else {}),
+    }
     host_route = route in {
         LoopXTurnRoute.READY_FOR_HOST,
         LoopXTurnRoute.REPAIR_REQUIRED,
@@ -178,11 +256,7 @@ def _session_plan(
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "none",
             "binding_status": "not_applicable",
-            "context_policy": {
-                "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-                "mode": iteration_context_policy,
-                "scope": "iteration",
-            },
+            "context_policy": context_policy,
         }, None
     if not all(lineage.values()):
         return {
@@ -198,11 +272,7 @@ def _session_plan(
             "binding_status": (
                 "existing_binding_ignored" if session_binding else "not_found"
             ),
-            "context_policy": {
-                "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-                "mode": "fresh",
-                "scope": "iteration",
-            },
+            "context_policy": context_policy,
         }, None
 
     binding = dict(session_binding or {})
@@ -210,11 +280,7 @@ def _session_plan(
         return {
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "start_new",
-            "context_policy": {
-                "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-                "mode": "resume_if_available",
-                "scope": "iteration",
-            },
+            "context_policy": context_policy,
         }, None
     if binding.get("schema_version") != LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION:
         return {
@@ -223,7 +289,6 @@ def _session_plan(
             "binding_status": "unsupported_schema",
         }, "unsupported LoopX Turn session binding schema"
 
-    identity_fields = ("goal_id", "agent_id", "todo_id")
     actual = {field: str(binding.get(field) or "") for field in identity_fields}
     expected = {field: lineage[field] for field in identity_fields}
     if actual != expected:
@@ -231,16 +296,12 @@ def _session_plan(
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "reject",
             "binding_status": "identity_mismatch",
-        }, "session binding does not match the current goal, agent, and todo"
+        }, "session binding does not match the current " + ", ".join(identity_fields)
     return {
         "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
         "action": "resume",
         "binding_status": "compatible",
-        "context_policy": {
-            "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-            "mode": "resume_if_available",
-            "scope": "iteration",
-        },
+        "context_policy": context_policy,
     }, None
 
 
@@ -254,11 +315,13 @@ def reconcile_failed_turn_session_request(
     envelope = _mapping(request.get("turn_envelope"))
     selected_todo = selected_turn_todo(envelope)
     lineage = _turn_lineage(envelope, selected_todo=selected_todo)
+    planned_session = _mapping(request.get("session"))
     session, session_error = _session_plan(
         route=LoopXTurnRoute.READY_FOR_HOST,
         lineage=lineage,
         session_binding=session_binding,
-        iteration_context_policy="resume_if_available",
+        iteration_context_policy="resume",
+        session_scope=str(_mapping(planned_session.get("context_policy")).get("binding_scope") or "todo"),
     )
     if session_error:
         status = str(session.get("binding_status") or "")
@@ -277,7 +340,6 @@ def reconcile_failed_turn_session_request(
             "failed-Turn recovery requires a compatible persisted session binding",
         )
 
-    planned_session = _mapping(request.get("session"))
     planned_action = str(planned_session.get("action") or "")
     if planned_action not in {"start_new", "resume"}:
         raise FailedTurnSessionRecoveryError(
@@ -380,7 +442,9 @@ def build_loopx_turn_plan(
     scheduler_owner: str | None = None,
     session_binding: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
-    iteration_context_policy: str = "resume_if_available",
+    iteration_context_policy: str = "resume",
+    session_scope: str | None = None,
+    goal_ref: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Project a TurnEnvelope into a typed, side-effect-free host decision."""
 
@@ -390,8 +454,13 @@ def build_loopx_turn_plan(
         raise ValueError(f"unsupported LoopX Turn execution mode: {execution_mode}")
     if iteration_context_policy not in SUPPORTED_ITERATION_CONTEXT_POLICIES:
         raise ValueError(
-            "iteration context policy must be fresh or resume_if_available"
+            "iteration context policy must be fresh or resume"
         )
+    if session_scope is None:
+        session_scope = "agent" if host == "codex-cli" else "todo"
+    session_identity_fields(session_scope)
+    if session_scope != "todo" and host != "codex-cli":
+        raise ValueError("agent session scope requires the codex-cli host")
 
     execution_context = scheduler_execution_context_for_turn(
         host=host,
@@ -405,12 +474,18 @@ def build_loopx_turn_plan(
         else LoopXTurnRoute.CONTRACT_ERROR
     )
     selected_todo = selected_turn_todo(envelope)
+    # Replanning an empty frontier is valid, but this Host executor settles
+    # against a Todo. Preserve the replan packet for the controller to resolve;
+    # do not turn the absence of a successor into a malformed Host session.
+    if route is LoopXTurnRoute.REPLAN_REQUIRED and not selected_todo:
+        route = LoopXTurnRoute.BLOCKED
     lineage = _turn_lineage(envelope, selected_todo=selected_todo)
     session, session_error = _session_plan(
         route=route,
         lineage=lineage,
         session_binding=session_binding,
         iteration_context_policy=iteration_context_policy,
+        session_scope=session_scope,
     )
     if session_error:
         route = LoopXTurnRoute.CONTRACT_ERROR
@@ -431,6 +506,7 @@ def build_loopx_turn_plan(
         scheduler_owner=str(context_projection.get("scheduler_owner") or ""),
         session_action=str(session.get("action") or "none"),
         turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
     )
     execution_topology = build_subagent_execution_topology(
         turn_envelope=envelope,
@@ -496,6 +572,8 @@ def build_loopx_turn_plan(
             payload["delegation_context"] = context
     if execution_topology:
         payload["subagent_execution_topology"] = execution_topology
+    if goal_ref is not None:
+        payload["goal_ref"] = dict(goal_ref)
     if route is LoopXTurnRoute.CAPABILITY_ACTION_REQUIRED:
         payload["capability_action"] = {
             "status": "required",

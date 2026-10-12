@@ -34,21 +34,52 @@ def opaque_digest(*values: Any) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:32]
 
 
-def manager_failure_reply(error: Exception) -> tuple[str, str]:
+def manager_failure_reply(
+    error: Exception | Mapping[str, Any], *, retry_info: Any = None,
+) -> tuple[str, str]:
     labels = {
         "cyber_policy": "上游安全策略拦截",
         "misalignment_policy_violation": "上游策略拦截",
         "usage_limit_exceeded": "上游用量限制",
         "rate_limit_exceeded": "上游请求频率限制",
+        "server_overloaded": "当前模型繁忙",
+        "upstream_transport_failure": "上游响应连接失败",
+        "session_queue_expired": "排队请求已过期",
         "context_window_exceeded": "上下文超限",
         "unauthorized": "上游身份验证失败",
         "idle_timeout": "等待上游响应超时",
         "hard_timeout": "处理超过时间限制",
         "interrupted": "处理已中断",
         "manager_authorization_unavailable": "当前连接的授权范围不可用",
+        # host_gate is a generic host failure. It does not establish whether
+        # quota, authentication, configuration, or another host condition failed.
+        "host_gate": "执行器未能完成本次调用，请检查管家执行器的具体错误",
+        "upstream_invalid_request": "上游拒绝了请求参数，请检查所选模型与 Codex CLI、账户的兼容性",
+        "server_restarted": "管家服务在处理过程中重启",
+        "runtime_unavailable": "本地运行环境初始化失败，请检查 LoopX 安装与运行配置，修复后重试",
+        "resume_failed": "原 Agent 会话恢复失败，请检查执行器状态，修复后重试",
+        "manager_channel_executor_rebind_required": (
+            "管家的执行器已由本机设置更改，需要重新应用一次管家连接"
+        ),
+        "manager_channel_route_reconcile_failed": (
+            "管家连接自动重绑未能完成，旧连接已保留；请在连接设置中查看修复状态"
+        ),
     }
-    code = str(getattr(error, "error_code", ""))
+    code = str(
+        error.get("error_code", "")
+        if isinstance(error, Mapping)
+        else getattr(error, "error_code", "")
+    )
     code = code if code in labels else "processing_failed"
+    # Old hosts can terminate with `other` after typed disconnect retries.
+    # Describe that observed history without changing the terminal category,
+    # inferring an authorization failure, or granting permission to replay.
+    if (code == "host_gate" and isinstance(retry_info, Mapping)
+            and set(retry_info) == {"responseStreamDisconnected"}
+            and isinstance(retry_info["responseStreamDisconnected"], Mapping)):
+        return code, "上游响应流曾中断，自动重试后本轮仍未完成。没有生成完整答复，本次请求不会自动重放。"
+    if code == "server_overloaded":
+        return code, "当前模型繁忙，本轮未完成。请先查看 /status 与已有结果，再决定是否稍后重试；本次请求不会自动重放。"
     return code, f"已收到你的消息，但本次未能完成：{labels.get(code, '管家处理失败')}。没有生成完整答复，本次请求不会自动重放。"
 
 
@@ -92,6 +123,7 @@ def _context_candidates(
                 "message_id": message_id,
                 "create_time": str(raw.get("create_time") or "")[:40],
                 "content": content,
+                **{key: str(raw[key]) for key in ("sender_type", "sender_id") if raw.get(key)},
             }
         )
     candidates.sort(key=lambda item: (item["create_time"], item["message_id"]))
@@ -343,7 +375,7 @@ def manager_context_projection(
     return projection, retention
 
 
-def manager_message(text: str, materials: object) -> str:
+def manager_message(text: str, materials: object, *, reply_context: str = "") -> str:
     current = str(text or "").strip()
     context = materials if isinstance(materials, list) else []
     lines = [
@@ -351,6 +383,8 @@ def manager_message(text: str, materials: object) -> str:
         "对已有授权的意图委托使用 context_handoff，直接交给目标 Agent 自主判断并推进，"
         "不要添加确认或直接替它改优先级。"
     ]
+    if reply_context:
+        lines.extend(["", reply_context])
     if context:
         lines.extend(
             [
@@ -363,7 +397,13 @@ def manager_message(text: str, materials: object) -> str:
             if isinstance(item, Mapping):
                 content = " ".join(str(item.get("content") or "").split())
                 if content:
-                    lines.append(f"- [context-only] {content}")
+                    material = {
+                        key: item[key] for key in
+                        ("message_id", "create_time", "sender_type", "sender_id")
+                        if item.get(key)
+                    }
+                    material["content"] = content
+                    lines.append("- [context-only] " + json.dumps(material, ensure_ascii=False))
     lines.extend(["", "已授权用户消息：" + current])
     return "\n".join(lines)
 

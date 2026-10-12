@@ -1,14 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import json
-import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
-
-from ..chat_action_store import ChatActionStore
-from ..chat_actions import ChatActionService
 
 from ..extensions.lark import (
     LARK_EXTENSION_ID,
@@ -19,7 +14,6 @@ from ..extensions.lark.goal_channel import (
     configure_lark_goal_channel_automation,
     default_goal_channel_binding_path,
     default_goal_channel_target_path,
-    deliver_goal_channel_operation_card,
     doctor_lark_goal_channel,
     goal_channel_target_for_name,
     list_goal_channel_targets,
@@ -29,7 +23,11 @@ from ..extensions.lark.goal_channel import (
     setup_lark_goal_channel,
     sync_lark_goal_channel,
 )
-from ..extensions.lark.goal_channel_contracts import binding_for_goal, operation_packet
+from ..extensions.lark.goal_channel_contracts import (
+    binding_for_goal,
+    notification_request_snapshot,
+    operation_packet,
+)
 from ..extensions.lark.goal_topic_batch import upgrade_lark_goal_topics
 from ..extensions.runtime import (
     default_extension_state_file,
@@ -41,6 +39,11 @@ from ..control_plane.runtime.runtime_projection_route import (
 from .goal_channel_runtime import (
     register_goal_channel_runtime_commands,
     run_goal_channel_runtime,
+)
+from .goal_channel_operation import (
+    GoalChannelOperationContext,
+    register_goal_channel_operation_commands,
+    run_goal_channel_operation,
 )
 from ..history import load_registry
 from ..paths import registry_project_root, resolve_runtime_root
@@ -56,7 +59,7 @@ OutputFormat = Callable[[argparse.Namespace], str]
 
 
 def register_goal_channel_commands(
-    subparsers: argparse._SubParsersAction,
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     parser = subparsers.add_parser(
@@ -171,6 +174,21 @@ def register_goal_channel_commands(
         action="store_false",
         help="Disable automatic human gate notifications.",
     )
+    automation.add_argument(
+        "--auto-notify-blocked-notices",
+        dest="auto_notify_blocked_notices",
+        action="store_true",
+        help="Send new or materially changed blocked Todo notices to the Goal Channel.",
+    )
+    automation.add_argument(
+        "--no-auto-notify-blocked-notices",
+        dest="auto_notify_blocked_notices",
+        action="store_false",
+        help="Disable automatic blocked Todo notices.",
+    )
+    configure.set_defaults(
+        auto_notify_human_gates=None, auto_notify_blocked_notices=None
+    )
     configure.add_argument("--execute", action="store_true")
 
     doctor = sub.add_parser(
@@ -207,32 +225,11 @@ def register_goal_channel_commands(
     )
     notify.add_argument("--execute", action="store_true")
 
-    prepare = sub.add_parser(
-        "prepare-operation",
-        help=(
-            "Validate and persist one canonical typed-operation proposal. "
-            "Dry-run unless --execute."
-        ),
+    register_goal_channel_operation_commands(
+        sub,
+        add_subcommand_format,
+        _add_common_args,
     )
-    add_subcommand_format(prepare)
-    _add_common_args(prepare)
-    prepare.add_argument("--agent-id", required=True)
-    prepare.add_argument("--summary", required=True)
-    prepare.add_argument("--idempotency-key", required=True)
-    prepare.add_argument("--request-json", required=True)
-    prepare.add_argument("--execute", action="store_true")
-
-    deliver = sub.add_parser(
-        "deliver-operation",
-        help=(
-            "Deliver one canonical typed-operation confirmation card through "
-            "the bound project Bot. Dry-run unless --execute."
-        ),
-    )
-    add_subcommand_format(deliver)
-    _add_common_args(deliver)
-    deliver.add_argument("--proposal-id", required=True)
-    deliver.add_argument("--execute", action="store_true")
 
     register_goal_channel_runtime_commands(sub, add_subcommand_format)
 
@@ -253,8 +250,11 @@ def _error_packet(
     execute: bool,
     blocker: str,
     summary: str,
+    external_write_performed: bool = False,
+    failure_stage: str | None = None,
+    details: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    packet: dict[str, object] = {
         "schema_version": "loopx_goal_channel_operation_v0",
         "ok": False,
         "goal_id": goal_id,
@@ -262,7 +262,7 @@ def _error_packet(
         "operation": operation,
         "execute": execute,
         "status": "blocked",
-        "external_write_performed": False,
+        "external_write_performed": external_write_performed,
         "readback_verified": False,
         "idempotency_key": None,
         "receipt_id": None,
@@ -270,6 +270,11 @@ def _error_packet(
         "private_provider_payload_captured": False,
         "blocker": blocker,
     }
+    if failure_stage:
+        packet["failure_stage"] = failure_stage
+    if details:
+        packet["details"] = dict(details)
+    return packet
 
 
 def _target_path(args: argparse.Namespace, runtime_root: Path) -> Path:
@@ -434,87 +439,16 @@ def _quota_packet(
         limit=20,
         goal_id=goal_id,
     )
-    return build_quota_should_run(
+    packet = build_quota_should_run(
         status,
         goal_id=goal_id,
         agent_id=agent_id,
     )
-
-
-def _prepare_goal_channel_operation(
-    *,
-    registry_path: Path,
-    runtime_root: Path,
-    goal_id: str,
-    agent_id: str,
-    summary: str,
-    idempotency_key: str,
-    request_path: Path,
-    execute: bool,
-) -> dict[str, Any]:
-    request = json.loads(request_path.read_text(encoding="utf-8"))
-    if not isinstance(request, dict):
-        raise ValueError("operation request JSON must be an object")
-    parameters = {**request, "goal_id": goal_id, "agent_id": agent_id}
-
-    def preview(store_root: Path) -> dict[str, Any]:
-        return ChatActionService(
-            store=ChatActionStore(store_root),
-            registry_path=registry_path,
-        ).preview(
-            {
-                "action_kind": "operation.execute",
-                "summary": summary,
-                "idempotency_key": idempotency_key,
-                "context": {"kind": "goal", "goal_id": goal_id},
-                "normalized_parameters": parameters,
-            }
-        )
-
-    durable_store_root = runtime_root / "chat" / "actions"
-    if execute:
-        proposal = preview(durable_store_root)
-        readback = ChatActionStore(durable_store_root).load(
-            str(proposal["proposal_id"])
-        )
-        readback_verified = bool(
-            readback is not None
-            and readback.get("request_digest") == proposal.get("request_digest")
-            and readback.get("operation") == proposal.get("operation")
-        )
-        if not readback_verified:
-            raise ValueError("operation proposal durable readback did not match")
-    else:
-        with tempfile.TemporaryDirectory(prefix="loopx-operation-preview-") as root:
-            proposal = preview(Path(root) / "actions")
-        readback_verified = False
-    operation = proposal.get("operation")
-    if not isinstance(operation, Mapping):
-        raise ValueError("operation preview did not produce a canonical envelope")
-    return operation_packet(
-        ok=True,
-        goal_id=goal_id,
-        operation="prepare_operation",
-        execute=execute,
-        status="awaiting_confirmation" if execute else "preview_ready",
-        public_summary=(
-            "persisted one canonical operation awaiting card delivery"
-            if execute
-            else "validated one canonical operation proposal without persistence"
-        ),
-        external_write_performed=False,
-        readback_verified=readback_verified,
-        idempotency_key=idempotency_key,
-        receipt_id=str(proposal["proposal_id"]) if execute else None,
-        details={
-            "operation_id": str(proposal["proposal_id"]) if execute else None,
-            "lifecycle_state": operation["lifecycle_state"],
-            "confirmation_digest": operation["confirmation_digest"],
-            "payload_digest": operation["payload_digest"],
-            "projection_digest": operation["projection_digest"],
-            "durable_proposal_written": execute,
-        },
-    )
+    # Transport adapter: retain the complete same-read Todo projection only
+    # for this notification. Quota's 180-character hot path stays unchanged;
+    # the shared TS presentation owner checks identity/version/lifecycle.
+    packet["request_snapshot"] = notification_request_snapshot(status, goal_id)
+    return packet
 
 
 def handle_goal_channel_command(
@@ -548,7 +482,31 @@ def handle_goal_channel_command(
         )
         print_payload(payload, output_format(args), render_goal_channel_markdown)
         return 0 if payload.get("ok") else 1
-    if command == "configure" and bool(args.auto_notify_human_gates):
+    if command in {"inspect-operation", "consume-operation", "report-operation"}:
+        # Original-Agent continuations do not call Lark. They must remain
+        # readable/settleable even if that transport extension is unavailable.
+        assert goal_id is not None
+        _, source_path, source_binding, source_root = _source_context(
+            registry=registry,
+            registry_path=registry_path,
+            goal_id=goal_id,
+        )
+        payload = run_goal_channel_operation(
+            args,
+            context=GoalChannelOperationContext(
+                invoked_runtime_root=runtime_root,
+                source_registry_path=source_path,
+                source_runtime_root=source_root,
+                binding_path=source_binding,
+            ),
+        )
+        assert payload is not None
+        print_payload(payload, output_format(args), render_goal_channel_markdown)
+        return 0 if payload.get("ok") else 1
+    if command == "configure" and (
+        args.auto_notify_human_gates is True
+        or getattr(args, "auto_notify_blocked_notices", None) is True
+    ):
         assert goal_id is not None
         _, source_registry_path, binding_path, _ = _source_context(
             registry=registry,
@@ -562,7 +520,10 @@ def handle_goal_channel_command(
         default_binding_path = None
     if (
         command == "configure"
-        and bool(args.auto_notify_human_gates)
+        and (
+            args.auto_notify_human_gates is True
+            or getattr(args, "auto_notify_blocked_notices", None) is True
+        )
         and binding_path is not None
         and default_binding_path is not None
         and binding_path.resolve() != default_binding_path.resolve()
@@ -573,13 +534,16 @@ def handle_goal_channel_command(
             execute=execute,
             blocker="noncanonical_binding_path",
             summary=(
-                "automatic human gate delivery requires the project-local "
+                "automatic Goal Channel delivery requires the project-local "
                 "default Goal Channel binding"
             ),
         )
         print_payload(payload, output_format(args), render_goal_channel_markdown)
         return 1
-    if command == "configure" and not bool(args.auto_notify_human_gates):
+    if command == "configure" and (
+        args.auto_notify_human_gates is False
+        or getattr(args, "auto_notify_blocked_notices", None) is False
+    ):
         assert goal_id is not None
         source_registry, _, binding_path, _ = _source_context(
             registry=registry,
@@ -592,7 +556,10 @@ def handle_goal_channel_command(
                 registry=source_registry,
                 goal_id=goal_id,
                 binding_path=binding_path,
-                human_gate_auto_notify=False,
+                human_gate_auto_notify=args.auto_notify_human_gates,
+                blocked_notice_auto_notify=getattr(
+                    args, "auto_notify_blocked_notices", None
+                ),
                 execute=execute,
             )
         except Exception:
@@ -680,122 +647,116 @@ def handle_goal_channel_command(
                     goal_id=goal_id,
                     binding_path_arg=getattr(args, "binding_path", None),
                 )
-                if command == "deliver-operation":
-                    target_path = _target_path(args, source_runtime_root)
-                target_name = str(getattr(args, "target", None) or "")
-                if not target_name:
-                    target_name = _binding_target_name(binding_path, goal_id)
-                provider_target = (
-                    _provider_target(
-                        target_path=target_path,
-                        target_name=target_name,
-                    )
-                    if target_name
-                    else None
+                operation_payload = run_goal_channel_operation(
+                    args,
+                    context=GoalChannelOperationContext(
+                        invoked_runtime_root=runtime_root,
+                        source_registry_path=source_registry_path,
+                        source_runtime_root=source_runtime_root,
+                        binding_path=binding_path,
+                    ),
                 )
-                if command == "upgrade":
-                    payload = upgrade_lark_goal_topics(
-                        registry=source_registry,
-                        registry_path=source_registry_path,
-                        goal_id=goal_id,
-                        binding_path=binding_path,
-                        target_path=target_path,
-                        connection_id=args.connection_id,
-                        agent_id=args.agent_id,
-                        execute=execute,
-                    )
-                elif target_name and provider_target is None:
-                    payload = _error_packet(
-                        goal_id=goal_id,
-                        operation=command.replace("-", "_"),
-                        execute=execute,
-                        blocker="provider_target_missing",
-                        summary="configure the named shared provider target first",
-                    )
-                elif command == "setup":
-                    payload = setup_lark_goal_channel(
-                        registry=source_registry,
-                        registry_path=source_registry_path,
-                        goal_id=goal_id,
-                        binding_path=binding_path,
-                        target_name=target_name or None,
-                        provider_target=provider_target,
-                        chat_id=args.chat_id,
-                        chat_name=args.chat_name,
-                        base_url=args.base_url,
-                        base_token=args.base_token,
-                        table_id=args.table_id,
-                        identity_mode=args.identity_mode,
-                        sender_profile=args.sender_profile,
-                        sender_identity=args.sender_identity,
-                        bot_app_id=getattr(args, "bot_app_id", None),
-                        bot_display_name=args.bot_display_name,
-                        cli_bin=args.cli_bin,
-                        execute=execute,
-                    )
-                elif command == "configure":
-                    payload = configure_lark_goal_channel_automation(
-                        registry=source_registry,
-                        goal_id=goal_id,
-                        binding_path=binding_path,
-                        human_gate_auto_notify=bool(args.auto_notify_human_gates),
-                        execute=execute,
-                    )
-                elif command == "doctor":
-                    payload = doctor_lark_goal_channel(
-                        registry=source_registry,
-                        registry_path=source_registry_path,
-                        goal_id=goal_id,
-                        binding_path=binding_path,
-                        provider_target=provider_target,
-                    )
-                elif command == "sync":
-                    payload = sync_lark_goal_channel(
-                        registry=source_registry,
-                        registry_path=source_registry_path,
-                        goal_id=goal_id,
-                        binding_path=binding_path,
-                        provider_target=provider_target,
-                        agent_id=args.agent_id,
-                        execute=execute,
-                    )
-                elif command == "notify-gate":
-                    payload = notify_lark_goal_channel_gate(
-                        registry=source_registry,
-                        goal_id=goal_id,
-                        binding_path=binding_path,
-                        provider_target=provider_target,
-                        quota_packet=_quota_packet(
-                            registry_path=registry_path,
-                            runtime_root_arg=runtime_root_arg,
-                            goal_id=goal_id,
-                            agent_id=args.agent_id,
-                        ),
-                        execute=execute,
-                    )
-                elif command == "prepare-operation":
-                    payload = _prepare_goal_channel_operation(
-                        registry_path=source_registry_path,
-                        runtime_root=source_runtime_root,
-                        goal_id=goal_id,
-                        agent_id=args.agent_id,
-                        summary=args.summary,
-                        idempotency_key=args.idempotency_key,
-                        request_path=Path(str(args.request_json)).expanduser(),
-                        execute=execute,
-                    )
-                elif command == "deliver-operation":
-                    payload = deliver_goal_channel_operation_card(
-                        proposal_id=args.proposal_id,
-                        action_store_root=source_runtime_root / "chat" / "actions",
-                        runtime_root=source_runtime_root,
-                        binding_path=binding_path,
-                        target_path=target_path,
-                        expected_goal_id=goal_id,
-                        execute=execute,
-                    )
+                if operation_payload is not None:
+                    payload = operation_payload
                 else:
-                    raise ValueError(f"unknown goal-channel command: {command}")
+                    target_name = str(getattr(args, "target", None) or "")
+                    if not target_name:
+                        target_name = _binding_target_name(binding_path, goal_id)
+                    provider_target = (
+                        _provider_target(
+                            target_path=target_path,
+                            target_name=target_name,
+                        )
+                        if target_name
+                        else None
+                    )
+                    if command == "upgrade":
+                        payload = upgrade_lark_goal_topics(
+                            registry=source_registry,
+                            registry_path=source_registry_path,
+                            goal_id=goal_id,
+                            binding_path=binding_path,
+                            target_path=target_path,
+                            connection_id=args.connection_id,
+                            agent_id=args.agent_id,
+                            execute=execute,
+                        )
+                    elif target_name and provider_target is None:
+                        payload = _error_packet(
+                            goal_id=goal_id,
+                            operation=command.replace("-", "_"),
+                            execute=execute,
+                            blocker="provider_target_missing",
+                            summary="configure the named shared provider target first",
+                        )
+                    elif command == "setup":
+                        payload = setup_lark_goal_channel(
+                            registry=source_registry,
+                            registry_path=source_registry_path,
+                            goal_id=goal_id,
+                            binding_path=binding_path,
+                            target_name=target_name or None,
+                            provider_target=provider_target,
+                            chat_id=args.chat_id,
+                            chat_name=args.chat_name,
+                            base_url=args.base_url,
+                            base_token=args.base_token,
+                            table_id=args.table_id,
+                            identity_mode=args.identity_mode,
+                            sender_profile=args.sender_profile,
+                            sender_identity=args.sender_identity,
+                            bot_app_id=getattr(args, "bot_app_id", None),
+                            bot_display_name=args.bot_display_name,
+                            cli_bin=args.cli_bin,
+                            execute=execute,
+                        )
+                    elif command == "configure":
+                        payload = configure_lark_goal_channel_automation(
+                            registry=source_registry,
+                            goal_id=goal_id,
+                            binding_path=binding_path,
+                            human_gate_auto_notify=args.auto_notify_human_gates,
+                            blocked_notice_auto_notify=getattr(
+                                args, "auto_notify_blocked_notices", None
+                            ),
+                            execute=execute,
+                        )
+                    elif command == "doctor":
+                        payload = doctor_lark_goal_channel(
+                            registry=source_registry,
+                            registry_path=source_registry_path,
+                            goal_id=goal_id,
+                            binding_path=binding_path,
+                            provider_target=provider_target,
+                        )
+                    elif command == "sync":
+                        payload = sync_lark_goal_channel(
+                            registry=source_registry,
+                            registry_path=source_registry_path,
+                            goal_id=goal_id,
+                            binding_path=binding_path,
+                            provider_target=provider_target,
+                            agent_id=args.agent_id,
+                            execute=execute,
+                        )
+                    elif command == "notify-gate":
+                        payload = notify_lark_goal_channel_gate(
+                            registry=source_registry,
+                            goal_id=goal_id,
+                            binding_path=binding_path,
+                            provider_target=provider_target,
+                            quota_packet=_quota_packet(
+                                registry_path=registry_path,
+                                runtime_root_arg=runtime_root_arg,
+                                goal_id=goal_id,
+                                agent_id=args.agent_id,
+                            ),
+                            execute=execute,
+                            registry_path=source_registry_path,
+                            runtime_root=runtime_root,
+                        )
+                    else:
+                        raise ValueError(f"unknown goal-channel command: {command}")
             if payload.get("ok"):
                 payload["extension_activation"] = activation
         except ValueError:

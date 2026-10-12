@@ -16,7 +16,6 @@ from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .release_manifest import release_runtime_identity
 
 
-CHAT_CAPABILITIES_PATH = "/api/chat/capabilities"
 DASHBOARD_CHAT_PATH = "/chat/"
 EXPECTED_CHAT_SCHEMA_VERSION = "loopx_chat_capabilities_v1"
 CHAT_PROBE_TIMEOUT_SECONDS = 0.75
@@ -48,6 +47,11 @@ def _probe_existing_chat(
     top-level capability fingerprint and release identity must match so a
     mismatched frontend/backend pair is never silently reused.
     """
+    # Imported here rather than at module level: the launcher probes a port that
+    # may hold no LoopX process at all, and the server module's import graph
+    # costs ~110ms on this path.
+    from .chat_server import CHAT_CAPABILITIES_PATH
+
     try:
         connection = http.client.HTTPConnection(
             host,
@@ -100,7 +104,7 @@ def _listener_pids(port: int) -> list[int]:
         result = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -125,7 +129,7 @@ def _is_same_user_loopx_chat_process(pid: int) -> bool:
         result = subprocess.run(
             ["ps", "-ww", "-p", str(pid), "-o", "uid=", "-o", "command="],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -229,6 +233,10 @@ def launch_dashboard(
             cwd=release_root,
             env=environment,
         )
+
+    if assets_dir is None:
+        from .presentation.chat_bundle import validate_bundle
+        validate_bundle(default_packaged_assets_dir(), source_root=Path(__file__).resolve().parents[1])
 
     existing_chat = _probe_existing_chat(
         host,

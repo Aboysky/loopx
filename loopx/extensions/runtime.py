@@ -12,12 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from ..file_lock import exclusive_file_lock
+from ..paths import select_default_runtime_root
 from .manifest import load_extension_manifest
 from .process_runtime import run_capped_process
 from .runtime_location import located_runtime, probe_runtime_location, record_runtime_location
 from .readiness import (
     EXTENSION_DOCTOR_SCHEMA_VERSION,
     ResolvedRuntimeEntrypoint,
+    declared_view_validators,
     extension_runtime,
     resolve_runtime_entrypoint,
     runtime_process_environment,
@@ -31,6 +33,8 @@ EXTENSION_ACTIVATION_SCHEMA_VERSION = "loopx_extension_activation_v0"
 EXTENSION_RUN_SCHEMA_VERSION = "loopx_extension_run_receipt_v0"
 EXTENSION_DOCTOR_BATCH_SCHEMA_VERSION = "loopx_extension_doctor_batch_v0"
 MAX_REVISIONS = 5
+# Requalification is required on eviction; unprobed artifacts never activate.
+MAX_VERIFIED_ENTRYPOINTS = 32
 MAX_EXTENSION_REQUEST_BYTES = 1_000_000
 MAX_EXTENSION_RESPONSE_BYTES = 1_000_000
 
@@ -69,7 +73,7 @@ def default_extension_state_file(runtime_root: str | Path | None = None) -> Path
     root = (
         Path(runtime_root).expanduser()
         if runtime_root is not None
-        else Path.home() / ".codex" / "loopx"
+        else select_default_runtime_root()
     )
     return root / "extensions" / "state.json"
 
@@ -163,6 +167,38 @@ def _retain_revisions(
     return retained
 
 
+def _verified_identities(entry: Mapping[str, Any], revision: str) -> list[str]:
+    if entry.get("doctor_verified_revision") != revision:
+        return []
+    identities = entry.get("doctor_verified_entrypoint_identities")
+    if identities is None:
+        # Read legacy state without rewriting it during status/activation.
+        identities = [entry.get("doctor_verified_entrypoint_identity")]
+    if not isinstance(identities, list):
+        return []
+    return list(dict.fromkeys(
+        identity for identity in identities if isinstance(identity, str) and identity
+    ))[-MAX_VERIFIED_ENTRYPOINTS:]
+
+
+def _record_doctor(entry: dict[str, Any], revision: str, doctor: Mapping[str, Any]) -> None:
+    identities = _verified_identities(entry, revision)
+    identity = doctor.get("probed_entrypoint_identity")
+    if doctor.get("verified") is True:
+        identity = doctor.get("entrypoint_identity")
+    if isinstance(identity, str) and identity:
+        identities = [value for value in identities if value != identity]
+        if doctor.get("verified") is True:
+            identities.append(identity)
+    entry.pop("doctor_verified_entrypoint_identity", None)
+    if identities:
+        entry["doctor_verified_revision"] = revision
+        entry["doctor_verified_entrypoint_identities"] = identities[-MAX_VERIFIED_ENTRYPOINTS:]
+    else:
+        entry.pop("doctor_verified_revision", None)
+        entry.pop("doctor_verified_entrypoint_identities", None)
+
+
 def install_extension(
     manifest_path: str | Path,
     *,
@@ -219,10 +255,9 @@ def install_extension(
                 "enabled": True,
                 "active_revision": revision,
                 "rollback_revision": previous_revision,
-                "doctor_verified_revision": revision,
-                "doctor_verified_entrypoint_identity": doctor["entrypoint_identity"],
                 "revisions": revisions,
             }
+            _record_doctor(extensions[extension_id], revision, doctor)
             _write_state(path, state)
             changed = True
     return {
@@ -271,8 +306,7 @@ def enable_extension(
                 or bool(current_entry.get("enabled")) != already_enabled
             ):
                 raise ValueError("extension state changed during enable; retry")
-            current_entry.pop("doctor_verified_revision", None)
-            current_entry.pop("doctor_verified_entrypoint_identity", None)
+            _record_doctor(current_entry, active_revision, doctor)
             _write_state(path, current_state)
         raise ValueError(
             f"extension `{extension_id}` enable doctor is not ready: {doctor['status']}"
@@ -293,10 +327,7 @@ def enable_extension(
                 location=location, expected=snapshot.get("entrypoint_path"),
             )
             current_entry["enabled"] = True
-            current_entry["doctor_verified_revision"] = active_revision
-            current_entry["doctor_verified_entrypoint_identity"] = doctor[
-                "entrypoint_identity"
-            ]
+            _record_doctor(current_entry, active_revision, doctor)
             _write_state(path, current_state)
             changed = not already_enabled
     return {
@@ -386,10 +417,7 @@ def rollback_extension(
             )
             current_entry["active_revision"] = target_revision
             current_entry["rollback_revision"] = previous_revision
-            current_entry["doctor_verified_revision"] = target_revision
-            current_entry["doctor_verified_entrypoint_identity"] = doctor[
-                "entrypoint_identity"
-            ]
+            _record_doctor(current_entry, target_revision, doctor)
             current_entry["enabled"] = True
             _write_state(path, current_state)
     return {
@@ -485,13 +513,7 @@ def doctor_installed_extension(
                     _entry_for_revision(current_entry, active_revision),
                     location=location, expected=snapshot.get("entrypoint_path"),
                 )
-                current_entry["doctor_verified_revision"] = active_revision
-                current_entry["doctor_verified_entrypoint_identity"] = doctor[
-                    "entrypoint_identity"
-                ]
-            else:
-                current_entry.pop("doctor_verified_revision", None)
-                current_entry.pop("doctor_verified_entrypoint_identity", None)
+            _record_doctor(current_entry, active_revision, doctor)
             _write_state(path, current_state)
     return doctor
 
@@ -561,9 +583,12 @@ def _verified_entrypoint(
     if not isinstance(manifest, Mapping):
         return None
     runtime = located_runtime(manifest, snapshot.get("entrypoint_path"))
-    identity = resolve_runtime_entrypoint(runtime)
-    if identity is None or identity.identity != entry.get(
-        "doctor_verified_entrypoint_identity"
+    identity = resolve_runtime_entrypoint(
+        runtime,
+        view_validators=declared_view_validators(manifest),
+    )
+    if identity is None or identity.identity not in _verified_identities(
+        entry, active_revision
     ):
         return None
     return identity
@@ -587,6 +612,7 @@ def extension_catalog_entries(
 
     manifests: dict[str, Mapping[str, Any]] = {}
     lifecycle: dict[str, dict[str, Any]] = {}
+    manifest: Mapping[str, Any]
     for manifest_path in extension_manifest_paths:
         manifest = load_extension_manifest(manifest_path)
         extension_id = str(manifest["provider"]["id"])

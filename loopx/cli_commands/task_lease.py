@@ -4,8 +4,8 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
+from ..control_plane.work_items.local_lease_record import TaskLeaseError
 from ..control_plane.work_items.task_lease import (
-    TaskLeaseError,
     inspect_task_lease,
     release_task_lease,
     renew_task_lease,
@@ -17,6 +17,8 @@ from ..control_plane.work_items.task_lease_acquire_adapter import (
 )
 from ..file_lock import LockAcquireTimeoutError
 from ..presentation.markdown import append_operator_action_markdown
+from .action_help import install_action_help
+from .task_lease_arguments import LEASE_ACTION_FIELDS, TaskLeaseArgumentError, validate_task_lease_arguments
 
 
 PrintPayload = Callable[
@@ -36,6 +38,13 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
         lines.append(f"- error: {payload.get('error')}")
     if payload.get("error_code"):
         lines.append(f"- error_code: `{payload.get('error_code')}`")
+    recovery = payload.get("recovery")
+    if isinstance(recovery, dict):
+        import shlex
+        lines.append(f"- repair: `{shlex.join(['loopx', *recovery['cli_args']])}`")
+        lines.append(f"- supply: `{', '.join(recovery['requires_flags']) or 'none'}`")
+        lines.append(f"- remove: `{', '.join(recovery['remove_flags']) or 'none'}`")
+        lines.append(f"- {recovery['reason']}")
     lease = payload.get("lease")
     if isinstance(lease, dict):
         lines.extend(
@@ -48,10 +57,22 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
                 f"- status: `{lease.get('status')}`",
                 f"- expires_at: `{lease.get('expires_at')}`",
                 f"- write_scopes: `{', '.join(lease.get('write_scopes') or [])}`",
+                f"- write_repository: `{lease.get('write_repository') or 'unknown (conservative overlap)'}`",
             ]
         )
+    advisories = payload.get("integration_overlap_advisories")
+    if isinstance(advisories, list) and advisories:
+        lines.append("- Independent worktree path overlap: coordinate changes and validate integration before merge.")
+        for row in advisories:
+            if not isinstance(row, dict):
+                continue
+            lines.append(f"  - `{row['todo_id']}`: {', '.join(row['write_scopes'])}")
     if payload.get("lease_path"):
         lines.append(f"- lease_path: `{payload.get('lease_path')}`")
+    if payload.get("transfer_claim") is True:
+        lines.append(f"- committed claim owner: `{payload.get('claimed_by')}`")
+        lines.append(f"- Todo projection delivery: `{payload.get('projection_delivery')}`")
+        lines.append("- A replay reports the original handover; use task-lease inspect for current authority.")
     conflicts = payload.get("conflicts")
     if isinstance(conflicts, list) and conflicts:
         lines.append("- conflicts:")
@@ -61,6 +82,7 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
             lines.append(
                 f"  - `{conflict.get('todo_id')}` owner=`{conflict.get('owner')}` "
                 f"expires_at=`{conflict.get('expires_at')}` "
+                f"write_repository=`{conflict.get('write_repository') or 'unknown'}` "
                 f"write_scopes=`{', '.join(conflict.get('write_scopes') or [])}`"
             )
     append_operator_action_markdown(lines, payload)
@@ -68,7 +90,7 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
 
 
 def register_task_lease_command(
-    subparsers: argparse._SubParsersAction,
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     parser = subparsers.add_parser(
@@ -87,6 +109,8 @@ def register_task_lease_command(
     parser.add_argument("--idempotency-key", help="Public-safe token used for idempotent retries and CAS.")
     parser.add_argument("--new-owner", help="For transfer, target registered public-safe agent id.")
     parser.add_argument("--new-idempotency-key", help="For transfer, target idempotency key.")
+    parser.add_argument("--transfer-claim", action="store_true",
+        help="For transfer on canonical hard_lease authority, atomically move the source owner's Todo claim with its lease.")
     parser.add_argument(
         "--ttl-seconds",
         type=int,
@@ -98,6 +122,7 @@ def register_task_lease_command(
         action="append",
         help="Relative write scope protected by this lease, such as loopx/**. Repeatable.",
     )
+    parser.add_argument("--write-worktree", help="Independent Git worktree root for code-edit scopes (canonical File/SQLite). Sibling worktree overlaps are advisory; shared-state leases stay exclusive.")
     parser.add_argument(
         "--expected-version",
         type=int,
@@ -106,10 +131,9 @@ def register_task_lease_command(
             "renew, transfer, and release; optional for acquire."
         ),
     )
-
-
-def _requires_owner(args: argparse.Namespace) -> bool:
-    return args.task_lease_command in {"acquire", "renew", "transfer", "release"}
+    install_action_help(parser, command_dest="task_lease_command",
+                        action_fields=LEASE_ACTION_FIELDS,
+                        common_fields=frozenset({"goal_id", "todo_id", "subcommand_format"}))
 
 
 def handle_task_lease_command(
@@ -123,10 +147,7 @@ def handle_task_lease_command(
     if args.command != "task-lease":
         return None
     try:
-        if _requires_owner(args) and not args.owner:
-            raise ValueError("task-lease action requires --owner")
-        if _requires_owner(args) and not args.idempotency_key:
-            raise ValueError("task-lease action requires --idempotency-key")
+        validate_task_lease_arguments(args)
         runtime_root = runtime_root_from_registry(registry_path, runtime_root_arg)
         if args.task_lease_command == "acquire":
             payload = execute_native_task_lease_acquire(
@@ -137,12 +158,11 @@ def handle_task_lease_command(
                 todo_id=args.todo_id,
                 idempotency_key=args.idempotency_key,
                 write_scopes=args.write_scopes,
+                **({"write_worktree": args.write_worktree} if args.write_worktree is not None else {}),
                 ttl_seconds=args.ttl_seconds,
                 expected_version=args.expected_version,
             )
         elif args.task_lease_command == "renew":
-            if args.write_scopes:
-                raise ValueError("task-lease renew does not accept --write-scope")
             payload = renew_task_lease(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
@@ -154,10 +174,6 @@ def handle_task_lease_command(
                 expected_version=args.expected_version,
             )
         elif args.task_lease_command == "transfer":
-            if args.write_scopes:
-                raise ValueError("task-lease transfer does not accept --write-scope")
-            if not args.new_owner or not args.new_idempotency_key:
-                raise ValueError("task-lease transfer requires --new-owner and --new-idempotency-key")
             payload = transfer_task_lease(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
@@ -167,14 +183,11 @@ def handle_task_lease_command(
                 idempotency_key=args.idempotency_key,
                 new_owner=args.new_owner,
                 new_idempotency_key=args.new_idempotency_key,
+                transfer_claim=args.transfer_claim,
                 ttl_seconds=args.ttl_seconds,
                 expected_version=args.expected_version,
             )
         elif args.task_lease_command == "release":
-            if args.write_scopes:
-                raise ValueError("task-lease release does not accept --write-scope")
-            if args.ttl_seconds is not None:
-                raise ValueError("task-lease release does not accept --ttl-seconds")
             payload = release_task_lease(
                 runtime_root=runtime_root,
                 goal_id=args.goal_id,
@@ -185,27 +198,20 @@ def handle_task_lease_command(
                 registry_path=registry_path,
             )
         else:
-            unsupported = [
-                flag
-                for flag, value in (
-                    ("--owner", args.owner),
-                    ("--idempotency-key", args.idempotency_key),
-                    ("--new-owner", args.new_owner),
-                    ("--new-idempotency-key", args.new_idempotency_key),
-                    ("--ttl-seconds", args.ttl_seconds),
-                    ("--write-scope", args.write_scopes),
-                    ("--expected-version", args.expected_version),
-                )
-                if value
-            ]
-            if unsupported:
-                raise ValueError("task-lease inspect only accepts --goal-id and --todo-id; unsupported: " + ", ".join(unsupported))
             payload = inspect_task_lease(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
                 goal_id=args.goal_id,
                 todo_id=args.todo_id,
             )
+    except TaskLeaseArgumentError as exc:
+        payload = {
+            "ok": False, "schema_version": "task_lease_v0",
+            "action": args.task_lease_command, "error": str(exc),
+            "error_code": "ValueError",
+            "recovery": exc.recovery(args, registry_path=registry_path,
+                                     runtime_root_arg=runtime_root_arg),
+        }
     except TaskLeaseError as exc:
         payload = {
             **exc.payload,

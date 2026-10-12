@@ -10,12 +10,15 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .agent_registry import normalize_registered_agents
+from .agent_registry import normalize_registered_agents, registered_agent_ids_for_goal
 from .boundary_authority import (
     build_checkpointed_boundary_authority_entry,
     checkpointed_boundary_authority_summary,
 )
+from .capabilities.pr_review_queue import goal_configuration as pr_review_config
 from .capabilities.change_quality import goal_configuration as change_quality_config
+from .capabilities.progress_review import goal_configuration as progress_review_config
+from .capabilities.goal_capability_organization import goal_configuration as improvement_config
 from .capabilities.change_quality.policy import change_quality_goal_policy_summary
 from .capabilities.machine_configuration.builtins import (
     builtin_machine_inheritable_goal_overrides,
@@ -24,6 +27,7 @@ from .capabilities.periodic_report import goal_configuration as periodic_report_
 from .capabilities.reward_memory.configuration import (
     apply_reward_memory_goal_configuration,
     plan_reward_memory_goal_configuration,
+    reward_memory_goal_configuration_summary,
     reward_memory_preflight_markdown_lines,
 )
 from .configuration_catalog import (
@@ -45,11 +49,14 @@ from .control_plane.agents.runtime_model import (
 )
 from .control_plane.agents.supervisor import normalize_peer_supervisor
 from .control_plane.agents.work_mode import normalize_agent_work_modes
-from .control_plane.coordination import local_authority_shadow_observation as shadow
+from .control_plane.coordination import configuration as shadow
 from .control_plane.coordination.configuration import normalize_goal_write_scope
 from .control_plane.operator_inbox_binding import local_private_config_digest
-from .control_plane.reward_memory import (
-    reward_memory_goal_policy_summary,
+from .control_plane.projects.registry_codec import (
+    ProjectRegistryTransaction,
+    load_project_registry,
+    project_registry_transaction,
+    require_runtime_compatible_project_registry,
 )
 from .control_plane.todos.contract import normalize_todo_claimed_by
 from .control_plane.todos.mutation_authority import (
@@ -59,7 +66,7 @@ from .execution_profile import (
     apply_goal_execution_profile_change,
     compact_execution_profile,
 )
-from .explore_graph import compact_explore_graph_policy
+from .explore_graph import compact_explore_graph_policy, explore_configuration, plan_explore_configuration
 from .orchestration import (
     EXPLORE_HARNESS_PROFILES,
     MULTI_SUBAGENT_ORCHESTRATION_MODE,
@@ -69,7 +76,7 @@ from .orchestration import (
     update_spawn_execution_policy,
 )
 from .quota import goal_quota_config
-from .registry import atomic_write_json, read_json, registry_goals
+from .registry import registry_goals
 
 WAITING_ON_CHOICES = (
     "codex",
@@ -239,9 +246,7 @@ def _settings_summary(goal: dict[str, Any]) -> dict[str, Any]:
         goal.get("coordination") if isinstance(goal.get("coordination"), dict) else {}
     )
     agent_model = agent_runtime_model_for_goal(goal)
-    registered_agents = normalize_registered_agents(
-        coordination.get("registered_agents")
-    )
+    registered_agents = registered_agent_ids_for_goal(goal)
     summary = {
         "execution_profile": compact_execution_profile(goal.get("execution_profile")),
         "quota": {
@@ -253,14 +258,17 @@ def _settings_summary(goal: dict[str, Any]) -> dict[str, Any]:
         "issue_fix_reviewer_notification": _reviewer_notification_config_summary(goal),
         "lark_event_inbox": _lark_event_inbox_config_summary(goal),
         "lark_kanban_heartbeat_sync": _lark_kanban_heartbeat_config_summary(goal),
-        "reward_memory": reward_memory_goal_policy_summary(goal),
+        "reward_memory": reward_memory_goal_configuration_summary(goal),
+        "pull_request_review": pr_review_config.configuration_summary(goal),
         "change_quality_qualification": change_quality_goal_policy_summary(goal),
-        "explore_graph": compact_explore_graph_policy(goal.get("explore_graph")),
+        "progress_review": progress_review_config.configuration_summary(goal),
+        "goal_capability_organization": improvement_config.configuration_summary(goal),
+        "explore_graph": compact_explore_graph_policy(goal.get("explore_graph"), orchestration.get("explore_harness")),
         "orchestration": orchestration,
         "waiting_on": goal.get("waiting_on"),
         "write_scope": normalize_goal_write_scope(coordination.get("write_scope") or [])
         or [],
-        "local_authority_shadow": shadow.local_authority_shadow_summary(goal),
+        **shadow.coordination_shadow_summaries(goal),
         "checkpointed_boundary_authority": checkpointed_boundary_authority_summary(
             coordination
         ),
@@ -429,15 +437,27 @@ def configure_goal(
     quota_window_hours: float | None = None,
     execution_turn_granularity: str | None = None,
     execution_replan_after_todos: int | None = None,
+    execution_replan_after_turns: int | None = None,
+    clear_execution_replan_after_turns: bool = False,
     clear_execution_replan_after_todos: bool = False,
     self_repair_enabled: bool | None = None,
     self_repair_health: bool | None = None,
     self_repair_waiting_projection: bool | None = None,
     periodic_report_configuration: Mapping[str, Any] | None = None, clear_periodic_report_configuration: bool = False,
+    pull_request_review_configuration: Mapping[str, Any] | None = None,
+    pull_request_review_agent_orders: Mapping[str, str | None] | None = None,
+    clear_pull_request_review_configuration: bool = False,
     change_quality_enabled: bool | None = None,
     change_quality_safe_fix: bool | None = None,
     change_quality_strict_receipt: bool | None = None,
     clear_change_quality_configuration: bool = False,
+    progress_review_mode: str | None = None,
+    progress_review_signal: str | None = None,
+    progress_review_drift_threshold: int | None = None,
+    progress_review_contract_revision: str | None = None,
+    clear_progress_review_configuration: bool = False,
+    capability_improvement_configuration: Mapping[str, Any] | None = None,
+    clear_capability_improvement_configuration: bool = False,
     multi_subagent_feature: str | None = None,
     orchestration_mode: str | None = None,
     spawn_allowed: bool | None = None,
@@ -445,12 +465,15 @@ def configure_goal(
     subagent_model: str | None = None,
     subagent_reasoning_effort: str | None = None,
     clear_subagent_model_config: bool = False,
+    subagent_execution_config: str | None = None,
+    clear_subagent_execution_config: bool = False,
     allowed_domains: list[str] | None = None,
     clear_allowed_domains: bool = False,
     explore_harness_enabled: bool | None = None,
     explore_harness_profile: str | None = None,
     clear_explore_harness_profile: bool = False,
     explore_graph_enabled: bool | None = None,
+    explore_mode: str | None = None,
     registered_agents: list[str] | None = None,
     clear_registered_agents: bool = False,
     peer_task_coordinator: str | None = None,
@@ -471,6 +494,8 @@ def configure_goal(
     clear_write_scope: bool = False,
     local_authority_shadow_file: bool = False,
     clear_local_authority_shadow: bool = False,
+    coordination_runtime_shadow_file: bool = False,
+    clear_coordination_runtime_shadow: bool = False,
     waiting_on: str | None = None,
     clear_waiting_on: bool = False,
     boundary_authority_scopes: list[str] | None = None,
@@ -489,7 +514,16 @@ def configure_goal(
     reward_memory_agents: list[str] | None = None,
     clear_reward_memory_config: bool = False,
     execute: bool = False,
+    _registry_transaction: ProjectRegistryTransaction | None = None,
 ) -> dict[str, Any]:
+    if execute and _registry_transaction is None:
+        forwarded = dict(locals())
+        with project_registry_transaction(
+            registry_path,
+            operation="configure_goal",
+        ) as transaction:
+            forwarded["_registry_transaction"] = transaction
+            return configure_goal(**forwarded)
     if not registry_path.exists():
         raise FileNotFoundError(f"registry file does not exist: {registry_path}")
     if clear_allowed_domains and allowed_domains:
@@ -541,9 +575,8 @@ def configure_goal(
         raise ValueError(
             "--clear-write-scope cannot be combined with --replace-write-scope"
         )
-    shadow.validate_local_authority_shadow_change(
-        local_authority_shadow_file, clear_local_authority_shadow
-    )
+    shadow.validate_coordination_shadow_changes(
+        local_authority_shadow_file, clear_local_authority_shadow, coordination_runtime_shadow_file, clear_coordination_runtime_shadow)
     if clear_waiting_on and waiting_on:
         raise ValueError("--clear-waiting-on cannot be combined with --waiting-on")
     adding_boundary_authority = any(
@@ -610,6 +643,11 @@ def configure_goal(
         raise ValueError(
             "--clear-subagent-model-config cannot be combined with model settings"
         )
+    if clear_subagent_execution_config and subagent_execution_config:
+        raise ValueError(
+            "--clear-subagent-execution-config cannot be combined with "
+            "--subagent-execution-config"
+        )
     if explore_harness_profile is not None:
         explore_harness_profile = (
             str(explore_harness_profile).strip().lower().replace("_", "-")
@@ -667,6 +705,10 @@ def configure_goal(
         reward_memory_config,
         label="reward memory experiment config",
     )
+    subagent_execution_config = _local_private_config_path(
+        subagent_execution_config,
+        label="subagent execution config",
+    )
     periodic_report_change = periodic_report_config.normalize_change(
         periodic_report_configuration, clear=clear_periodic_report_configuration
     )
@@ -676,7 +718,22 @@ def configure_goal(
         change_quality_strict_receipt,
         clear=clear_change_quality_configuration,
     )
-    payload = read_json(registry_path)
+    progress_review_change = progress_review_config.normalize_change(
+        progress_review_mode,
+        progress_review_signal,
+        progress_review_drift_threshold,
+        progress_review_contract_revision,
+        clear=clear_progress_review_configuration,
+    )
+    payload = (
+        _registry_transaction.payload_copy()
+        if _registry_transaction is not None
+        else load_project_registry(registry_path)
+    )
+    require_runtime_compatible_project_registry(
+        payload,
+        operation="Goal configuration",
+    )
     goals = registry_goals(payload)
     goal = next((item for item in goals if str(item.get("id")) == goal_id), None)
     if goal is None:
@@ -768,6 +825,8 @@ def configure_goal(
         goal,
         turn_granularity=execution_turn_granularity,
         replan_after_completed_todos=execution_replan_after_todos,
+        replan_after_effective_turns=execution_replan_after_turns,
+        clear_replan_after_effective_turns=clear_execution_replan_after_turns,
         clear_replan_after_completed_todos=clear_execution_replan_after_todos,
     )
     legacy_hierarchy_before = legacy_agent_hierarchy_present(before_goal)
@@ -841,6 +900,8 @@ def configure_goal(
         control_plane["self_repair"] = self_repair
     periodic_report_config.apply_change(goal, periodic_report_change)
     change_quality_config.apply_change(goal, change_quality_change)
+    progress_review_config.apply_change(goal, progress_review_change)
+    improvement_config.apply_change(goal, capability_improvement_configuration, clear=clear_capability_improvement_configuration)
     if (
         issue_fix_reviewer_notification_config is not None
         or clear_issue_fix_reviewer_notification_config
@@ -907,7 +968,16 @@ def configure_goal(
 
     apply_reward_memory_goal_configuration(goal, reward_memory_plan)
 
-    if explore_graph_enabled is not None:
+    if any(value is not None for value in (explore_mode, explore_graph_enabled, explore_harness_enabled)):
+        existing_harness = (goal.get("spawn_policy") or {}).get("explore_harness")
+        explore_plan = plan_explore_configuration(
+            explore_configuration(goal.get("explore_graph"), existing_harness),
+            {"mode": explore_mode, "evidence_enabled": explore_graph_enabled,
+             "planning_enabled": explore_harness_enabled},
+        )
+        explore_graph_enabled = explore_plan["evidence_enabled"]
+        if explore_mode is not None or explore_harness_enabled is not None or existing_harness:
+            explore_harness_enabled = explore_plan["planning_enabled"]
         goal["explore_graph"] = {"enabled": explore_graph_enabled}
 
     if (
@@ -918,6 +988,8 @@ def configure_goal(
         or subagent_model is not None
         or subagent_reasoning_effort is not None
         or clear_subagent_model_config
+        or subagent_execution_config is not None
+        or clear_subagent_execution_config
         or allowed_domains is not None
         or clear_allowed_domains
         or explore_harness_enabled is not None
@@ -938,6 +1010,8 @@ def configure_goal(
             subagent_model=subagent_model,
             subagent_reasoning_effort=subagent_reasoning_effort,
             clear_subagent_model_config=clear_subagent_model_config,
+            subagent_execution_config=subagent_execution_config,
+            clear_subagent_execution_config=clear_subagent_execution_config,
             allowed_domains=allowed_domains,
             clear_allowed_domains=clear_allowed_domains,
             default_max_children=DEFAULT_MULTI_SUBAGENT_MAX_CHILDREN,
@@ -1188,9 +1262,11 @@ def configure_goal(
             coordination["checkpointed_boundary_authority"] = [*entries, entry]
         goal["coordination"] = coordination
 
-    shadow.apply_local_authority_shadow_change(
-        goal, local_authority_shadow_file, clear_local_authority_shadow
-    )
+    shadow.apply_coordination_shadow_changes(
+        goal, local_authority_shadow_file, clear_local_authority_shadow, coordination_runtime_shadow_file, clear_coordination_runtime_shadow)
+    pr_review_config.apply_change(goal, pull_request_review_configuration, clear=clear_pull_request_review_configuration,
+                                 agent_order_updates=pull_request_review_agent_orders,
+                                 reconcile_registered_agents=registered_agents is not None or clear_registered_agents)
     after = _settings_summary(goal)
     changed_fields = _changed_fields(before, after)
     if goal != before_goal and not changed_fields:
@@ -1218,7 +1294,9 @@ def configure_goal(
                 f"{registry_path.name}.before-agent-model-{stamp}.bak"
             )
             shutil.copy2(registry_path, backup_path)
-        atomic_write_json(registry_path, payload)
+        if _registry_transaction is None:
+            raise RuntimeError("configure_goal mutation requires a registry transaction")
+        _registry_transaction.commit(payload)
 
     feature_summary = {
         "multi_subagent": _multi_subagent_feature_status(
@@ -1234,10 +1312,14 @@ def configure_goal(
             after.get("peer_task_coordination") or {"enabled": False}
         ),
         "local_authority_shadow": deepcopy(after["local_authority_shadow"]),
+        "coordination_runtime_shadow": deepcopy(after["coordination_runtime_shadow"]),
         "lark_event_inbox": _lark_event_inbox_config_summary(goal),
         "lark_kanban_heartbeat_sync": _lark_kanban_heartbeat_config_summary(goal),
-        "reward_memory": reward_memory_goal_policy_summary(goal),
+        "reward_memory": reward_memory_goal_configuration_summary(goal),
+        "pull_request_review": pr_review_config.configuration_summary(goal),
         "change_quality_qualification": change_quality_goal_policy_summary(goal),
+        "progress_review": progress_review_config.configuration_summary(goal),
+        "goal_capability_organization": improvement_config.configuration_summary(goal),
         "default": "off",
         "configuration_entry": "multi_subagent_feature",
     }
@@ -1352,6 +1434,18 @@ def render_configure_goal_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- control_plane: {payload.get('control_plane_summary')}")
     if payload.get("orchestration_summary"):
         lines.append(f"- orchestration: {payload.get('orchestration_summary')}")
+    codex_capacity = payload.get("codex_host_capacity")
+    if isinstance(codex_capacity, dict):
+        lines.extend(
+            [
+                f"- codex_host_capacity: `{codex_capacity.get('status')}`",
+                f"- codex_required_children: `{codex_capacity.get('required_children')}`",
+                f"- codex_configured_children: `{codex_capacity.get('configured_children')}`",
+                f"- codex_alignment_requested: `{codex_capacity.get('alignment_requested')}`",
+                f"- codex_capacity_written: `{codex_capacity.get('written', False)}`",
+                f"- codex_new_session_required: `{codex_capacity.get('new_session_required', False)}`",
+            ]
+        )
     feature_summary = payload.get("feature_summary")
     if isinstance(feature_summary, dict):
         lines.append(

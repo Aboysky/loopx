@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 import re
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeGuard
 
 from ..goals.goal_vision_wait_projection import attach_active_vision_waits
 from .contract import (
-    TODO_RESUME_KIND_TODO_DONE,
-    TODO_STATUS_DONE,
-    TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
-    TODO_TASK_CLASS_BLOCKER,
-    TODO_TASK_CLASS_MONITOR,
     TODO_TASK_CLASS_USER_ACTION,
     build_todo_id,
     normalize_required_capabilities,
@@ -34,7 +28,6 @@ from .contract import (
     normalize_todo_generation,
     normalize_todo_goal_bound,
     normalize_todo_id,
-    normalize_todo_id_list,
     normalize_todo_no_followup,
     normalize_removed_todo_continuation_policy,
     normalize_todo_required_decision_scopes,
@@ -44,12 +37,12 @@ from .contract import (
     normalize_todo_task_class,
     todo_done_for_status,
 )
+from .summary_item import todo_text_content_revision
 from .completion_validation_projection import project_completion_validation_authority
-from .frontier_revision import attach_advancement_frontier_revision_index
+from .frontier_revision import frontier_source_facts, TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION
 from .handoff_gate import build_todo_handoff_gate_states
-from .handoff_note import attach_todo_handoff_note
+from .handoff_note import attach_todo_handoff_notes, handoff_context_source, validate_handoff_context
 from .todo_semantics import (
-    todo_claimed_visibility_items as projection_todo_claimed_visibility_items,
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
     todo_item_is_deferred as projection_todo_item_is_deferred,
     todo_item_is_due_monitor as projection_todo_item_is_due_monitor,
@@ -63,12 +56,8 @@ from .todo_semantics import (
     todo_presentation_sort_key as projection_todo_presentation_sort_key,
     todo_projection_sort_key as projection_todo_projection_sort_key,
 )
-from .succession_warning import (
-    TODO_SUCCESSION_WARNING_REASON_CODE,
-    TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
-)
 from .resume_condition import evaluate_todo_resume_conditions
-from ..runtime.time import now_utc_iso
+from ..runtime.time import now_utc, now_utc_iso
 from ..work_items.project_asset import build_project_asset_todo_summary
 from .user_gate import open_user_gate_todo_items
 from ..coordination.coordination_state_contract import (
@@ -88,13 +77,22 @@ MAX_DEFERRED_TODO_VISIBILITY_ITEMS = 8
 MAX_MONITOR_DUE_ITEMS = 1
 MAX_DEPENDENCY_BLOCKERS = 4
 MAX_COMPLETED_SUCCESSION_WARNING_ITEMS = 5
-MAX_RECENT_COMPLETED_ADVANCEMENT_ITEMS = MAX_TODO_VISIBILITY_LANE_ITEMS
 
-TODO_SOURCE_PROOF_SCHEMA_VERSION = "todo_source_proof_v0"
-TODO_CLOSURE_INTENT_SCHEMA_VERSION = "todo_closure_intent_v0"
-TODO_TERMINAL_CLOSURE_PROOF_SCHEMA_VERSION = "todo_terminal_closure_proof_v0"
 TASK_ORCHESTRATION_AUTHORITY_SCHEMA_VERSION = "task_orchestration_authority_v0"
 TODO_ARCHIVE_STATE_ACTIVE = "active"
+
+# One internal batch carries the whole source, so the adapter sends columnar
+# facts: repeating every key name per Todo pushed a long-history request past the
+# effect-runtime request budget. The typed owner decodes the declared columns
+# back into row objects before validating them, so no cell changes meaning.
+SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION = "todo_summary_projection_request_v3"
+SUMMARY_PROJECTION_COLUMNS = (
+    "status", "done", "task_class", "has_resume", "resume_ready", "resume_evaluated",
+    "acceptance_blocked", "claimed", "preferred", "watch_only", "due_at", "expires_at",
+    "sort", "completed_at", "updated_at", "completion_index", "linked_user_action",
+    "no_followup", "successor_gap", "handoff_state", "replan", "todo_id", "claim",
+    "bound", "blocks", "global", "excluded",
+)
 AttentionItemBuilder = Callable[..., dict[str, Any]]
 GoalLifecycleFields = Callable[[dict[str, Any], Optional[dict[str, Any]]], dict[str, Any]]
 PublicSafeText = Callable[..., Optional[str]]
@@ -102,27 +100,6 @@ TodoOpenCount = Callable[[Optional[dict[str, Any]]], int]
 FirstOpenTodoText = Callable[[Optional[dict[str, Any]]], Optional[str]]
 
 
-@dataclass(frozen=True)
-class _TodoGroupLanes:
-    open_items: list[dict[str, Any]]
-    terminal_items: list[dict[str, Any]]
-    deferred_items: list[dict[str, Any]]
-    done_items: list[dict[str, Any]]
-    projected_open_items: list[dict[str, Any]]
-    projected_deferred_items: list[dict[str, Any]]
-    budgeted_items: list[dict[str, Any]]
-    claimed_open_items: list[dict[str, Any]]
-    unclaimed_open_items: list[dict[str, Any]]
-    executable_items: list[dict[str, Any]]
-    blocker_items: list[dict[str, Any]]
-    resume_blocked_items: list[dict[str, Any]]
-    monitor_items: list[dict[str, Any]]
-    monitor_due_items: list[dict[str, Any]]
-    monitor_schedule_gap_items: list[dict[str, Any]]
-    claimed_advancement_items: list[dict[str, Any]]
-    claimed_monitor_items: list[dict[str, Any]]
-    active_next_action_items: list[dict[str, Any]]
-    active_next_action_executable_items: list[dict[str, Any]]
 TASK_ORCHESTRATION_CANDIDATE_FIELDS = (
     "todo_id",
     "status",
@@ -152,20 +129,26 @@ TASK_ORCHESTRATION_USER_BLOCKER_FIELDS = (
 )
 
 
-def normalize_todo_text(text: str, *, limit: int = 500) -> str:
+def normalize_todo_text(text: str, *, limit: int | None = 500) -> str:
+    """Normalize whitespace; source codecs explicitly opt out of display limits."""
     compact = " ".join(str(text or "").strip().split())
-    if len(compact) <= limit:
+    if limit is None or len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
 
 
-def todo_item_status(item: dict[str, Any]) -> str:
-    """Return one Todo's explicit status with marker compatibility."""
-
-    status = normalize_todo_status(item.get("status"))
-    if status:
-        return status
-    return TODO_STATUS_DONE if item.get("done") else TODO_STATUS_OPEN
+def _structured_todo_text_fields(
+    item: dict[str, Any],
+    *,
+    text_limit: int | None,
+    include_content_revision: bool,
+) -> tuple[str, str | None]:
+    source_text = str(item.get("text") or "")
+    content_revision = (
+        todo_text_content_revision(source_text)
+        if include_content_revision else None
+    )
+    return normalize_todo_text(source_text, limit=text_limit), content_revision
 
 
 def todo_archive_state(item: dict[str, Any]) -> str:
@@ -319,8 +302,14 @@ def structured_todo_item(
     role: str | None,
     source_section: str | None,
     archive_state: str = "active",
+    text_limit: int | None = 500,
+    include_content_revision: bool = False,
 ) -> dict[str, Any]:
-    text = normalize_todo_text(str(item.get("text") or ""))
+    text, content_revision = _structured_todo_text_fields(
+        item,
+        text_limit=text_limit,
+        include_content_revision=include_content_revision,
+    )
     priority, title = todo_priority_parts(text)
     index = item.get("index")
     explicit_status = normalize_todo_status(item.get("status"))
@@ -350,6 +339,8 @@ def structured_todo_item(
             ),
         }
     )
+    if content_revision:
+        normalized["content_revision"] = content_revision
     action_kind = normalize_todo_action_kind(item.get("action_kind"))
     if action_kind:
         normalized["action_kind"] = action_kind
@@ -443,11 +434,11 @@ def structured_todo_item(
         normalized["no_followup"] = no_followup
     if priority:
         normalized["priority"] = priority
-        normalized["title"] = normalize_todo_text(title)
+        normalized["title"] = normalize_todo_text(title, limit=text_limit)
     return normalized
 
 
-def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
+def _compact_todo_item_record(item: dict[str, Any]) -> dict[str, Any]:
     compact: dict[str, Any] = {
         "index": item.get("index"),
         "done": bool(item.get("done")),
@@ -458,8 +449,20 @@ def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
             continue
         if item.get(key) is not None:
             compact[key] = item.get(key)
-    attach_todo_handoff_note(compact)
+    if item.get("content_revision"):
+        compact["content_revision"] = item["content_revision"]
+    if isinstance(item.get("goal_acceptance_guard"), dict):
+        compact["goal_acceptance_guard"] = item["goal_acceptance_guard"]
     return compact
+
+
+def compact_todo_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return attach_todo_handoff_notes([_compact_todo_item_record(item) for item in items])
+
+
+def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Singleton adapter; whole-source consumers use the batch owner."""
+    return compact_todo_items([item])[0]
 
 
 def canonical_todo_read_record(
@@ -469,8 +472,10 @@ def canonical_todo_read_record(
 ) -> dict[str, Any]:
     """Copy one already-normalized Todo consumer record without re-deriving it."""
 
+    # Read-policy evaluations are recomputed from a complete source. They must
+    # never enter shadow capture, provider records or the durable source digest.
     record = canonical_record_fields(
-        item,
+        {key: value for key, value in item.items() if key != "succession_evaluation"},
         fields=TODO_CANONICAL_READ_RECORD_FIELDS,
         required_fields=TODO_CANONICAL_REQUIRED_READ_FIELDS,
         label="canonical Todo read record",
@@ -493,45 +498,13 @@ def canonical_todo_read_record(
     return record
 
 
-def _task_orchestration_authority(
-    lanes: _TodoGroupLanes,
-    *,
-    role: str | None,
-) -> dict[str, Any]:
-    candidate_items = (
-        [
-            {
-                key: compact[key]
-                for key in TASK_ORCHESTRATION_CANDIDATE_FIELDS
-                if key in compact
-            }
-            for item in lanes.projected_open_items
-            if todo_item_task_class(item) == TODO_TASK_CLASS_ADVANCEMENT
-            for compact in [compact_todo_item(item)]
-        ]
-        if role == "agent"
-        else []
-    )
-    user_blocker_items = (
-        [
-            {
-                key: compact[key]
-                for key in TASK_ORCHESTRATION_USER_BLOCKER_FIELDS
-                if key in compact
-            }
-            for item in lanes.projected_open_items
-            if normalize_todo_id(item.get("unblocks_todo_id"))
-            for compact in [compact_todo_item(item)]
-        ]
-        if role == "user"
-        else []
-    )
-    return {
-        "schema_version": TASK_ORCHESTRATION_AUTHORITY_SCHEMA_VERSION,
-        "role": role,
-        "candidate_items": candidate_items,
-        "user_blocker_items": user_blocker_items,
-    }
+def _task_orchestration_authority(lanes: dict[str, list[dict[str, Any]]], *, role: str | None) -> dict[str, Any]:
+    """Materialize the typed selection using the existing public field allowlist."""
+    return {"schema_version": TASK_ORCHESTRATION_AUTHORITY_SCHEMA_VERSION, "role": role,
+        **{name: [{key: compact[key] for key in fields if key in compact}
+                  for compact in lanes[name]]
+           for name, fields in (("candidate_items", TASK_ORCHESTRATION_CANDIDATE_FIELDS),
+                                ("user_blocker_items", TASK_ORCHESTRATION_USER_BLOCKER_FIELDS))}}
 
 
 def compact_active_next_action_todo_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -590,10 +563,6 @@ def todo_projection_sort_key(item: dict[str, Any]) -> tuple[int, int]:
     return projection_todo_projection_sort_key(item, text_mode="prefix")
 
 
-def claimed_visibility_items(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
-    return projection_todo_claimed_visibility_items(items, limit=limit)
-
-
 def todo_item_is_deferred(item: dict[str, Any]) -> bool:
     return projection_todo_item_is_deferred(item)
 
@@ -623,13 +592,13 @@ def open_todo_items(
             if key in seen:
                 continue
             seen.add(key)
-            compact = compact_todo_item(item)
+            compact = _compact_todo_item_record(item)
             compact["done"] = False
             compact["text"] = text
             result.append(compact)
             if len(result) >= limit:
-                return sorted(result, key=projection_todo_presentation_sort_key)
-    return sorted(result, key=projection_todo_presentation_sort_key)
+                return sorted(attach_todo_handoff_notes(result), key=projection_todo_presentation_sort_key)
+    return sorted(attach_todo_handoff_notes(result), key=projection_todo_presentation_sort_key)
 
 
 def todo_lane_items(
@@ -760,9 +729,10 @@ def attach_dependency_blockers(
             item["dependency_blockers"] = blockers
 
 
-def apply_resume_conditions(
+def _apply_resume_conditions(
     items: list[dict[str, Any]],
     *,
+    source_section: str | None,
     resume_source_items: list[dict[str, Any]] | None = None,
     rollout_events: list[dict[str, Any]] | None = None,
     available_capabilities: Any = None,
@@ -775,7 +745,14 @@ def apply_resume_conditions(
     ]
     if not resume_items:
         return
-    source_items = [*(resume_source_items or []), *items]
+    # Only prepare history when at least one item needs the typed evaluator.
+    # Succession still receives the complete original lineage independently.
+    source_items = [
+        *_structured_resume_source_items(
+            resume_source_items, source_section=source_section,
+        ),
+        *items,
+    ]
     conditions = evaluate_todo_resume_conditions(
         resume_items,
         source_items=source_items,
@@ -809,111 +786,13 @@ def active_next_action_todo_ids(value: Any) -> set[str]:
     return todo_ids
 
 
-def _normalized_todo_id_list(value: Any) -> list[str]:
-    return normalize_todo_id_list(value)
+def todo_successor_todo_ids(item: dict[str, Any], *, items: list[dict[str, Any]]) -> list[str]:
+    """Compatibility call site for repair-delta; the typed graph owns links."""
+    from .succession_warning import evaluate_succession
 
-
-def todo_successor_todo_ids(
-    item: dict[str, Any],
-    *,
-    items: list[dict[str, Any]],
-) -> list[str]:
-    successor_ids = _normalized_todo_id_list(item.get("successor_todo_ids"))
-    superseded_by = normalize_todo_id(item.get("superseded_by"))
-    if superseded_by and superseded_by not in successor_ids:
-        successor_ids.append(superseded_by)
-
-    source_todo_id = normalize_todo_id(item.get("todo_id"))
-    if not source_todo_id:
-        return successor_ids
-
-    for candidate in items:
-        if not isinstance(candidate, dict):
-            continue
-        candidate_id = normalize_todo_id(candidate.get("todo_id"))
-        if not candidate_id or candidate_id == source_todo_id:
-            continue
-        if todo_item_task_class(candidate) != TODO_TASK_CLASS_ADVANCEMENT:
-            continue
-        resume_when = normalize_todo_resume_when(candidate.get("resume_when")) or ""
-        resume_kind, separator, resume_target = resume_when.partition(":")
-        candidate_unblocks = normalize_todo_id(candidate.get("unblocks_todo_id"))
-        if candidate_unblocks != source_todo_id and not (
-            separator
-            and resume_kind == TODO_RESUME_KIND_TODO_DONE
-            and normalize_todo_id(resume_target) == source_todo_id
-        ):
-            continue
-        if candidate_id not in successor_ids:
-            successor_ids.append(candidate_id)
-    return successor_ids
-
-
-def todo_item_is_succession_tracked_completion(item: dict[str, Any]) -> bool:
-    if todo_archive_state(item) != TODO_ARCHIVE_STATE_ACTIVE:
-        return False
-    if not item.get("done"):
-        return False
-    if todo_item_is_deferred(item):
-        return False
-    if todo_item_task_class(item) != TODO_TASK_CLASS_ADVANCEMENT:
-        return False
-    return any(
-        item.get(key) is not None
-        for key in (
-            "action_kind",
-            "task_repository",
-            "continuation_policy",
-            "claimed_by",
-            "completed_at",
-            "updated_at",
-            "required_write_scopes",
-            "required_capabilities",
-            "target_capabilities",
-            "explore_result_node_refs",
-            "decision_scope",
-            "required_decision_scopes",
-            "unblocks_todo_id",
-            "resume_when",
-            "blocks_agent",
-            "excluded_agents",
-            "global_gate",
-        )
-    )
-
-
-def _completed_succession_sort_key(item: dict[str, Any]) -> tuple[str, int]:
-    raw_index = item.get("index")
-    try:
-        index = int(raw_index) if raw_index is not None else 0
-    except (TypeError, ValueError):
-        index = 0
-    timestamp = str(item.get("updated_at") or item.get("completed_at") or "")
-    return (timestamp, index)
-
-
-def completed_without_successor_items(
-    done_items: list[dict[str, Any]],
-    *,
-    all_items: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    gap_items: list[dict[str, Any]] = []
-    for item in done_items:
-        if not todo_item_is_succession_tracked_completion(item):
-            continue
-        if normalize_todo_no_followup(item.get("no_followup")) is True:
-            continue
-        if todo_successor_todo_ids(item, items=all_items):
-            continue
-        compact = compact_todo_item(item)
-        for key in ("note", "evidence", "reason"):
-            compact.pop(key, None)
-        compact["succession_tracked"] = True
-        compact["recommended_action"] = (
-            "record no_followup=true or add/link a successor todo"
-        )
-        gap_items.append(compact)
-    return sorted(gap_items, key=_completed_succession_sort_key, reverse=True)
+    selected = dict(item)
+    evaluation = evaluate_succession([selected], items)[0]
+    return list(evaluation["successor_todo_ids"])
 
 
 def _structured_todo_group_items(
@@ -921,6 +800,8 @@ def _structured_todo_group_items(
     *,
     source_section: str | None,
     role: str | None,
+    text_limit: int | None,
+    include_content_revision: bool,
 ) -> list[dict[str, Any]]:
     return [
         structured_todo_item(
@@ -928,6 +809,8 @@ def _structured_todo_group_items(
             role=role,
             source_section=source_section,
             archive_state=todo_archive_state(item),
+            text_limit=text_limit,
+            include_content_revision=include_content_revision,
         )
         if isinstance(item, dict)
         else item
@@ -954,111 +837,184 @@ def _structured_resume_source_items(
                 if item.get("archive_state") is not None
                 else TODO_ARCHIVE_STATE_ACTIVE
             ),
+            include_content_revision=True,
         )
         for item in (items or [])
         if isinstance(item, dict)
     ]
 
 
-def _todo_group_lanes(
-    items: list[dict[str, Any]],
-    *,
-    preferred_todo_ids: set[str] | None,
-) -> _TodoGroupLanes:
-    open_items = [item for item in items if not item.get("done")]
-    terminal_items = [item for item in items if item.get("done")]
-    deferred_items = [item for item in terminal_items if todo_item_is_deferred(item)]
-    done_items = [item for item in terminal_items if not todo_item_is_deferred(item)]
-    projected_open_items = sorted(open_items, key=projection_todo_presentation_sort_key)
-    projected_deferred_items = sorted(
-        deferred_items,
-        key=projection_todo_presentation_sort_key,
-    )
-    budgeted_items = [
-        *projected_open_items,
-        *projected_deferred_items,
-        *done_items,
-    ]
-    claimed_open_items = [item for item in projected_open_items if item.get("claimed_by")]
-    unclaimed_open_items = [item for item in projected_open_items if not item.get("claimed_by")]
-    executable_items = [
-        item
-        for item in projected_open_items
-        if todo_item_is_actionable_open(item)
-        if todo_item_task_class(item) == TODO_TASK_CLASS_ADVANCEMENT
-    ]
-    blocker_items = [
-        item
-        for item in projected_open_items
-        if normalize_todo_status(item.get("status")) == "blocked"
-        if todo_item_task_class(item) == TODO_TASK_CLASS_BLOCKER
-    ]
-    resume_blocked_items = [
-        item
-        for item in projected_open_items
-        if normalize_todo_resume_when(item.get("resume_when"))
-        if item.get("resume_ready") is False
-    ]
-    monitor_items = [
-        item
-        for item in projected_open_items
-        if todo_item_is_actionable_open(item)
-        if todo_item_task_class(item) == TODO_TASK_CLASS_MONITOR
-    ]
-    monitor_due_items = [item for item in monitor_items if todo_item_is_due_monitor(item)]
-    monitor_schedule_gap_items = [
-        item
-        for item in monitor_items
-        if todo_item_missing_monitor_schedule(item)
-    ]
-    claimed_advancement_items = [
-        item
-        for item in claimed_open_items
-        if todo_item_is_actionable_open(item)
-        if todo_item_task_class(item) == TODO_TASK_CLASS_ADVANCEMENT
-    ]
-    claimed_monitor_items = [
-        item
-        for item in claimed_open_items
-        if todo_item_is_actionable_open(item)
-        if todo_item_task_class(item) == TODO_TASK_CLASS_MONITOR
-    ]
-    preferred_ids = {
-        todo_id
-        for todo_id in (preferred_todo_ids or set())
-        if normalize_todo_id(todo_id)
-    }
-    active_next_action_items = [
-        item
-        for item in projected_open_items
-        if normalize_todo_id(item.get("todo_id")) in preferred_ids
-    ]
-    active_next_action_executable_items = [
-        item
-        for item in executable_items
-        if normalize_todo_id(item.get("todo_id")) in preferred_ids
-    ]
-    return _TodoGroupLanes(
-        open_items=open_items,
-        terminal_items=terminal_items,
-        deferred_items=deferred_items,
-        done_items=done_items,
-        projected_open_items=projected_open_items,
-        projected_deferred_items=projected_deferred_items,
-        budgeted_items=budgeted_items,
-        claimed_open_items=claimed_open_items,
-        unclaimed_open_items=unclaimed_open_items,
-        executable_items=executable_items,
-        blocker_items=blocker_items,
-        resume_blocked_items=resume_blocked_items,
-        monitor_items=monitor_items,
-        monitor_due_items=monitor_due_items,
-        monitor_schedule_gap_items=monitor_schedule_gap_items,
-        claimed_advancement_items=claimed_advancement_items,
-        claimed_monitor_items=claimed_monitor_items,
-        active_next_action_items=active_next_action_items,
-        active_next_action_executable_items=active_next_action_executable_items,
-    )
+def _resume_condition_evaluated(item: dict[str, Any], resume: str | None) -> bool:
+    """The source's own full-source resume evaluation for this condition."""
+    condition = item.get("resume_condition")
+    return (isinstance(condition, dict)
+        and condition.get("schema_version") == "todo_resume_condition_v0"
+        and condition.get("resume_when") == resume
+        and isinstance(condition.get("satisfied"), bool)
+        and item.get("resume_ready") is condition.get("satisfied"))
+
+
+def _materialize_summary_lanes(items: list[dict[str, Any]], compacts: list[dict[str, Any]],
+    result: dict[str, Any], summary: dict[str, Any], lanes: dict[str, Any],
+    orchestration: dict[str, list[int]], *, fused_context: bool,
+) -> None:
+    """Materialize validated ordinals with the existing display field allowlist."""
+    if fused_context:
+        contexts = validate_handoff_context(result.get("handoff_context"), len(items))
+        for compact, context in zip(compacts, contexts, strict=True):
+            if context["note"]:
+                compact["handoff_note"] = context["note"]
+    else:
+        # Counts/closure still use every source row in their existing batch.
+        # The independent display lens only needs the ordinals that are used.
+        visible = sorted({index for lane in lanes.values() if lane["format"] != "raw" for index in lane["indices"]}
+                         | {index for indices in orchestration.values() for index in indices})
+        attach_todo_handoff_notes([compacts[index] for index in visible])
+    warning = summary.get("todo_succession_warning")
+    warning_action = warning.get("recommended_action") if isinstance(warning, dict) else None
+    if summary.get("completed_without_successor_count") and not isinstance(warning_action, str):
+        raise ValueError("invalid typed Todo succession warning")
+    for name, lane in lanes.items():
+        mode = lane.get("format")
+        if mode not in {"raw", "active", "compact", "recent", "gap"}:
+            raise ValueError("invalid Todo summary display format")
+        formatted = []
+        for index in lane["indices"]:
+            item = items[index]
+            if mode == "raw":
+                compact = item
+            elif mode == "active":
+                compact = dict(compacts[index])
+                for key in ("note", "evidence", "reason", "completed_at", "updated_at", "superseded_by"):
+                    compact.pop(key, None)
+            elif mode in {"compact", "recent", "gap"}:
+                compact = dict(compacts[index])
+                if mode in {"recent", "gap"}:
+                    for key in ("note", "evidence", "reason"):
+                        compact.pop(key, None)
+                if mode == "gap":
+                    compact.update(succession_tracked=True,
+                        recommended_action=warning_action)
+            else:
+                raise ValueError("invalid Todo summary display format")
+            formatted.append(compact)
+        summary[name] = formatted
+    if isinstance(warning, dict):
+        warning["items"] = summary["completed_without_successor_items"]
+
+
+def _project_summary(items: list[dict[str, Any]], preferred_todo_ids: set[str] | None,
+    *, selection: dict[str, Any] | None, role: str | None, source_section: str | None,
+    item_limit: int | None, full_selection: bool,
+) -> dict[str, Any]:
+    """Adapt evaluated facts and materialize one typed summary decision."""
+    import json
+
+    from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
+
+    from .succession_warning import succession_evaluations, succession_request
+
+    # Display may never invent the source's resume decision. Assert the
+    # full-source precondition before any RPC that reuses the evaluation, so an
+    # unevaluated source fails with its own diagnostic instead of a downstream
+    # "succession evaluation must be an object" from a later owner.
+    for item in items:
+        resume = normalize_todo_resume_when(item.get("resume_when"))
+        if resume and not _resume_condition_evaluated(item, resume):
+            raise ValueError("Todo display requires a matching full-source resume evaluation")
+    # Evidence is merely carried here. The shared TS summary owner validates
+    # the same full-source hashes/semantics before using any summary fact,
+    # avoiding a separate RPC for every role/filter (including empty roles).
+    succession = succession_evaluations(items)
+    rows = []
+    for item, evaluation in zip(items, succession, strict=True):
+        resume = normalize_todo_resume_when(item.get("resume_when"))
+        evaluated = _resume_condition_evaluated(item, resume)
+        due = projection_todo_item_next_due_at(item)
+        expires = projection_todo_item_expires_at(item)
+        guard = item.get("goal_acceptance_guard")
+        rows.append({"status": item.get("status") or ("done" if item.get("done") else "open"),
+            "done": bool(item.get("done")), "task_class": projection_todo_item_task_class(item),
+            "has_resume": bool(resume), "resume_ready": item.get("resume_ready"),
+            "resume_evaluated": evaluated, "acceptance_blocked": isinstance(guard, dict) and guard.get("allowed") is False,
+            "claimed": bool(item.get("claimed_by")), "preferred": item.get("todo_id") in (preferred_todo_ids or set()),
+            "watch_only": projection_todo_item_is_watch_only_monitor(item),
+            "due_at": due.timestamp() if due else None, "expires_at": expires.timestamp() if expires else None,
+            "sort": list(projection_todo_presentation_sort_key(item)),
+            "completed_at": str(item.get("completed_at") or "") or None,
+            "updated_at": str(item.get("updated_at") or "") or None,
+            "completion_index": int(item.get("index") or 0),
+            "linked_user_action": bool(normalize_todo_id(item.get("unblocks_todo_id"))),
+            "no_followup": normalize_todo_no_followup(item.get("no_followup")) is True,
+            "successor_gap": evaluation["successor_gap"], "handoff_state": evaluation["handoff_state"],
+            "replan": evaluation["route_continuation_replan_required"],
+            **{"todo_id": normalize_todo_id(item.get("todo_id")),
+                "claim": normalize_todo_claimed_by(item.get("claimed_by")),
+                "bound": normalize_todo_bound_agent(item.get("bound_agent")),
+                "blocks": normalize_todo_blocks_agent(item.get("blocks_agent")),
+                "global": bool(item.get("global_gate")),
+                "excluded": normalize_todo_excluded_agents(item.get("excluded_agents"))}})
+    compacts = [_compact_todo_item_record(item) for item in items]
+    contexts = [handoff_context_source(item) for item in compacts]
+    for context in contexts:
+        for key in ("todo_id", "claimed_by", "excluded_agents"):
+            context.get("metadata", {}).pop(key, None)
+        context.get("texts", {}).pop("task_class", None)
+        if not context.get("metadata"):
+            context.pop("metadata", None)
+    try:
+        request = {
+            "schema_version": SUMMARY_PROJECTION_REQUEST_SCHEMA_VERSION,
+            "handoff_sources": contexts,
+            "columns": list(SUMMARY_PROJECTION_COLUMNS),
+            "rows": [[row[name] for name in SUMMARY_PROJECTION_COLUMNS] for row in rows],
+            "succession": succession_request(items, reuse=True),
+            "frontier_rows": frontier_source_facts(items) if role == "agent" else None,
+            "observed_at": now_utc().timestamp(),
+            "selection": selection, "role": role, "source_section": source_section,
+            "item_limit": item_limit, "full_selection": full_selection,
+        }
+        fused_context = len(json.dumps(request, separators=(",", ":")).encode()) <= MAX_REQUEST_BYTES - 4096
+        if not fused_context:
+            request.pop("handoff_sources")
+        result = effect_runtime_result("todo.summary.project", request)
+    except EffectRuntimeRejected as error:
+        raise ValueError(str(error)) from error
+    if not isinstance(result, dict) or result.get("schema_version") != "todo_summary_projection_v0":
+        raise ValueError("invalid typed Todo summary projection")
+
+    def valid_ordinals(value: Any) -> TypeGuard[list[int]]:
+        return (isinstance(value, list)
+            and all(type(index) is int and 0 <= index < len(items) for index in value)
+            and len(set(value)) == len(value))
+
+    selected = result.get("source_indices")
+    if not valid_ordinals(selected):
+        raise ValueError("invalid typed Todo selection ordinals")
+    if type(result.get("full_selection")) is not bool:
+        raise ValueError("invalid typed Todo selection ordinals")
+    selected_set = set(selected)
+    lanes, orchestration = result.get("lanes"), result.get("orchestration")
+    if not isinstance(lanes, dict) or not isinstance(orchestration, dict):
+        raise ValueError("invalid typed Todo summary lanes")
+    for indices in [*(lane.get("indices") if isinstance(lane, dict) else None for lane in lanes.values()),
+                    *orchestration.values()]:
+        if not valid_ordinals(indices):
+            raise ValueError("invalid Todo summary source ordinal")
+        if not set(indices) <= selected_set:
+            raise ValueError("Todo summary lane escaped the selected source")
+    summary = result.get("fields")
+    if not isinstance(summary, dict) or summary.get("schema_version") != "todo_summary_v0":
+        raise ValueError("invalid typed Todo summary fields")
+    if role == "agent":
+        index = summary.get("advancement_frontier_revision_index")
+        if not isinstance(index, dict) or index.get("schema_version") != TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION:
+            raise ValueError("invalid typed Todo summary frontier index")
+    _materialize_summary_lanes(items, compacts, result, summary, lanes, orchestration,
+        fused_context=fused_context)
+    return {"summary": summary, "items": [items[index] for index in selected],
+        "succession": [succession[index] for index in selected],
+        "orchestration": {name: [compacts[index] for index in indices] for name, indices in orchestration.items()}}
 
 
 def compact_todo_group(
@@ -1072,6 +1028,8 @@ def compact_todo_group(
     rollout_events: list[dict[str, Any]] | None = None,
     available_capabilities: Any = None,
     item_limit: int | None = MAX_STATUS_TODOS_PER_ROLE,
+    text_limit: int | None = 500,
+    include_content_revision: bool = True,
     include_task_orchestration_authority: bool = False,
     vision_runs: list[dict[str, Any]] | None = None,
     evaluated_at: str | None = None,
@@ -1082,17 +1040,20 @@ def compact_todo_group(
         items,
         source_section=source_section,
         role=role,
+        text_limit=text_limit,
+        include_content_revision=include_content_revision,
     )
-    apply_resume_conditions(
+    _apply_resume_conditions(
         items,
-        resume_source_items=_structured_resume_source_items(
-            resume_source_items,
-            source_section=source_section,
-        ),
+        source_section=source_section,
+        resume_source_items=resume_source_items,
         rollout_events=rollout_events,
         available_capabilities=available_capabilities,
         evaluated_at=evaluated_at,
     )
+    from .succession_warning import evaluate_succession
+
+    evaluate_succession(items, resume_source_items)
     return compact_evaluated_todo_group(
         items, source_section=source_section, role=role,
         include_empty_source=include_empty_source, preferred_todo_ids=preferred_todo_ids,
@@ -1100,19 +1061,6 @@ def compact_todo_group(
         vision_runs=vision_runs, lineage_items=resume_source_items,
     )
 
-
-def _require_full_source_resume_evaluations(items: list[dict[str, Any]]) -> None:
-    for item in items:
-        resume_when = normalize_todo_resume_when(item.get("resume_when"))
-        if not resume_when:
-            continue
-        condition = item.get("resume_condition")
-        if (not isinstance(condition, dict)
-            or condition.get("schema_version") != "todo_resume_condition_v0"
-            or condition.get("resume_when") != resume_when
-            or not isinstance(condition.get("satisfied"), bool)
-            or item.get("resume_ready") is not condition.get("satisfied")):
-            raise ValueError("Todo display requires a matching full-source resume evaluation")
 
 
 def compact_evaluated_todo_group(
@@ -1126,6 +1074,8 @@ def compact_evaluated_todo_group(
     include_task_orchestration_authority: bool = False,
     vision_runs: list[dict[str, Any]] | None = None,
     lineage_items: list[dict[str, Any]] | None = None,
+    full_selection: bool = True,
+    selection: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Filter/display an already evaluated snapshot, never re-evaluate topology.
 
@@ -1134,227 +1084,20 @@ def compact_evaluated_todo_group(
     """
     if not items and not include_empty_source:
         return None
-    _require_full_source_resume_evaluations(items)
-    lanes = _todo_group_lanes(items, preferred_todo_ids=preferred_todo_ids)
-    source_valid = role in {"user", "agent"} and bool(str(source_section or "").strip())
-    no_followup_items = [
-        item
-        for item in items
-        if todo_done_for_status(item.get("status"))
-        and normalize_todo_no_followup(item.get("no_followup")) is True
-    ]
-    successor_gap_items = completed_without_successor_items(
-        lanes.done_items,
-        all_items=items,
-    )
-    recent_completed_advancement_items = [
-        compact_todo_item(item)
-        for item in sorted(
-            (
-                item
-                for item in lanes.done_items
-                if todo_item_task_class(item) == TODO_TASK_CLASS_ADVANCEMENT
-                and str(item.get("completed_at") or "").strip()
-            ),
-            key=_completed_succession_sort_key,
-            reverse=True,
-        )[:MAX_RECENT_COMPLETED_ADVANCEMENT_ITEMS]
-    ]
-    for item in recent_completed_advancement_items:
-        for key in ("note", "evidence", "reason"):
-            item.pop(key, None)
-    handoff_gates = build_todo_handoff_gate_states(items)
-    route_replan_required = any(
-        item.get("route_continuation_replan_required") is True
-        for item in [*items, *handoff_gates]
-    )
-    watch_only_monitor_items = [
-        item
-        for item in lanes.monitor_items
-        if projection_todo_item_is_watch_only_monitor(item)
-    ]
-    watch_only_ids = {
-        normalize_todo_id(item.get("todo_id"))
-        for item in watch_only_monitor_items
-    }
-    watch_only_monitor_due_items = [
-        item
-        for item in lanes.monitor_due_items
-        if normalize_todo_id(item.get("todo_id")) in watch_only_ids
-    ]
-    convergent_open_items = [
-        item
-        for item in lanes.open_items
-        if normalize_todo_id(item.get("todo_id")) not in watch_only_ids
-    ]
-    summary: dict[str, Any] = {
-        "schema_version": "todo_summary_v0",
-        "source_section": source_section,
-        "total_count": len(items),
-        "open_count": len(lanes.open_items),
-        "done_count": len(lanes.terminal_items),
-        "advancement_done_count": count_advancement_todos(lanes.done_items),
-        "deferred_count": len(lanes.deferred_items),
-        "first_open_items": [
-            compact_todo_item(item) for item in lanes.projected_open_items[:3]
-        ],
-        "first_executable_items": [
-            compact_todo_item(item) for item in lanes.executable_items[:3]
-        ],
-        "monitor_open_items": [
-            compact_todo_item(item) for item in lanes.monitor_items
-        ],
-        "monitor_due_count": len(lanes.monitor_due_items),
-        "monitor_due_items": [
-            compact_todo_item(item)
-            for item in lanes.monitor_due_items[:MAX_MONITOR_DUE_ITEMS]
-        ],
-        "monitor_schedule_gap_count": len(lanes.monitor_schedule_gap_items),
-        "monitor_schedule_gap_items": [
-            compact_todo_item(item)
-            for item in lanes.monitor_schedule_gap_items[:MAX_MONITOR_DUE_ITEMS]
-        ],
-        "unclaimed_priority_open_items": [
-            compact_todo_item(item)
-            for item in lanes.unclaimed_open_items[:MAX_PROJECT_ASSET_TODO_BACKLOG_ITEMS]
-        ],
-        "claimed_open_items": [
-            compact_todo_item(item)
-            for item in claimed_visibility_items(
-                lanes.claimed_open_items,
-                limit=MAX_TODO_VISIBILITY_LANE_ITEMS,
-            )
-        ],
-        "claimed_advancement_open_items": [
-            compact_todo_item(item)
-            for item in claimed_visibility_items(
-                lanes.claimed_advancement_items,
-                limit=MAX_TODO_VISIBILITY_LANE_ITEMS,
-            )
-        ],
-        "claimed_monitor_open_items": [
-            compact_todo_item(item)
-            for item in claimed_visibility_items(
-                lanes.claimed_monitor_items,
-                limit=MAX_TODO_VISIBILITY_LANE_ITEMS,
-            )
-        ],
-        "backlog_items": [
-            compact_todo_item(item)
-            for item in lanes.projected_open_items[:MAX_PROJECT_ASSET_TODO_BACKLOG_ITEMS]
-        ],
-        "executable_backlog_items": [
-            compact_todo_item(item)
-            for item in lanes.executable_items[:MAX_PROJECT_ASSET_TODO_BACKLOG_ITEMS]
-        ],
-        "deferred_items": [
-            compact_todo_item(item)
-            for item in lanes.projected_deferred_items[:MAX_DEFERRED_TODO_VISIBILITY_ITEMS]
-        ],
-        "deferred_resume_candidates": [
-            compact_todo_item(item)
-            for item in lanes.projected_deferred_items
-            if item.get("resume_ready") is True
-        ][:MAX_DEFERRED_TODO_VISIBILITY_ITEMS],
-        "items": lanes.budgeted_items if item_limit is None else lanes.budgeted_items[:item_limit],
-    }
-    attach_advancement_frontier_revision_index(summary, items, role=role)
+    projected = _project_summary(items, preferred_todo_ids, selection=selection,
+        role=role, source_section=source_section, item_limit=item_limit, full_selection=full_selection)
+    items = projected["items"]
+    if not items and not include_empty_source:
+        return None
+    summary: dict[str, Any] = projected["summary"]
+    handoff_gates = build_todo_handoff_gate_states(items, evaluations=projected["succession"])
     attach_active_vision_waits(
         summary, vision_runs, role=role, items=items,
         lineage_items=lineage_items,
     )
-    if watch_only_monitor_items:
-        summary["watch_only_monitor_count"] = len(watch_only_monitor_items)
-        summary["watch_only_monitor_due_count"] = len(watch_only_monitor_due_items)
-        summary["convergence_open_count"] = len(convergent_open_items)
-    if recent_completed_advancement_items:
-        summary["recent_completed_advancement_items"] = recent_completed_advancement_items
     if include_task_orchestration_authority:
         summary["task_orchestration_authority"] = _task_orchestration_authority(
-            lanes,
-            role=role,
-        )
-    if lanes.blocker_items:
-        summary["blocker_open_count"] = len(lanes.blocker_items)
-        summary["blocker_items"] = [
-            compact_todo_item(item) for item in lanes.blocker_items
-        ]
-    if not convergent_open_items and not lanes.deferred_items:
-        summary["source_proof"] = {
-            "schema_version": TODO_SOURCE_PROOF_SCHEMA_VERSION,
-            "role": role,
-            "item_count": len(items),
-            "derived": source_valid,
-        }
-    if (
-        source_valid
-        and len(lanes.done_items) + len(watch_only_monitor_items) == len(items)
-        and not convergent_open_items
-        and not successor_gap_items
-        and not route_replan_required
-    ):
-        summary["terminal_closure_proof"] = {
-            "schema_version": TODO_TERMINAL_CLOSURE_PROOF_SCHEMA_VERSION,
-            "role": role,
-            "source_section": source_section,
-            "item_count": len(items),
-            "all_todos_done": not watch_only_monitor_items,
-            "monitor_open_count": len(watch_only_monitor_items),
-            "successor_gap_count": 0,
-            "route_replan_count": 0,
-            "no_followup_count": len(no_followup_items),
-            "derived": True,
-        }
-        if watch_only_monitor_items:
-            summary["terminal_closure_proof"].update(
-                {
-                    "all_convergent_todos_done": True,
-                    "watch_only_monitor_count": len(watch_only_monitor_items),
-                }
-            )
-    if no_followup_items:
-        summary["closure_intent"] = {
-            "schema_version": TODO_CLOSURE_INTENT_SCHEMA_VERSION,
-            "kind": "no_followup",
-            "derived": True,
-            "count": len(no_followup_items),
-        }
-    if lanes.resume_blocked_items:
-        summary["resume_blocked_count"] = len(lanes.resume_blocked_items)
-        summary["resume_blocked_items"] = [
-            compact_todo_item(item)
-            for item in lanes.resume_blocked_items[:MAX_DEFERRED_TODO_VISIBILITY_ITEMS]
-        ]
+            projected["orchestration"], role=role)
     if handoff_gates:
         summary["handoff_gates"] = handoff_gates
-    if successor_gap_items:
-        compact_gap_items = successor_gap_items[:MAX_COMPLETED_SUCCESSION_WARNING_ITEMS]
-        summary["completed_without_successor_count"] = len(successor_gap_items)
-        summary["completed_without_successor_items"] = compact_gap_items
-        summary["todo_succession_warning"] = {
-            "schema_version": TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
-            "reason_code": TODO_SUCCESSION_WARNING_REASON_CODE,
-            "count": len(successor_gap_items),
-            "items": compact_gap_items,
-            "recommended_action": (
-                "run loopx todo complete --no-follow-up for the completed Todo, "
-                "or add/link a successor Todo before closing the slice; do not "
-                "invent a user gate"
-            ),
-        }
-    if lanes.active_next_action_items:
-        summary["active_next_action_items"] = [
-            compact_active_next_action_todo_item(item)
-            for item in lanes.active_next_action_items
-        ]
-    if lanes.active_next_action_executable_items:
-        summary["active_next_action_executable_items"] = [
-            compact_active_next_action_todo_item(item)
-            for item in lanes.active_next_action_executable_items
-        ]
-    if lanes.claimed_open_items:
-        summary["claimed_open_count"] = len(lanes.claimed_open_items)
-        summary["unclaimed_open_count"] = len(lanes.open_items) - len(lanes.claimed_open_items)
-        summary["claimed_advancement_open_count"] = len(lanes.claimed_advancement_items)
-        summary["claimed_monitor_open_count"] = len(lanes.claimed_monitor_items)
     return summary

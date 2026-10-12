@@ -63,11 +63,24 @@ def _projection_goal_fixture(
     )
     runs_dir = tmp_path / "runtime" / "goals" / "goal-1" / "runs"
     runs_dir.mkdir(parents=True)
-    (runs_dir / "index.jsonl").write_text(
-        "".join(json.dumps(run) + "\n" for run in runs),
-        encoding="utf-8",
-    )
+    _write_projection_runs(tmp_path / "runtime", runs)
     return tmp_path / "runtime", registry_path
+
+
+def _projection_run_path(runtime_root: Path, position: int = 0) -> Path:
+    return runtime_root / "goals" / "goal-1" / "runs" / f"run-{position}.json"
+
+
+def _write_projection_runs(runtime_root: Path, runs: list[dict[str, object]]) -> None:
+    rows = []
+    for position, raw_run in enumerate(runs):
+        artifact = _projection_run_path(runtime_root, position)
+        row = {**raw_run, "json_path": str(artifact)}
+        artifact.write_text(json.dumps(row), encoding="utf-8")
+        rows.append(row)
+    (_projection_run_path(runtime_root).parent / "index.jsonl").write_text(
+        "".join(json.dumps(run) + "\n" for run in reversed(rows)), encoding="utf-8"
+    )
 
 
 def _successor_ack_run(
@@ -1423,7 +1436,10 @@ def test_periodic_report_projection_reduces_durable_successor_transition(
     )
 
     projection = build_periodic_report_post_writeback_projection(
-        payload={"state": {"path": str(tmp_path / "goal.md")}},
+        payload={
+            "state": {"path": str(tmp_path / "goal.md")},
+            "json_path": str(_projection_run_path(runtime_root)),
+        },
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id="goal-1",
@@ -1434,6 +1450,35 @@ def test_periodic_report_projection_reduces_durable_successor_transition(
     assert receipt["transition"] == "successor_frontier_settled"
     assert receipt["frontier_identity"] == "frontier-2"
     assert projection["project_progress"]["observed_at"] == receipt["completed_at"]
+    assert build_periodic_report_post_writeback_projection(
+        payload={"state_file": str(tmp_path / "goal.md")},
+        registry_path=registry_path, runtime_root=runtime_root,
+        goal_id="goal-1", agent_id="agent-1",
+    ) == {}
+    assert build_periodic_report_post_writeback_projection(
+        payload={
+            "state_file": str(tmp_path / "goal.md"),
+            "json_path": str(_projection_run_path(runtime_root, 1)),
+        },
+        registry_path=registry_path, runtime_root=runtime_root,
+        goal_id="goal-1", agent_id="agent-1",
+    ) == {}
+    duplicate = {
+        **_successor_ack_run(),
+        "generated_at": "2026-08-30T12:00:00Z",
+        "json_path": str(_projection_run_path(runtime_root)),
+    }
+    index_path = _projection_run_path(runtime_root).parent / "index.jsonl"
+    with index_path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(duplicate) + "\n")
+    assert build_periodic_report_post_writeback_projection(
+        payload={
+            "state_file": str(tmp_path / "goal.md"),
+            "json_path": str(_projection_run_path(runtime_root)),
+        },
+        registry_path=registry_path, runtime_root=runtime_root,
+        goal_id="goal-1", agent_id="agent-1",
+    ) == {}
 
 
 def test_periodic_report_projection_reduces_terminal_after_todo_completion(
@@ -1514,7 +1559,10 @@ def test_periodic_report_projection_evaluates_turn_capabilities_absent_and_prese
     )
 
     projection_absent = build_periodic_report_post_writeback_projection(
-        payload={"state_file": str(tmp_path / "goal.md")},
+        payload={
+            "state_file": str(tmp_path / "goal.md"),
+            "json_path": str(_projection_run_path(runtime_root)),
+        },
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id="goal-1",
@@ -1531,6 +1579,7 @@ def test_periodic_report_projection_evaluates_turn_capabilities_absent_and_prese
     projection_present = build_periodic_report_post_writeback_projection(
         payload={
             "state_file": str(tmp_path / "goal.md"),
+            "json_path": str(_projection_run_path(runtime_root)),
             "available_capabilities": ["network"],
         },
         registry_path=registry_path,
@@ -1633,9 +1682,7 @@ def test_periodic_report_hook_accepts_projection_after_a_published_report(
     runtime_root, registry_path, state_path = _published_report_goal_fixtures(
         tmp_path, runs=runs
     )
-    ((runtime_root / "goals" / "goal-1" / "runs") / "index.jsonl").write_text(
-        "".join(json.dumps(run) + "\n" for run in runs), encoding="utf-8"
-    )
+    _write_projection_runs(runtime_root, runs)
     candidate = build_periodic_report_publication_candidate(
         goal_id="goal-1",
         agent_id="agent-1",
@@ -1653,7 +1700,10 @@ def test_periodic_report_hook_accepts_projection_after_a_published_report(
     )
 
     projection = build_periodic_report_post_writeback_projection(
-        payload={"state": {"path": str(state_path)}},
+        payload={
+            "state": {"path": str(state_path)},
+            "json_path": str(_projection_run_path(runtime_root)),
+        },
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id="goal-1",
@@ -2250,7 +2300,10 @@ def test_periodic_report_projection_isolates_other_agent_ack_and_claimed_todos(
 
     # Agent B's ACK and Agent B's claimed Todo must NOT settle Agent A's stage.
     projection_a = build_periodic_report_post_writeback_projection(
-        payload={"state": {"path": str(state_path)}},
+        payload={
+            "state": {"path": str(state_path)},
+            "json_path": str(_projection_run_path(runtime_root)),
+        },
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id="goal-1",
@@ -2273,10 +2326,7 @@ def test_periodic_report_projection_isolates_other_agent_ack_and_claimed_todos(
         json.loads(row)
         for row in (runs_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    (runs_dir / "index.jsonl").write_text(
-        "".join(json.dumps(run) + "\n" for run in [agent_a_ack, *prior_runs]),
-        encoding="utf-8",
-    )
+    _write_projection_runs(runtime_root, [agent_a_ack, *reversed(prior_runs)])
     state_path.write_text(
         """# Goal
 
@@ -2291,7 +2341,10 @@ def test_periodic_report_projection_isolates_other_agent_ack_and_claimed_todos(
     )
 
     projection_a_unclaimed = build_periodic_report_post_writeback_projection(
-        payload={"state": {"path": str(state_path)}},
+        payload={
+            "state": {"path": str(state_path)},
+            "json_path": str(_projection_run_path(runtime_root)),
+        },
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id="goal-1",
@@ -2571,3 +2624,106 @@ def test_refresh_state_composition_passes_effective_runtime_root_to_hooks(
 
     assert exit_code == 7
     assert captured["runtime_root"] == runtime_override
+
+
+def test_periodic_report_projection_carries_peer_lane_progress(
+    tmp_path,
+) -> None:
+    runtime_root, registry_path = _projection_goal_fixture(
+        tmp_path,
+        state_text="""# Goal
+
+## User Todo
+
+## Agent Todo
+
+- [x] Land the reporting lane's change.
+  <!-- loopx:todo status=done task_class=advancement_task claimed_by=agent-1 updated_at=2026-08-30T10:10:00Z -->
+- [x] Land a peer lane's change.
+  <!-- loopx:todo status=done task_class=advancement_task claimed_by=agent-2 updated_at=2026-08-30T10:20:00Z -->
+- [ ] Continue the reporting lane's next step.
+  <!-- loopx:todo status=open task_class=advancement_task claimed_by=agent-1 -->
+""",
+        runs=[
+            _successor_ack_run(),
+            _closed_vision_run(),
+        ],
+    )
+
+    projection = build_periodic_report_post_writeback_projection(
+        payload={
+            "state": {"path": str(tmp_path / "goal.md")},
+            "json_path": str(_projection_run_path(runtime_root)),
+        },
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id="goal-1",
+        agent_id="agent-1",
+    )
+
+    items = projection["project_progress"]["items"]
+    assert [(item["content_kind"], item["title"]) for item in items] == [
+        ("outcome", "Land the reporting lane's change."),
+        ("outcome", "Land a peer lane's change."),
+        ("next_action", "Next action"),
+    ]
+
+
+def test_periodic_report_projection_drops_facts_a_peer_already_delivered(
+    tmp_path,
+) -> None:
+    state_text = """# Goal
+
+## User Todo
+
+## Agent Todo
+
+- [x] Land the first bounded change.
+  <!-- loopx:todo status=done task_class=advancement_task claimed_by=agent-1 updated_at=2026-08-30T10:10:00Z -->
+- [x] Land the second bounded change.
+  <!-- loopx:todo status=done task_class=advancement_task claimed_by=agent-1 updated_at=2026-08-30T10:20:00Z -->
+- [ ] Continue the next bounded change.
+  <!-- loopx:todo status=open task_class=advancement_task claimed_by=agent-1 -->
+"""
+    runtime_root, registry_path = _projection_goal_fixture(
+        tmp_path,
+        state_text=state_text,
+        runs=[
+            _successor_ack_run(),
+            _closed_vision_run(),
+        ],
+    )
+
+    def projection() -> dict[str, object]:
+        return build_periodic_report_post_writeback_projection(
+            payload={
+                "state": {"path": str(tmp_path / "goal.md")},
+                "json_path": str(_projection_run_path(runtime_root)),
+            },
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id="goal-1",
+            agent_id="agent-1",
+        )
+
+    first = projection()
+    facts = first["project_progress"]["items"]
+    assert len(facts) == 3
+
+    candidate = build_periodic_report_publication_candidate(
+        goal_id="goal-1",
+        agent_id="agent-2",
+        generation_id="generation-peer-delivery",
+        trigger_receipt={"coalesced_trigger_ids": ["trigger-peer-delivery"]},
+        facts=facts,
+        baseline=None,
+    )
+    commit_periodic_report_publication_cursor(
+        runtime_root=runtime_root,
+        candidate=candidate,
+        publication_id="goal-channel:peer-delivery",
+        delivered_at="2026-08-30T12:00:00Z",
+        covered_until="2026-08-30T11:00:00Z",
+    )
+
+    assert "project_progress" not in projection()

@@ -476,6 +476,22 @@ test("turn-start read commands retain explicit routes with a bounded byte budget
   }
 });
 
+test("turn-start reads can opt into a bounded prompt budget without changing defaults", () => {
+  const registration = turnStartRegistration();
+  const read = registration.required_read;
+  assert.deepEqual(validateTurnStartHookRegistration(registration).required_read, read);
+  const budgeted = { ...read, prompt_budget_bytes: 1_536 };
+  assert.deepEqual(validateTurnStartHookRegistration({ ...registration, required_read: budgeted }).required_read, budgeted);
+  for (const value of [0, -1, 2_049, 1.5, true, "1536", null]) {
+    assert.throws(() => validateTurnStartHookRegistration({ ...registration,
+      required_read: { ...read, prompt_budget_bytes: value },
+    }), /prompt budget/);
+  }
+  assert.throws(() => validateTurnStartHookRegistration({ ...registration,
+    required_read: { ...read, prompt_budget_bytes: 64 },
+  }), /exceeds its declared prompt budget/);
+});
+
 test("turn-start observations require Agent reading without returning private content", () => {
   const observed = validateTurnStartHookInvocation({
     registration: turnStartRegistration(),
@@ -576,4 +592,27 @@ test("turn-start empty, provider failure, and owner-private write scopes stay di
     result: turnStartResult({ external_writes_performed: true }),
   });
   assert.equal(reacted.external_writes_performed, true);
+});
+
+
+test("Explore settlement hint cannot inject a command or impose a work obligation", () => {
+  const reg = registration({hook_id: "explore.settlement_attachment", capability_id: "explore",
+    projection_slots: ["explore_result_attachment"], requested_read_scope: ["goal.explore_policy"]});
+  const result = {schema_version: INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,
+    hook_id: reg.hook_id, capability_id: "explore", phase: "interaction_projection",
+    status: "candidate", projection_slot: "explore_result_attachment", payload: {}};
+  const projected = validateInteractionProjectionHookInvocation({registration: reg, result});
+  const hint = projected.projection as Record<string, unknown>;
+  assert.equal(hint.required, false);
+  assert.equal(hint.option, "--explore-result-json <result.json>");
+  assert.equal(hint.inline_option, "--agent-vision-json <vision.json>");
+  assert.equal(hint.inline_field, "explore_result");
+  assert.equal(hint.attachment_schema, "explore_result_attachment_v0");
+  for (const payload of [{required: true}, {command: "run something"}, {guidance: "Always write"}]) {
+    assert.throws(() => validateInteractionProjectionHookInvocation({registration: reg,
+      result: {...result, payload}}), /presence must be empty/);
+  }
+  assert.throws(() => validateInteractionProjectionHookInvocation({
+    registration: {...reg, capability_id: "other"}, result: {...result, capability_id: "other"},
+  }), /owning capability/);
 });

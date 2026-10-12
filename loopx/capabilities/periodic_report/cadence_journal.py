@@ -5,7 +5,6 @@ It never sends a report and never advances the authoritative delivery cursor.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -16,6 +15,8 @@ from typing import Any
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
 from ...registry import atomic_write_json
 from .cadence import report_cadence_window
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+from ...control_plane.digest_envelope import sha256_envelope
 
 CADENCE_WINDOW_SCHEMA = "periodic_report_cadence_window_v0"
 JOURNAL_SCHEMA = "periodic_report_cadence_journal_v0"
@@ -23,9 +24,9 @@ _ID = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 
 
 def _digest(value: object) -> str:
-    return "sha256:" + hashlib.sha256(json.dumps(
-        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
-    ).encode()).hexdigest()
+    return sha256_envelope(
+        json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    )
 
 
 def cadence_journal_path(root: Path, goal_id: str) -> Path:
@@ -47,7 +48,7 @@ def validate_cadence_window(raw: object) -> dict[str, Any]:
         for key in ("goal_id", "agent_id")
     ):
         raise ValueError("cadence window identity is invalid")
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(value["subscription_revision"])):
+    if not ENVELOPED_SHA256_PATTERN.fullmatch(str(value["subscription_revision"])):
         raise ValueError("cadence subscription revision is invalid")
     if not isinstance(value["profile_ref"], Mapping) or not isinstance(value["trigger_policy"], Mapping):
         raise ValueError("cadence profile facts are invalid")

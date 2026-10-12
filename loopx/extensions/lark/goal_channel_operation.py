@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import html
 import json
-import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -18,29 +17,31 @@ from ...extensions.runtime import (
     execute_extension_runtime_binding,
     resolve_extension_binding,
 )
+from .card_callback import (
+    callback_card_content_matches,
+    callback_timestamp,
+    operator_membership_verified,
+    patch_result_card,
+    read_callback_card_content,
+    update_callback_card,
+)
 from .goal_channel_contracts import operation_packet
 from .goal_channel_delivery_contract import (
     goal_channel_binding_digest,
     goal_channel_delivery_route,
 )
 from .goal_channel_message_delivery import (
+    GoalChannelDeliveryStageError,
     GoalChannelMessageDeliverySession,
-    card_projection_matches,
-    message_card_matches,
-    normalized_card_text,
     resolve_bound_goal_channel,
 )
-from .goal_channel_transport import call, json_payload, lark_args
+from .identity_shapes import require_card_callback_identity
 from .presentation.kanban import CommandRunner, default_subprocess_runner
 
 
 OPERATION_CARD_ACTION_SCHEMA_VERSION = "loopx_operation_card_action_v0"
 OPERATION_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_operation_callback_receipt_v0"
 OPERATION_EXECUTOR_CAPABILITY_ID = "human-confirmed-operation-executor"
-_EVENT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,240}$")
-_MESSAGE_ID = re.compile(r"^om_[A-Za-z0-9_-]+$")
-_CHAT_ID = re.compile(r"^oc_[A-Za-z0-9_-]+$")
-_OPEN_ID = re.compile(r"^ou_[A-Za-z0-9_-]+$")
 
 
 def _digest(value: object) -> str:
@@ -87,12 +88,14 @@ def _field_markdown(fields: list[Mapping[str, Any]]) -> str:
     )
 
 
-def _operation_review_frame(proposal: Mapping[str, Any]) -> dict[str, Any]:
+def _operation_review_frame(
+    proposal: Mapping[str, Any], *, now_ms: int | None = None
+) -> dict[str, Any]:
     """Read provider-neutral operation presentation semantics from TypeScript."""
 
     plan = effect_runtime_result(
         "presentation.action_review_plan.compile",
-        {"proposal": proposal},
+        {"proposal": proposal, **({"now_ms": now_ms} if now_ms is not None else {})},
     )
     if not isinstance(plan, Mapping):
         raise ValueError("operation review plan is unavailable")
@@ -106,10 +109,35 @@ def _operation_review_frame(proposal: Mapping[str, Any]) -> dict[str, Any]:
     return dict(frame)
 
 
+def _result_delivery_stage(proposal: Mapping[str, Any]) -> dict[str, str]:
+    parameters, operation = _proposal_operation(proposal)
+    if (parameters.get("executor") or {}).get("kind") not in {
+        "agent_session",
+        "managed_turn",
+    }:
+        return {}
+    return {
+        "outcome_stage": "reconciled"
+        if operation.get("reconciliation") is not None
+        else "initial"
+    }
+
+
+def _result_delivery_current(proposal: Mapping[str, Any]) -> bool:
+    _parameters, operation = _proposal_operation(proposal)
+    delivery = operation.get("result_delivery")
+    return isinstance(delivery, Mapping) and all(
+        delivery.get(key) == value
+        for key, value in _result_delivery_stage(proposal).items()
+    )
+
+
 def build_goal_channel_operation_card(
     proposal: Mapping[str, Any],
+    *,
+    now_ms: int | None = None,
 ) -> dict[str, Any]:
-    frame = _operation_review_frame(proposal)
+    frame = _operation_review_frame(proposal, now_ms=now_ms)
     if frame.get("kind") != "confirmation":
         raise ActionConflictError("operation is not awaiting confirmation")
     projection = frame.get("content")
@@ -319,16 +347,46 @@ def build_goal_channel_operation_result_card(
     proposal: Mapping[str, Any],
 ) -> dict[str, Any]:
     frame = _operation_review_frame(proposal)
-    if frame.get("kind") != "result":
+    if frame.get("kind") not in {"result", "pending"}:
         raise ActionConflictError("operation outcome is not available")
     projection = frame.get("content")
     if not isinstance(projection, Mapping):
         raise ValueError("operation result projection is unavailable")
     result_kind = frame.get("resultKind")
+    pending = frame.get("kind") == "pending"
+    unknown = result_kind == "unknown"
+    not_executed = result_kind == "not_executed"
+    cancelled = result_kind == "cancelled"
     rejected = result_kind == "rejected"
     simulated = result_kind == "simulation_completed"
-    template = "red" if rejected else "green"
-    result_label = "已拒绝" if rejected else "模拟完成" if simulated else "已完成"
+    template = (
+        "orange"
+        if pending or unknown or not_executed or cancelled
+        else "red"
+        if rejected
+        else "green"
+    )
+    result_label = (
+        "已确认，原宿主身份认证尚未接通"
+        if pending
+        else "结果未知，须核对原操作，不可重复提交"
+        if unknown
+        else "已结束，未执行"
+        if not_executed
+        else "确认请求已取消，未执行"
+        if cancelled
+        else "已拒绝"
+        if rejected
+        else "模拟完成"
+        if simulated
+        else "已完成"
+    )
+    if pending and frame.get("executionState") == "consumed_outcome_pending":
+        result_label = "执行授权已消费，等待真实结果"
+    elif pending and frame.get("executionState") == "managed_turn_pending":
+        result_label = "已确认，等待绑定的受管回合；尚未执行"
+    elif pending and frame.get("executionState") == "managed_turn_started":
+        result_label = "原生续接已接受；授权仍待消费，尚无执行结果"
     summary = str(frame.get("summary") or result_label)
     return {
         "schema": "2.0",
@@ -350,7 +408,11 @@ def build_goal_channel_operation_result_card(
                 {
                     "tag": "text_tag",
                     "text": {"tag": "plain_text", "content": result_label},
-                    "color": "red" if rejected else "green",
+                    "color": "orange"
+                    if pending or unknown or not_executed or cancelled
+                    else "red"
+                    if rejected
+                    else "green",
                 }
             ],
         },
@@ -430,13 +492,7 @@ def deliver_goal_channel_operation_card(
     goal_id = str(parameters["goal_id"])
     if expected_goal_id is not None and goal_id != expected_goal_id:
         raise ActionConflictError("operation proposal belongs to another goal")
-    resolved_executor = dict(
-        executor_binding_resolver(parameters, runtime_root)
-        if executor_binding_resolver is not None
-        else _resolve_operation_executor_binding(parameters, runtime_root=runtime_root)
-    )
-    if resolved_executor.get("revision") != parameters["executor"]["revision"]:
-        raise ActionConflictError("operation executor revision is not ready")
+    confirmed_operation_executor(parameters, runtime_root, executor_binding_resolver)
     agent_id = str(parameters["agent_id"])
     binding = resolve_bound_goal_channel(
         binding_path=binding_path,
@@ -445,7 +501,9 @@ def deliver_goal_channel_operation_card(
         agent_id=agent_id,
     )
     route = goal_channel_delivery_route(goal_id, lambda _goal_id: binding)
-    card = build_goal_channel_operation_card(proposal)
+    card = build_goal_channel_operation_card(
+        proposal, now_ms=int(datetime.now(timezone.utc).timestamp() * 1000)
+    )
     card_digest = _digest(card)
     key = str(operation["confirmation_digest"])
     if not execute:
@@ -485,10 +543,27 @@ def deliver_goal_channel_operation_card(
         runner=runner,
     )
     if session.verify(route) is not True:
-        raise ValueError("Goal Channel sender identity could not be verified")
+        raise GoalChannelDeliveryStageError(
+            "Goal Channel sender identity could not be verified",
+            blocker="sender_identity_unverified",
+            failure_stage="verify_sender_identity",
+        )
+    # Identity verification can cross the deadline. Fresh delivery uses the
+    # shared TS expiry guard; historical callback reconstruction stays timeless.
+    build_goal_channel_operation_card(
+        proposal, now_ms=int(datetime.now(timezone.utc).timestamp() * 1000)
+    )
     sent = dict(session.send(card, key, route))
     message_id = str(sent.get("message_id") or "")
-    observed = dict(session.readback(message_id))
+    try:
+        observed = dict(session.readback(message_id))
+    except Exception as exc:
+        raise GoalChannelDeliveryStageError(
+            "operation card delivery outcome is unknown after the provider write",
+            blocker="delivery_outcome_unknown",
+            failure_stage="read_operation_card",
+            external_write_performed=None,
+        ) from exc
     if not (
         observed.get("verified") is True
         and observed.get("message_id") == message_id
@@ -508,22 +583,30 @@ def deliver_goal_channel_operation_card(
             receipt_id=proposal_id,
             blocker="readback_unverified",
         )
-    store.record_operation_delivery(
-        proposal_id,
-        delivery={
-            "provider": "lark",
-            "message_id": message_id,
-            "chat_id": route["chat_id"],
-            "app_id": route["bot_app_id"],
-            "binding_digest": goal_channel_binding_digest(binding),
-            "card_digest": card_digest,
-            "delivered_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
-    store.record_operation_delivery_snapshot(
-        proposal_id,
-        submitted_card=card,
-    )
+    try:
+        store.record_operation_delivery(
+            proposal_id,
+            delivery={
+                "provider": "lark",
+                "message_id": message_id,
+                "chat_id": route["chat_id"],
+                "app_id": route["bot_app_id"],
+                "binding_digest": goal_channel_binding_digest(binding),
+                "card_digest": card_digest,
+                "delivered_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        store.record_operation_delivery_snapshot(
+            proposal_id,
+            submitted_card=card,
+        )
+    except Exception as exc:
+        raise GoalChannelDeliveryStageError(
+            "operation card was delivered but its receipt could not be recorded",
+            blocker="delivery_receipt_write_failed",
+            failure_stage="record_delivery_receipt",
+            external_write_performed=None,
+        ) from exc
     return operation_packet(
         ok=True,
         goal_id=goal_id,
@@ -571,135 +654,11 @@ def _callback_action(event: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _callback_timestamp(value: object) -> str:
-    token = str(value or "").strip()
-    precision = {
-        13: 1_000,
-        16: 1_000_000,
-    }.get(len(token))
-    if not token.isdigit() or precision is None:
-        raise ValueError("operation callback timestamp is invalid")
-    seconds, remainder = divmod(int(token), precision)
-    return (
-        (
-            datetime.fromtimestamp(seconds, tz=timezone.utc)
-            + timedelta(microseconds=remainder * (1_000_000 // precision))
-        )
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return callback_timestamp(value, subject="operation")
 
 
-def _lark_card_v2_fallback_matches(
-    observed: Mapping[str, Any], expected: Mapping[str, Any]
-) -> bool:
-    """Recognize Lark's message-get fallback for a Card 2.0 payload.
-
-    The provider exposes Card 2.0 through message-get as a title plus an
-    upgrade-client placeholder. ``card.action.trigger`` consumers hydrate
-    ``card_content`` from that endpoint, so its digest cannot equal the
-    submitted Card 2.0 JSON. The exact message, route, app, action digest, and
-    recorded submitted-card digest are checked independently by the caller.
-    """
-
-    if expected.get("schema") != "2.0":
-        return False
-    header = expected.get("header")
-    if not isinstance(header, Mapping):
-        return False
-    title_value = header.get("title")
-    subtitle_value = header.get("subtitle")
-    title = title_value.get("content") if isinstance(title_value, Mapping) else None
-    subtitle = (
-        subtitle_value.get("content") if isinstance(subtitle_value, Mapping) else None
-    )
-    expected_title = "\n".join(
-        item for item in (title, subtitle) if isinstance(item, str) and item
-    )
-    return _lark_card_v2_fallback_matches_title(observed, expected_title)
-
-
-def _lark_card_v2_fallback_matches_title(
-    observed: Mapping[str, Any], expected_title: str
-) -> bool:
-    if set(observed) != {"title", "elements"}:
-        return False
-    elements = observed.get("elements")
-    if observed.get("title") != expected_title or not isinstance(elements, list):
-        return False
-    leaves: list[Mapping[str, Any]] = []
-
-    def collect(value: object) -> bool:
-        if isinstance(value, list):
-            return bool(value) and all(collect(item) for item in value)
-        if not isinstance(value, Mapping) or value.get("tag") not in {"img", "text"}:
-            return False
-        leaves.append(value)
-        return True
-
-    return collect(elements) and any(item.get("tag") == "img" for item in leaves)
-
-
-def _callback_card_content_matches(value: object, expected: Mapping[str, Any]) -> bool:
-    """Verify either provider JSON or the documented userDSL callback shape."""
-
-    observed: object = value
-    if isinstance(value, str):
-        if not value:
-            return False
-        try:
-            observed = json.loads(value)
-        except json.JSONDecodeError:
-            return value == normalized_card_text(expected)
-    return bool(
-        isinstance(observed, Mapping)
-        and (
-            card_projection_matches(observed, expected)
-            or _lark_card_v2_fallback_matches(observed, expected)
-        )
-    )
-
-
-def _read_callback_card_content(
-    *,
-    runner: CommandRunner,
-    cli_bin: str,
-    profile: str,
-    message_id: str,
-    chat_id: str,
-    app_id: str,
-) -> object:
-    """Retry the CLI's best-effort callback hydration through exact readback."""
-
-    result = call(
-        runner,
-        lark_args(
-            cli_bin=cli_bin,
-            profile=profile,
-            tail=[
-                "api",
-                "GET",
-                f"/open-apis/im/v1/messages/{message_id}",
-                "--params",
-                json.dumps({"card_msg_content_type": "user_card_content"}),
-                "--as",
-                "bot",
-            ],
-        ),
-    )
-    if result.get("returncode") != 0:
-        return None
-    message = _find_message(json_payload(result), message_id)
-    sender = message.get("sender") if isinstance(message, Mapping) else None
-    if (
-        not isinstance(message, Mapping)
-        or str(message.get("chat_id") or "") != chat_id
-        or not isinstance(sender, Mapping)
-        or sender.get("sender_type") != "app"
-        or sender.get("id") != app_id
-    ):
-        return None
-    body = message.get("body") if isinstance(message, Mapping) else None
-    return body.get("content") if isinstance(body, Mapping) else None
+_callback_card_content_matches = callback_card_content_matches
+_read_callback_card_content = read_callback_card_content
 
 
 def _callback_replays_confirmation(
@@ -724,101 +683,22 @@ def _callback_replays_confirmation(
     return all(confirmation.get(key) == value for key, value in expected.items())
 
 
-def _operator_membership_verified(
-    *,
-    runner: CommandRunner,
-    cli_bin: str,
-    profile: str,
-    chat_id: str,
-    operator_id: str,
-) -> bool:
-    chat_result = call(
-        runner,
-        lark_args(
-            cli_bin=cli_bin,
-            profile=profile,
-            tail=[
-                "im",
-                "chats",
-                "get",
-                "--chat-id",
-                chat_id,
-                "--as",
-                "bot",
-                "--format",
-                "json",
-            ],
-        ),
-    )
-    member_result = call(
-        runner,
-        lark_args(
-            cli_bin=cli_bin,
-            profile=profile,
-            tail=[
-                "im",
-                "+chat-members-list",
-                "--chat-id",
-                chat_id,
-                "--member-types",
-                "user",
-                "--member-id-type",
-                "open_id",
-                "--page-all",
-                "--as",
-                "bot",
-                "--format",
-                "json",
-            ],
-        ),
-    )
-    if chat_result.get("returncode") != 0 or member_result.get("returncode") != 0:
-        return False
-    chat_payload = json_payload(chat_result)
-    member_payload = json_payload(member_result)
-    chat_tenant = _first_tenant_key(chat_payload)
-    member_tenant = _member_tenant_key(member_payload, operator_id)
-    return bool(chat_tenant and member_tenant and chat_tenant == member_tenant)
-
-
-def _first_tenant_key(value: object) -> str | None:
-    if isinstance(value, Mapping):
-        candidate = value.get("tenant_key")
-        if isinstance(candidate, str) and candidate:
-            return candidate
-        for child in value.values():
-            if found := _first_tenant_key(child):
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            if found := _first_tenant_key(child):
-                return found
-    return None
-
-
-def _member_tenant_key(value: object, operator_id: str) -> str | None:
-    if isinstance(value, Mapping):
-        identities = {
-            str(value.get(key) or "")
-            for key in ("member_id", "open_id", "operator_id", "id")
-        }
-        tenant_key = value.get("tenant_key")
-        if operator_id in identities and isinstance(tenant_key, str) and tenant_key:
-            return tenant_key
-        for child in value.values():
-            if found := _member_tenant_key(child, operator_id):
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            if found := _member_tenant_key(child, operator_id):
-                return found
-    return None
+_operator_membership_verified = operator_membership_verified
 
 
 def _resolve_operation_executor_binding(
     parameters: Mapping[str, Any], *, runtime_root: Path
 ) -> dict[str, Any]:
     executor = parameters.get("executor")
+    if isinstance(executor, Mapping) and executor.get("kind") in {
+        "agent_session",
+        "managed_turn",
+    }:
+        return dict(
+            effect_runtime_result(
+                "operation.agent_executor.normalize", {"executor": dict(executor)}
+            )
+        )
     if not isinstance(executor, Mapping):
         raise ValueError("operation executor binding is unavailable")
     return resolve_extension_binding(
@@ -828,6 +708,76 @@ def _resolve_operation_executor_binding(
         protocol=str(executor["protocol"]),
         permission=str(executor["permission"]),
     )
+
+
+class OperationExecutorDriftError(ActionConflictError):
+    """The requested executor revision does not match the active binding.
+
+    Raised before any durable proposal is written and again at delivery, so
+    a stale proposal can never reach the provider. `details` carries only
+    opaque revision identifiers.
+    """
+
+    def __init__(
+        self,
+        summary: str,
+        *,
+        failure_stage: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(summary)
+        self.blocker = "executor_revision_drift"
+        self.failure_stage = failure_stage
+        self.details = dict(details or {})
+        self.external_write_performed = False
+
+
+def confirmed_operation_executor(
+    parameters: Mapping[str, Any],
+    runtime_root: Path,
+    executor_binding_resolver: (
+        Callable[[Mapping[str, Any], Path], Mapping[str, Any]] | None
+    ),
+) -> dict[str, Any]:
+    """Resolve the declared executor binding against the active revision.
+
+    Shared by prepare (before any durable write) and deliver, so a proposal
+    whose executor revision no longer matches the installed extension is
+    rejected with a typed blocker instead of surfacing later as an
+    unreachable gated proposal. Resolution failures never leak the private
+    resolver text. ``executor_binding_resolver`` is a test seam with the same
+    shape as the delivery runner: production callers leave it unset and get the
+    extension binding resolver, so it is not a supported configuration entry.
+    """
+
+    executor = parameters.get("executor")
+    requested_revision = (
+        executor.get("revision") if isinstance(executor, Mapping) else None
+    )
+    try:
+        resolved = dict(
+            executor_binding_resolver(parameters, runtime_root)
+            if executor_binding_resolver is not None
+            else _resolve_operation_executor_binding(
+                parameters, runtime_root=runtime_root
+            )
+        )
+    except ValueError as exc:
+        raise GoalChannelDeliveryStageError(
+            "operation executor binding is unavailable",
+            blocker="executor_unavailable",
+            failure_stage="resolve_executor_binding",
+        ) from exc
+    if resolved.get("revision") != requested_revision:
+        raise OperationExecutorDriftError(
+            "operation executor revision is not ready",
+            failure_stage="resolve_executor_binding",
+            details={
+                "requested_executor_revision": requested_revision,
+                "active_executor_revision": resolved.get("revision"),
+            },
+        )
+    return resolved
 
 
 def _execute_claimed_operation(
@@ -876,187 +826,8 @@ def _execute_claimed_operation(
     return result
 
 
-def _find_message(value: object, message_id: str) -> Mapping[str, Any] | None:
-    if isinstance(value, Mapping):
-        if str(value.get("message_id") or "") == message_id:
-            return value
-        for child in value.values():
-            if found := _find_message(child, message_id):
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            if found := _find_message(child, message_id):
-                return found
-    return None
-
-
-def _result_card_readback_verified(
-    payload: Mapping[str, Any],
-    *,
-    message_id: str,
-    chat_id: str,
-    app_id: str,
-    card: Mapping[str, Any],
-) -> bool:
-    message = _find_message(payload, message_id)
-    sender = message.get("sender") if isinstance(message, Mapping) else None
-    return bool(
-        payload.get("ok") is True
-        and isinstance(message, Mapping)
-        and str(message.get("chat_id") or "") == chat_id
-        and isinstance(sender, Mapping)
-        and sender.get("sender_type") == "app"
-        and sender.get("id") == app_id
-        and message_card_matches(message, card)
-    )
-
-
-def _read_result_card(
-    *,
-    runner: CommandRunner,
-    cli_bin: str,
-    profile: str,
-    message_id: str,
-) -> tuple[Mapping[str, Any], bool]:
-    readback = call(
-        runner,
-        lark_args(
-            cli_bin=cli_bin,
-            profile=profile,
-            tail=[
-                "im",
-                "+messages-mget",
-                "--message-ids",
-                message_id,
-                "--as",
-                "bot",
-                "--no-reactions",
-                "--format",
-                "json",
-            ],
-        ),
-    )
-    return json_payload(readback), readback.get("returncode") == 0
-
-
-def _update_callback_card(
-    *,
-    runner: CommandRunner,
-    cli_bin: str,
-    profile: str,
-    token: str,
-    card: Mapping[str, Any],
-    message_id: str,
-    chat_id: str,
-    app_id: str,
-) -> dict[str, bool]:
-    result = call(
-        runner,
-        lark_args(
-            cli_bin=cli_bin,
-            profile=profile,
-            tail=[
-                "api",
-                "POST",
-                "/open-apis/interactive/v1/card/update",
-                "--as",
-                "bot",
-                "--data",
-                json.dumps(
-                    {"token": token, "card": dict(card)},
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            ],
-        ),
-    )
-    payload = json_payload(result)
-    write_performed = result.get("returncode") == 0 and payload.get("ok") is True
-    if not write_performed:
-        return {"external_write_performed": False, "readback_verified": False}
-    readback_payload, readback_ok = _read_result_card(
-        runner=runner,
-        cli_bin=cli_bin,
-        profile=profile,
-        message_id=message_id,
-    )
-    verified = bool(
-        readback_ok
-        and _result_card_readback_verified(
-            readback_payload,
-            message_id=message_id,
-            chat_id=chat_id,
-            app_id=app_id,
-            card=card,
-        )
-    )
-    return {
-        "external_write_performed": True,
-        "readback_verified": verified,
-    }
-
-
-def _patch_operation_result_card(
-    *,
-    runner: CommandRunner,
-    cli_bin: str,
-    profile: str,
-    card: Mapping[str, Any],
-    message_id: str,
-    chat_id: str,
-    app_id: str,
-) -> dict[str, bool]:
-    result = call(
-        runner,
-        lark_args(
-            cli_bin=cli_bin,
-            profile=profile,
-            tail=[
-                "im",
-                "messages",
-                "patch",
-                "--message-id",
-                message_id,
-                "--data",
-                json.dumps(
-                    {
-                        "content": json.dumps(
-                            dict(card),
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        )
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                "--as",
-                "bot",
-                "--format",
-                "json",
-            ],
-        ),
-    )
-    payload = json_payload(result)
-    write_performed = result.get("returncode") == 0 and payload.get("ok") is True
-    if not write_performed:
-        return {"external_write_performed": False, "readback_verified": False}
-    readback_payload, readback_ok = _read_result_card(
-        runner=runner,
-        cli_bin=cli_bin,
-        profile=profile,
-        message_id=message_id,
-    )
-    verified = readback_ok and _result_card_readback_verified(
-        readback_payload,
-        message_id=message_id,
-        chat_id=chat_id,
-        app_id=app_id,
-        card=card,
-    )
-    return {
-        "external_write_performed": True,
-        "readback_verified": verified,
-    }
+_update_callback_card = update_callback_card
+_patch_operation_result_card = patch_result_card
 
 
 def recover_goal_channel_operation_results(
@@ -1084,7 +855,7 @@ def recover_goal_channel_operation_results(
         delivery = operation.get("delivery")
         if (
             operation.get("lifecycle_state") != "outcome_observed"
-            or isinstance(operation.get("result_delivery"), Mapping)
+            or _result_delivery_current(proposal)
             or not isinstance(delivery, Mapping)
             or delivery.get("provider") != "lark"
             or delivery.get("app_id") != profile_app_id
@@ -1103,7 +874,7 @@ def recover_goal_channel_operation_results(
                 failed += 1
                 continue
             _current_parameters, current_operation = _proposal_operation(current)
-            if isinstance(current_operation.get("result_delivery"), Mapping):
+            if _result_delivery_current(current):
                 continue
             current_delivery = current_operation.get("delivery")
             if not isinstance(current_delivery, Mapping):
@@ -1132,6 +903,7 @@ def recover_goal_channel_operation_results(
                     "card_digest": _digest(result_card),
                     "transport": "message_patch",
                     "delivered_at": datetime.now(timezone.utc).isoformat(),
+                    **_result_delivery_stage(current),
                 },
             )
             delivered += 1
@@ -1204,6 +976,7 @@ def handle_goal_channel_operation_callback(
     profile: str,
     runner: CommandRunner = default_subprocess_runner,
     executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    managed_turn_wake: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     action = _callback_action(event)
     callback_token = str(event.get("token") or "").strip()
@@ -1213,14 +986,7 @@ def handle_goal_channel_operation_callback(
         or any(ord(character) < 32 for character in callback_token)
     ):
         raise ValueError("operation callback update token is invalid")
-    for field, pattern in (
-        ("event_id", _EVENT_ID),
-        ("message_id", _MESSAGE_ID),
-        ("chat_id", _CHAT_ID),
-        ("operator_id", _OPEN_ID),
-    ):
-        if not pattern.fullmatch(str(event.get(field) or "")):
-            raise ValueError(f"operation callback {field} is invalid")
+    require_card_callback_identity(event, error_prefix="operation callback")
     if str(event.get("host") or "") != "im_message":
         raise ValueError("operation callback host is unsupported")
     store = ChatActionStore(action_store_root)
@@ -1295,6 +1061,7 @@ def handle_goal_channel_operation_callback(
         },
     )
     dispatch_lock = store.root / f"{action['operation_id']}.dispatch.lock"
+    wake_receipt = None
     with exclusive_file_lock(
         dispatch_lock,
         agent_id="loopx-lark-operation",
@@ -1304,7 +1071,19 @@ def handle_goal_channel_operation_callback(
         if current is None:
             raise ValueError("claimed operation disappeared before dispatch")
         _parameters, current_operation = _proposal_operation(current)
-        if current_operation.get("lifecycle_state") == "claimed":
+        if current_operation.get("lifecycle_state") == "claimed" and (
+            _parameters.get("executor") or {}
+        ).get("kind") in {"agent_session", "managed_turn"}:
+            # Confirmation exposes an exact canonical continuation in the
+            # existing Inbox. No simulator, host resume or financial effect is
+            # run in the callback process, and no outcome is manufactured.
+            store._agent_operation_plan(current, action="project")
+            from ...control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
+
+            wake_receipt = dispatch_confirmed_operation_wake(
+                current, runtime_root=runtime_root, configuration=managed_turn_wake
+            )
+        elif current_operation.get("lifecycle_state") == "claimed":
             outcome = dict(
                 executor(current)
                 if executor is not None
@@ -1325,7 +1104,7 @@ def handle_goal_channel_operation_callback(
             raise ValueError("operation disappeared before result delivery")
         decided = current
         result_card = build_goal_channel_operation_result_card(decided)
-        if isinstance(decided["operation"].get("result_delivery"), Mapping):
+        if _result_delivery_current(decided):
             update = {"external_write_performed": False, "readback_verified": True}
         else:
             update = _update_callback_card(
@@ -1338,7 +1117,10 @@ def handle_goal_channel_operation_callback(
                 chat_id=str(delivery["chat_id"]),
                 app_id=str(delivery["app_id"]),
             )
-            if update["readback_verified"] is True:
+            if (
+                update["readback_verified"] is True
+                and decided["operation"]["lifecycle_state"] == "outcome_observed"
+            ):
                 decided = store.record_operation_result_delivery(
                     action["operation_id"],
                     delivery={
@@ -1349,26 +1131,42 @@ def handle_goal_channel_operation_callback(
                         "card_digest": _digest(result_card),
                         "transport": "callback_update",
                         "delivered_at": datetime.now(timezone.utc).isoformat(),
+                        **_result_delivery_stage(decided),
                     },
                 )
     update_verified = update["readback_verified"]
+    observed_outcome = (
+        decided["operation"].get("reconciliation")
+        or decided["operation"].get("outcome")
+        or {}
+    )
     return {
         "ok": update_verified,
         "schema_version": OPERATION_CALLBACK_RECEIPT_SCHEMA_VERSION,
         "operation_id": action["operation_id"],
         "decision": action["decision"],
         "lifecycle_state": decided["operation"]["lifecycle_state"],
-        "outcome": decided["operation"]["outcome"]["outcome"],
+        "outcome": observed_outcome.get("outcome"),
         "claim_id": (
             decided["operation"]["claim"]["claim_id"]
             if isinstance(decided["operation"].get("claim"), Mapping)
             else None
         ),
         "callback_ack_is_execution_receipt": False,
+        "managed_turn_wake": wake_receipt,
         "card_update_verified": update_verified,
-        "status": "outcome_observed" if update_verified else "result_delivery_pending",
+        "status": (
+            "authorization_pending"
+            if decided["operation"]["lifecycle_state"] == "claimed"
+            else "submission_unknown"
+            if observed_outcome.get("outcome") == "submission_unknown"
+            else "outcome_observed"
+        )
+        if update_verified
+        else "result_delivery_pending",
+        "needs_reconciliation": observed_outcome.get("outcome") == "submission_unknown",
         "domain_external_write_performed": bool(
-            decided["operation"]["outcome"].get("external_write_performed") is True
+            observed_outcome.get("external_write_performed") is True
         ),
         "external_write_performed": update["external_write_performed"],
     }

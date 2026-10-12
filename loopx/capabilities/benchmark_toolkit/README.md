@@ -261,7 +261,14 @@ release-snapshot CLI, requires the `codex_app_ssh_goal` profile and interface bu
 and proves that the returned body names that installed CLI. For an isolated case it
 also replaces the generic global-registry token with the explicit case registry.
 Keep app-server on `native_codex_profile_environment`; it supplies only the
-formal profile's `HOME`, `CODEX_HOME`, and `PATH`. The upstream provider value
+formal profile's `HOME`, `CODEX_HOME`, `PATH`, and home-scoped temporary directory
+(`TMPDIR`, `TMP`, `TEMP`). Installation and later profile calls use that same
+temporary scope, so equal-source profiles do not share runtime locators or
+shutdown ownership. Stop profile callers, then invoke
+`doctor --installation-only --restart-runtime` through its installed CLI with
+`native_codex_profile_environment(profile)` before removing the profile; require
+`stopped` or `not_running`, leaving incomplete shutdown visible.
+The upstream provider value
 must remain in `serve_runner_owned_provider_gateway`, while app-server receives
 only the loopback gateway URL and a fixed non-secret sentinel. On Linux, place
 app-server inside `native_codex_isolation` so its fresh PID namespace and
@@ -907,10 +914,29 @@ silently pooled. Unknown fields and path-like references fail closed.
 Every non-baseline row names an exact `comparison_anchor_run_id`. Standard control
 or treatment rows anchor to a baseline. Explore rows use `diagnostic_only` claim
 scope and may anchor to the baseline or fixed standard arm they are examining.
+Run identity is `(benchmark_id, study_id, case_id, run_id)`; an anchor inherits
+the candidate's benchmark, study, and case. Run ids may be reused across those
+scopes. Duplicate full identities must be reconciled before board readback.
+Study provenance and case insights bind to this same identity. Dashboard run
+links retain the case; a legacy run-id-only link resolves only when unambiguous.
 Matched comparisons require compatible benchmark, study, case, model, primary
 metric, comparison protocol, score countability, and treatment fidelity. Exact
 protocol revisions remain visible as a warning even when a declared comparison
 protocol says an older credible score remains semantically comparable.
+
+Metric comparisons preserve the raw `delta` (candidate value minus baseline
+value). When both metrics have positive totals, `delta_rate` determines improvement
+and the dashboard's largest eligible contrast; Markdown and dashboard labels show
+this change in percentage points (`pp`). Scalar metrics use the raw delta.
+Units, improvement direction, and the presence of a denominator must agree.
+A mismatch, zero denominator, or non-finite difference retains the endpoint values
+with `comparison_unavailable_reason`, without a delta or direction. An unavailable
+primary metric excludes the matched pair; an unavailable auxiliary metric does
+not invalidate an otherwise eligible primary comparison. Optional unit and
+direction metadata may remain absent on both sides of historical board rows.
+Factorial interactions use the same scale across all four cells and retain the
+existing fixed-total requirement for their primary metric. The study dashboard
+does not rank a mixture of scalar and ratio contrasts against one another.
 
 Full post-run analysis stays in private `benchmark_case_insight_v0` storage. The
 board records only its compact status or handle, so reading the board cannot widen
@@ -1360,6 +1386,9 @@ All commands are local and no-upload by default. `benchmark-toolkit` grants no m
 Docker, runner, upload, submission, publication, or production authority.
 
 The active benchmark research program and current public-safe practice live under
-[`benchmark/`](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md). Historical runners and dated research
-packets are retained under [`deprecate/benchmark-legacy/`](https://github.com/huangruiteng/loopx/blob/main/deprecate/benchmark-legacy/README.md)
+[`benchmark/`](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md). Retired implementations, superseded runners, and dated research
+packets are retained under [`deprecate/benchmark-legacy/`](https://github.com/loopx-project/loopx/blob/main/deprecate/benchmark-legacy/README.md)
 for source archaeology only.
+Immutable experiment snapshots follow the canonical
+[archive placement rules](../../../benchmark/README.md#archive-placement),
+which permit explicitly identified, inert snapshots in `benchmark/`.

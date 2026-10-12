@@ -2,7 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented behind explicit provider configuration |
+| Status | Accepted; implemented behind explicit provider configuration |
+| Supersedes / closes | none |
 | Date | 2026-08-26 |
 | Decision boundary | How fresh external inbox evidence reaches an Agent before it selects ordinary Goal work |
 | Core owner | Hook admission, ordering, bounded public receipt, and Agent-read obligation |
@@ -27,8 +28,9 @@ The hook is complete only when fresh evidence is routed to Agent reading. A
 result with new observations must set `agent_read_required=true`. Its
 registration declares one bounded, public-safe `required_read` descriptor.
 The generic hook kernel validates that descriptor, deduplicates it by command,
-and projects it into both Agent and CLI interaction channels with
-`ordering=before_work`. A fresh ordinary material read emits a non-blocking user
+and projects unresolved reads into the Agent channel with `ordering=before_work`.
+Registered context adapters may fulfill reads inline through the shared interaction
+owner; the CLI channel carries transitions rather than duplicate read lists. A fresh ordinary material read emits a non-blocking user
 notification while preserving the already selected work lane. If the material
 remains durably pending on the next turn, the existing material-review lane
 preempts work for recovery. A direct question or verified reply still preempts

@@ -15,7 +15,7 @@ LoopX 协调长程 agent。一个局部正确的改动，仍可能改变 agent �
 | Layer / 层 | What it proves / 证明什么 | Normal cadence / 常规频率 |
 | --- | --- | --- |
 | Unit and contract tests / 单元与合同测试 | Pure rules, schemas, transition tables, invalid-state rejection / 纯规则、schema、状态转换和非法状态拒绝 | Every relevant PR in `python-tests.yml` / 相关 PR 必跑 |
-| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public on `main`, daily, or manual / 本地聚焦；主干、每日或手动全量 |
+| Durable public smokes / 稳定公开 smoke | Shipped CLI and cross-module behavior through public-safe fixtures / CLI 与跨模块交付行为 | Focused locally; full-public daily or manual / 本地聚焦；每日或手动全量 |
 | Catalog-informed canary / Catalog 驱动 canary | The smallest risk-based slice spanning every changed public surface / 覆盖所有变更面的最小风险切片 | Before sensitive merge or release / 敏感合并与发布前 |
 | CLI output budgets / CLI 输出预算 | Agent-facing output stays bounded and base-to-head growth is visible / 输出有界且能发现相对增长 | Relevant PR CI and premerge / 相关 PR CI 与 premerge |
 | Public-safe decision replay / 公开安全决策回放 | Reviewed source-state invariants replay through the real quota-to-scheduler path / 经审阅的源状态不变量重放真实 quota-to-scheduler 链路 | Regression and control-plane changes / 回归与控制面变更 |
@@ -71,11 +71,56 @@ refreshed golden.
 行为，不授予其正确性；发现矛盾时应修复规则并增加反例或 mutation 覆盖，不得刷新
 golden 来让测试通过。
 
+### State Composition Qualification / 状态组合验证
+
+For a change spanning domain machines, select a bounded journey under the
+[composition verification RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.md).
+Reuse the quality catalog and existing validation matrix. Record independent
+invariants, explored actor/resource counts and trace bounds, fault orderings,
+real-entrypoint/readback evidence and conditional progress assumptions. A
+bounded sequence check is not an unbounded liveness proof. Existing deterministic
+checks, real-backend gates and required validation remain in force.
+
+跨领域状态机变更沿[组合验证 RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.zh-CN.md)
+选择有界旅程，复用 quality catalog 与已有验证矩阵。记录独立不变量、探索的 actor／
+resource 数与轨迹上限、故障顺序、真实入口／回读证据及有条件推进前提。有界序列
+检查不等于无界活性证明；既有确定性检查、真实后端门禁与必需验证继续适用。
+
+For a selected typed-core replacement, check illegal combinations at compile
+time and malformed/historical input at runtime. Compare pinned base/head through
+the same public path. Prove sensitivity with a historical failure or deliberate
+semantic mutation; a golden generated from the candidate is not an oracle.
+Retain only durable counterexamples, and do not build a general harness when an
+existing conformance family can express the causal sequence.
+
+选中的 typed core 替换同时验证编译期非法组合与运行时损坏／历史输入。相同公开
+路径比较 pinned base/head，用历史失败或语义 mutation 证明敏感性；候选实现生成
+的 golden 不是 oracle。只保留持久反例；已有 conformance 测试族能表达因果序列时，
+不另建通用 harness。
+
 ## Pull-Request Baseline / PR 基线
+
+### Synthetic Runs Must Not Report Adoption / 合成运行不计入使用遥测
+
+CI, pytest and canary smoke subprocesses disable usage collection with
+`LOOPX_USAGE_PING=0`. A synthetic installer, benchmark profile or release
+qualification that reconstructs its environment must set that opt-out itself,
+including in Agent tool shells; filtering out `CI` must never restore collection.
+Do not infer test provenance from OS, install channel or random installation IDs.
+Telemetry transport tests may explicitly opt in only with isolated state and a
+disposable local collector. Validate the actual child CLI and typed sender, and
+assert zero HTTP requests for disabled profiles rather than only inspecting a
+parent environment dictionary.
+
+CI、pytest 和 canary smoke 子进程通过 `LOOPX_USAGE_PING=0` 关闭遥测。合成安装、
+评测 profile 或发布资格验证重建环境时，必须自行设置关闭开关，并覆盖 Agent 工具
+shell；不能因为过滤了 `CI` 就恢复采集。不能按系统、安装渠道或随机 ID 推断测试
+来源。遥测传输专项测试只允许使用隔离状态和可丢弃的本地收集器显式开启。验证实际
+子进程 CLI 和类型化发送端，并断言关闭状态下 HTTP 请求为零，而非只检查父环境。
 
 ### Required Merge Check / 必需合并检查
 
-`python-tests.yml` publishes `merge-gate` for every pull request. Code,
+`python-tests.yml` publishes `merge-gate` for every open pull request. Code,
 workflow, policy and unknown paths require the existing `pytest` aggregate
 (including TypeScript checks and all four Python shards), Stage 2C correctness
 aggregate, and Windows tests to succeed. Failed, cancelled, missing or
@@ -95,11 +140,24 @@ is authoritative for activation. The lead maintainer alone retains the
 existing bypass exception; record the exact head, reason, validation and known
 failures whenever using it. A bypass does not turn failed tests into a pass.
 
-每个 PR 都会收到 `merge-gate` 结果。代码、工作流、治理规则和未知路径必须通过
+Both required workflows also run on `merge_group`, so a GitHub merge queue can
+qualify the exact candidate that would land on `main`. Queue candidates never
+receive a job exemption: the classifier plans them as full, exactly like
+`main`. `Sign-off` checks the same contribution range and exempts only
+verified GitHub-generated two-parent merges, so configure the queue with the
+merge method `merge`. The trigger is inert until the live ruleset enables a
+merge queue. Enabling the queue, and then relaxing the up-to-date-branch
+requirement, is a ruleset decision for the lead maintainer.
+
+每个开放 PR 都会收到 `merge-gate` 结果。代码、工作流、治理规则和未知路径必须通过
 原有核心测试；失败、取消、缺失或意外跳过均不能通过。仅白名单根目录 Markdown
 或 `docs/**/*.md` 的修改可显式跳过昂贵测试；运行时 prompt、可执行文档、代码删除
 及代码移入文档均不享受豁免。实际启用状态以在线规则为准，使用 owner bypass
 必须留下版本、原因、验证和已知失败的记录。
+两个必需工作流同样响应 `merge_group`，合并队列可在合入 `main` 前验证确切候选；
+队列候选一律全量验证、不享受豁免。队列合并方式应设为 `merge`，因为 `Sign-off`
+只豁免已验证的 GitHub 双父合并提交。在线规则启用合并队列前该触发不生效；启用
+队列并放宽“分支必须最新”要求由首席维护者决定。
 
 To validate or change the classifier locally:
 
@@ -112,9 +170,33 @@ Changes to the classifier or workflow need both code-path and documentation-only
 qualification. Keep required check names stable and never require a
 workflow-level path-filtered check that cannot report on every PR.
 
+Closing or merging a PR retires its outstanding Python qualification. A PR
+number keeps the same concurrency lane when the merged close event changes
+`github.ref` to the base branch. Closed events skip classification and the final
+gate; open PRs retain the same required jobs and cancellation failures.
+
+A trusted `pull_request_target: closed` job additionally cancels remaining runs
+of this workflow, using job-local `actions: write` without checking out PR code.
+It verifies the current closed PR, source repository/branch and close time;
+it preserves reopened PRs, another open PR on that branch, newer runs and
+foreign repositories. A missing run-to-PR association requires the exact closed
+head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
+nonterminal `always()` aggregates. The cleanup needs one short runner job;
+it releases obsolete capacity rather than reserving release capacity or
+providing a GitHub shared-pool priority guarantee.
+
+PR 关闭或合并后，以 PR 编号维持原并发 lane，关闭事件跳过分类与最终门；开放
+PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pull_request_target:
+closed` 清理任务仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
+状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、更新
+运行及其他仓库；缺少 PR 关联时只处理确切关闭 head。普通取消后仍未结束的
+`always()` 汇总使用强制取消 API。清理需要一个短 runner 任务；这会释放过期
+容量，不等于为发布预留容量或设置 GitHub 共享池优先级。
+
 The [job exemption policy](ci-impact-selection.md) additionally permits pure
 Dashboard-client changes to skip backend Python/Windows and Stage2c, while
-requiring common checks and the real packaged Dashboard build/browser smoke.
+requiring frontend type-check/build, scoped coverage and real packaged Dashboard
+browser smoke. Backend-only TS/lint/minimum-Node jobs are also exempt.
 Mixed, prompt, dependency and unknown changes stay full. Full Python runs four
 complete shards and combines all four coverage files. The `ci:full` label forces
 full qualification; main stays full. No selected-only report impersonates full
@@ -261,6 +343,43 @@ not overwritten or restored by the test. Stop the temporary server afterward.
 lease。私有快照和原始输出不得进入 Git 或公开 review；快照演练前后比较源指纹。
 发现并发源变更只报告，不擅自覆盖或恢复。测试后停止临时数据库。
 
+#### Isolate the managed Effect process as well as the data
+
+A separate worktree, registry, `--runtime-root` or archive `--destination`
+isolates neither CPU work nor the managed Effect server. Its discovery directory
+uses Python's temporary directory and user identity; the server is selected by
+source fingerprint. Identical checkouts and an installed release can therefore
+share the same process. A large restore/audit can delay ordinary CLI requests
+even when it writes only to a disposable store.
+
+Before a snapshot rehearsal, create a private existing temporary directory and
+set **all three** of `TMPDIR`, `TEMP`, and `TMP` to it for every child command.
+Keep the separate data/registry paths too: process isolation does not isolate
+data. In a Python process that already imported `tempfile`, also scope and
+restore its cached `tempfile.tempdir`; the existing
+`tests/control_plane/canonical_authority_fixture.py::isolate_sqlite_runtime`
+fixture demonstrates both boundaries. Record the serving runtime PID and verify
+it differs from the live server before dispatching expensive work. Stop only
+that isolated runtime after its requests settle, retaining the same temporary
+environment for shutdown; never restart a live server as test cleanup.
+
+Process isolation still shares machine resources. Run matched timing arms
+sequentially without overlapping builds or recovery work. If interference is
+discovered, retain failures and durable-receipt evidence, mark latency samples
+contaminated and resample after quiescence. A client timeout does not prove its
+server operation stopped; do not launch a duplicate restore while the first
+request may still be running. Neither a successful restore nor a clean resample
+qualifies concurrent administrative-work fairness or elapsed soak.
+
+独立 worktree、registry、`--runtime-root` 或 archive `--destination` 不会隔离
+Effect 后台进程；相同源码指纹可能让源码环境与已安装版本共享进程。演练前创建私有
+临时目录，对所有子命令同时设置 `TMPDIR`、`TEMP`、`TMP`；Python 进程若已缓存
+`tempfile.tempdir`，须在同一作用域覆盖并恢复。数据／registry 仍须单独隔离，且在
+重型操作前核对服务 PID 与活跃服务不同。等请求结束后，只在同一临时环境中停止
+演练进程。进程隔离不消除整机资源竞争：耗时对照顺序运行，发现竞争则保留失败与
+回执、作废受污染耗时并重新采样；超时不能当作服务端已停止，也不能因此重复恢复。
+恢复成功不证明并发管理操作公平性或自然时间 soak 已合格。
+
 Keep a deterministic, public-safe production-scale fixture beside the focused
 cases. Its envelope should cover realistic role/status distributions,
 multi-agent claims, user gates and standing decisions, current and retired
@@ -331,21 +450,139 @@ negative 或 mutation-style 断言，并让各 provider 复用同一 envelope �
 经 review 的兼容理由，不得削弱或删除已有维度。禁止复制生产文本、标识、路径、日志、
 凭据或私有快照。PR 验证证据需报告 fixture schema、语义维度、provider arms 与有意差异。
 
-Install the test dependencies once:
+### Local Validation Environment / 本地验证环境
+
+Run from the repository or dedicated worktree root with `uv`. The project's
+`requires-python` declares Python `>=3.11`; it does not require an executable
+named `python3.11`. `uv` selects a compatible interpreter, creates `.venv`, and
+installs the checkout with the selected extras. Interpreter downloads depend on
+uv's download settings and network access. A system `python3` may be too old,
+and a global `loopx` may resolve to a different installed source tree.
+
+在仓库或独立 worktree 根目录使用 `uv`。`pyproject.toml` 要求 Python `>=3.11`，
+无需依赖名为 `python3.11` 的命令。uv 选择兼容解释器，在 `.venv` 中安装当前源码
+与测试依赖；能否自动下载 Python 取决于下载配置与网络。系统 `python3` 可能过旧，
+全局 `loopx` 也可能指向另一个已安装版本。
 
 ```bash
-python -m pip install -e ".[test]"
-```
-
-Run the fast repository gate:
-
-```bash
-python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
-python -m mypy
-python examples/control_plane/cli-output-budget-regression-smoke.py
-python -m pytest -q
+uv sync --extra test
+uv run --extra test python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
+uv run --extra test python -m mypy
+uv run --extra test python examples/control_plane/cli-output-budget-regression-smoke.py
+uv run --extra test python -m pytest -q
+uv run --extra test loopx canary premerge --from-git-diff
+# For a fork whose PR base is upstream/main, use this instead:
+uv run --extra test loopx canary premerge --from-git-diff --git-diff-base upstream/main
+# Validate semantics; optionally inspect the full-tree inventory without writing it:
+uv run --extra test loopx canary smoke-suite --script semantic-vocabulary-drift-smoke.py
+uv run python scripts/generate_semantic_inventory.py
 git diff --check
 ```
+
+The semantic inventory is computed from the full tracked tree, not committed.
+Use `--output .local/semantic-inventory.json` only when an exported report is useful;
+`--output <path> --check` checks that explicit report without repairing it.
+词表、owner 与预算继续入库并受检查；结构清单按需计算，无须为普通 PR 补生成文件。
+
+The same premerge semantic smoke validates the tracked project-registry I/O
+census, including call-site coordinates and direct-I/O classifications, using
+its existing tracked-product source policy. After moving a registered call, run
+`uv run python scripts/generate_project_registry_io_manifest.py` and review the
+diff; new direct I/O still requires classification. This is a source-checkout
+check requiring Git and Node development dependencies, not an installed-App
+health check. No model calls are involved.
+
+同一 premerge 语义检查也会校验项目注册表 I/O 清单，复用已有产品源码扫描规则，检查调用
+位置与直接 I/O 分类。移动调用后重新生成并审阅清单；新增直接 I/O 仍需分类。
+这属于需要 Git 和 Node 开发依赖的源码检查，不是安装版 App 健康检查，也不调用模型。
+
+Confirm the interpreter and imported checkout when diagnosing a mismatch:
+
+```bash
+uv run python -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"
+```
+
+Node-based TypeScript tests and browser smokes that launch Python use
+`scripts/test-python.mjs`. It honors an explicit `LOOPX_TEST_PYTHON` (then the
+existing `LOOPX_PYTHON_BIN`/`LOOPX_PYTHON` overrides), otherwise reuses the
+source launcher's selection on POSIX or discovers a compatible interpreter on
+Windows. It prefers the worktree environment, checks Python `>=3.11`, and
+fails with a setup hint instead of falling back to an incompatible system
+`python3`. A source-level regression test rejects new bare-`python3`
+subprocess/fallback patterns in test and browser-smoke entry points. After
+`uv sync --extra test`, `npm run test:control-plane` needs no manual Python
+environment variable; `LOOPX_TEST_PYTHON=/path/to/python` is an explicit
+override when a separate compatible environment is intentional.
+
+会启动 Python 的 Node/TypeScript 测试和浏览器 smoke 统一使用
+`scripts/test-python.mjs`：显式覆盖优先，否则优先当前 worktree 环境，校验
+Python `>=3.11`；不会静默退回不兼容的系统 `python3`。回归测试会拦截测试入口
+重新引入裸 `python3` 子进程或默认值。
+
+The control-plane test and coverage commands run at most four test files at a
+time. Many files start additional Node/Python processes or exercise real SQLite;
+CPU-count-based fan-out can starve those children and turn resource contention
+into apparent transport failures. The SQLite capacity rehearsal remains in the
+full suite with its existing workload and deadlines; this concurrency bound
+does not relax capacity admission criteria. Test transport timeouts with
+controlled clocks or observable request cancellation, separately from loaded
+whole-suite throughput measurements.
+Healthy external-worker fixtures use the production quota timeout; only timeout
+cases inject a short deadline. Detached telemetry integration waits for a local
+start/end record with a bounded watchdog. That observation includes process
+startup and is separate from the HTTP cancellation contract. Rebuild Chat after
+changing shared TS inputs before running packaged-dashboard tests; a stale
+source witness must still reject the bundle.
+
+Canary executes Python checks with the interpreter that launched LoopX
+(`sys.executable`). Its displayed `python3` command is not a second interpreter
+selection. Keep subprocesses on `sys.executable`; use `uv run` at the developer
+entrypoint. Avoid `uvx loopx` or `uv run --no-project` when validating this
+checkout, and change into the intended worktree before running Git-based checks.
+An activated compatible environment remains a supported alternative: install
+with `python -m pip install -e ".[test]"`, then use that environment's Python
+and LoopX commands directly.
+
+Canary 使用启动 LoopX 的 `sys.executable` 执行 Python 检查，显示的 `python3`
+不是重新选择解释器。子进程继续复用 `sys.executable`，只在开发入口使用 `uv run`。
+检查当前源码时不要改用 `uvx loopx` 或 `uv run --no-project`；Git diff 检查前先进入
+目标 worktree。已有兼容虚拟环境也可用 `python -m pip install -e ".[test]"` 安装源码，
+随后直接使用该环境的命令。
+
+Canary is a repository development tool even when its CLI comes from a wheel.
+Run `premerge`, `run` and `smoke-suite` inside the intended source checkout
+(a subdirectory is also supported):
+the catalog, discovered examples, subprocess cwd and tracked-write guard share
+that checkout root. `canary premerge --catalog PATH` overrides the catalog only;
+it does not change the execution root or authorize commands outside its examples.
+Standalone read-only catalog commands retain their default catalog resolution;
+use their existing `--catalog PATH` when invoking an installed CLI.
+The wheel does not bundle the repository's docs/examples. Missing development
+inputs fail with a checkout/catalog recovery instruction, rather than an empty
+successful validation. `--no-execute` still previews; required CQR verification
+and merge authority remain separate gates.
+
+即使用 wheel 的 CLI，Canary 仍是仓库开发工具。`premerge`、`run`、`smoke-suite`
+在目标完整源码 checkout
+（也支持子目录）后运行；catalog、example 发现、子进程 cwd 与 tracked 写入保护
+共用该仓库根。`canary premerge --catalog PATH` 仅指定 catalog，不切执行根，也不
+授权执行 examples 之外的命令。独立的只读 catalog 命令保留既有默认解析，安装态
+可用其现有 `--catalog PATH` 指定输入。wheel 不携带仓库 docs/examples；缺少输入时明确
+提示补齐 checkout/catalog，不会以空检查冒充成功。`--no-execute` 仍是预览，
+required CQR 校验与合并权限继续分别判断。
+
+The repository does not currently track `.python-version` or `uv.lock`. `uv`
+creates a local lockfile during resolution; keep that generated file out of
+unrelated PRs. Introducing a shared lock or interpreter pin is a separate
+repository policy change. Do not claim identical environments from
+`requires-python` alone, or use `--locked` before a reviewed lockfile exists.
+CI keeps its explicit Python versions and pinned/hash-checked installation
+paths. Historical validation receipts keep the commands that actually ran.
+
+当前仓库未跟踪 `.python-version` 或 `uv.lock`。uv 解析依赖时生成的本地锁文件不要
+混入无关 PR；共享锁文件与解释器版本固定应单独评审。最低版本要求不等于环境完全
+可复现，没有已评审锁文件时也不使用 `--locked`。CI 保留显式 Python 版本与固定依赖／
+哈希校验的安装路径，历史验证记录保留实际执行过的命令。
 
 `.github/workflows/python-tests.yml` runs this fast lane for relevant Python
 pull requests. It intentionally excludes provider-backed evaluation and the
@@ -363,6 +600,9 @@ Lint, type checks, and the CLI budget run separately. The required `pytest`
 check rejects failed/skipped shards and missing coverage artifacts, then uses
 `coverage combine` to enforce the existing 19.6% floor on the union, not on
 individual shards. Relative coverage paths make reports portable across runners.
+Each shard has a 60-minute job ceiling for setup, the full partition and report
+upload; individual test deadlines stay unchanged. Verbose progress names failed
+cases before the suite finishes, so an interrupted run retains their identities.
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
@@ -373,11 +613,13 @@ Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker�
 按完整 collection 分片；没有历史耗时时，等权测试交替分配。lint、类型检查和 CLI
 预算独立执行。必需的 `pytest` 汇总检查会拒绝失败／跳过的分片和缺失的 coverage，
 合并后再执行原有 19.6% 门槛；不要求单个分片达到全套覆盖率。coverage 使用相对路径，
+每个分片的作业上限为 60 分钟，覆盖环境准备、完整分片和报告上传；单项测试超时
+保持不变。详细进度在套件结束前就记录失败用例名称，运行中断后仍可定位这些用例。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。
 
-Reproduce one shard locally with `python -m pytest -q -n 2 --splits 4 --group 1
+Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 4 --group 1
 --splitting-algorithm least_duration --cov=loopx`. Omit the split arguments to
 run the complete suite locally. 全量本地测试仍省略分片参数即可。
 
@@ -431,12 +673,42 @@ The complete public sweep remains explicit and bounded:
 loopx canary smoke-suite --suite full-public --jobs 4 --timeout-seconds 120
 ```
 
-`full-public-smokes.yml` runs on `main`, daily, and by manual dispatch. It is
-not a required PR check. This separation protects repository quality without
-making every small patch wait for the broadest suite.
+The smoke runner gives every check a disposable HOME, host configuration and
+temporary directory, removes inherited registry/runtime routes, disables usage
+telemetry, and stops only that fixture's managed Effect process before cleanup.
+Timeout and caller cancellation also reap the spawned check's isolated process
+group before deleting the fixture, including children retaining output pipes
+after leader exit. This uses the existing OS transport without extending the
+check deadline or stopping unrelated host processes.
+Serial and parallel checks have the same isolation. It preserves the caller's
+PATH: grouped checks append discovery fallbacks rather than overriding an
+explicitly selected toolchain. Prepare Python 3.11+, Node 24, jq and zsh before
+a complete release sweep, and record their versions with the exact-source
+receipts. A missing tool is an environment gap, not a product regression or a
+passing skip. Installed-host expected sets remain explicit so a missing bundled
+skill still fails; update their owning fixtures when the shipped contract changes.
 
-`full-public-smokes.yml` 在主干、每日定时和手动触发时运行，不是 PR 必须门禁。
-这种分层既保护质量，也避免每个小 patch 都等待最宽测试集。
+每项 smoke 都使用独立的一次性 HOME、宿主配置和临时目录，清除继承的 registry/runtime
+路由，关闭 usage telemetry，并在清理前只停止该 fixture 的 Effect 进程；串行、并行隔离
+一致。超时或调用方取消时，清理目录前还会回收该检查自建的隔离进程组，包括父进程
+退出后仍持有输出管道的子进程；复用已有 OS transport，不延长检查期限，不停止无关
+宿主进程。分组检查保留调用方 PATH 的优先级，只在末尾补充发现路径。完整发布验证前准备
+Python 3.11+、Node 24、jq 和 zsh，并随精确源码回执记录版本。缺工具属于环境缺口，
+不能记成产品失败或成功 skip。宿主材料期待集合保持明确，缺少已发货 skill 仍应失败；
+正式契约变化时同步更新其归属 fixture。
+
+`full-public-smokes.yml` runs daily and by manual dispatch on the selected ref;
+ordinary main pushes do not launch a sweep. It is not a required PR check. The
+five complete shards share one source-verified frontend build and at most two
+shards run at once. Daily/manual Python Tests also probes the next Node runtime;
+supported-runtime qualification remains on full PR/main/merge-queue candidates.
+See [CI impact and resource cadence](ci-impact-selection.md) for supersession,
+force-full and release readback. Hosted queue/runtime gains require measurement.
+
+`full-public-smokes.yml` 每日定时或按指定 ref 手动运行，不随普通主干提交重复启动，
+也不是 PR 必须门禁。五个完整分片共享一次前端构建，同时最多运行两个分片；
+下一版 Node 探测移到每日／手动 Python Tests，受支持 runtime 的完整验证仍保留。
+发布前需手动运行并回读精确候选的全量结果；实际排队与执行改善需在线测量。
 
 ### Smoke Fleet Health / Smoke 集群健康
 
@@ -474,13 +746,15 @@ profile 的条目表示 owner 待澄清，并不等于该测试没有价值。
 The interface budget gate measures stable command scenarios and compares the
 candidate checkout with its base. It catches accidental payload growth,
 duplicated diagnostics, and hot-path fields that silently return after a
-refactor. Budget changes are contract changes: update the implementation and
-the expectation together, explain every added or removed semantic field, and
-request owner review when the default agent-facing projection changes.
+refactor. Budgets protect useful, bounded decisions; historical ceilings are
+not optimization targets. Explain added or removed semantic fields and use the
+decision process below when changing a budget. Default agent-facing projection
+changes remain subject to the existing owner review.
 
 接口预算门会测量稳定命令场景，并比较 candidate 与 base，捕获意外膨胀、重复诊断
-以及重构后悄悄回到热路径的字段。预算变化就是合同变化：实现与期望必须一起修改，
-逐项解释新增或删除的语义字段；默认 agent-facing 投影变化时需要 owner review。
+以及重构后悄悄回到热路径的字段。预算保护有用且有界的决策，历史上限不是优化目标。
+解释新增或删除的语义字段，预算调整按下述流程判断；默认 agent-facing 投影变化
+仍遵循既有的 owner review。
 
 The full diagnostic packet remains an explicit drill-down surface. Moving a
 field off the default path is acceptable only when the default still tells the
@@ -488,6 +762,238 @@ agent what to do and how to request the omitted detail.
 
 完整诊断包保留为显式 drill-down。只有默认路径仍能告诉 agent 下一步做什么、以及
 如何请求被省略细节时，字段才能移出默认热路径。
+
+### Roadmap-Aligned Optimization
+
+For recurring command, recovery or retrieval costs, use the existing
+[overall roadmap](../architecture/rfcs/loopx-overall-roadmap-v0.md) and owning
+RFC acceptance to select the repair. Typed semantics and bridge costs belong
+to the [TS migration RFC](../architecture/rfcs/typescript-control-plane-migration-v0.md);
+backend capacity, retention and cutover qualification belong to the
+[shared-authority RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md).
+Use the existing task/PR evidence and update its owning checkpoint when warranted;
+this adds no approval, receipt or requirement to complete unrelated milestones.
+
+For a demonstrated slow command, the opt-in
+[performance diagnosis workflow](../../loopx/capabilities/performance_diagnosis/README.md)
+selects language-appropriate capture recipes and reads local Speedscope/V8 CPU
+stacks. Measure the original workload without instrumentation, profile the
+actual owning process, then test the proposed cause and repeat the original
+semantic/latency checks. Tool plans, overlapping thread weights and inclusive
+hotspots are not elapsed-time, root-cause or admission proof. Raw profiles remain
+local-private; the workflow adds no profiler service or receipt gate.
+
+- **Locate the cost before selecting an abstraction.** Separate caller repeats,
+  output/context expansion, process/bridge/serialization cost, shared semantic
+  work, and backend IO/verification/contention. A display filter does not reduce
+  upstream work; a short response or fast isolated query does not establish a
+  faster recovery loop. Name the real consumer and measure its useful outcome.
+- **Share contracts, qualify implementations.** Put common selection, bounded
+  reads and observation reuse at the existing consumer/typed owner boundary.
+  Preserve completeness, current authority, receipt replay and lease/CAS checks.
+  File, SQLite and PostgreSQL need not share cache invalidation, indexing or
+  history layout. Keep backend-specific algorithms in their providers; do not
+  duplicate authority in Python or invent a common cache to conceal those costs.
+  Run the applicable real-backend validation above for every affected backend.
+- **Treat migration as a hypothesis, not a cause.** Compare the same operation,
+  revision, data/history size, runtime configuration and concurrency where
+  possible. Separate cold/warm reads, alternating stores, writes and recovery
+  when those paths are affected. Without a controlled before/after comparison,
+  report measured costs and uncertainty. Successful ownership transfer does not
+  establish long-running latency, capacity or recovery equivalence.
+- **Qualify the intended outcome.** Retrieval relevance needs independently
+  labeled queries, ambiguous/no-match cases and disclosed language/corpus limits;
+  a small development set is not production accuracy or task-success evidence.
+  Runtime optimization needs the original failing workload plus semantic and
+  scale checks. Follow the budget decisions below rather than hiding regressions
+  with a larger timeout, smaller fixture or truncated decision evidence.
+- **Keep the delivered boundary honest.** State whether the change removes the
+  owning bottleneck or only mitigates its consumer impact. Reuse an existing
+  successor for an evidenced remaining gap and identify its acceptance. Do not
+  count a prompt reduction as backend qualification, or repeated repair PRs as
+  default-provider readiness; do not create follow-ups for hypothetical work.
+
+对反复出现的命令、恢复或检索开销，先对应总 roadmap 和所属 RFC 的验收，再选择修复：
+TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量、保留与切换验证。
+沿用现有任务、PR 证据和验收记录，不增加审批、回执或无关里程碑前置条件。
+
+- **先定位成本。** 区分重复调用、输出与上下文展开、进程与序列化、公共语义计算、
+  后端 IO／校验／竞争。输出过滤不减少上游计算；单次查询变快不等于恢复闭环变快。
+- **共用合同，分别验证实现。** 选择、有界读取和观测复用归现有调用方或 typed owner；
+  保留完整性、当前权限、回执重放及 lease/CAS。缓存失效、索引和历史布局可以因后端
+  而异，不能在 Python 复制权威，也不强造统一缓存。受影响后端遵循上文真实路径验证。
+- **迁移是待验证的原因。** 尽量控制操作、版本、数据与历史规模、配置、并发；按影响
+  区分冷／热读、多存储交替、写入与恢复。没有受控前后对照就披露不确定性；晋升成功
+  不证明长程延迟、容量和恢复等价。
+- **验证实际目标。** 检索用独立标注、歧义／无命中和语言边界验证；开发小样本不代表
+  生产精度或任务成功率。运行时优化保留原失败负载和语义／规模检查，预算按下节处理。
+- **区分缓解与闭环。** 写明消除了所属瓶颈，还是只减轻调用方影响；剩余真实缺口复用
+  已有后续任务并指明验收。提示词缩短不算后端验证，修复 PR 数量不算默认切换就绪。
+
+### Budget Failure Decisions
+
+Complete registry routes exposed an existing brief heartbeat regression on the
+unchanged 128-character-root fixture. Commit
+`fb20c153ba2c2a7376efe68091a76ca470effbde` added those routes: its immediate parent
+emitted 10,417 JSON / 8,846 Markdown characters; the same workload then emitted
+12,107 / 10,198 against 10,500 / 9,000 ceilings. The additional JSON cost is 1,690
+characters across eight command fields and two task-body commands. Keep the
+original failure and thresholds in the evidence, and preserve the full paths,
+fixture and consumer fields when qualifying compaction or a justified budget
+change. Historical thresholds do not freeze a regression budget. This history is
+not a waived regression or a frozen SLO pass. An unchanged base failure must be
+attributed before it is distinguished from a new candidate regression.
+
+Classify the limit by its owning contract before deciding how to repair a
+failure. This applies to output size/structure and latency regression budgets;
+it does not grant execution quota, spending, or provider authority.
+
+先根据所属合同判断上限的性质，再选择修复方式。这适用于输出尺寸、结构和延迟
+回归预算，不授予执行配额、费用额度或 provider 权限。
+
+| Limit / 上限 | Decision boundary / 决策边界 |
+| --- | --- |
+| Hard external or authorized limit / 外部或授权硬上限 | Respect the transport, storage, resource or owner constraint; a test edit cannot raise it. / 遵守传输、存储、资源或 owner 约束，改测试不能扩容。 |
+| Regression budget / 回归预算 | A measured guard against unexplained growth; preserving, reducing or increasing it needs consumer and cost evidence. / 用测量防止无解释增长；保持、压缩或扩容都依据消费者价值与成本。 |
+| Presentation cap / 展示上限 | Bound returned detail, not source truth; preserve selection, totals, completeness and drill-down. / 限制返回细节而非源事实；保留选择、总数、完整性与下钻路径。 |
+
+1. **Measure the same contract.** Record base/head revisions, workload, metric
+   and measurement boundary. Compact JSON characters, UTF-8 bytes, nested keys,
+   emitted stdout and tokens are different metrics. For latency, retain the
+   sample window, workload and distribution; acknowledge noise. Keep the
+   failing scenario and original result; do not shrink fixture populations,
+   scan roots or sampling depth to obtain a pass.
+   CI comparisons must use the event's immutable base and candidate revisions,
+   including merge-queue bases. Do not resolve a moving branch after queueing:
+   unrelated changes on that branch are not regressions in the tested commit.
+2. **Inspect information value and redundancy.** Name the current consumer and
+   decision each changed field supports. Remove derivable or unused copies when
+   the consumer contract permits it. Similar rows in different lanes may serve
+   different consumers; deduplicating them needs caller migration/parity, not
+   just equal JSON. Prefer bounded summaries and reachable cold paths for
+   detail. Do not delete identity, completeness, safety or settlement semantics,
+   shorten names solely to pass, or build a reference framework for tiny savings.
+   Treat agent-consumed prose as decision semantics too: compare each clause's
+   actor, trigger, ordering, modality, evidence provenance, scope qualifiers,
+   continuation and stop conditions. For example, "replan before continuing"
+   is not equivalent to "replan", "evidence-linked path" is not just "path",
+   and "a reasonable in-scope next step" is not "in-scope work". Unchanged
+   fields, commands, enums and legal outcomes cannot prove instruction parity.
+   Do not sacrifice useful meaning to meet a character ceiling; prefer a
+   justified regression-budget increase when no lossless reduction is proven.
+   A real hard limit needs an explicit lossless caller design and readback,
+   not silent deletion of obligations.
+3. **Choose and disclose the tradeoff.** Compare compaction, retaining the
+   ceiling, and a justified increase; a combination is valid. For an increase,
+   explain the remaining useful cost, old/new ceiling, measured headroom and
+   expected variation or scale. No universal headroom percentage is required.
+   Update the owning contract and test expectation together, rerun the original
+   scenario and affected semantic/scale checks, and report both the original
+   failure and new result in existing PR validation and review evidence. A
+   budget-only change need not force unrelated code cleanup. Frozen experiment
+   or promotion thresholds stay fixed for that result; revised thresholds belong
+   to a new qualification, never a relabeled historical pass.
+
+The fixed public CLI matrix at `2244b96f1e2e5c90bef43ae4c140c0994bfcc07a`
+and the settled-Turn cadence candidate exposed stale absolute ceilings on both
+revisions. The 96-row comparison retained 1/36/18 Todos and 1/12/12 history
+records, full command paths, enabled multi-subagent and blocking-gate cases.
+Quota's selected-Todo source carries current requirements, read freshness,
+before-work ordering and unavailable-source recovery; Turn transports that
+same context, and diagnose serves both selected and Goal-array consumers.
+Retain these caller contracts while calibrating the existing regression limits:
+
+| Output / 输出 | Same base/head measurement / 同口径测量 | Revised ceiling / 新上限 |
+| --- | --- | --- |
+| Quota small JSON / Markdown | 21,871 / 8,690 chars; 579 / 134 lines | 22,000 / 9,000 chars; 600 / 140 lines |
+| Quota crowded JSON / Markdown | 35,710 / 7,772 chars; 836 / 84 lines | 36,000 / 7,800 chars; 850 / 90 lines |
+| Quota explicit-detail Markdown | 8,760 chars; 134 lines | 9,000 chars; 140 lines |
+| Turn small / crowded / multi-agent JSON | 12,060 / 16,250 / 14,098 chars | 12,500 / 17,000 / 14,500 chars |
+| Crowded quota / Turn JSON with Agent vision | 41,503 / 16,679 chars; 939 / 427 lines | 42,000 / 17,000 chars; Turn 440 lines |
+| Turn transaction detail JSON | 13,688 chars | 14,000 chars |
+| TurnEnvelope JSON / enabled multi-subagent / Markdown | 10,498 / 11,426 / 3,949 chars; 255 / 279 / 90 lines | 12,000 JSON / 4,100 Markdown chars; 300 / 95 lines |
+| Diagnose small / crowded JSON | 21,521 / 45,122 chars | 22,000 / 46,000 chars |
+
+Only exceeded character/line guards change; semantic, duplication, per-Todo and
+fixed-growth assertions retain their existing limits. Headroom is bounded by
+the frozen workload, not a universal percentage. This calibration changes
+output regression guards, leaving execution quota, envelope wire limits and
+frozen experiment/promotion criteria with their existing owners. The original
+failures remain failures under the old ceilings; rerun the complete matrix and
+affected semantic tests under the revised contract.
+
+同一冻结负载在主干和候选上均超出旧回归预算；保留当前任务原文、读取时序、
+新鲜度、恢复和停止条件，并按上表校准已有输出检查。增长、语义及去重检查仍独立
+生效；此调整不授予执行额度，也不改写历史实验或验收结果。
+
+1. **同口径测量。** 记录 base/head、负载、指标和测量边界。紧凑 JSON 字符、UTF-8
+   字节、嵌套键数、真实 stdout 和 token 不可互换。延迟要保留样本窗口、负载和
+   分布，并承认噪声。保留失败场景与原结果，不缩小 fixture、扫描范围或采样深度。
+   CI 对照必须固定事件的 base 和 candidate 提交，包括合并队列的 base；不能在排队
+   后重新解析移动分支，把其他提交的变化当作被测提交的回归。
+2. **分析信息价值与真实冗余。** 说明变化字段服务哪个消费者、哪个决策。合同允许时
+   删除可推导或无人使用的副本；不同 lane 中相同的数据可能服务不同消费者，去重
+   需要调用方迁移和语义等价验证。详情优先使用有界摘要和可达冷路径。不能删身份、
+   完整性、安全或结算语义，不能只为过线缩字段名，也不为微小收益制造引用框架。
+   agent 读取的文字也是决策语义：逐条核对执行者、触发、时序、义务强度、证据来源、
+   范围限定、继续和停止条件。“继续前先 replan”不等于“replan”，“关联证据的路径”
+   不等于“路径”，“合理的范围内下一步”不等于“范围内工作”。字段、命令、枚举和
+   合法结果未变，不能证明指令等价。不能为字符上限损害有用语义；未证明无损压缩时，
+   优先基于证据调整回归预算。真实硬上限需要明确的无损调用方设计和读回，不能默删义务。
+3. **选择并披露取舍。** 比较压缩、保持上限、合理扩容，也可组合使用。扩容需说明
+   保留信息的价值与成本、新旧上限、实测余量和预期波动或规模，不规定统一余量比例。
+   合同和测试同步修改，重跑原场景及受影响的语义/规模检查，在既有 PR 验证和评审
+   证据中同时保留原失败与新结果。纯预算调整不必捆绑无关清理。已冻结的实验或
+   promotion 阈值不能追溯放宽；新阈值属于新一轮验证，不能改写历史结论。
+
+A base/head differential must remain able to measure a syntactically and
+semantically valid base that already exceeds its own historical ceiling;
+otherwise the gate deadlocks the repair before observing the candidate. The
+base-only probe may skip absolute size assertions while retaining parse,
+required-key, anchor, and semantic differential checks. The candidate always
+runs the current absolute budgets. Measurement-only mode is never a candidate
+override or merge bypass.
+
+当 base 已超过自身历史上限但输出仍可解析且语义完整时，base/head differential 必须
+仍能采集它；否则门禁会在观察修复候选之前形成死锁。仅 base 的 probe 可跳过绝对尺寸
+断言，但必须保留解析、必需字段、锚点和语义差异检查；candidate 始终执行当前绝对
+预算。measurement-only 不能用于 candidate，也不是合并旁路。
+
+The real-CLI differential runner and pytest use the same fixed-width fixture
+alias **per default scenario**. Alias the scenario root, not just its parent:
+otherwise scenario-name suffixes change repeated absolute command paths and
+can create a size failure unrelated to output growth. Measure unmodified
+stdout, keep fixture populations unchanged, apply the declared candidate budgets,
+preserve historical base measurements, and retain the separate
+real-long-path command-integrity check. This aligns measurement layouts; it does
+not shorten production commands or qualify long-path output under short-path caps.
+
+独立 real-CLI 对照和 pytest 对每个默认场景使用相同的固定宽度 fixture 别名。
+别名应指向场景根目录，而非仅指向父目录；否则场景名会改变多处绝对命令路径，
+产生与输出增长无关的尺寸失败。仍测量未经改写的 stdout，保留原负载和历史 base
+测量，对候选执行其已声明的预算，并保留
+独立的真实长路径命令完整性检查。这仅统一测量布局，不缩短生产命令，也不将
+长路径输出冒充短路径预算已通过。
+
+The PR-review packet's `semantic_alignment` rule consumes this evidence through
+the existing `validation_matrix` and `observable_semantics` rows. It does not
+add a separate budget receipt or approval gate. The result checker verifies
+evidence structure and verdict consistency; the reviewer still judges whether
+the measurements and tradeoff are sound.
+The existing `observable_semantics.decision_text_assessment` records inspected
+scope, clause comparisons and discriminating counterfactuals through the real
+caller. Missing equivalence evidence blocks approval; changed semantics need
+an accepted goal/contract, not a compression target. Instruction readback proves
+what was delivered, not actual model comprehension or adoption. The result
+checker enforces evidence structure and contradictions, not semantic truth.
+
+PR-review 的 `semantic_alignment` 通过既有 `validation_matrix` 和
+`observable_semantics` 使用这些证据，不增加独立预算回执或审批门。结果校验器检查
+证据结构和结论一致性；测量是否可信、取舍是否合理仍由评审判断。
+既有 `observable_semantics.decision_text_assessment` 记录检查范围、前后语义条款及
+真实调用方上的判别性反例。缺少等价证据不能批准；语义变化须有目标或合同依据，
+压缩指标不能授权。指令读回只证明交付了什么，不证明模型理解或采用；校验器检查
+证据结构和矛盾，不自动判断语义真假。
 
 ## Decision Replay And Issue #2191 / 决策回放与 #2191
 
@@ -629,8 +1135,8 @@ action without calling the tool, or issuing an unallowlisted command fails.
 
 replan semantic action 另有一条 function-tool 行为资格门，因为 no-tool JSON 决策不能
 证明模型会使用覆盖账本选择新方向并完成真实写回。资格门创建一个包含两个等价 typed
-progress observation 的隔离、public-safe 临时 Goal；真实模型只看到正式 thin Codex App
-heartbeat task body 和普通 `exec_command` tool。真实 quota 必须投影 host coverage context
+progress observation 的隔离、public-safe 临时 Goal；模型接收正式 thin Codex App
+heartbeat task body、受限执行环境说明和 `exec_command` tool。真实 quota 必须投影 host coverage context
 与最小 action packet，模型随后提交的 typed semantic delta 还要通过独立语义判定和真实
 写时闸门。若模型选择新 successor，资格门要求它以当前 `obligation_id` 调用真实
 `todo add`，验证 Todo 原子 receipt 与 `host_action=end_current_heartbeat`，且不得在同一
@@ -671,13 +1177,60 @@ python3 scripts/qualify-doubao-capability-monitor-repair-tool-live.py \
 ```
 
 The regular live suite is
-`actual_default_model_behavior_portfolio_v0`: nineteen one-arm scenarios and two
+`actual_default_model_behavior_portfolio_v0`: twenty-two one-arm scenarios and two
 attempts each. Its selected-Todo case starts from a production thin heartbeat,
 executes real quota, and requires the model to perform the selected Todo's
-read-only target action. Its required-vision replan case independently builds a
-hermetic missing-vision state, executes real quota, and requires the model to
-use host-projected frontier/work-source context and submit a typed semantic
-action through the real write path. The other turn cases remain
+read-only target action. Its accepted-replan-successor case requires the model
+to select the new primary while an older higher-priority alternative remains
+visible. This is packet interpretation evidence; the real CLI successor tests
+separately prove durable replan writeback and fresh-Turn adoption. Its
+required-vision replan case independently builds a
+hermetic required-profile/missing-vision state with a future monitor and
+peer-owned work. The actor must author an evidence-linked vision, execute the
+projected bound refresh and spend, and pass durable checkpoint, one-spend and
+next-Turn readback. Readback must clear the original missing-baseline obligation;
+a legitimate new successor requirement is allowed. Source alignment includes trigger kinds, accepted outcomes
+and qualification scope; a successful ordinary `typed_progress_repeat` refresh
+cannot qualify this journey. The narrow semantic-action gate remains useful
+but does not prove full closeout. Run this focused journey with
+`uv run --extra test python scripts/qualify-doubao-replan-semantic-action-live.py --required-vision --qualification-id <public-safe-run-id>`.
+The complete required-vision journey has a 40-call bound; the narrow
+single-semantic-action qualifier retains seven. The increased budget covers
+evidence discovery, JSON authoring, refresh, settlement and bounded recovery,
+including multiple field-validation corrections before a final spend;
+it does not authorize more effects or weaken the checkpoint/readback oracle.
+Each receipt records `tool_call_limit` beside actual usage. Earlier seven- and sixteen-call
+failures remain failures; the revised budget defines a new qualification, not
+a retrospective pass. Limit exhaustion after refresh but before spend still
+fails.
+
+Required-vision qualification runs a normal shell in an OS-isolated fixture,
+using `sandbox-exec` on macOS or `bubblewrap` on Linux. These are execution
+prerequisites: missing isolation fails explicitly rather than falling back to an
+unrestricted host. Shell variables, pipelines, compound commands, Python/JSON
+validation, and draft rewrites are ordinary operations, not an allowlisted
+command language. Read-only inspection may precede quota; writeback still needs
+the current quota-derived binding. The source must be observed in returned
+tool data, but no particular read command or metadata-read sequence is required.
+
+The shell may write project drafts and its private `$TMPDIR`. Original inputs,
+authority stores, host-private data and external network access are protected
+by the execution boundary. A fixture-local `loopx` command forwards expanded
+argv to the existing real CLI executor; only the task's quota, help, vision
+refresh and settlement operations have authority. The shell cannot forge run
+history or receipts by writing the store directly. Turn identity is supplied
+as normal host context, never inferred from a model's incorrect binding.
+
+Shell and real CLI failures return output and exit status for correction within
+the same call budget. Returning an error is not semantic acceptance or rollback.
+The model authors its own decision; the host does not fill semantic fields or
+change evidence. An observed source's evidence id and exact source reference
+identify the same evidence. Checkpoint, one-spend and following-Turn verification
+remain independent of shell success. Receipts disclose native-shell execution
+without persisting raw conversations. Other actors retain their existing host
+and seven-call contracts. Earlier bounded-grammar failures remain failed
+qualifications and are not evidence of core semantic rejection.
+The other turn cases remain
 bounded packet-interpretation checks. Nine core-contract scenarios cover
 onboarding, agent identity and goal selection, selected todo, peer identity
 routing, same-agent continuation, final human gate, healthy continuation, and
@@ -705,14 +1258,14 @@ projection; every repeat must pass and hard actor errors are not retried. The
 remaining live turn actor cases consume the default CLI hot-path
 `quota should-run` projection used by Codex App automation and return
 runtime-facing decisions rather than echoing a global testing-only semantic
-contract. The suite has 38 bounded scenario attempts. Five scenarios
+contract. The suite has 42 bounded scenario attempts. Five scenarios
 exercise real tool loops; their per-scenario provider-call ceilings are owned by
 the corresponding typed behavior harnesses instead of being duplicated here.
 Exact scheduler, vision, writeback, and warning fields stay in deterministic
 action-signature coverage; pair mode keeps TurnEnvelope semantic extraction for
 explicit packet differentials or outcome claims.
 
-常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：19 个 one-arm
+常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：22 个 one-arm
 场景，每个重复 2 次。9 个 core-contract 场景覆盖正常接入、agent 身份与
 goal 选择、selected todo、peer 身份路由、same-agent 续接、最终 human gate、
 健康继续和 projection repair；1 个 effect-settlement 场景覆盖 terminal closeout；
@@ -735,6 +1288,7 @@ actor 硬错误不自动重试。selected-Todo 场景从正式 thin heartbeat �
 缺失 vision 的 hermetic 状态，执行真实 quota，并要求模型读取 host 投影的 frontier 与
 工作源，再通过真实写路径提交 typed semantic action；其他 turn 场景仍直接读取 Codex App
 automation 使用的默认 CLI hot-path `quota should-run` projection 并返回运行时决策，
+完整 required-vision 闭环最多允许 40 次工具调用，窄范围单动作验收仍是 7 次；耗尽预算但未完成最终结算仍判失败。
 scoped-gate successor 场景也从 hermetic Goal 与正式 heartbeat 开始：真实 quota 必须
 同时投影非阻塞 user notice 和 ready deferred successor，模型随后既要呈现提醒，也要
 实际执行被选中的 successor；capability re-entry 场景则要求模型先执行原 blocked Todo
@@ -743,7 +1297,7 @@ scoped-gate successor 场景也从 hermetic Goal 与正式 heartbeat 开始：�
 其他 turn 场景仍属于
 packet interpretation。scheduler、vision、writeback 与
 warning 的精确字段继续由 action-signature 确定性覆盖；pair 中的 TurnEnvelope 只用于
-明确的 packet 差分或结果提升声明。全套是 38 个有界 scenario attempt；5 个真实工具
+明确的 packet 差分或结果提升声明。全套是 42 个有界 scenario attempt；5 个真实工具
 场景的 provider 调用上限由各自 typed behavior harness 持有，本文不再复制易漂移的总数。
 
 For onboarding packets, the suite uses the shipped guided packet builder and
@@ -820,10 +1374,13 @@ For focused thin/brief prompt-decision regression, use
 explicit release qualification. It defaults to no calls; missing credentials
 report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
 Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
-quiet-wait and required-vision-replan cases in each mode. Expected decisions
-remain outside model input. All attempts must pass; no answer correction or
-retry-until-pass is used. Ordinary pytest only checks the probe and negative
-oracles with scripted responses, without provider calls.
+quiet-wait, required-vision-replan and typed external-wait fallback cases in
+each mode. The fallback case uses the real compact quota projection: its wait
+transition already exists, so the host must advance the selected independent
+successor and notify rather than authoring another transition. Expected
+decisions remain outside model input. All attempts must pass; no answer
+correction or retry-until-pass is used. Ordinary pytest only checks the probe
+and negative oracles with scripted responses, without provider calls.
 
 This is a synthetic decision-level probe using current generated prompts,
 not proof of tool execution, host scheduling, upgrade delivery or full-Goal
@@ -925,7 +1482,11 @@ the same completion intent and a corrected uncommitted vision. Checkpoint-only
 recovery is not a substitute for unfinished settlement.
 
 If a previously completed MCP Todo omitted its decision, call
-`review_task_vision(todo_id, agent_id, agent_vision=...)` with that same Todo.
+`review_task_vision(todo_id, agent_id)` with that same Todo to read its current
+decision basis. Judge the returned basis, then submit `agent_vision=...` or
+`vision_unchanged_reason=...` together with `read_context_id=...`. A stale or
+replaced receipt requires another read and a new judgment; a lost response
+requires the exact same receipt and decision, without reading again.
 It uses the original host Turn and the same writeback command constructor,
 delegating to the existing typed checkpoint recovery. It neither repeats Todo
 completion nor spends again. Exact replay is idempotent; a conflicting committed
@@ -943,7 +1504,9 @@ not a substitute for evidence; remaining acceptance gaps or gates still prevent
 terminal quota. Kernel validation does not independently prove arbitrary prose
 true, so behavior qualification must also inspect the delivered artifacts.
 
-MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在原 Turn 补齐遗漏。
+MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在原 Turn 补齐遗漏：
+先只传 Todo 和 Agent 读取依据，重新判断后携带 `read_context_id` 与判断提交。
+凭据过期或被替换时重读重判；响应丢失时原样重试凭据和判断，不重新读取。
 复用 TS 的既有恢复规则，不新增结算引擎、不重扣额度；已提交的判断不能偷偷改写。
 格式和预算预检在 Todo 完成前拒绝非法输入；若旧宿主已部分完成，则修正未提交的
 vision 并重试原 `complete_task`，不能用仅补 checkpoint 的操作替代未完成结算。

@@ -328,7 +328,9 @@ def test_goal_todo_add_uses_provider_at_override_root_when_promoted(
     _engage_fence(runtime_override)
     captured: dict[str, object] = {}
 
-    def missing_provider(method: str, params: dict[str, object]) -> dict[str, object]:
+    def missing_provider(
+        method: str, params: dict[str, object], **_kwargs: object
+    ) -> dict[str, object]:
         captured.update(method=method, params=params)
         return {
             "status": "missing",
@@ -338,7 +340,7 @@ def test_goal_todo_add_uses_provider_at_override_root_when_promoted(
         }
 
     monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
+        "loopx.control_plane.todos.provider_create.effect_runtime_result",
         missing_provider,
     )
     state_before = state.read_text(encoding="utf-8")
@@ -355,10 +357,8 @@ def test_goal_todo_add_uses_provider_at_override_root_when_promoted(
         )
 
     assert exc_info.value.code == "local_authority_todo_list_unavailable"
-    assert captured["method"] == "coordination.local_authority.todo_list"
-    assert captured["params"] == {
-        "schema_version": "loopx_local_coordination_todo_list_request_v0",
-        "runtime_root": str(runtime_override.resolve()),
-        "goal_id": SPLIT_ROOT_GOAL_ID,
-    }
+    assert captured["method"] == "coordination.local_authority.todo_create"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["runtime_root"] == str(runtime_override.resolve())
     assert state.read_text(encoding="utf-8") == state_before

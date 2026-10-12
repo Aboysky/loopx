@@ -35,8 +35,9 @@ from ..control_plane.goals.goal_amendment_proposal import (
 from ..control_plane.goals.shared_goal_alignment import (
     _registered_goal,
 )
+from ..history import load_registry
 from ..runtime import validate_goal_id_path_segment
-from ..todos import resolve_todo_state_path
+from ..control_plane.todos.path_resolution import resolve_todo_state_path
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -196,14 +197,16 @@ def _resolve_project(
     if getattr(args, "project", None):
         return Path(args.project).expanduser()
     if goal_id:
-        try:
-            resolved_project, _ = resolve_todo_state_path(
-                registry_path=registry_path,
-                goal_id=goal_id,
+        resolved_project, _ = resolve_todo_state_path(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            require_existing=False,
+        )
+        if resolved_project is None:
+            raise ValueError(
+                "goal project is not configured in the registry; pass --project"
             )
-            return resolved_project
-        except Exception:
-            pass
+        return resolved_project
     return Path.cwd()
 
 
@@ -243,11 +246,9 @@ def _resolve_goal_routing(
     """
 
     try:
-        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry_payload = load_registry(registry_path)
     except (OSError, ValueError):
         raise ValueError(f"goal registry is unreadable: {registry_path}") from None
-    if not isinstance(registry_payload, dict):
-        raise TypeError("goal registry must contain a JSON object")
     _registered_goal(registry_payload, goal_id=goal_id)
 
     effective_runtime_root = runtime_root

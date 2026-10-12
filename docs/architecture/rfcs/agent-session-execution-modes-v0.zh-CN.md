@@ -1,6 +1,7 @@
 # RFC：Agent 会话执行模式（v0）
 
-- **RFC 状态：** Draft，维护者评审中。
+- **RFC 状态：** 已接受
+- **替代 / 关闭：** 无
 - **交付成熟度：** Partial。挂接宿主（attached host）的绑定、broker 与运行时围栏已在
   `main` 上交付；下文中的跨宿主接入契约仍是提案，且只被部分强制。
 - **作者 / 负责人：** 由维护者指示整理的契约。它把桌面端提案中已有的会话归属决策
@@ -141,6 +142,7 @@ LoopX 启动，另一种已经属于其他宿主。当绑定没有说明自己�
 | 挂接 broker | [`loopx/attached_session.py`](../../../loopx/attached_session.py) 在 `loopx_attached_agent_session_broker_v0` 下实现 bind/claim/complete，适配器类型 `attached_host_session`，上游模式 `host_broker`，claim 等待上限 1800 秒，claim 与完成回执去重，并按绑定加文件锁。 |
 | 运行时围栏 | [`loopx/chat_runtime.py`](../../../loopx/chat_runtime.py) 绝不为挂接会话启动托管适配器，并以类型化错误失败关闭，例如 `attached_session_live_steering_unavailable`、`live_steering_requires_active_turn`、`live_steering_session_not_attached`。 |
 | CLI 面 | `loopx worker-bridge attached-session-bind`、`-list`、`-claim`、`-complete` 存在于 [`loopx/cli_commands/worker_bridge.py`](../../../loopx/cli_commands/worker_bridge.py)，并在 [broker 指南](../../integrations/attached-agent-session-broker.md) 与 [worker-bridge 安装契约](../../integrations/worker-bridge-install-contract.md) 中记录。 |
+| 原会话委派 | [`loopx delegation`](../../reference/local-delegation.md#use-an-existing-agent-conversation-through-its-shell) 让有 shell 能力的原 Agent 使用与 MCP 相同的显式执行绑定；`operations` 无需记住 ID 即可找回自身委派，重新核验 accepted，明确单条不可用及剩余分页。新挂载工具的 Goal Chat 复用同一目录，已存在的原生线程恢复时保留原工具 schema；不创建 Agent、不迁移宿主，也不安装自动唤醒策略。 |
 | 聚焦测试 | [`tests/test_attached_session_cli.py`](../../../tests/test_attached_session_cli.py) 与 `tests/test_chat_codex_home.py::test_attached_session_uses_existing_host_not_managed_adapter` 覆盖 bind/claim/complete 与"不启动托管适配器"的围栏。 |
 | 产品级提案 | [桌面执行前端 RFC](desktop-execution-frontends-v0.zh-CN.md) 拥有 Mode A/Mode B 的产品对比、连接器与事件源正交性，以及桌面端非目标。 |
 | 宿主侧循环指引 | [Codex CLI TUI loop](../../product/runtimes/codex-cli/codex-cli-tui-loop.md) 记录了一个可见宿主的会话挂接自动化与恢复选项。 |
@@ -175,6 +177,127 @@ claim 与完成回执，以及"只有经过验证的回写才推进工作"这一
 被禁止的替代权威：宿主本地存储作为 Goal、Todo、quota、monitor 或生命周期事实；
 对话文本作为回执；同一绑定上的第二个调度器；Goal 级默认绑定；以及从探测、传输或
 提示词推断出的模式变更。
+
+<a id="reusable-agent-operations-and-continuation-ownership"></a>
+
+### 可复用的 Agent 操作与续跑归属
+
+现有前端 Goal 对话是会话型 coordinator 的基线入口。所有者也可以把 peer
+任务协调职责分配给已注册 Agent；职责本身不创建 Agent、不转移工作权威，也
+不激活续跑驱动。本地管家继续负责跨 Goal 接待与所有者注意力；会话和 peer
+coordinator 复用限定范围的委派、独立验收与结果返回。
+
+[Goal 对话显式续跑](../../reference/goal-chat-continuation.md)这一阶段把 Codex
+原生续跑接入输入框旁的 LoopX 模式，复用宿主绑定身份的委派、queue/inbox/steer
+与暂停恢复。首次开启仅升级闲置执行器的工具并保留本地历史，不替换未完成的
+原生 Goal。成员 Turn 仍由 TS 验收；原生完成不结算 canonical Goal 或报告 Todo。
+其他主力驱动、Lark 等价、无人值守服务和下文完整多 Agent 验收项仍分别资格化。
+
+本提案细化 managed 团队的交付契约，不新增 CLI 参数、不晋升宿主，也不改变现有
+会话/profile 默认。区分三组身份：已注册 Agent、其当前宿主会话与执行代际、每次工作
+请求/尝试。创建 Agent 不等于启动进程，挂接会话不等于领取工作，返回产物不等于工作验收。
+
+| 操作族 | 复用的现有 owner | 必须读回的事实 |
+| --- | --- | --- |
+| 发现/创建/复用 Agent | Registry、directory、onboarding 和配置的 execution profile | 稳定 Agent 身份、生效范围和支持能力；重复创建不产生第二身份 |
+| 挂接/启动/恢复/停止 | 本 RFC 的 binding 与选定 host adapter | 精确会话/代际、实际执行或阻塞、取消和替换读回；attached host 不获得替身执行器 |
+| 发送/接收/返回 | Collaboration request owner 与[入口策略](desktop-execution-frontends-v0.zh-CN.md#agent-scoped-bot-ingress-modes) | 请求/实际 inbox、queue、steer 语义；投递、消费、工作采用仍是不同事实 |
+| 领取/验证/结算 | 既有 Todo、lease、acceptance、quota owner | 当前执行 proof 与独立验收；宿主不能自行证明工作完成 |
+
+这些是语义操作族，不是新增的万能 adapter API。主 Agent 和获授权的 managed worker
+都可调用；宿主生命周期差异保持显式，协调角色不增加权限。
+
+**续跑归属是独立于 session mode 和 provider 的轴。** 每个 binding 只有一个经过
+资格化的下一执行机会 owner：
+
+- **LoopX 受控 Turn：** 既有 runtime/scheduler 准入一次完整的有界工作；宿主运行
+  自己的模型/工具循环，返回 typed candidate，经独立验证后结算。本地和云端宿主可
+  实现同一合同。Turn 不是一次模型调用或脚本业务 phase；Agent 可在范围内调查、
+  委派和修订。
+- **原生 Goal runtime：** 一次提交 Goal/task body，由该 runtime 拥有续跑；必须
+  验证其处理 LoopX continue/defer/complete、取消、预算和结果读回。Prompt 本身
+  不是调度器，provider Goal 自评不替代 LoopX 工作验收。
+- **同会话 host driver：** 显式激活的宿主集成可取得新鲜 LoopX 准入，将下一任务排入
+  原会话。它与 provider 原生 Goal evaluator 分别资格化。
+
+禁止在同一 binding 上，一边重复外部受控 Turn，一边包裹会自行续跑的原生 Goal。
+更换续跑 owner 前，停止新增准入、对账未决工具和不确定副作用、fence 旧执行器，
+再读回新绑定后执行；断连不授权该切换。
+
+首个混合 managed cohort 优先让云端 adapter 与本地 worker 通过同一 governed Turn
+合同，再扩展 native Goal profile。这是交付优先级，不是默认迁移；provider 资格由
+[harness 选型 RFC](harness-selection-dsh-pi-v0.zh-CN.md)负责。复用现有 profile editor
+和会话投影，不新建管家专属创建服务、任务账本或调度循环。
+
+### Agent 创建与接入中的模型选择
+
+这是对上述可复用 Agent 操作的设计细化，尚未交付通用模型目录 API。模型选择属于
+Agent 的 execution profile 与绑定，不取决于它是否担任协调员。复用现有 managed
+execution profile、子 Agent 启动偏好和 profile editor；管家的机器默认值只是一个
+调用入口的默认配置，不是通用配置 owner。换模型不产生新的逻辑 Agent，也不授予
+创建或启动 Agent 的权限。
+
+| 步骤 | Owner 与必须读回的事实 |
+| --- | --- |
+| 发现候选 | 所选 executor/provider adapter 返回模型 ID、支持参数、能力限制、发现范围与新鲜度。分别记录 provider 目录存在、managed host 兼容和账号授权；未知或发现失败不能冒充空的支持列表。 |
+| 请求与解析配置 | 共享 typed TS 边界校验调用者范围、允许的 profile、预算约束和显式配置优先级。保留请求模型/参数与解析值及来源的区别。SDK/网络发现留在 adapter，不让每个 Python launcher 复制选择或准入规则。 |
+| 创建或接入 | 创建经所选 adapter 使用已解析配置；接入只观察既有宿主实际配置，不能静默改模型、启动替代执行器，或把请求偏好显示为已生效。重复创建复用现有身份与绑定合同。 |
+| 启动并读回 | 配置 revision 绑定执行 generation，读回 provider 报告的模型与实际参数。目录可见或 Agent 定义创建成功，都不能证明推理会话可运行。配置不符或参数不支持必须给出可操作错误，不隐式换模型。 |
+
+参数支持由 provider 决定：相同 reasoning-effort 标签在不同宿主中未必同义，speed、
+thinking mode、上下文限制和工具支持也不是通用旋钮。采用小型公共选择合同与经校验的
+provider 参数，不在核心维护厂商模型名单或一个全局参数枚举。凭据留在所选 provider
+的凭据作用域中，不进入 Agent profile 或公开投影。
+
+动态模型别名需要显式读回。只有 provider 暴露解析版本时才记录具体版本；否则标明
+底层版本未知，不能把别名当作可复现快照。配置变更沿现有 binding revision/generation
+与 rebind 边界生效；运行中工作保留已准入的配置，直到经过已验证的迁移。父 Agent
+配置变更不静默修改已有子 Agent。获授权的子协调员仅能在继承的 profile 与预算范围
+内选择，使用和主 Agent 相同的操作。
+
+下一实现切片须为一个本地和一个云端执行器打通发现、选择、创建或接入、启动及读回。
+验证不支持的参数、过期目录、授权不可用、重试、动态别名和运行中配置变更。受影响的
+CLI、前端和 Lark 复用现有配置 owner/投影；单有后端字段不代表用户路径完成。在明确
+披露的实现交付之前，既有默认值和显式宿主选择保持不变。
+
+### 创建时的实际上下文与可恢复驻留
+
+在已有 profile 与 binding owner 中细化创建/接入；以下是提议验收要求，
+不是新的 factory API，也不表示已经实现驻留淘汰策略。三个输入必须独立：
+
+| 输入 | 解析与读回 |
+| --- | --- |
+| 上下文选择 | 有界语义 brief 或宿主支持的历史投影，携带来源版本、覆盖范围和遗漏。历史 fork 不是进程 checkpoint，不复制未决工具、claim 或授权；重建接收方指令，不把父 coordinator 角色继承为权限。 |
+| 执行偏好 | 从当前实际 profile 而非初始旧配置解析 model、effort 与支持的工具。共享 resolver 拥有显式/省略/清空意图及优先级；分别记录请求值、解析值、provider 观察值及其来源。角色名或配置可解析不证明已经生效。 |
+| 执行权限 | 偏好解析后重新应用当前资源、工具、环境与预算范围。角色和上下文继承不能扩大它；工作区共享或隔离是明确的宿主事实，独立模型上下文不等于独立 worktree 或沙箱。 |
+
+就绪需要实际 binding 能力和使用权限同时成立。模型目录可选、工具 schema 暴露、
+所有者启用、宿主成功读回是不同观察。child 能推理不代表能继续委派或接受 steer；
+派发前发现缺失条件并明确返回，不能通过偷偷换 provider 或扩大权限解决。
+管家、项目 coordinator 和嵌套成员复用同一解析路径。
+
+不要把身份、驻留和执行压成一个 Agent 状态：
+
+| 维度 | 已有来源与不变量 |
+| --- | --- |
+| 已注册身份 | Registry/directory 拥有身份与范围。live-runtime 行缺失或展示截断不证明 Agent 已删除。 |
+| 已加载运行时 | 宿主 supervisor 观察驻留、卸载、不可用或未知实例。这是概念区分，不新增 registry enum。 |
+| 活跃执行 | Binding/Turn owner 标识当前执行与 generation。Turn 完成或中断本身不删除身份、不释放工作 lease，也不证明所有后代效果已停止。 |
+
+未来容量控制必须声明计数口径：活跃执行、驻留实例、待提交 reservation、是否计入
+root，都不同于注册身份数和展示上限。不要只为展示这些观察引入淘汰机制；宿主今后
+若支持卸载，应验证无活跃执行/待处理输入且恢复依据已耐久保存，再资格化。
+容量不足返回明确处置，不承诺自动排队。
+
+创建重试先对账原操作和 provider 身份；丢失响应不能触发第二个运行时。恢复在执行
+效果前重新核对 binding 版本/generation、当前范围、环境和耐久上下文；恢复身份
+名单不启动所有成员。历史不可用或不支持 resume 时保留待办并指出具体缺口，走
+另行资格化的 replacement 路径，不猜测 session 或扩大策略。复用已有操作 journal
+与 supervisor，不另建生命周期账本。
+
+创建/profile 阶段须覆盖父偏好变更、child 工具不支持、过滤/压缩上下文、共享工作区
+假设、创建响应不确定、卸载与身份不存在的区别，以及恢复时授权撤销。用真实本地和
+云端 adapter 读回验收；名单长度和角色文案不是验收证据。
 
 ### 状态模型与 schema
 
@@ -242,11 +365,12 @@ claim 与完成回执，以及"只有经过验证的回写才推进工作"这一
 
 ### 能力与投递模式的正交性
 
-经常被混淆的五个轴，每个轴有唯一属主：
+经常被混淆的六个轴，每个轴有唯一属主：
 
 | 轴 | 取值 | 属主 |
 |---|---|---|
 | 执行模式 | `managed_runtime`、`attached_host` | 本 RFC |
+| 续跑 owner（提案） | LoopX Turn driver、原生 Goal runtime、同会话 host driver | 本 RFC；按选定 profile 验证，不从 provider 或部署位置推断 |
 | 传输 | web chat、Lark、CLI | 桌面执行前端 RFC；传输绝不改变模式 |
 | 事件源 | 群消息、文档评论、monitor 观察、入站文件 | 连接器与协作契约 |
 | 入口/投递模式 | `live_steering`、`session_queue`、`async_inbox` | 桌面执行前端 RFC，按绑定门控 |
@@ -349,6 +473,11 @@ claim 与完成回执，以及"只有经过验证的回写才推进工作"这一
 确定性的包测试不足以支撑接入。新宿主至少需要一条真实宿主行：一个真实进程、一次真实
 绑定、一次真实重启。
 
+续跑扩展还要求：已安装的本地/云端组合使用同一准入/结果/独立验证合同；普通 managed
+worker 请求并采用另一 worker 的产物；driver 切换竞态拒绝旧执行器。普通等待、未决
+工具、预算耗尽、native Goal defer/终态处理分别验证。注册、HTTP ACK 或固定 phase
+脚本都不能满足这些尚未资格化的项目；每个现有 profile 和入口保持 feature-off 行为。
+
 ## 11. 运维契约
 
 - **可观测性。** 会话回读暴露模式、宿主面、执行器端点、能力、状态、活跃 turn 与稳定
@@ -363,6 +492,19 @@ claim 与完成回执，以及"只有经过验证的回写才推进工作"这一
   失败关闭，绝不把工作转移到另一个执行器。
 - **恢复。** 被中断的执行器 turn 在重试前先被协调。经过验证的结果在生命周期回写之前
   先被记录。
+
+### 长程 managed 执行路线（2026-09-16）
+
+[统一路线](loopx-overall-roadmap-v0.zh-CN.md) R2 先验一个管家与 2–3 个真实 managed worker 的跨 Turn 闭环；R6 再验本地/云端同 authority，R7 才扩大活跃规模。本 RFC M1–M4 继续拥有宿主接入，不用团队计划的 `ready` 取代 binding、资格、claim/lease 或实际进程读回。
+
+目前 DSH 管家 Chat 是单段、只读、无跨 turn 宿主会话；`turn run-once` 是另一条有界执行路径。下一切片要证明 successor wake、取消/停止、崩溃恢复及旧执行器返回 fence，经 packaged frontend/CLI/Lark 回读真实状态。不能仅增加一个 executor 名称、启动一个片段或绑定若干 Agent 就声称持续 managed 模式完成。attached host 不因掉线而改为 managed，未验收宿主保持原资格边界。
+
+显式启用的[本地委派接口](../../reference/local-delegation.md)已为有界 Turn 提供持久
+操作，涵盖成员继续委派的授权及 TS 任务验收。Ark 进程中断实验在云端等待本地工具后，
+以原 Session/输入接回，不重发已确认副作用、不重置期限。这验证本地执行恢复，不代表
+successor wake、attached 接管或完整团队取消。Provider 文件配置保留现有模型/工具
+边界；上文通用 Agent 创建与模型发现提案仍是独立后续范围。
+
 
 ## 12. 规范性交付计划
 

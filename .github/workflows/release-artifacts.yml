@@ -9,6 +9,11 @@ on:
       - "package.json"
       - "package-lock.json"
       - "pyproject.toml"
+      - "setup.py"
+      - "MANIFEST.in"
+      - "apps/presentation/dashboard/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/verify_installed_chat.py"
       - "README.md"
       - "scripts/release_artifacts.py"
       - "tsconfig.control-plane.json"
@@ -17,8 +22,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing GitHub Release tag containing this release tooling"
+        description: "Existing GitHub Release tag to build without changing its product source"
         required: true
+        type: string
+      browser_fixture_commit:
+        description: "Optional full merged commit supplying corrected browser fixtures"
+        required: false
         type: string
 
 permissions:
@@ -26,11 +35,12 @@ permissions:
 
 concurrency:
   group: release-artifacts-${{ github.event.release.tag_name || inputs.tag || github.ref }}
-  cancel-in-progress: false
+  # Superseded PR validation may stop; publication retains its serialized lane.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
-    if: github.repository == 'huangruiteng/loopx'
+    if: github.repository == 'loopx-project/loopx'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -74,6 +84,11 @@ jobs:
           echo "RELEASE_TAG=${release_tag}" >> "${GITHUB_ENV}"
           echo "SOURCE_DATE_EPOCH=${source_date_epoch}" >> "${GITHUB_ENV}"
           echo "PYTHONHASHSEED=0" >> "${GITHUB_ENV}"
+
+      - name: Build exact release frontend with previous delivery assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/chat_bundle.py release-build --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
 
       - name: Install release build tools
         run: python -m pip install --disable-pip-version-check build==1.4.4 twine==6.2.0
@@ -196,6 +211,65 @@ jobs:
               assert committed["replayed"] is False, committed
           PY
 
+      - name: Verify installed frontend and sdist rebuild
+        run: |
+          python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
+          python -m pip wheel --no-deps dist/packages/*.tar.gz --wheel-dir "${RUNNER_TEMP}/sdist-wheel"
+          "${RUNNER_TEMP}/loopx-wheel/bin/python" -m pip install --force-reinstall --no-deps "${RUNNER_TEMP}"/sdist-wheel/*.whl
+          python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
+
+      - name: Resolve browser fixture correction without rebuilding product bytes
+        env:
+          BROWSER_FIXTURE_COMMIT: ${{ inputs.browser_fixture_commit }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          product = git("rev-parse", "HEAD")
+          fixture = os.environ.get("BROWSER_FIXTURE_COMMIT", "") or product
+          if not re.fullmatch(r"[0-9a-f]{40}", fixture):
+              raise SystemExit("browser fixture correction requires a full commit SHA")
+          if git("rev-parse", fixture + "^{commit}") != fixture:
+              raise SystemExit("browser fixture correction must name a commit")
+          allowed = {
+              "examples/personal-workspace-browser/fixture.mjs",
+              "examples/personal-workspace-browser/typed-actions.mjs",
+              "examples/personal-workspace-browser/goal-work-map.mjs",
+          }
+          changed = set(git("diff", "--name-only", product, fixture, "--", *sorted(allowed)).splitlines())
+          if fixture != product and not changed:
+              raise SystemExit("browser fixture commit contains no correction in the fixture owners")
+          if fixture != product:
+              subprocess.run(["git", "merge-base", "--is-ancestor", fixture, "origin/main"], check=True)
+              for path in sorted(changed):
+                  if git("ls-tree", fixture, "--", path).split()[0] != "100644":
+                      raise SystemExit("browser fixture correction must retain a regular source file")
+                  Path(path).write_bytes(subprocess.check_output(["git", "show", fixture + ":" + path]))
+          Path("dist/RELEASE-SOURCES.json").write_text(json.dumps({
+              "product_tag": os.environ["RELEASE_TAG"],
+              "product_commit": product,
+              "browser_fixture_commit": fixture,
+              "browser_fixture_paths": sorted(changed),
+              "workflow_commit": os.environ["GITHUB_SHA"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+          }, indent=2) + "\n")
+          PY
+
+      - name: Exercise the installed page in a real browser
+        working-directory: apps/presentation/dashboard
+        env:
+          LOOPX_PYTHON_BIN: ${{ runner.temp }}/loopx-wheel/bin/python
+        run: |
+          ./node_modules/.bin/playwright install --with-deps chromium
+          npm run smoke:personal-workspace-packaged
+
       - name: Verify wheel through the DSH managed-runtime install shape
         run: |
           set -euo pipefail
@@ -270,26 +344,39 @@ jobs:
             workflow-skills --uninstall --skills-dir "${skills_dir}" \
             > "${RUNNER_TEMP}/loopx-workflow-skills-uninstall.json"
           "${RUNNER_TEMP}/loopx-wheel/bin/python" - \
-            "${RUNNER_TEMP}/loopx-workflow-skills-uninstall.json" <<'PY'
+            "${RUNNER_TEMP}/loopx-workflow-skills-uninstall.json" \
+            "${RUNNER_TEMP}/loopx-workflow-skills-install.json" <<'PY'
           import json
           from pathlib import Path
           import sys
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assert payload["ok"] is True, payload
-          assert sorted(payload["result"]["removed"]) == [
-              "loopx",
-              "loopx-benchmark",
-              "loopx-doc-registry",
-              "loopx-pr-program",
-              "loopx-pr-review",
-              "loopx-project",
-              "loopx-self-repair",
-          ], payload
+          installed = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          expected = installed["after"]["required_skill_ids"]
+          assert expected and installed["after"]["ready"] is True, installed
+          assert sorted(payload["result"]["removed"]) == sorted(expected), payload
           PY
 
       - name: Exercise release contract smoke
         run: python examples/release-artifacts-smoke.py
+
+      - name: Restore browser fixtures and bind verified package checksums
+        run: |
+          git restore -- examples/personal-workspace-browser/fixture.mjs examples/personal-workspace-browser/typed-actions.mjs examples/personal-workspace-browser/goal-work-map.mjs
+          python scripts/release_artifacts.py verify-checksums --dist-dir dist/packages --checksum-file dist/SHA256SUMS
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          identity = Path("dist/RELEASE-SOURCES.json")
+          record = json.loads(identity.read_text())
+          record["sha256"] = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in [*sorted(Path("dist/packages").iterdir()), Path("dist/SHA256SUMS")]
+          }
+          identity.write_text(json.dumps(record, indent=2) + "\n")
+          PY
 
       - name: Attest release packages and checksum manifest
         if: github.event_name != 'pull_request'
@@ -298,6 +385,7 @@ jobs:
           subject-path: |
             dist/packages/*
             dist/SHA256SUMS
+            dist/RELEASE-SOURCES.json
 
       - name: Upload validated release bundle
         uses: actions/upload-artifact@v7
@@ -342,6 +430,7 @@ jobs:
           gh release upload "${RELEASE_TAG}" \
             dist/packages/* \
             dist/SHA256SUMS \
+            dist/RELEASE-SOURCES.json \
             --repo "${GITHUB_REPOSITORY}"
 
   publish-pypi:

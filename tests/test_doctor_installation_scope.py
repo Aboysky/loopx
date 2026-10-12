@@ -11,6 +11,76 @@ from loopx import doctor
 from loopx.control_plane.runtime import runtime_projection_route
 
 
+def test_python_distribution_does_not_require_release_installation_scripts(
+    tmp_path: Path,
+) -> None:
+    absent_script = tmp_path / "site-packages" / "scripts" / "install-windows.ps1"
+
+    check = doctor.optional_installation_script_check(
+        "install_script_exists",
+        exists=absent_script.exists(),
+        path=absent_script,
+        distribution_install=True,
+    )
+
+    assert check == {
+        "id": "install_script_exists",
+        "required": False,
+        "ok": True,
+        "applicable": False,
+        "detail": "not applicable: Python package installs do not include release installer scripts",
+    }
+
+
+def test_release_installation_still_reports_missing_scripts(tmp_path: Path) -> None:
+    absent_script = tmp_path / "release" / "scripts" / "install-windows.ps1"
+
+    check = doctor.optional_installation_script_check(
+        "install_script_exists",
+        exists=absent_script.exists(),
+        path=absent_script,
+        distribution_install=False,
+    )
+
+    assert check["ok"] is False
+    assert check["applicable"] is True
+    assert check["detail"] == str(absent_script)
+
+
+def test_doctor_cli_forwards_the_selected_registry_and_runtime(monkeypatch, tmp_path):
+    import argparse
+    from loopx.cli_commands import doctor as command
+    registry = tmp_path / "registry.json"
+    root = tmp_path / "runtime"
+    captured = {}
+    def collect(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+    monkeypatch.setattr(command, "collect_doctor", collect)
+    args = argparse.Namespace(deep=False, agent_type=None, installation_only=False,
+                              runtime_root=str(root), format="json")
+    assert command.handle_doctor_command(args, lambda *args: None, registry_path=registry) == 0
+    assert captured["registry_path"] == registry
+    assert captured["runtime_root_override"] == str(root)
+
+
+def test_configured_doctor_route_does_not_hide_implicit_conflict(monkeypatch, tmp_path):
+    from loopx import paths
+    legacy, current = tmp_path / "legacy", tmp_path / "current"
+    for root in [legacy, current]:
+        root.mkdir()
+        (root / "registry.global.json").write_text(json.dumps({"common_runtime_root": str(root), "goals": []}))
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy)
+    implicit = paths.default_runtime_route()
+    assert implicit["status"] == "conflict"
+    configured = paths.configured_runtime_route(registry_path=legacy / "registry.global.json")
+    assert configured["status"] == "configured"
+    assert configured["selected_runtime_root"] == str(legacy)
+    assert configured["default_status"] == "conflict"
+    assert paths.default_runtime_route() == implicit
+
+
 @pytest.mark.parametrize(
     "failed_check",
     [None, "typescript_effect_runtime_ready", "representative_cli_imports"],
@@ -75,6 +145,43 @@ def test_installation_scope_cannot_claim_host_integration_health():
     ).installation_only
     with pytest.raises(SystemExit):
         parser.parse_args(["doctor", "--installation-only", "--agent-type", "codex"])
+
+
+def test_installation_scope_uses_current_distribution_and_console_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from loopx import release_candidate
+
+    invocation = tmp_path / "current" / "bin" / "loopx"
+    other_command = tmp_path / "old" / "bin" / "loopx"
+    distribution_root = tmp_path / "current" / "site-packages"
+    observed: dict = {}
+    monkeypatch.setattr(doctor, "current_script_invocation_path", lambda: invocation)
+    monkeypatch.setattr(
+        "loopx.command_invocation.resolve_command_path", lambda _name: other_command
+    )
+
+    def distribution_install(module_path: Path) -> dict:
+        observed["module_path"] = module_path
+        return {"root": str(distribution_root)}
+
+    def deep_checks(**kwargs) -> dict:
+        observed["deep_checks"] = kwargs
+        return {"checks": [{"id": "distribution_check", "required": True, "ok": True}]}
+
+    monkeypatch.setattr(doctor, "python_distribution_install", distribution_install)
+    monkeypatch.setattr(release_candidate, "collect_deep_install_checks", deep_checks)
+    monkeypatch.setattr(
+        "loopx.control_plane.effect_runtime.collect_effect_runtime_readiness",
+        lambda *, deep: {"ready": True, "status": "ready"},
+    )
+
+    result = release_candidate.collect_installation_doctor(deep=True)
+    assert result["ok"] is True
+    assert result["path"]["loopx"] == str(invocation)
+    assert observed["module_path"] == Path(doctor.__file__).resolve()
+    assert observed["deep_checks"]["invocation_path"] == invocation
+    assert observed["deep_checks"]["distribution_root"] == str(distribution_root)
 
 
 def test_runtime_projection_diagnostics_bound_one_stalled_source_and_retry(

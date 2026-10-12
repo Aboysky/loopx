@@ -66,10 +66,19 @@ function ordered(items: readonly Item[]): Item[] {
   return [...items].sort((a, b) => a.priority - b.priority || a.index - b.index);
 }
 
+function itemIdentity(entry: Item): string {
+  // A canonical Todo id owns identity across compact/display and lossless
+  // candidate projections. Fall back to the legacy presentation identity only
+  // for rows that predate typed Todo ids.
+  return entry.id
+    ? JSON.stringify(["todo", entry.id])
+    : JSON.stringify(["projection", entry.payload.text, entry.payload.index]);
+}
+
 function unique(items: readonly Item[]): Item[] {
   const seen = new Set<string>();
   return items.filter((entry) => {
-    const key = JSON.stringify([entry.id ?? "", entry.payload.text, entry.payload.index]);
+    const key = itemIdentity(entry);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -134,6 +143,24 @@ function successorWaits(resumeBlocked: readonly Item[], deferredItems: readonly 
     } }))).sort((a, b) => Number(b.claim === agent) - Number(a.claim === agent));
 }
 
+function dependencyCycleReplan(items: readonly Item[], agent: string | null): JsonObject | null {
+  if (!agent) return null;
+  const candidates = ordered(unique(items)).filter(entry => {
+    const lane = claimLane(entry, agent);
+    return entry.payload.role === "agent" && entry.payload.task_class === "advancement_task" &&
+      ["open", "deferred"].includes(entry.status ?? "") &&
+      (entry.payload.archive_state == null || entry.payload.archive_state === "active") &&
+      (lane === "current_agent" || lane === "unclaimed") &&
+      entry.diagnosis?.state === "invalid" && entry.diagnosis.reason === "dependency_cycle";
+  });
+  if (!candidates.length) return null;
+  const first = candidates[0];
+  return {count: candidates.length, candidates: payloads(candidates, 3),
+    reason: `Todo ${first.id} depends on an unfinished completion cycle; waiting cannot resolve this plan.`,
+    recommended_action: "Inspect the reported dependency_cycle_todo_ids and their current owners. Replan an obsolete dependency only through the authorized Todo lifecycle with fresh owner/lease proof. If another owner must change an edge, report that concrete blocker. Do not clear a valid dependency, mark work done, or change another owner's Todo merely to unlock execution.",
+    spend_policy: "no spend for cycle diagnosis; replan credit requires validated authorized writeback"};
+}
+
 function resolveCapacity(items: readonly Item[], source: readonly Item[], capabilities: string[]): Item[] {
   const result = evaluateTodoResumeConditions({
     schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
@@ -167,12 +194,24 @@ function decodeSources(value: unknown): Record<SourceKey, Item[]> {
 
 function deferredPlan(sources: Record<SourceKey, Item[]>, capabilities: unknown) {
   let deferredItems = deferred(sources.deferred_items.length ? sources.deferred_items : sources.items);
-  let candidates = deferred(sources.deferred_resume_candidates).filter((entry) => entry.payload.resume_ready === true);
+  const projectedCandidates = deferred(sources.deferred_resume_candidates);
+  let candidates = projectedCandidates.filter((entry) => entry.payload.resume_ready === true);
   let capacityFields: JsonObject | null = null;
   if (capabilities !== null) {
-    deferredItems = resolveCapacity(deferredItems, sources.items,
+    // deferred_items is a bounded presentation lane while
+    // deferred_resume_candidates retains semantically selected rows that may
+    // fall outside that display window. Re-evaluate their union so supplying
+    // runtime capabilities cannot erase an already projected ready successor.
+    // Put the explicit candidate lane first so its lossless payload wins when
+    // the same Todo is also present in a compact display lane.
+    const displayIdentities = new Set(deferredItems.map(itemIdentity));
+    const reevaluated = resolveCapacity(ordered(unique([
+      ...projectedCandidates,
+      ...deferredItems,
+    ])), sources.items,
       requireStringArray(capabilities, "available_capabilities"));
-    candidates = deferredItems.filter((entry) => entry.payload.resume_ready === true);
+    deferredItems = reevaluated.filter((entry) => displayIdentities.has(itemIdentity(entry)));
+    candidates = reevaluated.filter((entry) => entry.payload.resume_ready === true);
     capacityFields = { deferred_items: payloads(deferredItems), deferred_resume_candidates: payloads(candidates) };
     // Existing summary readers treat an empty explicit deferred lane as absent,
     // including after capacity resolution; retain that compatibility fallback.
@@ -270,5 +309,6 @@ export function projectTodoResumePlanning(value: unknown): JsonObject {
     capacity_fields: capacityFields,
     deferred_items: payloads(deferredItems), monitor_blocked_items: payloads(monitorItems),
     blocked_successor_items: payloads(successorWaits(resumeBlocked, deferredItems, display.agent)),
+    dependency_cycle_replan: dependencyCycleReplan([...resumeBlocked, ...deferredItems], display.agent),
   };
 }

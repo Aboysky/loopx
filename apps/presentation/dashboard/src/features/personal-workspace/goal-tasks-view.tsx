@@ -9,6 +9,8 @@ import type {
 } from "./personal-workspace-model";
 import { localizedAttentionAge, useWorkspaceI18n } from "./i18n";
 import { CompletedTaskLane } from "./completed-task-lane";
+import { MarkdownText } from "./markdown";
+import { isGoalWorkTodo } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 
 function TaskLane({
   children,
@@ -105,6 +107,7 @@ function TaskLane({
  */
 export function GoalTasksView({
   historyEnabled = false,
+  historyRefreshRevision = 0,
   goal,
   items,
   onDraftTaskFromMessage,
@@ -116,6 +119,7 @@ export function GoalTasksView({
   userTodos,
 }: {
   historyEnabled?: boolean;
+  historyRefreshRevision?: number;
   goal: WorkspaceGoal;
   items: WorkspaceTimelineItem[];
   onDraftTaskFromMessage?: (message: string) => void;
@@ -130,6 +134,12 @@ export function GoalTasksView({
   const [listView, setListView] = useState(false);
   const [laneSelection, setLaneSelection] = useState({ goalId: "", laneId: "all" });
   const selectedTodoRef = useRef<HTMLElement | null>(null);
+  function selectFromButton(button: HTMLButtonElement, next: WorkspaceDrawerSelection) {
+    // macOS pointer activation need not focus buttons. The drawer uses the
+    // active element to return to the originating task when it closes.
+    button.focus({ preventScroll: true });
+    onSelect(next);
+  }
   useEffect(() => {
     if (!selectedTodoId) return;
     const frame = window.requestAnimationFrame(() => selectedTodoRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }));
@@ -139,7 +149,7 @@ export function GoalTasksView({
     .filter((todo) => todo.goalId === goal.goalId)
     .map((todo) => ({ ...todo, goalTitle: goal.title }));
   const priorityRank = (todo: WorkspaceGoal["agentTodos"][number]) =>
-    todo.priority === "P0" ? 0 : todo.priority === "P1" ? 1 : todo.priority === "P2" ? 2 : 3;
+    todo.priority === "P0" ? 0 : todo.priority === "P1" ? 1 : todo.priority === "P2" ? 2 : todo.priority === "P3" ? 3 : todo.priority === "P4" ? 4 : 50;
   const agentLanes = useMemo(() => {
     const lanes = new Map((goal.agentLanes ?? []).map((lane) => [lane.agentId, lane]));
     for (const todo of goal.agentTodos) {
@@ -155,11 +165,11 @@ export function GoalTasksView({
     : "all";
   const laneMatches = (agentId?: string | null) => selectedLaneId === "all" || agentId === selectedLaneId;
   const openAgentTodos = goal.agentTodos
-    .filter((todo) => todo.taskClass !== "continuous_monitor" && !todo.done)
+    .filter((todo) => isGoalWorkTodo(todo) && !todo.done)
     .filter((todo) => laneMatches(todo.claimedBy))
     .sort((left, right) => priorityRank(left) - priorityRank(right));
   const doneAgentTodos = goal.agentTodos
-    .filter((todo) => todo.taskClass !== "continuous_monitor" && todo.done)
+    .filter((todo) => isGoalWorkTodo(todo) && todo.done)
     .filter((todo) => laneMatches(todo.claimedBy));
   const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> =>
     item.kind === "schedule" && laneMatches(item.schedule.agentId));
@@ -209,12 +219,8 @@ export function GoalTasksView({
         <section aria-label={t("tasks.chatRecent")} className="personal-task-chat-receipt">
           <span className="personal-task-chat-icon"><MessageSquareText size={18} /></span>
           <div>
-            <header><strong>{replyPending ? t("tasks.chatPending") : latestReply ? t("tasks.chatAgentReplied") : t("tasks.chatRecent")}</strong><small>{goal.agentLabel ?? goal.agentId}</small></header>
-            <p className="is-user"><b>{t("common.you")}</b>{latestUserMessage.text}</p>
-            {latestReply && !latestReply.pending ? <p className="is-assistant"><b>{t("common.agent")}</b>{latestReply.text}</p> : null}
-            <small>{replyPending
-              ? t("tasks.chatPendingDescription")
-              : t("tasks.chatUnchangedDescription")}</small>
+            <header><strong>{replyPending ? t("tasks.chatPending") : latestReply ? t("tasks.chatAgentReplied") : t("tasks.chatRecent")}</strong><small>{latestReply?.returnDelivery ? t("tasks.chatReturn") : latestReply?.agentLabel}</small></header>
+            <div className="personal-task-reply-preview"><MarkdownText text={replyPending ? t("tasks.chatPendingDescription") : (latestReply?.text ?? latestUserMessage.text).trim().split(/\r?\n/, 1)[0]} /></div>
           </div>
           <footer>
             <button onClick={onOpenChat} type="button"><MessageSquareText size={14} />{t("tasks.chatViewReply")}</button>
@@ -227,7 +233,7 @@ export function GoalTasksView({
         {attentionItems.map((attention) => {
           const age = localizedAttentionAge(attention.updatedAt, t);
           return (
-            <button key={attention.todoId} onClick={() => onSelect({ item: attention, kind: "attention" })} type="button">
+            <button key={attention.todoId} onClick={(event) => selectFromButton(event.currentTarget, { item: attention, kind: "attention" })} type="button">
               <span aria-hidden="true" className="is-attention">!</span>
               <strong>{attention.text}</strong>
               <small>
@@ -241,22 +247,22 @@ export function GoalTasksView({
       </TaskLane>
       <TaskLane listView={listView} count={openAgentTodos.length} label={t("tasks.pendingAndRunning")} tone="progress">
         {openAgentTodos.map((todo) => {
-          const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId };
+          const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? t("drawer.notAssigned") };
           const execution = executionRuns.find((item) => item.run.todoId === todo.todoId)?.run;
           return (
             <div className={`personal-task-card${execution ? " has-session" : ""}${selectedTodoId === todo.todoId ? " is-selected" : ""}`} key={todo.todoId} ref={selectedTodoId === todo.todoId ? (element) => { selectedTodoRef.current = element; } : undefined}>
-              <button aria-pressed={selectedTodoId === todo.todoId} onClick={() => onSelect({ item: enriched, kind: "todo" })} type="button">
+              <button aria-pressed={selectedTodoId === todo.todoId} onClick={(event) => selectFromButton(event.currentTarget, { item: enriched, kind: "todo" })} type="button">
                 <span>○</span><strong>{todo.text}</strong>
                 <small>
                   {todo.priority ? <span className={`personal-priority-badge is-${todo.priority.toLowerCase()}`}>{todo.priority}</span> : null}
                   {todo.status === "blocked" ? <span className="personal-priority-badge is-blocked">{t("tasks.blocked")}</span> : null}
                   {execution ? <span className="personal-task-session-status">{execution.status === "running" || execution.status === "queued" ? t("runs.running") : execution.status === "failed" ? t("tasks.sessionError") : t("common.waiting")}</span> : null}
                   {todo.status === "deferred" ? <span className="personal-task-session-status">{t("drawer.taskStatusDeferred")}</span> : !execution ? <span className="personal-task-session-status">{t("tasks.waiting")}</span> : null}
-                  {todo.claimedBy ?? goal.agentLabel ?? goal.agentId}
+                  <span>{enriched.ownerLabel}</span>
                 </small>
               </button>
               <div className="personal-task-card-actions">
-                {execution ? <button className="personal-task-session-link" aria-label={t("tasks.openExecution", { name: todo.text })} onClick={() => onSelect({ item: execution, kind: "run" })} title={execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")} type="button"><ExternalLink size={14} /><span>{execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")}</span></button> : null}
+                {execution ? <button className="personal-task-session-link" aria-label={t("tasks.openExecution", { name: todo.text })} onClick={(event) => selectFromButton(event.currentTarget, { item: execution, kind: "run" })} title={execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")} type="button"><ExternalLink size={14} /><span>{execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")}</span></button> : null}
                 {onQuickComplete ? (
                   <button
                     aria-busy={quickCompletingTodoIds?.has(todo.todoId) || undefined}
@@ -271,7 +277,7 @@ export function GoalTasksView({
                       : <Check size={14} />}
                   </button>
                 ) : null}
-                <button aria-label={t("tasks.moreActions", { name: todo.text })} onClick={() => onSelect({ item: enriched, kind: "todo" })} title={t("common.actions")} type="button"><MoreHorizontal size={14} /></button>
+                <button aria-label={t("tasks.moreActions", { name: todo.text })} onClick={(event) => selectFromButton(event.currentTarget, { item: enriched, kind: "todo" })} title={t("common.actions")} type="button"><MoreHorizontal size={14} /></button>
               </div>
             </div>
           );
@@ -280,13 +286,13 @@ export function GoalTasksView({
       </TaskLane>
       <TaskLane listView={listView} count={scheduleItems.length} label={t("tasks.scheduled")} tone="schedule">
         {scheduleItems.map((item) => (
-          <button key={item.id} onClick={() => onSelect({ item: item.schedule, kind: "schedule" })} type="button">
+          <button key={item.id} onClick={(event) => selectFromButton(event.currentTarget, { item: item.schedule, kind: "schedule" })} type="button">
             <span>◷</span><strong>{item.schedule.label}</strong><small>{item.schedule.status === "paused" ? t("schedule.paused") : t("schedule.active")}</small>
           </button>
         ))}
         {!scheduleItems.length ? <p className="personal-task-empty">{t("tasks.emptySchedules")}</p> : null}
       </TaskLane>
-      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}:${historyEnabled}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
+      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}:${historyEnabled}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
       </div>
       {isEmpty ? (
         <p className="personal-task-empty">

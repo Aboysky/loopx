@@ -5,7 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -62,6 +62,19 @@ class GoalModeMCPControlPlane:
     def bound_agent_id(self) -> str | None:
         return self.state().get("agent_id")
 
+    def goal_ref(self) -> dict[str, str] | None:
+        value = self.state().get("goal_ref")
+        if not isinstance(value, Mapping):
+            return None
+        goal_id = value.get("goal_id")
+        goal_instance_id = value.get("goal_instance_id")
+        if not isinstance(goal_id, str) or not isinstance(goal_instance_id, str):
+            return None
+        return {
+            "goal_id": goal_id,
+            "goal_instance_id": goal_instance_id,
+        }
+
     def command_prefix(self) -> list[str]:
         executable = shutil.which("loopx")
         return [executable] if executable else [sys.executable, "-m", "loopx.cli"]
@@ -92,11 +105,11 @@ class GoalModeMCPControlPlane:
             command += ["--registry", registry]
         command += ["--format", "json"]
         result = subprocess.run(
-            [*command, *args], capture_output=True, text=True, timeout=30
+            [*command, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
         )
         if legacy_args is not None and self._runtime_profile_flag_is_unsupported(result):
             result = subprocess.run(
-                [*command, *legacy_args], capture_output=True, text=True, timeout=30
+                [*command, *legacy_args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
             )
         return (result.stdout or "") + (
             ("\n" + result.stderr) if result.returncode else ""
@@ -252,6 +265,7 @@ class GoalModeMCPControlPlane:
             execution_mode=self.config.execution_mode,
             completion_args=tuple(args),
             no_follow_up=no_follow_up,
+            goal_ref=self.goal_ref(),
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason) as authored:
             return settle_host_todo_completion(authored, run_cli=self.run_cli)
@@ -259,6 +273,7 @@ class GoalModeMCPControlPlane:
     def review_task_vision(
         self, todo_id: str, agent_id: str, agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
+        read_context_id: str = "",
     ) -> str:
         goal_id, _ = self.context()
         if not goal_id:
@@ -272,6 +287,8 @@ class GoalModeMCPControlPlane:
             legacy_host_surface=self.config.legacy_host_surface,
             scheduler_owner=self.config.scheduler_owner, execution_mode=self.config.execution_mode,
             completion_args=(),
+            checkpoint_read_context_id=read_context_id or None,
+            goal_ref=self.goal_ref(),
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason) as authored:
             return refresh_host_todo_vision(authored, run_cli=self.run_cli)
@@ -317,8 +334,13 @@ def create_fastmcp_server(
     def review_task_vision(
         todo_id: str, agent_id: str, agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
+        read_context_id: str = "",
     ) -> str:
         """Supply a missing vision decision for a previously completed MCP Todo.
+        First call with only todo_id and agent_id to read the current basis.
+        Judge that basis, then call again with its read_context_id and one decision.
+        On stale/replaced context, read and judge again; do not reuse the old decision.
+        Retry a lost response with the same receipt and decision, without a new read.
         Uses its original Turn, never repeats work or spends again. agent_vision is
         a goal_vision_replan_contract_v0 packet with state and vision_patch fields.
         Compare Goal acceptance with evidence; vision_closed closes a stage and
@@ -326,7 +348,7 @@ def create_fastmcp_server(
         An unchanged reason requires an existing valid vision. Recheck should_run;
         checkpoint success alone does not certify Goal completion or clear gates.
         """
-        return control.review_task_vision(todo_id, agent_id, agent_vision, vision_unchanged_reason)
+        return control.review_task_vision(todo_id, agent_id, agent_vision, vision_unchanged_reason, read_context_id)
 
     @server.tool()
     def complete_task(

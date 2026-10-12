@@ -4,24 +4,36 @@ from datetime import datetime, timedelta, timezone
 from collections.abc import Mapping
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import threading
 from typing import Any
 
 import pytest
+from argparse import Namespace
+import sys
 
 from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService
-from loopx.cli_commands.goal_channel import _prepare_goal_channel_operation
+from loopx.cli_commands.goal_channel_operation import (
+    GoalChannelOperationContext,
+    _prepare_goal_channel_operation,
+    run_goal_channel_operation,
+)
+from loopx.control_plane.collaboration.operation_handoff import agent_operation_action
+from loopx.control_plane.collaboration.inbox import pending
 from loopx.extensions.lark.goal_channel_contracts import (
     GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
     write_goal_channel_binding,
 )
 from loopx.extensions.lark.goal_channel_message_delivery import (
+    GoalChannelDeliveryStageError,
     message_card_matches,
     normalized_card_text,
 )
 from loopx.extensions.lark.goal_channel_operation import (
+    OperationExecutorDriftError,
     build_goal_channel_operation_card,
     build_goal_channel_operation_result_card,
     deliver_goal_channel_operation_card,
@@ -41,12 +53,664 @@ APP_ID = "cli_operation_fixture"
 TENANT_KEY = "tenant_operation_fixture"
 
 
+def _prepare_agent_handoff(
+    store: ChatActionStore, registry: Path, *, managed: bool = False
+) -> dict[str, Any]:
+    baseline = _prepare(store, registry)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["thread_agent_bindings"] = [
+        {
+            "agent_id": AGENT_ID,
+            "host_surface": "codex-app",
+            "thread_id": "thread-operation-fixture",
+        }
+    ]
+    registry.write_text(json.dumps(data))
+    parameters = dict(baseline["normalized_parameters"])
+    parameters.pop("projection_digest")
+    parameters["executor"] = {
+        "kind": "agent_session",
+        "host_surface": "codex-app",
+        "thread_id": "thread-operation-fixture",
+        "revision": "agent-session-handoff-v0",
+    }
+    parameters["operation_kind"] = "fixture.submit"
+    if managed:
+        from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+
+        _store_codex_cli_session(
+            store.root.parent.parent,
+            lineage={
+                "goal_id": GOAL_ID,
+                "agent_id": AGENT_ID,
+                "todo_id": "todo-managed",
+            },
+            session_id="owned-managed-thread",
+            operation_profile_digest="c" * 64,
+            operation_model="test-model",
+            operation_reasoning_effort="xhigh",
+        )
+        parameters["executor"] = {
+            "kind": "managed_turn",
+            "todo_id": "todo-managed",
+            "session_id": "owned-managed-thread",
+            "profile_digest": "c" * 64,
+            "model": "test-model",
+            "reasoning_effort": "xhigh",
+            "revision": "managed-turn-handoff-v0",
+        }
+    parameters["projection"] = {
+        **parameters["projection"],
+        "simulated": False,
+        "title": "Synthetic Agent execution handoff",
+        "warning": "Engineering fixture; never sent to a live provider.",
+    }
+    parameters["destination_account_ref"] = "account:synthetic-fixture"
+    return ChatActionService(store=store, registry_path=registry).preview(
+        {
+            "action_kind": "operation.execute",
+            "summary": "Synthetic original-Agent handoff",
+            "idempotency_key": "agent-operation-fixture-v1",
+            "context": {"kind": "goal", "goal_id": GOAL_ID},
+            "normalized_parameters": parameters,
+        }
+    )
+
+
+@pytest.mark.parametrize("fault", [None, "grant", "todo", "profile", "fresh", "stopped", "dispatch"])
+def test_callback_wake_uses_one_operator_granted_delegation_without_consuming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str | None,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.collaboration_mcp import Delegations
+
+    store, registry, runtime, channel, target = _fixture(tmp_path)
+    proposal = _prepare_agent_handoff(store, registry, managed=True)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("callback-requester")
+    if fault == "stopped":
+        data["goals"][0]["status"] = "stopped"
+    registry.write_text(json.dumps(data))
+    config = registry.parent / "delegations.json"
+    worker = tmp_path / "worker"
+    worker.mkdir()
+    binding = {"id": "confirmed-operation", "agent_id": AGENT_ID,
+               "todo_id": "other" if fault == "todo" else "todo-managed",
+               "requesters": [] if fault == "grant" else ["callback-requester"],
+               "workspace": str(worker), "timeout_seconds": 30, "output_refs": ["result.json"],
+               "host_args": ["--host", "codex-cli", "--codex-operation-tools", "--codex-model",
+                             "other" if fault == "profile" else "test-model", "--codex-reasoning-effort", "xhigh"]}
+    if fault == "fresh":
+        binding["host_args"] += ["--iteration-context", "fresh"]
+    config.write_text(json.dumps({"schema_version": "loopx_local_delegation_v0", "bindings": [binding]}))
+    launched = []
+    def spawn(self, operation_id):
+        launched.append(operation_id)
+        if fault == "dispatch":
+            raise RuntimeError("private argv must not be returned")
+    monkeypatch.setattr(Delegations, "_spawn", spawn)
+    cards = {}
+    runner = _runner([], cards)
+    deliver_goal_channel_operation_card(proposal_id=proposal["proposal_id"], action_store_root=store.root,
+        runtime_root=runtime, binding_path=channel, target_path=target, execute=True, runner=runner)
+    delivered = store.load(proposal["proposal_id"])
+    event = _event(delivered, cards[delivered["operation"]["delivery"]["message_id"]])
+    configuration = {"registry_path": str(registry), "goal_id": GOAL_ID,
+        "requester_agent_id": "callback-requester", "binding_id": binding["id"],
+        "project": str(registry.parent.parent), "execution_config": ".loopx/delegations.json"}
+    kwargs = dict(runtime_root=runtime, action_store_root=store.root, profile_app_id=APP_ID,
+                  cli_bin="lark-cli", profile="operation-bot", runner=runner, managed_turn_wake=configuration)
+    first = handle_goal_channel_operation_callback(event, **kwargs)
+    # Concurrent callback replay/lost ACK reuses the actual canonical journal.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replays = list(pool.map(lambda _: handle_goal_channel_operation_callback(event, **kwargs), range(2)))
+    assert first["ok"] and first["status"] == "authorization_pending"
+    assert first["managed_turn_wake"]["execution_allowed"] is False
+    assert first["managed_turn_wake"]["native_start_verified"] is False
+    assert "private argv" not in json.dumps(first)
+    stored = store.load(proposal["proposal_id"])
+    assert stored["operation"]["lifecycle_state"] == "claimed"
+    assert stored["operation"].get("agent_handoff") is None
+    assert stored["operation"].get("host_start") is None
+    assert stored["operation"]["outcome"] is None
+    if fault in {None, "dispatch"}:
+        assert len(launched) == 1
+        assert all(row["managed_turn_wake"]["state"] == "existing_delegation" for row in replays)
+        service = Delegations(runtime, registry, GOAL_ID, "callback-requester", config)
+        row = json.loads(service.path(launched[0]).read_text())
+        assert row["identity"]["confirmed_operation_id"] == proposal["proposal_id"]
+        argv = service._execution_arguments(binding, launched[0])
+        assert argv[-2:] == ["--codex-confirmed-operation-id", proposal["proposal_id"]]
+        assert first["managed_turn_wake"]["state"] == ("blocked" if fault else "delegation_requested")
+    else:
+        assert launched == []
+        assert first["managed_turn_wake"]["state"] == "blocked"
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_authenticated_callback_hands_off_without_calling_any_executor_and_reconciles_original_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    managed: bool,
+) -> None:
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-operation-fixture")
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare_agent_handoff(store, registry, managed=managed)
+    cards: dict[str, dict[str, Any]] = {}
+    runner = _runner([], cards)
+    deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"],
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=runner,
+    )
+    delivered = store.load(proposal["proposal_id"])
+    card = cards[delivered["operation"]["delivery"]["message_id"]]
+    event = _event(delivered, card)
+
+    def no_executor(_proposal):
+        pytest.fail("a human callback must not run an Agent or simulation executor")
+
+    kwargs = dict(
+        runtime_root=runtime,
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+        executor=no_executor,
+    )
+    for invalid in [
+        {"operator_id": "ou_wrong_operator"},
+        {"message_id": "om_wrong_card"},
+    ]:
+        with pytest.raises(ActionConflictError):
+            handle_goal_channel_operation_callback({**event, **invalid}, **kwargs)
+    first = handle_goal_channel_operation_callback(event, **kwargs)
+    replay = handle_goal_channel_operation_callback(event, **kwargs)
+    assert first["status"] == replay["status"] == "authorization_pending"
+    assert first["outcome"] is None and not first["domain_external_write_performed"]
+    assert first["callback_ack_is_execution_receipt"] is False
+    for receipt in [first, replay]:
+        assert receipt["managed_turn_wake"]["state"] == "not_configured"
+        assert receipt["managed_turn_wake"]["execution_allowed"] is False
+        assert receipt["managed_turn_wake"]["native_start_verified"] is False
+    claimed = store.load(proposal["proposal_id"])
+    assert claimed["operation"]["result_delivery"] is None
+    assert (
+        "等待绑定的受管回合" if managed else "原宿主身份认证尚未接通"
+    ) in normalized_card_text(next(iter(cards.values())))
+    actor = {
+        "goal_id": GOAL_ID,
+        "agent_id": AGENT_ID,
+        "host_surface": "codex-app",
+        "thread_id": "thread-operation-fixture",
+    }
+    context = GoalChannelOperationContext(runtime, registry, runtime, binding)
+    if managed:
+        actor.update(
+            host_surface="loopx-managed-codex",
+            thread_id="owned-managed-thread",
+            todo_id="todo-managed",
+            profile_digest="c" * 64,
+            host_turn_id="native-turn-1",
+            model="test-model",
+            reasoning_effort="xhigh",
+        )
+        start = agent_operation_action(
+            runtime, registry, proposal_id=proposal["proposal_id"], actor=actor,
+            action="observe_host_start", turn_key="sha256:" + "b" * 64,
+        )
+        assert start["recorded"] is True and start["execution_allowed"] is False
+        started_card = build_goal_channel_operation_result_card(store.load(proposal["proposal_id"]))
+        assert "原生续接已接受；授权仍待消费，尚无执行结果" in normalized_card_text(started_card)
+    args = Namespace(
+        goal_channel_command="consume-operation",
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        proposal_id=proposal["proposal_id"],
+        host_surface="codex-app",
+        thread_id="thread-operation-fixture",
+        consumption_id="attempt-1",
+        execute=False,
+    )
+    dry = run_goal_channel_operation(args, context=context)
+    assert dry["ok"] is False and not store.load(proposal["proposal_id"])[
+        "operation"
+    ].get("agent_handoff")
+    args.execute = True
+    before = store.path.read_bytes()
+    for ambient_thread in ["", "thread-unrelated-fixture", "thread-operation-fixture"]:
+        monkeypatch.setenv("CODEX_THREAD_ID", ambient_thread)
+        rejected = run_goal_channel_operation(args, context=context)
+        assert rejected["ok"] is False
+        assert rejected["blocker"] == "operation_host_authentication_unavailable"
+        assert store.path.read_bytes() == before
+    # The internal IO fixture qualifies one-shot/reconciliation semantics,
+    # not a production host issuer. The public CLI above must remain blocked.
+    consumed = agent_operation_action(
+        runtime,
+        registry,
+        proposal_id=proposal["proposal_id"],
+        actor=actor,
+        action="consume",
+        consumption_id="attempt-1",
+    )
+    assert consumed["execution_allowed"] is True
+    assert (
+        agent_operation_action(
+            runtime,
+            registry,
+            proposal_id=proposal["proposal_id"],
+            actor=actor,
+            action="consume",
+            consumption_id="attempt-1",
+        )["execution_allowed"]
+        is False
+    )
+    operation = claimed["operation"]
+    unknown = {
+        "schema_version": "loopx_operation_outcome_v0",
+        "operation_id": proposal["proposal_id"],
+        "payload_digest": operation["payload_digest"],
+        "confirmation_digest": operation["confirmation_digest"],
+        "claim_id": operation["claim"]["claim_id"],
+        "executor_revision": operation["executor_revision"],
+        "consumption_id": "attempt-1",
+        "projection_verified": True,
+        "simulation": False,
+        "outcome": "submission_unknown",
+        "external_write_performed": True,
+        "summary": "Synthetic submission result is unknown; do not resubmit.",
+        "evidence_refs": ["receipt:unknown-fixture"],
+    }
+    reported = agent_operation_action(
+        runtime,
+        registry,
+        proposal_id=proposal["proposal_id"],
+        actor=actor,
+        action="report",
+        outcome=unknown,
+    )
+    assert (
+        reported["status"] == "submission_unknown" and reported["needs_reconciliation"]
+    )
+    assert pending(runtime, GOAL_ID, AGENT_ID)["operation_handoffs"][0][
+        "needs_reconciliation"
+    ]
+    recovered = recover_goal_channel_operation_results(
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        allowed_chat_ids={CHAT_ID},
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+    )
+    assert recovered["delivered"] == 1
+    assert "不可重复提交" in normalized_card_text(next(iter(cards.values())))
+    final = {
+        **unknown,
+        "outcome": "not_executed",
+        "external_write_performed": False,
+        "summary": "Synthetic original venue evidence proves no submission.",
+        "reconciles_outcome_digest": _digest(unknown),
+        "evidence_refs": ["receipt:reconciled-fixture"],
+    }
+    assert (
+        agent_operation_action(
+            runtime,
+            registry,
+            proposal_id=proposal["proposal_id"],
+            actor=actor,
+            action="report",
+            outcome=final,
+        )["outcome"]
+        == final
+    )
+    updated = store.load(proposal["proposal_id"])
+    frame = goal_channel_operation._operation_review_frame(updated)
+    assert frame["resultDeliveryVerified"] is False
+    assert frame["resultKind"] == "not_executed"
+    recovered = recover_goal_channel_operation_results(
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        allowed_chat_ids={CHAT_ID},
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+    )
+    assert recovered["delivered"] == 1
+    assert "已结束，未执行" in normalized_card_text(next(iter(cards.values())))
+    assert store.load(proposal["proposal_id"])["operation"]["outcome"] == unknown
+    assert (
+        store.load(proposal["proposal_id"])["operation"]["result_delivery"][
+            "outcome_stage"
+        ]
+        == "reconciled"
+    )
+    assert (
+        agent_operation_action(
+            runtime,
+            registry,
+            proposal_id=proposal["proposal_id"],
+            actor=actor,
+            action="consume",
+            consumption_id="attempt-1",
+        )["execution_allowed"]
+        is False
+    )
+    assert "operation_handoffs" not in pending(runtime, GOAL_ID, AGENT_ID)
+    assert (
+        agent_operation_action(
+            runtime,
+            registry,
+            proposal_id=proposal["proposal_id"],
+            actor=actor,
+            action="inspect",
+        )["execution_allowed"]
+        is False
+    )
+
+
+def test_real_cli_rejects_same_user_environment_forgery_before_private_reads_or_writes(
+    tmp_path: Path,
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare_agent_handoff(store, registry)
+    cards: dict[str, dict[str, Any]] = {}
+    runner = _runner([], cards)
+    deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"],
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=runner,
+    )
+    delivered = store.load(proposal["proposal_id"])
+    handle_goal_channel_operation_callback(
+        _event(delivered, cards[delivered["operation"]["delivery"]["message_id"]]),
+        runtime_root=runtime,
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+        executor=lambda _: pytest.fail("no external execution"),
+    )
+    assert (
+        store.load(proposal["proposal_id"])["operation"]["lifecycle_state"] == "claimed"
+    )
+    before = store.path.read_bytes()
+    command_args = {
+        "consume-operation": ["--consumption-id", "attempt-forged", "--execute"],
+        "inspect-operation": [],
+        # Missing outcome is intentional: authentication must precede its read.
+        "report-operation": [
+            "--outcome-json",
+            str(tmp_path / "absent-outcome.json"),
+            "--execute",
+        ],
+    }
+    for command, extra in command_args.items():
+        for ambient_thread in [
+            "thread-operation-fixture",
+            "thread-unrelated-fixture",
+            "",
+        ]:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "loopx.cli",
+                    "--format",
+                    "json",
+                    "--registry",
+                    str(registry),
+                    "--runtime-root",
+                    str(runtime),
+                    "goal-channel",
+                    command,
+                    "--goal-id",
+                    GOAL_ID,
+                    "--agent-id",
+                    AGENT_ID,
+                    "--proposal-id",
+                    proposal["proposal_id"],
+                    "--host-surface",
+                    "codex-app",
+                    "--thread-id",
+                    "thread-operation-fixture",
+                    *extra,
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+                env={**os.environ, "CODEX_THREAD_ID": ambient_thread},
+            )
+            assert result.returncode == 1, result.stdout + result.stderr
+            packet = json.loads(result.stdout)
+            assert packet["blocker"] == "operation_host_authentication_unavailable"
+            assert packet["details"]["execution_allowed"] is False
+            assert packet["external_write_performed"] is False
+            assert (
+                "environment ids and route flags are not identity proof"
+                in packet["public_summary"]
+            )
+            assert "normalized_parameters" not in packet and "outcome" not in packet
+            assert store.path.read_bytes() == before
+
+
+def test_cli_host_gate_survives_unexpected_success_from_an_older_effect_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.cli_commands import goal_channel_operation as command_module
+
+    store, registry, runtime, binding, _target = _fixture(tmp_path)
+    proposal = _prepare_agent_handoff(store, registry)
+    before = store.path.read_bytes()
+    monkeypatch.setattr(
+        command_module,
+        "effect_runtime_result",
+        lambda *_: {
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "host_surface": "codex-app",
+            "thread_id": "thread-operation-fixture",
+        },
+    )
+    args = Namespace(
+        goal_channel_command="consume-operation",
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        proposal_id=proposal["proposal_id"],
+        host_surface="codex-app",
+        thread_id="thread-operation-fixture",
+        consumption_id="attempt-legacy",
+        execute=True,
+    )
+    packet = run_goal_channel_operation(
+        args,
+        context=GoalChannelOperationContext(runtime, registry, runtime, binding),
+    )
+    assert packet["ok"] is False and packet["external_write_performed"] is False
+    assert "no authenticated host transport" in packet["public_summary"]
+    assert store.path.read_bytes() == before
+
+
 def _digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(
             value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode()
     ).hexdigest()
+
+
+def test_internal_replacement_io_fixture_recovers_unknown_without_qualifying_host_identity(
+    tmp_path: Path,
+) -> None:
+    from loopx.thread_agent_binding import (
+        bind_thread_agent_in_registry,
+        unbind_thread_agent_in_registry,
+    )
+
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare_agent_handoff(store, registry)
+    cards: dict[str, dict[str, Any]] = {}
+    runner = _runner([], cards)
+    deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"],
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=runner,
+    )
+    delivered = store.load(proposal["proposal_id"])
+    message_id = delivered["operation"]["delivery"]["message_id"]
+    handle_goal_channel_operation_callback(
+        _event(delivered, cards[message_id]),
+        runtime_root=runtime,
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+        executor=lambda _: pytest.fail("recovery fixture must not execute externally"),
+    )
+    original = {
+        "goal_id": GOAL_ID,
+        "agent_id": AGENT_ID,
+        "host_surface": "codex-app",
+        "thread_id": "thread-operation-fixture",
+    }
+    replacement = {**original, "thread_id": "thread-replacement-fixture"}
+
+    def cli(*arguments: str, thread: str, expected_exit: int = 0) -> dict[str, Any]:
+        # Only the locator-only Inbox read remains public here. Positive
+        # operation calls below exercise internal IO, not host authentication.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "--registry",
+                str(registry),
+                "--runtime-root",
+                str(runtime),
+                *arguments,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+            env={**os.environ, "CODEX_THREAD_ID": thread},
+        )
+        assert result.returncode == expected_exit, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    def operation(actor: dict[str, str], action: str, **request: Any):
+        return agent_operation_action(
+            runtime,
+            registry,
+            proposal_id=proposal["proposal_id"],
+            actor=actor,
+            action=action,
+            **request,
+        )
+
+    consumed = operation(original, "consume", consumption_id="attempt-1")
+    assert consumed["execution_allowed"]
+    unknown = {
+        "schema_version": "loopx_operation_outcome_v0",
+        **{
+            key: consumed[key]
+            for key in (
+                "operation_id",
+                "payload_digest",
+                "confirmation_digest",
+                "claim_id",
+                "executor_revision",
+            )
+        },
+        "consumption_id": "attempt-1",
+        "projection_verified": True,
+        "simulation": False,
+        "outcome": "submission_unknown",
+        "external_write_performed": True,
+        "summary": "Synthetic unknown submission requires original-system evidence.",
+        "evidence_refs": ["receipt:unknown-fixture"],
+    }
+    operation(original, "report", outcome=unknown)
+    unbind_thread_agent_in_registry(registry_path=registry, **original, execute=True)
+    bind_thread_agent_in_registry(registry_path=registry, **replacement, execute=True)
+    inbox = cli(
+        "manager-inbox",
+        "read",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        thread=replacement["thread_id"],
+    )
+    assert inbox["operation_handoffs"][0]["binding_current"] is False
+    inspected = operation(replacement, "inspect")
+    assert inspected["outcome"] == unknown and inspected["route"] == original
+    assert inspected["access"]["owner"] == replacement
+    assert inspected["access"]["permission"] == "historical_evidence_only"
+    before = store.path.read_bytes()
+    with pytest.raises(ActionConflictError):
+        operation(replacement, "consume", consumption_id="attempt-2")
+    assert store.path.read_bytes() == before
+    final = {
+        **unknown,
+        "outcome": "not_executed",
+        "external_write_performed": False,
+        "summary": "Synthetic original-system evidence proves no submission.",
+        "evidence_refs": ["receipt:reconciled-fixture"],
+    }
+    with pytest.raises(ActionConflictError):
+        operation(replacement, "report", outcome=final)
+    assert store.path.read_bytes() == before
+    final["reconciles_outcome_digest"] = _digest(unknown)
+    dry = operation(replacement, "inspect")
+    assert not dry["execution_allowed"] and store.path.read_bytes() == before
+    reported = operation(replacement, "report", outcome=final)
+    assert not reported["execution_allowed"] and not reported["needs_reconciliation"]
+    assert reported["reconciliation_report"]["owner"] == replacement
+    inspected = operation(replacement, "inspect")
+    assert inspected["reconciliation"] == final and inspected["outcome"] == unknown
+    assert inspected["consumption"]["route"] == original
+    assert inspected["reconciliation_report"]["original_route"] == original
+    frame = goal_channel_operation._operation_review_frame(
+        store.load(proposal["proposal_id"])
+    )
+    assert frame["resultKind"] == "not_executed" and not frame["resultDeliveryVerified"]
+    recovered = recover_goal_channel_operation_results(
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        allowed_chat_ids={CHAT_ID},
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+    )
+    assert recovered["delivered"] == 1 and set(cards) == {message_id}
+    assert "已结束，未执行" in normalized_card_text(cards[message_id])
+    updated = store.load(proposal["proposal_id"])
+    assert updated["operation"]["outcome"] == unknown
+    assert updated["operation"]["result_delivery"]["outcome_stage"] == "reconciled"
+    assert goal_channel_operation._operation_review_frame(updated)[
+        "resultDeliveryVerified"
+    ]
 
 
 def _fixture(
@@ -395,6 +1059,63 @@ def _event(proposal: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("phase", ["preview", "before_verify", "after_verify"])
+def test_fresh_delivery_rejects_expiry_before_any_message_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    expiry_ms = int(
+        datetime.fromisoformat(proposal["operation"]["expires_at"]).timestamp() * 1000
+    )
+    times = iter(
+        [expiry_ms - 1000, expiry_ms + 1000]
+        if phase == "after_verify"
+        else [expiry_ms + 1000]
+    )
+
+    class DeliveryClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return datetime.fromtimestamp(next(times) / 1000, tz=tz)
+
+    monkeypatch.setattr(goal_channel_operation, "datetime", DeliveryClock)
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    with pytest.raises(ActionConflictError, match="not awaiting confirmation"):
+        deliver_goal_channel_operation_card(
+            proposal_id=proposal["proposal_id"],
+            action_store_root=store.root,
+            runtime_root=runtime,
+            binding_path=binding,
+            target_path=target,
+            execute=phase != "preview",
+            runner=_runner(calls, sent_cards),
+            executor_binding_resolver=lambda _parameters, _runtime: {
+                "revision": "simulator-v0"
+            },
+        )
+
+    assert not sent_cards
+    assert not any("+messages-send" in call for call in calls)
+    assert bool(calls) == (phase == "after_verify")
+    assert store.load(proposal["proposal_id"]) == proposal
+
+
+def test_historical_confirmation_card_reconstruction_ignores_processing_time(
+    tmp_path: Path,
+) -> None:
+    store, registry, _runtime, _binding, _target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    submitted = build_goal_channel_operation_card(proposal)
+    after_expiry = int(
+        datetime.fromisoformat(proposal["operation"]["expires_at"]).timestamp() * 1000
+    ) + 1000
+    with pytest.raises(ActionConflictError, match="not awaiting confirmation"):
+        build_goal_channel_operation_card(proposal, now_ms=after_expiry)
+    assert goal_channel_operation._submitted_confirmation_card(proposal) == submitted
+
+
 def test_callback_timestamp_normalizes_milliseconds_and_microseconds() -> None:
     expected = "2023-11-14T22:13:20.123000Z"
 
@@ -481,6 +1202,22 @@ def test_card_is_one_bounded_non_forwardable_confirmation_projection(
     assert {
         button["elements"][0]["behaviors"][0]["value"]["decision"] for button in buttons
     } == {"confirm", "reject"}
+
+
+def test_cancelled_request_card_does_not_claim_execution_completed(tmp_path: Path) -> None:
+    store, registry, _runtime, _binding, _target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    cancelled = store.cancel(proposal["proposal_id"])
+
+    card = build_goal_channel_operation_result_card(cancelled)
+
+    assert cancelled["operation"]["outcome"]["outcome"] == "cancelled_before_confirmation"
+    assert card["header"]["template"] == "orange"
+    tag = card["header"]["text_tag_list"][0]
+    assert tag["color"] == "orange"
+    assert tag["text"]["content"] == "确认请求已取消，未执行"
+    assert "已完成" not in card["config"]["summary"]["content"]
+    assert cancelled["operation"].get("authorization_consumed_at") is None
 
 
 def test_lark_cards_consume_one_shared_ts_frame_each(
@@ -650,6 +1387,9 @@ def test_cli_preparation_previews_without_write_then_persists_canonical_proposal
         idempotency_key="cli-operation-fixture",
         request_path=request_path,
         execute=False,
+        executor_binding_resolver=lambda _parameters, _runtime: {
+            "revision": "simulator-v0"
+        },
     )
     assert preview["status"] == "preview_ready"
     assert store.list() == []
@@ -663,6 +1403,9 @@ def test_cli_preparation_previews_without_write_then_persists_canonical_proposal
         idempotency_key="cli-operation-fixture",
         request_path=request_path,
         execute=True,
+        executor_binding_resolver=lambda _parameters, _runtime: {
+            "revision": "simulator-v0"
+        },
     )
     assert applied["status"] == "awaiting_confirmation"
     assert applied["details"]["durable_proposal_written"] is True
@@ -866,6 +1609,7 @@ def test_microsecond_callback_completes_simulation_and_result_delivery(
 
 def test_card_v2_normalized_readback_and_callback_fallback_complete_simulation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, registry, runtime, binding, target = _fixture(tmp_path)
     proposal = _prepare(store, registry)
@@ -895,6 +1639,25 @@ def test_card_v2_normalized_readback_and_callback_fallback_complete_simulation(
         **_event(durable, card),
         "card_content": json.dumps(_lark_card_v2_callback_fallback(card)),
     }
+    # Exercise the legacy no-snapshot fallback with a timely provider event
+    # processed after expiry. Processing time must not replace confirmed_at.
+    expiry = datetime.fromisoformat(durable["operation"]["expires_at"])
+
+    class CallbackClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return (expiry + timedelta(hours=1)).astimezone(tz)
+
+    load = ChatActionStore.load
+
+    def legacy_load(self: ChatActionStore, proposal_id: str) -> dict[str, Any] | None:
+        loaded = load(self, proposal_id)
+        if loaded is not None and loaded.get("operation", {}).get("delivery"):
+            loaded["operation"]["delivery"].pop("submitted_card", None)
+        return loaded
+
+    monkeypatch.setattr(goal_channel_operation, "datetime", CallbackClock)
+    monkeypatch.setattr(ChatActionStore, "load", legacy_load)
     execution_count = 0
 
     def executor(claimed: dict[str, Any]) -> dict[str, Any]:
@@ -1371,3 +2134,274 @@ def test_forwarded_or_unauthorized_card_cannot_claim(tmp_path: Path) -> None:
             runner=runner,
             executor=lambda _proposal: {},
         )
+
+
+def test_prepare_rejects_stale_executor_revision_before_any_persistence(
+    tmp_path: Path,
+) -> None:
+    """A stale revision is blocked in preview and execute without any write."""
+
+    store, registry, runtime, _binding, _target = _fixture(tmp_path)
+    request_path = tmp_path / "operation.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_operation_request_v0",
+                "domain": "finance",
+                "operation_kind": "finance.order.simulate",
+                "operation_schema": "finance_order_intent_v0",
+                "payload_ref": "finance-order:stale-fixture",
+                "payload": {"asset": "SYNTH"},
+                "payload_digest": _digest({"asset": "SYNTH"}),
+                "projection": {
+                    "schema_version": "loopx_operation_projection_v0",
+                    "title": "Simulated trade request",
+                    "subtitle": "Synthetic fixture",
+                    "focus": "BUY 1 SYNTH @ 10 TEST",
+                    "fields": [{"label": "Order", "value": "Limit · GTC"}],
+                    "warning": "Simulation only.",
+                    "simulated": True,
+                },
+                "destination_account_ref": "account:simulation",
+                "expires_at": (
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).isoformat(),
+                "authorized_principals": [f"lark:{OPERATOR_ID}"],
+                "executor": {
+                    "extension_id": "loopx-finance-execution",
+                    "protocol": "finance_operation_executor_v0",
+                    "permission": "finance.operation.simulate",
+                    "revision": "requested-v1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    for execute in (False, True):
+        with pytest.raises(OperationExecutorDriftError) as exc_info:
+            _prepare_goal_channel_operation(
+                registry_path=registry,
+                runtime_root=runtime,
+                goal_id=GOAL_ID,
+                agent_id=AGENT_ID,
+                summary="Review one simulated order",
+                idempotency_key=f"stale-operation-{execute}",
+                request_path=request_path,
+                execute=execute,
+                executor_binding_resolver=lambda _parameters, _runtime: {
+                    "revision": "active-v9"
+                },
+            )
+        assert exc_info.value.blocker == "executor_revision_drift"
+        assert exc_info.value.failure_stage == "resolve_executor_binding"
+        assert exc_info.value.details == {
+            "requested_executor_revision": "requested-v1",
+            "active_executor_revision": "active-v9",
+        }
+        assert exc_info.value.external_write_performed is False
+
+    durable = json.loads((store.root / "actions.json").read_text())
+    assert durable["proposals"] == {}
+    assert durable["idempotency"] == {}
+
+
+def test_prepare_rejects_unresolvable_executor_without_private_leak(
+    tmp_path: Path,
+) -> None:
+    """Resolution failures project a typed blocker without private text."""
+
+    store, registry, runtime, _binding, _target = _fixture(tmp_path)
+    request_path = tmp_path / "operation.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_operation_request_v0",
+                "domain": "finance",
+                "operation_kind": "finance.order.simulate",
+                "operation_schema": "finance_order_intent_v0",
+                "payload_ref": "finance-order:unavailable-fixture",
+                "payload": {"asset": "SYNTH"},
+                "payload_digest": _digest({"asset": "SYNTH"}),
+                "projection": {
+                    "schema_version": "loopx_operation_projection_v0",
+                    "title": "Simulated trade request",
+                    "subtitle": "Synthetic fixture",
+                    "focus": "BUY 1 SYNTH @ 10 TEST",
+                    "fields": [{"label": "Order", "value": "Limit · GTC"}],
+                    "warning": "Simulation only.",
+                    "simulated": True,
+                },
+                "destination_account_ref": "account:simulation",
+                "expires_at": (
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).isoformat(),
+                "authorized_principals": [f"lark:{OPERATOR_ID}"],
+                "executor": {
+                    "extension_id": "loopx-finance-execution",
+                    "protocol": "finance_operation_executor_v0",
+                    "permission": "finance.operation.simulate",
+                    "revision": "simulator-v0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def broken_resolver(_parameters: object, _runtime: object) -> object:
+        raise ValueError("private resolver detail: /home/operator/secret-path")
+
+    with pytest.raises(GoalChannelDeliveryStageError) as exc_info:
+        _prepare_goal_channel_operation(
+            registry_path=registry,
+            runtime_root=runtime,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            summary="Review one simulated order",
+            idempotency_key="unavailable-operation",
+            request_path=request_path,
+            execute=True,
+            executor_binding_resolver=broken_resolver,
+        )
+
+    assert str(exc_info.value) == "operation executor binding is unavailable"
+    assert exc_info.value.blocker == "executor_unavailable"
+    assert "secret-path" not in str(exc_info.value)
+    durable = json.loads((store.root / "actions.json").read_text())
+    assert durable["proposals"] == {}
+    assert durable["idempotency"] == {}
+
+
+def test_delivery_projects_typed_stage_blockers(tmp_path: Path) -> None:
+    """Stage failures keep their typed blocker and stage at the deliver seam."""
+
+    def _failed_delivery(
+        case: str,
+        fail_args: tuple[str, ...],
+        *,
+        outcome: dict[str, Any] | None = None,
+        raises: Exception | None = None,
+    ) -> tuple[GoalChannelDeliveryStageError, list[list[str]]]:
+        case_root = tmp_path / case
+        case_root.mkdir()
+        store, registry, runtime, binding, target = _fixture(case_root)
+        proposal = _prepare(store, registry)
+        calls: list[list[str]] = []
+        base = _runner(calls, {})
+
+        def runner(
+            args: list[str], cwd: Path | None, timeout: float | None
+        ) -> dict[str, Any]:
+            if all(fragment in args for fragment in fail_args):
+                calls.append(list(args))
+                if raises is not None:
+                    raise raises
+                if outcome is not None:
+                    return dict(outcome)
+                return {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "provider rejected",
+                }
+            return base(args, cwd, timeout)
+
+        with pytest.raises(GoalChannelDeliveryStageError) as exc_info:
+            deliver_goal_channel_operation_card(
+                proposal_id=proposal["proposal_id"],
+                action_store_root=store.root,
+                runtime_root=runtime,
+                binding_path=binding,
+                target_path=target,
+                execute=True,
+                runner=runner,
+                executor_binding_resolver=lambda _parameters, _runtime: {
+                    "revision": "simulator-v0"
+                },
+            )
+        return exc_info.value, calls
+
+    blocked, identity_calls = _failed_delivery("identity", ("auth", "status"))
+    assert blocked.blocker == "sender_identity_unverified"
+    assert blocked.failure_stage == "verify_sender_identity"
+    assert blocked.external_write_performed is False
+    assert not any("+messages-send" in call for call in identity_calls)
+
+    blocked, dedupe_calls = _failed_delivery("dedupe", ("+chat-messages-list",))
+    assert blocked.blocker == "dedupe_history_read_failed"
+    assert blocked.failure_stage == "read_dedupe_history"
+    assert blocked.external_write_performed is False
+    assert not any("+messages-send" in call for call in dedupe_calls)
+
+    blocked, send_calls = _failed_delivery("send", ("+messages-send",))
+    assert blocked.blocker == "provider_send_rejected"
+    assert blocked.failure_stage == "send_operation_card"
+    assert blocked.external_write_performed is False
+
+    # A provider answer is the only thing that can be projected as a verdict.
+    # Without one the card may already be live, so the send stage must report an
+    # unknown outcome rather than a clean no-write.
+    for case, outcome, raises in (
+        ("send-no-body", {"returncode": 1, "stdout": "", "stderr": ""}, None),
+        (
+            "send-timeout",
+            None,
+            subprocess.TimeoutExpired(cmd="lark-cli", timeout=30),
+        ),
+    ):
+        blocked, send_calls = _failed_delivery(
+            case, ("+messages-send",), outcome=outcome, raises=raises
+        )
+        assert blocked.blocker == "delivery_outcome_unknown", (case, blocked)
+        assert blocked.failure_stage == "send_operation_card", (case, blocked)
+        assert blocked.external_write_performed is None, (case, blocked)
+        assert any("+messages-send" in call for call in send_calls), case
+
+    # A command that never started cannot have written anything, and says so
+    # with its own blocker instead of being reported as a provider rejection.
+    blocked, send_calls = _failed_delivery(
+        "send-unavailable",
+        ("+messages-send",),
+        raises=FileNotFoundError("lark-cli"),
+    )
+    assert blocked.blocker == "provider_unavailable", blocked
+    assert blocked.failure_stage == "send_operation_card", blocked
+    assert blocked.external_write_performed is False, blocked
+
+
+def test_receipt_treats_post_send_failure_as_unknown_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure after the provider write must not project a clean receipt."""
+
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    calls: list[list[str]] = []
+
+    def failing_record(
+        self: ChatActionStore, *args: object, **kwargs: object
+    ) -> object:
+        raise OSError("synthetic receipt write failure")
+
+    monkeypatch.setattr(ChatActionStore, "record_operation_delivery", failing_record)
+
+    with pytest.raises(GoalChannelDeliveryStageError) as exc_info:
+        deliver_goal_channel_operation_card(
+            proposal_id=proposal["proposal_id"],
+            action_store_root=store.root,
+            runtime_root=runtime,
+            binding_path=binding,
+            target_path=target,
+            execute=True,
+            runner=_runner(calls, {}),
+            executor_binding_resolver=lambda _parameters, _runtime: {
+                "revision": "simulator-v0"
+            },
+        )
+
+    # The readback already proved the card is live, so this stage keeps its own
+    # blocker instead of diluting the "provider outcome unknown" signal.
+    assert exc_info.value.blocker == "delivery_receipt_write_failed"
+    assert exc_info.value.failure_stage == "record_delivery_receipt"
+    assert exc_info.value.external_write_performed is None
+    assert any("+messages-send" in call for call in calls)

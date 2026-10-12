@@ -56,7 +56,7 @@ its own updater.
 For contributors, keep the clone-plus-canary path:
 
 ```bash
-git clone https://github.com/huangruiteng/loopx ~/loopx
+git clone https://github.com/loopx-project/loopx ~/loopx
 ~/loopx/scripts/install-local.sh
 loopx doctor
 loopx-canary doctor
@@ -115,14 +115,23 @@ versions may still match while the installed source commit is behind.
 
 Use `loopx update check --ref main` for archive maintainer qualification. Its
 `runtime_activation_qualification` result compares the release-manifest source
-commit with the trusted source lineage reported by `loopx doctor`:
+commit with the selected ref's current GitHub commit. `source_commit_check`
+records the bounded read; an unavailable lookup does not turn equal package
+versions or a locally cached ref into an up-to-date claim:
 
 - `runtime_active` means the installed commit is the target commit or contains it;
 - `release_or_install_successor_required` means the installed commit is behind
   or diverged, so a release/install successor must remain explicit;
-- `activation_qualification_required` means commit lineage is unavailable or
-  belongs to a different `repo/ref`; the runtime-active claim must fail closed
-  until identity is refreshed.
+- `activation_qualification_required` means the selected commit differs without
+  proven ancestry, the ref lookup is unavailable, or archive identity is not
+  established; the runtime-active claim must fail closed until qualified.
+
+A pinned full commit SHA is its own trusted target, so
+`loopx update check --ref <40-hex-commit>` qualifies against the installed
+manifest source commit without waiting for a branch lineage lookup. Installed
+and pinned commits match: the receipt is `runtime_active`. They differ: the
+receipt stays `activation_qualification_required` and names the installed
+commit difference instead of the generic lineage message.
 
 Closing a PR monitor after latest-`main` validation is valid, but the closeout
 must not say the fix is active in the installed runtime unless this receipt is
@@ -143,17 +152,36 @@ Before moving `stable`, maintainers should:
 
 - bump `loopx.__version__` and `pyproject.toml` together when user-visible
   release behavior changes;
+- before freezing the candidate, align the existing canonical help catalog,
+  generated versioned manpage and current developer-book release checkpoint;
+  run the documentation preflight below without changing historical examples;
 - create or verify the matching Git tag, for example `v0.1.3`;
 - for host Goal/prompt changes, explicitly run the
   [release-only native Goal regression](../development/testing-and-quality.md#release-only-native-goal-regression--仅发布前的原生-goal-回归)
   in a supported Codex environment; record an unavailable environment as
   `skipped`, not a live pass. Never enable paid model execution in default PR CI;
+- for conversational intake/routing changes, run the
+  [public intake evaluation](use-cases/steward/golden-queries.md#gq01-conversational-preparation-variant)
+  on the release candidate for the default and newly advertised model profiles,
+  with at least two repeats. Record the exact commit, model/settings, prompt/case
+  hashes, usage, failures and skips. Paid calls belong to release qualification,
+  never routine PR work, per-commit checks or heartbeats; ordinary development
+  uses offline regressions and affected browser scenarios. A skipped profile is
+  not qualified, and provider failures must remain visible;
 - fast-forward `stable` to that tagged commit after the release canary passes;
 - confirm `release.json`, `loopx doctor`, and `loopx update check` report the
   same package version and tag;
 - tell existing users to run `loopx update check`, then
   `loopx update apply` when the check recommends or when they want to
   refresh to the named stable release.
+
+Run the existing documentation preflight from the candidate worktree:
+
+```bash
+uv run --extra test python scripts/render-manpage.py --output man/loopx.1
+uv run --extra test python examples/cli-help-manpage-smoke.py
+uv run --extra test python examples/dev-book-publication-smoke.py
+```
 
 The release workflow builds a wheel and source distribution from the tagged
 commit. Its release assets include a canonical `SHA256SUMS` file, and GitHub
@@ -162,8 +190,8 @@ manifest. Verify a downloaded bundle before installation:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify loopx-X.Y.Z-py3-none-any.whl --repo huangruiteng/loopx
-gh attestation verify loopx-X.Y.Z.tar.gz --repo huangruiteng/loopx
+gh attestation verify loopx-X.Y.Z-py3-none-any.whl --repo loopx-project/loopx
+gh attestation verify loopx-X.Y.Z.tar.gz --repo loopx-project/loopx
 ```
 
 The checksum proves that the downloaded bytes match the release manifest. The
@@ -171,18 +199,69 @@ attestation separately binds those bytes to the repository, workflow, commit,
 and build event; neither mechanism claims that the package is vulnerability
 free.
 
+Wheel builds recreate the LoopX package subtrees in `build_lib` and wheel staging
+after verifying the frontend bundle. Reused build or retained staging directories
+must not carry modules, packages or resources deleted from current source.
+Current package data and the bundle's qualified previous asset generation
+remain included; unrelated build output
+and editable setup remain untouched. A build destination overlapping the
+source package is rejected. Explicit `bdist_wheel --skip-build` still packages
+the selected existing build; it is not a fresh-source qualification. Before
+qualifying retirement, inspect the built wheel and run its installed entry
+points outside the source checkout; a source
+test or a manually cleaned build directory alone does not prove this rule.
+
+Before a recovery dispatch, inspect the existing `pypi` environment's allowed
+branch/tag refs as well as the Trusted Publisher and enabled variable:
+
+```bash
+gh api repos/loopx-project/loopx/environments/pypi/deployment-branch-policies
+gh api repos/loopx-project/loopx/actions/variables/PYPI_PUBLISH_ENABLED
+```
+
+The workflow ref must satisfy that existing deployment policy. For a tag-only
+policy, use an explicitly labelled release-tooling tag pinned to the reviewed
+workflow commit, separately from the immutable product tag passed as `tag`.
+Retain the tooling ref for provenance verification; do not move the product tag,
+relax the environment policy, or replace Trusted Publishing with a token.
+
+For a browser-fixture error discovered after an immutable tag was published,
+maintainers may dispatch the release workflow from reviewed tooling with
+`tag` set to that existing release and `browser_fixture_commit` set to a full,
+merged commit SHA. Only the personal-workspace fixture, typed-actions and goal-work-map
+scenario files are extracted from that commit; its other changes are not
+applied to the product checkout. A non-default commit must contain at least
+one correction in these fixture owners. The wheel and sdist are built before
+those test corrections are applied; checksums are verified again after the
+browser and managed-runtime tests, and the fixtures are restored. An empty
+input uses the tagged fixtures. This does not skip browser validation, rebuild
+from `main`, move the tag, or authorize product changes.
+
+`RELEASE-SOURCES.json` records the product tag/commit, browser fixture commit,
+workflow commit/ref, and package/checksum hashes. It is uploaded and attested
+alongside the packages. For a dispatched recovery, the attestation's build
+source identifies the workflow commit; the product source remains the tagged
+commit named in this separately attested record. Verify both, rather than
+assuming the builder and product commits are identical:
+
+```bash
+gh attestation verify RELEASE-SOURCES.json --repo loopx-project/loopx
+```
+
 PyPI publication is an explicit, fail-closed extension of the same build. The
 release workflow publishes only when maintainers have configured all of these:
 
 - a PyPI project named `loopx` with a Trusted Publisher for
-  `huangruiteng/loopx` and `.github/workflows/release-artifacts.yml`;
+  `loopx-project/loopx` and `.github/workflows/release-artifacts.yml`;
 - a protected GitHub environment named `pypi` that matches the Trusted
   Publisher configuration;
 - the repository variable `PYPI_PUBLISH_ENABLED=true`.
 
-Do not add a long-lived PyPI token. Without every condition above, GitHub
-Release packages and their verification material are still produced, while
-the PyPI job remains skipped.
+Do not add a long-lived PyPI token. Without the enabled variable, the PyPI
+job is skipped. With publication enabled, a disallowed workflow ref or invalid
+Trusted Publisher configuration fails closed; it does not become a successful
+or skipped publication. GitHub packages and PyPI publication retain separate
+readbacks.
 
 ## Public Release Timeline
 
@@ -575,6 +654,116 @@ path, and canary route rather than as a user-facing release baseline.
   typed upstream terminal errors land through #4126 and #4215. The published
   wheel, source distribution, macOS, Windows, checksum, update, and PyPI
   artifacts were verified against the exact release source before promotion.
+- `v1.0.4` on 2026-09-15 14:19 +08:00: bounded local authority storage,
+  human-confirmed operations, and a wider typed kernel release at the matching
+  `v1.0.4` tag (`b6d877b0c`). The opt-in SQLite authority provider keeps its
+  retained state log bounded with compact operation deltas plus periodic
+  checkpoints, separates storage, head, and continuity integrity, and migrates
+  V1 -> V2 as one idempotent, fail-closed transaction with a plan/execute
+  operator command (#4408, #4328, #4121); PostgreSQL authority admission
+  becomes a service-owned boundary whose authority ladder runs against a real
+  server in CI (#4334, #4399). Goal Channel operations ship as human-confirmed
+  typed actions whose review decision travels with the operation instead of
+  being re-derived per surface (#4275, #4364, #4132), and Todo, quota, lease,
+  monitor, and decision-scope rules converge on shared typed owners (#4273,
+  #4289, #4292, #4348, #4351). The published wheel, source distribution,
+  macOS, Windows, checksum, signed-update, and PyPI artifacts were verified
+  against the exact release source before `stable` fast-forwarded.
+- `v1.0.5` on 2026-09-16 03:14 +08:00: first-connect registration and explicit
+  host selection hot-fix release at the matching `v1.0.5` tag (`0c3971fea`).
+  `connect`/`bootstrap` register the goal and write the active state only, so a
+  freshly connected goal is immediately eligible instead of parking on a
+  generated owner gate, and the eight first-connect bootstrap options plus the
+  `onboarding_*` payload fields and the `adapter.connection_validation`
+  annotation are removed (#4465). Managed execution is selected rather than
+  inferred: the managed Turn host (#4443, #4451) and the steward channel
+  endpoint (#4446, #4419) come from explicit configuration, PR-review CI
+  waiting is configurable per machine or goal (#4452) under a documented review
+  frame (#4434), and update activation is qualified from an immutable source
+  commit (#4460) while the serving runtime publishes its identity with a
+  restart path (#4423). Quota window-slot spend clamps against the voids that
+  target it (#4384), the held coordination fence survives an authority-source
+  change (#4429), and a goal frontier missing its final-outcome claims is
+  diagnosed (#4341). Community contributions cover text-mode subprocess
+  decoding (#4396), stale executor revisions rejected before persisting
+  (#4398), CLI dash options (#4428), manager delegation reconciliation (#4372),
+  window-slot clamping (#4384), the semantic vocabulary registry and its
+  governance (#4433, #4453), and the Codex App autonomous goal guide (#4442).
+  The published wheel, source distribution, checksum, and PyPI artifacts were
+  verified against the exact release source before `stable` fast-forwarded.
+- `v1.1.0` on 2026-09-20 01:04 +08:00: organization migration and governed
+  collaboration release at the matching `v1.1.0` tag (`607c11d75`). LoopX
+  moved its repository, Pages, installer, and update surfaces to
+  `loopx-project`; team plans gained an explicit confirmation-to-canonical-work
+  path, local delegation gained durable operation recovery and checked returns,
+  and Goal acceptance plus replan obligations retained their existing authority
+  owners. The published package, desktop artifacts, signed update feed, and
+  website were verified before `stable` fast-forwarded.
+
+- `v1.2.0` on 2026-09-25 10:19 +08:00: recoverable authority, typed Todo
+  transitions, and inspectable host activation at commit `eb11130e1`.
+  The release separates package acquisition, delivered host material, runtime
+  activation, and enabled-extension readiness.
+
+- `v1.2.1` on 2026-09-27 16:22 +08:00: recoverable work, clearer Chat usage,
+  and lifecycle compatibility at commit `fce1a4bac`.
+  The published package, desktop artifacts, signed update feed, and website
+  were verified against the release source before `stable` fast-forwarded.
+
+- `v1.2.2` on 2026-09-28 07:17 +08:00: recoverable App conversations,
+  delegation continuity and local authority replay at commit
+  `ee9dad81b`. Settings identify device, Goal and Agent
+  targets; usage statistics preserve visible disclosure and persistent opt-out.
+  The published package, four Mac/Windows desktop artifacts, signed update
+  feed, PyPI installation and public Pages were verified against the tagged
+  source before `stable` fast-forwarded. The first full-public attempt hit a
+  disposable native-profile cleanup race; the complete same-source rerun passed
+  under unchanged budgets. Its remaining fixture-quiescence limit is retained
+  on the [existing profile lifecycle owner](https://github.com/loopx-project/loopx/pull/5226#issuecomment-5860681814).
+
+- `v1.2.3` on 2026-09-29 22:54 +08:00: App Goal drafts with explicit Apply,
+  exact Goal ownership for Chat and delegation, opt-in Kiro CLI mode, and typed
+  Explore observations at commit `0a401fe75`. The [published release](https://github.com/loopx-project/loopx/releases/tag/v1.2.3)
+  has 11 assets; package and desktop installer checksums, matching PyPI package
+  hashes, and the signed `desktop-stable` update feed were read back after all
+  three release workflows passed. `stable` was fast-forwarded to the tag.
+  This expedited release used focused local version, packaging, and two native
+  canary checks; the full Python/public smoke/model-behavior/PostgreSQL matrix
+  and a separate Pages check were not run.
+
+- `v1.2.4` on 2026-10-03 20:38 +08:00: scoped Chat coordination, recoverable
+  state migration, explicit local preferences, and handoff ownership at commit
+  `fc42b84cedb21a56c15ca3b4af5eab0407829cf8`. See the
+  [published release](https://github.com/loopx-project/loopx/releases/tag/v1.2.4)
+  for its shipped capability usage and qualification limits.
+
+- `v1.3.0` on 2026-10-06 09:41 +08:00: long-horizon benchmark findings and
+  Astra-assisted semantic control-plane engineering, with continuing-work
+  ownership, evidence-driven replanning and recoverable workspace interaction
+  at commit `e1dd9e519c3057fda4b3765d0c93e7ae793608bf`. The
+  [published release](https://github.com/loopx-project/loopx/releases/tag/v1.3.0)
+  contains bilingual operating instructions and annotated community credits;
+  the [personal illustrated guide](https://my.feishu.cn/docx/Rlg0d9pvAo6zXExWTvWcv0ben0f)
+  was read back with the released UI. Eight source-qualification lanes passed,
+  including the full Python/public smoke suites, installed wheel upgrade and
+  isolated real-model validation. Package checksums, PyPI hashes, hosted
+  attestations, desktop assets, signed update feed and the fast-forwarded
+  `stable` installation were independently verified. The attested source
+  record distinguishes immutable product source from reviewed workflow and
+  browser-fixture corrections. Native desktop builds passed; the maintainer
+  published verified CI outputs after cancelling queued publication jobs.
+  Windows execution, Apple Developer ID/notarization, live Lark/Bot channels
+  and unavailable Harbor/SForge/PostgreSQL/NoKV environments remain unqualified.
+  This release does not claim a paired-version benchmark uplift.
+
+- `v1.3.1` on 2026-10-06 16:10 +08:00: a focused compatibility release at
+  commit `7445ae360aaf330e0067959a5e0084ffd9f76de4`, adapting the renderer to
+  the `linkify-it` 6 named export while preserving user-info URL handling.
+  The [published release](https://github.com/loopx-project/loopx/releases/tag/v1.3.1)
+  records the shipped operating instructions and validation limits. Package,
+  PyPI, desktop assets, signed update feed, `stable` installation and the
+  personal illustrated guide were independently read back. Focused checks
+  passed; full Python/public smoke and paid model matrices were not rerun.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
@@ -750,7 +939,7 @@ host integrations when their focused smokes pass:
 - public slash command names: `/loopx`, `/loopx <goal>`,
   `/loopx-global-summary`, `/loopx-global-gates`, `/loopx-global-todos`, and
   `/loopx-global-risks`;
-- ignored local state boundaries under `~/.codex/loopx`, project-local registry
+- ignored local state boundaries under `~/.loopx`, project-local registry
   files, and project-local active-state workbench files recognized by
   `loopx doctor`, `loopx status`, and `loopx check`.
 
@@ -865,6 +1054,58 @@ also record:
   mirrors the English group structure and material claims in neutral product
   language. Keep each group shorter than its English counterpart while
   preserving direct PR attribution and compatibility boundaries.
+
+### Personal Feishu Release Guide
+
+Each named public release needs a companion illustrated Feishu document in the
+maintainer's personal user account. This is part of completing the release,
+alongside the GitHub release body; a changelog link alone is insufficient.
+Use the existing release-communication and document-authoring workflows when
+available, with the following durable procedure:
+
+1. Verify the personal account through an authoritative account mapping or
+   email, and explicitly use user identity for every document operation. A
+   matching display name or a profile named "personal" is insufficient. Never
+   fall back to a corporate account or bot; if personal access is unavailable,
+   keep the draft and report the access gap.
+2. Find the last substantive release guide in that personal account with a
+   bounded search. Read it and record its URL, date and covered version in the
+   private release checkpoint. Use that covered version as the guide's baseline;
+   do not substitute the previous GitHub tag. Read all intervening release notes
+   and derive cumulative claims from their merged PRs and the verified target
+   snapshot. If history cannot be verified, label an owner-supplied baseline
+   explicitly rather than claiming a complete audit. The GitHub release body
+   retains its own previous-tag-to-release-tag range.
+   Organize the guide around ordinary user tasks: who should
+   upgrade, what they can now do, where to find it, and how to verify the result.
+   Distinguish released behavior, experimental capabilities, simulated examples,
+   and failed or unavailable validation. A candidate draft must remain labeled
+   as such until the release and its artifacts are verified.
+3. Include legible screenshots of the actual released interface with public-safe
+   data. Label isolated demo data and any annotations; retain capture provenance
+   privately. Place concise explanations beside the relevant images and inspect
+   mobile readability. Do not fabricate UI, expose private workspaces, or use
+   an older screenshot as evidence of changed behavior.
+4. Teach the minimum upgrade and readback commands, compatibility or migration
+   behavior, and each highlighted optional capability's activation, validation,
+   disable or rollback path, and authority/privacy boundary. Link canonical
+   documentation at the release tag and the complete GitHub release body.
+   Preserve concrete community contribution credit from the guide's cumulative
+   range, deduplicated across the intervening releases; verify contribution
+   descriptions and first-time labels against merged PR metadata. Screenshot
+   captions must distinguish intervening released features from candidate-only
+   changes and retain their actual capture version.
+5. Create one document under the verified personal user identity, then repair
+   that document in place if content or media fails. Read back its ownership,
+   title, text, image blocks, and rendered presentation before declaring success.
+   Add the verified guide URL to the final GitHub release body in both languages,
+   and repeat the existing remote-body validation after that update.
+
+Record the guide URL and verified ownership/readback in the existing private
+release checkpoint. Credentials, account identifiers, private reference URLs,
+drafts, and raw evidence do not belong in public repository changes. This
+procedure authorizes neither chat/group announcements nor posts to other
+social channels; those retain their own authorization boundaries.
 
 ### Final Release Body Usage Gate
 

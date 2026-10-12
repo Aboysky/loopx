@@ -45,6 +45,7 @@ def _load_exports() -> None:
         register_bootstrap_connect_command,
     )
     from .canary import handle_canary_command, register_canary_commands
+    from .authority_archive import handle_authority_archive_command, register_authority_archive_command
     from .coordination_shadow import (
         handle_coordination_shadow_command,
         register_coordination_shadow_command,
@@ -57,7 +58,6 @@ def _load_exports() -> None:
         register_first_run_report_command,
     )
     from .dreaming import handle_dreaming_command, register_dreaming_commands
-    from .evidence_log import handle_evidence_log_command, register_evidence_log_command
     from .explore import handle_explore_command, register_explore_commands
     from .handoff_mode import handle_handoff_mode_command, register_handoff_mode_command
     from .history import handle_history_command, register_history_command
@@ -150,6 +150,7 @@ def _load_exports() -> None:
     from .todo import handle_todo_command
     from .todo_registration import register_todo_command
     from .version import handle_version_command, register_version_command
+    from .usage_ping import handle_usage_ping_command, register_usage_ping_command
     from .worker_bridge import handle_worker_bridge_command, register_worker_bridge_commands
     from .workflow_skills import (
         handle_workflow_skills_command,
@@ -169,6 +170,7 @@ __all__ = [
     "handle_bootstrap_connect_command",
     "handle_canary_command",
     "handle_coordination_shadow_command",
+    "handle_authority_archive_command",
     "handle_capability_command",
     "handle_extension_command",
     "handle_check_command",
@@ -194,7 +196,6 @@ __all__ = [
     "handle_doctor_command",
     "handle_first_run_report_command",
     "handle_dreaming_command",
-    "handle_evidence_log_command",
     "handle_explore_command",
     "handle_handoff_mode_command",
     "handle_history_command",
@@ -230,6 +231,7 @@ __all__ = [
     "handle_task_lease_command",
     "handle_todo_command",
     "handle_version_command",
+    "handle_usage_ping_command",
     "handle_worker_bridge_command",
     "handle_workflow_skills_command",
     "register_turn_commands",
@@ -240,12 +242,12 @@ __all__ = [
     "register_bootstrap_connect_command",
     "register_canary_commands",
     "register_coordination_shadow_command",
+    "register_authority_archive_command",
     "register_capability_commands",
     "register_extension_commands",
     "register_doctor_command",
     "register_first_run_report_command",
     "register_dreaming_commands",
-    "register_evidence_log_command",
     "register_explore_commands",
     "register_handoff_mode_command",
     "register_history_command",
@@ -278,6 +280,7 @@ __all__ = [
     "register_task_lease_command",
     "register_todo_command",
     "register_version_command",
+    "register_usage_ping_command",
     "register_worker_bridge_commands",
     "register_workflow_skills_command",
 ]

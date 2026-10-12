@@ -14,11 +14,55 @@ const directorySchema = z.object({
 });
 export type WorkspaceDirectory = z.infer<typeof directorySchema>;
 export type WorkspaceLoadError = "timeout" | "network" | "service" | "access" | "revision" | "scope" | "invalid";
+export type WorkspaceReadScope = "all" | "missing";
 export type WorkspaceProgress = {
   directory: WorkspaceDirectory;
   snapshots: Record<string, StatusPayload>;
   errors: Record<string, WorkspaceLoadError>;
 };
+
+/**
+ * Snapshots a same-source read may keep visible while it reconciles.
+ *
+ * A directory entry is the cheap authoritative signal for "this Goal's
+ * lifecycle did not move here". It does not establish Todo freshness: a full
+ * refresh still re-reads retained Goals. A partial retry or known action may
+ * skip unaffected peers. Touched Goals and entries that moved or left the
+ * directory lose their snapshot.
+ */
+export function reusableGoalSnapshots(
+  previous: Pick<WorkspaceProgress, "directory" | "snapshots"> | null,
+  directory: WorkspaceDirectory,
+  options: { invalidateGoalIds?: Iterable<string> } = {},
+): Record<string, StatusPayload> {
+  if (!previous) return {};
+  const invalidated = new Set(options.invalidateGoalIds ?? []);
+  const before = new Map(previous.directory.goals.map((goal) => [goal.id, goal]));
+  return Object.fromEntries(directory.goals.flatMap((goal) => {
+    const earlier = before.get(goal.id);
+    const snapshot = previous.snapshots[goal.id];
+    if (!earlier || !snapshot || invalidated.has(goal.id)) return [];
+    if (earlier.display_name !== goal.display_name
+      || earlier.activation_state !== goal.activation_state) return [];
+    return [[goal.id, snapshot]];
+  }));
+}
+
+/** Display retention and request selection are separate decisions. */
+export function workspaceReadPlan(
+  previous: Pick<WorkspaceProgress, "directory" | "snapshots"> | null,
+  directory: WorkspaceDirectory,
+  scope: WorkspaceReadScope = "all",
+  options: { invalidateGoalIds?: Iterable<string> } = {},
+) {
+  const snapshots = reusableGoalSnapshots(previous, directory, options);
+  return {
+    snapshots,
+    requestedDirectory: { ...directory, goals: directory.goals.filter(
+      (goal) => scope === "all" || !snapshots[goal.id],
+    ) },
+  };
+}
 
 function queryUrl(url: string, fields: Record<string, string>, base: string) {
   const parsed = new URL(url, base);

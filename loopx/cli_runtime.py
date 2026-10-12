@@ -8,7 +8,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
-from .paths import DEFAULT_RUNTIME_ROOT, default_registry_path, global_registry_path
+from .paths import default_registry_path, global_registry_path, select_default_runtime_root
+
+
+HOST_GLOBAL_REGISTRY_SELECTOR = "@host-global"
 
 
 GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format"})
@@ -37,11 +40,15 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"codex-cli-visible-driver-run",
 		"codex-cli-visible-driver-plan",
 		"codex-cli-visible-session-proof",
+		"commands",
 		"demo",
 		"doctor",
 		"first-run-report",
+		"usage-ping",
+		"performance-diagnosis",
 		"new-project-prompt",
 		"resolve-agent-thread",
+		"resolve-peer-route",
 		"start-goal",
 		"slash-commands",
 		"workflow-skills",
@@ -53,11 +60,15 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"uninstall-project",
 		"version",
 		"host-mode-plan",
+		"migrate-local-state",
 	}
 )
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
-_SELECTED_COMMANDS = _STATUS_COMMANDS | {"todo", "quota", "change-window"}
+_SELECTED_COMMANDS = _STATUS_COMMANDS | {
+	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
+	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+}
 
 
 class LoopXArgumentParser(argparse.ArgumentParser):
@@ -82,6 +93,8 @@ def print_payload(
 	fmt: str,
 	markdown_renderer: Callable[[dict[str, object]], str],
 ) -> None:
+	from .usage_ping import capture_result
+	capture_result(payload)
 	if fmt == "json":
 		print(json.dumps(payload, ensure_ascii=False, indent=2))
 	else:
@@ -123,7 +136,7 @@ def build_cli_parser(
 	parser.add_argument(
 		"--registry",
 		default=str(default_registry_path()),
-		help="Path to a project-local registry.",
+		help="Registry path, or @host-global for this host's selected default global registry.",
 	)
 	parser.add_argument("--runtime-root", help="Override registry common_runtime_root.")
 	parser.add_argument("--format", choices=["markdown", "json"])
@@ -144,6 +157,16 @@ def resolve_cli_registry(
 	registry_was_configured = user_supplied_registry(raw_argv) or bool(
 		os.environ.get("LOOPX_REGISTRY")
 	)
+	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
+		return global_registry_path(runtime_root), True
 	project_register_uses_default_registry = (
 		args.command == "project"
 		and args.project_command == "register"
@@ -153,15 +176,19 @@ def resolve_cli_registry(
 		registry_path = Path(args.knowledge_root).expanduser() / ".loopx" / "registry.json"
 	if (
 		args.command not in _REGISTRY_OPTIONAL_COMMANDS
+		and not (args.command == "canary" and not getattr(args, "goal_id", None))
 		and not project_register_uses_default_registry
 		and not registry_was_configured
 		and not registry_path.exists()
 	):
-		runtime_root = (
-			Path(args.runtime_root).expanduser()
-			if args.runtime_root
-			else DEFAULT_RUNTIME_ROOT
-		)
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
 		fallback_registry = global_registry_path(runtime_root)
 		if fallback_registry.exists():
 			registry_path = fallback_registry
@@ -212,23 +239,125 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.quota_registration import register_quota_command
 
 		register_quota_command(subparsers)
+	elif command == "task-lease":
+		from .cli_commands.task_lease import register_task_lease_command
+
+		register_task_lease_command(subparsers, add_subcommand_format)
 	elif command == "change-window":
 		from .capabilities.repository_change_window.cli import register_repository_change_window_commands
 
 		register_repository_change_window_commands(subparsers, add_subcommand_format)
+	elif command == "delegation":
+		from .cli_commands.delegation import register_delegation
+
+		register_delegation(subparsers, add_subcommand_format)
+	elif command == "turn":
+		from .cli_commands.turn_registration import register_turn_commands
+
+		register_turn_commands(subparsers, add_subcommand_format)
+	elif command == "authority-archive":
+		from .cli_commands.authority_archive import register_authority_archive_command
+
+		register_authority_archive_command(subparsers, add_subcommand_format)
+	elif command == "coordination-shadow":
+		from .cli_commands.coordination_shadow import register_coordination_shadow_command
+
+		register_coordination_shadow_command(subparsers, add_subcommand_format)
+	elif command == "extension":
+		from .cli_commands.extension import register_extension_commands
+
+		register_extension_commands(subparsers, add_subcommand_format)
+	elif command == "slash-commands":
+		from .cli_commands.slash_commands import register_slash_commands_command
+
+		register_slash_commands_command(subparsers, add_subcommand_format)
+	elif command == "doctor":
+		from .cli_commands.doctor import register_doctor_command
+
+		register_doctor_command(subparsers, add_subcommand_format)
+	elif command == "commands":
+		from .help_surface import register_command_reference
+
+		register_command_reference(subparsers)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
 
 
-def dispatch_common_command(
+def _dispatch_common_command(
 	args: argparse.Namespace,
 	*,
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
-	"""Dispatch one selected command through the shared canonical wiring."""
+	if args.command == "task-lease":
+		from .cli_commands.task_lease import handle_task_lease_command
 
+		return handle_task_lease_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "authority-archive":
+		from .cli_commands.authority_archive import handle_authority_archive_command
+
+		return handle_authority_archive_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "coordination-shadow":
+		from .cli_commands.coordination_shadow import handle_coordination_shadow_command
+
+		return handle_coordination_shadow_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "extension":
+		from .cli_commands.extension import handle_extension_command
+
+		return handle_extension_command(
+			args, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "slash-commands":
+		from .cli_commands.slash_commands import handle_slash_commands_command
+
+		return handle_slash_commands_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "doctor":
+		from .cli_commands.doctor import handle_doctor_command
+
+		return handle_doctor_command(args, print_payload, registry_path=registry_path)
+	if args.command == "commands":
+		from .help_surface import (
+			build_command_reference_payload, render_command_reference_markdown,
+		)
+
+		print_payload(
+			build_command_reference_payload(), output_format(args),
+			render_command_reference_markdown,
+		)
+		return 0
+	if args.command == "delegation":
+		from .cli_commands.delegation import handle_delegation
+		from .paths import (
+			effective_runtime_root,
+		)
+
+		return handle_delegation(
+			args, registry_path,
+			effective_runtime_root(registry_path, args.runtime_root),
+		)
+	if args.command == "turn":
+		from .cli_commands.turn import handle_turn_command
+
+		return handle_turn_command(
+			args,
+			registry_path=registry_path,
+			runtime_root_arg=args.runtime_root,
+			output_format=output_format,
+			print_payload=print_payload,
+		)
 	if args.command == "change-window":
 		from .capabilities.repository_change_window.cli import handle_repository_change_window_command
 
@@ -282,7 +411,7 @@ def dispatch_common_command(
 		)
 		from .cli_commands.todo import handle_todo_command
 		from .cli_rollout import append_cli_rollout_event
-		from .control_plane.coordination.local_authority_shadow_adapter import (
+		from .paths import (
 			effective_runtime_root,
 		)
 
@@ -325,7 +454,25 @@ def dispatch_common_command(
 	return None
 
 
+def dispatch_common_command(
+	args: argparse.Namespace,
+	*,
+	registry_path: Path,
+	allow_missing_registry: bool,
+) -> int | None:
+	from .control_plane.effect_runtime import effect_runtime_request_scope
+
+	with effect_runtime_request_scope():
+		return _dispatch_common_command(
+			args,
+			registry_path=registry_path,
+			allow_missing_registry=allow_missing_registry,
+		)
+
+
 def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
+	from .usage_ping import select_operation
+	select_operation(args)
 	args.format = resolve_global_output_format(args)
 	guard_result = enforce_native_controller_guard(args)
 	if guard_result is not None:
@@ -359,6 +506,24 @@ def main(argv: list[str] | None = None) -> int:
 		print(render_concise_help(sys.argv[0] if argv is None else "loopx"), end="")
 		return 0
 	command = _top_level_command(raw_argv)
+	from .usage_ping import begin, finish
+
+	ticket = begin(command or "")
+	code = 1
+	error = None
+	try:
+		code = _run_command(command, raw_argv)
+		return code
+	except BaseException as exc:
+		error = exc
+		if isinstance(exc, SystemExit):
+			code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+		raise
+	finally:
+		finish(ticket, command or "", code, error)
+
+
+def _run_command(command: str | None, raw_argv: list[str]) -> int:
 	if command in _SELECTED_COMMANDS:
 		try:
 			args = _build_selected_parser(command).parse_args(raw_argv)

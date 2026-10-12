@@ -54,6 +54,8 @@ def _prepare_dashboard_runtime_fixture(tmp_path: Path) -> tuple[Path, Path, Path
     (dashboard_dir / "node_modules" / ".bin" / "vite").touch()
     fake_bin.mkdir()
     _copy_dashboard_launcher(scripts_dir)
+    # This fixture isolates service error propagation; bundle integrity has its own suite.
+    (scripts_dir / "chat_bundle.py").write_text("# frontend already qualified in fixture\n")
     for executable in (fake_bin / "node", fake_bin / "npm"):
         executable.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
@@ -328,6 +330,26 @@ def test_probe_existing_chat_rejects_stale_runtime_identity() -> None:
     server, thread = _serve_capabilities(_StaleCapabilitiesHandler)
     try:
         assert _probe_existing_chat("127.0.0.1", server.server_address[1]) == "stale"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_probe_existing_chat_fences_two_wheels_with_the_same_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loopx import dashboard_launcher
+
+    expected = {"schema_version": "loopx_runtime_identity_v1", "package_version": "1.2.4",
+                "release_id": None, "source_revision": None, "package_fingerprint": "sha256:new"}
+    monkeypatch.setattr(dashboard_launcher, "release_runtime_identity", lambda _root: expected)
+    class Handler(_CapabilitiesHandler):
+        capabilities = {"ok": True, "schema_version": "loopx_chat_capabilities_v1",
+                        "runtime_identity": {**expected, "package_fingerprint": "sha256:old"}}
+    server, thread = _serve_capabilities(Handler)
+    try:
+        assert dashboard_launcher._probe_existing_chat("127.0.0.1", server.server_address[1]) == "stale"
+        Handler.capabilities["runtime_identity"] = expected
+        assert dashboard_launcher._probe_existing_chat("127.0.0.1", server.server_address[1]) == "matching"
     finally:
         server.shutdown()
         server.server_close()
@@ -860,6 +882,11 @@ def test_dashboard_launcher_discovers_agent_bins_outside_restricted_path(
     fake_bin.mkdir()
     npm_global.mkdir(parents=True)
     nvm_bin.mkdir(parents=True)
+    # Keep shell utilities available without admitting host-installed agents.
+    for utility in ("bash", "dirname", "sort", "uniq"):
+        executable = shutil.which(utility)
+        assert executable is not None
+        (fake_bin / utility).symlink_to(executable)
     _copy_dashboard_launcher(scripts_dir)
     (dashboard_dir / "node_modules" / ".bin").mkdir(parents=True)
     (dashboard_dir / "node_modules" / ".bin" / "vite").touch()
@@ -897,7 +924,7 @@ def test_dashboard_launcher_discovers_agent_bins_outside_restricted_path(
         env={
             **os.environ,
             "HOME": str(home),
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "PATH": str(fake_bin),
             "NVM_DIR": str(home / ".nvm"),
             "NVM_BIN": str(nvm_bin),
             "LOOPX_COMMAND_LOG": str(command_log),
@@ -1000,3 +1027,49 @@ def test_dashboard_command_in_installed_mode_resolves_packaged_web_bundle(
     assert served[0]["port"] == 8791
     assert served[0]["open_browser"] is False
     assert (Path(str(served[0]["assets_dir"])) / "index.html").is_file()
+
+
+@pytest.mark.parametrize(
+    ("command", "target", "argv"),
+    [
+        ("chat", "serve_chat", ["chat", "--no-open"]),
+        ("dashboard", "launch_dashboard", ["dashboard"]),
+        ("serve-status", "serve_status", ["serve-status"]),
+    ],
+)
+def test_local_service_start_failure_keeps_its_error_in_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    target: str,
+    argv: list[str],
+) -> None:
+    def fail(**_kwargs: object) -> None:
+        raise RuntimeError("Chat bundle is missing; run npm run build:chat")
+
+    monkeypatch.setattr(support_control, target, fail, raising=False)
+
+    assert main(argv) == 1
+    output = capsys.readouterr().out
+    assert output.startswith(f"# LoopX {command} could not start")
+    assert "- error: Chat bundle is missing; run npm run build:chat" in output
+    # A failed start has no status projection to render.
+    assert "- goals: `None`" not in output
+
+
+def test_chat_start_failure_markdown_names_the_next_action(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(**_kwargs: object) -> None:
+        raise RuntimeError("Codex app-server is unavailable")
+
+    monkeypatch.setattr(support_control, "serve_chat", fail)
+
+    assert main(["chat", "--no-open"]) == 1
+    assert "- next action: Resolve the reported local host capability, then retry loopx chat." in capsys.readouterr().out
+
+    assert main(["--format", "json", "chat", "--no-open"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == "loopx_chat_start_v0"
+    assert payload["error"] == "Codex app-server is unavailable"

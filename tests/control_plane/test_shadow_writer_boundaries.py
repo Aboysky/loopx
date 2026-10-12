@@ -15,7 +15,7 @@ from loopx.control_plane.coordination.legacy_writer_fence import (
     legacy_todo_write_transaction,
 )
 from loopx.control_plane.todos.handoff_mode import set_goal_handoff_mode
-from loopx.todo_followups import capture_followup_todos
+from loopx.todos import add_goal_todo
 
 
 GOAL = "writer-boundary"
@@ -42,9 +42,30 @@ def fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     return registry, state, root
 
 
-@pytest.mark.parametrize("writer", ["handoff", "followups"])
-def test_omitted_writers_refuse_a_fence_before_primary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str,
+@pytest.mark.parametrize("registry_directory", [".loopx", "standalone"])
+@pytest.mark.parametrize("override", [None, "", "override", Path("path-override")])
+def test_runtime_route_keeps_project_relative_precedence_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_directory: str, override,
+) -> None:
+    from loopx.paths import effective_runtime_root
+    from loopx.control_plane.coordination.local_authority_shadow_adapter import effective_runtime_root as compatibility_route
+
+    assert compatibility_route is effective_runtime_root
+    project = tmp_path / "project"
+    registry = project / registry_directory / "registry.json"
+    registry.parent.mkdir(parents=True)
+    original = json.dumps({"common_runtime_root": "declared"}).encode()
+    registry.write_bytes(original)
+    monkeypatch.chdir(tmp_path)
+    owner = project if registry_directory == ".loopx" else registry.parent
+    assert effective_runtime_root(registry, override) == owner / str(override or "declared")
+    assert registry.read_bytes() == original
+    assert list(registry.parent.iterdir()) == [registry]
+    assert not (owner / "declared").exists()
+
+
+def test_handoff_writer_refuses_a_fence_before_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry, state, root = fixture(tmp_path)
     fence = legacy_coordination_writer_fence_path(runtime_root=root, goal_id=GOAL)
@@ -58,13 +79,7 @@ def test_omitted_writers_refuse_a_fence_before_primary(
     )
     before = state.read_bytes()
     with pytest.raises(LegacyCoordinationWriterFenced):
-        if writer == "handoff":
-            set_goal_handoff_mode(registry_path=registry, goal_id=GOAL, mode="soft_claim")
-        else:
-            capture_followup_todos(
-                registry_path=registry, goal_id=GOAL,
-                followups=["Review the durable boundary."], evidence="review fixture",
-            )
+        set_goal_handoff_mode(registry_path=registry, goal_id=GOAL, mode="soft_claim")
     assert state.read_bytes() == before
     assert not (root / "authority-shadow").exists()
 
@@ -120,16 +135,16 @@ def test_corrupt_management_state_blocks_before_transaction_body(tmp_path: Path)
 def test_atomic_state_writer_keeps_original_on_failed_replace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx.control_plane.todos import active_state_editing
+    from loopx.control_plane.runtime import document_io
 
-    write = getattr(active_state_editing, "atomic_write_state_text", None)
+    write = getattr(document_io, "atomic_write_state_text", None)
     assert callable(write), "all state writers need the shared durable text primitive"
     state = tmp_path / "state.md"
     state.write_bytes(b"original\r\n")
     state.chmod(0o640)
     def fail_replace(*_args: object) -> None:
         raise OSError("replacement unavailable")
-    monkeypatch.setattr(active_state_editing.os, "replace", fail_replace)
+    monkeypatch.setattr(document_io.os, "replace", fail_replace)
     with pytest.raises(OSError, match="replacement unavailable"):
         write(state, "replacement\r\n")
     assert state.read_bytes() == b"original\r\n"
@@ -162,6 +177,7 @@ def test_reward_summary_cannot_inject_a_canonical_todo(tmp_path: Path) -> None:
     with pytest.raises(ActiveStateAuthorityMutationError):
         append_human_reward(registry_path=registry, runtime_root_override=None,
             goal_id=GOAL, run_generated_at=None, reward=reward,
+            actor_kind="owner",
             write_active_state_summary=True)
     assert (state.read_bytes(), index.read_bytes()) == before
 
@@ -180,6 +196,7 @@ def test_reward_rebases_its_owned_paragraph_after_a_concurrent_todo_write(
     monkeypatch.setattr(feedback, "plan_active_state_update", plan_then_edit)
     feedback.append_human_reward(registry_path=registry, runtime_root_override=None,
         goal_id=GOAL, run_generated_at=None, reward=reward,
+        actor_kind="owner",
         write_active_state_summary=True)
     assert "Concurrent task." in state.read_text()
     assert "Review accepted." in state.read_text()
@@ -201,7 +218,7 @@ def test_force_bootstrap_cannot_erase_an_active_shadow_binding(tmp_path: Path, p
             goal_id=GOAL, objective="Rebuild safely.", domain="test", role="primary",
             parent_goal_id=None, state_file=state, goal_doc=None, adapter_kind="generic_project_goal_v0",
             adapter_status="connected", next_probe=None, spawn_allowed=False, max_children=0,
-            allowed_domains=[], write_scope=[], onboarding_scan_enabled=False,
+            allowed_domains=[], write_scope=[],
             force=True, preserve_todos=preserve, dry_run=False, sync_global=False)
     assert (registry.read_bytes(), state.read_bytes()) == before
 
@@ -213,7 +230,107 @@ def cli(registry: Path, *args: str) -> dict:
     return json.loads(result.stdout)
 
 
-def test_real_cli_handoff_and_followup_batch_have_one_receipt_each(tmp_path: Path) -> None:
+@pytest.mark.parametrize("configured", [None, False])
+@pytest.mark.parametrize("operation", ["add", "bootstrap"])
+def test_disabled_capture_skips_shadow_inputs_on_real_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool | None, operation: str,
+) -> None:
+    from loopx import bootstrap, rollout_event_log
+    from loopx.control_plane.coordination import local_authority_shadow_adapter as projection
+    from loopx.control_plane.coordination import runtime_shadow_writer_adapter as writer
+
+    registry, state, root = fixture(tmp_path)
+    if configured is not None:
+        value = json.loads(registry.read_text())
+        value["goals"][0]["coordination"]["runtime_shadow"] = {
+            "enabled": configured,
+            "schema_version": "loopx_coordination_runtime_shadow_config_v0",
+            "provider": "file_v0",
+        }
+        registry.write_text(json.dumps(value))
+    begin = writer.begin_todo_runtime_shadow_capture
+    load = rollout_event_log.load_rollout_events
+    project = projection.todo_partition_projector
+    observed: list[str] = []
+
+    def read_events(*args, **kwargs):
+        observed.append("events")
+        return load(*args, **kwargs)
+
+    def build_projector(*args, **kwargs):
+        observed.append("projector")
+        return project(*args, **kwargs)
+
+    def observe_capture(**kwargs):
+        observed.append("begin")
+        # Observe only capture IO; other writer readers retain their real inputs.
+        with monkeypatch.context() as capture_observer:
+            capture_observer.setattr(rollout_event_log, "load_rollout_events", read_events)
+            capture_observer.setattr(projection, "todo_partition_projector", build_projector)
+            return begin(**kwargs)
+
+    monkeypatch.setattr(writer, "begin_todo_runtime_shadow_capture", observe_capture)
+    before = state.read_bytes()
+    if operation == "add":
+        result = add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent",
+            text="Keep disabled capture inert.", task_class="advancement_task", agent_id="agent-a")
+        assert result["added"] is True
+        assert "Keep disabled capture inert." in state.read_text()
+        assert result["coordination_runtime_shadow"]["outcome"] == "no_transaction"
+        assert result["coordination_runtime_shadow"]["reason_code"] == "shadow_disabled"
+    else:
+        result = bootstrap.bootstrap_project(project=tmp_path, registry_path=registry,
+            runtime_root=root, goal_id=GOAL, objective="Keep the legacy source complete.",
+            domain="test", role="primary", parent_goal_id=None, state_file=state,
+            goal_doc=None, adapter_kind="generic_project_goal_v0", adapter_status="connected",
+            next_probe=None, spawn_allowed=False, max_children=0, allowed_domains=[],
+            write_scope=[], force=False, preserve_todos=False, dry_run=False, sync_global=False)
+        assert result["ok"] is True
+        assert "## User Todo" in state.read_text()
+    assert state.read_bytes() != before
+    assert observed == ["begin"]
+    assert not (root / "authority-shadow").exists()
+
+
+@pytest.mark.parametrize("projector_fails", [False, True])
+def test_active_binding_keeps_capture_after_configuration_is_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, projector_fails: bool,
+) -> None:
+    from loopx.control_plane.coordination import local_authority_shadow_adapter as projection
+    from loopx.control_plane.coordination.shadow_management import ShadowManagementError
+
+    registry, state, root = fixture(tmp_path)
+    value = json.loads(registry.read_text())
+    value["goals"][0]["coordination"]["runtime_shadow"] = {
+        "enabled": True, "schema_version": "loopx_coordination_runtime_shadow_config_v0", "provider": "file_v0",
+    }
+    registry.write_text(json.dumps(value))
+    cli(registry, "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")
+    value["goals"][0]["coordination"]["runtime_shadow"]["enabled"] = False
+    registry.write_text(json.dumps(value))
+    before = state.read_bytes()
+    if projector_fails:
+        def unavailable(*args, **kwargs):
+            raise OSError("projection input unavailable")
+        monkeypatch.setattr(projection, "todo_partition_projector", unavailable)
+        with pytest.raises(ShadowManagementError) as error:
+            add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent",
+                text="Preserve the active lineage.", task_class="advancement_task", agent_id="agent-a")
+        assert error.value.reason_code == "shadow_capture_prepare_failed"
+        assert state.read_bytes() == before
+        assert not list((root / "authority-shadow" / "outbox" / GOAL / "todos").glob("*.committed.json"))
+    else:
+        result = add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent",
+            text="Preserve the active lineage.", task_class="advancement_task", agent_id="agent-a")
+        assert result["added"] is True
+        assert result["coordination_runtime_shadow"]["outcome"] == "delivered"
+        assert "Preserve the active lineage." in state.read_text()
+        digest = hashlib.sha256(GOAL.encode()).hexdigest()[:16]
+        candidate = json.loads((root / "authority-shadow" / "file-v0" / f"authority-store-{digest}.json").read_text())
+        assert candidate["cursor"] == "2"
+
+
+def test_real_cli_handoff_and_todo_add_have_one_receipt_each(tmp_path: Path) -> None:
     registry, state, root = fixture(tmp_path)
     value = json.loads(registry.read_text())
     value["goals"][0]["coordination"]["runtime_shadow"] = {
@@ -222,21 +339,17 @@ def test_real_cli_handoff_and_followup_batch_have_one_receipt_each(tmp_path: Pat
     registry.write_text(json.dumps(value))
     cli(registry, "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")
     handoff = cli(registry, "handoff-mode", "set", "--goal-id", GOAL, "--mode", "soft_claim")
-    followed = cli(registry, "todo", "capture-followups", "--goal-id", GOAL,
-        "--follow-up", "Inspect the read path.", "--follow-up", "Inspect the write path.",
+    added = cli(registry, "todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--text", "Inspect the read path.", "--task-class", "advancement_task",
         "--evidence", "review fixture")
     assert handoff["coordination_runtime_shadow"]["outcome"] == "delivered", handoff
-    assert followed["coordination_runtime_shadow"]["outcome"] == "delivered", followed
-    assert followed["recorded_count"] == 2
+    assert added["coordination_runtime_shadow"]["outcome"] == "delivered", added
+    assert added["added"] is True
     digest = hashlib.sha256(GOAL.encode()).hexdigest()[:16]
     candidate = json.loads((root / "authority-shadow" / "file-v0" / f"authority-store-{digest}.json").read_text())
     assert candidate["cursor"] == "3", "bootstrap plus two primary writes must not get CLI mirror receipts"
     assert len(candidate["committed"]) == 3
     assert "Inspect the read path." in state.read_text()
-    noop = cli(registry, "todo", "capture-followups", "--goal-id", GOAL,
-        "--follow-up", "Inspect the read path.", "--evidence", "review fixture")
-    assert noop["changed"] is False
-    assert json.loads((root / "authority-shadow" / "file-v0" / f"authority-store-{digest}.json").read_text())["cursor"] == "3"
 
 
 @pytest.mark.parametrize("phase", ["before", "after"])
@@ -246,7 +359,7 @@ def test_real_process_kill_around_state_replace_preserves_complete_bytes(tmp_pat
     code = """
 import sys
 from pathlib import Path
-from loopx.control_plane.todos import active_state_editing as editing
+from loopx.control_plane.runtime import document_io as editing
 original = editing.os.replace
 def replace(source, target):
     if sys.argv[2] == 'after': original(source, target)
@@ -313,7 +426,7 @@ raise SystemExit(main())
                 assert time.monotonic() < deadline, "engagement did not acquire the Todo lock"
                 time.sleep(0.01)
             child = subprocess.Popen([sys.executable, "-c", code, "--registry", str(registry), "--format", "json",
-                "todo", "capture-followups", "--goal-id", GOAL, "--follow-up", "Must be fenced.",
+                "todo", "add", "--goal-id", GOAL, "--role", "agent", "--text", "Must be fenced.",
                 "--evidence", "race fixture"], cwd=REPO,
                 text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             children.append(child)
@@ -339,13 +452,13 @@ def test_real_writer_commits_before_a_later_fence_is_published(tmp_path: Path, o
     registry, state, root = fixture(tmp_path)
     writer_code = """
 import sys
-from loopx.control_plane.todos import active_state_editing
-original = active_state_editing.atomic_write_state_text
+from loopx.control_plane.runtime import document_io
+original = document_io.atomic_write_state_text
 def paused(*args):
     print('primary-write-cut', flush=True)
     sys.stdin.readline()
     return original(*args)
-active_state_editing.atomic_write_state_text = paused
+document_io.atomic_write_state_text = paused
 from loopx.entrypoint import main
 raise SystemExit(main(sys.argv[1:]))
 """
@@ -359,8 +472,8 @@ raise SystemExit(main(sys.argv[1:]))
     try:
         writer = subprocess.Popen([sys.executable, "-c", writer_code, "--registry", str(registry),
             "--runtime-root", str(tmp_path / "override" if override_root else root),
-            "--format", "json", "todo", "capture-followups", "--goal-id", GOAL,
-            "--follow-up", "Primary won the lock.", "--evidence", "ordering fixture"],
+            "--format", "json", "todo", "add", "--goal-id", GOAL, "--role", "agent",
+            "--text", "Primary won the lock.", "--evidence", "ordering fixture"],
             cwd=REPO, text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         children.append(writer)
         assert writer.stdout is not None
@@ -381,7 +494,7 @@ raise SystemExit(main(sys.argv[1:]))
         assert engager.poll() is None
         output, error = writer.communicate("continue\n", timeout=30)
         assert writer.returncode == 0, output + error
-        assert json.loads(output)["recorded_count"] == 1
+        assert json.loads(output)["added"] is True
         output, error = engager.communicate(timeout=30)
         assert json.loads(output)["status"] == "applied", output + error
         assert "Primary won the lock." in state.read_text()
@@ -393,7 +506,7 @@ raise SystemExit(main(sys.argv[1:]))
 
 
 def test_failed_primary_replace_never_marks_shadow_committed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from loopx.control_plane.todos import active_state_editing
+    from loopx.control_plane.runtime import document_io
     registry, state, root = fixture(tmp_path)
     value = json.loads(registry.read_text())
     value["goals"][0]["coordination"]["runtime_shadow"] = {
@@ -401,15 +514,17 @@ def test_failed_primary_replace_never_marks_shadow_committed(tmp_path: Path, mon
     registry.write_text(json.dumps(value))
     cli(registry, "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")
     before = state.read_bytes()
-    original = active_state_editing.os.replace
+    original = document_io.os.replace
     def fail_primary(source: object, target: object) -> None:
         if Path(str(target)) == state:
             raise OSError("primary replace refused")
         original(source, target)
-    monkeypatch.setattr(active_state_editing.os, "replace", fail_primary)
+    monkeypatch.setattr(document_io.os, "replace", fail_primary)
     with pytest.raises(OSError, match="primary replace refused"):
-        capture_followup_todos(registry_path=registry, goal_id=GOAL,
-            followups=["Must stay prepared."], evidence="replace failure")
+        add_goal_todo(
+            registry_path=registry, goal_id=GOAL, role="agent",
+            text="Must stay prepared.",
+        )
     assert state.read_bytes() == before
     directory = root / "authority-shadow" / "outbox" / GOAL / "todos"
     assert len(list(directory.glob("*.prepared.json"))) == 1
@@ -426,10 +541,122 @@ def test_prose_only_reward_remains_allowed_under_a_legacy_fence(tmp_path: Path) 
     # comparison proves that no Todo/lease field is changed.
     fence.write_text("{invalid", encoding="utf-8")
     result = append_human_reward(registry_path=registry, runtime_root_override=None,
-        goal_id=GOAL, run_generated_at=None, reward=reward, write_active_state_summary=True)
+        goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+        write_active_state_summary=True)
     assert result["appended"] is True
     assert "Review accepted." in state.read_text()
     assert not (root / "authority-shadow").exists()
+
+
+def test_prose_guard_ignores_resume_evaluation_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.coordination.runtime_shadow_writer_adapter import (
+        require_prose_state_write_allowed,
+    )
+
+    registry, state, root = fixture(tmp_path)
+    add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL,
+        role="agent",
+        text="Resume the bounded inspection.",
+        status="deferred",
+        resume_when="resume_at:2099-01-01T00:00:00Z",
+    )
+    original = state.read_text(encoding="utf-8")
+    planned = original + "\nA bounded narrative observation.\n"
+
+    from loopx.control_plane.coordination.local_authority_shadow_adapter import (
+        todo_partition_projector,
+    )
+    from loopx.control_plane.coordination.local_authority_shadow_projection import (
+        partition_comparison_view,
+    )
+
+    timestamps = ("2026-09-21T00:00:00Z", "2026-09-21T00:00:01Z")
+    ticks = iter(timestamps * 2)
+
+    def ticking_projector(*args, **kwargs):
+        project = todo_partition_projector(*args, **kwargs)
+
+        def project_at_distinct_time(text):
+            projection = project(text)
+            projection["todos"][0]["resume_condition"]["evaluated_at"] = next(ticks)
+            return projection
+
+        return project_at_distinct_time
+
+    monkeypatch.setattr(
+        "loopx.control_plane.coordination.authority_source_capture.todo_partition_projector",
+        ticking_projector,
+    )
+    goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
+    projector = ticking_projector(goal, state_path=state)
+    before, after = projector(original), projector(planned)
+    assert before != after
+    assert before["todos"][0]["resume_condition"]["evaluated_at"] == timestamps[0]
+    assert after["todos"][0]["resume_condition"]["evaluated_at"] == timestamps[1]
+    assert partition_comparison_view(before) == partition_comparison_view(after)
+    # Prove the raw projections differ ONLY in the read-time clock.
+    after["todos"][0]["resume_condition"]["evaluated_at"] = timestamps[0]
+    assert before == after
+
+    # The real guard gets the same forced one-second difference. Restoring
+    # its old raw comparison must fail deterministically, without sleeping.
+    require_prose_state_write_allowed(
+        registry_path=registry,
+        runtime_root=root,
+        goal_id=GOAL,
+        state_path=state,
+        original_text=original,
+        planned_text=planned,
+    )
+
+
+
+@pytest.mark.parametrize("original_value,planned_value", [(True, 1), (False, 0)])
+def test_prose_guard_preserves_json_scalar_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    original_value: bool, planned_value: int,
+) -> None:
+    """A full source projection must retain JSON types even if Python equates them."""
+    from loopx.control_plane.coordination import authority_source_capture as adapter
+    from loopx.control_plane.coordination.local_authority_shadow_projection import (
+        todo_partition_projection,
+    )
+    from loopx.control_plane.coordination.runtime_shadow_writer_adapter import (
+        ActiveStateAuthorityMutationError, require_prose_state_write_allowed,
+    )
+
+    registry, state, root = fixture(tmp_path)
+    add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent", text="Retain result facts.")
+    original = state.read_text(encoding="utf-8")
+    planned = original + "\nA narrative observation.\n"
+    real_projector = adapter.todo_partition_projector
+
+    def source_projector(*args, **kwargs):
+        project = real_projector(*args, **kwargs)
+
+        def project_result(text):
+            projection = project(text)
+            # Exercise the complete-record adapter contract through the real TS
+            # assembler. This injected result fact models an adapter output,
+            # not an assertion that the current Markdown codec emits this shape.
+            projection["todos"][0]["completion_result"] = {
+                "facts": [{"value": original_value if text == original else planned_value}],
+            }
+            return todo_partition_projection(**projection)
+
+        return project_result
+
+    monkeypatch.setattr(adapter, "todo_partition_projector", source_projector)
+    with pytest.raises(ActiveStateAuthorityMutationError, match="would change canonical"):
+        require_prose_state_write_allowed(
+            registry_path=registry, runtime_root=root, goal_id=GOAL,
+            state_path=state, original_text=original, planned_text=planned,
+        )
+    assert state.read_text(encoding="utf-8") == original
 
 
 def test_prose_only_reward_holds_before_index_append_during_maintenance(tmp_path: Path) -> None:
@@ -442,8 +669,85 @@ def test_prose_only_reward_holds_before_index_append_during_maintenance(tmp_path
     before = state.read_bytes(), index.read_bytes()
     with pytest.raises(ShadowManagementError):
         append_human_reward(registry_path=registry, runtime_root_override=None,
-            goal_id=GOAL, run_generated_at=None, reward=reward, write_active_state_summary=True)
+            goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+            write_active_state_summary=True)
     assert (state.read_bytes(), index.read_bytes()) == before
+
+
+def test_prose_guard_rejects_a_handoff_change(tmp_path: Path) -> None:
+    from loopx.control_plane.coordination.runtime_shadow_writer_adapter import (
+        ActiveStateAuthorityMutationError, require_prose_state_write_allowed,
+    )
+    registry, state, root = fixture(tmp_path)
+    original = state.read_text()
+    with pytest.raises(ActiveStateAuthorityMutationError, match="would change canonical"):
+        require_prose_state_write_allowed(
+            registry_path=registry, runtime_root=root, goal_id=GOAL, state_path=state,
+            original_text=original, planned_text=original.replace("handoff_mode: legacy", "handoff_mode: hard_lease"),
+        )
+    assert state.read_text() == original
+
+
+@pytest.mark.parametrize("maintenance", [False, True])
+def test_prose_projection_failure_preserves_source_and_reward_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, maintenance: bool,
+) -> None:
+    from loopx.feedback import append_human_reward
+    from loopx.control_plane.coordination import authority_source_capture as source
+    from loopx.control_plane.coordination.runtime_shadow_writer_adapter import ActiveStateAuthorityMutationError
+    from loopx.control_plane.coordination.shadow_management import ShadowManagementError, shadow_management_state_path
+
+    registry, state, index, reward = reward_fixture(tmp_path)
+    called = []
+
+    def unavailable(*_args, **_kwargs):
+        called.append(True)
+        raise ValueError("source projection unavailable")
+
+    monkeypatch.setattr(source, "todo_partition_projector", unavailable)
+    if maintenance:
+        path = shadow_management_state_path(tmp_path / "runtime", GOAL)
+        path.parent.mkdir(parents=True)
+        path.write_text("{}")
+    before = state.read_bytes(), index.read_bytes(), registry.read_bytes()
+    error = ShadowManagementError if maintenance else ActiveStateAuthorityMutationError
+    with pytest.raises(error):
+        append_human_reward(registry_path=registry, runtime_root_override=None,
+            goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+            write_active_state_summary=True)
+    assert called == ([] if maintenance else [True])
+    assert (state.read_bytes(), index.read_bytes(), registry.read_bytes()) == before
+
+
+def test_configuration_and_prose_guard_load_without_capture_modules(tmp_path, monkeypatch):
+    from test_cold_source_import_cli import workspace
+
+    _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
+    for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
+                 "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
+        (receiver / "loopx/control_plane/coordination" / name).unlink()
+    registry = tmp_path / "project/.loopx/registry.json"
+    child = subprocess.run([sys.executable, "-c", """
+import sys,loopx
+from pathlib import Path
+import loopx.presentation.configuration_api
+from loopx.feedback import require_prose_state_write_allowed
+from loopx.control_plane.coordination.legacy_writer_fence import ActiveStateAuthorityMutationError
+registry,runtime,state,package = map(Path,sys.argv[1:])
+assert Path(loopx.__file__) == package / 'loopx/__init__.py'
+original = state.read_text()
+args = dict(registry_path=registry,runtime_root=runtime,goal_id='cold',state_path=state,original_text=original)
+require_prose_state_write_allowed(**args,planned_text=original+'\\nA narrative observation.\\n')
+try:
+    require_prose_state_write_allowed(**args,planned_text=original.replace('handoff_mode: legacy','handoff_mode: hard_lease'))
+except ActiveStateAuthorityMutationError:
+    pass
+else:
+    raise AssertionError('handoff mutation was accepted')
+assert state.read_text() == original
+""", str(registry), str(runtime), str(state), str(receiver)], cwd=tmp_path,
+        env=env, capture_output=True, text=True, timeout=60)
+    assert child.returncode == 0, child.stdout + child.stderr
 
 
 def test_override_root_is_the_only_maintenance_authority(tmp_path: Path) -> None:
@@ -454,50 +758,63 @@ def test_override_root_is_the_only_maintenance_authority(tmp_path: Path) -> None
     management.parent.mkdir(parents=True)
     management.write_text("{}")
     with pytest.raises(ShadowManagementError):
-        capture_followup_todos(registry_path=registry, goal_id=GOAL,
-            runtime_root_arg=str(override), followups=["Hold override."], evidence="root fixture")
+        add_goal_todo(
+            registry_path=registry, goal_id=GOAL, runtime_root_arg=str(override),
+            role="agent", text="Hold override.",
+        )
     assert "Hold override." not in state.read_text()
     assert not (root / "authority-transition").exists()
-    result = capture_followup_todos(registry_path=registry, goal_id=GOAL,
-        followups=["Default root remains writable."], evidence="root fixture")
-    assert result["recorded_count"] == 1
+    result = add_goal_todo(
+        registry_path=registry, goal_id=GOAL, role="agent",
+        text="Default root remains writable.",
+    )
+    assert result["added"] is True
 
 
 @pytest.mark.parametrize("writer", ["todo", "prose"])
 def test_override_root_cannot_bypass_registry_source_maintenance(tmp_path: Path, writer: str) -> None:
     from loopx.control_plane.coordination.shadow_management import ShadowManagementError, shadow_management_state_path
-    from loopx.state_refresh import refresh_state_run
-    registry, state, root = fixture(tmp_path)
+    from loopx.feedback import append_human_reward
+    registry, state, index, reward = reward_fixture(tmp_path)
+    root = tmp_path / "runtime"
     override = tmp_path / "override"
+    override_index = override / "goals" / GOAL / "runs" / "index.jsonl"
+    override_index.parent.mkdir(parents=True)
+    override_index.write_bytes(index.read_bytes())
     management = shadow_management_state_path(root, GOAL)
     management.parent.mkdir(parents=True)
     management.write_text("{}")
     before = state.read_bytes()
     with pytest.raises(ShadowManagementError):
         if writer == "todo":
-            capture_followup_todos(registry_path=registry, goal_id=GOAL,
-                runtime_root_arg=str(override), followups=["Cannot bypass source maintenance."], evidence="root fixture")
+            add_goal_todo(
+                registry_path=registry, goal_id=GOAL, runtime_root_arg=str(override),
+                role="agent", text="Cannot bypass source maintenance.",
+            )
         else:
-            refresh_state_run(registry_path=registry, runtime_root_override=str(override), goal_id=GOAL,
-                project=None, state_file=None, classification="continue", recommended_action="Continue inspection.",
-                next_action="Cannot bypass source maintenance.", dry_run=False, sync_global=False)
+            append_human_reward(registry_path=registry, runtime_root_override=str(override),
+                goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+                write_active_state_summary=True)
     assert state.read_bytes() == before
 
 
 def test_override_root_keeps_prose_writable_with_an_active_source_binding(tmp_path: Path) -> None:
-    from loopx.state_refresh import refresh_state_run
-    registry, state, _root = fixture(tmp_path)
+    from loopx.feedback import append_human_reward
+    registry, state, index, reward = reward_fixture(tmp_path)
     value = json.loads(registry.read_text())
     value["goals"][0]["coordination"]["runtime_shadow"] = {
         "enabled": True, "schema_version": "loopx_coordination_runtime_shadow_config_v0", "provider": "file_v0"}
     registry.write_text(json.dumps(value))
     cli(registry, "coordination-shadow", "bootstrap", "--goal-id", GOAL, "--execute")
     override = tmp_path / "override"
-    refreshed = refresh_state_run(registry_path=registry, runtime_root_override=str(override), goal_id=GOAL,
-        project=None, state_file=None, classification="continue", recommended_action="Continue inspection.",
-        next_action="Only this owned prose changes.", dry_run=False, sync_global=False)
-    assert refreshed["ok"] is True
-    assert "Only this owned prose changes." in state.read_text()
+    override_index = override / "goals" / GOAL / "runs" / "index.jsonl"
+    override_index.parent.mkdir(parents=True)
+    override_index.write_bytes(index.read_bytes())
+    refreshed = append_human_reward(registry_path=registry, runtime_root_override=str(override),
+        goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+        write_active_state_summary=True)
+    assert refreshed["appended"] is True
+    assert "Review accepted." in state.read_text()
     assert not (override / "authority-shadow" / "outbox" / GOAL).exists()
 
 
@@ -532,7 +849,7 @@ raise SystemExit(main())
 """
     child = subprocess.Popen([sys.executable, "-c", code, str(state), str(waiting), str(proceed),
         "--registry", str(registry), "--runtime-root", str(tmp_path / "override"), "--format", "json",
-        "todo", "capture-followups", "--goal-id", GOAL, "--follow-up", "Must observe the new source binding.",
+        "todo", "add", "--goal-id", GOAL, "--role", "agent", "--text", "Must observe the new source binding.",
         "--evidence", "cross-root race"], cwd=REPO, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         deadline = time.monotonic() + 10
@@ -597,21 +914,6 @@ def test_registry_missing_state_reconstruction_respects_maintenance(tmp_path: Pa
     assert registry.read_bytes() == before
 
 
-def test_refresh_owned_next_action_holds_before_state_change(tmp_path: Path) -> None:
-    from loopx.state_refresh import refresh_state_run
-    from loopx.control_plane.coordination.shadow_management import ShadowManagementError, shadow_management_state_path
-    registry, state, root = fixture(tmp_path)
-    management = shadow_management_state_path(root, GOAL)
-    management.parent.mkdir(parents=True)
-    management.write_text("{}")
-    before = state.read_bytes()
-    with pytest.raises(ShadowManagementError):
-        refresh_state_run(registry_path=registry, runtime_root_override=None, goal_id=GOAL,
-            project=None, state_file=None, classification="continue", recommended_action="Continue inspection.",
-            next_action="Read the next source.", dry_run=False, sync_global=False)
-    assert state.read_bytes() == before
-    assert not (root / "goals" / GOAL / "runs" / "index.jsonl").exists()
-
 
 def test_active_capture_prepare_failure_holds_primary_before_any_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from loopx.control_plane.coordination import local_authority_shadow_outbox as outbox
@@ -638,23 +940,7 @@ def test_active_capture_prepare_failure_holds_primary_before_any_transition(tmp_
     assert list(directory.glob("*.committed.json")) == []
 
 
-def test_public_preview_does_not_require_primary_write_permission(tmp_path: Path) -> None:
-    from loopx.control_plane.coordination.shadow_management import shadow_management_state_path
-    registry, state, root = fixture(tmp_path)
-    before = state.read_bytes()
-    management = shadow_management_state_path(root, GOAL)
-    management.parent.mkdir(parents=True)
-    management.write_text("{}")
-    fence = legacy_coordination_writer_fence_path(runtime_root=root, goal_id=GOAL)
-    fence.write_text("{invalid")
-    preview = cli(registry, "todo", "capture-followups", "--goal-id", GOAL,
-        "--follow-up", "Preview remains read-only.", "--evidence", "preview fixture", "--dry-run")
-    assert preview["dry_run"] is True
-    assert state.read_bytes() == before
-    assert not (root / "authority-shadow").exists()
-
-
-@pytest.mark.parametrize("operation", ["add", "update", "complete", "supersede", "archive", "followups"])
+@pytest.mark.parametrize("operation", ["add", "update", "complete", "supersede", "archive"])
 def test_all_todo_transaction_owners_enforce_active_preparation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
@@ -694,57 +980,21 @@ def test_all_todo_transaction_owners_enforce_active_preparation(
         elif operation == "supersede":
             todos.supersede_goal_todo(**identity, todo_id=seed["todo_id"], reason="Replace the approach.",
                 next_agent_todo="Use a better check.", next_task_class="advancement_task", agent_id="agent-a")
-        elif operation == "archive":
-            todos.archive_completed_todos(**identity, max_active_done=0, dry_run=False)
         else:
-            capture_followup_todos(**identity, followups=["Capture another owner."], evidence="Boundary fixture.")
+            todos.archive_completed_todos(**identity, max_active_done=0, dry_run=False)
     assert held.value.reason_code == "shadow_capture_prepare_failed"
     assert state.read_bytes() == before
 
 
-def test_concurrent_public_refresh_preserves_the_newer_owned_paragraph(tmp_path: Path) -> None:
-    registry, state, _root = fixture(tmp_path)
-    code = """
-import sys
-from contextlib import contextmanager
-from pathlib import Path
-from loopx import state_refresh
-original = state_refresh.exclusive_cross_runtime_file_lock
-observed = 0
-@contextmanager
-def paused(path, *args, **kwargs):
-    global observed
-    with original(path, *args, **kwargs) as held:
-        yield held
-    if Path(path).name == 'ACTIVE_GOAL_STATE.md':
-        observed += 1
-        if observed == 1:
-            print('refresh-plan-ready', flush=True)
-            sys.stdin.readline()
-state_refresh.exclusive_cross_runtime_file_lock = paused
-from loopx.entrypoint import main
-raise SystemExit(main(sys.argv[1:]))
-"""
-    command = ["--registry", str(registry), "--format", "json", "refresh-state", "--goal-id", GOAL,
-        "--classification", "continue", "--recommended-action", "Retain the selected next action.",
-        "--next-action", "Stale planned paragraph.", "--no-global-sync"]
-    child = subprocess.Popen([sys.executable, "-c", code, *command], cwd=REPO,
-        text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        assert child.stdout is not None
-        assert child.stdout.readline().strip() == "refresh-plan-ready"
-        second = cli(registry, "--runtime-root", str(tmp_path / "parallel-runtime"),
-            "refresh-state", "--goal-id", GOAL, "--classification", "continue",
-            "--recommended-action", "Retain the selected next action.", "--next-action",
-            "Newer committed paragraph.", "--no-global-sync")
-        assert second["ok"] is True
-        before = state.read_bytes()
-        output, error = child.communicate("continue\n", timeout=30)
-        assert child.returncode == 1, output + error
-        assert "changed while refresh-state was qualifying" in json.loads(output)["error"]
-        assert state.read_bytes() == before
-        assert "Newer committed paragraph." in state.read_text()
-    finally:
-        if child.poll() is None:
-            child.kill()
-            child.communicate(timeout=10)
+def test_public_refresh_step_does_not_write_owned_paragraph(tmp_path: Path) -> None:
+    registry, state, root = fixture(tmp_path)
+    add_goal_todo(registry_path=registry, goal_id=GOAL, role="agent",
+        text="Inspect the bounded result.", task_class="advancement_task", agent_id="agent-a")
+    before = state.read_bytes()
+    result = cli(registry, "refresh-state", "--goal-id", GOAL, "--agent-id", "agent-a",
+        "--next-action", "Compare the current evidence.", "--no-global-sync")
+    assert result["ok"] is True
+    assert result["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
+    assert state.read_bytes() == before
+    assert "Compare the current evidence." not in state.read_text()
+    assert not (root / "authority-shadow").exists()

@@ -3,12 +3,14 @@ from __future__ import annotations
 import importlib
 from concurrent.futures import ThreadPoolExecutor
 import os
+import sys
 from importlib.metadata import PackageNotFoundError, distribution
 import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
 from .command_invocation import command_argv
+from .release_manifest import release_runtime_identity
 
 
 REPRESENTATIVE_CLI_IMPORTS = (
@@ -68,7 +70,7 @@ def _command_summary(command_path: Path | None) -> dict[str, Any]:
                 command_argv(command_path, args),
                 check=False,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=30,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -289,7 +291,7 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
     from .doctor import current_script_invocation_path, python_distribution_install
 
     invocation = current_script_invocation_path()
-    command = resolve_command_path("loopx") or invocation
+    command = invocation or resolve_command_path("loopx")
     package_root = Path(__file__).resolve().parents[1]
     selected = os.environ.get("LOOPX_RELEASE_ROOT")
     runtime = collect_effect_runtime_readiness(deep=deep)
@@ -301,6 +303,8 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "mode": "deep" if deep else "standard",
         "scope": "installation_only",
+        "service_runtime_identity": release_runtime_identity(),
+        "python": {"executable": sys.executable},
         "checks": checks,
         "typescript_control_plane": runtime,
         "path": {"loopx": str(command) if command else None},
@@ -311,7 +315,9 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
             invocation_path=invocation,
             package_root=package_root,
             invocation_root=Path(selected).expanduser().resolve() if selected else package_root,
-            distribution_root=python_distribution_install(Path(__file__).resolve()).get("root"),
+            distribution_root=python_distribution_install(
+                Path(__file__).with_name("doctor.py").resolve()
+            ).get("root"),
         )
         checks.extend(candidate["checks"])
         payload["release_candidate"] = candidate

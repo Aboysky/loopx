@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .effective_action import EffectiveAction
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -13,7 +14,10 @@ from ..agents.agent_scope import (
 from ..agents.identity import (
     build_quota_agent_identity,
 )
-from ..agents.workspace_guard import build_agent_workspace_guard
+from ..agents.workspace_guard import (
+    build_agent_workspace_guard,
+    observe_goal_local_workspace,
+)
 from ..quota.decision_summary import (
     quota_plan_items as _quota_plan_items,
 )
@@ -37,15 +41,14 @@ from ..scheduler.execution_context import (
 from ..todos.write_hint import build_todo_write_hint
 from ..work_items.interaction_contract import (
     build_interaction_contract,
-    build_protocol_action_packet,
 )
 from .effect_program import (
     ReceiptBoundMonitorPhase,
     ReceiptBoundReplayPhase,
     ReceiptBoundTerminalPhase,
 )
-from .settlement_precedence import apply_settled_replay_route_precedence
 from .should_run_packet import (
+    _attach_automation_cadence_readback,
     _build_quota_should_run_payload,
     _execution_obligation,
     _QuotaDecisionRoute,
@@ -61,20 +64,11 @@ QUOTA_PAUSED_MODE = "quota_paused"
 GOAL_STOPPED_MODE = "goal_stopped"
 
 
-def _resolve_quota_route_with_settled_replay_precedence(
-    prepared: _QuotaDecisionPreparation,
-) -> _QuotaDecisionRoute:
-    route = _resolve_quota_should_run_route(prepared)
-    apply_settled_replay_route_precedence(
-        route,
-        replay_phase=prepared.receipt_bound_replay_phase,
-    )
-    return route
-
-
 def _apply_selected_todo_guards(
     prepared: _QuotaDecisionPreparation,
     route: _QuotaDecisionRoute,
+    *,
+    workspace_path: Path | None = None,
 ) -> _QuotaDecisionRoute:
     """Bind workspace and boundary guards to the exact projected Todo.
 
@@ -85,19 +79,65 @@ def _apply_selected_todo_guards(
 
     selected_todo = selected_todo_projection(
         agent_lane_next_action=route.agent_lane_next_action,
-        work_lane_contract=route.payload_work_lane_contract,
+        work_lane_contract=(None if route.replan_decision_allowed else route.payload_work_lane_contract),
         agent_scope_frontier=route.agent_scope_frontier,
     )
+    if (
+        selected_todo is None
+        and prepared.requested_action_todo_id is not None
+        and (prepared.action_selection_qualification or {}).get("state")
+        in {"deferred", "rejected"}
+    ):
+        # The typed selection owner refused this choice before workspace checks.
+        # A guard's legacy default fallback must not replace that refusal with
+        # a repair for a different, unselected Todo.
+        return route
+    summary = prepared.agent_todo_summary or {}
+    acceptance = summary.get("goal_acceptance_contract")
+    if isinstance(acceptance, dict) and acceptance.get("enabled") is True:
+        held_ids = acceptance.get("held_todo_ids") or []
+        held_selection = bool(selected_todo and selected_todo.get("todo_id") in held_ids)
+        # Native guards already filtered these lanes. Do not let a generic
+        # Goal recommendation recreate advancement permission from held work.
+        no_runnable_work = bool(held_ids) and not selected_todo and not any(
+            summary.get(field) for field in (
+                "first_executable_items", "executable_backlog_items", "monitor_due_items",
+            )
+        )
+        if (
+            (route.normal_delivery_allowed or route.recovery_allowed)
+            and not prepared.inbox_priority_due
+            and not route.replan_decision_allowed
+            and (held_selection or no_runnable_work)
+        ):
+            prepared.normal_delivery_allowed = False
+            prepared.recovery_allowed = False
+            prepared.reason = (
+                "Goal acceptance holds the current work; inspect its contract and "
+                "ask the owner to configure or rebind the current Todo."
+            )
+            route = _resolve_quota_should_run_route(prepared)
     workspace_guard = None
+    # A compact legacy projection may legitimately omit every boundary field.
+    # Observe the selected workspace without inventing a write grant.
+    goal_boundary = prepared.goal_boundary or {}
+    local_workspace = observe_goal_local_workspace(
+        prepared.item, selected_todo, goal_boundary.get("write_scope", [])
+    )
     if not prepared.inbox_priority_due:
         workspace_guard = build_agent_workspace_guard(
             prepared.item,
             prepared.agent_identity,
             agent_todo_summary=prepared.agent_todo_summary,
             selected_todo=selected_todo,
+            current_path=workspace_path,
+            local_workspace=local_workspace,
         )
     boundary_projection_repair = build_boundary_projection_repair_hint(
-        prepared.goal_boundary,
+        {**goal_boundary, "write_scope": [
+            *goal_boundary.get("write_scope", []),
+            *local_workspace.get("allowed_write_scopes", []),
+        ]},
         prepared.agent_todo_summary,
         candidate_should_run=bool(route.should_run),
         capability_gate=prepared.capability_gate,
@@ -118,7 +158,7 @@ def _apply_selected_todo_guards(
         prepared.reason = str(
             boundary_projection_repair.get("reason") or prepared.reason
         )
-    return _resolve_quota_route_with_settled_replay_precedence(prepared)
+    return _resolve_quota_should_run_route(prepared)
 
 
 def build_quota_paused_should_run_payload(
@@ -134,6 +174,7 @@ def build_quota_paused_should_run_payload(
     codex_app_automation_id: Any = None,
     resolved_scheduler_context: SchedulerExecutionContextResolution,
     runtime_root: str | Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Project one canonical hard-pause contract with no lane contradiction.
 
@@ -173,7 +214,7 @@ def build_quota_paused_should_run_payload(
     }
     execution_obligation = _execution_obligation(
         should_run=False,
-        effective_action="quota_skip",
+        effective_action=EffectiveAction.QUOTA_SKIP.value,
         heartbeat_recommendation=heartbeat_recommendation,
     )
     payload: dict[str, Any] = {
@@ -188,7 +229,7 @@ def build_quota_paused_should_run_payload(
         "self_repair_allowed": False,
         "capability_repair_allowed": False,
         "workspace_repair_allowed": False,
-        "effective_action": "quota_skip",
+        "effective_action": EffectiveAction.QUOTA_SKIP.value,
         "actionable_by_codex": False,
         "reason": reason,
         "quota": quota,
@@ -211,6 +252,24 @@ def build_quota_paused_should_run_payload(
         payload=payload,
         agent_identity=agent_identity,
     )
+    if goal_ref is not None:
+        payload["goal_ref"] = dict(goal_ref)
+    effective_agent_id = (
+        str(agent_identity.get("agent_id") or "").strip()
+        if isinstance(agent_identity, Mapping)
+        else ""
+    ) or requested_agent_id
+    _attach_automation_cadence_readback(
+        payload,
+        goal_id=safe_goal_id,
+        agent_id=effective_agent_id,
+        automation_id=codex_app_automation_id,
+        runtime_root=(
+            runtime_root
+            or status_payload.get("runtime_root")
+        ),
+        resolved_scheduler_context=resolved_scheduler_context,
+    )
     payload["automation_liveness"] = build_automation_liveness(payload)
     payload["interaction_contract"] = build_interaction_contract(
         payload,
@@ -232,7 +291,6 @@ def build_quota_paused_should_run_payload(
         codex_app_automation_id=codex_app_automation_id,
         scheduler_execution_context=resolved_scheduler_context,
     )
-    payload["protocol_action_packet"] = build_protocol_action_packet(payload)
     return payload
 
 
@@ -256,8 +314,12 @@ def build_quota_should_run(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None = None,
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
+    receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_guard_recorded_at: str | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
+    workspace_path: Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     resolved_scheduler_context = resolve_scheduler_execution_context(
@@ -305,6 +367,7 @@ def build_quota_should_run(
                 codex_app_automation_id=codex_app_automation_id,
                 resolved_scheduler_context=resolved_scheduler_context,
                 runtime_root=runtime_root,
+                goal_ref=goal_ref,
             )
         prepared = _prepare_quota_should_run_item(
             status_payload,
@@ -326,18 +389,21 @@ def build_quota_should_run(
             receipt_bound_monitor_phase=receipt_bound_monitor_phase,
             receipt_bound_replay_phase=receipt_bound_replay_phase,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+            receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+            receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         )
-        route = _resolve_quota_route_with_settled_replay_precedence(prepared)
-        route = _apply_selected_todo_guards(prepared, route)
+        route = _resolve_quota_should_run_route(prepared)
+        route = _apply_selected_todo_guards(prepared, route, workspace_path=workspace_path)
         return _build_quota_should_run_payload(
             prepared,
             route,
             turn_instance_id=turn_instance_id,
             include_agent_todo_detail=include_agent_todo_detail,
             runtime_root=runtime_root,
+            goal_ref=goal_ref,
         )
     if health_item:
-        return {
+        payload = {
             "ok": False,
             "mode": "should-run",
             "goal_id": safe_goal_id,
@@ -354,6 +420,15 @@ def build_quota_should_run(
             "recommended_action": health_item.get("recommended_action"),
             "plan_summary": plan.get("summary"),
         }
+        _attach_automation_cadence_readback(
+            payload,
+            goal_id=safe_goal_id,
+            agent_id=agent_id,
+            automation_id=codex_app_automation_id,
+            runtime_root=runtime_root or status_payload.get("runtime_root"),
+            resolved_scheduler_context=resolved_scheduler_context,
+        )
+        return payload
     return {
         "ok": False,
         "mode": "should-run",

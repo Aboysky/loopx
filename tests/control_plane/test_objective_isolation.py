@@ -4,9 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from loopx.bootstrap import render_objective_markdown, render_state_markdown
-from loopx.chat_server import _active_state_section
-from loopx.control_plane.projects.registry import _state_markdown
+from loopx.bootstrap import render_state_markdown
+from loopx.control_plane.goals.active_state_metadata import (
+    active_state_section_text,
+    markdown_blockquote,
+)
+from loopx.control_plane.projects.registration_state import render_registration_state
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
 
 
@@ -27,7 +30,7 @@ CLOSED_MULTILINE_FENCE_OBJECTIVE = "```text\nImplement and validate the task.\n`
 
 
 def _bootstrap_state(tmp_path: Path, objective: str) -> str:
-    return render_state_markdown(
+    state = render_state_markdown(
         project=tmp_path,
         goal_id="objective-example",
         adapter_kind="read_only_project_map_v0",
@@ -36,14 +39,21 @@ def _bootstrap_state(tmp_path: Path, objective: str) -> str:
         goal_doc=None,
         execution_profile=None,
     )
+    # Bootstrap now leaves authoring to the canonical Todo owner. Supply one
+    # independent legitimate Todo to prove objective prose cannot hide it.
+    return state.replace(
+        "\n## Agent Todo\n",
+        "\n## Agent Todo\n\n- [ ] Real planned work.\n",
+        1,
+    )
 
 
-def test_render_objective_markdown_quotes_every_line() -> None:
-    assert render_objective_markdown("") == ""
-    assert render_objective_markdown(PLAIN_OBJECTIVE) == f"> {PLAIN_OBJECTIVE}"
+def test_objective_markdown_quotes_every_line() -> None:
+    assert markdown_blockquote("") == ""
+    assert markdown_blockquote(PLAIN_OBJECTIVE) == f"> {PLAIN_OBJECTIVE}"
     assert (
-        render_objective_markdown("first\n\nsecond")
-        == "> first\n>\n> second"
+        markdown_blockquote("first\n\nsecond")
+        == "> first\n> \n> second"
     )
 
 
@@ -56,7 +66,7 @@ def test_bootstrap_state_keeps_generated_todos_readable_beyond_objective_example
 
     assert sources["user"] == "User Todo / Owner Review Reading Queue"
     assert sources["agent"] == "Agent Todo"
-    # The generated onboarding connection-validation Todo stays readable.
+    # The legitimate work stays readable and the objective creates no work.
     assert len(items["agent"]) == 1
     assert "fake objective todo" not in str(items["agent"][0].get("text") or "")
 
@@ -95,11 +105,11 @@ def test_chat_context_readback_strips_objective_quote_isolation(
 ) -> None:
     state = _bootstrap_state(tmp_path, objective)
 
-    assert _active_state_section(state, "Objective") == objective
+    assert active_state_section_text(state, "Objective") == objective
 
 
 def test_registry_state_markdown_keeps_todo_sections_readable_beyond_fenced_objective() -> None:
-    state = _state_markdown(
+    state = render_registration_state(
         project_id="project-example",
         goal_id="goal-example",
         objective="```text Implement the pipeline. ```",

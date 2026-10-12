@@ -85,6 +85,18 @@ Confirmation and result cards consume the same internal TypeScript
 card render, then owns only provider-specific Card 2.0 markup and delivery; the
 frame neither grants authority nor replaces the canonical operation receipt.
 
+That request path is not operation-only. `presentation.action_review_plan.compile`
+also returns a `review_card_frame_v0` for a validated steward team plan
+(`team.plan`), whose confirmation identity is the action proposal and the state
+fingerprint the apply re-validates against rather than an operation envelope. Its
+fields are `{key, value}` pairs and its fixed labels are keys, so this boundary
+stays language-neutral and the surface owns the words. A plan card can therefore
+reuse the card shell, the callback consumer, the operator membership check,
+replay protection and card readback described here. What a plan card still needs
+is its own delivery route for the audience that asked (the manager group is not a
+Goal channel binding) and a callback effect that applies the proposal through the
+Chat action service instead of claiming an operation envelope.
+
 ```bash
 loopx goal-channel prepare-operation \
   --goal-id <goal-id> \
@@ -170,6 +182,13 @@ loopx lark-inbox history-catch-up \
   --start 2026-08-01T00:00:00Z \
   --execute
 ```
+
+Inline `thread_replies` returned by the CLI are ingested under their own message
+ids and sender/mention evidence, retaining the source root and thread. The repeated
+root row is skipped; verified self-Bot replies are filtered like root messages.
+Malformed or foreign-source expansions fail before inbox/cursor writes. This
+covers supplied inline replies only: it does not independently paginate threads
+or discover later replies whose root is outside the requested group window.
 
 Retries resume the exact private page token. A completed window replays
 without another provider read only while its upper coverage bound is current;
@@ -467,3 +486,28 @@ group's session. Long-running work still belongs to worker Agents. Conversation
 turns retain the existing read-only tool policy and typed preview/apply authority;
 a synchronous response is not permission to mutate arbitrary repositories or
 skip a control-plane receipt.
+
+
+### Native private Chat progress
+
+Native private project Chat and steward conversations present persisted Core
+Turn events as a mutable, source-bound Markdown reply. Answer chunks are coalesced at a two-second interval; changes only to fixed
+activity labels are coalesced at ten seconds to avoid message churn. Reasoning,
+tool arguments and command output are excluded. The transport does not run models.
+
+The conservative edit budget applies to each draft, rather than the whole Turn.
+When it is exhausted, the transport verifies a short continuation notice on the
+old draft, then creates a numbered continuation using the existing sender and
+source placement. A definite provider edit-limit rejection also allows this
+continuation; uncertain closes or creates recover their frozen intent instead
+of blindly sending another message. Archived draft proofs survive restarts.
+The full canonical answer replaces the latest draft, with the existing oversized
+answer and provider-limit fallback. Source/App/audience checks and final
+readback still gate delivery, and only final delivery acknowledges the request.
+
+原生私聊的回答片段按两秒间隔合并更新，仅工具状态变化时按十秒合并，避免刷屏。
+每条草稿分别计算编辑预算。长任务用完
+预算后，先读回旧草稿上的续接提示，再在同一来源位置发送编号的后续进度；明确的
+provider 编辑次数耗尽也允许续接。关闭或创建结果不明时，恢复原有投递意图，不盲目
+重发、不重跑任务。最终完整答案替换最新草稿，超长答案沿用既有完整发送路径；
+来源、App、接收范围和最终读回校验仍然有效。

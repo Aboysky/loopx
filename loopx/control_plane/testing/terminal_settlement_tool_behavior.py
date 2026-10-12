@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ...heartbeat_prompt import build_heartbeat_prompt
-from ...todos import add_goal_todo, complete_goal_todo
+from ...control_plane.todos.mutation_api import add_goal_todo, complete_goal_todo
 from ..quota.turn_envelope import quota_action_signature_document
 from .doubao_model_behavior_actor import (
     ARK_API_KEY_ENV,
@@ -144,7 +144,7 @@ def _build_fixture(root: Path) -> _TerminalSettlementFixture:
         cwd=project_root,
         check=True,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=10,
     )
     subprocess.run(
@@ -158,7 +158,7 @@ def _build_fixture(root: Path) -> _TerminalSettlementFixture:
         cwd=project_root,
         check=True,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=10,
     )
     state_path.write_text(
@@ -334,7 +334,7 @@ def _build_reentry_fixture(root: Path) -> _TerminalSettlementReentryFixture:
         cwd=project_root,
         check=True,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=10,
     )
     subprocess.run(
@@ -348,7 +348,7 @@ def _build_reentry_fixture(root: Path) -> _TerminalSettlementReentryFixture:
         cwd=project_root,
         check=True,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=10,
     )
     state_path.write_text(
@@ -656,7 +656,7 @@ def _execute_workspace_read(
             cwd=state.fixture.project_root,
             check=False,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=10,
         )
         status = completed.returncode

@@ -11,6 +11,11 @@ from urllib.parse import parse_qs, urlparse
 from .control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
 )
+from .capabilities.multi_subagent import (
+    apply_codex_subagent_capacity,
+    plan_codex_subagent_capacity,
+    public_codex_host_capacity,
+)
 from .capabilities.periodic_report.workspace import (
     DEFAULT_WORKSPACE_INDEX_LIMIT,
     MAX_WORKSPACE_INDEX_LIMIT,
@@ -77,6 +82,7 @@ CONFIGURE_GOAL_REQUEST_FIELDS = {
     "orchestration_mode",
     "spawn_allowed",
     "max_children",
+    "align_codex_subagent_capacity",
     "allowed_domains",
     "clear_allowed_domains",
     "registered_agents",
@@ -196,12 +202,18 @@ def reward_preview_id(payload: dict[str, Any]) -> str:
 
 
 def configure_goal_preview_id(payload: dict[str, Any]) -> str:
+    codex_host_capacity = payload.get("codex_host_capacity")
+    if isinstance(codex_host_capacity, dict) and isinstance(
+        codex_host_capacity.get("plan_before_apply"), dict
+    ):
+        codex_host_capacity = codex_host_capacity["plan_before_apply"]
     stable_payload = {
         "goal_id": payload.get("goal_id"),
         "changed": payload.get("changed"),
         "changed_fields": payload.get("changed_fields"),
         "before": payload.get("before"),
         "after": payload.get("after"),
+        "codex_host_capacity": codex_host_capacity,
     }
     stable = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()[:24]
@@ -225,8 +237,129 @@ class StatusHTTPServer(ThreadingHTTPServer):
     ssh_config_path: Path | None
     verbose: bool
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.runtime_identity = release_runtime_identity()
+        super().__init__(*args, **kwargs)
 
-class StatusRequestHandler(BaseHTTPRequestHandler):
+
+class ExtensionPresentationRequestMixin:
+    """Shared read-only extension routes for loopback status and Chat surfaces."""
+
+    server: Any
+
+    def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
+        raise NotImplementedError
+
+    def _handle_extension_projection(self, query: dict[str, list[str]]) -> None:
+        if not is_loopback_host(str(self.server.server_address[0])):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "extension projection reads require a loopback status server",
+                },
+                status=403,
+            )
+            return
+        if not is_loopback_origin(self.headers.get("Origin")):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "extension projection reads only accept loopback browser origins",
+                },
+                status=403,
+            )
+            return
+        extension_id = (query.get("extension_id") or [""])[0].strip()
+        surface_id = (query.get("surface_id") or [""])[0].strip()
+        extension_revision = (query.get("extension_revision") or [""])[0].strip()
+        payload_sha256 = (query.get("payload_sha256") or [""])[0].strip()
+        if not (extension_id and surface_id and extension_revision and payload_sha256):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": (
+                        "extension_id, surface_id, extension_revision, and "
+                        "payload_sha256 are required"
+                    ),
+                },
+                status=400,
+            )
+            return
+        try:
+            registry = load_registry(self.server.registry_path)
+            runtime_root = resolve_runtime_root(
+                registry,
+                self.server.runtime_root_override,
+                registry_path=self.server.registry_path,
+            )
+            envelope = read_extension_projection(
+                state_file=default_extension_state_file(runtime_root),
+                extension_id=extension_id,
+                surface_id=surface_id,
+                extension_revision=extension_revision,
+                payload_sha256=payload_sha256,
+            )
+        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
+            self._send_json(
+                {
+                    "ok": False,
+                    "extension_id": extension_id,
+                    "surface_id": surface_id,
+                    "error": str(exc),
+                },
+                status=400,
+            )
+            return
+        self._send_json({"ok": True, "projection": envelope})
+
+    def _handle_extension_presentation_surfaces(self) -> None:
+        if not is_loopback_host(str(self.server.server_address[0])):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": (
+                        "extension presentation surfaces require a loopback "
+                        "status server"
+                    ),
+                },
+                status=403,
+            )
+            return
+        if not is_loopback_origin(self.headers.get("Origin")):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": (
+                        "extension presentation surfaces only accept loopback "
+                        "browser origins"
+                    ),
+                },
+                status=403,
+            )
+            return
+        try:
+            registry = load_registry(self.server.registry_path)
+            runtime_root = resolve_runtime_root(
+                registry,
+                self.server.runtime_root_override,
+                registry_path=self.server.registry_path,
+            )
+            surfaces = collect_active_extension_presentation_surfaces(
+                state_file=default_extension_state_file(runtime_root),
+            )
+        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                },
+                status=400,
+            )
+            return
+        self._send_json({"ok": True, "presentation_surfaces": surfaces})
+
+
+class StatusRequestHandler(ExtensionPresentationRequestMixin, BaseHTTPRequestHandler):
     server: StatusHTTPServer
 
     def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
@@ -336,6 +469,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             goal_id=goal_id,
             run_generated_at=run_generated_at,
             reward=reward,
+            actor_kind="owner",
             dry_run=True,
             write_active_state_summary=(
                 _json_boolean(body, "write_active_state_summary", default=True)
@@ -416,6 +550,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
                 goal_id=goal_id,
                 run_generated_at=run_generated_at,
                 reward=reward,
+                actor_kind="owner",
                 dry_run=False,
                 write_active_state_summary=_json_boolean(
                     body, "write_active_state_summary", default=True
@@ -503,6 +638,9 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             "orchestration_mode": body.get("orchestration_mode"),
             "spawn_allowed": _optional_json_boolean(body, "spawn_allowed"),
             "max_children": body.get("max_children"),
+            "align_codex_subagent_capacity": _json_boolean(
+                body, "align_codex_subagent_capacity"
+            ),
             "allowed_domains": [str(item) for item in allowed_domains] if allowed_domains is not None else None,
             "clear_allowed_domains": _json_boolean(body, "clear_allowed_domains"),
             "registered_agents": [str(item) for item in registered_agents] if registered_agents is not None else None,
@@ -567,6 +705,11 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             orchestration_mode=values["orchestration_mode"],
             spawn_allowed=values["spawn_allowed"],
             max_children=values["max_children"],
+            align_codex_subagent_capacity=values[
+                "align_codex_subagent_capacity"
+            ],
+            codex_host_capacity_planner=plan_codex_subagent_capacity,
+            codex_host_capacity_applier=apply_codex_subagent_capacity,
             allowed_domains=values["allowed_domains"],
             clear_allowed_domains=values["clear_allowed_domains"],
             registered_agents=values["registered_agents"],
@@ -614,6 +757,10 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             "control_plane_summary": payload.get("control_plane_summary"),
             "orchestration_summary": payload.get("orchestration_summary"),
             "feature_summary": payload.get("feature_summary"),
+            "goal_configuration_changed": payload.get(
+                "goal_configuration_changed"
+            ),
+            "codex_host_capacity": public_codex_host_capacity(payload),
             "heartbeat_prompt_migration": payload.get("heartbeat_prompt_migration"),
             "supervisor_prompt": payload.get("supervisor_prompt"),
             "global_sync": payload.get("global_sync"),
@@ -737,114 +884,6 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(payload)
 
-    def _handle_extension_projection(self, query: dict[str, list[str]]) -> None:
-        if not is_loopback_host(str(self.server.server_address[0])):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": "extension projection reads require a loopback status server",
-                },
-                status=403,
-            )
-            return
-        if not is_loopback_origin(self.headers.get("Origin")):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": "extension projection reads only accept loopback browser origins",
-                },
-                status=403,
-            )
-            return
-        extension_id = (query.get("extension_id") or [""])[0].strip()
-        surface_id = (query.get("surface_id") or [""])[0].strip()
-        extension_revision = (query.get("extension_revision") or [""])[0].strip()
-        payload_sha256 = (query.get("payload_sha256") or [""])[0].strip()
-        if not (extension_id and surface_id and extension_revision and payload_sha256):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": (
-                        "extension_id, surface_id, extension_revision, and "
-                        "payload_sha256 are required"
-                    ),
-                },
-                status=400,
-            )
-            return
-        try:
-            registry = load_registry(self.server.registry_path)
-            runtime_root = resolve_runtime_root(
-                registry,
-                self.server.runtime_root_override,
-                registry_path=self.server.registry_path,
-            )
-            envelope = read_extension_projection(
-                state_file=default_extension_state_file(runtime_root),
-                extension_id=extension_id,
-                surface_id=surface_id,
-                extension_revision=extension_revision,
-                payload_sha256=payload_sha256,
-            )
-        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
-            self._send_json(
-                {
-                    "ok": False,
-                    "extension_id": extension_id,
-                    "surface_id": surface_id,
-                    "error": str(exc),
-                },
-                status=400,
-            )
-            return
-        self._send_json({"ok": True, "projection": envelope})
-
-    def _handle_extension_presentation_surfaces(self) -> None:
-        if not is_loopback_host(str(self.server.server_address[0])):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": (
-                        "extension presentation surfaces require a loopback "
-                        "status server"
-                    ),
-                },
-                status=403,
-            )
-            return
-        if not is_loopback_origin(self.headers.get("Origin")):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": (
-                        "extension presentation surfaces only accept loopback "
-                        "browser origins"
-                    ),
-                },
-                status=403,
-            )
-            return
-        try:
-            registry = load_registry(self.server.registry_path)
-            runtime_root = resolve_runtime_root(
-                registry,
-                self.server.runtime_root_override,
-                registry_path=self.server.registry_path,
-            )
-            surfaces = collect_active_extension_presentation_surfaces(
-                state_file=default_extension_state_file(runtime_root),
-            )
-        except Exception as exc:  # noqa: BLE001 - local UI needs the read failure.
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                },
-                status=400,
-            )
-            return
-        self._send_json({"ok": True, "presentation_surfaces": surfaces})
-
     def _handle_periodic_report_index(self, query: dict[str, list[str]]) -> None:
         if not is_loopback_host(
             str(self.server.server_address[0])
@@ -959,7 +998,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
     def _local_dashboard_api_payload(self) -> dict[str, Any]:
         return {
             "source": "serve-status",
-            "runtime_identity": release_runtime_identity(),
+            "runtime_identity": self.server.runtime_identity,
             "status_url": self.server.status_path,
             "health_url": "/healthz",
             "readiness_url": "/?readiness=1",

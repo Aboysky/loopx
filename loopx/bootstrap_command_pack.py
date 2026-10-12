@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import registered_agent_ids_for_goal
-from .bootstrap import default_goal_id
+from .control_plane.projects.identity import default_goal_id
+from .paths import registered_goal_state_file
 from .capabilities.issue_fix.candidate_preflight import (
     candidate_preflight_input_contract,
 )
@@ -14,6 +15,14 @@ from .capabilities.issue_fix.workflow_plan import (
     build_issue_fix_goal_command_templates,
 )
 from .control_plane.effect_program import effect_program_from_ordered_steps
+from .control_plane.goals.orphaned_goal_state import (
+    ORPHANED_GOAL_STATE_CONNECTION,
+    absent_goal_connection,
+    fence_command_pack,
+    fenced_standalone_message,
+    guided_fence,
+    render_guided_lines,
+)
 from .control_plane.goals.start_contract import (
     build_goal_start_contract,
     build_goal_start_prompt,
@@ -31,6 +40,7 @@ from .host_loop_activation import (
     build_host_loop_activation_packet,
     scheduler_command_binding_for_agent_type,
 )
+from .history import load_registry
 from .project_alias import resolve_canonical_project_alias
 from .project_prompt import (
     DEFAULT_HANDOFF_ADAPTER_KIND,
@@ -490,15 +500,12 @@ def _resolve_project(project: Path) -> Path:
 
 
 def _read_registry(path: Path) -> tuple[dict[str, Any] | None, str | None]:
-    try:
-        with path.open(encoding="utf-8") as f:
-            payload = json.load(f)
-    except FileNotFoundError:
+    if not path.is_file():
         return None, None
-    except (OSError, json.JSONDecodeError) as exc:
+    try:
+        payload = load_registry(path)
+    except (OSError, ValueError) as exc:
         return None, str(exc)
-    if not isinstance(payload, dict):
-        return None, "registry root must be a JSON object"
     return payload, None
 
 
@@ -562,7 +569,7 @@ def inspect_bootstrap_connection(
     registry_exists = registry_path.exists()
     registry, registry_error = _read_registry(registry_path) if registry_exists else (None, None)
     inferred_goal_id = goal_id or default_goal_id(resolved_project)
-    state_file = resolved_project / ".codex" / "goals" / inferred_goal_id / "ACTIVE_GOAL_STATE.md"
+    state_file = registered_goal_state_file(resolved_project, inferred_goal_id, registry)
     base_connection = {
         "input_project": str(input_project),
         "project": str(resolved_project),
@@ -571,35 +578,29 @@ def inspect_bootstrap_connection(
     }
 
     if registry_error:
-        return {
-            **base_connection,
-            "registry_exists": registry_exists,
-            "goal_id": inferred_goal_id,
-            "goal_found": False,
-            "state_file": str(state_file),
-            "state_file_exists": state_file.exists(),
-            "connection_state": "registry_invalid",
-            "mutation_confirmation_required": True,
-            "reason": registry_error,
-        }
+        return absent_goal_connection(
+            base_connection=base_connection,
+            goal_id=inferred_goal_id,
+            state_file=state_file,
+            registry_exists=registry_exists,
+            absence_connection="registry_invalid",
+            absence_reason=registry_error,
+        )
 
     if not registry:
-        return {
-            **base_connection,
-            "registry_exists": False,
-            "goal_id": inferred_goal_id,
-            "goal_found": False,
-            "state_file": str(state_file),
-            "state_file_exists": state_file.exists(),
-            "connection_state": "not_connected",
-            "mutation_confirmation_required": True,
-            "reason": "project-local .loopx/registry.json is missing",
-        }
+        return absent_goal_connection(
+            base_connection=base_connection,
+            goal_id=inferred_goal_id,
+            state_file=state_file,
+            registry_exists=False,
+            absence_connection="not_connected",
+            absence_reason="project-local .loopx/registry.json is missing",
+        )
 
     goals = registry_goals(registry)
     selected_goal_id, selected_goal = _select_goal(goals, goal_id)
     resolved_goal_id = selected_goal_id or inferred_goal_id
-    fallback_state_file = resolved_project / ".codex" / "goals" / resolved_goal_id / "ACTIVE_GOAL_STATE.md"
+    fallback_state_file = registered_goal_state_file(resolved_project, resolved_goal_id, registry)
     goal_state_file = (
         resolve_state_file(resolved_project, str(selected_goal.get("state_file")))
         if selected_goal and selected_goal.get("state_file")
@@ -608,18 +609,15 @@ def inspect_bootstrap_connection(
     state_file = goal_state_file or fallback_state_file
 
     if selected_goal is None:
-        return {
-            **base_connection,
-            "registry_exists": True,
-            "goal_id": resolved_goal_id,
-            "goal_found": False,
-            "known_goal_ids": [str(goal.get("id")) for goal in goals],
-            "state_file": str(state_file),
-            "state_file_exists": state_file.exists(),
-            "connection_state": "registry_without_goal",
-            "mutation_confirmation_required": True,
-            "reason": "registry exists but no matching goal entry was found",
-        }
+        return absent_goal_connection(
+            base_connection=base_connection,
+            goal_id=resolved_goal_id,
+            state_file=state_file,
+            registry_exists=True,
+            absence_connection="registry_without_goal",
+            absence_reason="registry exists but no matching goal entry was found",
+            known_goal_ids=[str(goal.get("id")) for goal in goals],
+        )
 
     if not selected_goal.get("state_file"):
         return {
@@ -675,8 +673,7 @@ def _bootstrap_command(
         "  --project . \\",
         f"  --goal-id {shell_arg(goal_id)} \\",
         f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
-        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)} \\",
-        "  --codex-app-heartbeat ask",
+        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)}",
     ]
     if fine_grained:
         lines[-1] += " \\"
@@ -1077,6 +1074,7 @@ def build_loopx_bootstrap_command_pack(
             "host_loop_activation_allowed": activation_allowed,
         },
     }
+    fence_command_pack(payload, command_prefix=command_prefix)
     if normalized_thread_id:
         payload["thread_id"] = normalized_thread_id
         payload["thread_agent_binding"] = thread_binding_projection
@@ -1710,6 +1708,10 @@ def build_start_goal_guided_packet(
             detail_command=detail_command,
         )
     )
+    orphaned_gate = command_pack.get("orphaned_goal_state")
+    if isinstance(orphaned_gate, dict):
+        guided_transaction.update(guided_fence(orphaned_gate))
+        guided_transaction.pop("identity_selection_gate", None)
     payload = {
         "ok": True,
         "schema_version": GUIDED_START_SCHEMA_VERSION,
@@ -1732,6 +1734,7 @@ def build_start_goal_guided_packet(
             "spends_quota": False,
             "mutation_commands_are_previewed": True,
             "force_bootstrap_allowed": False,
+            "orphaned_goal_state_blocks_continuation": isinstance(orphaned_gate, dict),
         },
     }
     if command_pack.get("thread_id"):
@@ -1888,6 +1891,7 @@ def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
             + "\n".join(choices)
             + "\n"
         )
+    orphan_gate_lines = render_guided_lines(transaction)
     host_gate = transaction.get("host_surface_selection_gate")
     host_gate = host_gate if isinstance(host_gate, dict) else {}
     host_gate_lines = ""
@@ -1917,6 +1921,7 @@ Preview only; follow ordered commands to mutate.
 {chr(10).join(step_lines)}
 {host_gate_lines}
 {goal_gate_lines}
+{orphan_gate_lines}
 {identity_gate_lines}
 
 ## Todo Preservation
@@ -1928,6 +1933,8 @@ Preview only; follow ordered commands to mutate.
 def render_loopx_bootstrap_command_pack_message(payload: dict[str, Any]) -> str:
     connection = payload.get("project_connection")
     connection = connection if isinstance(connection, dict) else {}
+    if connection.get("connection_state") == ORPHANED_GOAL_STATE_CONNECTION:
+        return fenced_standalone_message(payload)
     commands = payload.get("commands")
     commands = commands if isinstance(commands, dict) else {}
     next_step = payload.get("recommended_next_step")
@@ -2102,7 +2109,7 @@ Detected state: `{state}` ({reason})
 
 Rules:
 - This command pack preview is read-only. Do not run bootstrap/connect, create heartbeat automation, or spend quota while only previewing it.
-- Bare `/loopx` is read/status-first: if the project is not fully connected, ask for explicit user confirmation before any command that writes `.loopx/` or `.codex/goals/`.
+- Bare `/loopx` is read/status-first: if the project is not fully connected, ask for explicit user confirmation before any command that writes `.loopx/` (or legacy `.codex/goals/`).
 - `/loopx <goal text>` is explicit goal-start intent: it may create project-local LoopX state, but it must run the profile-appropriate planning checkpoint before writing todos, then activate the correct host loop if missing/stale.
 - Same-priority todos are ranked by planner order, then by `todo add` write order; preserve the order exactly.
 - If the project is connected, reuse the existing state and show the status/gate/todo snapshot.

@@ -1,5 +1,8 @@
+import {verifyShadowRegistrySource, withShadowRegistrySource} from "./shadow_registry_source.ts";
+import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA, currentGraphTodoIds} from "./source_projection.ts";
 import { createHash } from "node:crypto";
-import { readFile, readdir, lstat } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { open, readFile, readdir, lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -9,14 +12,17 @@ import type { AuthorityStore } from "./authority_store.ts";
 import { canonicalAuthorityBytes, canonicalAuthorityObject, canonicalAuthoritySha256, requireAuthorityStoreId } from "./authority_store_codec.ts";
 import { indexCoordinationProjectionTodos, validateCoordinationTodoReadModel } from "./coordination_projection.ts";
 import { FileAuthorityStore } from "./file_authority_store.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { legacyCoordinationTodoLockPath, legacyCoordinationLeaseLockPath, loadLegacyCoordinationWriterFence } from "./legacy_writer_fence.ts";
 import { loadValidatedShadowLineage, localAuthorityShadowHeadDigest, ShadowLineageError } from "./local_authority_shadow.ts";
 import { readOutboxCursor } from "./local_authority_shadow_outbox.ts";
 import {
   bootstrapManagedShadow, rollbackManagedShadow, requireShadowCaptureBinding,
-  withShadowMaintenanceLock, ShadowManagementError, requireShadowPrimaryWriteAllowed,
+  shadowBindingGoalRef, withShadowMaintenanceLock, ShadowManagementError,
+  requireShadowPrimaryWriteAllowed,
 } from "./shadow_management.ts";
 import * as schemas from "./coordination_state_contract.generated.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const COORDINATION_RUNTIME_SHADOW_REQUEST_SCHEMA = schemas.COORDINATION_RUNTIME_SHADOW_COMMIT_REQUEST_SCHEMA;
 export const COORDINATION_RUNTIME_SHADOW_RESULT_SCHEMA = schemas.COORDINATION_RUNTIME_SHADOW_COMMIT_RESULT_SCHEMA;
@@ -29,12 +35,12 @@ export {
   COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
 } from "./coordination_state_contract.generated.ts";
 
-interface RuntimeShadowDependencies {
+export interface RuntimeShadowDependencies {
   createStore?: (directory: string, goalId: string) => AuthorityStore;
   createFileStore?: (directory: string, goalId: string) => FileAuthorityStore;
 }
 
-interface ShadowRequest extends JsonObject {
+export interface ShadowRequest extends JsonObject {
   runtime_root: string;
   goal_id: string;
   projection: JsonObject;
@@ -58,7 +64,7 @@ function failure(schema: string, error: unknown): JsonObject {
     sustained_parity_verdict: "not_evaluated",
     primary_writeback_preserved: true, decision_read_from_shadow: false };
 }
-function decode(value: unknown, schema: string, extra: string[] = []): ShadowRequest {
+export function decodeRuntimeShadowRequest(value: unknown, schema: string, extra: string[] = []): ShadowRequest {
   const input = requireJsonObject(value, "coordination shadow request");
   const allowed = ["schema_version", "runtime_root", "goal_id", "projection", "source_snapshot", ...extra];
   if (Object.keys(input).some((key) => !allowed.includes(key)) || input.schema_version !== schema) {
@@ -76,33 +82,36 @@ function decode(value: unknown, schema: string, extra: string[] = []): ShadowReq
 /** Source preconditions are ephemeral. They never become an alternative state ledger. */
 function sourceSnapshot(request: ShadowRequest): JsonObject {
   const snapshot = request.source_snapshot;
-  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files"], "source_snapshot");
+  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files", "registry_source"], "source_snapshot");
   if (!isAbsolute(text(snapshot.state_path, "state_path")) ||
       !isAbsolute(text(snapshot.registered_runtime_root, "registered_runtime_root")) ||
       !isAbsolute(text(snapshot.registered_state_path, "registered_state_path")) ||
-      !/^sha256:[0-9a-f]{64}$/.test(text(snapshot.state_bytes_sha256, "state_bytes_sha256")) ||
+      !ENVELOPED_SHA256_PATTERN.test(text(snapshot.state_bytes_sha256, "state_bytes_sha256")) ||
       !Array.isArray(snapshot.lease_inventory) || !Array.isArray(snapshot.evidence_files) ||
       snapshot.projection_sha256 !== canonicalAuthoritySha256(request.projection)) {
     throw new ShadowManagementError("source_snapshot_invalid");
   }
   return snapshot;
 }
-export async function withShadowSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>): Promise<T> {
+export async function withShadowSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   const snapshot = request.source_snapshot;
   if (!isAbsolute(text(snapshot.state_path, "state_path"))) throw new ShadowManagementError("source_snapshot_invalid");
   const root = request.runtime_root;
   const goal = request.goal_id;
   return await withFileMutationLock(legacyCoordinationTodoLockPath(root, goal), () =>
     withFileMutationLock(String(snapshot.state_path), () =>
-      withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), () =>
-        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), operation))));
+      withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), async () => {
+        await sourceLeaseDirectory(root, goal);
+        return await withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"),
+          () => registryMode === "current" ? withShadowRegistrySource(snapshot, operation) : operation());
+      })));
 }
-async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>): Promise<T> {
+async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   return await withShadowSourceLocks(request, async () => {
     const fence = await loadLegacyCoordinationWriterFence(request.runtime_root, request.goal_id);
     if (fence.status !== "missing") throw new ShadowManagementError(fence.status === "loaded" ? "legacy_authority_already_promoted" : fence.reason_code);
     return await operation();
-  });
+  }, registryMode);
 }
 function bytesDigest(value: Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -113,28 +122,84 @@ async function optionalBytes(path: string): Promise<Buffer | null> {
     throw error;
   }
 }
+
+/** Local source admission, not a lease state or an authority grant. Check the
+ * subtree before taking its lock so a source link cannot redirect lock writes. */
+async function sourceLeaseDirectory(root: string, goal: string): Promise<Stats | null> {
+  let path = root;
+  let info: Stats | null = null;
+  for (const segment of ["goals", goal, "task-leases"]) {
+    path = join(path, segment);
+    try { info = await lstat(path); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new ShadowManagementError("source_lease_inventory_invalid");
+  }
+  return info;
+}
+async function sourceLeaseBytes(path: string): Promise<Buffer> {
+  const before = await lstat(path);
+  if (!before.isFile() || before.isSymbolicLink()) throw new ShadowManagementError("source_lease_inventory_invalid");
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino) throw new ShadowManagementError("source_changed_retry");
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino ||
+        before.size !== bytes.length || after.size !== bytes.length || current.size !== bytes.length ||
+        before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs ||
+        after.mtimeMs !== current.mtimeMs || after.ctimeMs !== current.ctimeMs) {
+      throw new ShadowManagementError("source_changed_retry");
+    }
+    return bytes;
+  } finally { await handle.close(); }
+}
+async function sameSourceRuntimeRoot(registered: string, requested: string): Promise<boolean> {
+  if (registered === requested) return true;
+  // IO adapters resolve backup paths, while retained registry observations may
+  // name an OS or user-created alias. Admit only the same physical directory;
+  // a changed alias must still take the existing foreign-source rejection.
+  try {
+    const [source, target] = await Promise.all([realpath(registered), realpath(requested)]);
+    return source === target;
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+    throw error;
+  }
+}
 export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promise<void> {
   const snapshot = sourceSnapshot(request);
+  await verifyShadowRegistrySource(snapshot);
   if (resolve(String(snapshot.state_path)) !== resolve(String(snapshot.registered_state_path))) {
     throw new ShadowManagementError("shadow_source_state_path_mismatch");
   }
   const registeredRoot = resolve(String(snapshot.registered_runtime_root));
-  if (registeredRoot !== request.runtime_root) {
+  if (!await sameSourceRuntimeRoot(registeredRoot, request.runtime_root)) {
     await requireShadowPrimaryWriteAllowed(registeredRoot, request.goal_id);
     const fence = await loadLegacyCoordinationWriterFence(registeredRoot, request.goal_id);
     if (fence.status !== "missing") throw new ShadowManagementError(fence.status === "loaded" ? "legacy_authority_already_promoted" : fence.reason_code);
     throw new ShadowManagementError("shadow_source_runtime_root_mismatch");
   }
-  exact(request.projection, ["schema_version", "goal_id", "source_authority", "handoff_mode", "todos", "leases", "todo_read_model", "partitions"], "source projection");
-  if (request.projection.schema_version !== schemas.LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA ||
-      request.projection.goal_id !== request.goal_id || request.projection.source_authority !== "legacy_markdown_and_task_lease" ||
-      typeof request.projection.handoff_mode !== "string" ||
-      !canonicalAuthorityBytes(request.projection.partitions).equals(canonicalAuthorityBytes({ todos: null, leases: null }))) {
+  const rebuilt = projectCoordinationSource({
+    schema_version: SOURCE_PROJECTION_REQUEST_SCHEMA, kind: "snapshot",
+    goal_id: request.goal_id, handoff_mode: request.projection.handoff_mode,
+    todos: request.projection.todos, leases: request.projection.leases,
+    read_model_schema: canonicalAuthorityObject(request.projection.todo_read_model, "source Todo read model").schema_version,
+  }).projection as JsonObject;
+  // Assembly publishes the current manifest. A persisted pre-extension
+  // manifest remains valid under the existing reader compatibility rule;
+  // verify it before retaining its exact bytes, never silently upgrade it.
+  rebuilt.todo_read_model = validateCoordinationTodoReadModel(request.projection, request.goal_id);
+  if (!canonicalAuthorityBytes(rebuilt).equals(canonicalAuthorityBytes(request.projection))) {
     throw new ShadowManagementError("source_projection_invalid");
   }
   const bytes = await optionalBytes(String(snapshot.state_path));
   if (bytes === null || bytesDigest(bytes) !== snapshot.state_bytes_sha256) throw new ShadowManagementError("source_changed_retry");
   const directory = join(request.runtime_root, "goals", request.goal_id, "task-leases");
+  const directoryBefore = await sourceLeaseDirectory(request.runtime_root, request.goal_id);
   let names: string[];
   try { names = await readdir(directory); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -142,19 +207,17 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
   }
   const inventory: JsonObject[] = [];
   const leases: JsonObject[] = [];
-  const currentTodoIds = new Set(
-    (request.projection.todos as JsonObject[]).filter(todo => todo.archive_state === "active").map((todo) =>
-      String(canonicalAuthorityObject(todo, "source Todo").todo_id)),
-  );
+  const currentTodoIds = currentGraphTodoIds(request.projection.todos as JsonObject[]);
   // ASCII filenames must use the same ordinal order as Python's source snapshot.
-  const leaseNames = names.filter((name) => /^[A-Za-z0-9_.-]+\.json$/.test(name)).sort((left, right) => {
+  const leaseNames = names.filter((name) => name.endsWith(".json")).sort((left, right) => {
     if (left < right) return -1;
     if (left > right) return 1;
     return 0;
   });
   for (const name of leaseNames) {
-    const data = await readFile(join(directory, name));
-    const lease = canonicalAuthorityObject(JSON.parse(data.toString("utf8")), "lease");
+    if (!/^[A-Za-z0-9_.-]+\.json$/.test(name)) throw new ShadowManagementError("source_lease_inventory_invalid");
+    const data = await sourceLeaseBytes(join(directory, name));
+    const lease = canonicalAuthorityObject(JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(data)), "lease");
     if (lease.goal_id !== request.goal_id || lease.todo_id !== name.slice(0, -5)) throw new ShadowManagementError("source_lease_identity_mismatch");
     inventory.push({ name, bytes_sha256: bytesDigest(data) });
     // The legacy directory is append-retained audit history. The source
@@ -162,6 +225,10 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     // edges to Todos that still exist in the current projection.
     if (currentTodoIds.has(String(lease.todo_id))) leases.push(lease);
   }
+  const directoryAfter = await sourceLeaseDirectory(request.runtime_root, request.goal_id);
+  const namesAfter = directoryAfter === null ? [] : (await readdir(directory)).filter(name => name.endsWith(".json")).sort();
+  if (directoryBefore?.dev !== directoryAfter?.dev || directoryBefore?.ino !== directoryAfter?.ino ||
+      !canonicalAuthorityBytes(leaseNames).equals(canonicalAuthorityBytes(namesAfter))) throw new ShadowManagementError("source_changed_retry");
   if (!canonicalAuthorityBytes(inventory).equals(canonicalAuthorityBytes(snapshot.lease_inventory)) ||
       !canonicalAuthorityBytes(leases).equals(canonicalAuthorityBytes(request.projection.leases))) {
     throw new ShadowManagementError("source_changed_retry");
@@ -174,14 +241,31 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     const data = await optionalBytes(path);
     if ((data === null ? null : bytesDigest(data)) !== evidence.bytes_sha256) throw new ShadowManagementError("source_changed_retry");
   }
-  validateCoordinationTodoReadModel(request.projection, request.goal_id);
 }
 
 export async function bootstrapCoordinationRuntimeShadow(value: unknown, _dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA, ["operation_id", "source_version"]);
+    const input = requireJsonObject(value, "coordination shadow bootstrap request");
+    const exactIdentity = input.schema_version === schemas.COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA;
+    const request = decodeRuntimeShadowRequest(
+      value,
+      exactIdentity
+        ? schemas.COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA
+        : schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
+      exactIdentity ? ["operation_id", "source_version", "goal_ref"] : ["operation_id", "source_version"],
+    );
     text(request.operation_id, "operation_id"); text(request.source_version, "source_version");
+    if (exactIdentity) {
+      const goalRef = parseExactGoalRef(request.goal_ref);
+      if (goalRef.kind !== "parsed" || goalRef.value.goalId.value !== request.goal_id) {
+        throw new ShadowManagementError("goal_ref_invalid");
+      }
+      request.goal_ref = {
+        goal_id: goalRef.value.goalId.value,
+        goal_instance_id: goalRef.value.goalInstanceId.value,
+      };
+    }
     const result = await bootstrapManagedShadow(request, {
       withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation),
       verifySourceSnapshot: () => verifyShadowSourceSnapshot(request),
@@ -192,13 +276,13 @@ export async function bootstrapCoordinationRuntimeShadow(value: unknown, _depend
 export async function rollbackCoordinationRuntimeShadow(value: unknown, _dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_ROLLBACK_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_ROLLBACK_REQUEST_SCHEMA,
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_ROLLBACK_REQUEST_SCHEMA,
       ["operation_id", "expected_provider_revision", "expected_bootstrap_operation_id"]);
     text(request.operation_id, "operation_id");
     const revision = request.expected_provider_revision;
     const bootstrap = request.expected_bootstrap_operation_id;
     if ((typeof revision === "string") === (typeof bootstrap === "string")) throw new Error("rollback requires exactly one revision or bootstrap operation selector");
-    const result = await rollbackManagedShadow(request, { withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation) });
+    const result = await rollbackManagedShadow(request, { withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation, "retained") });
     return { schema_version: schema, ...result, primary_writeback_preserved: true, decision_read_from_shadow: false };
   } catch (error) { return failure(schema, error); }
 }
@@ -218,7 +302,11 @@ async function pendingOutbox(root: string, goal: string,
   try { manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes)); }
   catch { throw new ShadowLineageError("outbox_manifest_unproved"); }
   if (!canonicalAuthorityBytes(manifest).equals(canonicalAuthorityBytes({
-    schema_version: schemas.SHADOW_OUTBOX_MANIFEST_SCHEMA, goal_id: goal, ...binding,
+    schema_version: shadowBindingGoalRef(binding) === null
+      ? schemas.SHADOW_OUTBOX_MANIFEST_SCHEMA
+      : schemas.SHADOW_EXACT_OUTBOX_MANIFEST_SCHEMA,
+    goal_id: goal,
+    ...binding,
   }))) throw new ShadowLineageError("outbox_manifest_unproved");
   for (const partition of ["todos", "leases"]) {
     const directory = join(root, "authority-shadow", "outbox", goal, partition);
@@ -246,17 +334,39 @@ async function pendingOutbox(root: string, goal: string,
   return false;
 }
 
-async function qualifySnapshot(request: ShadowRequest, dependencies: RuntimeShadowDependencies, minimum: number, required: string[]): Promise<JsonObject> {
-  return await withShadowMaintenanceLock(request.runtime_root, request.goal_id, () => withShadowSourceLocks(request, async () => {
-    await verifyShadowSourceSnapshot(request);
+export async function qualifyCoordinationRuntimeShadowUnderLocks(
+  request: ShadowRequest,
+  dependencies: RuntimeShadowDependencies,
+  minimum: number,
+  required: string[],
+): Promise<JsonObject> {
+  await verifyShadowSourceSnapshot(request);
+  const result = await qualifyCoordinationShadowLineageUnderLocks(request, dependencies, minimum, required);
+  await verifyShadowSourceSnapshot(request);
+  return result;
+}
+
+/** Revalidate durable capture lineage under the maintenance lock. Callers must
+ * either verify a fresh source snapshot or first verify the exact durable fence.
+ * A fenced recovery cannot require a legacy document that is no longer authority. */
+export async function qualifyCoordinationShadowLineageUnderLocks(
+  request: Pick<ShadowRequest, "runtime_root" | "goal_id" | "projection">,
+  dependencies: RuntimeShadowDependencies,
+  minimum: number,
+  required: string[],
+): Promise<JsonObject> {
     const store = dependencies.createStore?.(join(request.runtime_root, "authority-shadow", "file-v0"), request.goal_id) ??
       new FileAuthorityStore(join(request.runtime_root, "authority-shadow", "file-v0"), request.goal_id, { existingOnly: true });
     const initial = await store.loadAuthority();
+    // A failed read is not an absent baseline. Preserve the provider-owned
+    // refusal before lineage validation can mislabel it bootstrap_required.
+    if (initial.status === "failed" || initial.status === "unavailable") {
+      throw new ShadowLineageError(initial.reason_code);
+    }
     if (initial.status === "loaded" && initial.head.capture_profile !== "file_outbox_v1") throw new ShadowLineageError("legacy_lineage_ineligible");
     const binding = await requireShadowCaptureBinding(request.runtime_root, request.goal_id);
     const lineage = await loadValidatedShadowLineage(store, request.runtime_root, request.goal_id, binding);
     const pending = await pendingOutbox(request.runtime_root, request.goal_id, binding, lineage.transactions);
-    await verifyShadowSourceSnapshot(request);
     const matched = localAuthorityShadowHeadDigest(request.projection) === localAuthorityShadowHeadDigest(lineage.head.head);
     const missing = required.filter((kind) => !lineage.write_classes.includes(kind));
     const operations = lineage.transactions.slice(1).filter((transaction) => transaction.receipts[0]?.no_op === false).length;
@@ -278,7 +388,11 @@ async function qualifySnapshot(request: ShadowRequest, dependencies: RuntimeShad
       primary_writeback_preserved: true, decision_read_from_shadow: false,
       head: lineage.head.head,
     };
-  }));
+}
+
+async function qualifySnapshot(request: ShadowRequest, dependencies: RuntimeShadowDependencies, minimum: number, required: string[]): Promise<JsonObject> {
+  return await withShadowMaintenanceLock(request.runtime_root, request.goal_id, () => withShadowSourceLocks(request, () =>
+    qualifyCoordinationRuntimeShadowUnderLocks(request, dependencies, minimum, required)));
 }
 function policy(request: ShadowRequest): { minimum: number; required: string[] } {
   const minimum = request.minimum_operations ?? 3;
@@ -291,7 +405,7 @@ function policy(request: ShadowRequest): { minimum: number; required: string[] }
 export async function qualifyCoordinationRuntimeShadow(value: unknown, dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA, ["minimum_operations", "required_event_kinds"]);
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA, ["minimum_operations", "required_event_kinds"]);
     const selected = policy(request);
     const result = await qualifySnapshot(request, dependencies, selected.minimum, selected.required);
     delete result.head;
@@ -301,7 +415,7 @@ export async function qualifyCoordinationRuntimeShadow(value: unknown, dependenc
 export async function inspectCoordinationRuntimeShadow(value: unknown, dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA);
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA);
     const result = await qualifySnapshot(request, dependencies, 0, []);
     delete result.head;
     return { schema_version: schema, ...result, status: result.qualified ? "matched" : result.status,
@@ -315,7 +429,7 @@ export async function inspectCoordinationRuntimeShadow(value: unknown, dependenc
 export async function readCoordinationRuntimeShadowTodoCandidate(value: unknown, dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA, ["todo_id"]);
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA, ["todo_id"]);
     const todoId = text(request.todo_id, "todo_id");
     const result = await qualifySnapshot(request, dependencies, 3, []);
     const head = result.head as JsonObject;

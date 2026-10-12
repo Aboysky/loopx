@@ -34,6 +34,9 @@ def test_install_reconciles_both_roots_and_retires_codex_aliases(roots):
         skill(root, "loopx")
         skill(root, "loopx-pr-review")
         skill(root, "loop-global-summary")
+    # Cross-host import can rewrite the surface label and omit metadata.
+    for path in alternate.glob("*/SKILL.md"):
+        path.write_text(MARKER.replace("codex-skills", "Codex-skills"))
     rich = "# LoopX PR Review\n\nRun `loopx pr-review` first\n"
     skill(target, "loopx-pr-review", rich)
     readback.write_skill_install_readback(
@@ -142,9 +145,15 @@ def test_custom_home_does_not_touch_another_codex_profile(roots):
     assert not (alternate / "loopx").exists()
 
 
-def test_user_alias_is_preserved_and_native_host_aliases_still_work(tmp_path):
+def test_user_alias_is_preserved_and_deprecated_host_aliases_are_retired(tmp_path):
+    """A user-owned alias skill is never touched, and the deprecated managed
+    alias is not republished to another host root: a cross-host import would
+    otherwise copy it into the shared ~/.agents/skills root next to the
+    canonical facade and make one outcome resolve twice."""
+
     codex, claude = tmp_path / "codex", tmp_path / "claude"
     custom = skill(codex / "skills", "loop-global-summary", "User skill")
+    deprecated = skill(claude / "skills", "loop-global-summary")
     install_slash_commands(
         execute=True,
         surfaces=["codex", "claude-code"],
@@ -152,7 +161,8 @@ def test_user_alias_is_preserved_and_native_host_aliases_still_work(tmp_path):
         claude_home=str(claude),
     )
     assert custom.read_text() == "User skill"
-    assert (claude / "skills/loop-global-summary/SKILL.md").exists()
+    assert not deprecated.exists()
+    assert (claude / "skills/loopx-global-summary/SKILL.md").exists()
 
 
 def test_retirement_updates_receipt_without_blessing_modified_survivor(tmp_path):

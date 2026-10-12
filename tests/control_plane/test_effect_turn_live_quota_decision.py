@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.quota import live_decision, should_run_packet
+from loopx.control_plane.quota.effect_program import ReceiptBoundReplayPhase
 from loopx.control_plane.effect_program import (
     interpret_quota_should_run_packet,
 )
@@ -14,6 +21,9 @@ from loopx.control_plane.capability_hooks import (
 from loopx.control_plane.quota.live_decision import (
     bind_action_selection_cli_routes,
     build_live_quota_should_run_decision,
+)
+from loopx.control_plane.quota.error_codes import (
+    HeartbeatReceiptIdentityConflictError,
 )
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.rollout_event_log import build_rollout_event
@@ -86,6 +96,32 @@ def _ordinary_status_payload() -> dict[str, object]:
         ],
         recommended_action=todo_text,
         next_action=todo_text,
+    )
+
+
+def _ordinary_agent_status_payload(agent_id: str) -> dict[str, object]:
+    todo_text = "[P1] Keep advancing the selected task."
+    return quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[
+            {
+                "todo_id": "todo_ordinary_work",
+                "index": 1,
+                "text": todo_text,
+                "role": "agent",
+                "status": "open",
+                "priority": "P1",
+                "task_class": "advancement_task",
+            }
+        ],
+        recommended_action=todo_text,
+        next_action=todo_text,
+        claim_scope_agent_id=agent_id,
+        coordination={
+            "registered_agents": [agent_id],
+            "agent_model": "peer_v1",
+        },
     )
 
 
@@ -169,7 +205,7 @@ def test_live_quota_decision_maps_to_effect_turn(tmp_path: Path) -> None:
     turn = interpret_quota_should_run_packet(
         packet,
         goal_id=GOAL_ID,
-        agent_id="codex-fixture",
+        agent_id=None,
         capabilities=["shell"],
     )
 
@@ -182,8 +218,247 @@ def test_live_quota_decision_maps_to_effect_turn(tmp_path: Path) -> None:
     assert turn.next_effect.cli_actions[0].startswith("loopx --runtime-root ")
 
 
-def test_managed_turn_projects_prior_unsettled_heartbeat_recovery(
+def _configure_automation_cadence(runtime_root: Path) -> dict[str, object]:
+    configured = effect_runtime_result(
+        "quota.automation_cadence.manage",
+        {
+            "runtime_root": str(runtime_root),
+            "operation": "configure",
+            "goal_id": GOAL_ID,
+            "agent_id": None,
+            "automation_id": None,
+            "expected_revision": 0,
+            "min_interval_minutes": 60,
+            "owner_reference": "fixture-owner",
+            "execute": True,
+        },
+        retry_safe=False,
+    )
+    assert configured["configuration_revision"] == 1
+    return configured
+
+
+def _configure_waiting_automation_cadence(
+    runtime_root: Path,
+    *,
+    agent_id: str,
+) -> int:
+    _configure_automation_cadence(runtime_root)
+    now_ms = int(time.time() * 1_000)
+    admitted = effect_runtime_result(
+        "quota.automation_cadence.admit",
+        {
+            "runtime_root": str(runtime_root),
+            "goal_id": GOAL_ID,
+            "agent_id": agent_id,
+            "automation_id": None,
+            "request_id": "fixture-first-start",
+            "now_ms": now_ms,
+            "trigger_at_ms": now_ms,
+        },
+        retry_safe=False,
+    )
+    assert admitted["admitted"] is True
+    return now_ms + 60 * 60 * 1_000
+
+
+def test_owner_cadence_wait_is_app_only_and_has_no_scheduler_side_effect(
     tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    agent_id = "cadence-agent"
+    next_eligible_at_ms = _configure_waiting_automation_cadence(
+        runtime_root,
+        agent_id=agent_id,
+    )
+    status = _ordinary_agent_status_payload(agent_id)
+    app_context = {
+        "host_surface": "codex_app",
+        "scheduler_owner": "host_automation",
+        "execution_mode": "hosted_automation",
+    }
+
+    packet = build_live_quota_should_run_decision(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule="FREQ=MINUTELY;INTERVAL=3",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context=app_context,
+    )
+
+    assert packet["automation_cadence_readback"]["eligibility"] == {
+        "state": "waiting",
+        "reason": "minimum_interval_wait",
+        "eligible_now": False,
+        "next_eligible_at_ms": next_eligible_at_ms,
+    }
+    assert packet["decision"] == "wait"
+    assert packet["effective_action"] == "blocked_wait"
+    assert packet["should_run"] is False
+    assert packet["automation_liveness"]["keep_active"] is True
+    assert packet["interaction_contract"]["mode"] == "blocked_wait"
+    assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    scheduler = packet["scheduler_hint"]
+    assert scheduler["action"] == "backoff_until_state_change"
+    assert scheduler["app_automation"]["apply"] == "none"
+    assert scheduler["app_automation"]["host_action"] == "none"
+    assert scheduler["app_automation"]["host_action_required"] is False
+    assert scheduler["app_automation"]["ack_required"] is False
+    assert "ack_hint" not in scheduler["app_automation"]
+    assert "failure_hint" not in scheduler["app_automation"]
+    assert "recommended_rrule" not in scheduler["app_automation"]
+    assert "stateful_backoff" not in scheduler["app_automation"]
+    assert "execution_phase" not in scheduler
+    turn = interpret_quota_should_run_packet(
+        packet,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        capabilities=["shell"],
+    )
+    assert "automation_update" not in repr(turn.next_effect)
+    assert "scheduler ack" not in repr(turn.next_effect).lower()
+
+    generic = build_live_quota_should_run_decision(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context={
+            "host_surface": "generic_cli",
+            "scheduler_owner": "agent_cli_loop",
+            "execution_mode": "interactive",
+        },
+    )
+    assert generic["automation_cadence_readback"]["eligibility"]["state"] == "waiting"
+    assert generic["decision"] == "run"
+    assert generic["should_run"] is True
+
+    paused = build_live_quota_should_run_decision(
+        quota_status_payload(
+            goal_id=GOAL_ID,
+            status="active",
+            agent_todo_items=[],
+            recommended_action="wait for quota resume",
+            quota_state="paused",
+            quota_extra={"compute": 0},
+            claim_scope_agent_id=agent_id,
+            coordination={
+                "registered_agents": [agent_id],
+                "agent_model": "peer_v1",
+            },
+        ),
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule="FREQ=MINUTELY;INTERVAL=3",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context=app_context,
+    )
+    assert paused["automation_cadence_readback"]["eligibility"]["state"] == "waiting"
+    assert paused["state"] == "paused"
+    assert paused["decision"] == "skip"
+    assert paused["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+
+
+def test_owner_interval_eligibility_does_not_override_paused_quota(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    agent_id = "cadence-agent"
+    configured = _configure_automation_cadence(runtime_root)
+    assert configured["configuration_revision"] == 1
+
+    packet = build_live_quota_should_run_decision(
+        quota_status_payload(
+            goal_id=GOAL_ID,
+            status="active",
+            agent_todo_items=[],
+            recommended_action="wait for quota resume",
+            quota_state="paused",
+            quota_extra={"compute": 0},
+            claim_scope_agent_id=agent_id,
+            coordination={
+                "registered_agents": [agent_id],
+                "agent_model": "peer_v1",
+            },
+        ),
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule="FREQ=MINUTELY;INTERVAL=3",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=runtime_root,
+        scheduler_execution_context={
+            "host_surface": "codex_app",
+            "scheduler_owner": "host_automation",
+            "execution_mode": "hosted_automation",
+        },
+    )
+
+    assert packet["automation_cadence_readback"]["eligibility"]["state"] == "eligible"
+    assert packet["state"] == "paused"
+    assert packet["decision"] == "skip"
+    assert packet["should_run"] is False
+    assert packet["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+
+
+def test_cadence_read_failure_is_unknown_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_effect_runtime_result = should_run_packet.effect_runtime_result
+
+    def fail_cadence_read(method: str, params: object, **kwargs: object) -> object:
+        if method == "quota.automation_cadence.manage":
+            raise RuntimeError("private owner failure")
+        return real_effect_runtime_result(method, params, **kwargs)
+
+    monkeypatch.setattr(
+        should_run_packet,
+        "effect_runtime_result",
+        fail_cadence_read,
+    )
+    packet = build_live_quota_should_run_decision(
+        _ordinary_agent_status_payload("cadence-agent"),
+        goal_id=GOAL_ID,
+        agent_id="cadence-agent",
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        scheduler_execution_context={
+            "host_surface": "codex_app",
+            "scheduler_owner": "host_automation",
+            "execution_mode": "hosted_automation",
+        },
+    )
+
+    assert packet["automation_cadence_readback"]["eligibility"] == {
+        "state": "unavailable",
+        "reason": "owner_read_failed",
+        "eligible_now": None,
+        "next_eligible_at_ms": None,
+    }
+    assert packet["decision"] == "run"
+    assert packet["should_run"] is True
+    assert "private owner failure" not in repr(packet)
+
+
+@pytest.mark.parametrize("reads", [False, True])
+def test_managed_turn_projects_prior_unsettled_heartbeat_recovery(
+    tmp_path: Path, reads: bool,
 ) -> None:
     runtime_root = tmp_path / "runtime"
     agent_id = "codex-fixture"
@@ -253,6 +528,7 @@ def test_managed_turn_projects_prior_unsettled_heartbeat_recovery(
         codex_app_current_rrule=None,
         registry_path=tmp_path / "registry.json",
         runtime_root=runtime_root,
+        turn_start_hook_dispatch=_turn_start_dispatch(required=reads),
         route_source="loopx_turn_plan",
         turn_instance_id="managed-current-turn",
         scheduler_execution_context={
@@ -271,6 +547,203 @@ def test_managed_turn_projects_prior_unsettled_heartbeat_recovery(
     assert contract["mode"] == "unsettled_host_turn_recovery"
     assert contract["agent_channel"]["delivery_allowed"] is False
     assert contract["cli_channel"]["spend_after_validation"] is False
+
+
+def test_settled_turn_defers_prior_turn_recovery_to_a_fresh_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps({"goals": []}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        live_decision,
+        "read_heartbeat_settlement",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            monitor_phase=None,
+            replay_phase=ReceiptBoundReplayPhase.SETTLED,
+        ),
+    )
+
+    def fail_if_recovery_runs(*_args: object, **_kwargs: object) -> bool:
+        pytest.fail("a settled host Turn must not inspect prior-Turn recovery")
+
+    monkeypatch.setattr(
+        live_decision,
+        "apply_unsettled_host_turn_recovery_if_required",
+        fail_if_recovery_runs,
+    )
+    todo_text = "[P1] Keep advancing the selected task."
+    status = quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[
+            {
+                "todo_id": "todo_ordinary_work",
+                "index": 1,
+                "text": todo_text,
+                "role": "agent",
+                "status": "open",
+                "priority": "P1",
+                "task_class": "advancement_task",
+            }
+        ],
+        recommended_action=todo_text,
+        next_action=todo_text,
+        coordination={
+            "registered_agents": ["codex-fixture"],
+            "agent_model": "peer_v1",
+        },
+        claim_scope_agent_id="codex-fixture",
+    )
+
+    packet = build_live_quota_should_run_decision(
+        status,
+        goal_id=GOAL_ID,
+        agent_id="codex-fixture",
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        route_source="loopx_turn_plan",
+        receipt_bound_todo_id="todo_ordinary_work",
+        turn_instance_id="managed-settled-turn",
+        scheduler_execution_context={
+            "host_surface": "generic_cli",
+            "scheduler_owner": "agent_cli_loop",
+            "execution_mode": "interactive",
+        },
+    )
+
+    assert packet["decision"] == "skip"
+    assert packet["effective_action"] == "heartbeat_settled_skip"
+    assert packet["should_run"] is False
+    assert packet.get("selected_todo") is None
+    assert packet.get("unsettled_host_turn_recovery") is None
+
+
+def test_managed_turn_accepts_exact_material_monitor_poll_closeout(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = tmp_path / "registry.json"
+    state_path = tmp_path / "ACTIVE_GOAL_STATE.md"
+    agent_id = "codex-fixture"
+    monitor_id = "todo_managed_monitor"
+    prior_turn_id = "managed-prior-monitor-turn"
+    state_path.write_text(
+        "# Goal\n\n## Agent Todo\n\n"
+        "- [ ] [P0-monitor] Observe the managed target.\n"
+        f"  <!-- loopx:todo todo_id={monitor_id} status=open "
+        "task_class=continuous_monitor target_key=managed-target "
+        "cadence=1h next_due_at=2099-01-01T00%3A00%3A00Z -->\n"
+        "- [ ] [P1] Continue independent work.\n"
+        "  <!-- loopx:todo todo_id=todo_visible status=open "
+        "task_class=advancement_task -->\n",
+        encoding="utf-8",
+    )
+    registry_path.write_text(
+        json.dumps(
+            {
+                "common_runtime_root": str(runtime_root),
+                "goals": [
+                    {
+                        "id": GOAL_ID,
+                        "repo": str(tmp_path),
+                        "state_file": str(state_path),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt = build_rollout_event(
+        goal_id=GOAL_ID,
+        event_kind="quota_should_run",
+        agent_id=agent_id,
+        todo_id=monitor_id,
+        run_id=prior_turn_id,
+        status="normal_run",
+        summary="managed monitor heartbeat requires closeout",
+        details={
+            "todo_id": monitor_id,
+            "settlement_effect_id": (
+                f"{GOAL_ID}:{agent_id}:{monitor_id}:{prior_turn_id}"
+            ),
+            "closeout_required": True,
+        },
+    )
+    goal_runtime = runtime_root / "goals" / GOAL_ID
+    goal_runtime.mkdir(parents=True)
+    (goal_runtime / "rollout-event-log.jsonl").write_text(
+        json.dumps(receipt) + "\n", encoding="utf-8"
+    )
+    runs_dir = goal_runtime / "runs"
+    runs_dir.mkdir()
+    (runs_dir / "index.jsonl").write_text(
+        json.dumps(
+            {
+                "classification": "quota_monitor_poll",
+                "goal_id": GOAL_ID,
+                "agent_id": agent_id,
+                "todo_id": monitor_id,
+                "turn_instance_id": prior_turn_id,
+                "material_change": True,
+                "quota_monitor_poll_commit": {
+                    "schema_version": "quota_monitor_poll_commit_receipt_v0",
+                    "effect_id": (
+                        f"quota-monitor-poll:{GOAL_ID}:{agent_id}:"
+                        f"{prior_turn_id}:todo:{monitor_id}"
+                    ),
+                    "request_digest": "sha256:fixture",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status = quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[
+            {
+                "todo_id": "todo_visible",
+                "index": 2,
+                "text": "[P1] Continue independent work.",
+                "role": "agent",
+                "status": "open",
+                "priority": "P1",
+                "task_class": "advancement_task",
+            }
+        ],
+        recommended_action="[P1] Continue independent work.",
+        next_action="[P1] Continue independent work.",
+        coordination={"registered_agents": [agent_id], "agent_model": "peer_v1"},
+        claim_scope_agent_id=agent_id,
+    )
+    packet = build_live_quota_should_run_decision(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        route_source="loopx_turn_plan",
+        turn_instance_id="managed-current-turn",
+        scheduler_execution_context={
+            "host_surface": "generic_cli",
+            "scheduler_owner": "agent_cli_loop",
+            "execution_mode": "interactive",
+        },
+    )
+
+    assert packet["effective_action"] != "unsettled_host_turn_recovery"
+    assert packet["selected_todo"]["todo_id"] == "todo_visible"
 
 
 def test_recovery_reads_lifecycle_when_status_summary_omits_bound_todo(
@@ -422,10 +895,7 @@ def test_turn_start_read_is_required_before_ordinary_work(tmp_path: Path) -> Non
     )
 
     required_reads = packet["interaction_contract"]["agent_channel"]["required_reads"]
-    assert (
-        required_reads
-        == packet["interaction_contract"]["cli_channel"]["required_reads"]
-    )
+    assert "required_reads" not in packet["interaction_contract"]["cli_channel"]
     assert required_reads == [
         {
             "kind": "operator_inbox",
@@ -436,6 +906,8 @@ def test_turn_start_read_is_required_before_ordinary_work(tmp_path: Path) -> Non
             "reason": "turn-start hook synchronized new operator inbox evidence",
             "source": "turn_start_capability_hook",
             "ordering": "before_work",
+            "hook_id": "operator_inbox.turn_start_sync_0",
+            "capability_id": "operator-inbox",
         }
     ]
     assert packet["interaction_contract"]["user_channel"]["notify"] == "NOTIFY"
@@ -518,7 +990,7 @@ def test_unsettled_inbox_material_preempts_on_following_turn(
 
     assert packet["effective_action"] == "operator_inbox_material_review_due"
     assert packet["work_lane_contract"]["priority_preemption"] is True
-    assert "required_reads" not in packet["interaction_contract"]["agent_channel"]
+    assert packet["interaction_contract"]["agent_channel"]["required_reads"] == []
 
 
 def test_fresh_direct_reply_still_preempts_selected_work(
@@ -673,7 +1145,7 @@ def test_turn_start_read_is_not_projected_for_empty_or_failed_dispatch(
             turn_start_hook_dispatch=dispatch,
         )
 
-        assert "required_reads" not in packet["interaction_contract"]["agent_channel"]
+        assert packet["interaction_contract"]["agent_channel"]["required_reads"] == []
         assert "required_reads" not in packet["interaction_contract"]["cli_channel"]
 
 
@@ -694,5 +1166,370 @@ def test_duplicate_required_inbox_routes_project_one_public_safe_read(
         turn_start_hook_dispatch=dispatch,
     )
 
-    assert len(packet["required_reads"]) == 1
-    assert packet["required_reads"][0]["command"] == command
+    reads = packet["interaction_contract"]["agent_channel"]["required_reads"]
+    assert len(reads) == 1
+    assert reads[0]["command"] == command
+    assert "required_reads" not in packet
+
+
+def test_prior_closeout_identity_conflict_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A conflicting prior receipt cannot be resolved into a recovery verdict."""
+
+    runtime_root = tmp_path / "runtime"
+    registry_path = tmp_path / "registry.json"
+    state_path = tmp_path / "ACTIVE_GOAL_STATE.md"
+    agent_id = "codex-fixture"
+    prior_turn_id = "managed-prior-turn"
+    state_path.write_text(
+        "# Goal\n\n## Agent Todo\n\n"
+        "- [ ] [P1] Keep advancing the selected task.\n"
+        "  <!-- loopx:todo todo_id=todo_ordinary_work status=open "
+        "task_class=advancement_task -->\n",
+        encoding="utf-8",
+    )
+    registry_path.write_text(
+        json.dumps(
+            {
+                "common_runtime_root": str(runtime_root),
+                "goals": [
+                    {
+                        "id": GOAL_ID,
+                        "repo": str(tmp_path),
+                        "state_file": str(state_path),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    goal_runtime = runtime_root / "goals" / GOAL_ID
+    goal_runtime.mkdir(parents=True)
+    conflicting = [
+        {"todo_id": "todo_ordinary_work"},
+        {"todo_id": "todo_other_work"},
+    ]
+    (goal_runtime / "rollout-event-log.jsonl").write_text(
+        "".join(
+            json.dumps(
+                build_rollout_event(
+                    goal_id=GOAL_ID,
+                    event_kind="quota_should_run",
+                    agent_id=agent_id,
+                    todo_id=str(details["todo_id"]),
+                    run_id=prior_turn_id,
+                    status="normal_run",
+                    summary="managed heartbeat guard requires closeout",
+                    details={**details, "closeout_required": True},
+                )
+            )
+            + "\n"
+            for details in conflicting
+        ),
+        encoding="utf-8",
+    )
+
+    todo_text = "[P1] Keep advancing the selected task."
+    status = quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[
+            {
+                "todo_id": "todo_ordinary_work",
+                "index": 1,
+                "text": todo_text,
+                "role": "agent",
+                "status": "open",
+                "priority": "P1",
+                "task_class": "advancement_task",
+            }
+        ],
+        recommended_action=todo_text,
+        next_action=todo_text,
+        coordination={
+            "registered_agents": [agent_id],
+            "agent_model": "peer_v1",
+        },
+        claim_scope_agent_id=agent_id,
+    )
+    with pytest.raises(HeartbeatReceiptIdentityConflictError):
+        build_live_quota_should_run_decision(
+            status,
+            goal_id=GOAL_ID,
+            agent_id=agent_id,
+            available_capabilities=["shell"],
+            include_scheduler_detail=False,
+            codex_app_current_rrule=None,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            route_source="loopx_turn_plan",
+            turn_instance_id="managed-current-turn",
+            scheduler_execution_context={
+                "host_surface": "generic_cli",
+                "scheduler_owner": "agent_cli_loop",
+                "execution_mode": "interactive",
+            },
+        )
+
+
+@pytest.mark.parametrize("quota_state", ["eligible", "paused", "operator_gate", "exhausted"])
+@pytest.mark.parametrize("required_reads", [False, True])
+def test_current_quota_outputs_retire_packet_without_losing_signed_actions(
+    tmp_path: Path, quota_state: str, required_reads: bool,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import (
+        build_turn_envelope, quota_action_signature_document,
+        turn_envelope_action_signature_document,
+    )
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
+
+    status = quota_status_payload(
+        goal_id=GOAL_ID, status="active", quota_state=quota_state,
+        agent_todo_items=[{
+            "todo_id": "todo_packet_retirement", "index": 1,
+            "text": "[P1] Verify the bounded change", "role": "agent",
+            "status": "open", "priority": "P1", "task_class": "advancement_task",
+        }],
+        recommended_action="Verify the bounded change",
+    )
+    payload = build_live_quota_should_run_decision(
+        status, goal_id=GOAL_ID, agent_id=None, available_capabilities=["shell"],
+        include_scheduler_detail=False, codex_app_current_rrule=None,
+        registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+        turn_start_hook_dispatch=_turn_start_dispatch(required=required_reads),
+    )
+    assert "protocol_action_packet" not in payload
+    envelope = build_turn_envelope(payload)
+    assert "protocol_action_packet" not in envelope["contract_capsule"]
+    assert quota_action_signature_document(payload) == turn_envelope_action_signature_document(envelope)
+    assert extract_turn_authority({"turn_envelope": envelope})["primary_action"]
+    if quota_state == "paused":
+        assert payload["should_run"] is False
+        assert envelope["writeback"]["spend_allowed_now"] is False
+    if required_reads:
+        assert payload["interaction_contract"]["agent_channel"]["required_reads"]
+
+
+def test_packet_retirement_preserves_reads_and_independent_capability_command(tmp_path: Path) -> None:
+    from loopx.control_plane.capability_hooks import (
+        InteractionProjectionHookRegistration,
+        INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,
+    )
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
+
+    command = f"loopx periodic-report consume-pending --goal-id {GOAL_ID} --agent-id fixture-agent --execute"
+    hook = InteractionProjectionHookRegistration(
+        hook_id="periodic_report.pending_intent", capability_id="periodic-report",
+        projection_slots=("pending_capability_intent",),
+        requested_read_scope=("post_writeback_intent_journal",),
+        producer=lambda: {
+            "schema_version": INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,
+            "hook_id": "periodic_report.pending_intent", "capability_id": "periodic-report",
+            "phase": "interaction_projection", "status": "candidate",
+            "projection_slot": "pending_capability_intent",
+            "payload": {
+                "schema_version": "pending_capability_intent_projection_v0",
+                "capability_id": "periodic-report", "intent_kind": "periodic_report.trigger_evaluation",
+                "idempotency_key": "periodic-report:fixture", "intent_digest": "sha256:" + "a" * 64,
+                "goal_id": GOAL_ID, "agent_id": "fixture-agent", "state": "pending",
+                "action_kind": "consume_periodic_report_intent", "action_summary": "Generate the exact report.",
+                "command": command, "generation_authorized": True,
+                "external_delivery_authorized": True, "agent_read_required": True,
+            },
+        },
+    )
+    payload = build_live_quota_should_run_decision(
+        _ordinary_status_payload(), goal_id=GOAL_ID, agent_id=None,
+        available_capabilities=["shell"], include_scheduler_detail=False,
+        codex_app_current_rrule=None, registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime", interaction_projection_hooks=[hook],
+        turn_start_hook_dispatch=_turn_start_dispatch(),
+    )
+    assert "protocol_action_packet" not in payload
+    assert payload["effective_action"] == "governed_capability_intent"
+    assert payload["normal_delivery_allowed"] is False
+    contract = payload["interaction_contract"]
+    assert contract["cli_channel"]["next_cli_actions"] == [command]
+    assert contract["agent_channel"]["required_reads"]
+    envelope = build_turn_envelope(payload)
+    assert "protocol_action_packet" not in envelope["contract_capsule"]
+    authority = extract_turn_authority({"turn_envelope": envelope})
+    assert authority["primary_action"] == "Generate the exact report."
+    assert envelope["writeback"]["next_cli_actions"] == [command]
+    assert authority["required_reads"]
+
+
+def test_retained_selection_reentry_stays_packet_free_and_signed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import (
+        build_turn_envelope,
+        quota_action_signature_document,
+        turn_envelope_action_signature_document,
+    )
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
+
+    status_payload = _ordinary_status_payload()
+    status_item = status_payload["attention_queue"]["items"][0]
+
+    from loopx.control_plane.todos import list_readback
+
+    monkeypatch.setattr(
+        list_readback,
+        "list_goal_todos",
+        lambda **_kwargs: {
+            "ok": True,
+            "todos": status_item["agent_todos"]["first_open_items"],
+            "agent_todos": status_item["agent_todos"],
+            "user_todos": status_item["user_todos"],
+        },
+    )
+
+    payload = build_live_quota_should_run_decision(
+        status_payload,
+        goal_id=GOAL_ID,
+        agent_id=None,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        retained_action_selection_todo_id="todo_retained_explicit",
+        turn_instance_id="turn-retained-packet-retirement",
+    )
+
+    assert payload["retained_action_selection"]["disposition"] == (
+        "require_explicit_selection"
+    )
+    assert payload["state"] == "action_selection_required"
+    assert payload["should_run"] is False
+    assert "selected_todo" not in payload
+    assert "protocol_action_packet" not in payload
+    interaction = payload["interaction_contract"]
+    assert interaction["mode"] == "skip"
+    assert interaction["agent_channel"]["must_attempt"] is False
+    assert interaction["agent_channel"]["delivery_allowed"] is False
+
+    envelope = build_turn_envelope(payload)
+    assert "protocol_action_packet" not in envelope["contract_capsule"]
+    assert quota_action_signature_document(payload) == (
+        turn_envelope_action_signature_document(envelope)
+    )
+    authority = extract_turn_authority({"turn_envelope": envelope})
+    assert authority["primary_action"] == interaction["agent_channel"][
+        "primary_action"
+    ]
+    assert authority["write_scope"] == []
+    assert envelope["writeback"]["spend_allowed_now"] is False
+    assert envelope["writeback"]["spend_after_validation"] is False
+
+
+@pytest.mark.parametrize(
+    ("advancement_count", "requires_replan"),
+    [(1, False), (14, False), (15, True)],
+)
+def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    advancement_count: int,
+    requires_replan: bool,
+) -> None:
+    """Refresh retained choices before applying the claimed advancement threshold."""
+
+    agent_id = "agent-provider-frontier"
+    selected_todo_id = "todo_provider_selected"
+    stale_status = quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[
+            {
+                "todo_id": selected_todo_id,
+                "index": 1,
+                "text": "[P1] Continue the selected delivery.",
+                "role": "agent",
+                "status": "open",
+                "priority": "P1",
+                "task_class": "advancement_task",
+                "claimed_by": agent_id,
+                "updated_at": "2026-09-21T00:00:00Z",
+            }
+        ],
+        recommended_action="[P1] Continue the selected delivery.",
+        next_action="[P1] Continue the selected delivery.",
+        claim_scope_agent_id=agent_id,
+        coordination={
+            "agent_model": "peer_v1",
+            "registered_agents": [agent_id],
+        },
+    )
+    fresh_items = [
+        {
+            "todo_id": selected_todo_id if index == 0 else f"todo_provider_{index:012d}",
+            "index": index + 1,
+            "text": (
+                "[P1] Continue the selected delivery."
+                if index == 0
+                else f"[P1] Provider frontier item {index}."
+            ),
+            "role": "agent",
+            "status": "open",
+            "priority": "P1",
+            "task_class": (
+                "advancement_task" if index < advancement_count else "blocker"
+            ),
+            "claimed_by": agent_id,
+            "updated_at": f"2026-09-{(index % 9) + 1:02d}T00:00:00Z",
+        }
+        for index in range(20)
+    ]
+    from loopx.control_plane.testing.quota_fixtures import quota_todo_summary
+
+    fresh_agent_todos = quota_todo_summary(
+        fresh_items,
+        role="agent",
+        claim_scope_agent_id=agent_id,
+    )
+    fresh_user_todos = quota_todo_summary([], role="user")
+    reads: list[str] = []
+
+    def fresh_todos(**_kwargs: object) -> dict[str, object]:
+        reads.append("provider")
+        return {
+            "ok": True,
+            "todos": fresh_items,
+            "agent_todos": fresh_agent_todos,
+            "user_todos": fresh_user_todos,
+        }
+
+    from loopx.control_plane.todos import list_readback
+
+    monkeypatch.setattr(list_readback, "list_goal_todos", fresh_todos)
+
+    payload = build_live_quota_should_run_decision(
+        stale_status,
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        available_capabilities=["shell"],
+        include_scheduler_detail=False,
+        codex_app_current_rrule=None,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        retained_action_selection_todo_id=selected_todo_id,
+        turn_instance_id="turn-provider-frontier-reentry",
+    )
+
+    assert reads == ["provider"]
+    assert payload["selected_todo"]["todo_id"] == selected_todo_id
+    assert payload["retained_action_selection"]["disposition"] == (
+        "preserve_retained_todo"
+    )
+    assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    if requires_replan:
+        assert payload["decision"] == "autonomous_replan_required"
+        assert payload["replan_action_packet"]["obligation_id"]
+    else:
+        assert payload["decision"] == "run"
+        assert not payload.get("replan_action_packet")

@@ -156,6 +156,9 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
                 assert "successor_todo_ids" in complete.inputSchema["properties"]
                 assert "agent_vision" in complete.inputSchema["properties"]
                 assert "review_task_vision" in {t.name for t in tools.tools}
+                review = next(t for t in tools.tools if t.name == "review_task_vision")
+                assert review.inputSchema["required"] == ["todo_id", "agent_id"]
+                assert "read_context_id" in review.inputSchema["properties"]
                 guard = await session.call_tool("should_run", {})
                 payload = json.loads(guard.content[0].text)
                 assert payload["ok"] is True and payload["selected_todo"]["todo_id"] == "todo_reducer"
@@ -343,10 +346,11 @@ def test_manifest_oracle_rejects_false_acceptance(tmp_path, defect):
         runner.verify_manifest_delivery(tmp_path)
 
 
-def test_real_mcp_delivery_completes_and_settles_existing_plan(tmp_path):
+def test_real_mcp_delivery_completes_and_settles_existing_plan(tmp_path, monkeypatch):
     from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 
     project, runtime, launcher = runner.shared.setup(tmp_path)
+    monkeypatch.chdir(project)
     # Real delivery class: do not substitute same_agent_non_delivery to make
     # this acceptance test green. No live model or external side effect.
     (project / "delivery.txt").write_text("synthetic verified delivery\n")
