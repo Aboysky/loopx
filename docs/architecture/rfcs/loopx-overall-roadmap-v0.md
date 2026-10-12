@@ -114,8 +114,10 @@ The bounded S4/S5/S7/S8/S12 [ZCode native CLI provider](../../../loopx/zcode_goa
 adds explicit binding, model selection, start/pause/resume/stop and live readback
 through the existing CLI and Goal detail drawer. It reuses Core Goal/Agent
 identity and quota admission/revocation, isolates the managed session and keeps
-the skill facade as default. Real local-model and recovery validation qualify
-this provider boundary; per-call hard budgets, live billing, Desktop attachment,
+the skill facade as default. Packaged recovery now exercises one real API,
+bridge and persistent journal owner with a vendor-protocol substitute; matched
+shared-off observations preserve schemas, user text and durable effects. This
+qualifies that bounded recovery path; per-call hard budgets, live billing, Desktop attachment,
 Automations and multi-Agent acceptance remain separate. This closes no G1 or
 fleet qualification gate.
 
