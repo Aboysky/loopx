@@ -208,6 +208,32 @@ def test_checkpoint_opportunity_uses_native_admission_and_real_grade(tmp_path, m
             files={"archive": ("candidate.tar.gz", first_archive)}, timeout=15)
         assert cooled.status_code == 429  # Reading the checkpoint cannot refill admission.
         assert app.state.judge.resolve_token(token) == before
+        # A fresh identity is a valid new trial, but not a same-point branch.
+        # Even with the same remaining deadline and declared limits, native
+        # registration resets the counter and makes its first submission eligible.
+        cold = requests.post(url + "/api/v1/register", json={"task_id": "fixture",
+            "run_id": "synthetic-new-registration", "admin_secret": app.state.judge.admin_secret,
+            "submission_cooldown": 3600, "max_agent_submissions": 12}, timeout=10)
+        cold.raise_for_status()
+        cold_token = cold.json()["token"]
+        cold_point = capture_opportunity({**env, "SFORGE_TOKEN": cold_token}, timeout=10,
+                                        incumbent_path=tmp_path / "cold-incumbent.tar.gz")
+        assert cold_point["next_agent_round"] == 1 and cold_point["remaining_cooldown_seconds"] == 0
+        assert cold_point["released_history"] == [] and cold_point["native_incumbent"] is None
+        assert cold_point["max_agent_submissions"] - (cold_point["next_agent_round"] - 1) == 12
+        assert point["max_agent_submissions"] - (point["next_agent_round"] - 1) == 11
+        cold_accepted = requests.post(url + "/api/v1/submit", data={"token": cold_token},
+            files={"archive": ("candidate.tar.gz", first_archive)}, timeout=15)
+        cold_accepted.raise_for_status()
+        assert cold_accepted.json()["round_id"] == "agent-1"
+        wait_for(lambda: not app.state.judge._outstanding_by_run, timeout=60)
+        # Neither copying the incumbent bytes nor replaying its grade restored
+        # consumed source rounds/history or its currently active cooldown.
+        cold_after = capture_opportunity({**env, "SFORGE_TOKEN": cold_token}, timeout=10,
+                                        incumbent_path=tmp_path / "cold-after-incumbent.tar.gz")
+        assert cold_after["next_agent_round"] == 2 and len(cold_after["released_history"]) == 1
+        assert cold_after["released_history"][0]["submission_id"] != point["released_history"][0]["submission_id"]
+        assert app.state.judge.resolve_token(token) == before
         with pytest.raises(ValueError, match="original trial deadline"):
             capture_opportunity({**env, "LOOPX_PHASE_DEADLINE_EPOCH": "0"}, timeout=10,
                                 incumbent_path=tmp_path / "closed.tar.gz")
