@@ -1,6 +1,7 @@
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 import { isStringLiteral } from "./runtime_decode.ts";
 import { decodeInteractionContract } from "./work_items/interaction_contract.ts";
+import { EffectiveAction } from "./quota/effective_action.generated.ts";
 
 export {
   RECEIPT_BOUND_MONITOR_PHASES,
@@ -907,13 +908,16 @@ export function settlementNextAction(options: {
   return { decision: "complete", step_kind: null, result: seeded };
 }
 
+/** Only the actual quota admission refusal carries a rejecting action.
+ * Missing/unknown facts retain a stage failure; diagnostic text is never authority. */
 export function callbackFailureKind(
   stepKind: SettlementStepKind,
-  reason: string,
+  payload: JsonObject,
 ): SettlementFailureKind {
   if (stepKind === "durable_writeback") return "writeback_rejected";
   if (stepKind === "terminal_closeout") return "terminal_closeout_rejected";
-  if (reason.toLowerCase().includes("budget")) return "budget_rejected";
+  if (stepKind === "quota_spend" &&
+      payload.quota_rejection_action === EffectiveAction.THROTTLED_SKIP) return "budget_rejected";
   return "quota_spend_rejected";
 }
 
@@ -932,7 +936,7 @@ export function commitStepPayload(options: {
       `${stepKind} callback rejected the settlement`;
     return {
       result: settlementFailed({
-        kind: callbackFailureKind(stepKind, reason),
+        kind: callbackFailureKind(stepKind, payload),
         step_kind: stepKind,
         reason,
       }),
