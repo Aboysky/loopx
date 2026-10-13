@@ -1871,7 +1871,10 @@ export function PersonalWorkspacePage({
         return;
       }
       const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
-      retainSteeringRequest(composerDraftKey, request);
+      if (!retainSteeringRequest(composerDraftKey, request)) {
+        setActionFeedback(t("feedback.steeringStorageUnavailable"));
+        return;
+      }
       setSteering(true);
       setActionFeedback(null);
       setImageAttachmentError(null);
