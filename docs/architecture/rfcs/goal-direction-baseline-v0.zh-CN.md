@@ -5,7 +5,7 @@
 - **交付成熟度：** Partial（M1 与显式本地 M2 均为候选；准入和通用启用未验收）
 - **作者 / 负责人：** LoopX 维护者与贡献者
 - **创建日期：** 2026-09-10
-- **最后规范修订：** 2026-10-12
+- **最后规范修订：** 2026-10-13
 - **实现基线：** `41a95d9`
 - **跟踪 Issue：** [#2831](https://github.com/huangruiteng/loopx/issues/2831)
 - **相关契约：**
@@ -25,6 +25,8 @@
 RFC 成熟度与交付成熟度互相独立。M1 候选 TypeScript builder 已基于传入的完整 canonical
 输入实现 `goal_direction_baseline_v0`。§12.5 的显式本地候选新增来源支持的读取 offer、
 同 Agent 确认和 cold 回读；不代表通用运行时启用或模型真实消费，schema 合法仍不充分。
+M1 准入仍待 owner 批准第 12 节容量与回执决策；M2 consumer/recovery UX
+批准是另一项待完成 gate。实现和测试不授予其中任何批准。
 
 独立的[验收合同 v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
 不实现本 RFC 的材料声明或使用回执。#2831 的下一切片是**方向材料版本与验收基线关联**，
@@ -527,6 +529,17 @@ Usage 分两步：
 不能编辑 receipt 让投影变绿。实例退休/重建会 fence 新操作，包括 caller 超时后的迟到
 RPC。原操作回执保持历史，不授予当前读取/执行权；peer receipt 不可转移。组合输入容量
 在提交前检查，不会为凑预算持久化部分投影。
+
+当前投影达到 4,096 条 usage 时，新观察只能替换**同一 Agent/material** 的一条旧记录。
+完整旧 provenance 以 `archived_usage_record` 保存在同一次原子操作的 receipt/journal，
+可用该 operation id 的 `receipt` 冷回读，原操作回执保持不变。这个限额约束当前投影，
+不代表 journal 历史或 provider 自身容量无限。满额时若该 pair 没有旧记录则拒绝，
+不挤掉其他 pair，未读 pair 继续 blocked。新 offer 绑定同 pair 完整 retained usage
+摘要，行数不变也不能让 unavailable 前的旧 offer 重新有效；其他 pair 不受影响。
+scope 的单调 `usage_generation` 在首次替换后拒绝升级前只有行数的旧 offer。
+新的 read/ack 可正常恢复，不提高上限。产生这些记录后须保留兼容 reader；回退到无法
+识别 generation 的旧 reader 不是受支持的 rollback。
+
 
 设置入口 **Goal 设置 → 任务所有权 → 方向依据与资料版本** 支持检查/应用声明、独立查看
 各 Agent、恢复未知响应和停用。浏览器不能代表 peer 读取、确认或提交 usage receipt。

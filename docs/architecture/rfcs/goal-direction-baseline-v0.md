@@ -5,7 +5,7 @@
 - **Delivery maturity:** Partial (M1 and explicit local M2 candidates; entry and general activation unqualified)
 - **Authors / owners:** LoopX maintainers and contributors
 - **Created:** 2026-09-10
-- **Last normative revision:** 2026-10-12
+- **Last normative revision:** 2026-10-13
 - **Implementation baseline:** `41a95d9`
 - **Tracking issue:** [#2831](https://github.com/huangruiteng/loopx/issues/2831)
 - **Related contracts:**
@@ -29,7 +29,9 @@ RFC maturity and delivery maturity are independent. The candidate M1 TypeScript 
 implements `goal_direction_baseline_v0` over supplied canonical inputs. The explicit local candidate in §12.5 adds source-backed read offers, same-Agent
 acknowledgement and cold operator/Agent readback. It does not qualify general
 runtime activation or live model consumption; schema validity alone remains
-insufficient.
+insufficient. M1 entry qualification remains pending owner approval of the
+Section 12 capacity and receipt decisions; M2 consumer/recovery UX approval
+is a separate pending gate. Implementation and tests do not grant either approval.
 
 The separate [acceptance contract v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
 does not implement this RFC's material declarations or usage receipts.
@@ -616,6 +618,22 @@ Original operation receipts remain historical; replay grants no current access
 or execution. A same-Agent exact-revision receipt permits a current projection;
 a peer's receipt is nontransferable. Combined authority/receipt input is bounded
 before commit; no partial projection is persisted to fit the budget.
+
+At 4,096 retained usage records, a new observation may replace one older
+record for the **same Agent/material only**. The displaced complete provenance
+record is retained as `archived_usage_record` in the same atomic operation
+receipt/journal; `receipt` with that operation id reads it back. Original
+operation receipts remain unchanged. This bounds the current projection, not
+the store's journal history or its separate provider capacity. A full store with
+no record for this pair refuses the new observation; it cannot evict another
+pair, and the unread pair remains blocked. New offers bind the complete retained
+same-pair usage digest, so an unavailable observation invalidates old offers even
+when the row count is unchanged; unrelated pairs remain valid. A monotonic scope
+`usage_generation` fences pre-upgrade offers that only carried a row count after
+the first replacement. A new read and acknowledgement recover normally without
+raising the limit. Keep compatible readers after such records exist; reverting
+to a reader that cannot interpret the generation is not a supported rollback.
+
 
 The existing settings path **Goal settings → Task ownership → Direction
 materials and revisions** lets the owner review/apply declarations, inspect
