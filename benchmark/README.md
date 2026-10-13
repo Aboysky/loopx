@@ -221,10 +221,17 @@ the registered destination Goal/Agent, without replacing an existing binding.
 The registry owner's fence guards the configuration check and binding write;
 this preserves the existing profile's lifetime semantics. The lifecycle-only
 `source_session_v1` profile is rejected by its owner because it cannot run
-governed benchmark work. Changed configuration/profiles or ambiguous prior admission reject. After a
-lost result, read the original agent-scoped session binding through
-`BenchmarkSessionWake`; a repeated command cannot silently fork again. Omit this
-command to leave the unit inert. Code/research authority, unresolved effects,
+governed benchmark work. The binding atomically retains the captured artifact digest.
+If the binding committed but its controller reply was lost, repeat this exact
+command: it reads the original binding and verifies current Goal/Agent/profile,
+Host/configuration and complete native history, returning the same admission
+without another fork or model call. Changed or unmarked bindings reject; this
+cannot retrofit recovery onto older bindings. Once native work has advanced, use
+the existing continuation rather than retrying admission at the old cursor.
+Provenance survives ordinary observations of the same session, but does not follow
+a replacement session, profile or Goal lifetime. A fork whose reply was lost
+**before binding** remains unresolved and cannot be automatically repeated. Omit
+this command to leave the unit inert. Code/research authority, unresolved effects,
 native evaluator admission and remaining whole-trial budget still require their
 owners before executing a research continuation. This source-checkout controller
 entrypoint is a partial participant journey; it does not ship a frontend restore

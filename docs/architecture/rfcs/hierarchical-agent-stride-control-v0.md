@@ -815,6 +815,17 @@ This narrows the integration gap but does not prove an automatic joint barrier,
 canonical graph/vision/effect activation, original activation recovery, isolated
 Linux solver restoration, or useful research.
 
+Committed native session admission now retains the captured artifact digest in
+the original atomic session binding. Exact controller retries after a lost binding
+reply verify that receipt, current Goal/Agent/profile and unchanged complete
+native history, then return the same session without a fork or model call.
+Ordinary subsequent observations preserve provenance only for that conversation;
+replacement identity drops it. Unmarked/foreign bindings and advanced native
+history reject old-point admission. This closes post-binding reply loss, not an
+unknown fork before binding or joint evaluator/Host activation recovery. Tests
+inject reply loss after the actual binding, then recover through the CLI and
+continue real native governed work with a deterministic local provider.
+
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
 paths. Historical leases, quota, timers, pending effects and submission tokens

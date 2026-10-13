@@ -645,6 +645,14 @@ canonical graph/vision/effect 激活、完整 native/Host/evaluator 一致性、
 恢复、packaged 交付和实际有效研究仍待验收。operator metadata 或历史一致不能
 认证参与者/effect 对账与完整新研究状态采用。
 
+已提交的 native session 准入现在将捕获产物 digest 与原 session binding 原子保存。
+binding 已提交但控制器响应丢失时，重复原命令会核对原凭据、当前 Goal/Agent/profile
+及未推进的完整 native 历史，返回同一 session，不另起 fork 或模型调用。同一会话的
+后续正常观察保留来源，替换 session、profile 或 Goal lifetime 不继承来源。无来源
+标记、外来 binding 或已推进历史均拒绝旧点准入。真实 binding 后注入响应丢失，
+再经 CLI 恢复并继续实际 native governed 工作的确定性测试覆盖这一边界；fork 在
+binding 前的未知结果与 evaluator/Host 联合激活恢复仍未资格化。
+
 原生新注册不等于恢复准入。真实原生 Docker 资格测试中，source 已消耗十二次
 中的一次，且冷却仍有效；同额度的新注册却立即受理 `agent-1`，保留十二次未用
 机会。重评已保存 archive 产生新的结果，没有恢复 source 的历史或机会状态。
