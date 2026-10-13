@@ -38,3 +38,26 @@ test("a silently dropped browser write is not a durable retry identity", async (
   assert.equal(recovery.retainSteeringRequest(key, request), false);
   assert.deepEqual(recovery.readSteeringRequest(key), request);
 });
+
+
+test("a durable request retries independently of another conversation's unsaved draft", async () => {
+  let stored = null, writable = true;
+  globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {
+    if (!writable) throw new Error("QuotaExceededError");
+    stored = value;
+  }}};
+  const recovery = await import("./steering-recovery.ts?independent");
+  assert.equal(recovery.retainSteeringRequest(key, request), true);
+  writable = false;
+  const otherKey = JSON.stringify(["composer", "other-goal", "other-agent"]);
+  const other = {...request, sessionId: "other-session", turnId: "other-turn", id: "other-request"};
+  assert.equal(recovery.retainSteeringRequest(otherKey, other), false);
+  assert.equal(recovery.retainSteeringRequest(key, request), true);
+  assert.deepEqual(JSON.parse(stored), [[key, request]]);
+  for (const field of ["sessionId", "turnId", "text", "id"]) {
+    assert.equal(recovery.retainSteeringRequest(key, {...request, [field]: "changed"}), false, field);
+  }
+  assert.equal(recovery.retainSteeringRequest("another-key", request), false);
+  globalThis.window.sessionStorage.getItem = () => {throw new Error("read unavailable");};
+  assert.equal(recovery.retainSteeringRequest(key, request), false, "page cache is not persistent evidence");
+});

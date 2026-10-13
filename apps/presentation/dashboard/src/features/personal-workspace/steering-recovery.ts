@@ -52,7 +52,14 @@ export function readSteeringRequest(key: string) {
 
 export function retainSteeringRequest(key: string, request: SteeringRequest): boolean {
   requestCache().set(key, request);
-  return persistRequests();
+  if (persistRequests()) return true;
+  // Another conversation's unsaved draft may prevent rewriting the whole cache.
+  // Only the current request's exact durable identity qualifies its retry.
+  const durable = restoreRequests().get(key);
+  return durable?.sessionId === request.sessionId
+    && durable.turnId === request.turnId
+    && durable.text === request.text
+    && durable.id === request.id;
 }
 
 export function retireSteeringRequest(key: string, id: string) {
