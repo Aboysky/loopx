@@ -172,7 +172,10 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   function changeMode() {
     if (mutation.busy || !jsonValid) return;
     if (editorMode === "guided" && selected) {
-      setJsonDraft(JSON.stringify(goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride), null, 2));
+      const jsonValue = selected.capability_id === "todo_replan_cadence"
+        ? goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride)
+        : mutation.draft;
+      setJsonDraft(JSON.stringify(jsonValue, null, 2));
     }
     setEditorMode(editorMode === "guided" ? "json" : "guided");
     setMutation((current) => ({ ...current, preview: null,
