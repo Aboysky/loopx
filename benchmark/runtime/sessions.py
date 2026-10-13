@@ -116,7 +116,8 @@ class BenchmarkSessionWake:
         )
         self.receipt["session"]["session_id"] = observed
 
-    def _bind_verified_fork(self, session_id: str, source_profile_digest: str) -> None:
+    def _bind_verified_fork(self, session_id: str, source_profile_digest: str,
+                            checkpoint_artifact_sha256: str) -> None:
         """Bind a controller-verified native fork through the existing session owner.
 
         This admits the conversation binding only. It does not claim work,
@@ -135,6 +136,7 @@ class BenchmarkSessionWake:
                 goal_ref=self.goal_ref,
                 session_profile_digest=self.digest,
                 require_absent=True,
+                checkpoint_artifact_sha256=checkpoint_artifact_sha256,
             )
         )
         self.session_id = session_id

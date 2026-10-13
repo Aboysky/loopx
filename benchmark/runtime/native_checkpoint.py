@@ -205,6 +205,8 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         raise ValueError("checkpoint session admission requires its captured source session profile")
     if tomllib.loads(config_path.read_text()).get("features", {}).get("goals") is not False:
         raise ValueError("checkpoint session admission requires native automatic Goals explicitly disabled")
+    if hashlib.sha256(config_path.read_bytes()).hexdigest() != metadata["native_session"]["config_sha256"]:
+        raise ValueError("native checkpoint effective configuration differs")
     source = metadata.get("loopx_state", {})
     lineage = {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}
     if (not source.get("goal_id") or not source.get("agent_id") or
@@ -217,7 +219,33 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
     require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
     if select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage=lineage,
                                session_scope="agent") is not None:
-        raise ValueError("destination session binding already exists; read back its original admission")
+        # The original session binding is also the admission receipt. Only a
+        # source-bound committed admission can recover a lost controller reply;
+        # an unrelated binding or a partial native fork is never replaced.
+        with project_registry_transaction(registry, operation="checkpoint_session_binding", agent_id=lineage["agent_id"]):
+            current = load_goal_from_registry(registry, lineage["goal_id"])
+            require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
+            if current != goal:
+                raise ValueError("destination Goal configuration changed during native checkpoint readback")
+            wake = BenchmarkSessionWake(env, execution, {})
+            binding = select_codex_cli_session(wake.root, lineage=lineage, session_scope="agent",
+                                              goal_admission=wake.admission)
+            if not binding or binding.get("checkpoint_artifact_sha256") != expected_sha256:
+                raise ValueError("destination session binding already exists without this checkpoint admission")
+            if wake.digest != source_profile:
+                raise ValueError("checkpoint source session profile changed")
+            native = metadata["native_session"]
+            observed = native_session_checkpoint(env, binding["session_id"],
+                timeout=max(.1, deadline - time.monotonic()))["metadata"]
+            keys = ("completed_turn_id", "turn_ids", "visible_history_sha256", "host_version",
+                    "guest_home", "guest_workspace", "config_sha256")
+            if binding["session_id"] == native["session_id"] or any(observed[key] != native[key] for key in keys):
+                raise ValueError("checkpoint admitted native session advanced or differs; use its existing continuation")
+            return {"session_id": binding["session_id"], "completed_turn_id": observed["completed_turn_id"],
+                "visible_history_sha256": observed["visible_history_sha256"], "history_verified": True,
+                "model_calls": 0, "execution_authority_granted": False, "continuation_qualified": False,
+                "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
+                "session_binding_admitted": True, "session_profile_digest": wake.digest}
     result = fork_native_checkpoint(env, unit, expected_sha256, config_path,
                                     timeout=max(.1, deadline - time.monotonic()))
     # Hold the existing registry owner's fence through the session write. This
@@ -229,7 +257,7 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
             raise ValueError("destination Goal configuration changed during native checkpoint reconstruction")
         receipt: dict[str, Any] = {}
         wake = BenchmarkSessionWake(env, execution, receipt)
-        wake._bind_verified_fork(result["session_id"], source_profile)
+        wake._bind_verified_fork(result["session_id"], source_profile, expected_sha256)
     return {**result, "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
             "session_binding_admitted": True, "session_profile_digest": wake.digest}
 

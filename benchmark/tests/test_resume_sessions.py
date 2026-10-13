@@ -40,6 +40,39 @@ def test_absent_only_session_admission_preserves_every_existing_binding(tmp_path
         assert load_codex_cli_session(tmp_path, lineage=lineage, session_scope="agent")["session_id"] == "observed-session"
 
 
+@pytest.mark.parametrize("replacement", [None, "session", "profile", "lifetime"])
+def test_checkpoint_provenance_belongs_only_to_original_binding(tmp_path, replacement):
+    from loopx.control_plane.turn_driver.codex_sessions import _session_path, _store_codex_cli_session
+
+    args = dict(lineage={"goal_id": "branch", "agent_id": "actor"}, session_scope="agent",
+                session_id="original", session_profile_digest="profile", goal_ref={"goal_id": "branch"})
+    _store_codex_cli_session(tmp_path, **args, checkpoint_artifact_sha256="a" * 64, require_absent=True)
+    path = _session_path(tmp_path, args["lineage"], "agent")
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="cannot change"):
+        _store_codex_cli_session(tmp_path, **args, checkpoint_artifact_sha256="b" * 64)
+    assert path.read_bytes() == original
+    if replacement == "session":
+        args["session_id"] = "replacement"
+    elif replacement == "profile":
+        args["session_profile_digest"] = "changed"
+    elif replacement == "lifetime":
+        args["goal_ref"] = {"goal_id": "branch", "goal_instance_id": "replacement"}
+    _store_codex_cli_session(tmp_path, **args)
+    value = load_codex_cli_session(tmp_path, lineage=args["lineage"], session_scope="agent")
+    if replacement is None:
+        assert path.read_bytes() == original
+        assert value["checkpoint_artifact_sha256"] == "a" * 64
+    else:
+        assert "checkpoint_artifact_sha256" not in value
+    # A never-enabled ordinary record retains exactly the original field shape.
+    plain = dict(args, session_id="ordinary")
+    _store_codex_cli_session(tmp_path, **plain)
+    assert set(load_codex_cli_session(tmp_path, lineage=args["lineage"], session_scope="agent")) == {
+        "schema_version", "host", "goal_id", "agent_id", "session_scope", "session_id",
+        "session_profile_digest", "goal_ref"}
+
+
 def resume_env(tmp_path, monkeypatch):
     env = worker_env(tmp_path)
     skills = tmp_path / "skills"

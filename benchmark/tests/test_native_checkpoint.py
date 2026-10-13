@@ -194,7 +194,7 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; only a local static provider is used")
-@pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint"])
+@pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint", "binding_reply_loss"])
 def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case, request):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
@@ -438,6 +438,18 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert len(calls) == 1
             assert retained_source() == before
             return
+        if case == "binding_reply_loss":
+            original_bind = BenchmarkSessionWake._bind_verified_fork
+            def lose_binding_reply(self, *args):
+                original_bind(self, *args)
+                raise TimeoutError("synthetic loss after atomic binding")
+            with monkeypatch.context() as lost:
+                lost.setattr(BenchmarkSessionWake, "_bind_verified_fork", lose_binding_reply)
+                with pytest.raises(TimeoutError, match="loss after atomic binding"):
+                    admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+            assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
+                "agent_id": destination_agent}, session_scope="agent")["checkpoint_artifact_sha256"] == digest
+            assert len(calls) == 1
         admitted_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.native_checkpoint",
             "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", execution.sandbox],
             env=env, text=True, capture_output=True, timeout=40)
@@ -454,10 +466,40 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             def forbidden_fork(*args, **kwargs):
                 raise AssertionError("a repeated admission must not create a second native fork")
             replay.setattr("benchmark.runtime.native_checkpoint.fork_native_checkpoint", forbidden_fork)
-            with pytest.raises(ValueError, match="already exists"):
-                admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+            recovered = admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+            assert recovered == admitted
+            assert bound["checkpoint_artifact_sha256"] == digest
+            # Transport reply loss leaves the atomic source-bound binding as the
+            # original receipt. An exact CLI retry must also recover it.
+            retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
+            assert retry_cli.returncode == 0, retry_cli.stderr
+            assert json.loads(retry_cli.stdout) == admitted
+            with pytest.raises(ValueError, match="profile changed"):
+                admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
+                                                config, execution=execution, timeout=30)
         assert len(calls) == 1 and load_codex_cli_session(runtime, lineage={
             "goal_id": destination_goal, "agent_id": destination_agent}, session_scope="agent") == bound
+        if case == "resume":
+            wrong_config = tmp_path / "changed-source-config.toml"
+            wrong_config.write_text(config.read_text() + "\n# different source configuration\n")
+            with pytest.raises(ValueError, match="effective configuration differs"):
+                admit_native_checkpoint_session(env, unit, digest, wrong_config, execution=execution, timeout=30)
+            from loopx.control_plane.turn_driver.codex_sessions import _session_path
+            binding_path = _session_path(runtime, {"goal_id": destination_goal, "agent_id": destination_agent}, "agent")
+            original_binding = binding_path.read_bytes()
+            # Isolated fixture corruption: neither an unrelated binding nor a
+            # binding for another checkpoint may be relabeled as this admission.
+            for wrong_source in (None, "f" * 64):
+                changed = dict(bound)
+                if wrong_source is None:
+                    changed.pop("checkpoint_artifact_sha256")
+                else:
+                    changed["checkpoint_artifact_sha256"] = wrong_source
+                binding_path.write_text(json.dumps(changed))
+                with pytest.raises(ValueError, match="without this checkpoint admission"):
+                    admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+                assert json.loads(binding_path.read_text()) == changed and len(calls) == 1
+            binding_path.write_bytes(original_binding)
 
         # Both participants meet at the real destination continuation owner.
         # No source claim/lease is replayed; adoption alone still starts no work.
@@ -578,6 +620,13 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         retained = native_session_checkpoint(env, admitted["session_id"], timeout=20)
         assert retained["metadata"]["turn_ids"][:-1] == native["metadata"]["turn_ids"]
         assert retained["metadata"]["completed_turn_id"] != native["metadata"]["completed_turn_id"]
+        after_work = load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
+            "agent_id": destination_agent}, session_scope="agent")
+        assert after_work["checkpoint_artifact_sha256"] == digest
+        with pytest.raises(ValueError, match="advanced or differs"):
+            admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+        assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
+            "agent_id": destination_agent}, session_scope="agent") == after_work
         with pytest.raises(ValueError, match="native history or configuration moved"):
             adopt_todo_context(env, unit, digest, source_todo_id=source_todo,
                 todo_id=destination_todo, operation_id="must-not-adopt-later-session",
