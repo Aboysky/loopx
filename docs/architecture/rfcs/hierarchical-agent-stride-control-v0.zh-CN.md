@@ -609,10 +609,19 @@ Benchmark adapter 在既有 Turn 结算后请求捕获；typed 产物 owner 封�
 研究点尚未资格化。Heartbeat adapter 还支持显式 fresh-replan 触发：预加载原
 quota guard，在模型调用前捕获 wake 开始已投影的准入 replan，并按既有义务
 去重；尚不覆盖运行中 Host wake 首次产生的 replan。可选 native 参与者通过
-Codex 读取完整历史、核对会话真实工作区，并在字节 probe 后复查该历史。读取
+Codex 读取完整历史、核对会话真实工作区及当前 source binding/profile，并在字节 probe 后复查。读取
 到 probe 之间出现的后续 source Turn 会拒绝；之后的写入由产物 witness 校验
 拦截。它封存 rollout/索引/分页库并验证固定 guest 路径下的原生分叉；来源基准
-校验不等于会话采用或研究收益。显式 checkpoint-aware native judge 还可导出已公开结果明细、受理计数/
+校验不等于研究收益。显式 source-checkout controller 现可通过既有 registry/
+session owner 准备已验证 fork，要求不同且已注册的 Goal/Agent 身份与匹配的
+捕获 session profile。Registry fence 保护配置复查到绑定写入，保持原有 profile
+的 lifetime 语义；lifecycle-only source-session profile 不能运行 governed 工作，
+会被拒绝而非当作 benchmark 替代路径。已有绑定、配置/profile 变化和原生自动
+Goal 激活均会拒绝。真实 native CLI/resume 资格化通过本地静态 provider，将保留
+会话传入新 Turn，实际验证物化代码与负证据，并按原身份结算 LoopX guard/
+writeback/spend。合成源静止后交换固定 guest 路径；完整环境隔离仍未资格化。
+这证明会话参与者采用与合成接续，不等于完整研究/
+effect 采用、剩余总预算、已安装前端恢复或科学收益。显式 checkpoint-aware native judge 还可导出已公开结果明细、受理计数/
 时钟、剩余冷却及原试验期限，并封存与已公开结果绑定的原生选优 incumbent
 原始 archive。它可能早于工作区候选；排序仍由原生规则决定。缺失源码、捕获
 绑定变化或文件 witness 不符均在发布前拒绝；不评测、不补发机会，未完成或

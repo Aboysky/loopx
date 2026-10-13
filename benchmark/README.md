@@ -185,7 +185,7 @@ Add `"native_session": true` to include Codex's completed native cursor, all
 retained history pages, rollout/compaction records and native index/history SQLite
 stores. The adapter verifies the native session's actual workspace, reads its full
 cursor before the byte probe and reads it again after that probe. A changed cursor,
-configuration or participant inventory rejects before publication; the artifact
+configuration, source session binding or participant inventory rejects before publication; the artifact
 owner then verifies the same physical witness through capture. This prevents later
 Turns on the selected source session from being sealed under an earlier cursor. The adapter excludes
 credential files, logs, memories and the symlinked skill installation. Record the
@@ -199,6 +199,46 @@ the captured guest paths**, with matching configuration and Host version. It che
 the full history digest and cursor, starts no model and registers no LoopX binding.
 A failed or partial reconstruction is not an admitted session. This is a session
 participant prerequisite, not full research continuation or arbitrary path import.
+
+An explicit controller can then prepare that participant through the existing
+registry and session owners. Prepare a fresh governed benchmark Goal and
+distinct Agent identity in the isolated guest; set its destination `LOOPX_REGISTRY`,
+`LOOPX_RUNTIME_ROOT`, `LOOPX_GOAL_ID` and `LOOPX_AGENT_ID`, plus the qualified
+`CODEX_BIN`, `CODEX_HOME`, `LOOPX_PROJECT`, `MODEL_NAME` and `REASONING_EFFORT`.
+The captured session profile must match the destination, and native automatic
+Goals must remain explicitly disabled. Fork deferral preserves native Goal data;
+it does not remove historical authority. The controller environment and explicit
+configuration are not exported as authority or credentials.
+
+```sh
+python -m benchmark.runtime.native_checkpoint \
+  --root /private/captured-point --expected-sha256 CAPTURE_DIGEST \
+  --config-path /private/qualified-config.toml --sandbox read-only
+```
+
+This command starts no model and claims no work. It stores the verified fork for
+the registered destination Goal/Agent, without replacing an existing binding.
+The registry owner's fence guards the configuration check and binding write;
+this preserves the existing profile's lifetime semantics. The lifecycle-only
+`source_session_v1` profile is rejected by its owner because it cannot run
+governed benchmark work. Changed configuration/profiles or ambiguous prior admission reject. After a
+lost result, read the original agent-scoped session binding through
+`BenchmarkSessionWake`; a repeated command cannot silently fork again. Omit this
+command to leave the unit inert. Code/research authority, unresolved effects,
+native evaluator admission and remaining whole-trial budget still require their
+owners before executing a research continuation. This source-checkout controller
+entrypoint is a partial participant journey; it does not ship a frontend restore
+operation or qualify a complete research point.
+
+The explicit real-Host tests below also qualify this CLI and the worker's native
+resume transport: a local static provider receives the retained conversation,
+runs a read-only verification of materialized code/negative evidence and completes
+a new native Turn plus its original LoopX guard/writeback/spend. Later source
+candidate/evidence and original native participants remain unchanged. These tests
+swap fixed paths only after their synthetic source is quiescent; they do not prove
+complete environment isolation. Goal configuration change, unsupported lifecycle
+profile, profile change and duplicate binding are rejected. This proves protocol adoption
+and synthetic continued work, not model research utility or native score gains.
 
 For the native feedback protocol with **no automatic evaluations**, start an
 explicit checkpoint-aware native judge:

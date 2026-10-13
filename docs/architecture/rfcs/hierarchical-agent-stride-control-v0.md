@@ -729,11 +729,23 @@ an explicit fresh-replan trigger: it preloads the original quota guard and captu
 an admitted replan projected at wake start before invoking the model, deduplicated
 by the existing obligation. It does not cover replans first created inside a running
 Host wake. The optional native participant reads complete history through Codex,
-checks the session's actual workspace, and rechecks that history after the byte
+checks the session's actual workspace and current source binding/profile, and rechecks them after the byte
 probe. A later source Turn in the read-to-probe gap is rejected; the artifact
 owner's witness checks cover subsequent writes. It seals rollout/index/paged
 stores and verifies native forks at fixed guest paths. These source-basis checks
-are qualified separately from session adoption or research utility.
+are qualified separately from research utility. An explicit source-checkout
+controller now prepares a verified fork through the existing registry/session
+owners, with distinct registered Goal/Agent identities and a matching captured
+session profile. The registry fence guards configuration through the binding write;
+existing lifetime semantics remain. The lifecycle-only source-session profile
+cannot run governed work and is rejected rather than used as a benchmark surrogate.
+Replacement, changed configuration/profile and native automatic Goal activation
+are refused. Real native CLI/resume qualification uses a local static provider
+to carry retained conversation into a new Turn, verify materialized code/negative
+evidence and settle the original LoopX guard/writeback/spend. The quiesced fixture
+swaps fixed guest paths; full environment isolation remains unqualified. This proves
+the conversation participant's adoption and synthetic continuation, not full research/effect adoption, remaining
+whole-trial budget, installed frontend recovery or scientific benefit.
 An explicit checkpoint-aware native judge also exports released public result
 details, accepted counters/clock, remaining cooldown and original trial deadline,
 plus the opaque native-selected incumbent archive bound to its released result.
