@@ -11,6 +11,7 @@ from loopx.chat_store import CHAT_SESSION_SCHEMA_VERSION, ChatSessionStore
 
 def test_agent_model_value_keeps_provider_protocol_characters() -> None:
     assert chat_store.normalize_agent_model_id("vendor/model-fast") == "vendor/model-fast"
+    assert chat_store.normalize_agent_model_id("vendor/model  fast") == "vendor/model  fast"
 
 
 @pytest.mark.parametrize("value", ["", "model\nnext", "x" * 161])
