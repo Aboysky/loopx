@@ -365,10 +365,14 @@ later source evidence, then settles current governed work. This proves mechanica
 adoption and use, not model judgment or research benefit. It does not replace
 current Todo requirements with source requirements, reactivate source claims, or
 certify Host budget and evaluator participants as part of the same point. If prepare/adopt commits but
-its response/projection is uncertain, inspect the existing `handoff` and canonical
-Todo owner using the original operation identities; do not create a new session,
-claim or context operation to conceal that uncertainty. Automatic original-operation
-recovery and the packaged frontend journey remain qualification work.
+its response/projection is uncertain, repeat this command with the **same original
+operation ID, expected revision, checkpoint and lease proof**. It replays the
+existing prepare/adopt receipts and reconciles projection; it does not create a
+new note or reset execution authority. Changed notes, artifacts, native history,
+leases or request identity still refuse recovery. Do not substitute a new session,
+claim, revision or context operation to conceal uncertainty. This qualifies only
+context-command recovery; joint participant recovery and the packaged frontend
+journey remain open.
 
 
 Declare authorized workspace code/research files, effective configuration and

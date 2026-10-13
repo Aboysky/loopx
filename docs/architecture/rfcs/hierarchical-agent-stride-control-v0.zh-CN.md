@@ -626,8 +626,20 @@ effect 采用、剩余总预算、已安装前端恢复或科学收益。显式 
 原始 archive。它可能早于工作区候选；排序仍由原生规则决定。缺失源码、捕获
 绑定变化或文件 witness 不符均在发布前拒绝；不评测、不补发机会，未完成或
 未对账评测会拒绝。
-参与者/效果 reconciliation、新研究状态采用、目标侧评测与 Host 联合准入及实际有效
-接续仍各自待验收；operator metadata 或历史一致不能认证这些条件。
+可选 LoopX-state 参与者还封存 promoted provider 同一 revision 的完整分页
+canonical Todo 读取，并复查字节和 revision。未 promoted 的来源仍只保存原有
+惰性 inventory，明确不支持 canonical context 采用。控制器通过既有 leased
+continuation prepare/adopt owner，将保留上下文挂到已被目标 Agent 持有的 Todo，
+读回 canonical note 与 Markdown 投影。原始 Todo 集合、note 和负证据仅作为私有
+上下文；目标 requirements、status、claim 和 lease 仍由当前 authority 决定。
+prepare/adopt 前均复查 native profile 与完整历史。真实 native fork/resume、CLI
+和 canonical owner 的合成资格测试实际读取保留候选与负证据，排除来源后续证据，
+并完成当前 governed 工作结算。本地确定性 provider 只证明传输、采用及机械使用，
+不证明研究判断或收益。context 命令在响应丢失或投影失败后，复用原 prepare/adopt
+身份与 revision 恢复；authority、note、产物变化或 native 历史已推进仍拒绝。
+canonical graph/vision/effect 激活、完整 native/Host/evaluator 一致性、参与者联合
+恢复、packaged 交付和实际有效研究仍待验收。operator metadata 或历史一致不能
+认证参与者/effect 对账与完整新研究状态采用。
 
 原生新注册不等于恢复准入。真实原生 Docker 资格测试中，source 已消耗十二次
 中的一次，且冷却仍有效；同额度的新注册却立即受理 `agent-1`，保留十二次未用

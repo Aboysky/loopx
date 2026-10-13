@@ -765,9 +765,11 @@ both preparation and adoption. A real native fork/resume plus CLI and canonical
 owner fixture consumes the captured candidate and negative Todo evidence, excludes
 later source evidence, and settles governed work. Its local deterministic provider
 qualifies transport/adoption and mechanical use, not research judgment or benefit;
-canonical graph/vision/effect activation, full native/Host/evaluator consistency,
-original-operation recovery, packaged delivery and useful continued research
-remain open. Participant/effect reconciliation and complete fresh research-state
+context-command retries now reuse the original prepare/adopt identities and
+revision after lost responses or projection failure, while changed authority,
+notes, artifacts and advanced native history still refuse recovery. Canonical
+graph/vision/effect activation, full native/Host/evaluator consistency, joint
+participant recovery, packaged delivery and useful continued research remain open. Participant/effect reconciliation and complete fresh research-state
 adoption cannot be certified by operator metadata or native history equality.
 
 A native fresh registration is not restored admission. In the controlled native
