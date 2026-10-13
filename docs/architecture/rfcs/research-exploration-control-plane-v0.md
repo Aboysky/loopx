@@ -717,6 +717,11 @@ control cost must not come from hiding useful negative evidence.
 
 ### 11.6 Research scope review at the shared replan boundary
 
+See the [execution, exploration and correction integration guide](../long-running-execution-exploration-and-correction.md)
+for selecting a research method, returning evidence through the existing Explore
+attachment, and qualifying its effect on subsequent work. It reuses this RFC's
+owners without making exploration mandatory for ordinary execution.
+
 The [stride control loop](hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control)
 complements result adoption. It asks whether the next experiment should change
 the mechanism, the validation coverage, or the uncertainty being resolved.

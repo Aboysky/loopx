@@ -497,6 +497,11 @@ slice. Scientific usefulness follows the independent qualification in
 
 ### 7.6 Research scope and evidence-conditioned control
 
+The [execution, exploration and correction integration guide](../long-running-execution-exploration-and-correction.md)
+maps this boundary to Host continuation, Explore writeback, recovery and product
+readback. It provides source comparisons and one connected qualification episode;
+the contracts and milestones in this RFC retain their authority.
+
 Work and research stride have three independently chosen coordinates. The first two are
 the main controls; the third bounds the evidence and cost needed to act:
 

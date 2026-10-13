@@ -75,6 +75,10 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 
 ### RFC 之外的关键覆盖与 owning sources
 
+[执行、探索与纠偏集成指南](../long-running-execution-exploration-and-correction.zh-CN.md)
+通过既有 Host、replan、Explore 和验收 owner 衔接 S3/S4/S6/S7/S10/S11，
+将源码借鉴、成本边界和可恢复验收场景映射到现有里程碑，不增加平行交付计划。
+
 下列不是可忽略的配套事项；它们直接决定一个长程团队是否可用。目录或 README 证明的是可发现的实现/合同入口，具体安装可用性仍从 `loopx capability list/show` 与选定版本读取。
 
 | 领域与已有入口 | 所属工作流 | 当前总纲要求的下一步 |

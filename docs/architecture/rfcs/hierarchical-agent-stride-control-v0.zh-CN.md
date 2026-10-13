@@ -443,6 +443,10 @@ readback 属于 partial slice。科学效用遵循
 
 ### 7.6 研究范围与证据驱动控制
 
+[执行、探索与纠偏集成指南](../long-running-execution-exploration-and-correction.zh-CN.md)
+将此边界连接到 Host 接续、Explore 回写、恢复和产品回读，提供源码对照与一次
+连贯验收场景；合同与里程碑的权威仍属于本 RFC。
+
 普通工作与研究的步幅包含三个独立选择的坐标。前两个是主要控制量，第三个限定采取行动所需
 证据与成本：
 

@@ -651,6 +651,10 @@ matched 总预算下独立验证模型 adoption 和科学效用；降低控制�
 
 ### 11.6 共享 replan 边界的研究范围复盘
 
+[执行、探索与纠偏集成指南](../long-running-execution-exploration-and-correction.zh-CN.md)
+说明如何选择研究方法、通过既有 Explore 附件返回证据，并验证它对后续工作的影响。
+指南复用本 RFC 的归属，不将探索变成普通执行的必经步骤。
+
 [步幅控制闭环](hierarchical-agent-stride-control-v0.zh-CN.md#76-研究范围与证据驱动控制)
 补充结果采用：下一实验应改变机制、验证覆盖，还是需要解决的不确定性？更多
 正确测试和更多命名假设不证明研究更广。原生/provider outcome、噪声与收益空间
