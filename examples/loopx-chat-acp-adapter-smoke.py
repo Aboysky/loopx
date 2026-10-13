@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.chat_acp import ACPStdioAdapter  # noqa: E402
+from loopx.chat_agent import CodexChatAgentError  # noqa: E402
 from loopx.chat_endpoints import AgentEndpointRegistry  # noqa: E402
 from loopx.chat_runtime import ChatRuntimeController  # noqa: E402
 from loopx.chat_store import ChatSessionStore  # noqa: E402
@@ -30,6 +31,13 @@ session_id = "acp:fixture/session"
 active_prompt_id = None
 session_cwd = ""
 client_initialized = False
+current_model = "fixture-default"
+def config_options():
+    return [{"id": "engine", "name": "Model", "category": "model", "type": "select", "currentValue": current_model,
+        "options": [{"group": "fixtures", "name": "Fixtures", "options": [
+            {"value": "fixture-default", "name": "Fixture default"},
+            {"value": "fixture/fast", "name": "Fixture fast"},
+        ]}]}]
 for line in sys.stdin:
     request = json.loads(line)
     assert request.get("jsonrpc") == "2.0", request
@@ -53,14 +61,12 @@ for line in sys.stdin:
         assert client_initialized, "client must send initialized before session/new"
         assert request["params"]["mcpServers"] == []
         session_cwd = request["params"]["cwd"]
-        result = {"sessionId": session_id, "configOptions": [{
-            "id": "model", "name": "Model", "currentValue": "fixture-default",
-            "options": [{"value": "fixture-default", "name": "Fixture default"}, {"value": "fixture/fast", "name": "Fixture fast"}],
-        }]}
+        result = {"sessionId": session_id, "configOptions": config_options()}
     elif method == "session/load":
         assert request["params"]["sessionId"] == session_id
         session_cwd = request["params"]["cwd"]
-        result = {}
+        current_model = "fixture-default"
+        result = {} if "--omit-config-on-load" in sys.argv else {"configOptions": config_options()}
     elif method == "session/prompt":
         active_prompt_id = request_id
         prompt = request["params"]["prompt"][0]["text"]
@@ -74,6 +80,11 @@ for line in sys.stdin:
             assert "Do not edit files" in prompt, prompt
         if "wait for cancel" in prompt:
             continue
+        if "provider fallback" in prompt:
+            current_model = "fixture-default"
+            print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": session_id, "update": {"sessionUpdate": "config_option_update", "configOptions": config_options()}
+            }}), flush=True)
         if "activity renew" in prompt:
             for _ in range(4):
                 time.sleep(0.06)
@@ -117,13 +128,14 @@ for line in sys.stdin:
         permission = json.loads(sys.stdin.readline())
         assert permission["id"] == 900
         assert permission["result"]["outcome"]["outcome"] == "cancelled"
+        answer = "ACP model: " + current_model if "report model" in prompt else "ACP 回答。"
         envelope = '<loopx-review-json>' + json.dumps({
             "schema_version": "loopx_chat_agent_response_v0",
-            "message": "ACP 回答。",
+            "message": answer,
             "proposals": [],
             "gate": None,
         }, ensure_ascii=False) + '</loopx-review-json>'
-        response = "ACP 回答。\n" + envelope
+        response = answer + "\n" + envelope
         marker_split = response.index("<loopx-review-json>") + 5
         for chunk in (response[:marker_split], response[marker_split:]):
             print(json.dumps({
@@ -136,8 +148,9 @@ for line in sys.stdin:
             }, ensure_ascii=False), flush=True)
         result = {"stopReason": "end_turn"}
     elif method == "session/set_config_option":
-        assert request["params"] == {"sessionId": session_id, "configId": "model", "type": "id", "value": "fixture/fast"}
-        result = {}
+        assert request["params"] == {"sessionId": session_id, "configId": "engine", "type": "id", "value": "fixture/fast"}
+        current_model = "fixture/fast"
+        result = {"configOptions": config_options()}
     elif method == "session/cancel":
         if active_prompt_id is not None:
             print(json.dumps({"jsonrpc": "2.0", "id": active_prompt_id, "result": {"stopReason": "cancelled"}}), flush=True)
@@ -162,7 +175,7 @@ def main() -> None:
         assert adapter.upstream_thread_id == "acp:fixture/session"
         assert adapter.capabilities()["resume"] is True
         assert adapter.model_options() == {
-            "id": "model", "label": "Model", "selected": "fixture/fast",
+            "id": "engine", "label": "Model", "selected": "fixture/fast",
             "options": [{"value": "fixture-default", "label": "Fixture default"}, {"value": "fixture/fast", "label": "Fixture fast"}],
         }
         events: list[tuple[str, dict[str, object]]] = []
@@ -179,6 +192,20 @@ def main() -> None:
         assert str(root) not in str(events), events
         assert not any("private thought" in str(payload) for _, payload in events), events
         adapter.close_session()
+
+        try:
+            ACPStdioAdapter.start(command=(str(fake),), work_dir=root, config_values={"model": "not-offered"})
+        except CodexChatAgentError as exc:
+            assert exc.error_code == "unsupported_configuration", exc
+        else:
+            raise AssertionError("an unknown model was accepted")
+
+        unknown = ACPStdioAdapter.start(
+            command=(str(fake), "--omit-config-on-load"), work_dir=root,
+            resume_thread_id="acp:fixture/session",
+        )
+        assert unknown.current_model_id is None
+        unknown.close_session()
 
         renewed = ACPStdioAdapter.start(
             command=(str(fake),),
@@ -224,6 +251,9 @@ def main() -> None:
             codex_bin="missing-codex-for-fixture",
             endpoint_registry=endpoint_registry,
         )
+        discovered = first.inspect_agent_model_options("fixture-acp", work_dir=root)
+        assert discovered["model"]["id"] == "engine", discovered
+        assert {item["value"] for item in discovered["model"]["options"]} == {"fixture-default", "fixture/fast"}
         session, was_resumed = first.open_session(
             goal_id="fixture-goal",
             agent_id="fixture-acp",
@@ -239,7 +269,7 @@ def main() -> None:
         turn, created = first.submit_turn(
             session_id=str(session["session_id"]),
             client_turn_id="fixture-turn",
-            message="verify execution mode",
+            message="verify execution mode; report model",
             work_dir=root,
             objective="Exercise the ACP route.",
         )
@@ -250,6 +280,7 @@ def main() -> None:
             timeout_sec=3,
         )
         assert completed["status"] == "completed", completed
+        assert completed["response"]["message"] == "ACP model: fixture/fast", completed
         first.close()
         second = ChatRuntimeController(
             store=store,
@@ -266,6 +297,14 @@ def main() -> None:
         )
         assert was_resumed is True
         assert restored["session_id"] == session["session_id"]
+        assert restored["agent_model_id"] == "fixture-default", restored
+        fallback_turn, _ = second.submit_turn(
+            session_id=str(session["session_id"]), client_turn_id="fallback-turn",
+            message="provider fallback; report model", work_dir=root, objective="Exercise the ACP route.",
+        )
+        fallback = second.wait_for_turn(session_id=str(session["session_id"]), turn_id=str(fallback_turn["turn_id"]), timeout_sec=3)
+        assert fallback["response"]["message"] == "ACP model: fixture-default", fallback
+        assert store.load_session(str(session["session_id"]))["agent_model_id"] == "fixture-default"
         second.close()
 
         # Kiro CLI is a built-in ACP agent, not an owner-registered endpoint:
