@@ -8,7 +8,7 @@ back to the existing LoopX decision boundary, and verifies the resulting work
 without turning every tool result into another planning cycle.
 
 This is an implementation map and integration guide, based on LoopX source
-`1ab64911f4e6e7b9b18f777388208791dabf9757`. External source snapshots were
+`b77f63495f2619237380755178c0780ae10a0f26`. External source snapshots were
 inspected on 2026-10-13. It connects existing RFCs; it creates no policy,
 schema, scheduler, default change or execution grant. Source presence,
 installed behavior, model adoption and measured benefit remain separate.
@@ -25,7 +25,7 @@ separately from source behavior.
 
 | Source | Fixed revision | Inspected scope |
 | --- | --- | --- |
-| LoopX | `1ab64911f4e6e7b9b18f777388208791dabf9757` | Quota/replan, monitor, Explore writeback, Turn recovery and workspace steering |
+| LoopX | `b77f63495f2619237380755178c0780ae10a0f26` | Quota/replan, monitor, Explore writeback, Turn recovery and workspace steering |
 | Grok Build | `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` | Public Rust CLI/runtime Goal controller, interjections and snapshot recovery |
 | Codex | `9167a0b2d4a74d44a4d388057d304682e47313c6` | Public Rust turn loop, Goal extension, compaction and Agent communication |
 | OpenCode | `be674e3158abb5f1b0c16b2bdeb3a9ba2b072774` | Session admission/inbox, execution coordinator, restart and child-result delivery |
@@ -182,10 +182,12 @@ adoption, independent acceptance and readable product return remain distinct.
 The [Goal Vision/replan contract](../reference/protocols/goal-vision-replan-contract-v0.md)
 defines activation and current settlement rules. `evidence_conditioned_v1` is
 optional and default-off; ordinary review remains available when it is off.
-The baseline's structured fresh-path checks are not a claim that every legal
-periodic-review exit requires the same attachment. Follow the owning contract
-when that boundary changes; efficiency work must not bypass admitted review,
-quota settlement, permission, lease or revision checks.
+At this baseline, every accepted exit of an enabled periodic review also
+requires a current `stride_decision` bound to its obligation and delivered
+context. Progress, successor, blocker and terminal outcomes keep their own
+evidence rules; other replan sources retain their existing exits. This enforced
+recording obligation does not prove actual adoption. Efficiency work must not
+bypass it, quota settlement, permission, lease or revision checks.
 
 ## Transfer mechanisms, with their limits
 
@@ -467,7 +469,7 @@ its owning implementation, compatibility and default-off validation.
 | Area | Evidence available | Remaining completion boundary |
 | --- | --- | --- |
 | Replan transport and successor selection | Actual callers; typed provenance checks; multi-Turn CLI tests | Natural-model method adoption and useful outcomes |
-| Structured stride strategy | Opt-in proposal shape, previous/Explore review, exact evidence binding | All-exit periodic enforcement must follow the current owner; a valid declaration is not truth |
+| Structured stride strategy | Opt-in proposal shape, previous/Explore review, exact evidence binding and an enforced decision at every enabled periodic-review exit | A valid declaration is not truth; actual method adoption and gain still need evidence |
 | Explore capture and explicit M3 composition | Existing ordinary attachments and File/SQLite composition gate; see Research RFC §5 | Single-experiment result/adoption gate in §11.5, full remote/installed qualification and scientific utility |
 | Corrections and accepted-result wake | Browser retry identity, exact-Turn ingress and scoped Goal Chat wake | Declared consumption boundary and live adoption per Host/channel; generic job-result integration |
 | Recovery and required reads | Typed original-operation recovery, current Todo/acceptance/lease checks, source read paths | Full Goal requirement coverage across compaction/handoff; no inferred whole-Goal readiness |

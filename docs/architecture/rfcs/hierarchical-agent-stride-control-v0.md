@@ -675,6 +675,12 @@ projection/review semantics. Both historical v1 decision shapes retain read
 compatibility, but cannot discharge a fresh enabled review. Frozen workers retain
 their exact source. Pin implementation revisions for comparisons; do not
 reinterpret old decisions. The policy seam can evolve when evidence warrants it, without maintaining speculative variants.
+For an enabled periodic review, every settlement path now requires a current,
+source-bound stride decision. Typed progress, successor and terminal results
+remain valid evidence/outcomes, while a bare Todo successor transition cannot
+stand in for the review. This closes the decision-recording gap; it does not
+establish that the proposed action was adopted or improved the Goal.
+
 The effective review cadence remains owned by the
 [Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
 and Goal/device configuration. It is not Todo size, an experiment boundary or

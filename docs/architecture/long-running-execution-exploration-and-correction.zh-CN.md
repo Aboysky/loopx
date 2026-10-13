@@ -7,7 +7,7 @@
 避免每个工具结果都引发一次完整规划。
 
 本文是实现地图与集成指南，基于 LoopX 源码
-`1ab64911f4e6e7b9b18f777388208791dabf9757`，外部源码快照核验于 2026-10-13。
+`b77f63495f2619237380755178c0780ae10a0f26`，外部源码快照核验于 2026-10-13。
 它衔接现有 RFC，不创建新策略、schema、调度器、默认行为或执行授权。
 源码存在、安装后的行为、模型采用和实测收益分别成立。
 
@@ -20,7 +20,7 @@
 
 | 来源 | 固定版本 | 阅读范围 |
 | --- | --- | --- |
-| LoopX | `1ab64911f4e6e7b9b18f777388208791dabf9757` | quota/replan、monitor、Explore 回写、Turn 恢复与工作区 steering |
+| LoopX | `b77f63495f2619237380755178c0780ae10a0f26` | quota/replan、monitor、Explore 回写、Turn 恢复与工作区 steering |
 | Grok Build | `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` | 公开 Rust CLI/runtime 的 Goal controller、插入消息与快照恢复 |
 | Codex | `9167a0b2d4a74d44a4d388057d304682e47313c6` | 公开 Rust turn loop、Goal extension、压缩与 Agent 通信 |
 | OpenCode | `be674e3158abb5f1b0c16b2bdeb3a9ba2b072774` | Session 准入/inbox、执行协调、重启和子任务结果投递 |
@@ -148,9 +148,10 @@ Explore 依据。它验证声明的来源与结构，不认证 Agent 解释为�
 
 [Goal Vision/replan 契约](../reference/protocols/goal-vision-replan-contract-v0.md)
 定义启用方式与当前结算规则。`evidence_conditioned_v1` 可选且默认关闭，关闭时仍有
-普通复核。此基线的结构化 fresh-path 检查，不意味着所有合法周期复核出口都强制同一
-附件。边界变化时遵循所属契约；优化不能绕过已准入复核、quota 结算、权限、lease
-或版本检查。
+普通复核。此基线已要求启用策略的周期复核在每个合法结算出口都留下当前
+`stride_decision`，绑定原义务与投递 context。进展、后继、blocker 和终止结果保留
+各自证据规则，其他 replan 来源保留原出口。这项机器约束不证明实际采用；优化不能
+绕过它、quota 结算、权限、lease 或版本检查。
 
 ## 借鉴机制及其限制
 
@@ -384,7 +385,7 @@ Grok 的[第三方声明](https://github.com/xai-org/grok-build/blob/2bdd1d6a636
 | 范围 | 已有证据 | 仍待闭合的边界 |
 | --- | --- | --- |
 | Replan 投递与后继选择 | 实际 caller、typed 来源检查、跨 Turn CLI 测试 | 自然模型的方法采用与有效结果 |
-| 结构化 stride 策略 | 可选提案结构、previous/Explore review、精确证据绑定 | 周期义务所有出口的约束遵循当前 owner；声明合法不等于真实 |
+| 结构化 stride 策略 | 可选提案结构、previous/Explore review、精确证据绑定，以及开启的周期复核所有出口必须记录决定的约束 | 声明合法不等于真实，实际方法采用和收益仍需证据 |
 | Explore 捕获与显式 M3 composition | 普通附件和 File/SQLite composition gate，见 Research §5 | §11.5 单实验结果/采用门、完整远端/安装验收与科学效用 |
 | 纠正与 accepted-result wake | 浏览器重试身份、exact-Turn ingress、有界 Goal Chat wake | 逐 Host/channel 的实际消费和采用，通用作业结果集成 |
 | 恢复与 required reads | typed 原操作恢复、当前 Todo/acceptance/lease 检查和来源读取 | 跨压缩/交接的完整 Goal 要求覆盖，不推断全局就绪 |
