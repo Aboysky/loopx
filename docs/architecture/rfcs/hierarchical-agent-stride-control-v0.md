@@ -752,9 +752,23 @@ plus the opaque native-selected incumbent archive bound to its released result.
 The incumbent can precede the working candidate; native ranking remains the owner.
 Missing bytes, changed capture bindings or mismatched file witnesses reject before
 publication, without grading or refilling admission; pending or unreconciled grades reject.
-Participant/effect reconciliation, fresh research-state adoption, joint evaluator/Host
-admission and useful continued work remain separate acceptance work; operator
-metadata and native history equality cannot certify them.
+The opt-in LoopX-state participant additionally seals a complete paged canonical
+Todo read at one promoted provider revision, with byte/revision rechecks.
+Unpromoted coordination retains its previous inert inventory only, explicitly
+without canonical context adoption. A controller can
+attach this retained context to an already owned destination Todo through the
+existing leased continuation prepare/adopt owner and canonical projection
+readback. The source population, notes and original negative evidence are
+available as private context; current requirements, status, claims and leases
+remain current authority. Native profile and complete-history readback precede
+both preparation and adoption. A real native fork/resume plus CLI and canonical
+owner fixture consumes the captured candidate and negative Todo evidence, excludes
+later source evidence, and settles governed work. Its local deterministic provider
+qualifies transport/adoption and mechanical use, not research judgment or benefit;
+canonical graph/vision/effect activation, full native/Host/evaluator consistency,
+original-operation recovery, packaged delivery and useful continued research
+remain open. Participant/effect reconciliation and complete fresh research-state
+adoption cannot be certified by operator metadata or native history equality.
 
 A native fresh registration is not restored admission. In the controlled native
 Docker qualification, one of twelve source submissions was consumed and its

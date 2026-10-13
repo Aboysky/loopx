@@ -321,6 +321,56 @@ inventory, symlink routes and narrower overlapping components reject capture.
 File and SQLite authority providers remain inert artifacts after materialization;
 copying their old leases or settlement records grants no new execution authority.
 
+With this option, capture also retains the **complete paged canonical Todo read**
+at one provider revision when its source coordination is promoted, as a private
+artifact. It rechecks the canonical head and exported bytes before sealing;
+missing promoted authority or a moved revision fails this optional capture while
+ordinary work continues. An unpromoted source keeps the previous inert inventory
+capture and explicitly records canonical context as unavailable; it cannot use
+this context-adoption path. Leases are excluded from the read, while historical
+claim/status fields remain evidence. Declarations without `loopx_state` keep
+their previous path.
+
+After separately admitting the checkpoint's native session, an operator can
+adopt this retained context on an **already claimed and leased destination Todo**
+whose note is empty:
+
+```sh
+python -m benchmark.runtime.research_checkpoint \
+  --root /private/checkpoints/point --expected-sha256 CHECKPOINT_SHA256 \
+  --source-todo-id SOURCE_TODO --todo-id DESTINATION_TODO \
+  --operation-id CONTEXT_OPERATION --expected-revision CURRENT_REVISION \
+  --lease-key CURRENT_LEASE_KEY --lease-version CURRENT_LEASE_VERSION
+```
+
+Supply the destination `LOOPX_PROJECT`, `LOOPX_REGISTRY`, `LOOPX_RUNTIME_ROOT`,
+`LOOPX_GOAL_ID`, `LOOPX_AGENT_ID`, `CODEX_BIN`, `CODEX_HOME`, `MODEL_NAME`,
+`REASONING_EFFORT` and `LOOPX_CODEX_SANDBOX` explicitly. The Goal and Agent must
+differ from the captured source. The session owner must admit the distinct
+current native binding and matching execution profile. Before prepare and adopt,
+readback must match the captured complete native history, Host and configuration;
+a branch that has already continued cannot adopt context from this older point. The adapter uses the existing continuation prepare/adopt owners,
+then reads back the canonical note and Markdown projection. It retains the full
+source read in a private workspace-relative file, with its checkpoint and source
+revision references; current requirements, status, claim and lease stay governed
+by their existing owners. The operation starts no model and submits no candidate.
+The option is disabled by omitting the command; an adopted note is ordinary
+current Todo context and can be changed through its owner.
+
+This is **Todo context adoption**, not canonical graph/vision/effect reactivation
+or a complete research continuation. A deterministic local-provider qualification
+uses the real native Host fork and resume, CLI and canonical continuation owner:
+a tool reads the retained candidate and captured negative Todo evidence, excludes
+later source evidence, then settles current governed work. This proves mechanical
+adoption and use, not model judgment or research benefit. It does not replace
+current Todo requirements with source requirements, reactivate source claims, or
+certify Host budget and evaluator participants as part of the same point. If prepare/adopt commits but
+its response/projection is uncertain, inspect the existing `handoff` and canonical
+Todo owner using the original operation identities; do not create a new session,
+claim or context operation to conceal that uncertainty. Automatic original-operation
+recovery and the packaged frontend journey remain qualification work.
+
+
 Declare authorized workspace code/research files, effective configuration and
 installed source/profile pins as non-overlapping components. The native and
 opportunity participants do not imply that omitted state was saved. Every source
