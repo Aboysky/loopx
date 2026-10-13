@@ -377,7 +377,9 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize(("drift", "mutation_stage"), [(None, "probe"),
     ("canonical_head", "probe"), ("exported_bytes", "probe"),
-    ("canonical_head", "capture"), ("exported_bytes", "capture")])
+    ("canonical_head", "capture"), ("exported_bytes", "capture"),
+    ("research_log", "probe"), ("research_log", "capture"),
+    ("vision_index", "probe"), ("vision_index", "capture")])
 def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_path, monkeypatch, provider, drift, mutation_stage):
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -427,6 +429,14 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
         '--delivery-batch-scale','multi_surface','--delivery-outcome','outcome_progress','--agent-vision-json',str(vision))
     run('quota','spend-slot','--goal-id',cli.GOAL_ID,*binding,'--source','heartbeat','--execute')
     before = run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
+    from loopx.capabilities.explore.result_log import (
+        explore_result_log_path, append_explore_result_event, build_explore_node_event,
+    )
+    graph_path = explore_result_log_path(runtime, cli.GOAL_ID)
+    def append_source_evidence(title):
+        append_explore_result_event(graph_path, build_explore_node_event(goal_id=cli.GOAL_ID,
+            title=title, status="dead_end", summary="Fresh validation rejected this route."))
+    append_source_evidence("Original rejected route")
     original_head = authority_head(runtime)
     assert original_head['status'] == 'loaded'
     source_settlement = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID,agent_id=cli.AGENT_ID,
@@ -451,6 +461,13 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
                     # Receipt-only provider commits also move the consistency
                     # cursor; no new knowledge is needed to invalidate the point.
                     authority_head(runtime, advance=True)
+                elif drift == "research_log":
+                    append_source_evidence("Later evidence outside the point")
+                elif drift == "vision_index":
+                    with (runtime / "goals" / cli.GOAL_ID / "runs/index.jsonl").open("a") as stream:
+                        stream.write(json.dumps({"goal_id": cli.GOAL_ID, "agent_id": cli.AGENT_ID,
+                            "generated_at": "2099-01-01T00:00:00Z", "agent_vision": {
+                                "vision_patch": {"acceptance_summary": "Later source vision"}}}) + "\n")
                 else:
                     (wakes/cli.TURN_ID/'checkpoint-research-context.json').write_text('{"later":true}')
             return effect_runtime_result(method, params, **kwargs)
@@ -470,6 +487,9 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
     context = json.loads(exported_context.read_bytes())
     assert context['snapshot']['provider_revision'] == before['authority_read']['provider_revision']
     assert context['goal_id'] == cli.GOAL_ID and 'leases' not in context['snapshot']
+    assert context['research_evidence']['explore_events'][0]['title'] == 'Original rejected route'
+    assert any('Controlled participant probe passed' in json.dumps(row)
+               for row in context['research_evidence']['vision_history'])
     coverage = manifest['point_metadata']['loopx_state']['source_inventory']
     covered = {entry['source_path']:entry['component_id'] for entry in coverage}
     assert str(runtime) in covered and str(registry) in covered and str(state) in covered

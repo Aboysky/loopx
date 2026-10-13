@@ -12,7 +12,7 @@ import pytest
 
 from loopx.cli import main
 from loopx.control_plane.effect_runtime import effect_runtime_result
-from benchmark.runtime.research_checkpoint import canonical_context, adopt_todo_context, _encoded
+from benchmark.runtime.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
@@ -166,3 +166,78 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     with pytest.raises(ValueError,match='continuation rejected'):
         adopt_todo_context(env,unit,digest,**args)
     assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==moved
+
+
+def test_research_history_is_complete_and_bound_to_original_source(tmp_path, monkeypatch, capsys):
+    from loopx.capabilities.explore.result_log import (
+        append_explore_result_events, build_explore_node_event, build_explore_edge_event,
+        build_explore_finding_event, explore_result_log_path,
+    )
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, root = tmp_path / "registry.json", tmp_path / "runtime"
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(root)]
+    assert main([*prefix, "bootstrap", "--project", str(tmp_path), "--goal-id", "source",
+        "--objective", "Investigate synthetic candidates.", "--adapter-kind", "read_only_project_map_v0",
+        "--adapter-status", "connected-read-only", "--write-scope", "**", "--no-global-sync"]) == 0
+    capsys.readouterr()
+    env = {"LOOPX_RUNTIME_ROOT": str(root), "LOOPX_GOAL_ID": "source"}
+    log = explore_result_log_path(root, "source")
+    events = [build_explore_node_event(goal_id="source", node_id="candidate-3", title="Rejected candidate",
+                                      status="dead_end", summary="Fresh samples refuted candidate 3."),
+              build_explore_node_event(goal_id="source", node_id="candidate-7", title="Retained candidate",
+                                      status="exploring"),
+              build_explore_edge_event(goal_id="source", from_node="candidate-7", to_node="candidate-3",
+                                       edge_type="refutes")]
+    # More than the display finding limit: a checkpoint must retain the earliest
+    # counterexample as well as recent observations, with original topology.
+    events += [build_explore_finding_event(goal_id="source", node_id="candidate-3", finding_id=f"finding-{i}",
+                                          title=f"Negative observation {i}", status="confirmed") for i in range(45)]
+    append_explore_result_events(log, events, expected_goal_id="source")
+    index = root / "goals/source/runs/index.jsonl"
+    # Synthetic persisted source records test transport, not vision judgment.
+    rows = [{"goal_id": "source", "agent_id": "source-actor", "generated_at": f"2026-01-01T00:00:{i:02d}Z",
+             "agent_vision": {"vision_patch": {"current_path": f"Complete experiment {i}"},
+                              "stride_decision": {"original": i}}} for i in range(2)]
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    captured = research_context(env, deadline=time.time() + 30)
+    assert captured["research_evidence"]["explore_events"] == events
+    assert captured["research_evidence"]["vision_history"] == rows
+    assert "leases" not in captured["snapshot"]
+    components = [{"id": "runtime", "source_path": str(root)}]
+    probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    verify_context_sources(captured, components, probe["source_witness"])
+    raw = index.read_bytes()
+    index.write_bytes(raw + json.dumps({**rows[-1], "generated_at": "2026-01-01T01:00:00Z"}).encode() + b"\n")
+    later = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    with pytest.raises(ValueError, match="differs from the captured context"):
+        verify_context_sources(captured, components, later["source_witness"])
+    with pytest.raises(ValueError, match="outside the captured inventory"):
+        verify_context_sources(captured, [], {})
+    for bad in (b'{', b'not-json\n', b'[]\n', b'{"goal_id":"foreign"}\n'):
+        index.write_bytes(raw + bad)
+        with pytest.raises(ValueError):
+            research_context(env, deadline=time.time() + 30)
+    index.write_bytes(raw)
+    original = log.read_bytes()
+    log.write_bytes(original + b'not-json\n')
+    with pytest.raises(ValueError, match="invalid Explore result"):
+        research_context(env, deadline=time.time() + 30)
+    log.write_bytes(original)
+    log.unlink()
+    absent = research_context(env, deadline=time.time() + 30)
+    assert absent["research_evidence"]["explore_events"] == []
+    log.write_bytes(original)
+    appeared = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    with pytest.raises(ValueError, match="appeared before sealing"):
+        verify_context_sources(absent, components, appeared["source_witness"])
+    # An append during the canonical read is also rejected, not silently mixed.
+    from benchmark.runtime import research_checkpoint
+    original_read = research_checkpoint.canonical_context
+    def racing_read(*args, **kwargs):
+        result = original_read(*args, **kwargs)
+        index.write_bytes(raw + b'{}\n')
+        return result
+    monkeypatch.setattr(research_checkpoint, "canonical_context", racing_read)
+    with pytest.raises(ValueError, match="moved during the context read"):
+        research_context(env, deadline=time.time() + 30)

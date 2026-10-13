@@ -340,8 +340,8 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             from loopx.control_plane.coordination.local_authority import local_authority_is_promoted
             research = None
             if local_authority_is_promoted(runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"]):
-                from .research_checkpoint import canonical_context, _encoded
-                research = canonical_context(env, deadline=deadline)
+                from .research_checkpoint import research_context, verify_context_sources, _encoded
+                research = research_context(env, deadline=deadline)
                 evidence = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-research-context.json"
                 research_raw = _encoded(research)
                 with os.fdopen(os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as file:
@@ -410,8 +410,9 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                 raise ValueError("native checkpoint source session binding moved before sealing")
         if request.get("loopx_state"):
             if research is not None:
-                if canonical_context(env, deadline=deadline) != research:
+                if research_context(env, deadline=deadline) != research:
                     raise ValueError("canonical research context moved before sealing")
+                verify_context_sources(research, components, probe["source_witness"])
                 retained = metadata["research_context"]
                 member = next((entry for entry in probe["source_witness"][retained["component_id"]]
                     if entry["path"] == retained["member_path"]), None)

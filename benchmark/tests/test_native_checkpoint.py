@@ -245,7 +245,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
     guard = json.loads(capsys.readouterr().out)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
-    from benchmark.runtime.research_checkpoint import canonical_context, adopt_todo_context, _encoded
+    from benchmark.runtime.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
     source_prefix = ["--format", "json", "--registry", str(source_registry), "--runtime-root", str(source_runtime)]
     def invoke(arguments):
         code = main(arguments)
@@ -286,7 +286,24 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         native = native_session_checkpoint(env, source_session, timeout=20)
         config = tmp_path / "config.toml"
         config.write_bytes((Path(env["CODEX_HOME"]) / "config.toml").read_bytes())
-        source_context = canonical_context(env, deadline=time.time() + 30)
+        from loopx.capabilities.explore.result_log import (
+            append_explore_result_event, build_explore_node_event, explore_result_log_path,
+        )
+        graph_path = explore_result_log_path(source_runtime, source_goal)
+        append_explore_result_event(graph_path, build_explore_node_event(
+            goal_id=source_goal, node_id="rejected-route", title="Rejected route", status="dead_end",
+            summary="Route rejected because fresh samples reversed its pilot gain."))
+        source_vision = tmp_path / "source-vision.json"
+        source_vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
+            "state": "vision_patch_proposed", "vision_patch": {"acceptance_summary":
+                "Complete a fresh-sample experiment before changing the retained route."}}))
+        invoke([*source_prefix, "quota", "should-run", *source_binding, "--agent-id", source_agent,
+            "--turn-instance-id", "source-research-evidence", "--runtime-profile", "generic_cli"])
+        invoke([*source_prefix, "refresh-state", *source_binding, "--agent-id", source_agent,
+            "--turn-instance-id", "source-research-evidence", "--classification", "synthetic_research_evidence",
+            "--delivery-batch-scale", "multi_surface", "--delivery-outcome", "outcome_progress",
+            "--agent-vision-json", str(source_vision)])
+        source_context = research_context(env, deadline=time.time() + 30)
         context_raw = _encoded(source_context)
         context_export = tmp_path / "source-context.json"
         context_export.write_bytes(context_raw)
@@ -310,6 +327,9 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             "--update-operation-id", "later-negative-evidence", "--update-expected-provider-revision",
             source_context["snapshot"]["provider_revision"], "--task-lease-idempotency-key", "source-context",
             "--task-lease-expected-version", "1"])
+        append_explore_result_event(graph_path, build_explore_node_event(
+            goal_id=source_goal, node_id="future-route", title="Future route outside this checkpoint",
+            status="exploring"))
         later_context = canonical_context(env, deadline=time.time() + 30)
         # Qualify use of captured inputs, not the source's later working files.
         # A quiesced same-machine fixture swaps fixed paths; this is not evidence
@@ -452,7 +472,12 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         assert "retained candidate: 7" in json.dumps(requests[2])
         assert "candidate 3 was rejected" in json.dumps(requests[2])
         assert "Candidate 3 failed the synthetic check" in json.dumps(requests[2])
+        assert "fresh samples reversed its pilot gain" in json.dumps(requests[2])
+        assert "Complete a fresh-sample experiment" in json.dumps(requests[2])
+        assert source_context["research_evidence"]["explore_events"][0]["status"] == "dead_end"
+        assert not explore_result_log_path(runtime, destination_goal).exists()
         assert "Candidate 999" not in json.dumps(requests[2])
+        assert "Future route outside this checkpoint" not in json.dumps(requests[2])
         assert canonical_context({**env, "LOOPX_GOAL_ID": source_goal,
             "LOOPX_RUNTIME_ROOT": str(source_runtime)}, deadline=time.time() + 30) == later_context
         assert "Retained candidate 7 verified" in result.stdout

@@ -32,6 +32,91 @@ def canonical_context(env: dict[str, str], *, deadline: float) -> dict:
     return {"goal_id": env["LOOPX_GOAL_ID"], "snapshot": result}
 
 
+def research_context(env: dict[str, str], *, deadline: float) -> dict:
+    """Retain decision evidence as history, without importing operational state.
+
+    The existing Explore codec owns event validity and topology; run-index
+    records own vision/stride history. This transport preserves their values
+    instead of inferring a new frontier or reviving a historical decision.
+    """
+    from loopx.capabilities.explore.result_log import (
+        explore_result_log_path, validate_explore_result_event,
+    )
+    from loopx.history import load_index_snapshot
+    from loopx.runtime import validate_goal_id_path_segment
+
+    root = Path(env["LOOPX_RUNTIME_ROOT"])
+    goal = validate_goal_id_path_segment(env["LOOPX_GOAL_ID"])
+    paths = [explore_result_log_path(root, goal), root / "goals" / goal / "runs/index.jsonl"]
+    before = {}
+    for path in paths:
+        if not path.is_absolute() or path.resolve() != path:
+            raise ValueError("research evidence source must be a physical absolute path")
+        raw = path.read_bytes() if path.exists() else None
+        # An incomplete append is not a complete research boundary. The source
+        # owners validate event fields; the transport checks complete framing.
+        if raw and not raw.endswith(b"\n"):
+            raise ValueError("research evidence source has an incomplete tail")
+        before[path] = raw
+    events = []
+    # Decode exactly the witnessed bytes through the existing event validator;
+    # rereading the file for decoding would leave an avoidable ABA window.
+    for line in (before[paths[0]] or b"").splitlines():
+        if line.strip():
+            try:
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError("event must be an object")
+                events.append(validate_explore_result_event(row, expected_goal_id=goal))
+            except ValueError as error:
+                raise ValueError("invalid Explore result in research context") from error
+    raw_index = before[paths[1]]
+    if raw_index:
+        for line in raw_index.splitlines():
+            if line.strip():
+                row = json.loads(line)
+                if not isinstance(row, dict) or row.get("goal_id", goal) != goal:
+                    raise ValueError("research history contains a malformed or foreign record")
+    index = load_index_snapshot(paths[1], include_artifact_status=False)
+    if index.digest != ("sha256:" + hashlib.sha256(raw_index).hexdigest() if raw_index is not None else None):
+        raise ValueError("research history source moved during decoding")
+    runs = index.records
+    # Preserve every indexed vision, including retired decisions and their
+    # explicit provenance; a latest-only display could erase negative evidence.
+    visions = [{key: row[key] for key in ("generated_at", "goal_id", "agent_id", "goal_ref",
+                "turn_instance_id", "agent_vision", "vision_checkpoint") if key in row}
+               for row in runs if row.get("agent_vision") or row.get("vision_checkpoint")]
+    result = canonical_context(env, deadline=deadline)
+    for path, raw in before.items():
+        if (path.read_bytes() if path.exists() else None) != raw:
+            raise ValueError("research evidence source moved during the context read")
+    return {**result, "research_evidence": {"explore_events": events, "vision_history": visions},
+        "source_files": [{"path": str(path), "sha256": hashlib.sha256(raw).hexdigest() if raw is not None else None}
+                         for path, raw in before.items()]}
+
+
+def verify_context_sources(context: dict, components: list[dict], witness: dict) -> None:
+    """Bind exported history to the artifact owner's actual source witness.
+
+    A second read alone ends too early: a source append immediately before the
+    probe must not be captured next to an older exported context. Absence is
+    witnessed by the containing component too, so a first append also rejects.
+    """
+    for source in context.get("source_files", []):
+        path = Path(source["path"])
+        parent = next((entry for entry in components if path.is_relative_to(Path(entry["source_path"]))), None)
+        if parent is None:
+            raise ValueError("research evidence source is outside the captured inventory")
+        relative = path.relative_to(Path(parent["source_path"]))
+        member = "" if str(relative) == "." else relative.as_posix()
+        observed = next((item for item in witness[parent["id"]] if item["path"] == member), None)
+        if source["sha256"] is None:
+            if observed is not None:
+                raise ValueError("research evidence source appeared before sealing")
+        elif observed is None or observed.get("kind") != "file" or observed.get("sha256") != source["sha256"]:
+            raise ValueError("research evidence source differs from the captured context")
+
+
 def _encoded(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -162,8 +247,12 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
         raise ValueError("destination context artifact readback differs")
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": digest})
+    # Keep old context-only request bytes stable for original receipt recovery
+    # across an adapter upgrade. New history is disclosed only when captured.
+    history_guidance = (" Read its research_evidence for prior branches, negative results and vision/stride decisions."
+                        if "research_evidence" in carrier else "")
     note = {"work_summary": "Retained canonical Todo context from the verified checkpoint is available in " + relative.as_posix() +
-            ". Historical owners, statuses and operational references are evidence only; current Goal/Todo/lease rules govern work.",
+            ". Historical owners, statuses and operational references are evidence only; current Goal/Todo/lease rules govern work." + history_guidance,
         "source_refs": ["checkpoint:" + digest, "source-todo:" + source_todo_id,
                         "source-revision:" + declared["provider_revision"]],
         "files_touched": [{"path": relative.as_posix(), "action": "read",
