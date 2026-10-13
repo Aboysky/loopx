@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn, spawnSync} from 'node:child_process';
-import {mkdtemp, mkdir, writeFile, rm} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createRequire} from 'node:module';
@@ -119,6 +119,55 @@ assert call('inspect')['projection']['direction_state']=='current'
   await panel.getByText('仍有资料未读取或不可用',{exact:true}).waitFor();
   await panel.getByRole('combobox',{name:'查看 Agent',exact:true}).selectOption('agent-a');
   await panel.getByText('已确认当前资料版本',{exact:true}).waitFor();
+  // Saturate only the disposable registered SQLite projection. The actual
+  // source read and UI readback still use the production owner and HTTP route.
+  const capacity=testPythonCommand(String.raw`
+import contextlib,io,json,subprocess,sys
+from pathlib import Path
+import loopx
+from loopx.cli import main
+root=Path(sys.argv[1]);ref=json.loads((root/'registration.json').read_text())['goal_ref']
+provider=(Path(loopx.__file__).resolve().parent/'control_plane/coordination/local_authority_provider.ts').as_uri()
+seed="""
+const {openLocalAuthorityStore}=await import(process.argv[1]);
+const store=await openLocalAuthorityStore(process.argv[2],process.argv[3]);
+const loaded=await store.loadAuthority();if(loaded.status!=='loaded')throw Error('missing');
+const row=loaded.head.material_usage_receipts[0];
+const records=Array.from({length:4096},(_,i)=>({...row,read_operation_id:'history-'+i,
+ receipt:{...row.receipt,receipt_id:'history-'+i,recorded_at:new Date(Date.UTC(2026,0,1)+i).toISOString()}}));
+const result=await store.commitAuthority({expected_provider_revision:loaded.provider_revision,operation_id:'full-history',
+ events:[],receipts:[],next_projection:{...loaded.head,material_usage_receipts:records}});
+if(result.status!=='applied')throw Error(JSON.stringify(result));
+"""
+subprocess.run(['node','--no-warnings','--experimental-strip-types','--input-type=module','-e',seed,provider,str(root/'runtime'),ref['goal_id']],check=True)
+def call(operation,fields=None):
+    args=['--registry',str(root/'project/.loopx/registry.json'),'--format','json','goal-direction',
+        '--operation',operation,'--goal-id',ref['goal_id'],'--goal-instance-id',ref['goal_instance_id'],'--agent-id','agent-a']
+    if fields is not None:
+        request=root/'capacity-request.json';request.write_text(json.dumps(fields));args+=['--request-json',str(request),'--execute']
+    with contextlib.redirect_stdout(io.StringIO()) as output:code=main(args)
+    return code,json.loads(output.getvalue())
+_,view=call('inspect');assert view['projection']['direction_state']=='current'
+path=root/'project/direction.md';(root/'capacity-original.txt').write_text(path.read_text());path.unlink()
+code,failed=call('read',{'material_id':'contract','source_path':'direction.md',
+    'required_revision':view['projection']['items'][0]['required_revision'],
+    'authority_digest':view['authority_digest'],'operation_id':'full-unavailable'})
+assert code==1 and failed['read_outcome']=='unavailable',failed
+_,cold=call('inspect');assert cold['projection']['direction_state']=='blocked' and cold['receipt_count']==4096,cold
+`);
+  const exhausted=spawnSync(capacity.command,[...capacity.args,root],{cwd:root,encoding:'utf8',timeout:60_000,
+    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root}});
+  assert.equal(exhausted.status,0,exhausted.stdout+exhausted.stderr);
+  await panel.getByRole('button',{name:'读取当前方向状态',exact:true}).click();
+  await panel.getByText('仍有资料未读取或不可用',{exact:true}).waitFor();
+  await page.screenshot({path:resolve(output,'full-capacity-blocked.png')});
+  await writeFile(resolve(root,'project/direction.md'),await readFile(resolve(root,'capacity-original.txt')));
+  const capacityRecovered=spawnSync(invoke.command,[...invoke.args,root,'capacity-recovery'],{cwd:root,encoding:'utf8',timeout:60_000,
+    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root}});
+  assert.equal(capacityRecovered.status,0,capacityRecovered.stdout+capacityRecovered.stderr);
+  await panel.getByRole('button',{name:'读取当前方向状态',exact:true}).click();
+  await panel.getByText('已确认当前资料版本',{exact:true}).waitFor();
+  await page.screenshot({path:resolve(output,'full-capacity-recovered.png')});
   // Owner updates the declared basis; a source edit between review/apply
   // refuses, unlocks correction and never restamps the old usage receipt.
   await writeFile(resolve(root,'project/direction.md'),'# Revised direction\nPreserve the Goal and independently check dependency.\n');
@@ -145,7 +194,7 @@ assert call('inspect')['projection']['direction_state']=='current'
   await panel.getByText('方向资料未启用',{exact:true}).waitFor();
   const state=await fetch(`http://127.0.0.1:${port}/api/chat/goal-direction?goal_id=amendment-goal&agent_id=agent-a`).then(r=>r.json());
   assert.equal(state.enabled,false);assert.equal(state.projection,null);assert.equal(state.execution_authority_granted,false);
-  assert.equal(state.receipt_count,2);assert.equal(state.acceptance_assessed,false);
+  assert.equal(state.receipt_count,4096);assert.equal(state.acceptance_assessed,false);
   await writeFile(resolve(output,'result.json'),JSON.stringify({ok:true,boundary:'Real native source registration, SQLite, packaged operator UI and separate Agent CLI read/ack; no model calls',state},null,2));
   await page.close();page=await browser.newPage({viewport:{width:1512,height:1100}});
   await page.addInitScript(()=>localStorage.setItem('loopx-pw-locale','en'));
@@ -155,7 +204,7 @@ assert call('inspect')['projection']['direction_state']=='current'
   await page.getByRole('button',{name:'Task ownership',exact:true}).click();
   await page.getByText('Direction materials and revisions',{exact:true}).click();
   await page.getByText('Direction materials are disabled',{exact:true}).waitFor();
-  console.log('Direction browser passed: native declaration, unknown-response recovery, separate Agent read/ack, peer isolation and disable readback.');
+  console.log('Direction browser passed: native declaration, unknown-response recovery, separate Agent read/ack, peer isolation, full-capacity failure/recovery and disable readback.');
 }catch(error){if(page){await writeFile(resolve(output,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:resolve(output,'failure.png'),fullPage:true});}throw error;}
 finally{await browser?.close();child.kill('SIGTERM');lines.close();await new Promise(accept=>child.exitCode!==null?accept():child.once('exit',accept));
   await writeFile(resolve(output,'server.log'),serverLog);await rm(root,{recursive:true,force:true});}
