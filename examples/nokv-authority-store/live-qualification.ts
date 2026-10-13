@@ -74,14 +74,21 @@ export interface QualificationReport {
   availability_or_ha_proven: false;
   nokv_sdk_version: typeof QUALIFIED_NOKV_SDK_VERSION;
   nokv_api_version: typeof QUALIFIED_NOKV_API_VERSION;
-  /** `null` when the wheel exports no `WORKSPACE_PROTOCOL_SCHEMA` (0.11.0). */
   nokv_protocol_schema: string | null;
+  nokv_protocol_schema_observations: readonly (string | null)[];
 }
 
 export interface QualificationSequenceResult {
   checks: readonly { id: string; status: "passed" }[];
   final_generation: number;
   final_cursor: string;
+  /**
+   * The wire schema every opened helper declared, or `null` when they did not
+   * all declare the same one. The 0.11.x release wheels declare none.
+   */
+  nokv_protocol_schema: string | null;
+  /** Each opened helper's declared schema in open order; `null` where none. */
+  nokv_protocol_schema_observations: readonly (string | null)[];
 }
 
 export interface QualificationCliArguments {
@@ -279,6 +286,12 @@ function staleIncarnation(current: string): string {
 /** A fresh lower-layer publication identity; the probe never reuses one. */
 function freshPhysicalIdentity(): string {
   return randomUUID().replaceAll("-", "");
+}
+
+/** The schema every observation names; `null` when none declared one or they disagree. */
+function uniformProtocolSchema(observations: readonly (string | null)[]): string | null {
+  const [first = null, ...rest] = observations;
+  return rest.every((schema) => schema === first) ? first : null;
 }
 
 async function rawGeneration(
@@ -541,10 +554,13 @@ export async function exerciseQualificationSequence(
     );
     passed("loser_receipt_absent");
 
+    const protocolSchemas = opened.map((transport) => transport.sdkProtocolSchema ?? null);
     return {
       checks,
       final_generation: 3,
       final_cursor: "3",
+      nokv_protocol_schema: uniformProtocolSchema(protocolSchemas),
+      nokv_protocol_schema_observations: protocolSchemas,
     };
   } finally {
     await Promise.allSettled(opened.map(async (transport) => await transport.close()));
@@ -555,16 +571,12 @@ export async function exerciseQualificationSequence(
 export async function qualifyNoKVAuthorityStore(
   options: QualificationOptions,
 ): Promise<QualificationReport> {
-  let protocolSchema: string | null = null;
-  const sequence = await exerciseQualificationSequence(options, async () => {
-    const transport = await NoKVJsonLinesTransport.open({
+  const sequence = await exerciseQualificationSequence(options, async () =>
+    await NoKVJsonLinesTransport.open({
       argv: qualificationHelperArgv(options.python_executable),
       config: options.client_config,
       request_timeout_ms: options.request_timeout_ms,
-    });
-    if (protocolSchema === null) protocolSchema = transport.sdkProtocolSchema;
-    return transport;
-  });
+    }));
   return {
     schema_version: REPORT_SCHEMA,
     qualification_scope: QUALIFICATION_SCOPE,
@@ -575,7 +587,6 @@ export async function qualifyNoKVAuthorityStore(
     availability_or_ha_proven: false,
     nokv_sdk_version: QUALIFIED_NOKV_SDK_VERSION,
     nokv_api_version: QUALIFIED_NOKV_API_VERSION,
-    nokv_protocol_schema: protocolSchema,
   };
 }
 

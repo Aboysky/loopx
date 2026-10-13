@@ -119,7 +119,7 @@ export class NoKVJsonLinesTransport implements NoKVBlobTransport {
   private closing = false;
   /**
    * The wire schema the helper's SDK declared in its `ready` handshake, or
-   * `null` when the wheel exports none (the 0.11.0 release). Informational:
+   * `null` when the wheel exports none (the 0.11.x releases). Informational:
    * the helper's own version guard stays the admission decision.
    */
   sdkProtocolSchema: string | null = null;
