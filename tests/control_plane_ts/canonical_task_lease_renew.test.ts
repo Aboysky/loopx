@@ -126,7 +126,10 @@ for (const provider of ["file", "sqlite"] as const) {
       await writeFile(config, JSON.stringify({...command, operation: "acquire", now: acquireNow.toISOString()}));
       const before = await store.loadAuthority();
       const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD, config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-      assert.equal(child.signal, "SIGKILL", child.stderr);
+      assert.equal(child.error, undefined);
+      assert.notEqual(child.status, 0);
+      // Windows has no POSIX signals; TerminateProcess reports an exit status instead.
+      if (process.platform !== "win32") assert.equal(child.signal, "SIGKILL", child.stderr);
       if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
       const result = await executeTaskLeaseAcquire(command, {now: () => acquireNow});
       assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.status, boundary === "before" ? "applied" : "replayed");
@@ -266,7 +269,10 @@ for (const provider of ["file", "sqlite"] as const) {
       const config = join(root, "child.json"); await writeFile(config, JSON.stringify({...request, now: NOW.toISOString()}));
       const before = await store.loadAuthority();
       const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD, config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-      assert.equal(child.signal, "SIGKILL", child.stderr);
+      assert.equal(child.error, undefined);
+      assert.notEqual(child.status, 0);
+      // Windows has no POSIX signals; TerminateProcess reports an exit status instead.
+      if (process.platform !== "win32") assert.equal(child.signal, "SIGKILL", child.stderr);
       if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
       const result = await executeTaskLeaseLifecycle(request, {now: () => NOW});
       assert.equal(result.ok, true); assert.equal(result.status, boundary === "before" ? "applied" : "replayed");
@@ -315,7 +321,10 @@ for (const provider of ["file", "sqlite"] as const) {
         const before = await store.loadAuthority();
         const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD,
           config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-        assert.equal(child.signal, "SIGKILL", child.stderr);
+        assert.equal(child.error, undefined);
+        assert.notEqual(child.status, 0);
+        // Windows has no POSIX signals; TerminateProcess reports an exit status instead.
+        if (process.platform !== "win32") assert.equal(child.signal, "SIGKILL", child.stderr);
         if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
         const recovered = await executeTaskLeaseLifecycle(command, {now: () => NOW});
         assert.equal(recovered.ok, true, JSON.stringify(recovered));
@@ -355,7 +364,10 @@ for (const provider of ["file", "sqlite"] as const) {
       const before = await store.loadAuthority();
       const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", CHILD,
         config, boundary, "600"], {encoding: "utf8", timeout: 30000});
-      assert.equal(child.signal, "SIGKILL", child.stderr);
+      assert.equal(child.error, undefined);
+      assert.notEqual(child.status, 0);
+      // Windows has no POSIX signals; TerminateProcess reports an exit status instead.
+      if (process.platform !== "win32") assert.equal(child.signal, "SIGKILL", child.stderr);
       if (boundary === "before") assert.deepEqual(await store.loadAuthority(), before);
       const recovered = await executeTaskLeaseLifecycle(command, {now: () => NOW});
       assert.equal(recovered.ok, true, JSON.stringify(recovered));
