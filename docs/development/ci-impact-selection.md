@@ -52,13 +52,14 @@ Frontstage Pages 只验收并发布公共网站和 projection demo，保留构�
 预算、静态宿主 prompt 和后端 Python/TS 逻辑暂不享受免跑；它们仍可能改变核心行为。
 新增一种豁免只需审阅其业务边界和保留的验收，不要求列举全部替代测试文件。
 
-## Four complete Python shards
+## Six complete Python shards
 
-Full Python qualification uses four runners with two xdist workers each:
-`--splits 4 --group N --splitting-algorithm least_duration`. It still partitions
+Full Python qualification uses six shard jobs with two xdist workers each:
+`--splits 6 --group N --splitting-algorithm least_duration`. It still partitions
 the whole collection, excluding only the separately executed Stage2c marker.
 No tests are removed. Without timing history the splitter uses equal weights;
-four-way parallelism is not a claim of perfect duration balancing.
+six shards do not establish perfect duration balancing. Each numbered shard
+shares its queue across workflow runs without replacing another current head.
 
 The shard command explicitly loads `scripts.ci.pytest_timing`. Its controller
 streams pytest's setup/call/teardown durations to Actions logs as each report
@@ -127,15 +128,16 @@ timestamp/ANSI framing; phase identity, ordering and completion checks remain st
 reader 接受 GitHub 日志分块拼接产生的行首 BOM，再读取时间戳和 ANSI 包装；
 phase 身份、顺序与完整性检查保持严格。
 
-The aggregate requires every shard to succeed and all four coverage files to
+The aggregate requires every shard to succeed and all six coverage files to
 exist before combining them. The existing full-suite coverage floor remains.
 No Python or backend TypeScript coverage artifact or Sonar run is manufactured
 when those lanes are exempt. Dashboard coverage remains scoped to the frontend.
 
-全量 Python 从 2 个分片扩大到 4 个，每片仍为 2 个 worker，不提高单机进程争抢。
-真实 pytest-split/xdist/coverage 回归覆盖分片集合互斥、并集完整、四份报告合并以及
+全量 Python 采用 6 个分片，每片仍为 2 个 worker，不提高单机进程争抢。
+各分片号在 workflow 之间共享队列，不替换其他当前 head 的待执行资格。
+真实 pytest-split/xdist/coverage 回归覆盖分片集合互斥、并集完整、六份报告合并以及
 缺失任意报告时拒绝通过。分片增加会增加安装开销与同时占用的 runner；应看实际
-critical path 和 runner-minutes，而不是宣称“4 片必然快一倍”。
+critical path 和 runner-minutes，而不是根据分片数宣称必然加速。
 
 ## Override and evidence
 

@@ -58,6 +58,17 @@ provider 生命周期读回证明 installed/enabled/ready 之前仍投影为 `re
 
 ## CLI / 命令行
 
+The `external-evidence` `--*-json` options take **file paths**, not inline JSON.
+The provider inventory file contains an object with a `providers` array
+(`{"providers": [...]}`), not a bare array. File-read errors, invalid JSON,
+and non-object roots are reported separately in JSON and default Markdown output
+so callers can correct the input.
+
+`external-evidence` 的 `--*-json` 参数接收**文件路径**，不接收 inline JSON。
+provider inventory 文件的根对象须包含 `providers` 数组，不是裸数组。
+JSON 与默认 Markdown 输出分别报告文件读取、JSON 解析和根对象类型错误，
+便于调用者修正输入。
+
 ```bash
 loopx external-evidence discover \
   --connector-registry \
@@ -201,6 +212,13 @@ cannot authorize or prove a successful read.
 该内置 method 只做匿名、有界 HTTPS GET，只接受显式选择的完整 commit SHA 文件 URL。
 规划和执行均检查仓库当前公开性；不使用 token、cookie、私有仓库、分支 head、重定向、
 代理凭据、原文持久化或自动采纳。保留的 ready 行本身不证明执行成功。
+
+Each successful source's `accessed_at` records its UTC observation after the
+bounded read; receipt `completed_at` is recorded after all attempted reads,
+including failures. Neither timestamp establishes publication or first availability.
+
+每条成功来源的 `accessed_at` 在有界读取后记录 UTC 观察时间；回执的
+`completed_at` 在全部读取尝试（包括失败）结束后记录。两者均不证明发布或首次可得时间。
 
 Failure limitations identify the reached step: public repository visibility,
 source file read, or source text validation. HTTP status codes remain visible;
