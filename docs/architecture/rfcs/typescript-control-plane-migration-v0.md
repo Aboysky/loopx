@@ -73,6 +73,15 @@ Disposable source/normal-wheel probes remove the facade, the whole legacy Todo
 writer and four shadow producers together; real File/SQLite CLI lifecycle,
 once-only settlement, Monitor replay and App cold-import/action/restart journeys
 must still work, with missing-provider/lease and changed-source/backup refusals.
+The App HTTP receiver now also removes `bootstrap.py` from that same copied
+distribution and checks the complete removed set before each server start,
+restart and auxiliary CLI. Separate fixture results cannot prove this combined
+absence. The ordinary canonical CLI creation entrypoint remains with its owner;
+removing it from the cold-import receiver is a disposable qualification probe,
+not a supported package format or permission to break the additive 1.x line.
+中文：App 冷导入、后续写入和重启使用同一份缺少旧入口、writer 与 source producer 的
+隔离副本；不能拼接两组各自缺少一部分模块的结果。正常 canonical 创建仍保留其
+现有入口，这个临时卸除验收不等于已完成整族退役、自然试用或正式安装采用。
 Lark dry-run and Explore replay qualify local consumers only, not live external
 adoption. The fresh research execution path added by [#5280](https://github.com/loopx-project/loopx/pull/5280)
 reintroduced a function-local historic import after the earlier caller inventory.
