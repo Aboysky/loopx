@@ -750,6 +750,106 @@ def test_declared_feedback_requires_delivery_for_each_completed_submission() -> 
     assert "evaluation_protocol_deliveries_invalid" in receipt["blockers"]
 
 
+def _final_drain_attestation(
+    trajectory: dict[str, object],
+    policy: dict[str, object],
+) -> dict[str, object]:
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    attestation["evaluation_protocol"]["submissions"][0].update(
+        captured_at_ms=290,
+        evaluation_started_at_ms=295,
+        evaluation_completed_at_ms=310,
+    )
+    attestation["evaluation_protocol"]["deliveries"] = []
+    attestation["feedback_transport"].update(
+        intent_count=0,
+        ack_count=0,
+        deliveries_sha256=_canonical_sha256([]),
+    )
+    return attestation
+
+
+@pytest.mark.parametrize("omit_delivery", [False, True])
+def test_cli_final_drain_allows_zero_feedback_but_requires_complete_delivery_evidence(
+    tmp_path: Path, omit_delivery: bool
+) -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _final_drain_attestation(trajectory, policy)
+    if omit_delivery:
+        attestation["evaluation_protocol"]["deliveries"] = None
+    paths = []
+    for name, value in (
+        ("trajectory", trajectory),
+        ("policy", policy),
+        ("attestation", attestation),
+    ):
+        path = tmp_path / f"private-{name}.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        paths.append(path)
+    completed = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts/loopx"),
+            "benchmark",
+            "integrity-qualification",
+            "--trajectory-json",
+            str(paths[0]),
+            "--policy-json",
+            str(paths[1]),
+            "--runtime-attestation-json",
+            str(paths[2]),
+            "--require-qualified",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    receipt = json.loads(completed.stdout)
+    assert completed.returncode == (1 if omit_delivery else 0)
+    assert receipt["integrity_qualified"] is (not omit_delivery)
+    assert str(tmp_path) not in completed.stdout
+    if not omit_delivery:
+        assert receipt["evaluation_protocol"]["submission_count"] == 1
+        assert receipt["evaluation_protocol"]["delivery_count"] == 0
+
+
+@pytest.mark.parametrize("counter", ["intent_count", "ack_count"])
+@pytest.mark.parametrize("value", [-1, False, True, 0.0, None, "0", 1])
+def test_final_drain_rejects_invalid_or_invented_feedback_counters(
+    counter: str, value: object
+) -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _final_drain_attestation(trajectory, policy)
+    attestation["feedback_transport"][counter] = value
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_transport_invalid" in receipt["blockers"]
+
+
+def test_zero_feedback_does_not_waive_delivery_for_completed_submission() -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _final_drain_attestation(trajectory, policy)
+    attestation["evaluation_protocol"]["submissions"][0][
+        "evaluation_completed_at_ms"
+    ] = 299
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_deliveries_invalid" in receipt["blockers"]
+
+
 def test_task_authorization_does_not_rewrite_frozen_feedback_policy_digest() -> None:
     trajectory = _task_environment_read_trajectory(
         {"TASKCAP_TOKEN": "fixture-task-token-private-value"}

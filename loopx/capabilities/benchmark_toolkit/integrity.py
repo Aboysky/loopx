@@ -817,8 +817,12 @@ def _network_request_scope(arguments: object) -> NetworkRequestScope:
     return scope
 
 
+def _nonnegative_int(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _positive_int(value: object) -> TypeGuard[int]:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    return _nonnegative_int(value) and value > 0
 
 
 def _validated_declared_feedback_runtime(
@@ -950,7 +954,6 @@ def _validated_declared_feedback_runtime(
     deliveries_valid = (
         submissions_valid
         and isinstance(raw_deliveries_value, list)
-        and bool(deliveries)
         and len(deliveries) <= 50_000
     )
     seen_deliveries: set[tuple[str, str, str]] = set()
@@ -1001,6 +1004,8 @@ def _validated_declared_feedback_runtime(
             for submission_id, submission in submissions_by_id.items()
             if submission["evaluation_completed_at_ms"] <= solver_end_ms
         }
+        # An explicit empty list is complete evidence only when the final
+        # submission drains after solving, so no in-solving delivery is due.
         if delivered_submission_ids != required_delivery_submission_ids:
             deliveries_valid = False
     if not deliveries_valid:
@@ -1018,8 +1023,8 @@ def _validated_declared_feedback_runtime(
         if (
             not _positive_int(request_count)
             or not _positive_int(response_ack_count)
-            or not _positive_int(intent_count)
-            or not _positive_int(ack_count)
+            or not _nonnegative_int(intent_count)
+            or not _nonnegative_int(ack_count)
         ):
             transport_valid = False
         else:
