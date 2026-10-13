@@ -88,6 +88,19 @@ only a lower bound; use job/step timestamps for setup and runner occupancy.
 These observations do not become a timing cache, change selection or establish
 qualification. Missing durations still use the existing equal-weight fallback.
 
+The same observer flushes failed reports as separate `LOOPX_PYTEST_FAILURE`
+JSON lines, including nested failures without counting their duration again.
+They retain the same hashed identity, phase, a known exception class and up to
+eight repository-relative source positions with literal-redacted assertion
+expressions. Messages, parameters, locals and captured IO are omitted from the
+new JSON; pytest's existing output is unchanged. Unknown classes or unavailable
+source context remain null, and an observer error may omit a diagnostic record.
+Only reports received by the controller are covered; collection failures,
+worker death before sending and unseen reports at interruption are excluded.
+These locations are diagnostic context, not complete cause attribution or
+authenticated evidence. JUnit, exit status, full collection and gates remain
+required. The timing reader ignores this separate prefix.
+
 分片在 controller 中随 pytest 的 setup/call/teardown 报告写入 Actions 日志，
 无需等待最终 JUnit 或耗时汇总。下载单个 job 日志后运行
 `node scripts/ci/pytest_timing.ts JOB_LOG`，可回读选中／完成数量、已观察耗时、
@@ -96,6 +109,10 @@ worker 秒数、各阶段总和与最慢用例。缺失、损坏或矛盾记录�
 仅收集项的报告提供 phase 耗时；pytest/unittest 子测试仍由 pytest 输出结果，
 其成本已包含在父项 call 中，不重复记入 phase。旧 observer 把子测试混入普通 phase
 的日志仍作为矛盾证据拒绝，reader 不猜测应丢弃哪条重复记录。
+同一 observer 收到失败报告后立即输出 `LOOPX_PYTEST_FAILURE` 脱敏源码位置、异常类和
+断言结构；子测试单独保留失败位置，不重复计时。新增 JSON 不含消息、参数、locals 或
+捕获的 IO，原 pytest 输出不变。未知类、缺失源码或诊断异常仍是证据缺口；未送达的
+报告与收集失败不在覆盖范围，不能据此完成原因归因、证明真实性或豁免完整门禁。
 并发 phase 总和不是
 runner-minutes、排队时长或 CPU 时间；不完整记录仅给出下界，环境准备与占用须结合
 job/step 时间戳。记录不进入 timing cache、不改变测试选择、不替代门禁；没有耗时
