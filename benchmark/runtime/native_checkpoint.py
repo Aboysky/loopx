@@ -5,16 +5,20 @@ The artifact owner seals its declared native-store members after the Host exits.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import math
 import re
 import shutil
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import StdioNativeGoalTransport
+from .codex import Execution
 
 
 def _complete_history(request, session_id: str) -> list[dict[str, Any]]:
@@ -169,3 +173,88 @@ def fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str
     return {"session_id": session, "completed_turn_id": native["completed_turn_id"],
             "visible_history_sha256": native["visible_history_sha256"], "history_verified": True,
             "model_calls": 0, "execution_authority_granted": False, "continuation_qualified": False}
+
+
+def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sha256: str,
+                                    config_path: Path, *, execution: Execution, timeout: float) -> dict[str, Any]:
+    """Explicit controller admission of a verified fork into a destination Goal.
+
+    Existing native fork, Goal lifetime and session owners retain their rules.
+    Historical research/effects and evaluator/whole-trial budget are not adopted
+    by this participant. Admission alone never launches work or a model.
+    """
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.agent_registry import load_goal_from_registry, require_registered_agent_id
+    from loopx.control_plane.projects.registry_codec import (
+        project_registry_transaction,
+    )
+    from loopx.control_plane.turn_driver.codex_sessions import select_codex_cli_session
+    from .sessions import BenchmarkSessionWake
+
+    if execution.context != "resume" or execution.mode != "heartbeat":
+        raise ValueError("checkpoint session admission requires explicit heartbeat resume")
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("checkpoint session admission timeout must be finite and positive")
+    deadline = time.monotonic() + timeout
+    effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "verify", "root": str(unit), "expected_sha256": expected_sha256,
+    }, timeout=timeout)
+    metadata = json.loads((unit / "checkpoint.json").read_bytes())["point_metadata"]
+    source_profile = (metadata.get("session") or {}).get("session_profile_digest")
+    if not isinstance(source_profile, str) or not re.fullmatch(r"[0-9a-f]{64}", source_profile):
+        raise ValueError("checkpoint session admission requires its captured source session profile")
+    if tomllib.loads(config_path.read_text()).get("features", {}).get("goals") is not False:
+        raise ValueError("checkpoint session admission requires native automatic Goals explicitly disabled")
+    source = metadata.get("loopx_state", {})
+    lineage = {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}
+    if (not source.get("goal_id") or not source.get("agent_id") or
+            any(source[key] == lineage[key] for key in lineage)):
+        raise ValueError("checkpoint session admission requires distinct destination Goal and Agent identities")
+    registry = Path(env["LOOPX_REGISTRY"])
+    # Use the current governed benchmark path. The lifecycle-only source-session
+    # profile cannot run governed Turns and is rejected by the registry owner.
+    goal = load_goal_from_registry(registry, lineage["goal_id"])
+    require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
+    if select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage=lineage,
+                               session_scope="agent") is not None:
+        raise ValueError("destination session binding already exists; read back its original admission")
+    result = fork_native_checkpoint(env, unit, expected_sha256, config_path,
+                                    timeout=max(.1, deadline - time.monotonic()))
+    # Hold the existing registry owner's fence through the session write. This
+    # does not mint a lease, task or work admission from historical state.
+    with project_registry_transaction(registry, operation="checkpoint_session_binding", agent_id=lineage["agent_id"]):
+        current = load_goal_from_registry(registry, lineage["goal_id"])
+        require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
+        if current != goal:
+            raise ValueError("destination Goal configuration changed during native checkpoint reconstruction")
+        receipt: dict[str, Any] = {}
+        wake = BenchmarkSessionWake(env, execution, receipt)
+        wake._bind_verified_fork(result["session_id"], source_profile)
+    return {**result, "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
+            "session_binding_admitted": True, "session_profile_digest": wake.digest}
+
+
+def main(argv=None) -> None:
+    """Controller entrypoint inside an explicitly prepared isolated guest."""
+    import os
+    from .codex import SANDBOXES
+
+    parser = argparse.ArgumentParser(description="Admit a checkpoint's native session participant; no model starts.")
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--expected-sha256", required=True)
+    parser.add_argument("--config-path", type=Path, required=True)
+    parser.add_argument("--sandbox", choices=SANDBOXES, required=True)
+    parser.add_argument("--timeout-seconds", type=float, default=30)
+    args = parser.parse_args(argv)
+    required = ("CODEX_BIN", "CODEX_HOME", "LOOPX_PROJECT", "LOOPX_REGISTRY", "LOOPX_RUNTIME_ROOT",
+                "LOOPX_GOAL_ID", "LOOPX_AGENT_ID", "MODEL_NAME", "REASONING_EFFORT")
+    missing = [key for key in required if not os.environ.get(key)]
+    if missing:
+        parser.error("Explicit destination controller environment is missing: " + ", ".join(missing))
+    result = admit_native_checkpoint_session(dict(os.environ), args.root, args.expected_sha256,
+        args.config_path, execution=Execution(context="resume", sandbox=args.sandbox), timeout=args.timeout_seconds)
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()

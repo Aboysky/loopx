@@ -350,8 +350,15 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                 components = [*components, {"id": "evaluation_incumbent", "source_path": str(incumbent)}]
         if request.get("native_session"):
             from .native_checkpoint import native_session_checkpoint
+            from .codex import Execution
+            from .sessions import BenchmarkSessionWake
 
             session = receipt.get("session") or {}
+            source_wake = BenchmarkSessionWake(env, Execution(context="resume",
+                sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
+            if source_wake.session_id != session.get("session_id"):
+                raise ValueError("native checkpoint differs from the current source session binding")
+            metadata["session"] = {**session, "session_profile_digest": source_wake.digest}
             native = native_session_checkpoint(env, session.get("session_id", ""),
                                                timeout=max(.1, deadline - time.time()))
             components = [*components, *native["components"]]
@@ -369,6 +376,11 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                                                   timeout=max(.1, deadline - time.time()))
             if confirmed != native:
                 raise ValueError("native checkpoint cursor or participant basis moved before sealing")
+            confirmed_wake = BenchmarkSessionWake(env, Execution(context="resume",
+                sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
+            if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
+                    (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
+                raise ValueError("native checkpoint source session binding moved before sealing")
         if request.get("loopx_state"):
             declared = metadata["loopx_state"]
             witness = probe["source_witness"][declared["registry_component_id"]]

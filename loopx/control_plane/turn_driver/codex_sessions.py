@@ -174,8 +174,12 @@ def _store_codex_cli_session(
     operation_profile_digest: str | None = None,
     operation_model: str | None = None,
     operation_reasoning_effort: str | None = None,
+    require_absent: bool = False,
 ) -> None:
-    with exclusive_file_lock(_session_path(runtime_root, lineage, session_scope)):
+    path = _session_path(runtime_root, lineage, session_scope)
+    with exclusive_file_lock(path):
+        if require_absent and (path.exists() or path.is_symlink()):
+            raise ValueError("session binding already exists; read back the original admission")
         _write_codex_cli_session(
             runtime_root,
             lineage=lineage,
