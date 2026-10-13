@@ -370,9 +370,39 @@ fail without a fresh evaluation. Redirects cannot forward the admin secret.
 After an uncertain restore response, inspect native readback with the controller;
 do not switch run identities or perform ordinary fresh registration as a retry.
 
+An explicit **SForge phase-clock participant** preserves a declared Host file's
+remaining duration alongside native opportunities. Add
+`--phase-deadline-file /private/source-phase-deadline` to capture, and
+`--phase-deadline-file /private/new-host-control/phase-deadline` to restore.
+Supply the original physical integer deadline from the admitted source Host,
+through an authorized controller read route. The destination file must be new,
+outside the artifact and native bank, and installed at the Host's existing
+phase-file route before starting its ordinary entry command.
+
+The sealed deadline and native capture timestamp determine the remainder; the
+receiver recomputes it. A point with two hours remaining keeps that duration
+after an eight-hour offline gap. It does not reuse the old absolute epoch or
+initialize another configured twelve-hour trial. Native admission still owns
+consumed rounds and remaining cooldown. Host time begins immediately before
+native activation, including its transport time; the integer phase format can
+round the retained allowance down by less than one second. The existing worker's
+startup/settlement reserve remains in force.
+
+A native-only point or visited native/Host capture attempt cannot acquire a later Host clock. A capsule
+with this participant requires the matching explicit restore option; omitting it
+cannot discard its allowance. Existing/aliased files, source movement, changed
+sealed bytes and exhausted work allowance refuse activation. An uncertain native
+response leaves the reserved phase file empty and unusable by the ordinary Host
+entry, preventing a fresh-budget fallback. Reconcile that original native
+operation before any owner-authorized recovery; no automatic replay, new run or
+budget reset is supplied. Omit the option on **new captures** to retain native-only
+transport. Full Host source attribution, source/native clock alignment and the
+joint session/research/effect barrier remain qualification requirements.
+
 This is an independently usable **native participant transport**, still partial
 relative to full research continuation. It does not join the worker's replan
-barrier, restore Codex/LoopX authority or carry the remaining whole-trial budget.
+barrier or restore Codex/LoopX authority. Its optional declared phase clock does
+not qualify full research-state adoption or a same-point scientific comparison.
 Never put its controller configuration in `--checkpoint-request` or a worker
 payload. Omit both these controller operations and the native `--checkpoints`
 flag to disable this transport on a fresh judge; preserved capsules stay inert.

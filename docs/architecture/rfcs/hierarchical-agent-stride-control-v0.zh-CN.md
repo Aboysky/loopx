@@ -640,7 +640,13 @@ effect 采用、剩余总预算、已安装前端恢复或科学收益。显式 
 已将提议中的 native initializer 接入既有 typed 产物 owner：显式 controller
 权限捕获/导入封存 native bank，再请求新的原生注册。controller 配置不进入 solver
 payload 或导出参与者；opaque 内容仍私有且未获隐私认证。此切片保留原生历史、选优 archive、计数及冷却，仍不
-资格化联合 replan barrier、模型/LoopX 状态采用、剩余总预算或实际有效研究。
+资格化联合 replan barrier、模型/LoopX 状态采用或实际有效研究。其显式 SForge
+phase 文件参与者还将声明的 Host deadline 与 native 捕获时间绑定；恢复时重算
+剩余时长，在激活处锚定新的 Host phase 文件，计入传输时间，不计离线等待，
+也不重置为新试验的完整预算。既有工作预留和 native 评测机会 owner 不变。
+不确定响应留下不可执行的 phase 预留，不能回退到新预算。完整 Host 来源/
+时钟对齐、联合研究/effect 采用与原操作恢复仍须按 profile 资格化；参与者
+传输本身不能证明这些结果。
 
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和

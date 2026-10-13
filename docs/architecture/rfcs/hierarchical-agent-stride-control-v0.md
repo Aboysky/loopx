@@ -772,7 +772,15 @@ explicit controller authority captures/imports a sealed native bank and requests
 fresh native registration. Controller configuration stays out of solver payloads
 and exported participants; opaque data remains private and uncertified. This slice preserves native history, selected
 archive, counters and cooldown; it does not yet qualify the joint replan barrier,
-model/LoopX state adoption, remaining whole-trial budget or useful research.
+model/LoopX state adoption or useful research. Its explicit SForge phase-file
+participant also seals the declared Host deadline against the native capture
+timestamp. Restore recomputes the remaining duration and anchors a new Host phase
+file at activation, charging transport rather than offline time or a fresh trial.
+The existing work reserve and native opportunity owner remain unchanged. An
+uncertain response leaves an unusable phase reservation, not a fresh-budget
+fallback. Full Host provenance/clock alignment, joint research/effect adoption
+and original-operation recovery still need their profile's qualification; this
+participant transport cannot certify them.
 
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
