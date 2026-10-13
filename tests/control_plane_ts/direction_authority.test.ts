@@ -71,6 +71,54 @@ for(const provider of ["file","sqlite","postgresql"]){
   assert.deepEqual(after.head.todos,work.todos);assert.deepEqual(after.head.leases,[]);
   assert.equal(JSON.stringify(after.head).includes("original material"),false);
   assert.equal(JSON.stringify(after.head).includes("source.md"),false);
+  // A legal full projection remains a bounded read model, not a reason to
+  // discard a newer failure. Seed synthetic history only in this isolated store.
+  const original=(after.head.material_usage_receipts as JsonObject[])[0]!;
+  const records=Array.from({length:4096},(_,i)=>({...original,read_operation_id:`history-${i}`,
+    receipt:{...(original.receipt as JsonObject),receipt_id:`history-${i}`,agent_id:i===4095?"agent-b":"agent-a",
+      recorded_at:new Date(Date.UTC(2026,0,1)+i).toISOString()}}));
+  const full=await store.commitAuthority({expected_provider_revision:after.provider_revision,operation_id:"full-history",
+    events:[],receipts:[],next_projection:{...after.head,material_usage_receipts:records}});
+  assert.equal(full.status,"applied");
+  const old=await invoke({...read,operation_id:"old-offer"});
+  const peer=await invoke({...read,operation_id:"peer-offer",actor_agent_id:"agent-b"});
+  // Persist an old-format offer, as produced by the pre-fix reader. It must
+  // remain valid before rollover, but cannot use the unchanged count after it.
+  const legacyOffer={...(old.offer as JsonObject)};delete legacyOffer.usage_basis_sha256;
+  const {canonicalAuthoritySha256}=await import("../../loopx/control_plane/coordination/authority_store_codec.ts");
+  legacyOffer.read_operation_id="legacy-offer";
+  const beforeLegacy=await store.loadAuthority();if(beforeLegacy.status!=="loaded")throw Error("missing");
+  const legacyDigest=canonicalAuthoritySha256(legacyOffer);
+  await store.commitAuthority({expected_provider_revision:beforeLegacy.provider_revision,operation_id:"legacy-offer",events:[],
+    receipts:[{schema_version:"goal_direction_operation_v0",operation_id:"legacy-offer",result:{goal_ref,agent_id:"agent-a",offer:legacyOffer,delivery_digest:legacyDigest}}],
+    next_projection:beforeLegacy.head});
+  const missing={...read,operation_id:"full-missing",source:{...source,material_observation:{available:false}}};
+  store.commitAuthority=async input=>{await write(input);throw Error("lost full-capacity reply");};
+  const failed=await invoke(missing);assert.equal(failed.status,"recovered");assert.equal(failed.read_outcome,"unavailable");
+  store.commitAuthority=write;
+  assert.deepEqual(failed.archived_usage_record,records[0]);
+  assert.equal(((await invoke(request("inspect"))).projection as JsonObject).direction_state,"blocked");
+  assert.equal((await invoke(missing)).status,"replayed");
+  const archive=await invoke(request("receipt",{receipt_operation_id:"full-missing"}));
+  assert.deepEqual(((archive.receipts as JsonObject[])[0]!.result as JsonObject).archived_usage_record,records[0]);
+  for(const [id,digest] of [["old-offer",old.delivery_digest],["legacy-offer",legacyDigest]]) {
+    await assert.rejects(invoke(request("acknowledge",{operation_id:`late-${id}`,read_operation_id:id,delivery_digest:digest})),/later material observation/);
+  }
+  // A new-format peer offer binds only that peer/material, so unrelated
+  // rollover must not require another read.
+  const peerAck=await invoke(request("acknowledge",{actor_agent_id:"agent-b",operation_id:"peer-ack",read_operation_id:"peer-offer",delivery_digest:peer.delivery_digest}));
+  assert.equal(peerAck.ok,true);
+  const fresh=await invoke({...read,operation_id:"fresh-offer"});
+  const restored=await invoke(request("acknowledge",{operation_id:"fresh-ack",read_operation_id:"fresh-offer",delivery_digest:fresh.delivery_digest}));
+  assert.equal(restored.ok,true);
+  assert.equal(((await invoke(request("inspect"))).projection as JsonObject).direction_state,"current");
+  const final=await store.loadAuthority();if(final.status!=="loaded")throw Error("missing");
+  assert.equal((final.head.material_usage_receipts as JsonObject[]).length,4096);
+  assert.deepEqual(final.head.todos,work.todos);assert.deepEqual(final.head.leases,[]);
+  const originalHistory=await store.readReceipt("ack");
+  assert.equal(originalHistory.status,"found");
+  if(originalHistory.status==="found")assert.deepEqual(originalHistory.receipts,historical.receipts);
+
  });
 }
 

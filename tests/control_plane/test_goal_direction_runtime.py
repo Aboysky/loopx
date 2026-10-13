@@ -321,3 +321,68 @@ def test_missing_repo_material_never_falls_back_to_same_named_runtime_copy(sourc
         "repo": str(f["registry"].parent.parent), "state_file": str(f["state"])}]},
         runtime_root=f["runtime"], goal_id=f["ref"]["goal_id"], raw_path="direction.md")
     assert legacy["content"] == replica.read_text()
+
+
+def test_full_usage_preserves_failure_and_recovers_without_losing_history(source_goal, tmp_path, capsys):
+    """Fill only a disposable native store; all exercised operations use the CLI."""
+    import subprocess
+    from pathlib import Path
+
+    f, document, _, request = setup(source_goal, tmp_path, capsys)
+    read = call(f, tmp_path, capsys, "read", request, actor="agent-a", execute=True)[1]
+    ack = {"read_operation_id": request["operation_id"], "delivery_digest": read["delivery_digest"], "operation_id": "original-ack"}
+    confirmed = call(f, tmp_path, capsys, "acknowledge", ack, actor="agent-a", execute=True)[1]
+    original_receipt = confirmed["original_receipt"]
+    # Actual native creation/first read/ack above supplies the exact lifetime and
+    # receipt shape. Saturate legal synthetic history through the real provider.
+    script = """
+import {openLocalAuthorityStore} from './loopx/control_plane/coordination/local_authority_provider.ts';
+const store = await openLocalAuthorityStore(process.argv[1], process.argv[2]);
+const loaded = await store.loadAuthority();
+if (loaded.status !== 'loaded') throw Error('missing authority');
+const original = loaded.head.material_usage_receipts[0];
+const rows = Array.from({length:4096}, (_,i) => ({...original,
+ read_operation_id:'historical-read-'+i, receipt:{...original.receipt,
+ receipt_id:'historical-'+i, recorded_at:new Date(Date.UTC(2026,0,1)+i).toISOString()}}));
+const result = await store.commitAuthority({expected_provider_revision:loaded.provider_revision,
+ operation_id:'synthetic-full-history',events:[],receipts:[],
+ next_projection:{...loaded.head,material_usage_receipts:rows}});
+if (result.status !== 'applied') throw Error(JSON.stringify(result));
+console.log(JSON.stringify(rows[0]));
+"""
+    seeded = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script,
+        str(f["runtime"]), f["ref"]["goal_id"]], cwd=Path(__file__).resolve().parents[2], text=True, capture_output=True, check=True)
+    first_record = json.loads(seeded.stdout)
+    assert call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]["projection"]["direction_state"] == "current"
+    stale = call(f, tmp_path, capsys, "read", {**request, "operation_id": "before-loss"}, actor="agent-a", execute=True)[1]
+    content = document.read_text()
+    document.unlink()
+    missing_request = {**request, "operation_id": "full-missing"}
+    code, missing = call(f, tmp_path, capsys, "read", missing_request, actor="agent-a", execute=True)
+    cold = call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]
+    assert cold["projection"]["direction_state"] == "blocked", (missing, cold["projection"])
+    assert code == 1 and missing.get("read_outcome") == "unavailable", missing
+    assert missing["archived_usage_record"] == first_record
+    assert cold["receipt_count"] == 4096
+    assert cold["projection"]["items"][0]["state"] == "inaccessible"
+    replay = call(f, tmp_path, capsys, "read", missing_request, actor="agent-a", execute=True)[1]
+    assert replay["status"] == "replayed" and replay["original_receipt"] == missing["original_receipt"]
+    archived = call(f, tmp_path, capsys, "receipt", {"receipt_operation_id": "full-missing"}, actor="agent-a")[1]
+    assert archived["receipts"][0]["result"]["archived_usage_record"] == first_record
+    history = call(f, tmp_path, capsys, "receipt", {"receipt_operation_id": "original-ack"}, actor="agent-a")[1]
+    assert history["receipts"][0] == original_receipt
+    old_ack = {"read_operation_id": "before-loss", "delivery_digest": stale["delivery_digest"], "operation_id": "stale-full-ack"}
+    assert call(f, tmp_path, capsys, "acknowledge", old_ack, actor="agent-a", execute=True)[0] == 1
+    document.write_text(content)
+    recovered = call(f, tmp_path, capsys, "read", {**request, "operation_id": "full-recovered"}, actor="agent-a", execute=True)[1]
+    fresh_ack = {"read_operation_id": "full-recovered", "delivery_digest": recovered["delivery_digest"], "operation_id": "full-recovered-ack"}
+    code, fixed = call(f, tmp_path, capsys, "acknowledge", fresh_ack, actor="agent-a", execute=True)
+    assert code == 0 and fixed["current"]["projection"]["direction_state"] == "current", fixed
+    assert fixed["current"]["receipt_count"] == 4096
+    assert call(f, tmp_path, capsys, "acknowledge", fresh_ack, actor="agent-a", execute=True)[1]["status"] == "replayed"
+    # Another Agent with no retained observation cannot evict this Agent's rows.
+    document.unlink()
+    code, refused = call(f, tmp_path, capsys, "read", {**request, "operation_id": "peer-full"}, actor="agent-b", execute=True)
+    assert code == 1 and "capacity" in refused["reason"], refused
+    assert call(f, tmp_path, capsys, "inspect", actor="agent-b")[1]["projection"]["direction_state"] == "blocked"
+    assert call(f, tmp_path, capsys, "inspect", actor="agent-a")[1]["receipt_count"] == 4096

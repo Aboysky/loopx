@@ -75,7 +75,8 @@ function policyRegistry(value: unknown): JsonObject {
 function scope(head: JsonObject, goalRef: WireExactGoalRef): JsonObject | null {
   if (head.goal_direction_scope === undefined) return null;
   const value = object(head.goal_direction_scope, "direction scope");
-  keys(value, ["schema_version", "goal_ref", "enabled", "authority_digest"]);
+  keys(value, ["schema_version", "goal_ref", "enabled", "authority_digest"], ["usage_generation"]);
+  need(Number.isSafeInteger(value.usage_generation ?? 0) && Number(value.usage_generation ?? 0) >= 0, "invalid material usage generation");
   need(value.schema_version === SCOPE_SCHEMA && typeof value.enabled === "boolean", "invalid direction scope");
   const storedRef = parseWireExactGoalRef(value.goal_ref, "direction scope");need(sameExactGoalRef(storedRef, goalRef), "direction belongs to a different Goal lifetime");
   const registry = object(head.authority_registry, "canonical authority registry");
@@ -114,6 +115,29 @@ function usage(head: JsonObject, goalRef: WireExactGoalRef): JsonObject[] {
     need(!ids.has(id), "duplicate usage receipt identity");ids.add(id);
     return receipt;
   });
+}
+/** Keep the bounded current read model, retaining every displaced record in the
+ * same atomic command receipt/journal. Never evict another Agent/material.
+ * Legacy offers use the generation fence; new offers bind only their own pair.
+ */
+function retainUsage(next: JsonObject, goalRef: WireExactGoalRef, record: JsonObject): JsonObject | null {
+  const rows = usage(next, goalRef), incoming = object(record.receipt, "new usage receipt");
+  const retained = [...(next.material_usage_receipts as JsonObject[] ?? [])];
+  let archived: JsonObject | null = null;
+  if (rows.length === GOAL_DIRECTION_LIMITS.receipts) {
+    const index = rows.findIndex(row => row.agent_id === incoming.agent_id && row.material_id === incoming.material_id);
+    need(index >= 0, "material usage capacity exceeded; no retained observation for this Agent/material can be archived");
+    const configured = scope(next, goalRef)!;
+    const generation = Number(configured.usage_generation ?? 0) + 1;
+    need(Number.isSafeInteger(generation), "material usage generation capacity exceeded");
+    [archived] = retained.splice(index, 1);
+    next.goal_direction_scope = {...configured, usage_generation: generation};
+  }
+  retained.push(record);next.material_usage_receipts = retained;
+  return archived;
+}
+function usageBasis(rows: JsonObject[], actor: unknown, material: unknown): string {
+  return canonicalAuthoritySha256(rows.filter(row => row.agent_id === actor && row.material_id === material));
 }
 function readView(loaded: AuthorityStoreHead, goalRef: WireExactGoalRef, actor: string | null, registered: string[], now: string): JsonObject {
   const configured = scope(loaded.head, goalRef), rows = usage(loaded.head, goalRef);
@@ -219,7 +243,8 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
       need(readable?.baseline_digest,"direction declaration does not fit the existing reader envelope");
       const digest=canonicalAuthoritySha256({goal_ref:goalRef,authority_registry:registry});
       basis(request.expected_authority_digest===undefined||request.expected_authority_digest===digest,"reviewed material declaration changed before apply");
-      next.authority_registry=registry;next.goal_direction_scope={schema_version:SCOPE_SCHEMA,goal_ref:goalRef,enabled:true,authority_digest:digest};
+      next.authority_registry=registry;next.goal_direction_scope={schema_version:SCOPE_SCHEMA,goal_ref:goalRef,enabled:true,authority_digest:digest,
+        ...(prior?.usage_generation === undefined ? {} : {usage_generation:prior.usage_generation})};
       result={changed:!prior||prior.enabled!==true||prior.authority_digest!==digest,goal_ref:goalRef,agent_id:null,authority_digest:digest};
     } else {
       need(prior,"direction baseline is not configured");next.goal_direction_scope={...prior,enabled:false};result={changed:prior.enabled===true,goal_ref:goalRef,agent_id:null,authority_digest:prior.authority_digest};
@@ -231,14 +256,15 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
     const observation=object(source.material_observation,"actual material read");
     const count=usage(loaded.head,goalRef).filter(r=>r.agent_id===actor&&r.material_id===request.material_id).length;
     if(observation.available===false){
-      keys(observation,["available"]);need(usage(loaded.head,goalRef).length<GOAL_DIRECTION_LIMITS.receipts,"material usage capacity exceeded");
+      keys(observation,["available"]);
       const receipt={schema_version:"material_usage_receipt_v0",receipt_id:`unavailable:${canonicalAuthoritySha256({goal_ref:goalRef,operation_id:request.operation_id}).slice(0,32)}`,
         goal_id:goalRef.goal_id,agent_id:actor,material_id:request.material_id,todo_id:null,observed_revision:null,outcome:"unavailable",
         recorded_at:usageRecordedAt(usage(loaded.head,goalRef),now)};
-      next.material_usage_receipts=[...(loaded.head.material_usage_receipts as JsonObject[]??[]),{
+      const archived=retainUsage(next,goalRef,{
         schema_version:USAGE_SCHEMA,goal_ref:goalRef,receipt,read_operation_id:request.operation_id,
-        delivery_digest:canonicalAuthoritySha256({goal_ref:goalRef,agent_id:actor,operation_id:request.operation_id,available:false})}];
+        delivery_digest:canonicalAuthoritySha256({goal_ref:goalRef,agent_id:actor,operation_id:request.operation_id,available:false})});
       result={changed:true,goal_ref:goalRef,agent_id:actor,read_outcome:"unavailable",receipt,
+        ...(archived ? {archived_usage_record:archived} : {}),
         receipt_recorded:true,reason:"Material is unavailable at its declared revision; repair its source or have the owner review the updated revision, then retry a new read."};
     } else {
     keys(observation,["revision","source_ref_sha256","byte_count","content_sha256"]);
@@ -246,7 +272,8 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
       "actual read did not match the required material revision");
     need(Number.isSafeInteger(observation.byte_count)&&Number(observation.byte_count)>0&&Number(observation.byte_count)<=256_000,"material byte budget exceeded");
     const offer={goal_ref:goalRef,agent_id:actor,material_id:request.material_id,authority_digest:request.authority_digest,required_revision:request.required_revision,
-      source_ref_sha256:request.source_ref_sha256,content_sha256:observation.content_sha256,byte_count:observation.byte_count,read_operation_id:request.operation_id,usage_count:count};
+      source_ref_sha256:request.source_ref_sha256,content_sha256:observation.content_sha256,byte_count:observation.byte_count,read_operation_id:request.operation_id,usage_count:count,
+      usage_basis_sha256:usageBasis(usage(loaded.head,goalRef),actor,request.material_id)};
     result={changed:true,goal_ref:goalRef,agent_id:actor,offer,delivery_digest:canonicalAuthoritySha256(offer),receipt_recorded:false};
     }
   } else {
@@ -261,14 +288,17 @@ export async function executeDirectionOperation(store: AuthorityStore, value: un
     const rows=usage(loaded.head,goalRef);
     const receiptId="read_"+createHash("sha256").update(canonicalAuthoritySha256({goal_ref:goalRef,agent_id:actor,read_operation_id:readId})).digest("hex").slice(0,24);
     const existing=rows.find(row=>row.receipt_id===receiptId);
-    need(existing||rows.length<GOAL_DIRECTION_LIMITS.receipts,"material usage capacity exceeded");
-    need(existing||rows.filter(r=>r.agent_id===actor&&r.material_id===offer.material_id).length===offer.usage_count,
+    need(existing || (offer.usage_basis_sha256 === undefined
+      ? Number(scope(loaded.head,goalRef)?.usage_generation ?? 0) === 0
+        && rows.filter(r=>r.agent_id===actor&&r.material_id===offer.material_id).length===offer.usage_count
+      : hash(offer.usage_basis_sha256) === usageBasis(rows,actor,offer.material_id)),
       "a later material observation invalidated this unacknowledged offer; read the source again");
     const receipt=existing??{schema_version:"material_usage_receipt_v0",receipt_id:receiptId,goal_id:goalRef.goal_id,agent_id:actor,material_id:offer.material_id,
       todo_id:null,observed_revision:offer.required_revision,outcome:"read",recorded_at:usageRecordedAt(rows,now)};
-    if(!existing)next.material_usage_receipts=[...(loaded.head.material_usage_receipts as JsonObject[]??[]),{
-      schema_version:USAGE_SCHEMA,goal_ref:goalRef,receipt,read_operation_id:readId,delivery_digest:read.delivery_digest}];
-    result={changed:!existing,goal_ref:goalRef,agent_id:actor,receipt,receipt_recorded:true,understanding_verified:false};
+    const archived=existing ? null : retainUsage(next,goalRef,{
+      schema_version:USAGE_SCHEMA,goal_ref:goalRef,receipt,read_operation_id:readId,delivery_digest:read.delivery_digest});
+    result={changed:!existing,goal_ref:goalRef,agent_id:actor,receipt,receipt_recorded:true,understanding_verified:false,
+      ...(archived ? {archived_usage_record:archived} : {})};
   }
   need(await sourceCurrent(),"source Goal changed before direction commit");
   // Refuse the added record/configuration before its combined projection input
