@@ -375,21 +375,27 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize(("drift", "mutation_stage"), [(None, "probe"),
+    ("canonical_head", "probe"), ("exported_bytes", "probe"),
+    ("canonical_head", "capture"), ("exported_bytes", "capture")])
+def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_path, monkeypatch, provider, drift, mutation_stage):
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     import subprocess
 
-    def authority_head(root):
+    def authority_head(root, advance=False):
         module = Path(__file__).resolve().parents[2]/'loopx/control_plane/coordination/local_authority_provider.ts'
         script = ('import {openLocalAuthorityStore} from '+json.dumps(module.as_uri())+';'
             "let input='';for await(const chunk of process.stdin)input+=chunk;"
             'const x=JSON.parse(input);const store=await openLocalAuthorityStore(x.root,x.goal,{}, {existingOnly:true});'
+            "if(x.advance){const head=await store.loadAuthority();const result=await store.commitAuthority({"
+            "expected_provider_revision:head.provider_revision,operation_id:'synthetic-source-observation',"
+            "events:[],receipts:[],next_projection:head.head});if(result.status!=='applied')throw new Error(JSON.stringify(result));}"
             'process.stdout.write(JSON.stringify(await store.loadAuthority()));')
         result = subprocess.run(['node','--no-warnings','--experimental-strip-types','--input-type=module','-e',script],
-            input=json.dumps({'root':str(root),'goal':cli.GOAL_ID}),capture_output=True,text=True,timeout=45)
+            input=json.dumps({'root':str(root),'goal':cli.GOAL_ID,'advance':advance}),capture_output=True,text=True,timeout=45)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
@@ -438,9 +444,32 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
         'LOOPX_PROJECT':str(project),'LOOPX_RUNTIME_ROOT':str(runtime),'LOOPX_REGISTRY':str(registry),
         'LOOPX_GOAL_ID':cli.GOAL_ID,'LOOPX_AGENT_ID':cli.AGENT_ID}
     receipt = {'ok':True,'stage':'execute','mode':'heartbeat','turn_id':cli.TURN_ID}
+    if drift:
+        def changed_context(method, params, **kwargs):
+            if method == "runtime.checkpoint_artifacts" and params.get("action") == mutation_stage:
+                if drift == "canonical_head":
+                    # Receipt-only provider commits also move the consistency
+                    # cursor; no new knowledge is needed to invalidate the point.
+                    authority_head(runtime, advance=True)
+                else:
+                    (wakes/cli.TURN_ID/'checkpoint-research-context.json').write_text('{"later":true}')
+            return effect_runtime_result(method, params, **kwargs)
+        monkeypatch.setattr('benchmark.runtime.checkpoint.effect_runtime_result', changed_context)
     capture_after_wake(env, receipt)
+    if drift:
+        assert not receipt['checkpoint']['captured'] and not target.exists(), receipt
+        assert ('context' if mutation_stage == 'probe' else 'source') in receipt['checkpoint']['error']
+        assert receipt['ok'] is True
+        return
     assert receipt['checkpoint'].get('captured') is True, json.dumps(receipt['checkpoint'])
     manifest = json.loads((target/'checkpoint.json').read_text())
+    declared_context = manifest['point_metadata']['research_context']
+    context_root = target/'components'/declared_context['component_id']
+    exported_context = context_root/declared_context['member_path'] if declared_context['member_path'] else context_root
+    assert hashlib.sha256(exported_context.read_bytes()).hexdigest() == declared_context['sha256']
+    context = json.loads(exported_context.read_bytes())
+    assert context['snapshot']['provider_revision'] == before['authority_read']['provider_revision']
+    assert context['goal_id'] == cli.GOAL_ID and 'leases' not in context['snapshot']
     coverage = manifest['point_metadata']['loopx_state']['source_inventory']
     covered = {entry['source_path']:entry['component_id'] for entry in coverage}
     assert str(runtime) in covered and str(registry) in covered and str(state) in covered

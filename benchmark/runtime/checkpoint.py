@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import subprocess
 import time
 from pathlib import Path, PurePosixPath
@@ -336,6 +337,25 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
         components = request["components"]
         if request.get("loopx_state"):
             components, metadata["loopx_state"] = _loopx_state_components(env, components, destination)
+            from loopx.control_plane.coordination.local_authority import local_authority_is_promoted
+            research = None
+            if local_authority_is_promoted(runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"]):
+                from .research_checkpoint import canonical_context, _encoded
+                research = canonical_context(env, deadline=deadline)
+                evidence = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-research-context.json"
+                research_raw = _encoded(research)
+                with os.fdopen(os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as file:
+                    file.write(research_raw)
+                parent = next((entry for entry in components if evidence.is_relative_to(Path(entry["source_path"]))), None)
+                if parent is None:
+                    parent = {"id": "research_context", "source_path": str(evidence)}
+                    components = [*components, parent]
+                metadata["research_context"] = {"component_id": parent["id"],
+                    "member_path": evidence.relative_to(Path(parent["source_path"])).as_posix() if evidence != Path(parent["source_path"]) else "",
+                    "sha256": hashlib.sha256(research_raw).hexdigest(),
+                    "provider_revision": research["snapshot"]["provider_revision"], "store_identity": research["snapshot"]["store_identity"]}
+            else:
+                metadata["canonical_context_unavailable"] = "Source coordination is unpromoted; its retained inventory remains inert."
         opportunity = None
         if request.get("evaluation_opportunity"):
             from .sforge_checkpoint import capture_opportunity
@@ -389,6 +409,14 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                     (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
                 raise ValueError("native checkpoint source session binding moved before sealing")
         if request.get("loopx_state"):
+            if research is not None:
+                if canonical_context(env, deadline=deadline) != research:
+                    raise ValueError("canonical research context moved before sealing")
+                retained = metadata["research_context"]
+                member = next((entry for entry in probe["source_witness"][retained["component_id"]]
+                    if entry["path"] == retained["member_path"]), None)
+                if member is None or member.get("sha256") != retained["sha256"]:
+                    raise ValueError("canonical research context bytes moved before sealing")
             declared = metadata["loopx_state"]
             witness = probe["source_witness"][declared["registry_component_id"]]
             member = next((entry for entry in witness if entry["path"] == declared["registry_member_path"]), None)

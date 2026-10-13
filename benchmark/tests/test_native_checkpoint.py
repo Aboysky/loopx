@@ -195,8 +195,8 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
 def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
-    This qualifies the conversation participant, not full research/evaluator
-    adoption or benchmark utility. No source trial or paid model is launched.
+    This jointly qualifies native conversation and canonical Todo evidence
+    adoption, not full research/evaluator state or benchmark utility. No source trial or paid model is launched.
     """
     import shutil
     import subprocess
@@ -236,7 +236,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             "--text", "Verify the retained candidate and preserve applicable negative evidence."]) == 0
         added = json.loads(capsys.readouterr().out)
         return registry, runtime, added["todo_id"]
-    source_registry, source_runtime, _ = register(source_goal, source_agent)
+    source_registry, source_runtime, source_todo = register(source_goal, source_agent)
     registry, runtime, destination_todo = register(destination_goal, destination_agent)
     prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime)]
     turn_id = "checkpoint-continuation-fixture"
@@ -245,13 +245,29 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
     guard = json.loads(capsys.readouterr().out)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    from benchmark.runtime.research_checkpoint import canonical_context, adopt_todo_context, _encoded
+    source_prefix = ["--format", "json", "--registry", str(source_registry), "--runtime-root", str(source_runtime)]
+    def invoke(arguments):
+        code = main(arguments)
+        output = capsys.readouterr().out
+        assert code == 0, output
+        return json.loads(output)
+    source_binding = ["--goal-id", source_goal, "--todo-id", source_todo]
+    invoke([*source_prefix, "task-lease", "acquire", *source_binding,
+            "--owner", source_agent, "--idempotency-key", "source-context"])
+    source_revision = invoke([*source_prefix, "todo", "list", *source_binding])["authority_read"]["provider_revision"]
+    invoke([*source_prefix, "todo", "update", *source_binding, "--agent-id", source_agent,
+        "--note", "Candidate 3 failed the synthetic check; preserve candidate 7.",
+        "--update-operation-id", "source-negative-evidence", "--update-expected-provider-revision", source_revision,
+        "--task-lease-idempotency-key", "source-context", "--task-lease-expected-version", "1"])
     requests = []
+    retained_context_path = None
     def response(request, index, message):
         requests.append(request)
         if index == 2:
             return {"type": "function_call", "id": "fc_retained", "call_id": "call_retained",
                 "name": "exec_command", "arguments": json.dumps({
-                    "cmd": "cat candidate.txt research.txt", "max_output_tokens": 1000})}
+                    "cmd": "cat candidate.txt research.txt " + retained_context_path, "max_output_tokens": 6000})}
         if index == 3:
             message["content"][0]["text"] = "Retained candidate 7 verified; candidate 3 remains rejected."
         return message
@@ -270,16 +286,31 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         native = native_session_checkpoint(env, source_session, timeout=20)
         config = tmp_path / "config.toml"
         config.write_bytes((Path(env["CODEX_HOME"]) / "config.toml").read_bytes())
+        source_context = canonical_context(env, deadline=time.time() + 30)
+        context_raw = _encoded(source_context)
+        context_export = tmp_path / "source-context.json"
+        context_export.write_bytes(context_raw)
         components = [*native["components"], {"id": "code", "source_path": str(candidate)},
-                      {"id": "research", "source_path": str(research)}]
+                      {"id": "research", "source_path": str(research)},
+                      {"id": "research_context", "source_path": str(context_export)}]
         probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
         unit = tmp_path / "point"
         captured = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture",
             "destination": str(unit), "components": components, "expected_source_sha256": probe["source_sha256"],
             "point_metadata": {"native_session": native["metadata"],
                 "session": {"session_id": source_session, "session_profile_digest": source_wake.digest},
-                "loopx_state": {"goal_id": source_goal, "agent_id": source_agent}}}, retry_safe=False)
+                "loopx_state": {"goal_id": source_goal, "agent_id": source_agent},
+                "research_context": {"component_id": "research_context", "member_path": "",
+                    "sha256": hashlib.sha256(context_raw).hexdigest(),
+                    "provider_revision": source_context["snapshot"]["provider_revision"],
+                    "store_identity": source_context["snapshot"]["store_identity"]}}}, retry_safe=False)
         digest = captured["sha256"]
+        invoke([*source_prefix, "todo", "update", *source_binding, "--agent-id", source_agent,
+            "--note", "Candidate 999 is later evidence outside the captured point.",
+            "--update-operation-id", "later-negative-evidence", "--update-expected-provider-revision",
+            source_context["snapshot"]["provider_revision"], "--task-lease-idempotency-key", "source-context",
+            "--task-lease-expected-version", "1"])
+        later_context = canonical_context(env, deadline=time.time() + 30)
         # Qualify use of captured inputs, not the source's later working files.
         # A quiesced same-machine fixture swaps fixed paths; this is not evidence
         # of complete guest/environment isolation or a scientific matched trial.
@@ -375,6 +406,26 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         assert len(calls) == 1 and load_codex_cli_session(runtime, lineage={
             "goal_id": destination_goal, "agent_id": destination_agent}, session_scope="agent") == bound
 
+        # Both participants meet at the real destination continuation owner.
+        # No source claim/lease is replayed; adoption alone still starts no work.
+        lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
+            "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
+        current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
+        adopted_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.research_checkpoint",
+            "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
+            "--todo-id", destination_todo, "--operation-id", "branch-context",
+            "--expected-revision", current["authority_read"]["provider_revision"],
+            "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])],
+            env=env, text=True, capture_output=True, timeout=60)
+        assert adopted_cli.returncode == 0, adopted_cli.stderr
+        context_result = json.loads(adopted_cli.stdout)
+        retained_context_path = str(Path(context_result["artifact"]).relative_to(workspace))
+        assert Path(context_result["artifact"]).read_bytes() == context_raw and len(calls) == 1
+        adopted_todo = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
+        assert adopted_todo["todo"]["claimed_by"] == destination_agent
+        assert json.loads(adopted_todo["todo"]["note"])["source_session"] == source_session
+        guard = invoke([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding])
+        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
         receipt = {}
         wake = BenchmarkSessionWake(env, execution, receipt)
         assert wake.session_id == admitted["session_id"] and receipt["session"]["action"] == "resume"
@@ -392,10 +443,22 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         assert destination_goal in json.dumps(requests[1]) and destination_todo in json.dumps(requests[1])
         assert "retained candidate: 7" in json.dumps(requests[2])
         assert "candidate 3 was rejected" in json.dumps(requests[2])
+        assert "Candidate 3 failed the synthetic check" in json.dumps(requests[2])
+        assert "Candidate 999" not in json.dumps(requests[2])
+        assert canonical_context({**env, "LOOPX_GOAL_ID": source_goal,
+            "LOOPX_RUNTIME_ROOT": str(source_runtime)}, deadline=time.time() + 30) == later_context
         assert "Retained candidate 7 verified" in result.stdout
         retained = native_session_checkpoint(env, admitted["session_id"], timeout=20)
         assert retained["metadata"]["turn_ids"][:-1] == native["metadata"]["turn_ids"]
         assert retained["metadata"]["completed_turn_id"] != native["metadata"]["completed_turn_id"]
+        with pytest.raises(ValueError, match="native history or configuration moved"):
+            adopt_todo_context(env, unit, digest, source_todo_id=source_todo,
+                todo_id=destination_todo, operation_id="must-not-adopt-later-session",
+                expected_revision=adopted_todo["authority_read"]["provider_revision"],
+                lease_key="branch-context", lease_version=lease["lease"]["version"])
+        assert len(calls) == 3
+        assert invoke([*prefix, "todo", "list", "--goal-id", destination_goal,
+                       "--todo-id", destination_todo])["todo"] == adopted_todo["todo"]
         assert candidate.read_text() == "retained candidate: 7\n"
         assert (late_source / candidate.name).read_text() == "later candidate: 999\n"
         assert (late_source / research.name).read_text() == "later evidence unavailable at the captured point\n"
