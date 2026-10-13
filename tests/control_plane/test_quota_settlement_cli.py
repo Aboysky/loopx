@@ -91,6 +91,7 @@ def _write_fixture(
     required_capability: str | None = None,
     claimed: bool = True,
 ) -> tuple[Path, Path, Path]:
+    """Build owned delivery work; claim-authoring scenarios must opt out."""
     project = root / "project"
     runtime = root / "runtime"
     state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
