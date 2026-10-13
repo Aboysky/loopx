@@ -347,6 +347,35 @@ reject dropped coverage, and invalidate stale evidence under the same owner.
 
 ### 3.8 Invalid evidence and affected consumers
 
+Recovery and work switching must preserve the different observations defined
+in §3.7. `work_context.complete` currently means source adapters reported no
+failure; it can coexist with a full Goal document still in `required_reads`.
+An inline exact-Todo or acceptance body supplies that read's content, not proof
+that a model consumed it or that its criteria passed. A current continuation
+note, adoption receipt and journal `continue` each qualify their own boundary.
+None is a whole-Goal completion result or an independent execution grant.
+
+For the next new action after compaction, replacement or handoff, qualification
+must reconnect three existing sources: current Goal identity/intent, applicable
+acceptance criterion/revision, and the versions of explicitly consumed evidence.
+Preserve pending reads and unknowns. These reads need not be one cross-owner
+transaction; the owning action boundary must recheck their current applicability
+when a relevant revision changes. Do not add a recovery-context authority or
+infer dependencies from shared words. A Todo-facts fingerprint or file existence
+cannot establish the validity of all three sources.
+
+Original-operation recovery remains separate. Resolve its journal/effect under
+the existing identity and fences; never rewrite an old receipt with a new Goal
+basis to make it continue. Before new dependent work, obtain fresh admission and
+reassess any changed criterion or explicit source. A legal recovery transition
+does not by itself authorize that new work. Preserve unrelated valid results.
+Qualify a criterion change after context capture, a source becoming unavailable
+before dependent work, and an amendment arriving during restore: the original
+effect is reconciled once, stale assumptions do not authorize the next action,
+and stopped work is not revived by reading a snapshot. Full requirement coverage
+and real-model adoption remain the open §3.7/R4 acceptance, not completed by this
+clarification.
+
 This is a proposed qualification contract for existing acceptance and explicit
 result-use owners, not a new global error state, taint graph or automatic
 amendment policy. Historical completion and current eligibility to use evidence

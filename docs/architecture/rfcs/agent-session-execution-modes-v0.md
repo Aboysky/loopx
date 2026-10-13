@@ -75,10 +75,13 @@ semantics and continuation paths stay with the
 Default and opt-in boundary: a newly created LoopX Chat session defaults to
 `managed_runtime`. Attaching an external host session is opt-in through an
 explicit binding command, and a managed host only runs when an operator
-launches it. Nothing attaches, resumes, replaces, or migrates a session
-automatically, and no mode grants Goal, quota, or permission authority.
+authorizes its execution profile. A mode tag alone never attaches, resumes,
+replaces or migrates a session and grants no Goal, quota or permission authority.
+An explicitly activated native Goal or qualified result-wake profile may continue
+through its existing owner (§5); that does not authorize implicit activation,
+replacement or a switch of continuation owner.
 
-This RFC does not approve new always-on residency, automatic session resume,
+This RFC does not by itself approve additional always-on residency or automatic-resume profiles,
 cross-host session takeover, mode change as a side effect of a message or
 probe, promotion of any optional preview host into a supported product
 surface, or any new credential or permission boundary.
@@ -278,6 +281,17 @@ Never wrap a self-continuing native Goal in repeated externally driven Turns on
 the same binding. To change the continuation owner, stop new admission, reconcile
 pending tools and uncertain effects, fence the old executor, and read back the
 new binding before execution. Disconnection does not authorize that switch.
+
+Qualification must name the adapter's actual input-consumption boundary: for
+example, the next model request after a tool batch, a subsequent native Turn,
+or explicit inbox drain. Reuse the
+[ingress and wake-policy contract](desktop-execution-frontends-v0.md#delivery-intent-does-not-choose-the-wake-policy)
+rather than another queue authority. A steering ACK does not cancel already
+submitted tools or prove model consumption. Exercise input arriving during tools,
+context preparation/compaction and finalization; preserve source/target identity
+and observe the next eligible request or truthful pending/refusal. Then verify
+actual work adoption separately. Unsupported boundaries remain unavailable,
+not emulated by silently replacing the executor.
 
 For the first mixed managed cohort, qualify a cloud adapter against the same
 governed Turn contract as the local worker before expanding native Goal profiles.
@@ -585,6 +599,7 @@ future evidence and must not be reported as green.
 | Host-local state is not authority | Inspect host storage for Goal, Todo, quota, monitor, lifecycle copies | No competing status; journals are replayable results, not authority | Unverified for new hosts |
 | Admission under restart and crash | Kill the host during execution with a bound session | No orphan executor; replacement binding has one owner and correct mode | Unverified for new hosts |
 | Feature-off parity | Run without any attached binding and without the preview host | Existing managed behavior, routes, and defaults unchanged | Unverified for new hosts |
+| Declared input boundary | Deliver a correction during a tool batch, compaction and finalization | Exact target/source retained; next eligible Host input or truthful pending/refusal; no implicit tool cancellation or retargeting | Per-adapter qualification; protocol fixtures do not prove model adoption |
 
 Deterministic package tests are not sufficient for admission. A new host needs
 at least one real-host row: a live process, a real bind, and a real restart.
@@ -622,7 +637,23 @@ Preserve feature-off behavior for every existing profile and entrypoint.
 
 [Roadmap](loopx-overall-roadmap-v0.md) R2 first qualifies a steward and 2–3 actual managed workers across Turns; R6 qualifies local/cloud execution on one authority, then R7 expands active scale. M1–M4 here retain host admission ownership. Team-plan `ready` cannot replace binding, qualification, claim/lease or actual process readback.
 
-DSH steward Chat is currently single-segment, read-only and without cross-turn host sessions; `turn run-once` is a separate bounded execution path. The next slice proves successor wake, cancellation/stop, crash recovery and returning stale-executor fences with packaged frontend/CLI/Lark readback. An executor name, one segment or multiple registrations cannot establish continuous managed execution. Disconnection never switches attached hosts to managed, and unqualified hosts retain their existing boundary.
+DSH steward Chat remains a single-segment, read-only profile without cross-turn
+host sessions; `turn run-once` is a separate bounded path. Its next slice still
+needs successor wake, stop, recovery and stale-executor fences with product
+readback. This limitation must not be generalized to every existing profile.
+
+The explicit [Goal Chat LoopX profile](../../reference/goal-chat-continuation.md)
+already persists accepted-delegation wake intent and routes it through
+[`pump_delegation_wakes`](../../../loopx/chat_loopx_mode.py) and the typed
+collaboration owner. It pins the originating conversation, uses intent-derived
+Turn identity, retains pending work while the lead is active or paused, and
+refuses stopped/rebound/missing owners. Provider-start evidence remains distinct
+from worker startup. Reuse that scoped path for the existing
+[finalization/reconnect matrix](desktop-execution-frontends-v0.md#delivery-intent-does-not-choose-the-wake-policy);
+a process notification may coalesce while the committed result and pending work
+remain recoverable. This is not generic provider-checkpoint, all-Host, Lark,
+model-adoption or whole-Goal qualification. No late event unpauses work, changes
+its continuation owner or switches an attached host to managed execution.
 
 The opt-in [local delegation interface](../../reference/local-delegation.md)
 now provides durable operations around bounded Turns, including member-to-member

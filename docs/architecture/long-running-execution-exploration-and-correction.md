@@ -8,10 +8,34 @@ back to the existing LoopX decision boundary, and verifies the resulting work
 without turning every tool result into another planning cycle.
 
 This is an implementation map and integration guide, based on LoopX source
-`17bc011b3c5fcd30b879442cb21d734ac5d8ab69`. External source snapshots were
+`1ab64911f4e6e7b9b18f777388208791dabf9757`. External source snapshots were
 inspected on 2026-10-13. It connects existing RFCs; it creates no policy,
 schema, scheduler, default change or execution grant. Source presence,
 installed behavior, model adoption and measured benefit remain separate.
+
+## Comparison method and evidence scope
+
+The comparison follows the same questions in each repository: who admits work,
+what continues the model/tool loop, when a correction becomes input, who decides
+to investigate or finish, what survives interruption, and what the next decision
+actually consumes. A feature name or README statement is insufficient: each
+claim below follows a caller into its state owner and, where available, an
+existing failure-case test. Interpretations and proposed transfers are stated
+separately from source behavior.
+
+| Source | Fixed revision | Inspected scope |
+| --- | --- | --- |
+| LoopX | `1ab64911f4e6e7b9b18f777388208791dabf9757` | Quota/replan, monitor, Explore writeback, Turn recovery and workspace steering |
+| Grok Build | `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` | Public Rust CLI/runtime Goal controller, interjections and snapshot recovery |
+| Codex | `9167a0b2d4a74d44a4d388057d304682e47313c6` | Public Rust turn loop, Goal extension, compaction and Agent communication |
+| OpenCode | `be674e3158abb5f1b0c16b2bdeb3a9ba2b072774` | Session admission/inbox, execution coordinator, restart and child-result delivery |
+| Pi | `e6220e1316f86af818a0ccbfe1c09d7e918b41cf` | Agent core and coding-agent queues, context refresh, session persistence and extensions |
+
+External tests cited below were inspected, not executed in this comparison.
+LoopX validation executed for the documentation change is disclosed in the PR.
+No live-model or matched-cost experiment is implied. Provider model calls, Host
+turns and LoopX's accountable Turns are different units; counts across these
+projects are not directly comparable.
 
 ## Existing owners and the connected path
 
@@ -44,13 +68,116 @@ Current Goal, requirements, authority and evidence
   -> accepted decision and later work feed the next review
 ```
 
-| Source connection | What exists at this baseline | What it does not establish |
-| --- | --- | --- |
-| [`projectReplanHistory`](../../loopx/control_plane/work_items/replan_history.ts) → [`build_replan_context`](../../loopx/control_plane/goals/goal_frontier/__init__.py) → action packet / [TurnEnvelope](../reference/protocols/turn-envelope-v0.md) | Progress, monitor and review facts reach the Agent through existing quota/Host callers | That the model read, understood or followed every instruction |
-| [`strideReviewMismatch`](../../loopx/control_plane/work_items/stride_policy.ts) and [`replan_semantics`](../../loopx/control_plane/work_items/replan_semantics.ts) → Vision/ACK settlement | Enabled structured path reviews bind the current obligation, previous decision and delivered evidence | Truth of Agent claims or permission to execute a successor inside the original Turn's outstanding settlement |
-| [`evaluateDeliveryRoute`](../../loopx/control_plane/turn_driver/delivery_continuity.ts) → next eligible work | A qualifying accepted replan successor can take precedence over ordinary continuation | Semantic adoption of the proposed method or Goal completion |
-| [`decisionFollowthrough`](../../loopx/control_plane/work_items/replan_context.ts) → next review | Prior accepted path and subsequent recorded progress remain connected | Execution and Goal gain: the projection explicitly retains `unknown` |
-| [Explore result writeback](../../loopx/capabilities/explore/result_writeback.py) → [turn context](../../loopx/capabilities/explore/turn_context.py) | Explicit findings can return through ordinary Todo/Turn writeback and inform later work | Automatic skill-report ingestion, scientific truth or a complete frontend attachment/retry journey |
+### LoopX: from a detected gap to the next selected work
+
+The purpose is to change an ineffective route without losing the original
+Turn's settlement or another Agent's work. This is a real caller chain:
+
+```text
+canonical run/Todo facts
+  -> projectReplanHistory + Goal-frontier rules
+  -> build_replan_context -> projectReplanContext
+  -> build_replan_action_packet -> CLI / heartbeat / TurnEnvelope
+  -> Agent path/progress/successor writeback
+  -> replan_semantics qualification -> durable Vision/ACK
+  -> settle original Turn
+  -> fresh quota: canonical successor + current eligibility
+  -> evaluateDeliveryRoute -> next admitted Host execution
+```
+
+[`replan_history.ts`](../../loopx/control_plane/work_items/replan_history.ts)
+scopes history to the Agent, stops at its accepted ACK and deduplicates counted
+Turn identities. `periodicTrigger` counts qualified settled work; a monitor
+liveness record is not work unless its transition is material. `progressTrigger`
+uses repeated typed observations, while `futureBlockingMonitor` reuses the
+existing resume planner to avoid classifying a valid external wait as a stall.
+These are detector rules, not a model's estimate of scientific usefulness.
+
+The [Goal frontier caller](../../loopx/control_plane/goals/goal_frontier/__init__.py)
+actually constructs the context. [Quota](../../loopx/control_plane/quota/should_run_packet.py)
+projects the action packet and exact commands; the
+[TurnEnvelope](../../loopx/control_plane/quota/turn_envelope.ts) preserves the
+structured review and its obligations. On writeback,
+[`replan_semantics`](../../loopx/control_plane/work_items/replan_semantics.ts)
+checks source-specific outcomes. `strideReviewMismatch` in
+[`stride_policy.ts`](../../loopx/control_plane/work_items/stride_policy.ts)
+rejects a missing delivered previous-decision review, a foreign evidence
+reference or an incompatible Explore basis. It checks declared provenance and
+shape, not the truth of the Agent's interpretation.
+
+Fresh quota reads the ACK's exact successor from canonical Todos, checks current
+actionability/capabilities, and asks
+[`evaluateDeliveryRoute`](../../loopx/control_plane/turn_driver/delivery_continuity.ts).
+`prefersReplanSuccessor` requires the same Agent, accepted ACK, exact origin
+obligation and a currently legal delivery boundary. This can change the next
+primary task, but does not grant a lease or execute it during the old Turn.
+The [successor reentry tests](../../tests/control_plane/test_replan_successor_guard_reentry.py)
+exercise real File/SQLite CLI settlement and a fresh Turn selecting that
+successor, including invalidation. Selection is narrower than adopting a method.
+
+### LoopX: from an exploration result to a later decision
+
+The purpose is to keep a reusable result available without making a skill
+report another authority source or repeating completed work after a link fails.
+
+```text
+ordinary admitted work + explicit Explore attachment
+  -> validate scope/input before primary writeback
+  -> committed record -> deliver_result_attachment
+  -> idempotent graph event -> canonical Todo evidence link
+  -> explore_turn_context / enabled replan Explore read
+  -> evidence-bound explore_review and next task decision
+```
+
+[`deliver_result_attachment`](../../loopx/capabilities/explore/result_writeback.py)
+consumes a committed primary record and a pure post-writeback intent. If graph
+delivery or the Todo link fails, it retains `primary_committed` and a retryable
+delivery result. Exact replay repairs the missing association; already-complete
+delivery is readback-only. Claim/lease rules still apply to unfinished delivery.
+The [linked capture tests](../../tests/control_plane/test_explore_linked_capture.py)
+check current canonical scope rather than stale shared projections, and reject
+invalid attachments before primary commit. The
+[result-writeback tests](../../tests/control_plane/test_explore_result_writeback.py)
+also describe partial-link replay and preserving a linked refutation under newer
+positive observations; these are different from model-use evidence.
+
+[`explore_turn_context`](../../loopx/capabilities/explore/turn_context.py) validates
+the complete evidence log before returning bounded, relevant details and a
+revision-bound detail route. Replan can bind those findings through
+`explore_review`. Separately,
+[`decisionFollowthrough`](../../loopx/control_plane/work_items/replan_context.ts)
+uses qualified append order to pair the latest accepted decision with later
+progress, keeping omitted counts and `execution_and_goal_gain=unknown`.
+The [three-Turn CLI test](../../tests/control_plane/test_long_chain_projected_closeout.py)
+performs review, test-driven synthetic work and a subsequent review that refuses
+a missing `previous_review`. It proves that the wire/settlement chain is connected;
+it does not prove a live model chose or executed a better experiment.
+
+### LoopX: correction transport, recovery and visible evidence
+
+Current workspace steering already persists the exact Session/Turn/text/request
+identity before dispatch. [`retainSteeringRequest`](../../apps/presentation/dashboard/src/features/personal-workspace/steering-recovery.ts)
+checks persistent readback; the [composer](../../apps/presentation/dashboard/src/features/personal-workspace/personal-workspace-page.tsx)
+does not send if that fails, and an uncertain retry retains the original Turn
+even after completion. A confirmed non-delivery has a different recovery path.
+The [storage tests](../../apps/presentation/dashboard/src/features/personal-workspace/steering-recovery.test.mjs)
+cover reload, a silently dropped write and another conversation's unsaved draft.
+This closes a transport-identity gap, not evidence that the model changed its plan.
+
+[`recoveryDecision`](../../loopx/control_plane/turn_driver/turn_journal.ts) checks
+journal consistency, returns retained terminal results, and distinguishes an
+explicit failed retry from phase recovery. Relevant Host session bindings must
+still qualify; unknown prepared effects use their original readback path.
+[`continuation_adoption.ts`](../../loopx/control_plane/coordination/continuation_adoption.ts)
+keeps context adoption separate from lease transfer and dependency eligibility.
+Resuming context is not authorization to repeat an ambiguous external effect.
+
+The [team correction view](../../apps/presentation/dashboard/src/features/personal-workspace/goal-team-episode.tsx)
+follows explicit `revises`, `responds_to` and downstream `uses` relationships,
+checks artifact versions on demand and keeps missing adoption visible. It is a
+real companion surface, but does not consume every `stride_decision` as a
+universal causal timeline. Source wiring, transport qualification, actual model
+adoption, independent acceptance and readable product return remain distinct.
 
 The [Goal Vision/replan contract](../reference/protocols/goal-vision-replan-contract-v0.md)
 defines activation and current settlement rules. `evidence_conditioned_v1` is
@@ -73,6 +200,226 @@ trigger conditions and failure cases rather than copying whole runtimes.
 | OpenCode `be674e31`: [inbox](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/inbox.ts), [run coordinator](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/run-coordinator.ts), [child return](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/subagent-completion.ts) | Current-work steering and queued work differ; a pending-wake signal coalesces notifications across the drain-to-idle race; child completion returns as input | Extend existing inbox/session/Turn delivery. A process-local single executor cannot replace distributed claims, leases or adoption evidence |
 | Pi `e6220e13`: [agent loop](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/agent/src/agent-loop.ts), [skills](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/coding-agent/docs/skills.md), [subagent extension example](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/coding-agent/examples/extensions/subagent/README.md) | Inner tool/steering and outer follow-up loops; skills and richer workflows load when needed | Keep ordinary work independent of a full research workflow. An extension example is not default product support, isolation or cross-Host qualification |
 
+### Grok Build: separate continuing, candidate review and method investigation
+
+**Question followed through the code:** when a worker appears finished or keeps
+failing, what actually causes it to continue, obtain criticism or change method?
+
+```text
+handle_turn_input_inner finishes a work round
+  -> runnable user input takes precedence
+  -> run_goal_round_end -> evaluate_goal_round
+       continue           -> next-step directive -> worker continues
+       blocked            -> stable blocker key -> repeated-blocker policy
+       candidate_complete -> verify_goal_candidate
+           Achieved       -> local Goal completion
+           NotAchieved    -> preserve concrete gaps -> worker continues
+               strategy cadence reached -> advisory strategist
+           review infrastructure unavailable -> new path pauses
+```
+
+The [work-round caller](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs)
+does this after normal model/tool work, not before every tool. The
+[evaluator](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/goal_evaluator.rs)
+receives a bounded transcript, objective and plan with no tools. It must return
+evidence and a next step; a stable key distinguishes a recurring external
+blocker from ordinary errors the worker can investigate. This is another model
+judgment, not a cheap deterministic completion oracle.
+
+Only candidate completion starts verifier work. The
+[classifier](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/goal_classifier.rs)
+defaults to three skeptic roles, but a decisive initial refutation can avoid
+starting the rest. Cold-review voting does not let the resumed gap reviewer
+supply the decisive approval. Role count is not API-call count: each role can
+run tools and multiple samples. The [verifier instructions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/templates/goal_verifier_prompt.md)
+primarily audit the implementer's evidence and permit spot checks; they do not
+independently establish every business postcondition.
+
+`strategist_should_fire` triggers on accumulated non-achievement rather than
+running at every step. Its [strategy instructions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/templates/goal_strategist_prompt.md)
+ask for a structural change grounded in trace, diff and tests. `PlanGuard`
+restores changed plan bytes so method investigation does not quietly weaken
+acceptance. This is bounded protection, not a universal permissions system.
+
+**Follow the failure path as well.** Corrections are drained at Host safe points
+under `RestoreOnCancel`; cancellation before context submission restores queue
+order. A correction arriving after the final drain has a fallback prompt path
+that retains the plan gate. The [interjection implementation](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session_impl/interjection.rs)
+and [actor tests](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session_tests/interjection_actor_tests.rs)
+cover canceled drains and late messages. LoopX can borrow those race scenarios,
+but its exact-Turn steer must not silently inherit Grok's fallback policy.
+
+Compaction reseeds current Goal state without counting another work round.
+Process restart is different: [GoalTracker::from_snapshot](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/goal_tracker.rs)
+clears in-flight child state and restores an active Goal as user-paused.
+[Snapshot persistence](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/persistence.rs)
+is reached through asynchronous notification; writing a snapshot file atomically
+does not make all Goal accounting and external effects one acknowledged transaction.
+
+**Comparison result.** Borrow staged escalation and current-Goal reconstruction.
+Keep LoopX's acceptance, original-operation recovery and configured review
+obligations. Do not import the panel size, counter resets or paused-on-restart
+policy without qualifying that Host/profile. The inspected source defaults to
+the new workflow branch, subject to configuration and a remote kill switch;
+[configuration](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/config.rs)
+does not prove installed behavior. Its
+[compaction tests](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/acp_session_tests/goal/goal_compaction_reseed_tests.rs)
+and [snapshot tests](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/goal_tracker_tests.rs)
+provide counterexamples to reuse, not passing evidence from this investigation.
+
+### Codex: response completion, turn termination and Goal continuation differ
+
+**Question:** what continues work without making every tool result a Goal-level
+planning event, and what happens if a correction races that continuation?
+
+```text
+accepted input -> run_turn -> sampling request
+  -> model output + tools -> drain tool results
+  -> model needs follow-up OR pending input?
+       yes -> prepare current context -> next sample
+       no  -> stop hooks -> end turn or a bounded continuation
+  -> Goal lifecycle accounts the completed turn
+  -> on_thread_idle -> continue_if_idle
+       read persistent active Goal under Goal-state permit
+       -> start_turn_if_idle performs Core admission again
+```
+
+The same step context supplies the model request, advertised tools and tool
+execution. Queued input is consumed at defined boundaries. Thus final-looking
+text, completion of a sampling request and termination of the enclosing turn
+are different events. [Core input admission](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/core/src/session/turn_input.rs)
+also binds steering to the expected active Turn.
+
+The native Goal path has two protections: a Goal-state permit covers its
+read/start window, and Core independently reserves an idle turn. Pending
+triggering messages, Plan mode, draining or an already active turn can reject
+automatic work. Rejection does not silently turn it into queued work or steering
+of a newer turn. The [input-submission tests](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/core/tests/suite/turn_input_submission.rs)
+exercise atomic Plan-mode rejection. [Goal lifecycle tests](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/ext/goal/tests/goal_extension_backend.rs)
+cover resume/accounting and forbidden status changes. The
+[`update_goal` tool](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/ext/goal/src/tool.rs)
+records a permitted completion status and usage; that write is not an independent
+test of the objective's business requirements.
+
+**A second race appears during compaction.** A prepared summary may be obsolete
+by installation time. The optional [async path](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/core/src/session/async_compaction.rs)
+is feature/provider-gated and tracks history, model and authentication versions.
+[`replace_compacted_history`](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/core/src/session/mod.rs)
+checks the captured basis at mutation time, retains the live suffix and preserves
+Goal edits accepted after a foreground compaction snapshot. [Rollout reconstruction](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/core/src/session/rollout_reconstruction.rs)
+restores history together with attribution/settings metadata, rather than
+reusing whichever older summary happens to be readable. Speculative requests
+can still consume billable usage even when their result is discarded.
+
+Skills use a [budgeted metadata catalog](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/ext/skills/src/render.rs)
+and [explicit resource reads](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/ext/skills/src/tools/read.rs).
+Exploration can move into child contexts, but the return boundary remains
+limited: [completion routing](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/core/src/agent/control/completion.rs)
+is best-effort mailbox delivery with `trigger_turn=false` in the inspected V2
+path. `wait_agent` reports waiting activity, not adopted research content.
+The [multi-Agent tests](https://github.com/openai/codex/blob/9167a0b2d4a74d44a4d388057d304682e47313c6/codex-rs/core/src/tools/handlers/multi_agents_tests.rs)
+explicitly distinguish completed content, waiting and interruption.
+
+**Comparison result.** LoopX should reuse the Host's inner loop and revalidate a
+prepared continuation at its own current authority boundary. Native Goal state,
+a prepared summary and a queued child result cannot replace LoopX acceptance,
+lease fences or result adoption. This is a division of responsibilities, not a
+claim that a thin Host has solved the full cross-Agent lifecycle.
+
+### OpenCode: durable admitted work and a coalesced execution wake
+
+**Question:** how can work arriving at the busy-to-idle boundary survive without
+starting duplicate runners or forcing the model to poll every child?
+
+```text
+Session.prompt: reconcile identity -> prepare -> admit
+  -> durable inbox -> SessionExecution.wake
+  -> per-session coordinator -> drain
+  -> runner advanceToStep -> promote input -> runStep
+       model/tool attempt -> persist tool/step terminal events
+       -> retry / compact / continue / complete
+  -> pendingWake? drain again : finish execution
+```
+
+[`Session.prompt`](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/session.ts)
+admits the input before waking execution. The
+[runner](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/runner/llm.ts)
+allows queued input when entering work, then only steering while continuing
+that work. A provider retry refreshes context within the same logical step,
+without repeatedly promoting more inbox input. The coordinator's in-memory
+`pendingWake` closes the final eligibility-check/idle race; it coalesces wake
+intent while the durable inbox retains the actual work. [Coordinator tests](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/test/session-run-coordinator.test.ts)
+exercise active, finalizing and cleanup interleavings with controlled scheduling.
+
+Persistence is more than that in-memory map. [Execution](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/execution.ts)
+commits an execution-start event with a durable claim; normal terminal/cancel
+releases it while shutdown retains recovery evidence. [Restart](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/execution/restart.ts)
+scans claims and persists a bounded resume count. Its stated recovery assumption
+is at-least-once, under a managed-server handover. A tool may have changed the
+external world before its result was committed; the claim cannot resolve that
+ambiguity. [Execution tests](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/test/session-execution.test.ts)
+cover claim cleanup, cancellation and the persisted resume limit.
+
+Background exploration returns through [SubagentJob](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/session/subagent-job.ts):
+the child/job generation owns a completion observer, which submits a stable-ID
+synthetic input to the parent's existing inbox and wake path. The observer
+outlives a local view's eviction; [lifetime tests](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/test/subagent-lifetime.test.ts)
+move/evict views before child completion and check the return notice. This proves
+the intended routing/recovery boundary, not that a real parent model used the
+finding. Skills remain [permission-checked, on-demand reads](https://github.com/anomalyco/opencode/blob/be674e3158abb5f1b0c16b2bdeb3a9ba2b072774/packages/core/src/tool/plugin/skill.ts).
+
+**Comparison result.** Reuse the distinction between durable work and a cheap
+wake signal. LoopX already has a scoped accepted-result wake path in Goal Chat;
+qualify its last-check, restart and stop races before generalizing to provider
+checkpoints. Do not substitute OpenCode's process/server assumptions for the
+existing LoopX claim, lease and ambiguous-effect owners.
+
+### Pi: batch-boundary steering and context refresh as separate operations
+
+**Question:** where can a correction enter a running tool workflow, and how can
+context maintenance avoid delaying it by one more model request?
+
+```text
+AgentSession prompt / steer / followUp
+  -> Agent pending queues -> runLoop
+  -> prepareNextTurn -> pick up steering received during preparation
+  -> prepareRequest -> model response -> execute the whole tool batch
+  -> finishTurn -> next tool/steering cycle
+  -> only when that cycle would stop: consume follow-up
+  -> event listener appends completed messages to session history
+```
+
+At this version, steering is consumed **after the entire tool-call batch**.
+Sequential mode also finishes the batch before injection; parallel execution
+can complete out of order while results enter context in call order. Steering
+does not abort a submitted tool. Follow-up waits until the inner tool/steering
+loop would stop. The [loop tests](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/agent/test/agent-loop.test.ts)
+assert that both tool outputs precede queued steering. This granularity matters
+when specifying correction latency for a long tool operation.
+
+[`AgentSession`](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/coding-agent/src/core/agent-session.ts)
+installs context refresh in `prepareNextTurn`. A large tool result can require
+compaction before the next sample; `runLoop` checks for new steering after this
+preparation without consuming a second message in one-at-a-time mode. The
+[compaction suite](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/coding-agent/test/suite/agent-session-compaction.test.ts)
+blocks a compaction hook, queues a correction, then checks the next request
+contains it. Faux provider responses establish ordering, not model compliance.
+
+[`SessionManager`](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/coding-agent/src/core/session-manager.ts)
+keeps an append-only JSONL tree with parent IDs. Compaction appends a summary
+entry and retained-history boundary; rebuilding the model projection does not
+erase the original history. This can restore context, but neither a summary nor
+an append-only record establishes task acceptance or external-effect idempotency.
+
+The coding-agent's plan/subagent workflows are optional extensions; the linked
+subagent implementation is an example, not a mandatory default. The
+[skill formatter](https://github.com/earendil-works/pi/blob/e6220e1316f86af818a0ccbfe1c09d7e918b41cf/packages/coding-agent/src/core/skills.ts)
+initially supplies metadata and a read route. Executable extensions can change
+the lifecycle and have process permissions, whereas skill text only guides the
+selected work. **LoopX's adaptation** is to keep those costs conditional and
+declare the actual Host consumption boundary; it must preserve its own required
+reads, independent acceptance and continuation authority.
+
 Grok Build's new and legacy Goal paths have different failure behavior; its
 legacy path includes infrastructure fail-open completion. That behavior is not
 a candidate for LoopX acceptance. Public Goal/turn similarities are not
@@ -81,6 +428,51 @@ independent experimental evidence: Grok's
 also identifies tool code ported from Codex/OpenCode. This does not establish
 shared Goal-loop history. None of these client sources proves how every hosted
 service operates, or that an external effect executes exactly once.
+
+## What the comparison changes in the existing RFCs
+
+The review used the following sequence, rather than treating external features
+as missing LoopX features:
+
+1. Trace each external caller to its real loop, state write and return path.
+   This exposed different units: a Pi tool batch, a Grok work round and a LoopX
+   settled Turn cannot share one universal intervention count.
+2. Inspect cancellation, late-input and restart tests. OpenCode's durable
+   recovery and Grok's paused restoration prevent describing either as a simple
+   stateless loop, while neither proves external effects exactly once.
+3. Locate the corresponding LoopX caller and reference contract. Existing
+   steering receipts, accepted-result wakes and Explore capture were found;
+   they should be qualified or composed, not reimplemented under new names.
+4. Separate connected source from model behavior. The prior-decision projection
+   and CLI chain exist, but result delivery does not prove a better next action.
+5. Compare the current RFC clauses with those facts. Revise stale next-step
+   descriptions and ambiguous obligations in their owning sections, then add
+   failure scenarios that distinguish the proposed behavior from the old reading.
+
+| Owning section | Ambiguity or stale definition | Revision and decisive acceptance |
+| --- | --- | --- |
+| Stride §§6.4, 7.5–7.7, 11–12 | Event-driven review could be read as skipping periodic duty; feedback projection was still described as the next implementation | Retain configured obligations; separate candidate review from acceptance; make the next slice a real result→adopted work→next-review episode, with context recovery and full cost |
+| Research Exploration §§5.1, 11.5 | Generic result capture and the proposed scientific decision/adoption contract were insufficiently separated; bounded output implied no full source read | Reuse existing attachment/replay; identify only additional missing validity/adoption facts; measure source IO; qualify capture, use and outcome separately |
+| Agent Session §§1, 5, 10–11 | Blanket no-resume wording and a generic successor-wake gap obscured existing scoped continuation | Preserve explicit activation and one continuation owner; declare actual Host input boundaries; reuse Goal Chat wake and test finalization/reconnect instead of claiming all-Host readiness |
+| Manager A23 and §10 | “Steer or queue” could allow an exact-Turn correction to be silently moved after a completion race | Retain original ingress/Turn identity; fallback needs prior permission or a new explicit delivery choice; provider ACK and model adoption remain separate |
+| Shared Goal Alignment §3.8 | Source readability, note adoption and journal continuation could be collapsed into one recovered/ready result | Reconnect Goal/criterion/explicit evidence before new work; preserve original-operation recovery; test amendments and source loss during restore without rewriting old receipts |
+
+The revised text refines qualification and clarifies existing authority. It
+does not install an evaluator, change the current cadence or invent a new
+protocol vocabulary. An additional machine-enforced requirement still needs
+its owning implementation, compatibility and default-off validation.
+
+### Implementation maturity at the inspected LoopX revision
+
+| Area | Evidence available | Remaining completion boundary |
+| --- | --- | --- |
+| Replan transport and successor selection | Actual callers; typed provenance checks; multi-Turn CLI tests | Natural-model method adoption and useful outcomes |
+| Structured stride strategy | Opt-in proposal shape, previous/Explore review, exact evidence binding | All-exit periodic enforcement must follow the current owner; a valid declaration is not truth |
+| Explore capture and explicit M3 composition | Existing ordinary attachments and File/SQLite composition gate; see Research RFC §5 | Single-experiment result/adoption gate in §11.5, full remote/installed qualification and scientific utility |
+| Corrections and accepted-result wake | Browser retry identity, exact-Turn ingress and scoped Goal Chat wake | Declared consumption boundary and live adoption per Host/channel; generic job-result integration |
+| Recovery and required reads | Typed original-operation recovery, current Todo/acceptance/lease checks, source read paths | Full Goal requirement coverage across compaction/handoff; no inferred whole-Goal readiness |
+| Product explanation | Explicit artifact/review/revision/adoption view | Universal stride-decision→artifact story and complete Explore attachment/retry interaction |
+| Runtime efficiency | Specific owners and measurable candidate costs | Controlled workload, model and history-size measurements; source size or successful tests are not latency evidence |
 
 ## Integrate exploration without making every task research
 

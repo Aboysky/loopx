@@ -77,7 +77,8 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 
 [执行、探索与纠偏集成指南](../long-running-execution-exploration-and-correction.zh-CN.md)
 通过既有 Host、replan、Explore 和验收 owner 衔接 S3/S4/S6/S7/S10/S11，
-将源码借鉴、成本边界和可恢复验收场景映射到现有里程碑，不增加平行交付计划。
+源码对照区分已实现反馈、有界结果唤醒和 Explore 捕获，与尚未资格化的通用结果采用、
+完整 Goal 要求覆盖及运行收益；验收沿现有里程碑，不增加平行交付计划。
 
 下列不是可忽略的配套事项；它们直接决定一个长程团队是否可用。目录或 README 证明的是可发现的实现/合同入口，具体安装可用性仍从 `loopx capability list/show` 与选定版本读取。
 

@@ -293,6 +293,25 @@ R1/R4/R5 与 S11，本 RFC 不隐式开启新的 acceptance policy。下一完�
 
 ### 3.8 失效证据与受影响消费者
 
+恢复和工作切换须保留 §3.7 中不同观察的含义。当前 `work_context.complete` 表示
+来源 adapter 未报告失败，完整 Goal 文档仍可能在 `required_reads` 中。
+Inline 精确 Todo/acceptance 正文只提供对应读取内容，不证明模型消费或标准通过。
+续接 note 有效、adoption receipt 成功和 journal `continue` 分别只限定各自边界，
+都不是全 Goal 完成或独立执行授权。
+
+压缩、替换 session 或交接之后，下一项新动作的验收须重新连接三类已有来源：
+当前 Goal 身份/意图、适用验收 criterion/revision、显式消费证据的版本。
+保留 pending reads 和 unknown；不要求这些读取组成跨 owner 事务，但相关版本变化时，
+所属动作边界须重新确认当前适用性。不增加 recovery-context 权威，不用共同词语
+推断依赖。Todo-facts 指纹或文件存在，不能证明三类来源都有效。
+
+原操作恢复另行处理：按既有身份与 fence 核对 journal/effect，不用新的 Goal 依据
+改写旧回执以强行续行。新依赖工作前重新准入并检查变化的标准或显式来源；合法恢复
+迁移本身不授权新工作，无关有效结果继续保留。验证上下文捕获后 criterion 改变、
+依赖工作前来源不可用、restore 期间 amendment 到达三类情形：原效果只核对一次，
+旧假设不授权下一动作，读取快照不复活已停止工作。完整要求覆盖和真实模型采用仍属
+§3.7/R4 未闭合验收，本澄清不宣称完成。
+
 本节是既有 acceptance 与显式 result-use owner 的待实现资格合同，不新增全局错误
 状态、taint graph 或自动 amendment 政策。历史完成与当前证据使用资格是不同事实。
 保留原 receipt、声明依据与结果，重新检查当前适用性；不能靠改写已完成 Todo 让

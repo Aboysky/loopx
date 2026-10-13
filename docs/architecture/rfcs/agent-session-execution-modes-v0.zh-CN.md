@@ -54,10 +54,12 @@
 仍属于 [管家 RFC](capable-manager-semantic-handoff-v0.zh-CN.md)。
 
 默认与 opt-in 边界：新建的 LoopX Chat 会话默认是 `managed_runtime`。挂接外部宿主会话
-需要显式绑定命令 opt-in，托管的宿主只在操作者启动时才运行。任何会话都不会被自动
-挂接、恢复、替换或迁移，且任何模式都不授予 Goal、quota 或权限权威。
+需要显式绑定命令 opt-in，托管宿主只在操作者授权其执行 profile 后运行。模式标签
+本身不挂接、恢复、替换或迁移会话，也不授予 Goal、quota 或权限权威。已显式激活的
+原生 Goal 或合格结果唤醒 profile 可经既有 owner 接续（§5），不因此授权隐式激活、
+替换或更换续跑 owner。
 
-本 RFC 不批准以下事项：新的常驻服务、自动恢复会话、跨宿主会话接管、由消息或探测
+本 RFC 本身不批准以下事项：新增常驻或自动恢复 profile、跨宿主会话接管、由消息或探测
 副作用触发的模式变更、把任何可选预览宿主提升为受支持的产品面，以及任何新的凭据或
 权限边界。
 
@@ -223,6 +225,12 @@ coordinator 复用限定范围的委派、独立验收与结果返回。
 禁止在同一 binding 上，一边重复外部受控 Turn，一边包裹会自行续跑的原生 Goal。
 更换续跑 owner 前，停止新增准入、对账未决工具和不确定副作用、fence 旧执行器，
 再读回新绑定后执行；断连不授权该切换。
+
+验收须说明 adapter 实际的输入消费边界，例如整批工具后的下一次模型请求、后续
+native Turn 或显式 inbox drain。复用既有[输入/唤醒策略](desktop-execution-frontends-v0.md#delivery-intent-does-not-choose-the-wake-policy)，
+不另建队列权威。Steering ACK 不代表取消已提交工具或证明模型消费。覆盖工具执行、
+上下文准备/压缩、终结期间的输入，保留来源/目标身份，观察下一次合格请求或真实的
+pending/拒绝，再单独验证实际采用。不支持的边界保持不可用，不能悄悄换执行器模拟。
 
 首个混合 managed cohort 优先让云端 adapter 与本地 worker 通过同一 governed Turn
 合同，再扩展 native Goal profile。这是交付优先级，不是默认迁移；provider 资格由
@@ -469,6 +477,7 @@ root，都不同于注册身份数和展示上限。不要只为展示这些观�
 | 宿主本地状态非权威 | 检查宿主存储中的 Goal、Todo、quota、monitor、生命周期副本 | 无竞争状态；日志是可重放结果而非权威 | 对新宿主未验证 |
 | 重启与崩溃下的接入 | 在已绑定会话期间杀掉宿主 | 无孤儿执行器；替换绑定只有一个属主且模式正确 | 对新宿主未验证 |
 | 关闭态一致性 | 在没有任何挂接绑定、也没有预览宿主的情况下运行 | 既有托管行为、路由与默认值不变 | 对新宿主未验证 |
+| 已声明输入边界 | 工具批次、压缩和终结期间交付纠正 | 保留确切目标/来源；进入下一合格 Host 输入或真实 pending/拒绝；不隐式取消工具或改投 | 按 adapter 验证；协议 fixture 不证明模型采用 |
 
 确定性的包测试不足以支撑接入。新宿主至少需要一条真实宿主行：一个真实进程、一次真实
 绑定、一次真实重启。
@@ -497,7 +506,18 @@ worker 请求并采用另一 worker 的产物；driver 切换竞态拒绝旧执�
 
 [统一路线](loopx-overall-roadmap-v0.zh-CN.md) R2 先验一个管家与 2–3 个真实 managed worker 的跨 Turn 闭环；R6 再验本地/云端同 authority，R7 才扩大活跃规模。本 RFC M1–M4 继续拥有宿主接入，不用团队计划的 `ready` 取代 binding、资格、claim/lease 或实际进程读回。
 
-目前 DSH 管家 Chat 是单段、只读、无跨 turn 宿主会话；`turn run-once` 是另一条有界执行路径。下一切片要证明 successor wake、取消/停止、崩溃恢复及旧执行器返回 fence，经 packaged frontend/CLI/Lark 回读真实状态。不能仅增加一个 executor 名称、启动一个片段或绑定若干 Agent 就声称持续 managed 模式完成。attached host 不因掉线而改为 managed，未验收宿主保持原资格边界。
+DSH 管家 Chat 仍是单段、只读、无跨 turn 宿主会话的 profile；`turn run-once` 是另一条
+有界路径。其下一片段仍需 successor wake、停止、恢复、旧执行器 fence 及产品回读。
+这个限制不能泛化到所有已有 profile。
+
+显式[Goal Chat LoopX profile](../../reference/goal-chat-continuation.md)已持久记录
+accepted delegation wake intent，经 [`pump_delegation_wakes`](../../../loopx/chat_loopx_mode.py)
+与 typed collaboration owner 接续。它固定原对话，用 intent 派生 Turn identity，
+lead active/paused 时保留 pending，拒绝 stopped/rebound/missing owner；provider
+启动证据仍不同于 worker 启动。沿这条有界路径验证既有[终结/重连矩阵](desktop-execution-frontends-v0.md#delivery-intent-does-not-choose-the-wake-policy)：
+进程通知可以合并，但已提交结果和待处理工作须可恢复。这不证明通用 provider
+checkpoint、全部 Host、Lark、模型采用或全 Goal 验收。晚到事件不能恢复暂停、改变
+续跑 owner，或将 attached host 切为 managed。
 
 显式启用的[本地委派接口](../../reference/local-delegation.md)已为有界 Turn 提供持久
 操作，涵盖成员继续委派的授权及 TS 任务验收。Ark 进程中断实验在云端等待本地工具后，

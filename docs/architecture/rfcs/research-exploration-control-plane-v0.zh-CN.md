@@ -122,7 +122,7 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 | 空转检测 | 连续且物质等价的 typed observation 可以派生 replan trigger。 |
 | Semantic replan closure | 新类型化维度、grounded successor、concrete blocker 或 coverage-backed terminal result 可以关闭当前 obligation。 |
 | Host-delivered context | Quota 可以投影 compact coverage ledger 与 uncovered frontier，不要求手动 evidence-read 仪式。 |
-| Explore evidence | Explore 拥有 append-only node、edge、finding 与有界 public-safe projection。 |
+| Explore evidence 与普通捕获 | Explore 拥有 append-only node/edge/finding。现有结果附件在主工作提交前验证，再幂等投递 finding 与 Todo 关联；部分关联失败保留已提交工作，沿原操作重放。有界 turn context 返回范围明确的证据。这是捕获/回读，不是 §11.5 的决策采用门。 |
 | Research evidence 与 cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.zh-CN.md) 组合 generic progress、typed closure 和 explicit binary candidate。CLI summary 与 Lark node summary 共用只读投影，精确 experiment input fingerprint 防止过期结果继续有效。 |
 | 显式 M3 组合门禁 | [PR #5280](https://github.com/loopx-project/loopx/pull/5280) 已于 2026-10-12 作为 `1e6cae19f` 合入。可选启用的 Goal-frontier、Todo、experiment 和 input lineage 在 File/SQLite 中共用 typed write-time qualification；陈旧或无关证据不能解除当前义务。仍由既有 Goal 能力编辑器和 CLI 负责启用。规则已集成，不等于科学结果获接受或自然宿主已验收。 |
 | Explore planning | 可选 branch planner 保持只读，并把执行交还 quota、Todo、claim 和 lease。 |
@@ -565,8 +565,11 @@ Generic kernel 不解释分数，也不从 Todo 更新推断研究真相。
 
 #### 绑定问题与证据适用范围
 
-第一个真实 caller 组合显式 versioned Explore attachment，不向 research
-observation v0 偷加 unknown field。概念数据如下：
+普通范围内的 finding 已经通过[工作回写](../../../loopx/capabilities/explore/README.md#results-from-ordinary-work-writeback)
+使用 `explore_result_attachment_v0` 或既有 `explore_result_from_path_delta_v0`。
+复用这条捕获/重放路径。首个 §11.5 caller 应明确还缺哪些 result-validity 和
+decision-adoption 事实，只为现有合同缺少的事实扩展注册契约；不另建结果日志，
+不向 research observation v0 偷加字段。剩余决策合同所需概念数据如下：
 
 | 数据 | 所属语义 |
 |---|---|
@@ -575,8 +578,9 @@ observation v0 偷加 unknown field。概念数据如下：
 | Result 与 validity | 精确 provider result revision/evidence、比较和 uncertainty/guardrail assessment。失败、缺失、不可比的测量与有效负证据区分。 |
 | Decision 与 adoption | 精确 input/result fingerprint，现有 `continue`/`no_change`/`replan` path outcome、evidence ref 与绑定 task step 或 grounded successor。重复 probe 要有新的判别问题，或明确的 replication/uncertainty 理由和预算。 |
 
-这是设计清单，不是已接受 wire schema 或新 global enum。未来 TS codec/reducer
-归 Explore；compute/capture provider 适配，不新增平行决策源。复用 node、finding、
+这是额外决策合同的设计清单，不表示通用结果捕获尚不存在，也不是已接受 wire schema
+或新 global enum。其 TS codec/reducer 归 Explore；compute/capture provider 适配，
+不新增平行决策源。复用 node、finding、
 `supports`/`refutes`、closure 和 input-fingerprint 语义。Versioned decision
 attachment 与现有 Goal path delta、Todo-bound recommendation receipt 组合，
 不新增 Next Action 或 settlement store。ML adapter 可映射已有 hypothesis ledger
@@ -601,7 +605,8 @@ attachment 与现有 Goal path delta、Todo-bound recommendation receipt 组合�
    与当前 input fingerprint。Launch receipt 单独不是 research evidence。
 2. 显式 per-Goal opt-in 时，为绑定 experiment/Todo 投影紧凑 pending decision：
    问题、incumbent、适用 exclusion、uncertainty/invalidity、input/result ref 和
-   剩余预算。构造投影不需要完整日志或新增 reasoning-model 调用。
+   剩余预算。限制交付包而不截断源事实；分别测源日志验证、索引和跨语言成本。
+   当前有界视图可能读取完整日志，投影本身不需要新增 reasoning 调用。
 3. 由正常获准 Agent 决策。继续合法，但须说明下一 probe 要获得什么新信息，
    以及 exclusion 为什么尚未回答该问题。Pivot 指出改变的问题/机制与证据，
    使用已有 grounded successor 路径。
@@ -617,6 +622,19 @@ attachment 与现有 Goal path delta、Todo-bound recommendation receipt 组合�
 Operational validity、新研究信息、原生结果提升和 Goal acceptance 是不同
 observation。有效负实验可以是合法交付而没有涨分；连续负实验仍须暴露知识
 变化与剩余 frontier。
+
+#### 按能改变的决定选择调查
+
+初始未知、新机会、明确用户方向或反证都可以支持探索；重复失败不是必要条件，也不
+自动要求换方法。选择源码阅读、外部研究或实验流程前，说明问题、保持的约束、判别
+证据、预算和停止条件。这是普通工作选择，不是新的 skill router 或固定技能流水线；
+并行分支需要不同且有用的问题，并遵循既有容量和权限。
+
+技能报告和子任务完成只是候选证据。捕获时保留来源、适用范围、测试版本和未解决
+矛盾，不解析任意报告文案来自动认定 finding。下一获准决策可以采用、暂缓、有范围
+地复验或保留现有方案；通过既有 owner 记录确切任务/步骤或结果关系，并观察实际
+工作后再声称采用。不换路也可能有价值；普通工作没有可复用发现时无需空附件。
+捕获、模型使用、独立结果和完整成本分别验收。
 
 #### 最小有用路径与资格验证
 

@@ -352,6 +352,13 @@ that a new Todo is needed, that a coherence slice ended, or that human
 attention is warranted. Missed and duplicate wakes should be recoverable from
 durable state.
 
+Observation delivery, direction review and candidate acceptance have different
+triggers. Stable continuation does not require another planner/evaluator model
+after every tool effect. Event coalescing and unchanged-result suppression must
+preserve due periodic reviews, changed authority and outstanding settlement.
+A review may retain the current route, but still records the owning obligation's
+legal disposition. This refinement changes neither cadence nor discharge rules.
+
 ### 6.5 A stronger model does not widen every layer
 
 Model capability is multidimensional:
@@ -450,6 +457,17 @@ The proposed handoff is:
 | Return a decision checkpoint | The provider validates a new result against the declared postcondition, binds its revision/artifact digest and emits a compact observation. Failure, cancellation and deadline expiry must also produce actionable observations. |
 | Admit a decision | The existing scheduler/Turn path rechecks Goal lifetime, ownership, quota, capabilities and authority. A ready observation is input, not execution permission. Other runnable work can proceed while this experiment waits. |
 | Consume and continue | In the accountable consuming Turn, commit result adoption and the next step through the normal writeback before acknowledging consumption. Replayed/duplicate delivery recovers that receipt without duplicating launch or adoption. Settlement replay is idempotent for the same Turn identity; a newly admitted recovery Turn still settles normally. |
+
+Receipt, pending delivery, context admission and adopted action remain distinct.
+Qualify corrections and results arriving during tools, context preparation and
+the last intake/idle transition through the existing
+[Host consumption boundary](agent-session-execution-modes-v0.md#reusable-agent-operations-and-continuation-ownership)
+and [ingress/wake policy](desktop-execution-frontends-v0.md#delivery-intent-does-not-choose-the-wake-policy).
+Cancellation before admission preserves recoverable input. A late exact-Turn
+steer is not silently retargeted; fallback requires its already permitted policy
+or an explicit new delivery choice. A coalesced notification can disappear only
+when the durable work remains discoverable. Neither a transport ACK nor entry
+into model context proves that later work adopted the result.
 
 Current Todo resume conditions include `monitor_changed` and `resume_at`; an
 implementation should use the existing typed monitor generation and timeout
@@ -606,6 +624,15 @@ numeric policy. The engineering design has four replaceable boundaries:
    cost to the next review. Proposal, adoption and utility remain separately
    replayable; missing feedback never becomes success.
 
+Candidate review may add a critic when the owning capability has a concrete
+evidence gap; it is not a mandatory model on every Turn. A verdict, confidence
+score or majority vote remains an assessment until the existing acceptance owner
+checks the relevant criterion against current attributable evidence. Missing
+tools, invalid output or failed review transport remain unavailable, not passed
+acceptance or scientific refutation. Preserve unresolved gaps and bind any new
+blocker to a current criterion; strategy advice cannot weaken acceptance, and
+repeated review cannot invent unrelated requirements or hide a new defect.
+
 The initial TypeScript component remains one selectable strategy,
 `evidence_conditioned_v1`, plus `off`. Its current implementation replaces fixed
 basis-to-vector mappings with an explicit `grow | switch | verify` action and
@@ -648,8 +675,11 @@ projection/review semantics. Both historical v1 decision shapes retain read
 compatibility, but cannot discharge a fresh enabled review. Frozen workers retain
 their exact source. Pin implementation revisions for comparisons; do not
 reinterpret old decisions. The policy seam can evolve when evidence warrants it, without maintaining speculative variants.
-Six effective work Turns remains the review cadence, not the size of a Todo,
-experiment or route change. Matched continuation must qualify actual adoption,
+The effective review cadence remains owned by the
+[Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
+and Goal/device configuration. It is not Todo size, an experiment boundary or
+a mandatory route switch; this refinement changes neither counting nor discharge.
+Matched continuation must qualify actual adoption,
 target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical
@@ -659,6 +689,14 @@ signals, not an isolated causal effect or promotion qualification. Reserve
 matched continuation and replication for decisions that need those claims.
 
 ### 7.7 Research-state branching and matched continuation
+
+Ordinary compaction and session recovery first follow the
+[current work/Goal basis contract](shared-goal-alignment-and-governed-amendment-v0.md#37-current-work-and-goal-requirements).
+Rebuilding context is not effective work, result adoption or permission to clear
+a due review. Preserve the original recovery operation and settlement identity;
+fresh work re-enters its current admission boundary. The research-state capture
+below adds requirements for a fair comparison, not prerequisites for ordinary
+recovery or a second source of execution authority.
 
 A restorable research point combines **conversation position, research evidence,
 code/candidate artifacts and observation opportunities**. A code archive or
@@ -921,18 +959,26 @@ keyword.
 
 ## 11. Smallest Useful Implementation Slice
 
-M1 read-only observation remains available. The next complete, reversible slice
-returns prior accepted decisions and subsequent evidence to the existing replan
-entry, with the guidance in §7.6. It does not add a classifier, scheduler or
-acceptance gate. Qualify the real CLI/Host projection, immutable reference
-readback, missing/corrupt/stale inputs and unchanged semantic discharge first.
+M1 observation and the source-level feedback slice already exist: the typed
+replan projection returns the prior accepted path and later recorded progress;
+the opt-in strategy validates a source-bound proposal. Preserve exact-entry,
+stale/corrupt-input and feature-off qualification. These facts establish neither
+live model adoption nor scientific or cost benefit, and do not justify another
+feedback ledger.
 
-Then qualify one research-state capture/continuation profile under §7.7. Keep
-verification, executable continuation, model adoption and scientific benefit as
-separate outcomes. Matched continuation pilots judge whether scope review
-produces discriminating experiments and adopted improvements; repeated studies
-and full-cost evidence precede adaptive-policy promotion. A partial Host export
-or a read-only decision projection does not close this implementation program.
+The next usable M3 episode connects one real capability/provider result to the
+existing task/replan writeback and readback. Deliver its current basis, admit a
+bounded continuation or successor, observe actual adopted work, and return its
+artifact, outcome and remaining gap to the next review. Include a late correction,
+lost/duplicate delivery and ordinary context recovery, retaining current authority
+and owed settlement. The packaged task/capability journey must expose waiting,
+failure, stale/unavailable and adopted-result facts. A synthetic verdict or CLI
+receipt alone remains partial.
+
+§7.7 separately qualifies claims requiring the same captured research state and
+comparable feedback opportunities; it need not block this bounded integration.
+Repeated matched results and full-cost evidence remain prerequisites for M5
+promotion. This refinement activates no policy or additional model call.
 
 ## 12. Milestones
 
@@ -963,6 +1009,8 @@ or a read-only decision projection does not close this implementation program.
 - retain Todo and replan as the only execution authorities.
 - qualify §7.6 decision followthrough at the real replan entry and observe
   whether the next probe changes relevant information, rather than identifiers;
+- connect the existing feedback projection to the §11 provider/adoption episode,
+  including late correction, context recovery and product readback;
 - qualify one §7.7 research-state branch and matched continuation profile;
 - qualify the proposed §7.5 provider checkpoint/monitor binding in shadow;
   distinguish model decisions from experiment completion and Turn settlement.
