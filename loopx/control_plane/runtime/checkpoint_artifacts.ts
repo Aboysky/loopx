@@ -13,6 +13,7 @@ import {snapshotSqliteDatabase} from "../coordination/sqlite_backup.ts";
 import {durableWriteJson, publishNewDirectory} from "../effect_runtime_io.ts";
 import {settlementIdentity} from "../effect_program.ts";
 import {normalizeHeartbeatReplanObligationId, normalizeHeartbeatTodoId} from "../quota/heartbeat_receipt_identity.ts";
+import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 
 const SCHEMA = "loopx_checkpoint_artifact_set_v0";
@@ -90,7 +91,7 @@ async function witness(entries: Component[], sourceObservation = true): Promise<
   return result;
 }
 function unchanged(a: unknown, b: unknown, message = "checkpoint source moved; retry at a new owned barrier"): void {
-  if (canonicalAuthoritySha256(a) !== canonicalAuthoritySha256(b)) throw new Error(message);
+  if (canonicalAuthoritySha256(a) !== canonicalAuthoritySha256(b)) throw new EffectRuntimeConflictError(message);
 }
 async function absentDestination(path: string): Promise<void> {
   await physical(dirname(path));
@@ -232,7 +233,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     const sources = components(request.components);
     if (sources.some(c => destination === c.source_path || destination.startsWith(c.source_path + sep) || c.source_path.startsWith(destination + sep))) throw new Error("checkpoint output overlaps its source");
     const before = await witness(sources);
-    if (request.expected_source_sha256 !== canonicalAuthoritySha256(before)) throw new Error("checkpoint source moved before capture");
+    if (request.expected_source_sha256 !== canonicalAuthoritySha256(before)) throw new EffectRuntimeConflictError("checkpoint source moved before capture");
     await mkdir(join(staging, "components"), {mode: 0o700});
     for (const c of sources) await copyComponent(c.source_path, join(staging, "components", c.id));
     unchanged(before, await witness(sources));

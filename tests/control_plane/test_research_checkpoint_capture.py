@@ -216,7 +216,8 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; static local provider only")
 @pytest.mark.parametrize("source_moves", [False, True, "binding"])
-def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch, source_moves):
+@pytest.mark.parametrize("mutation_stage", ["probe", "capture"])
+def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch, source_moves, mutation_stage):
     """Actual CLI settlement, native completed Turns and TS SQLite artifacts."""
     from benchmark.tests.test_native_checkpoint import real_native_source
     from benchmark.runtime.codex import Execution
@@ -263,7 +264,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
                    "session": {"session_id": source}}
         injected = []
         def between_read_and_probe(method, params, **kwargs):
-            if source_moves and params["action"] == "probe" and not injected:
+            if source_moves and params["action"] == mutation_stage and not injected:
                 if source_moves == "binding":
                     injected.append(True)
                     _store_codex_cli_session(runtime, lineage={"goal_id": cli.GOAL_ID, "agent_id": cli.AGENT_ID},
@@ -278,8 +279,10 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
         assert len(calls) == (2 if source_moves is True else 1)  # Static local streams only; no implicit new work.
         if source_moves:
             assert not receipt["checkpoint"]["captured"], receipt
-            assert ("profile changed" if source_moves == "binding" else "native") in receipt["checkpoint"]["error"]
             assert not destination.exists()
+            expected_error = ("checkpoint source moved" if mutation_stage == "capture" else
+                              "profile changed" if source_moves == "binding" else "native")
+            assert expected_error in receipt["checkpoint"]["error"]
         else:
             assert receipt["checkpoint"]["captured"], receipt
             manifest = json.loads((destination / "checkpoint.json").read_text())

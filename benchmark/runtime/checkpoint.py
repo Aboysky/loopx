@@ -358,6 +358,13 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                 sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
             if source_wake.session_id != session.get("session_id"):
                 raise ValueError("native checkpoint differs from the current source session binding")
+            # This sideband record belongs to the existing session owner. It
+            # must participate even when loopx_state was not requested: native
+            # store bytes alone cannot witness a binding/profile replacement.
+            from loopx.control_plane.turn_driver.codex_sessions import _session_path
+            binding_path = _session_path(source_wake.root, source_wake.lineage, "agent")
+            if not any(binding_path.is_relative_to(Path(entry["source_path"])) for entry in components):
+                components = [*components, {"id": "source_session_binding", "source_path": str(binding_path)}]
             metadata["session"] = {**session, "session_profile_digest": source_wake.digest}
             native = native_session_checkpoint(env, session.get("session_id", ""),
                                                timeout=max(.1, deadline - time.time()))
