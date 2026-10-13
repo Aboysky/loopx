@@ -72,10 +72,16 @@ requires you to:
 - include a readable copy of the applicable attribution notices from `NOTICE`
   in one of the locations allowed by section 4(d).
 
-A new name, programming language, or AI-assisted rewrite does not by itself
-remove these obligations from a derivative work. Whether a particular
-implementation is a derivative work depends on its facts; this guidance does
-not classify every independent implementation of similar ideas as a derivative.
+You must not use AI generation, code rewriting, cross-language translation,
+or project renaming as grounds to remove or evade copyright, attribution, or
+NOTICE retention requirements under the applicable license. If the distributed
+material is a derivative work of LoopX, those obligations still apply. This
+clarification does not restrict modifications or redistribution permitted by
+the applicable license.
+
+Whether a particular implementation is a derivative work depends on its facts;
+this guidance does not classify every independent implementation of similar
+ideas as a derivative.
 Historical MIT material and separately licensed third-party components remain
 subject to their applicable terms.
 

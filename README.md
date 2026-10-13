@@ -815,10 +815,12 @@ terms; the historical text and notice are preserved in
 [LICENSE-MIT](LICENSE-MIT). The [licensing policy](docs/project/licensing.md)
 explains the version, contribution, patent-grant, and open-core boundaries.
 
-When redistributing Apache-2.0 forks, ports, or other derivative works,
-preserve the required notices and identify modified files. Renaming,
-cross-language translation, or AI-assisted rewriting does not by itself remove
-those obligations. See [reuse and attribution](docs/project/licensing.md#reuse-ports-and-attribution)
+You must not use AI generation, code rewriting, cross-language translation,
+or project renaming as grounds to remove or evade copyright, attribution, or
+NOTICE retention requirements under the applicable license. If the distributed
+material is a derivative work of LoopX, those obligations still apply. This
+clarification does not restrict modifications or redistribution permitted by
+the applicable license. See [reuse and attribution](docs/project/licensing.md#reuse-ports-and-attribution)
 and [name and marks guidance](docs/project/trademarks.md); a derivative
 distribution must not be presented as an official LoopX release.
 
