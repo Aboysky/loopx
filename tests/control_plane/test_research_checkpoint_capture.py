@@ -215,10 +215,13 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(tmp_
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; static local provider only")
-@pytest.mark.parametrize("source_moves", [False, True])
+@pytest.mark.parametrize("source_moves", [False, True, "binding"])
 def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch, source_moves):
     """Actual CLI settlement, native completed Turns and TS SQLite artifacts."""
     from benchmark.tests.test_native_checkpoint import real_native_source
+    from benchmark.runtime.codex import Execution
+    from benchmark.runtime.sessions import BenchmarkSessionWake
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path)
@@ -250,21 +253,33 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
     with real_native_source(tmp_path / "native", os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"], project) as (env, source, complete, calls):
         env.update(LOOPX_CHECKPOINT_REQUEST=str(request), LOOPX_WAKE_LOG_DIR=str(logs / "wakes"),
             LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_REGISTRY=str(registry), LOOPX_GOAL_ID=cli.GOAL_ID,
-            LOOPX_AGENT_ID=cli.AGENT_ID)
+            LOOPX_AGENT_ID=cli.AGENT_ID, MODEL_NAME="fixture", REASONING_EFFORT="high",
+            LOOPX_CODEX_SANDBOX="read-only")
+        source_wake = BenchmarkSessionWake(env, Execution(context="resume", sandbox="read-only"), {})
+        source_wake.admission.accept_result(lambda: _store_codex_cli_session(runtime,
+            lineage={"goal_id": cli.GOAL_ID, "agent_id": cli.AGENT_ID}, session_scope="agent", session_id=source,
+            goal_ref=source_wake.goal_ref, session_profile_digest=source_wake.digest))
         receipt = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": cli.TURN_ID,
                    "session": {"session_id": source}}
         injected = []
         def between_read_and_probe(method, params, **kwargs):
             if source_moves and params["action"] == "probe" and not injected:
-                injected.append(complete())  # Native writer commits later history before the byte witness.
+                if source_moves == "binding":
+                    injected.append(True)
+                    _store_codex_cli_session(runtime, lineage={"goal_id": cli.GOAL_ID, "agent_id": cli.AGENT_ID},
+                        session_scope="agent", session_id=source, goal_ref=source_wake.goal_ref,
+                        session_profile_digest="b" * 64)
+                else:
+                    injected.append(complete())  # Native writer commits later history before the byte witness.
             return effect_runtime_result(method, params, **kwargs)
         monkeypatch.setattr("benchmark.runtime.checkpoint.effect_runtime_result", between_read_and_probe)
         capture_after_wake(env, receipt)
         assert receipt["ok"] and candidate.read_text() == "source_candidate = 7\n"
-        assert len(calls) == (2 if source_moves else 1)  # Static local streams only; no implicit new work.
+        assert len(calls) == (2 if source_moves is True else 1)  # Static local streams only; no implicit new work.
         if source_moves:
             assert not receipt["checkpoint"]["captured"], receipt
-            assert "native" in receipt["checkpoint"]["error"] and not destination.exists()
+            assert ("profile changed" if source_moves == "binding" else "native") in receipt["checkpoint"]["error"]
+            assert not destination.exists()
         else:
             assert receipt["checkpoint"]["captured"], receipt
             manifest = json.loads((destination / "checkpoint.json").read_text())

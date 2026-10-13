@@ -86,7 +86,7 @@ def test_foreign_native_session_is_rejected_before_history(tmp_path, monkeypatch
 
 
 @contextmanager
-def real_native_source(root, binary, workspace):
+def real_native_source(root, binary, workspace, *, close_source=False, response_builder=None):
     """Real native writer/readback; a local static stream replaces only the model.
 
     No paid model, tool invocation, user credential or benchmark cell. Fixtures
@@ -103,10 +103,12 @@ def real_native_source(root, binary, workspace):
             pass
 
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
             calls.append(self.path)
             message = {"type": "message", "id": "msg_" + uuid.uuid4().hex, "role": "assistant",
                        "content": [{"type": "output_text", "text": "Synthetic source result."}]}
+            if response_builder is not None:
+                message = response_builder(request, len(calls), message)
             result = {"id": "resp_" + uuid.uuid4().hex, "status": "completed", "output": [message],
                       "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
             events = [{"type": "response.created", "response": {**result, "status": "in_progress", "output": []}},
@@ -123,13 +125,15 @@ def real_native_source(root, binary, workspace):
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     (home / "config.toml").write_text(
-        'model="fixture"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
-        '[features]\ngoals=false\nresponses_websockets_v2=false\n'
+        'model="fixture"\nmodel_reasoning_effort="high"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
+        '[features]\ngoals=false\nresponses_websockets_v2=false\nplugins=false\nremote_plugin=false\nplugin_sharing=false\n'
         '[model_providers.fixture]\nname="Synthetic local"\n'
         f'base_url="http://127.0.0.1:{server.server_port}/v1"\nwire_api="responses"\n'
         'env_key="SYNTHETIC_PROVIDER_KEY"\n')
+    # No ambient provider credentials or app integrations enter this fixture.
     env = {key: value for key, value in os.environ.items()
-           if key not in {"OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"}}
+           if key in {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL",
+                      "SYSTEMROOT", "PYTHONPATH", "VIRTUAL_ENV"}}
     env.update(CODEX_HOME=str(home), CODEX_BIN=binary, LOOPX_PROJECT=str(workspace),
                SYNTHETIC_PROVIDER_KEY="synthetic-local-only", LOOPX_USAGE_PING="0")
     try:
@@ -160,6 +164,8 @@ def real_native_source(root, binary, workspace):
                     time.sleep(.05)
                 raise AssertionError("Real native fixture did not complete its source Turn")
             complete_turn()
+            if close_source:
+                native.close()
             yield env, source, complete_turn, calls
     finally:
         server.shutdown()
@@ -181,3 +187,231 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
         foreign.mkdir()
         with pytest.raises(ValueError, match="workspace"):
             native_session_checkpoint({**env, "LOOPX_PROJECT": str(foreign)}, source, timeout=20)
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
+                    reason="Requires an explicit real native Host binary; only a local static provider is used")
+@pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change"])
+def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case):
+    """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
+
+    This qualifies the conversation participant, not full research/evaluator
+    adoption or benchmark utility. No source trial or paid model is launched.
+    """
+    import shutil
+    import subprocess
+    import sys
+    from pathlib import Path
+    from benchmark.runtime.codex import Execution
+    from benchmark.runtime.native_checkpoint import admit_native_checkpoint_session
+    from benchmark.runtime.sessions import BenchmarkSessionWake
+    from benchmark.runtime.worker import native_command
+    from loopx.cli import main
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.turn_driver.codex_sessions import load_codex_cli_session, _store_codex_cli_session
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    from loopx.control_plane.projects.registry_codec import ProjectRegistryProtocolError
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    candidate = workspace / "candidate.txt"
+    candidate.write_text("retained candidate: 7\n")
+    research = workspace / "research.txt"
+    research.write_text("candidate 3 was rejected by the original synthetic check\n")
+    source_goal, source_agent = "source-research", "source-researcher"
+    destination_goal, destination_agent = "branch-research", "branch-researcher"
+    def register(name, agent):
+        registry = tmp_path / name / "registry.json"
+        runtime = tmp_path / name / "runtime"
+        prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime)]
+        assert main([*prefix, "bootstrap", "--project", str(workspace), "--goal-id", name,
+            "--objective", "Continue the synthetic candidate investigation.", "--adapter-kind", "read_only_project_map_v0",
+            "--adapter-status", "connected-read-only", "--write-scope", "**", "--no-global-sync"]) == 0
+        capsys.readouterr()
+        assert main([*prefix, "configure-goal", "--goal-id", name, "--registered-agent", agent,
+            "--agent-work-mode", agent + "=active", "--execute"]) == 0
+        capsys.readouterr()
+        assert main([*prefix, "todo", "add", "--goal-id", name, "--role", "agent", "--claimed-by", agent,
+            "--task-class", "advancement_task", "--required-capability", "shell",
+            "--text", "Verify the retained candidate and preserve applicable negative evidence."]) == 0
+        added = json.loads(capsys.readouterr().out)
+        return registry, runtime, added["todo_id"]
+    source_registry, source_runtime, _ = register(source_goal, source_agent)
+    registry, runtime, destination_todo = register(destination_goal, destination_agent)
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime)]
+    turn_id = "checkpoint-continuation-fixture"
+    binding = ["--goal-id", destination_goal, "--agent-id", destination_agent,
+               "--todo-id", destination_todo, "--turn-instance-id", turn_id]
+    assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
+    guard = json.loads(capsys.readouterr().out)
+    assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    requests = []
+    def response(request, index, message):
+        requests.append(request)
+        if index == 2:
+            return {"type": "function_call", "id": "fc_retained", "call_id": "call_retained",
+                "name": "exec_command", "arguments": json.dumps({
+                    "cmd": "cat candidate.txt research.txt", "max_output_tokens": 1000})}
+        if index == 3:
+            message["content"][0]["text"] = "Retained candidate 7 verified; candidate 3 remains rejected."
+        return message
+
+    binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
+    execution = Execution(context="resume", sandbox="read-only")
+    with real_native_source(tmp_path / "native", binary, workspace, close_source=True,
+                            response_builder=response) as (env, source_session, _, calls):
+        env.update(LOOPX_REGISTRY=str(source_registry), LOOPX_RUNTIME_ROOT=str(source_runtime),
+                   LOOPX_GOAL_ID=source_goal, LOOPX_AGENT_ID=source_agent,
+                   MODEL_NAME="fixture", REASONING_EFFORT="high", LOOPX_CODEX_SANDBOX="read-only")
+        source_wake = BenchmarkSessionWake(env, execution, {})
+        source_wake.admission.accept_result(lambda: _store_codex_cli_session(source_runtime,
+            lineage={"goal_id": source_goal, "agent_id": source_agent}, session_scope="agent",
+            session_id=source_session, goal_ref=source_wake.goal_ref, session_profile_digest=source_wake.digest))
+        native = native_session_checkpoint(env, source_session, timeout=20)
+        config = tmp_path / "config.toml"
+        config.write_bytes((Path(env["CODEX_HOME"]) / "config.toml").read_bytes())
+        components = [*native["components"], {"id": "code", "source_path": str(candidate)},
+                      {"id": "research", "source_path": str(research)}]
+        probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+        unit = tmp_path / "point"
+        captured = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture",
+            "destination": str(unit), "components": components, "expected_source_sha256": probe["source_sha256"],
+            "point_metadata": {"native_session": native["metadata"],
+                "session": {"session_id": source_session, "session_profile_digest": source_wake.digest},
+                "loopx_state": {"goal_id": source_goal, "agent_id": source_agent}}}, retry_safe=False)
+        digest = captured["sha256"]
+        # Qualify use of captured inputs, not the source's later working files.
+        # A quiesced same-machine fixture swaps fixed paths; this is not evidence
+        # of complete guest/environment isolation or a scientific matched trial.
+        candidate.write_text("later candidate: 999\n")
+        research.write_text("later evidence unavailable at the captured point\n")
+        late_source = tmp_path / "retained-later-source"
+        late_source.mkdir()
+        shutil.move(candidate, late_source / candidate.name)
+        shutil.move(research, late_source / research.name)
+        materialized = tmp_path / "materialized"
+        effect_runtime_result("runtime.checkpoint_artifacts", {"action": "materialize", "root": str(unit),
+            "expected_sha256": digest, "destination": str(materialized)}, retry_safe=False)
+        shutil.copy2(materialized / "components/code", candidate)
+        shutil.copy2(materialized / "components/research", research)
+        original_home = tmp_path / "original-home"
+        shutil.move(env["CODEX_HOME"], original_home)
+        retained_names = {m["name"] for m in native["metadata"]["store_members"]} | {"config.toml"}
+        def retained_source():
+            return {p.relative_to(original_home).as_posix(): p.read_bytes()
+                for p in original_home.rglob("*") if p.is_file() and p.relative_to(original_home).parts[0] in retained_names}
+        before = retained_source()
+        env.update(LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
+                   LOOPX_GOAL_ID=destination_goal, LOOPX_AGENT_ID=destination_agent,
+                   MODEL_NAME="fixture", REASONING_EFFORT="high")
+        lifecycle_registry = tmp_path / "lifecycle-only" / "registry.json"
+        assert main(["--format", "json", "--registry", str(lifecycle_registry),
+            "--runtime-root", str(tmp_path / "lifecycle-only/runtime"), "project", "register",
+            "--goal-instance-profile", "source_session_v1", "--operation-id", "lifecycle-only",
+            "--project-id", "lifecycle-only", "--project-kind", "work", "--knowledge-root", str(workspace),
+            "--goal-id", "lifecycle-only", "--objective", "Synthetic lifecycle fixture.",
+            "--acceptance", "Lifecycle only.", "--next-effect", "Read.", "--stop-condition", "Stop."]) == 0
+        capsys.readouterr()
+        with pytest.raises(ProjectRegistryProtocolError, match="lifecycle-only"):
+            admit_native_checkpoint_session({**env, "LOOPX_REGISTRY": str(lifecycle_registry),
+                "LOOPX_GOAL_ID": "lifecycle-only"}, unit, digest, config, execution=execution, timeout=30)
+        assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
+        unsupported_config = tmp_path / "automatic-goal-config.toml"
+        unsupported_config.write_text(config.read_text().replace("goals=false", "goals=true"))
+        with monkeypatch.context() as automatic:
+            def forbidden_automatic_fork(*args, **kwargs):
+                raise AssertionError("an unsupported automatic Goal profile must fail before native reconstruction")
+            automatic.setattr("benchmark.runtime.native_checkpoint.fork_native_checkpoint", forbidden_automatic_fork)
+            with pytest.raises(ValueError, match="automatic Goals explicitly disabled"):
+                admit_native_checkpoint_session(env, unit, digest, unsupported_config, execution=execution, timeout=30)
+        with pytest.raises(ValueError, match="distinct destination"):
+            admit_native_checkpoint_session({**env, "LOOPX_GOAL_ID": source_goal}, unit, digest,
+                                            config, execution=execution, timeout=30)
+        assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
+        if case == "scope_change":
+            from benchmark.runtime import native_checkpoint
+            original_fork = native_checkpoint.fork_native_checkpoint
+            def change_scope_after_real_fork(*args, **kwargs):
+                result = original_fork(*args, **kwargs)
+                assert main([*prefix, "configure-goal", "--goal-id", destination_goal,
+                    "--agent-work-mode", destination_agent + "=monitor_only", "--execute"]) == 0
+                capsys.readouterr()
+                return result
+            monkeypatch.setattr(native_checkpoint, "fork_native_checkpoint", change_scope_after_real_fork)
+            with pytest.raises(ValueError, match="Goal configuration changed"):
+                admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+            assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
+                "agent_id": destination_agent}, session_scope="agent") is None
+            assert len(calls) == 1  # A native fork occurred; no binding or model did.
+            assert retained_source() == before
+            return
+        if case == "profile_change":
+            with pytest.raises(ValueError, match="profile changed"):
+                admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
+                                                config, execution=execution, timeout=30)
+            assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
+                "agent_id": destination_agent}, session_scope="agent") is None
+            assert len(calls) == 1
+            assert retained_source() == before
+            return
+        admitted_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.native_checkpoint",
+            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", "read-only"],
+            env=env, text=True, capture_output=True, timeout=40)
+        assert admitted_cli.returncode == 0, admitted_cli.stderr
+        admitted = json.loads(admitted_cli.stdout)
+        assert admitted["session_binding_admitted"] and admitted["history_verified"]
+        assert admitted["model_calls"] == 0 and not admitted["continuation_qualified"]
+        assert admitted["session_id"] != source_session and len(calls) == 1
+        bound = load_codex_cli_session(runtime, lineage={"goal_id": destination_goal, "agent_id": destination_agent},
+                                      session_scope="agent")
+        assert bound["session_id"] == admitted["session_id"]
+        assert bound.get("goal_ref") == admitted["destination_goal_ref"]
+        with monkeypatch.context() as replay:
+            def forbidden_fork(*args, **kwargs):
+                raise AssertionError("a repeated admission must not create a second native fork")
+            replay.setattr("benchmark.runtime.native_checkpoint.fork_native_checkpoint", forbidden_fork)
+            with pytest.raises(ValueError, match="already exists"):
+                admit_native_checkpoint_session(env, unit, digest, config, execution=execution, timeout=30)
+        assert len(calls) == 1 and load_codex_cli_session(runtime, lineage={
+            "goal_id": destination_goal, "agent_id": destination_agent}, session_scope="agent") == bound
+
+        receipt = {}
+        wake = BenchmarkSessionWake(env, execution, receipt)
+        assert wake.session_id == admitted["session_id"] and receipt["session"]["action"] == "resume"
+        logs = tmp_path / "continuation"
+        logs.mkdir()
+        command = native_command(env, execution, "execute", logs, wake)
+        current_body = json.dumps(guard["interaction_contract"], ensure_ascii=False)
+        result = subprocess.run(command, env=env, cwd=workspace, input=current_body + "\nContinue: verify the retained files.",
+                                text=True, capture_output=True, timeout=40)
+        assert result.returncode == 0, result.stderr
+        (logs / "stdout.jsonl").write_text(result.stdout)
+        wake.observe(logs / "stdout.jsonl")
+        assert wake.session_id == admitted["session_id"] and len(calls) == 3
+        assert "Synthetic source result." in json.dumps(requests[1])
+        assert destination_goal in json.dumps(requests[1]) and destination_todo in json.dumps(requests[1])
+        assert "retained candidate: 7" in json.dumps(requests[2])
+        assert "candidate 3 was rejected" in json.dumps(requests[2])
+        assert "Retained candidate 7 verified" in result.stdout
+        retained = native_session_checkpoint(env, admitted["session_id"], timeout=20)
+        assert retained["metadata"]["turn_ids"][:-1] == native["metadata"]["turn_ids"]
+        assert retained["metadata"]["completed_turn_id"] != native["metadata"]["completed_turn_id"]
+        assert candidate.read_text() == "retained candidate: 7\n"
+        assert (late_source / candidate.name).read_text() == "later candidate: 999\n"
+        assert (late_source / research.name).read_text() == "later evidence unavailable at the captured point\n"
+        assert retained_source() == before
+        vision = tmp_path / "continuation-vision.json"
+        vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+            "vision_patch": {"acceptance_summary": "Synthetic conversation continuation verified; full research remains open."},
+            "path_delta": {"outcome": "continue", "prior_assumption": "Retained candidate and evidence are available.",
+                "observed_reality": "The resumed native tool read verifies candidate 7 and the rejection of candidate 3.",
+                "retained": ["Complete checkpoint qualification"], "evidence_refs": ["evidence:native-continuation-fixture"]}}))
+        assert main([*prefix, "refresh-state", *binding, "--classification", "checkpoint_continuation_verified",
+            "--delivery-batch-scale", "multi_surface", "--delivery-outcome", "outcome_progress",
+            "--agent-vision-json", str(vision)]) == 0
+        assert json.loads(capsys.readouterr().out)["ok"] is True
+        assert main([*prefix, "quota", "spend-slot", *binding, "--source", "heartbeat", "--execute"]) == 0
+        assert json.loads(capsys.readouterr().out)["ok"] is True
+        settled = read_heartbeat_settlement(runtime, goal_id=destination_goal, agent_id=destination_agent,
+            todo_id=destination_todo, turn_instance_id=turn_id, registry_path=registry)
+        assert settled.progress["state"] == "settled"

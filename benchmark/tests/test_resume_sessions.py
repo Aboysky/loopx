@@ -15,6 +15,31 @@ from benchmark.tests.test_shared_codex_runtime import worker_env
 from loopx.control_plane.turn_driver.codex_sessions import load_codex_cli_session
 
 
+@pytest.mark.parametrize("existing", ["valid", "malformed", "dangling"])
+def test_absent_only_session_admission_preserves_every_existing_binding(tmp_path, existing):
+    """The no-replacement condition is checked under the session owner's lock."""
+    from loopx.control_plane.turn_driver.codex_sessions import _session_path, _store_codex_cli_session
+
+    lineage = {"goal_id": "continuation-fixture", "agent_id": "continuation-agent"}
+    path = _session_path(tmp_path, lineage, "agent")
+    path.parent.mkdir(parents=True)
+    if existing == "valid":
+        _store_codex_cli_session(tmp_path, lineage=lineage, session_scope="agent", session_id="original-session")
+    elif existing == "malformed":
+        path.write_bytes(b"unconfirmed original binding")
+    else:
+        path.symlink_to(path.with_name("unavailable-original"))
+    before = path.readlink() if path.is_symlink() else path.read_bytes()
+    with pytest.raises(ValueError, match="already exists"):
+        _store_codex_cli_session(tmp_path, lineage=lineage, session_scope="agent", session_id="replacement-session",
+                                require_absent=True)
+    assert (path.readlink() if path.is_symlink() else path.read_bytes()) == before
+    if existing == "valid":
+        # Ordinary native observation retains its existing default behavior.
+        _store_codex_cli_session(tmp_path, lineage=lineage, session_scope="agent", session_id="observed-session")
+        assert load_codex_cli_session(tmp_path, lineage=lineage, session_scope="agent")["session_id"] == "observed-session"
+
+
 def resume_env(tmp_path, monkeypatch):
     env = worker_env(tmp_path)
     skills = tmp_path / "skills"
