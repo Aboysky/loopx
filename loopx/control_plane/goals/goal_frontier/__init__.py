@@ -4,7 +4,7 @@ from typing import Any
 
 from ...agents.agent_scope import (
     agent_scope_blocking_handoff_gates,
-    agent_scope_count_advancement_items,
+    agent_scope_count_advancement_items as _count_advancement_items,
     agent_scope_item_claimed_by,
     agent_scope_item_claimed_by_agent_or_unclaimed,
 )
@@ -26,6 +26,7 @@ from ...todos.succession_warning import (
     TODO_SUCCESSION_WARNING_REASON_CODE,
     todo_succession_gap_items,
 )
+from ...todos.user_gate import open_todo_count as _open_todo_count
 from ...work_items.autonomous_replan_ack import (
     autonomous_replan_ack_matches_agent,
     autonomous_replan_ack_matches_frontier,
@@ -64,9 +65,10 @@ from .ack_policy import (
     autonomous_replan_ack_satisfies_obligation,
     replan_successor_transition_ack,
 )
-from .fallback_disposition import (
+from .fallback_source import (
     VISION_FRONTIER_TODO_DELTA_ACTIONS,  # noqa: F401
     FallbackDeclaration,  # noqa: F401
+    FallbackTodoSource,
     agent_scoped_selectable_advancement_todo_ids,  # noqa: F401
     declared_fallback_gap_from_agent_vision,
     parse_fallback_declarations,  # noqa: F401
@@ -84,6 +86,7 @@ from .semantic_history import (
     latest_agent_vision_from_runs as latest_agent_vision_from_runs,
 )
 from .semantic_history import (
+    _latest_runs_for_goal,
     latest_agent_vision_from_status_payload,
     latest_autonomous_replan_ack_from_status_payload,
     latest_missing_vision_checkpoint_from_status_payload,
@@ -548,12 +551,6 @@ def build_vision_gap_judge(
     }
 
 
-def _open_todo_count(summary: dict[str, Any] | None) -> int:
-    if not isinstance(summary, dict):
-        return 0
-    return safe_non_negative_int(summary.get("open_count"))
-
-
 def _blocking_user_open_count(summary: dict[str, Any] | None) -> int:
     if not isinstance(summary, dict):
         return 0
@@ -577,10 +574,6 @@ def _todo_item_is_actionable_open(item: dict[str, Any]) -> bool:
 
 def _todo_task_class(item: dict[str, Any]) -> str:
     return str(item.get("task_class") or "").strip()
-
-
-def _count_advancement_items(items: Any, *, claimed_by: str | None = None) -> int:
-    return agent_scope_count_advancement_items(items, claimed_by=claimed_by)
 
 
 def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
@@ -1499,6 +1492,8 @@ def build_goal_frontier_projection_context_from_status(
     work_lane_contract: dict[str, Any] | None,
     neutral_replan_ack_classifications: set[str],
     agent_todo_source_items: list[dict[str, Any]] | None = None,
+    fallback_todo_source_items: FallbackTodoSource = None,
+    available_capabilities: Any = None,
     registered_agent_ids: list[str] | None = None,
     goal_status: str | None = None,
     agent_profile: dict[str, Any] | None = None,
@@ -1644,6 +1639,12 @@ def build_goal_frontier_projection_context_from_status(
                 latest_agent_vision,
                 agent_todo_summary=agent_todo_summary,
                 agent_id=agent_id,
+                agent_todo_source_items=fallback_todo_source_items,
+                rollout_events=_latest_runs_for_goal(
+                    status_payload,
+                    goal_id=goal_id,
+                ),
+                available_capabilities=available_capabilities,
             ),
         )
         if isinstance(gap, dict)
