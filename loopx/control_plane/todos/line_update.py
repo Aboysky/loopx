@@ -50,6 +50,32 @@ def upsert_todo_metadata(
     return True
 
 
+def record_todo_mutation_actor(
+    lines: list[str],
+    update_result: dict[str, Any],
+    actor: str | None,
+) -> None:
+    """Transport accepted mutation provenance inside the held writer transaction.
+
+    Authority remains with the existing lifecycle decision. An unchanged replay
+    must not mint a new actor or advance the source timestamp.
+    """
+    if not update_result.get("changed"):
+        return
+    if actor is None:
+        return
+    match = find_todo_block(
+        lines, todo_id=update_result["todo_id"], role=update_result["role"],
+    )
+    if match is None:
+        raise RuntimeError("Authorized Todo disappeared before provenance writeback")
+    block = match[4]
+    metadata_line = metadata_line_for_todo_block(block, {"last_actor_agent_id": actor})
+    updated = upsert_todo_metadata(lines, block, metadata_line)
+    update_result["metadata_updated"] = updated or update_result["metadata_updated"]
+    update_result["last_actor_agent_id"] = actor
+
+
 def link_generated_successor_todo_ids(
     lines: list[str],
     *,
