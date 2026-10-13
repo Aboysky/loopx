@@ -57,6 +57,13 @@ def _is_git_bash(path: str) -> bool:
     )
 
 
+# Claude Code honors `CLAUDE_CODE_GIT_BASH_PATH` only when the file name is one
+# of these (env-vars reference, 2.1.219+); any other name is ignored and Git
+# Bash detection continues as if the variable were unset - even when the file
+# exists and runs.
+_GIT_BASH_OVERRIDE_NAMES = frozenset({"bash.exe", "sh.exe", "bash", "sh"})
+
+
 def _git_bash() -> str | None:
     """The Git Bash Claude Code runs a shell-form command string with, if any.
 
@@ -65,14 +72,15 @@ def _git_bash() -> str | None:
     macOS/Linux (Claude Code hooks reference, "Exec form and shell form"). It
     finds Git Bash through its `CLAUDE_CODE_GIT_BASH_PATH` override, the Git
     installation or a `bash` on PATH, or a default Git for Windows location;
-    this mirrors those sources so the encoding can follow the same choice, and
-    a stale override falls through to the next source the way a non-bash
-    override is ignored there."""
+    this mirrors those sources so the encoding can follow the same choice. Like
+    that consumer, an override whose file name is not `bash.exe`, `sh.exe`,
+    `bash` or `sh` (compared case-insensitively) is ignored and detection
+    continues as if it were unset."""
     if sys.platform != "win32":
         return None
     candidates: list[str] = []
     override = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")
-    if override:
+    if override and Path(override).name.lower() in _GIT_BASH_OVERRIDE_NAMES:
         candidates.append(override)
     git = shutil.which("git")
     if git:

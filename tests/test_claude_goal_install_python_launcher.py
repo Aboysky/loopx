@@ -25,10 +25,12 @@ a space - produces a command the shell splits at the first space. PR #6229
 named that residual and issue #6249 reported it; PR #6250 keeps every baked
 token literal in the shell that actually runs it - `/bin/sh` on macOS/Linux,
 Git Bash on Windows when it is installed, PowerShell on a Windows host without
-Git Bash. cmd.exe was never that shell for current Claude Code, and it read
-`$`, quotes and backslashes differently from the Git Bash that does run these
-strings. These tests read the generated commands back out of the installed
-files and execute them through the selected shell.
+Git Bash - and the `CLAUDE_CODE_GIT_BASH_PATH` override only counts there when
+the file is named `bash.exe`, `sh.exe`, `bash` or `sh`, the same rule this
+installer applies. cmd.exe was never that shell for current Claude Code, and it
+read `$`, quotes and backslashes differently from the Git Bash that does run
+these strings. These tests read the generated commands back out of the
+installed files and execute them through the selected shell.
 """
 
 from __future__ import annotations
@@ -317,6 +319,152 @@ def test_git_bash_rejects_the_wsl_alias(monkeypatch: pytest.MonkeyPatch) -> None
     assert claude_install._git_bash() is None
 
 
+def _git_bash_host(
+    monkeypatch: pytest.MonkeyPatch, which, override: str | None = None
+) -> None:
+    """Pin `_git_bash` to a Windows host whose only discovery sources are the
+    `which` lookup and `override`.
+
+    Pinning `sys.platform` covers the Windows-only rule on every host, and the
+    Git-for-Windows default locations are cleared so a result can only come
+    from the stub or the override.
+    """
+    monkeypatch.setattr(claude_install.sys, "platform", "win32")
+    monkeypatch.setattr(claude_install.shutil, "which", which)
+    if override is None:
+        monkeypatch.delenv("CLAUDE_CODE_GIT_BASH_PATH", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", override)
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.mark.parametrize("name", ["custom-shell.exe", "git-bash.exe", "bash.cmd", "wsl-bash"])
+def test_git_bash_ignores_override_names_claude_rejects(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `CLAUDE_CODE_GIT_BASH_PATH` name Claude Code does not accept is unset.
+
+    The env-vars reference (2.1.219+) only honors `bash.exe`, `sh.exe`, `bash`
+    and `sh`: any other name is ignored and detection continues, even though the
+    file exists and runs. Accepting such an override here would render POSIX
+    commands while the consumer dispatches the same string to PowerShell.
+    """
+    override = tmp_path / name
+    override.write_bytes(b"")
+    _git_bash_host(monkeypatch, lambda _name: None, override=str(override))
+    # Only the consumer's name rule can reject the file: it exists and would
+    # pass the MSYS probe.
+    monkeypatch.setattr(claude_install, "_is_git_bash", lambda _path: True)
+    assert claude_install._git_bash() is None
+
+
+@pytest.mark.parametrize("name", ["bash.exe", "sh.exe", "bash", "sh", "BASH.EXE"])
+def test_git_bash_honors_override_names_claude_accepts(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The four accepted names win; the consumer lowercases, and so does this."""
+    override = tmp_path / "Git" / "bin" / name
+    override.parent.mkdir(parents=True)
+    override.write_bytes(b"")
+    _git_bash_host(monkeypatch, lambda _name: None, override=str(override))
+    monkeypatch.setattr(claude_install, "_is_git_bash", lambda _path: True)
+    assert claude_install._git_bash() == str(override)
+
+
+def test_git_bash_ignores_a_rejected_name_but_keeps_detecting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ignored override must not stop the auto-detection the consumer falls
+    back to: a `git` on PATH still resolves its Git Bash."""
+    override = tmp_path / "custom-shell.exe"
+    override.write_bytes(b"")
+    git = tmp_path / "Git" / "cmd" / "git.exe"
+    git.parent.mkdir(parents=True)
+    git.write_bytes(b"")
+    fallback = tmp_path / "Git" / "bin" / "bash.exe"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_bytes(b"")
+    _git_bash_host(
+        monkeypatch, lambda name: str(git) if name == "git" else None, override=str(override)
+    )
+    monkeypatch.setattr(claude_install, "_is_git_bash", lambda _path: True)
+    assert Path(claude_install._git_bash()).resolve() == fallback.resolve()
+
+
+def test_rejected_override_renders_the_powershell_fallback(
+    literal_host, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runnable `custom-shell.exe` must not flip the renderer to POSIX while
+    the consumer ignores it and falls back.
+
+    With no other Git Bash, Claude Code dispatches to PowerShell, so the
+    installed hook and statusline must carry its `& '...'` command form.
+    """
+    launcher = str(literal_host("Program Files"))
+    override = tmp_path / "custom-shell.exe"
+    override.write_bytes(b"")
+    _git_bash_host(
+        monkeypatch, lambda name: launcher if name == "python3" else None, override=str(override)
+    )
+    monkeypatch.setattr(claude_install, "_is_git_bash", lambda _path: True)
+
+    assert claude_install._uses_powershell() is True
+    hardening = claude_install.hardening_block()
+    hook = hardening["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    status = hardening["statusLine"]["command"]
+    assert hook.startswith(f"& '{launcher}' ")
+    assert status.startswith(f"& '{launcher}' ")
+
+
+def test_accepted_override_renders_the_literal_posix_form(
+    literal_host, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An override name the consumer honors keeps the literal POSIX rendering."""
+    launcher = str(literal_host("Program Files"))
+    override = tmp_path / "Git" / "bin" / "BASH.EXE"
+    override.parent.mkdir(parents=True)
+    override.write_bytes(b"")
+    _git_bash_host(
+        monkeypatch, lambda name: launcher if name == "python3" else None, override=str(override)
+    )
+    monkeypatch.setattr(claude_install, "_is_git_bash", lambda _path: True)
+
+    assert claude_install._uses_powershell() is False
+    token = shlex.quote(launcher)
+    hardening = claude_install.hardening_block()
+    hook = hardening["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    status = hardening["statusLine"]["command"]
+    assert hook.startswith(f"{token} ")
+    assert status.startswith(f"{token} ")
+
+
+def test_git_derived_fallback_renders_the_literal_posix_form(
+    literal_host, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-detected Git Bash (no override) still renders the literal form."""
+    launcher = str(literal_host("Program Files"))
+    git = tmp_path / "Git" / "cmd" / "git.exe"
+    git.parent.mkdir(parents=True)
+    git.write_bytes(b"")
+    bash = tmp_path / "Git" / "bin" / "bash.exe"
+    bash.parent.mkdir(parents=True)
+    bash.write_bytes(b"")
+    _git_bash_host(
+        monkeypatch,
+        lambda name: launcher if name == "python3" else (str(git) if name == "git" else None),
+    )
+    monkeypatch.setattr(claude_install, "_is_git_bash", lambda _path: True)
+
+    assert claude_install._uses_powershell() is False
+    token = shlex.quote(launcher)
+    hardening = claude_install.hardening_block()
+    hook = hardening["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    status = hardening["statusLine"]["command"]
+    assert hook.startswith(f"{token} ")
+    assert status.startswith(f"{token} ")
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Git Bash discovery is Windows-only")
 def test_git_bash_is_a_runnable_msys_shell() -> None:
     """Whatever the discovery accepts must answer `uname -s` as an MSYS/Cygwin bash."""
@@ -456,16 +604,24 @@ def test_installed_slash_command_runs_through_a_literal_interpreter(
 def test_installed_commands_run_under_powershell_without_git_bash(
     literal_host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The PowerShell form must start the same interpreter on a host with no Git Bash.
+    """The rejected-override fallback must start the interpreter under the real
+    PowerShell.
 
-    The host running the test may have Git Bash (CI Windows does), so the
-    PowerShell branch is forced here and the installed strings are executed
-    through a real `powershell.exe` - the shell Claude Code falls back to when
-    Git Bash is absent - with the event and session JSON on stdin.
+    This host may have Git Bash (CI Windows does), so every discovery source is
+    pinned empty and the `CLAUDE_CODE_GIT_BASH_PATH` override carries a name
+    Claude Code ignores, leaving the real selector on the PowerShell fallback.
+    The installed strings are executed through a real `powershell.exe` - the
+    shell Claude Code uses when Git Bash is absent - with the event and session
+    JSON on stdin.
     """
     launcher = str(literal_host("Program Files"))
-    monkeypatch.setattr(claude_install, "_uses_powershell", lambda: True)
+    override = tmp_path / "custom-shell.exe"
+    override.write_bytes(b"")
+    _git_bash_host(
+        monkeypatch, lambda name: launcher if name == "python3" else None, override=str(override)
+    )
 
+    assert claude_install._uses_powershell() is True
     settings = tmp_path / "claude" / "settings.json"
     claude_install.add_hardening(dry=False, settings_path=settings)
     hook_cmd, status_cmd = _installed_commands(settings)

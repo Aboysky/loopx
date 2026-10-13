@@ -94,7 +94,10 @@ Git Bash cannot run it at all; and the shell choice is made when the installer
 runs - installing or removing Git Bash later, or pointing Claude Code at one
 with `CLAUDE_CODE_GIT_BASH_PATH` in an environment the installer cannot see,
 changes which shell Claude Code picks, so re-run `install.py --harden` after
-that change.
+that change. Claude Code honors that override only for a file named `bash.exe`,
+`sh.exe`, `bash` or `sh`; anything else, existing or not, is ignored and
+detection proceeds as if it were unset, and the installer follows the same
+rule.
 `tests/test_claude_goal_install_python_launcher.py` executes the installed
 hook, statusline and `/loopx` commands through the selected shell for a plain
 path, an ordinary spaced path and literal `$`/quote paths.
