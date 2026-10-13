@@ -381,6 +381,19 @@ context-command recovery; joint participant recovery and the packaged frontend
 journey remain open.
 
 
+The composed local qualification also seals the native evaluator capsule with the
+conversation/code/context artifact. An actual resumed Codex tool reads captured
+research and public feedback, computes a synthetic candidate from captured code,
+and submits through the native HTTP owner. It retains consumed rounds and the
+active cooldown, rejects a further submission at the inherited limit, and enters
+through the existing SForge Host phase check with the captured remaining duration.
+Later source evidence stays excluded and the source service remains unchanged.
+The fixture quiesces participants itself, uses a local deterministic model and
+synthetic grading, and does not activate a destination Explore graph or old
+vision/effects. It qualifies this composed mechanical path, not an automatic
+cross-owner barrier, ambiguous activation recovery, isolated Linux solver restore,
+or research utility. Those remain requirements before scientific continuation.
+
 Declare authorized workspace code/research files, effective configuration and
 installed source/profile pins as non-overlapping components. The native and
 opportunity participants do not imply that omitted state was saved. Every source

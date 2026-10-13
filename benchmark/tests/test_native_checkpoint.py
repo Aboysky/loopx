@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from benchmark.runtime.native_checkpoint import native_session_checkpoint
+from benchmark.tests.test_checkpoint_controller import controllers  # noqa: F401 -- shared real HTTP fixture
 
 
 def fixture(tmp_path, monkeypatch, pages):
@@ -86,7 +87,7 @@ def test_foreign_native_session_is_rejected_before_history(tmp_path, monkeypatch
 
 
 @contextmanager
-def real_native_source(root, binary, workspace, *, close_source=False, response_builder=None):
+def real_native_source(root, binary, workspace, *, close_source=False, response_builder=None, sandbox="read-only"):
     """Real native writer/readback; a local static stream replaces only the model.
 
     No paid model, tool invocation, user credential or benchmark cell. Fixtures
@@ -125,7 +126,9 @@ def real_native_source(root, binary, workspace, *, close_source=False, response_
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     (home / "config.toml").write_text(
-        'model="fixture"\nmodel_reasoning_effort="high"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
+        'model="fixture"\nmodel_reasoning_effort="high"\nmodel_provider="fixture"\napproval_policy="never"\n'
+        f'sandbox_mode={json.dumps(sandbox)}\n'
+        + ('[sandbox_workspace_write]\nnetwork_access=true\n' if sandbox == "workspace-write" else "") +
         '[features]\ngoals=false\nresponses_websockets_v2=false\nplugins=false\nremote_plugin=false\nplugin_sharing=false\n'
         '[model_providers.fixture]\nname="Synthetic local"\n'
         f'base_url="http://127.0.0.1:{server.server_port}/v1"\nwire_api="responses"\n'
@@ -144,7 +147,7 @@ def real_native_source(root, binary, workspace, *, close_source=False, response_
             native.request("initialize", {"clientInfo": {"name": "checkpoint_qualification", "version": "0.1.0"},
                                           "capabilities": {"experimentalApi": True}})
             native.notify("initialized", {})
-            source = native.request("thread/start", {"cwd": str(workspace), "sandbox": "read-only",
+            source = native.request("thread/start", {"cwd": str(workspace), "sandbox": sandbox,
                 "approvalPolicy": "never", "persistExtendedHistory": True})["thread"]["id"]
             def complete_turn():
                 expected_turn = native.request("turn/start", {"threadId": source,
@@ -191,12 +194,14 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; only a local static provider is used")
-@pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change"])
-def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case):
+@pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint"])
+def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case, request):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
     This jointly qualifies native conversation and canonical Todo evidence
-    adoption, not full research/evaluator state or benchmark utility. No source trial or paid model is launched.
+    adoption. The joint case adds actual native HTTP and Host phase entry, with
+    synthetic grading. Full cross-owner barriers and research utility remain
+    outside this fixture. No benchmark cell or paid model is launched.
     """
     import shutil
     import subprocess
@@ -262,23 +267,44 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         "--task-lease-idempotency-key", "source-context", "--task-lease-expected-version", "1"])
     requests = []
     retained_context_path = None
+    joint_command = ""
+    if case == "joint":
+        import copy
+        import shlex
+        import requests as http
+        from benchmark.edgebench import checkpoint_controller as transport
+        from benchmark.tests.test_checkpoint_controller import register as register_judge, submit, host_phase_command
+        source_judge, branch_judge, source_url, branch_url, controllers_files, grades = request.getfixturevalue("controllers")
+        source_token = register_judge(source_judge, source_url, max_agent_submissions=3, submission_cooldown=0)
+        assert submit(source_url, source_token, 7).status_code == 200
+        assert submit(source_url, source_token, 3).status_code == 200
+        source_judge.state.judge.tokens[source_token]["submission_cooldown"] = 3
+        source_phase = tmp_path / "source-phase"
+        source_phase.write_text(f"{int(time.time()) + 7200}\n")
+        evaluator_unit = tmp_path / "evaluator-point"
+        evaluator_point = transport.capture(controllers_files[0], token=source_token,
+            capture_id="e" * 32, destination=evaluator_unit, phase_deadline_file=source_phase)
+        evaluator_body = json.loads((evaluator_unit / "checkpoint.json").read_bytes())
+        # Real participants are quiesced by this fixture. It is not a production
+        # cross-owner capture barrier or a proof of autonomous research utility.
+
     def response(request, index, message):
         requests.append(request)
         if index == 2:
             return {"type": "function_call", "id": "fc_retained", "call_id": "call_retained",
                 "name": "exec_command", "arguments": json.dumps({
-                    "cmd": "cat candidate.txt research.txt " + retained_context_path, "max_output_tokens": 6000})}
+                    "cmd": "cat candidate.txt research.txt " + retained_context_path + joint_command, "max_output_tokens": 6000})}
         if index == 3:
             message["content"][0]["text"] = "Retained candidate 7 verified; candidate 3 remains rejected."
         return message
 
     binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
-    execution = Execution(context="resume", sandbox="read-only")
+    execution = Execution(context="resume", sandbox="workspace-write" if case == "joint" else "read-only")
     with real_native_source(tmp_path / "native", binary, workspace, close_source=True,
-                            response_builder=response) as (env, source_session, _, calls):
+                            response_builder=response, sandbox=execution.sandbox) as (env, source_session, _, calls):
         env.update(LOOPX_REGISTRY=str(source_registry), LOOPX_RUNTIME_ROOT=str(source_runtime),
                    LOOPX_GOAL_ID=source_goal, LOOPX_AGENT_ID=source_agent,
-                   MODEL_NAME="fixture", REASONING_EFFORT="high", LOOPX_CODEX_SANDBOX="read-only")
+                   MODEL_NAME="fixture", REASONING_EFFORT="high", LOOPX_CODEX_SANDBOX=execution.sandbox)
         source_wake = BenchmarkSessionWake(env, execution, {})
         source_wake.admission.accept_result(lambda: _store_codex_cli_session(source_runtime,
             lineage={"goal_id": source_goal, "agent_id": source_agent}, session_scope="agent",
@@ -310,6 +336,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         components = [*native["components"], {"id": "code", "source_path": str(candidate)},
                       {"id": "research", "source_path": str(research)},
                       {"id": "research_context", "source_path": str(context_export)}]
+        if case == "joint":
+            components.append({"id": "evaluation", "source_path": str(evaluator_unit)})
         probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
         unit = tmp_path / "point"
         captured = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture",
@@ -322,6 +350,11 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                     "provider_revision": source_context["snapshot"]["provider_revision"],
                     "store_identity": source_context["snapshot"]["store_identity"]}}}, retry_safe=False)
         digest = captured["sha256"]
+        if case == "joint":
+            source_judge.state.judge.tokens[source_token]["submission_cooldown"] = 0
+            assert submit(source_url, source_token, 99).status_code == 200
+            judge_before = copy.deepcopy((source_judge.state.judge.tokens,
+                source_judge.state.judge.submissions, source_judge.state.judge.run_history))
         invoke([*source_prefix, "todo", "update", *source_binding, "--agent-id", source_agent,
             "--note", "Candidate 999 is later evidence outside the captured point.",
             "--update-operation-id", "later-negative-evidence", "--update-expected-provider-revision",
@@ -406,7 +439,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert retained_source() == before
             return
         admitted_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.native_checkpoint",
-            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", "read-only"],
+            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", execution.sandbox],
             env=env, text=True, capture_output=True, timeout=40)
         assert admitted_cli.returncode == 0, admitted_cli.stderr
         admitted = json.loads(admitted_cli.stdout)
@@ -454,12 +487,63 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         assert json.loads(adopted_todo["todo"]["note"])["source_session"] == source_session
         guard = invoke([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding])
         assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+        if case == "joint":
+            control = tmp_path / "host-control"
+            control.mkdir()
+            branch_phase = control / "phase-deadline"
+            # Restore only the nested capsule from the same verified artifact,
+            # never the later source service or an unrelated caller file.
+            fresh = transport.restore(controllers_files[1], root=materialized / "components/evaluation",
+                expected_sha256=evaluator_point["sha256"], run_id="joint-branch", phase_deadline_file=branch_phase)
+            assert submit(branch_url, fresh["token"], 8).status_code == 429
+            assert len(grades) == 3  # No implicit regrade on restore or cooldown rejection.
+            shell = host_phase_command(tmp_path, monkeypatch).replace(
+                "/opt/loopx-benchmark/control", str(control))
+            budget = subprocess.run(["/bin/bash", "-c", shell + 'printf "%s" "$remaining"'],
+                text=True, capture_output=True, check=True)
+            assert 7100 < int(budget.stdout) <= 7200
+            assert int(branch_phase.read_bytes()) <= time.time() + evaluator_body["point_metadata"]["host_phase_budget"]["remaining_seconds"]
+            # Explicit fresh token only, never controller/admin credentials.
+            # The native resumed tool reads public history, uses captured code,
+            # submits one new candidate, and observes the preserved round cap.
+            solver_input = workspace / "branch-judge.json"
+            solver_input.write_text(json.dumps({"url": branch_url, "token": fresh["token"]}))
+            solver_input.chmod(0o600)
+            solver = workspace / "continue_synthetic.py"
+            solver.write_text("""import json, time
+from pathlib import Path
+import requests
+binding = json.loads(Path('branch-judge.json').read_text())
+url, token = binding['url'], binding['token']
+history = requests.get(url + '/api/v1/history', params={'token': token}, timeout=5).json()
+assert history['best_score'] == 7 and history['agent_submissions'] == 2
+value = float(Path('candidate.txt').read_text().split(':')[1]) + 1
+response = requests.post(url + '/api/v1/submit', data={'token': token},
+    files={'archive': ('candidate.tar.gz', str(value).encode())}, timeout=5)
+response.raise_for_status()
+identifier = response.json()['submission_id']
+for _ in range(100):
+    result = requests.get(url + '/api/v1/result/' + identifier, timeout=5).json()
+    if result['status'] == 'completed': break
+    time.sleep(.01)
+assert result['status'] == 'completed'
+exhausted = requests.post(url + '/api/v1/submit', data={'token': token},
+    files={'archive': ('candidate.tar.gz', b'999')}, timeout=5)
+assert exhausted.status_code == 429
+print('Captured public best 7; continued candidate 8; consumed round agent-3; no extra opportunity.')
+""")
+            # Wait only the inherited short synthetic cooldown, never create an
+            # opportunity by changing source/destination counters or timestamps.
+            time.sleep(evaluator_body["point_metadata"]["native_reference"]["opportunity"]["remaining_cooldown_seconds"] + .05)
+            joint_command = " && " + shlex.quote(sys.executable) + " continue_synthetic.py"
         receipt = {}
         wake = BenchmarkSessionWake(env, execution, receipt)
         assert wake.session_id == admitted["session_id"] and receipt["session"]["action"] == "resume"
         logs = tmp_path / "continuation"
         logs.mkdir()
         command = native_command(env, execution, "execute", logs, wake)
+        if case == "joint":
+            command = ["/bin/bash", "-c", shell + "exec " + shlex.join(command)]
         current_body = json.dumps(guard["interaction_contract"], ensure_ascii=False)
         result = subprocess.run(command, env=env, cwd=workspace, input=current_body + "\nContinue: verify the retained files.",
                                 text=True, capture_output=True, timeout=40)
@@ -480,6 +564,16 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         assert "Future route outside this checkpoint" not in json.dumps(requests[2])
         assert canonical_context({**env, "LOOPX_GOAL_ID": source_goal,
             "LOOPX_RUNTIME_ROOT": str(source_runtime)}, deadline=time.time() + 30) == later_context
+        if case == "joint":
+            assert "Captured public best 7; continued candidate 8" in json.dumps(requests[2])
+            history = http.get(branch_url + "/api/v1/history", params={"token": fresh["token"]}, timeout=5).json()
+            assert history["best_score"] == 8 and history["best_round"] == "agent-3"
+            assert history["agent_submissions"] == 3 and len(grades) == 4
+            assert (source_judge.state.judge.tokens, source_judge.state.judge.submissions,
+                    source_judge.state.judge.run_history) == judge_before
+            for secret in (source_token, fresh["token"], source_judge.state.judge.admin_secret,
+                           branch_judge.state.judge.admin_secret):
+                assert secret not in json.dumps(requests)
         assert "Retained candidate 7 verified" in result.stdout
         retained = native_session_checkpoint(env, admitted["session_id"], timeout=20)
         assert retained["metadata"]["turn_ids"][:-1] == native["metadata"]["turn_ids"]

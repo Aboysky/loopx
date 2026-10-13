@@ -803,6 +803,18 @@ fallback. Full Host provenance/clock alignment, joint research/effect adoption
 and original-operation recovery still need their profile's qualification; this
 participant transport cannot certify them.
 
+The composed local continuation qualification now carries the evaluator capsule
+inside the verified conversation/code/context artifact. The actual resumed Codex
+tool reads retained research and public feedback, computes a synthetic candidate
+from captured code, submits it through the native HTTP owner, and observes the
+inherited round limit. The original cooldown rejects an immediate submission;
+SForge's phase entry uses the remaining duration instead of a new trial budget.
+Source future evidence is excluded and its later state is unchanged. Participants
+are explicitly quiesced by the fixture; inference and grading are synthetic.
+This narrows the integration gap but does not prove an automatic joint barrier,
+canonical graph/vision/effect activation, original activation recovery, isolated
+Linux solver restoration, or useful research.
+
 An inert verification unit grants no execution authority. The destination uses
 fresh experiment/Host identities and the existing Goal/session/state admission
 paths. Historical leases, quota, timers, pending effects and submission tokens
