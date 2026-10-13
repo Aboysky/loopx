@@ -120,7 +120,7 @@ shell；不能因为过滤了 `CI` 就恢复采集。不能按系统、安装渠
 
 ### Required Merge Check / 必需合并检查
 
-`python-tests.yml` publishes `merge-gate` for every pull request. Code,
+`python-tests.yml` publishes `merge-gate` for every open pull request. Code,
 workflow, policy and unknown paths require the existing `pytest` aggregate
 (including TypeScript checks and all four Python shards), Stage 2C correctness
 aggregate, and Windows tests to succeed. Failed, cancelled, missing or
@@ -149,7 +149,7 @@ merge method `merge`. The trigger is inert until the live ruleset enables a
 merge queue. Enabling the queue, and then relaxing the up-to-date-branch
 requirement, is a ruleset decision for the lead maintainer.
 
-每个 PR 都会收到 `merge-gate` 结果。代码、工作流、治理规则和未知路径必须通过
+每个开放 PR 都会收到 `merge-gate` 结果。代码、工作流、治理规则和未知路径必须通过
 原有核心测试；失败、取消、缺失或意外跳过均不能通过。仅白名单根目录 Markdown
 或 `docs/**/*.md` 的修改可显式跳过昂贵测试；运行时 prompt、可执行文档、代码删除
 及代码移入文档均不享受豁免。实际启用状态以在线规则为准，使用 owner bypass
@@ -169,6 +169,29 @@ python scripts/ci/review_gate.py classify --base origin/main --head HEAD
 Changes to the classifier or workflow need both code-path and documentation-only
 qualification. Keep required check names stable and never require a
 workflow-level path-filtered check that cannot report on every PR.
+
+Closing or merging a PR retires its outstanding Python qualification. A PR
+number keeps the same concurrency lane when the merged close event changes
+`github.ref` to the base branch. Closed events skip classification and the final
+gate; open PRs retain the same required jobs and cancellation failures.
+
+A trusted `pull_request_target: closed` job additionally cancels remaining runs
+of this workflow, using job-local `actions: write` without checking out PR code.
+It verifies the current closed PR, source repository/branch and close time;
+it preserves reopened PRs, another open PR on that branch, newer runs and
+foreign repositories. A missing run-to-PR association requires the exact closed
+head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
+nonterminal `always()` aggregates. The cleanup needs one short runner job;
+it releases obsolete capacity rather than reserving release capacity or
+providing a GitHub shared-pool priority guarantee.
+
+PR 关闭或合并后，以 PR 编号维持原并发 lane，关闭事件跳过分类与最终门；开放
+PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pull_request_target:
+closed` 清理任务仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
+状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、更新
+运行及其他仓库；缺少 PR 关联时只处理确切关闭 head。普通取消后仍未结束的
+`always()` 汇总使用强制取消 API。清理需要一个短 runner 任务；这会释放过期
+容量，不等于为发布预留容量或设置 GitHub 共享池优先级。
 
 The [job exemption policy](ci-impact-selection.md) additionally permits pure
 Dashboard-client changes to skip backend Python/Windows and Stage2c, while
@@ -580,6 +603,11 @@ individual shards. Relative coverage paths make reports portable across runners.
 Each shard has a 60-minute job ceiling for setup, the full partition and report
 upload; individual test deadlines stay unchanged. Verbose progress names failed
 cases before the suite finishes, so an interrupted run retains their identities.
+An explicitly loaded CI observer also streams pytest-owned phase durations from
+the xdist controller. Read the downloaded log with
+`node scripts/ci/pytest_timing.ts JOB_LOG`; incomplete evidence remains incomplete
+and does not replace JUnit, coverage or the required gate. See the
+[timing observation boundary](ci-impact-selection.md#four-complete-python-shards).
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
@@ -592,6 +620,10 @@ Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker�
 合并后再执行原有 19.6% 门槛；不要求单个分片达到全套覆盖率。coverage 使用相对路径，
 每个分片的作业上限为 60 分钟，覆盖环境准备、完整分片和报告上传；单项测试超时
 保持不变。详细进度在套件结束前就记录失败用例名称，运行中断后仍可定位这些用例。
+CI 同时在 xdist controller 流式记录 pytest 原生 phase 耗时。下载日志后用
+`node scripts/ci/pytest_timing.ts JOB_LOG` 回读；不完整证据保持不完整，不能替代
+JUnit、coverage 或必过门禁。归属与测量边界见
+[分片耗时记录](ci-impact-selection.md#four-complete-python-shards)。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。

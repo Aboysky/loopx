@@ -2917,6 +2917,11 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         TURN_ID,
         "--execute",
     ]
+    # Matching Host facts cannot revive the superseded receipt.
+    write_codex_heartbeat_fixture(
+        scheduler_host_home, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        rrule="FREQ=MINUTELY;INTERVAL=3",
+    )
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,
@@ -2955,6 +2960,8 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert fresh_turn_rc == 0, fresh_turn
     assert fresh_turn["selected_todo"]["todo_id"] == successor_id
     fresh_ack_args = fresh_turn["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
+    # Remove only the isolated observation to exercise missing Host refusal.
+    (scheduler_host_home / "automations" / "scheduler-fixture" / "automation.toml").unlink()
     _prepare_scheduler_host_readback(registry_path, runtime, scheduler_host_home, fresh_ack_args)
     fresh_ack_rc, fresh_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
     assert fresh_ack_rc == 0, fresh_ack

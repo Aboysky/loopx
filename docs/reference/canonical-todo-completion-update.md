@@ -14,7 +14,46 @@ loopx todo update --goal-id example --todo-id todo_observation \
 Use the same operation id and intent after a lost response. A new annotation
 uses a new id (omitting the id generates one). `--dry-run` validates and previews
 without running declared validation, writing a receipt, or delivering a display.
-Agent completion continues to require `loopx todo complete`.
+Agent completion keeps its dedicated terminal owner (`loopx todo complete` or
+the reviewed Chat action below).
+
+### Chat/App completion with original execution proof
+
+The existing `todo.update` Chat action with `operation=complete` also transports
+caller-supplied `agent_id`, `task_lease_idempotency_key` and
+`task_lease_expected_version` to the same terminal owner. Previously, Chat
+rejected these proof parameters before reaching that owner. Both proof fields
+are required together with an explicit Agent; other update operations reject
+them. Missing proof retains the existing mode-dependent refusal.
+
+In the App, open the Task's **Original execution proof** disclosure and paste the responsible
+Agent's original JSON proof containing those three fields. Use the existing
+**Mark complete** preview, inspect the intended effect, then confirm and read
+back the completed Task. A list completion refused for missing proof opens that
+same Task inspector. Editing the proof requires a fresh preview. The proof draft
+is cleared when changing Tasks and is not saved as a browser preference.
+
+The App neither inspects a lease to fabricate proof nor acquires a competing
+execution. Providing JSON does not grant ownership or waive validation.
+Where execution proof is required, the terminal owner checks current actor, claim, execution key, version, expiry,
+registry witness and provider revision. A changed or expired execution must be
+reconciled through its owning lifecycle. Retry the original reviewed proposal
+after a lost response; its receipt recovers the committed completion and display
+without releasing a new lease or repeating the completion effect. Proof-bearing
+proposal retries require a version supporting this transport; older versions do
+not supply these fields. This does not
+qualify live-model execution, other host surfaces, sustained SQLite operation or
+legacy writer retirement.
+
+App 的任务详情 **原执行证明** 折叠区接收负责 Agent 提供的原 JSON 证明，字段为
+`agent_id`、`task_lease_idempotency_key`、`task_lease_expected_version`。仍按
+**标记完成 → 检查 → 确认 → 读回** 操作；列表因缺少证明拒绝时打开同一任务详情。
+换任务会清除证明草稿，修改证明须重新预览。App 不读租约补造证明、不自动领取或
+改变归属；有效性、过期、CAS、验证与重放仍由原 TS owner 判定。失响应后重试原
+proposal，不重复完成效果。此路径不代表 live model、其他 Host、持续 SQLite
+运行或整个 legacy writer 退役已通过。
+
+Synthetic packaged examples: [desktop original-proof input](assets/todo-completion-proof/desktop.png) and [narrow English refusal](assets/todo-completion-proof/narrow-en.png). These illustrate the local transport journey, not a live Agent or native desktop qualification.
 
 ## Revising an open Todo validator
 
@@ -550,6 +589,30 @@ Reverting the code move requires no data conversion or receipt rewriting.
 Whole-writer retirement still needs the declared support cutoff, last callers
 and pending outbox disposition; this separation does not force an upgrade or
 change a provider default.
+
+Production callers import those same owners directly: `mutation_api` for the
+five operations and archive constant, `list_readback` for complete Todo reads,
+`path_resolution` for configured source routing, and `active_state_editing` for
+supported source-display parsing. This includes CLI registration, quota/planning,
+capability consumers and Lark. The historic `loopx.todos` public surface remains
+an alias to the same function objects; no source-format support is withdrawn.
+The consumer oracle adds physical facade removal to whole-writer/four-producer
+removal in source and normal-wheel copies. It reuses the lifecycle, creation,
+lease/once-only settlement and Monitor negative/replay oracles, plus real App
+HTTP cold import, later mutations and server restart. The Lark dry-run refuses
+remote execution; Explore projection replays without duplicate events. These
+local extension checks do not qualify live Lark adoption. Restoring imports is
+a code rollback with no new schema, provider selection or receipt conversion.
+
+生产调用方直接导入相同 owner：`mutation_api` 负责五种操作及归档常量，
+`list_readback` 负责完整 Todo 读取，`path_resolution` 负责已配置的源路径，
+`active_state_editing` 负责受支持的源显示解析；覆盖 CLI 注册、quota／规划、能力
+消费者与 Lark。历史 `loopx.todos` 仍重导出相同函数对象，旧格式支持未撤销。
+消费者检查在源码及正常 wheel 中同时物理移除 facade、整个 writer 和四个 producer，
+复用生命周期、创建、租约／恰好一次结算及 Monitor 负例／重放，另验真实 App HTTP
+冷导入、后续写入与服务重启。Lark dry-run 不执行远端命令，Explore 重放不重复事件，
+这些本地扩展检查不认证 live Lark 采用。回滚只恢复代码导入，不转换 schema、provider
+选择或回执；有真实调用的旧源 IO 和历史恢复仍保留。
 
 The retained field adapter preserves blank Python resume values as omission,
 timezone normalization, explicit clears and rejection before source mutation.
