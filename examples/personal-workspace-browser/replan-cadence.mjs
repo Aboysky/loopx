@@ -88,12 +88,20 @@ export const replanCadenceScenario = {
         return packet.capability_catalog.capabilities.find((row) => row.capability_id === "todo_replan_cadence");
       }
       if (await strategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Goal did not inherit strategy version");
+      await strategy.selectOption("off");
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      let goalCadence = await readGoalCadence();
+      if (JSON.stringify(goalCadence.current) !== JSON.stringify({ stride_strategy: "off" })
+        || goalCadence.effective_configuration.configuration.count !== 3) {
+        throw new Error("Goal strategy-only override pinned or lost the inherited review interval");
+      }
       await count.fill("2");
       await strategy.selectOption("off");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await applyGoalPreview();
       await page.getByRole("button", { name: "恢复沿用设备默认", exact: true }).waitFor();
-      let goalCadence = await readGoalCadence();
+      goalCadence = await readGoalCadence();
       if (goalCadence.effective_configuration.source !== "goal_override" || goalCadence.current.count !== 2) throw new Error("Goal override readback failed");
       if (goalCadence.current.stride_strategy !== "off") throw new Error("Goal stride opt-out failed");
       if ((await request(base)).machine_configuration.namespaces.todo_replan_cadence.stride_strategy !== "evidence_conditioned_v1") throw new Error("Goal override changed machine strategy");

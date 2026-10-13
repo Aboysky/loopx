@@ -243,6 +243,9 @@ def _goal_capability_options(
         return {"capability_improvement_configuration": config}
     if capability_id == "todo_replan_cadence":
         from .capabilities.todo_replan_cadence.machine_defaults import normalize_replan_cadence_configuration
+        from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+        if set(config) == {"stride_strategy"}:
+            return {"execution_stride_strategy": normalize_stride_strategy(config["stride_strategy"])}
         cadence = normalize_replan_cadence_configuration(config)
         option = ("execution_replan_after_turns" if cadence["count_unit"] == "effective_turns"
                   else "execution_replan_after_todos")

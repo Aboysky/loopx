@@ -61,6 +61,32 @@ export function replanCadenceEditorValue(value: unknown): unknown {
   return { ...record, stride_strategy: record.stride_strategy ?? "off" };
 }
 
+/** Show the live interval when a Goal stores only its strategy choice. */
+export function goalReplanCadenceEditorValue(current: unknown, effective: unknown): Record<string, unknown> {
+  const inherited = configurationObject(replanCadenceEditorValue(effective));
+  return current == null ? inherited : {
+    ...inherited,
+    ...configurationObject(replanCadenceEditorValue(current)),
+  };
+}
+
+/** Keep a strategy-only Goal override on the live review interval. */
+export function goalReplanCadenceWriteValue(
+  draft: Record<string, unknown>,
+  current: unknown,
+  effective: unknown,
+): Record<string, unknown> {
+  const saved = configurationObject(current);
+  const active = configurationObject(replanCadenceEditorValue(effective));
+  const value = { ...draft };
+  const hasSavedCadence = Object.hasOwn(saved, "count_unit") || Object.hasOwn(saved, "completed_todos");
+  if (!hasSavedCadence && value.count_unit === active.count_unit && value.count === active.count) {
+    delete value.count_unit;
+    delete value.count;
+  }
+  return value;
+}
+
 /** A v0 storage selector did not enable creation; opening Settings must not. */
 export function goalStorageEditorValue(value: unknown): unknown {
   const record = configurationObject(value);

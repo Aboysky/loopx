@@ -10,7 +10,7 @@ import {
   type GoalConfigurationPreview,
   type GoalConfigurationPartialWrite,
 } from "../../data/chat";
-import { parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
+import { goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration } from "../../data/capability-configuration";
 import { useWorkspaceI18n } from "./i18n";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
@@ -36,8 +36,13 @@ type CapabilityMutationState = Readonly<{
   preview: GoalConfigurationPreview | null;
 }>;
 
-function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>) {
-  const writable = projectEditableCapabilityConfiguration(selected.configuration_editor, draft, selected.default);
+function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>, editorMode: "guided" | "json") {
+  const writable = projectEditableCapabilityConfiguration(
+    selected.configuration_editor, draft, editorMode === "json" && selected.capability_id === "todo_replan_cadence" ? undefined : selected.default,
+  );
+  if (selected.capability_id === "todo_replan_cadence" && editorMode === "guided") {
+    return goalReplanCadenceWriteValue(writable, selected.current, selected.effective_configuration?.configuration);
+  }
   if (selected.capability_id === "pull_request_review" && !Object.hasOwn(selected.current ?? {}, "owner_logins")
     && JSON.stringify(writable.owner_logins ?? []) === JSON.stringify(selected.effective_configuration?.configuration?.owner_logins ?? [])) {
     delete writable.owner_logins;
@@ -83,7 +88,9 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
       busy: null,
       draft: projectEditableCapabilityConfiguration(
         selected?.configuration_editor ?? { fields: [] },
-        selected?.capability_id === "todo_replan_cadence" ? replanCadenceEditorValue(current) : current,
+        selected?.capability_id === "todo_replan_cadence"
+          ? goalReplanCadenceEditorValue(selected.current, selected.effective_configuration?.configuration)
+          : current,
         selected?.default,
       ),
       partialWrite: null,
@@ -97,7 +104,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "preview", partialWrite: null }));
     setError(null);
     try {
-      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration));
+      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration, editorMode));
       setMutation((current) => ({ ...current, preview: nextPreview }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
@@ -111,7 +118,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
-      const writableDraft = goalWriteDraft(selected, mutation.draft);
+      const writableDraft = goalWriteDraft(selected, mutation.draft, editorMode);
       const result = await applyGoalConfiguration(
         goalId,
         selected.capability_id,
@@ -148,7 +155,8 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setJsonDraft(text);
     const parsed = parseEditableCapabilityJson(selected.configuration_editor, text);
     setMutation((current) => ({ ...current, preview: null, draft: parsed
-      ? projectEditableCapabilityConfiguration(selected.configuration_editor, parsed, selected.default)
+      ? projectEditableCapabilityConfiguration(selected.configuration_editor, parsed,
+        selected.capability_id === "todo_replan_cadence" ? undefined : selected.default)
       : current.draft }));
     setError(null);
   }
@@ -244,12 +252,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
 
   async function createPreview() {
     if (!localizedSelected || !editorAvailable || busy || !jsonValid) return;
-    const writableDraft = projectEditableCapabilityConfiguration(
-      localizedSelected.configuration_editor,
-      draft,
-      localizedSelected.default,
-    );
-    await requestPreview(writableDraft);
+    await requestPreview(draft);
   }
 
   async function createClearPreview() {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration } from "../src/data/capability-configuration.js";
+import { goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration } from "../src/data/capability-configuration.js";
 
 const periodicReportEditor = {
   fields: [
@@ -13,6 +13,20 @@ const periodicReportEditor = {
 };
 
 const storageEditor = { fields: [{ key: "new_goal_provider" }, { key: "canonical_creation" }, { key: "new_goal_handoff_mode" }] };
+const inheritedReview = { count_unit: "effective_turns", count: 3, stride_strategy: "off" };
+assert.deepEqual(goalReplanCadenceEditorValue({ stride_strategy: "evidence_conditioned_v1" }, inheritedReview),
+  { ...inheritedReview, stride_strategy: "evidence_conditioned_v1" },
+  "strategy-only Goal settings display the live review interval");
+assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview, stride_strategy: "evidence_conditioned_v1" }, undefined, inheritedReview),
+  { stride_strategy: "evidence_conditioned_v1" },
+  "changing only the strategy must not pin the displayed interval");
+assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview, count: 2, stride_strategy: "evidence_conditioned_v1" }, undefined, inheritedReview),
+  { count_unit: "effective_turns", count: 2, stride_strategy: "evidence_conditioned_v1" },
+  "an edited interval remains an explicit Goal override");
+assert.deepEqual(goalReplanCadenceWriteValue({ count_unit: "completed_todos", count: 2, stride_strategy: "off" },
+  undefined, { schema_version: "todo_replan_cadence_machine_defaults_v0", completed_todos: 2 }),
+  { stride_strategy: "off" },
+  "legacy device units can be inherited without pinning their count");
 const storageDefault = { schema_version: "loopx_goal_storage_defaults_v1", new_goal_provider: "sqlite",
   canonical_creation: true, new_goal_handoff_mode: "hard_lease" };
 assert.deepEqual(projectEditableCapabilityConfiguration(storageEditor,
