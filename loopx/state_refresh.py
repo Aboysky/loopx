@@ -1071,7 +1071,16 @@ def refresh_state_run(
             agent_id=normalized_agent_id, registry_goal=registry_goal, state_text=state_text,
             capability_guard=settlement_replan_guard.get("selected_capability_guard"),
         )
+        def read_explore_context(read_goal_id: str, read_agent_id: str | None):
+            from .capabilities.explore.turn_context import read_replan_explore_context
+
+            return read_replan_explore_context(
+                source_status={"registry": str(registry_path), "runtime_root": str(runtime_root)},
+                goal_id=read_goal_id, agent_id=read_agent_id)
+
         replan_qualification = qualify_refresh_replan_writeback(
+            replan_explore_reader=read_explore_context,
+            replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root)},
             capability_evidence=capability_evidence,
             guard_capability=settlement_replan_guard.get("selected_capability_guard"),
             todo_fields=todo_fields,
@@ -1205,6 +1214,13 @@ def refresh_state_run(
             turn_scoped_settlement_qualified
             and workspace_requirement != "not_required"
             and not checkpoint_supplement
+            # The TS settlement owner has qualified only an unavailable
+            # observation, with no delivery, Todo mutation or quota debit.
+            # Recording that failed attempt needs no producing git worktree.
+            and not (
+                isinstance(blocked_retry, dict)
+                and blocked_retry.get("schema_version") == "quota_monitor_unavailable_v0"
+            )
         ):
             delivery_workspace = capture_delivery_workspace(
                 current_path=delivery_workspace_path,
