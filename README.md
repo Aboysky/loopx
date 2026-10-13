@@ -805,10 +805,21 @@ coordination, and an explicitly staged architecture and research incubator.
 
 ## License
 
+Copyright 2026 LoopX contributors. Created by
+[`@huangruiteng`](https://github.com/huangruiteng); see the public
+[creator and contributor record](docs/project/authors.md).
+
 Apache License 2.0 beginning with `v0.4.8`. See [LICENSE](LICENSE) and
 [NOTICE](NOTICE). Releases through `v0.4.7` remain under their original MIT
 terms; the historical text and notice are preserved in
 [LICENSE-MIT](LICENSE-MIT). The [licensing policy](docs/project/licensing.md)
 explains the version, contribution, patent-grant, and open-core boundaries.
+
+When redistributing Apache-2.0 forks, ports, or other derivative works,
+preserve the required notices and identify modified files. Renaming,
+cross-language translation, or AI-assisted rewriting does not by itself remove
+those obligations. See [reuse and attribution](docs/project/licensing.md#reuse-ports-and-attribution)
+and [name and marks guidance](docs/project/trademarks.md); a derivative
+distribution must not be presented as an official LoopX release.
 
 [osai-verify: eb42dd9cf910399988f0]: #

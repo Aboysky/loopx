@@ -721,7 +721,17 @@ benchmark 证据、operator surface 与 IM integration、shared-goal 跨 host �
 
 ## License
 
+Copyright 2026 LoopX contributors。LoopX 由
+[`@huangruiteng`](https://github.com/huangruiteng) 创建，创建者与社区贡献记录见
+[Authors and Contributors](docs/project/authors.md)。
+
 从 `v0.4.8` 起采用 Apache License 2.0，见 [LICENSE](LICENSE) 与
 [NOTICE](NOTICE)。`v0.4.7` 及更早版本永久保留原 MIT 许可；历史许可证全文与
 notice 保存在 [LICENSE-MIT](LICENSE-MIT)。[许可证政策](docs/project/licensing.md)
 说明版本、贡献、专利授权与 open-core 边界。
+
+分发采用 Apache-2.0 的 fork、移植或其他衍生作品时，应保留许可证要求的通知，
+并标明修改过的文件。
+改名、跨语言转换或 AI 辅助改写本身不会消除这些义务。具体见
+[复用与署名说明](docs/project/licensing.md#reuse-ports-and-attribution)及
+[名称与标识使用](docs/project/trademarks.md)；衍生分发不得冒充官方 LoopX 版本。
