@@ -43,8 +43,8 @@ test("decision metadata normalizes compact and object forms without duplicate sc
 });
 
 test("declared scope inputs retain every kind and granularity without becoming authority", () => {
-  // These are author-input witnesses, not inferred decisions or a definition
-  // of when an author should choose the still-unresolved `other` kind.
+  // These are author-input witnesses, not inferred decisions or proof
+  // that an author followed the separate kind=other authoring contract.
   for (const kind of ["private_read", "write_scope", "resource", "production", "public_claim", "direction", "other"]) {
     assert.deepEqual(normalizeTodoDecisionScope(`${kind}:action:example`), {
       schema_version: "decision_scope_v0", kind, granularity: "action", scope_key: "example",

@@ -1,11 +1,12 @@
 # 当前集成主线上的登记来源处理
 
-当前运行时代码基线：`509c38c502d3d0b4eafb01550efcdc4b5b5a1d17`（2026-10-13）。
+当前运行时代码基线：`60d833b13c85135587b725013b247e827663ffb9`（2026-10-13）。
 本次在结算失败、选择、旧工作基线及保留值处置合入后，更新既有 #6270 清单。
 候选的 `loopx/`、`apps/`、`packages/` 生产树与此 main 完全相同，只增加既有见证和记录。
 验收仍沿 [#4789 分阶段范围](https://github.com/loopx-project/loopx/pull/4789)。
-**26 行清单不是 26 项正式 producer 证明，也不是 tracker 关闭。** 来源清单 PR、独立的
-#6285 宿主观察 fixture 修复仍需集成，并由 owner 完成最终验收。
+**26 行清单不是 26 项正式 producer 证明，也不是 tracker 关闭。** 来源清单 PR 仍需
+集成并由 owner 完成最终验收。原先三个 Host-ACK fixture 失败已由 #6344 在主干修复；
+不再把另合一次 #6285 当作这些场景通过的前提。
 
 注册表仍为 26 项，已用实际 `task_lease_lifecycle_operation` 替换退休的 `lease_action`。
 F1/F2 仍是 **6/26**：五项 kernel 和 settlement-binding witness。其余二十项跨运行时
@@ -95,32 +96,38 @@ scope kind/granularity 用例是输入见证；other 的作者选择遵循当前
 | 组 | 结果 | 含义 |
 | --- | --- | --- |
 | 前述 28 个 Python 领域文件：Turn/frontier/workspace/Todo/amendment/scheduler/handoff/continuity/history/local-provider | 610 passed | 真实领域 owner，含隔离 Git/File/SQLite；不证明真实模型或 Host 定时器。 |
-| `tests/architecture/test_semantic*.py` | 660 passed | scanner/registry/owner/兼容契约，不是全程序生产证明。 |
+| `tests/architecture/test_semantic*.py` 与 `test_cross_runtime_value_notes.py` | 706 passed | scanner/registry/owner/value-note/兼容契约，不是全程序生产证明。 |
 | 前述 TS 组，另含 action-selection admission 与 interaction contract | 448 passed，无 skip | 类型化来源和消费边界，不是 PostgreSQL 或部署端资格。 |
-| 完整 settlement CLI、decision-scope CLI/consistency/lifecycle 与 2a 见证 | 206 passed，**3 failed** | 主干的三个原始 ACK 场景仍缺真实的合成宿主观察。 |
+| 完整 settlement CLI、decision-scope CLI/consistency/lifecycle 与 2a 见证 | 209 passed，无 skip | 三个原始 ACK 场景现已在当前主干代码通过；新增来源见证仍在本 PR。 |
+| 当前主干 monitor unavailable-recovery、closeout 与 target-key replay | 52 passed | 补充近期 readback 变化的真实 owner 路径；不证明真实 Host 定时器或部署端恢复。 |
 
-失败仍是 `tests/control_plane/test_quota_settlement_cli.py` 的
-`test_standard_codex_app_settlement_is_receipted_and_idempotent` 和两个
-`test_todoless_autonomous_replan_settles_quota_refresh_spend_chain` 变体。
-它们收到 `rrule_mismatch`，没有 scheduler 写入；主干后续 CI 更正没有解决这三个
-用例。没有放宽规则或删除断言。
+原先失败的 `test_standard_codex_app_settlement_is_receipted_and_idempotent` 和两个
+`test_todoless_autonomous_replan_settles_quota_refresh_spend_chain` 变体，现在单独运行
+及放入上述完整分组都通过。相关生产代码和 settlement CLI 测试与 main 相同。
+`db5a298a54f47179b9be2a3b9cf2f775b71a9274`
+（[#6344](https://github.com/loopx-project/loopx/pull/6344)）已补入实际合成宿主观察；
+Todo-less 场景保留缺失/不匹配 manifest 的拒绝、无 scheduler 写入和一次扣费。
+普通场景仍先拒绝过期 Turn，再确认当前 Turn。原 ACK、持久 scheduler 状态和字节
+稳定重放断言均通过，没有放宽宿主回读规则。
 
-既有 [#6285](https://github.com/loopx-project/loopx/pull/6285) 的
-`277dab815eb8dba20ff1ca6256009589a1675a85` 修复仍独立于本 PR。在隔离组合中，将
-同一 main + #6270 见证加上这份未改动的 fixture 修复，三个原失败场景和完整 settlement
-CLI 均通过：**101 passed**，无 skip。可由上述 main、既有 #6270 来源见证补丁和固定的
-#6285 纯测试提交复现组合；临时集成产物不是已发布版本。
-**不能据此把当前 main 写成通过，也不授予两个 PR 的合并权。** 修复让真实 reader 读取合成的 absent/mismatched/正确 manifest，
-验证无额外扣费，再恢复原 ACK 和字节稳定的 replay。
+[#6285](https://github.com/loopx-project/loopx/pull/6285) 仍是独立开放提案，当前 head 为
+`f6c8aae7a7e8ba917861992a1ad21eb29477bf26`。其剩余差异包括共享 fixture、普通 Turn
+额外缺失/不匹配反例和 applied-RRULE 显式回读；不能说它与 main 字节相同或已经合并。
+这些剩余增强不会使原三个主干失败重新成立，不在本 PR 复制其补丁，也不为了给同一
+fixture 修复重复记账而要求再合一次。
+
+旧结果保留原截面：main `509c38c502d3d0b4eafb01550efcdc4b5b5a1d17` 的该组为
+206 passed / 3 failed；另一个加入当时 #6285 fixture 的隔离组合中，settlement CLI
+101 项通过。当前验收使用上面的新主干运行时结果，不把历史失败改写成当时已成功。
 
 完整 drift 仍保留 F1/F2 6/26、F3 0/26、F4 4/4、F5 1/1、F6 0/0；未知 producer
 站点继续显式报告：45 个未解析，其中 17 个不能提供 producer 证据；不放宽上限或扫描
-边界。既有跨运行时 value-note 组另有 46 项通过；生成器、typecheck 和对应质量检查
+边界。value-note 用例已计入上方 706 项，不重复累加；生成器、typecheck 和对应质量检查
 在 PR 验证记录中披露。旧 66/564/82/706 Python、421 TS 数字属于 `43173c0b8`
 历史截面，不重新贴成当前结果。
 
 <details>
-<summary>610 项 Python 与 448 项 TypeScript 组的精确选集</summary>
+<summary>当前证据各组的精确选集</summary>
 
 ```sh
 uv run --extra test python -m pytest -q \
@@ -153,7 +160,7 @@ uv run --extra test python -m pytest -q \
   tests/control_plane/test_protocol_packet_retirement_cli.py \
   tests/control_plane/test_local_provider_settlement_journey.py
 
-node --no-warnings --experimental-sqlite --experimental-strip-types --test \
+node --no-warnings --experimental-sqlite --experimental-strip-types --test --test-concurrency=1 \
   tests/control_plane_ts/turn_settlement.test.ts \
   tests/control_plane_ts/quota_settlement_readback.test.ts \
   tests/control_plane_ts/task_lease_acquire.test.ts \
@@ -170,6 +177,22 @@ node --no-warnings --experimental-sqlite --experimental-strip-types --test \
   tests/control_plane_ts/delivery_history.test.ts \
   tests/control_plane_ts/action_selection_admission.test.ts \
   tests/control_plane_ts/interaction_contract.test.ts
+
+uv run --extra test python -m pytest -q \
+  tests/control_plane/test_quota_settlement_cli.py \
+  tests/control_plane/test_todo_decision_scope_cli_validation.py \
+  tests/control_plane/test_todo_decision_scope_consistency.py \
+  tests/control_plane/test_todo_decision_scope_lifecycle.py \
+  tests/architecture/test_settlement_receipt_source_boundaries.py
+
+uv run --extra test python -m pytest -q \
+  tests/architecture/test_semantic*.py \
+  tests/architecture/test_cross_runtime_value_notes.py
+
+uv run --extra test python -m pytest -q \
+  tests/control_plane/test_monitor_poll_unavailable_recovery.py \
+  tests/control_plane/test_monitor_unavailable_closeout_cli.py \
+  tests/control_plane/test_monitor_target_key_replay.py
 ```
 
 </details>
@@ -184,8 +207,8 @@ node --no-warnings --experimental-sqlite --experimental-strip-types --test \
 
 当前基线已包含 #6251 typed-failure、#6268 canonical-selection、#6260 shared
 consistency、#6290 legacy-work-basis 及 #6313 含义处置。它们消除了具体代码/含义
-缺口，不扩大 #4447 原关闭范围。#6270 来源见证和 #6285 ACK fixture 修复仍待合入；
-当前 main 仍有上述三项失败，所以 Stage 3 与 issue 继续开放。最终 owner 验收须点名
-单一集成 revision 及其 passed/failed/untested 边界。安装前端/Lark、真实模型、完整
+缺口，不扩大 #4447 原关闭范围。原 Host-ACK 阻塞已在主干解决；#6270 新来源见证与
+清单仍待集成。Stage 3 与 issue 为此集成及 owner 最终验收保持开放，验收须点名一个
+revision 及其 passed/failed/untested 边界；#6285 剩余增强不是本 tracker 的新关闭条件。安装前端/Lark、真实模型、完整
 Goal/团队资格和通用 F6 不属本 tracker；本次不改生产 provider/权限/持久格式，日志及
 本地 Goal 状态保留在私有位置。

@@ -1,14 +1,16 @@
 # Registered source treatment at the integrated main baseline
 
-Current runtime baseline: `509c38c502d3d0b4eafb01550efcdc4b5b5a1d17` (2026-10-13).
+Current runtime baseline: `60d833b13c85135587b725013b247e827663ffb9` (2026-10-13).
 This updates the existing #6270 inventory after the typed-failure, selected-work,
 legacy-work-basis and reserved-value changes reached main. The production
 `loopx/`, `apps/` and `packages/` trees in this source-evidence candidate are
 identical to that main; only its existing witnesses and records are added.
 The [staged scope revision](https://github.com/loopx-project/loopx/pull/4789)
 remains the acceptance boundary. **26 rows inventoried is not 26 formal producer
-proofs or tracker closure.** The source-inventory PR and the separate #6285
-Host-observation fixture repair still need integration and final owner closeout.
+proofs or tracker closure.** The source-inventory PR still needs integration
+and final owner closeout. The original three Host-ACK fixture failures have
+already been repaired on main through #6344; #6285 is not an additional merge
+prerequisite for those same cases.
 
 The registry still contains 26 entries, including `task_lease_lifecycle_operation`
 in place of retired `lease_action`. F1/F2 remain **6/26**: five kernel entries
@@ -137,38 +139,47 @@ Python 3.11.7 and qualified Node 22.22.3:
 | Group | Result | Meaning |
 | --- | --- | --- |
 | Existing Turn/frontier/workspace/Todo/amendment/scheduler/handoff/continuity/history and local-provider paths (28 Python files listed above) | 610 passed | Actual domain owners, including isolated Git/File/SQLite paths; no live model or Host timer claim. |
-| Semantic architecture (`tests/architecture/test_semantic*.py`) | 660 passed | Scanner/registry/owner/compatibility contracts, not whole-program production proof. |
+| Semantic architecture plus `test_cross_runtime_value_notes.py` | 706 passed | Scanner/registry/owner/value-note/compatibility contracts, not whole-program production proof. |
 | Native TypeScript (the listed suites plus action-selection admission and interaction contract) | 448 passed, no skips | Typed source and consumer boundaries; not a PostgreSQL or deployed-App qualification. |
-| Full settlement CLI plus decision-scope CLI/consistency/lifecycle and Stage 2a source witnesses | 206 passed, **3 failed** | The three original current-Host ACK scenarios still lack their actual synthetic Host observation on main. |
+| Full settlement CLI plus decision-scope CLI/consistency/lifecycle and Stage 2a source witnesses | 209 passed, no skips | The three original Host-ACK cases now pass on current main code; source-witness additions remain in this PR. |
+| Current-main monitor unavailable-recovery, closeout and target-key replay | 52 passed | Real affected owner paths supplement the changed readback boundary; no live Host timer or deployed recovery claim. |
 
-The failing tests are
+The original failing tests —
 `test_standard_codex_app_settlement_is_receipted_and_idempotent` and both
-`test_todoless_autonomous_replan_settles_quota_refresh_spend_chain` variants in
-`tests/control_plane/test_quota_settlement_cli.py`. They still receive
-`rrule_mismatch` and no scheduler write. Main's later CI qualification changes
-do not resolve these cases. No rule or assertion was weakened.
+`test_todoless_autonomous_replan_settles_quota_refresh_spend_chain` variants —
+now pass individually and in the full group above. The relevant production and
+settlement CLI test files equal main. Commit
+`db5a298a54f47179b9be2a3b9cf2f775b71a9274`
+([#6344](https://github.com/loopx-project/loopx/pull/6344)) supplied the missing
+synthetic Host observation; the Todo-less scenarios also retain absent and
+mismatched manifest refusals, no scheduler write and the original single debit.
+The ordinary scenario still refuses the superseded Turn before acknowledging
+the current one. Original ACK, persisted scheduler state and byte-stable replay
+assertions pass without relaxing the Host-readback rule.
 
-The existing [#6285](https://github.com/loopx-project/loopx/pull/6285) fix at
-`277dab815eb8dba20ff1ca6256009589a1675a85` is deliberately separate from this PR.
-A disposable combination of the same main + #6270 witnesses + that unchanged
-fixture fix passes all three original failing scenarios and the complete
-settlement CLI suite: **101 passed**, no skips. Reproduce the combination from
-this main baseline, the existing #6270 source-witness patch and the pinned #6285
-test-only commit; its temporary integration artifact is not a published release.
-This does **not** make
-current main green or authorize merging either PR. The fix observes a real
-reader over synthetic absent/mismatched/then-correct manifests, verifies no
-extra quota debit, and recovers the original ACK and byte-stable replay.
+[#6285](https://github.com/loopx-project/loopx/pull/6285) remains a separate open
+proposal at `f6c8aae7a7e8ba917861992a1ad21eb29477bf26`. Its current diff still adds
+shared fixture setup, extra ordinary-Turn absent/mismatched cases and explicit
+applied-RRULE readback; it is not byte-identical to main or reported as merged.
+Those remaining changes do not make the original three main failures recur.
+Do not duplicate its patch here or require another merge merely to count the
+same fixture repair twice.
+
+Historical results remain tied to their original snapshots: main
+`509c38c502d3d0b4eafb01550efcdc4b5b5a1d17` had 206 passed / 3 failed in this group,
+and a separate combination with the then-current #6285 fixture passed the
+101-test settlement CLI suite. They are superseded for current acceptance by
+the current-main-runtime results above, not rewritten as earlier successes.
 
 The full drift readback retains F1/F2 6/26, F3 0/26, F4 4/4, F5 1/1 and F6 0/0.
 The report still names 45 unresolved producer sites, including 17 that cannot
-supply producer evidence; no ceiling or scan boundary is relaxed. The existing
-cross-runtime value-note suite adds 46 passing cases. Generators, typecheck and
+supply producer evidence; no ceiling or scan boundary is relaxed. The cross-runtime value-note cases are included in the 706-case group above,
+not an additional coverage count. Generators, typecheck and
 scoped quality results are part of the PR validation record. Earlier 66/564/82/706 Python and 421 TS counts
 belong to the old `43173c0b8` snapshot; they are not relabeled as current results.
 
 <details>
-<summary>Exact selections for the 610-Python and 448-TypeScript groups</summary>
+<summary>Exact selections for the current evidence groups</summary>
 
 ```sh
 uv run --extra test python -m pytest -q \
@@ -201,7 +212,7 @@ uv run --extra test python -m pytest -q \
   tests/control_plane/test_protocol_packet_retirement_cli.py \
   tests/control_plane/test_local_provider_settlement_journey.py
 
-node --no-warnings --experimental-sqlite --experimental-strip-types --test \
+node --no-warnings --experimental-sqlite --experimental-strip-types --test --test-concurrency=1 \
   tests/control_plane_ts/turn_settlement.test.ts \
   tests/control_plane_ts/quota_settlement_readback.test.ts \
   tests/control_plane_ts/task_lease_acquire.test.ts \
@@ -218,6 +229,22 @@ node --no-warnings --experimental-sqlite --experimental-strip-types --test \
   tests/control_plane_ts/delivery_history.test.ts \
   tests/control_plane_ts/action_selection_admission.test.ts \
   tests/control_plane_ts/interaction_contract.test.ts
+
+uv run --extra test python -m pytest -q \
+  tests/control_plane/test_quota_settlement_cli.py \
+  tests/control_plane/test_todo_decision_scope_cli_validation.py \
+  tests/control_plane/test_todo_decision_scope_consistency.py \
+  tests/control_plane/test_todo_decision_scope_lifecycle.py \
+  tests/architecture/test_settlement_receipt_source_boundaries.py
+
+uv run --extra test python -m pytest -q \
+  tests/architecture/test_semantic*.py \
+  tests/architecture/test_cross_runtime_value_notes.py
+
+uv run --extra test python -m pytest -q \
+  tests/control_plane/test_monitor_poll_unavailable_recovery.py \
+  tests/control_plane/test_monitor_unavailable_closeout_cli.py \
+  tests/control_plane/test_monitor_target_key_replay.py
 ```
 
 </details>
@@ -236,10 +263,11 @@ instruction” claim is obsolete. Advisory findings do not become blocking proof
 The current baseline includes #6251 typed-failure and #6268 canonical-selection
 repairs, #6260 shared consistency, #6290 legacy-work-basis repair and #6313 source
 disposition. These resolve named code/meaning gaps; they do not extend #4447's
-original closure scope. The source witness additions in #6270 and ACK fixture
-repair in #6285 remain proposed until merged. Current main still has the three
-failures above, so Stage 3 and the issue remain open. Final owner closeout must
-name a single integrated revision and its passed/failed/untested evidence.
+original closure scope. The original Host-ACK blocker is resolved in main;
+the additional source witnesses and inventory in #6270 are still proposed.
+Stage 3 and the issue remain open for that integration and final owner closeout
+on one revision with explicit passed/failed/untested evidence. A remaining
+#6285 enhancement is not a new closure condition for this tracker.
 Installed frontend/Lark/live-model, general Goal/team qualification and blanket
 F6 proof are outside this tracker. No production provider, permission or
 persistence format changes here; raw logs and local Goal state stay private.

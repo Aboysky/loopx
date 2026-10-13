@@ -1047,9 +1047,10 @@ development-time advisory; it does not close this tracker's source obligations.
 
 The [current registered-source inventory](ledger/semantic-vocabulary-convergence-v0/2026-10-12-registered-source-treatment.md)
 records all 26 entries, current-main evidence and compatibility boundaries.
-The owner merged both source-meaning dispositions in #6313; source-inventory
-integration, #6285 ACK fixture repair and final single-revision acceptance
-remain open. F1/F2 stays 6/26, with no source-domain inflation or F6-wide claim.
+The owner merged both source-meaning dispositions in #6313. Main now includes
+the original Host-ACK fixture repair through #6344, verified on `60d833b13`.
+Source-inventory integration and final single-revision owner acceptance remain
+open; the remaining #6285 enhancements are separate. F1/F2 stays 6/26, with no source-domain inflation or F6-wide claim.
 Milestone obligations and historical measurements retain their original scope/SHA.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
