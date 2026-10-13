@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ...agents.agent_scope import (
     agent_scope_blocking_handoff_gates,
-    agent_scope_count_advancement_items,
+    agent_scope_count_advancement_items as _count_advancement_items,
     agent_scope_item_claimed_by,
     agent_scope_item_claimed_by_agent_or_unclaimed,
 )
@@ -26,6 +27,7 @@ from ...todos.succession_warning import (
     TODO_SUCCESSION_WARNING_REASON_CODE,
     todo_succession_gap_items,
 )
+from ...todos.user_gate import open_todo_count as _open_todo_count
 from ...work_items.autonomous_replan_ack import (
     autonomous_replan_ack_matches_agent,
     autonomous_replan_ack_matches_frontier,
@@ -61,6 +63,7 @@ from .acceptance import (
 )
 from ...effect_runtime import effect_runtime_result
 from .ack_policy import (
+    attach_rejected_replan_feedback,
     autonomous_replan_ack_satisfies_obligation,
     replan_successor_transition_ack,
 )
@@ -550,12 +553,6 @@ def build_vision_gap_judge(
     }
 
 
-def _open_todo_count(summary: dict[str, Any] | None) -> int:
-    if not isinstance(summary, dict):
-        return 0
-    return safe_non_negative_int(summary.get("open_count"))
-
-
 def _blocking_user_open_count(summary: dict[str, Any] | None) -> int:
     if not isinstance(summary, dict):
         return 0
@@ -579,10 +576,6 @@ def _todo_item_is_actionable_open(item: dict[str, Any]) -> bool:
 
 def _todo_task_class(item: dict[str, Any]) -> str:
     return str(item.get("task_class") or "").strip()
-
-
-def _count_advancement_items(items: Any, *, claimed_by: str | None = None) -> int:
-    return agent_scope_count_advancement_items(items, claimed_by=claimed_by)
 
 
 def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
@@ -1508,6 +1501,7 @@ def build_goal_frontier_projection_context_from_status(
     agent_profile: dict[str, Any] | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Build the quota-facing goal-frontier read model.
 
@@ -1778,29 +1772,18 @@ def build_goal_frontier_projection_context_from_status(
             registered_agent_ids=registered_agent_ids,
         )
 
-    if replan_obligation and latest_replan_ack_feedback:
-        replan_obligation = dict(replan_obligation)
-        replan_obligation["replan_ack_feedback"] = latest_replan_ack_feedback
-        claims = latest_replan_ack_feedback.get("rejected_claims") or []
-        first_claim = next(
-            (item for item in claims if isinstance(item, dict)),
-            None,
-        )
-        if first_claim:
-            replan_obligation["recommended_action"] = (
-                "previous replan ACK was rejected: "
-                f"{first_claim.get('kind')}: {first_claim.get('reason')}; "
-                + str(replan_obligation.get("recommended_action") or "replan again")
-            )
+    replan_obligation = attach_rejected_replan_feedback(replan_obligation, latest_replan_ack_feedback)
 
     if replan_obligation:
         replan_obligation = dict(replan_obligation)
+        strategy = ((project_asset or {}).get("execution_profile") or {}).get("stride_strategy", "off")
+        explore_context = replan_explore_reader(goal_id, agent_id) if strategy != "off" and replan_explore_reader else None
         replan_obligation["replan_context"] = build_replan_context(
-            replan_obligation,
+            replan_obligation, explore_context=explore_context,
             goal_id=goal_id,
             agent_id=agent_id,
             newest_first_runs=(), source_status=status_payload,
-            stride_strategy=((project_asset or {}).get("execution_profile") or {}).get("stride_strategy", "off"),
+            stride_strategy=strategy,
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
         )
 
