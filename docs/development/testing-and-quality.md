@@ -818,6 +818,23 @@ agent what to do and how to request the omitted detail.
 完整诊断包保留为显式 drill-down。只有默认路径仍能告诉 agent 下一步做什么、以及
 如何请求被省略细节时，字段才能移出默认热路径。
 
+The default `quota should-run` CLI preserves the complete
+`vision_continuation_audit` once, including judge identity, evidence requirements,
+research/writeback instructions, and done/continue conditions. Only identical
+copies in the same response reference that owner; differing channel rules remain
+inline. This restores rules previously omitted by the default projection;
+`--include-detail vision` still returns the full inline audit. The existing
+40,000-character fixture budget remains unchanged: the same workload measures
+30,697 characters before repair and 33,205 after repair, with 56,401 in detail.
+These are JSON fixture measurements, not token costs or model-behavior evidence.
+
+默认 `quota should-run` CLI 完整保留一份 `vision_continuation_audit`，包括 judge
+身份、证据要求、研究／回写指令及 done/continue 条件；仅同一响应内完全相同的
+副本引用该 owner，不同 channel 的规则仍内联。这恢复了默认投影此前省略的规则；
+`--include-detail vision` 仍返回完整内联 audit。原有 40,000 字符 fixture 预算不变，
+同一负载修复前／后为 30,697／33,205 字符，详情为 56,401 字符。这是 JSON fixture
+测量，不代表 token 成本或模型行为证据。
+
 ### Roadmap-Aligned Optimization
 
 For recurring command, recovery or retrieval costs, use the existing
