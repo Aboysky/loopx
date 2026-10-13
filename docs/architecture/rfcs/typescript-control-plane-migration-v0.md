@@ -105,6 +105,11 @@ The existing delivery Todos should carry these concrete exits:
   execution grants refuse before effects; canonical work and original-operation
   recovery pass with the old writer physically absent. Keep the additive 1.x
   import/deprecation line compatible.
+  Admission must preserve original lease release and receipt/outbox recovery
+  before import; denying the existing shared legacy fence indiscriminately
+  would also block these prerequisites. Remove the Python missing-fence bypass
+  with the typed cutoff and validate the combined recovery-to-import journey
+  specified in the linked release contract.
 - After the last source caller exits, reconcile pending outboxes and delete
   unused capture producers/private decisions together. Keep supported historical
   readers and current-head rollback; do not wait for every external user to
