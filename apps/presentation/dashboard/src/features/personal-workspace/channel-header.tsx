@@ -87,17 +87,23 @@ export function ChannelHeader({
     return () => controller.abort();
   }, [readOnlySourceLabel, selectedAgentId]);
   const model = modelDiscovery?.model;
-  const selectedModel = selectedAgentModelId || model?.selected || model?.options[0]?.value || "";
-  const modelControl = model && selectedModel ? (
+  const selectedModel = selectedAgentModelId === undefined ? model?.selected || model?.options[0]?.value || "" : selectedAgentModelId;
+  const modelControl = model && model.options.length ? (
     <WorkspaceSelect
       ariaLabel={locale === "zh-CN" ? "选择模型" : "Select model"}
       className="personal-agent-select personal-model-select"
       onChange={(value) => onSelectAgentModel?.(value)}
-      options={model.options.map((option) => ({ label: option.label, value: option.value }))}
+      options={[
+        ...(!selectedModel ? [{ disabled: true, label: locale === "zh-CN" ? "当前模型未知" : "Current model unknown", value: "" }] : []),
+        ...(selectedModel && !model.options.some((option) => option.value === selectedModel)
+          ? [{ disabled: true, label: `${locale === "zh-CN" ? "当前模型" : "Current model"}: ${selectedModel}`, value: selectedModel }] : []),
+        ...model.options.map((option) => ({ label: option.label, value: option.value })),
+      ]}
       prefixLabel={locale === "zh-CN" ? "模型" : "Model"}
       value={selectedModel}
     />
-  ) : modelDiscoveryState === "loading" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "正在读取模型…" : "Reading models…"}</small>
+  ) : selectedAgentModelId === "" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "当前模型未知" : "Current model unknown"}</small>
+    : modelDiscoveryState === "loading" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "正在读取模型…" : "Reading models…"}</small>
     : modelDiscoveryState === "error" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "无法读取模型" : "Models unavailable"}</small> : null;
   // The chip reports the selected executor, whose credential pays for it, and
   // the resolved model, so an executor and a model that disagree are visible

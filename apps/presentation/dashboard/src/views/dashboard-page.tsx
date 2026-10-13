@@ -1590,11 +1590,10 @@ function PersonalGoalHome({
   }, [readOnly, conversationReturnSessionKey]);
 
   function recordSessionAdmission(targetContextId: string, session: ChatSessionSummary) {
-    if (session.agent_model_id) {
-      const key = agentModelSelectionKey(targetContextId, session.agent_id);
-      setSelectedAgentModels((current) => current[key] === session.agent_model_id
-        ? current : { ...current, [key]: session.agent_model_id! });
-    }
+    const key = agentModelSelectionKey(targetContextId, session.agent_id);
+    const currentModel = session.agent_model_id ?? "";
+    setSelectedAgentModels((current) => current[key] === currentModel
+      ? current : { ...current, [key]: currentModel });
     const queues = chatSessionQueuesFollowUps(session);
     const supportsSteering = chatSessionSupportsSteering(session);
     setSteeringSessionIds((current) => {
@@ -2405,16 +2404,20 @@ function PersonalGoalHome({
       // stored identity before offering a link; a failed read never hides the
       // visible answer or retries the model Turn.
       const completedMessageId = streamingMessageId;
-      if ((response.message || streamedText).length >= MIN_SEPARATE_ANSWER_LENGTH) {
-        void fetchChatSession(sessionId).then((stored) => {
+      void fetchChatSession(sessionId).then((stored) => {
+        const key = `${targetContextId}:${stored.session.agent_id}`;
+        if (sessionIds.current.get(key) === sessionId && !newSessionRequired.current.has(key)) {
+          recordSessionAdmission(targetContextId, stored.session);
+        }
+        if ((response.message || streamedText).length >= MIN_SEPARATE_ANSWER_LENGTH) {
           const answer = stored.messages.find((item) =>
             item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
           if (answer) updateConversationMessage(targetContextId, completedMessageId, {
             sourceMessageId: answer.message_id, sourceSessionId: sessionId,
             collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
           });
-        }).catch(() => { /* The original conversation remains readable. */ });
-      }
+        }
+      }).catch(() => { /* The original conversation remains readable. */ });
       const todoProposals = response.proposals.filter(isTodoProposal);
       // The channel already states where a team plan is confirmed: its answer
       // names the Goal whose workspace holds the card, so a manager-channel

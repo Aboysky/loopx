@@ -9,8 +9,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import threading
 import time
 from typing import Any, Callable, Mapping, Protocol
@@ -60,7 +58,7 @@ from .chat_store import (
     normalize_agent_model_id,
     utc_now,
 )
-from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .chat_providers import ClaudeCodeAdapter, codex_model_options, direct_model_from_environment
 from .attached_session import (
     enqueue_attached_agent_turn,
     require_current_attached_session,
@@ -404,7 +402,7 @@ class ChatRuntimeController:
         if capability is None or not capability.get("available"):
             raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
         if agent_id == "codex":
-            return {"agent_id": agent_id, "model": self._codex_model_options(), "supported": True}
+            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin), "supported": True}
         if agent_id == "claude-code":
             return {
                 "agent_id": agent_id,
@@ -430,33 +428,6 @@ class ChatRuntimeController:
             return {"agent_id": agent_id, "model": adapter.model_options(), "supported": True}
         finally:
             adapter.close_session()
-
-    def _codex_model_options(self) -> dict[str, Any] | None:
-        """Project the local Codex catalog without exposing its instructions."""
-        executable = self.codex_bin if Path(self.codex_bin).is_absolute() else shutil.which(self.codex_bin)
-        if not executable:
-            return None
-        try:
-            result = subprocess.run(
-                [str(executable), "debug", "models"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, encoding="utf-8", errors="replace", timeout=15, check=False,
-            )
-            payload = json.loads(result.stdout) if result.returncode == 0 else {}
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-            return None
-        rows = payload.get("models") if isinstance(payload, dict) else None
-        if not isinstance(rows, list):
-            return None
-        options = [
-            {"value": slug, "label": " ".join(str(row.get("display_name") or slug).split())[:100]}
-            for row in rows
-            if isinstance(row, dict)
-            and isinstance((slug := str(row.get("slug") or "").strip()), str)
-            and slug and len(slug) <= 160
-            and str(row.get("visibility") or "list") == "list"
-        ]
-        return {"id": "model", "label": "Model", "selected": options[0]["value"] if options else "", "options": options} if options else None
 
     @staticmethod
     def _managed_upstream_mode(session: dict[str, Any]) -> str:
@@ -799,7 +770,7 @@ class ChatRuntimeController:
                     codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
                     project_context=project_context,
                     steward_context=steward_context,
-                    agent_model_id=agent_model_id,
+                    agent_model_id=adapter.current_model_id if isinstance(adapter, ACPStdioAdapter) else agent_model_id,
                 )
             except Exception:
                 adapter.close_session()
@@ -1059,6 +1030,8 @@ class ChatRuntimeController:
         with self.lock:
             self.adapters[session_id] = adapter
         try:
+            if isinstance(adapter, ACPStdioAdapter):
+                self.store.update_session(session_id, agent_model_id=adapter.current_model_id)
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
@@ -1673,6 +1646,9 @@ class ChatRuntimeController:
                     expected_statuses={"starting", "running", "interrupting"},
                     upstream_turn_id=payload["upstream_turn_id"],
                 )
+            if kind == "agent.model_config":
+                self.store.update_session(session_id, agent_model_id=payload.get("model_id"))
+                return
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:
                     return

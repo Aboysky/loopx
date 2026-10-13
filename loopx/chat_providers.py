@@ -22,6 +22,34 @@ EventSink = Callable[[str, dict[str, Any]], None]
 _PRIVATE_PARTS = {".git", ".env", ".ssh", ".aws", ".config", "node_modules"}
 
 
+def codex_model_options(codex_bin: str) -> dict[str, Any] | None:
+    """Project the local Codex catalog without exposing its instructions."""
+    executable = codex_bin if Path(codex_bin).is_absolute() else shutil.which(codex_bin)
+    if not executable:
+        return None
+    try:
+        result = subprocess.run(
+            [str(executable), "debug", "models"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace", timeout=15, check=False,
+        )
+        payload = json.loads(result.stdout) if result.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return None
+    rows = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return None
+    options = [
+        {"value": slug, "label": " ".join(str(row.get("display_name") or slug).split())[:100]}
+        for row in rows
+        if isinstance(row, dict)
+        and isinstance((slug := str(row.get("slug") or "").strip()), str)
+        and slug and len(slug) <= 160
+        and str(row.get("visibility") or "list") == "list"
+    ]
+    return {"id": "model", "label": "Model", "selected": options[0]["value"] if options else "", "options": options} if options else None
+
+
 def _read_only_tools(provider: str) -> list[dict[str, Any]]:
     definitions = [
         ("list_files", "List public project files matching a bounded glob.", {

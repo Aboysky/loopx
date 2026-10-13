@@ -76,8 +76,8 @@ def normalize_agent_model_id(value: Any) -> str:
     are persisted in JSON only, so retain a bounded printable value while
     rejecting controls that would make logs or projections unsafe.
     """
-    token = str(value or "").strip()
-    if not token or len(token) > _AGENT_MODEL_ID_MAX_LENGTH or any(ord(character) < 32 for character in token):
+    token = str(value or "")
+    if not token.strip() or len(token) > _AGENT_MODEL_ID_MAX_LENGTH or any(ord(character) < 32 for character in token):
         raise ValueError("agent_model_id must be a bounded model value")
     return token
 
