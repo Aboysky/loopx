@@ -470,7 +470,11 @@ For that policy only, qualification replaces the two blind-protocol attestations
 policy and trajectory digests, prove strictly ordered submissions and declared
 deliveries, and show a complete acknowledged feedback transport. At most the final
 submission may finish evaluation after the solver ends, and it cannot deliver feedback
-back into the solving phase. The public evidence digest binds both the protocol log and
+back into the solving phase. If that is the only submission, the complete evidence has
+an explicit empty `deliveries` list and integer `intent_count=ack_count=0`; submission
+request/response acknowledgements and their record digests are still required. Empty
+deliveries never excuse missing feedback for evaluations completed during solving.
+The public evidence digest binds both the protocol log and
 the feedback transport; the receipt otherwise contains only digests and
 submission/delivery counts. A prose claim that feedback was expected, an unbound score
 log, an undeclared channel, or an incomplete transport does not relax the blind default.
