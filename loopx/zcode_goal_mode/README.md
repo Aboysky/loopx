@@ -179,6 +179,8 @@ dependencies installed, build the Chat bundle with
 `npm --prefix apps/presentation/dashboard run build`, install Chromium with
 `npm --prefix apps/presentation/dashboard exec playwright install chromium`,
 and run `node examples/zcode-persistent-browser-smoke.mjs`.
+The runner explicitly selects the Chinese browser locale used by its control
+selectors and checks the rendered language, independent of the host locale.
 The packaged controls call the production loopback API, Python bridge, Core
 identity/quota admission and persistent TypeScript controller journal. Only
 the vendor NDJSON endpoint is substituted. The journey corrects a missing

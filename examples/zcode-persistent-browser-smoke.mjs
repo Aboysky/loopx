@@ -26,10 +26,11 @@ async function journal(){const dir=join(root,'runtime/zcode-goal');const files=(
 try {
  const deadline=Date.now()+45000;
  while(true){try {const r=await fetch(url+'/');if(r.ok)break;}catch{}if(server.exitCode!==null||Date.now()>deadline)throw Error('Startup failed: '+serverErrors+'; exit='+server.exitCode);await new Promise(r=>setTimeout(r,100));}
- browser=await chromium.launch({headless:true,...(process.env.LOOPX_BROWSER_EXECUTABLE ? {executablePath:process.env.LOOPX_BROWSER_EXECUTABLE} : {})});const page=await browser.newPage({viewport:{width:1512,height:982}});
+ browser=await chromium.launch({headless:true,...(process.env.LOOPX_BROWSER_EXECUTABLE ? {executablePath:process.env.LOOPX_BROWSER_EXECUTABLE} : {})});const page=await browser.newPage({locale:'zh-CN',viewport:{width:1512,height:982}});
  const errors=[];const nativeRequests=[];page.on('request',r=>{if(new URL(r.url()).pathname===route)nativeRequests.push(r.method());});page.on('pageerror',e=>errors.push(e.message));
  page.on('response',async r=>{if(r.status()>=400)console.error('HTTP failure',r.status(),new URL(r.url()).pathname,(await r.text()).slice(0,1800));});
  await page.goto(url,{waitUntil:'networkidle'});
+ assert.equal(await page.locator('html').getAttribute('lang'),'zh-CN', 'Acceptance selectors require the explicitly configured Chinese locale');
  await page.locator('.personal-goal-link').filter({hasText:'Persistent ZCode'}).click();
  await mkdir(join(root,'evidence'));
  const open=async()=>{
