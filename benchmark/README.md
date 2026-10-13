@@ -323,7 +323,13 @@ copying their old leases or settlement records grants no new execution authority
 
 With this option, capture also retains the **complete paged canonical Todo read**
 at one provider revision when its source coordination is promoted, as a private
-artifact. It rechecks the canonical head and exported bytes before sealing;
+artifact. That context also preserves the complete validated Explore event log
+(nodes, edges and findings, including dead ends) and all indexed vision/checkpoint
+records, including their original stride decisions. These are historical inputs,
+not imported destination graph, vision or effect authority. Empty histories are
+explicit; malformed rows and incomplete appends reject capture. The original
+source-file digests/absence must match the artifact owner's source witness, so an
+append between the context read and sealing cannot mix research points. It rechecks the canonical head and exported bytes before sealing;
 missing promoted authority or a moved revision fails this optional capture while
 ordinary work continues. An unpromoted source keeps the previous inert inventory
 capture and explicitly records canonical context as unavailable; it cannot use
@@ -360,7 +366,7 @@ current Todo context and can be changed through its owner.
 This is **Todo context adoption**, not canonical graph/vision/effect reactivation
 or a complete research continuation. A deterministic local-provider qualification
 uses the real native Host fork and resume, CLI and canonical continuation owner:
-a tool reads the retained candidate and captured negative Todo evidence, excludes
+a tool reads the retained candidate, negative Todo/Explore evidence and vision, excludes
 later source evidence, then settles current governed work. This proves mechanical
 adoption and use, not model judgment or research benefit. It does not replace
 current Todo requirements with source requirements, reactivate source claims, or

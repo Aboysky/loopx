@@ -627,13 +627,17 @@ effect 采用、剩余总预算、已安装前端恢复或科学收益。显式 
 绑定变化或文件 witness 不符均在发布前拒绝；不评测、不补发机会，未完成或
 未对账评测会拒绝。
 可选 LoopX-state 参与者还封存 promoted provider 同一 revision 的完整分页
-canonical Todo 读取，并复查字节和 revision。未 promoted 的来源仍只保存原有
+canonical Todo 读取，并复查字节和 revision。同时保留完整 Explore 事件、索引中的
+vision/checkpoint 历史及原 stride 决策，供后续读取原分支、负证据与路线判断。
+Explore 行仍由原 owner 校验；不完整追加、坏行、源文件 digest/缺失状态与封存
+inventory 不一致均拒绝可选捕获。历史记录不激活目标 graph、旧 vision 或 effect。
+未 promoted 的来源仍只保存原有
 惰性 inventory，明确不支持 canonical context 采用。控制器通过既有 leased
 continuation prepare/adopt owner，将保留上下文挂到已被目标 Agent 持有的 Todo，
 读回 canonical note 与 Markdown 投影。原始 Todo 集合、note 和负证据仅作为私有
 上下文；目标 requirements、status、claim 和 lease 仍由当前 authority 决定。
 prepare/adopt 前均复查 native profile 与完整历史。真实 native fork/resume、CLI
-和 canonical owner 的合成资格测试实际读取保留候选与负证据，排除来源后续证据，
+和 canonical owner 的合成资格测试实际读取保留候选、Todo/Explore 负证据与 vision，排除来源后续证据，
 并完成当前 governed 工作结算。本地确定性 provider 只证明传输、采用及机械使用，
 不证明研究判断或收益。context 命令在响应丢失或投影失败后，复用原 prepare/adopt
 身份与 revision 恢复；authority、note、产物变化或 native 历史已推进仍拒绝。

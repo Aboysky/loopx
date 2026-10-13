@@ -753,7 +753,12 @@ The incumbent can precede the working candidate; native ranking remains the owne
 Missing bytes, changed capture bindings or mismatched file witnesses reject before
 publication, without grading or refilling admission; pending or unreconciled grades reject.
 The opt-in LoopX-state participant additionally seals a complete paged canonical
-Todo read at one promoted provider revision, with byte/revision rechecks.
+Todo read at one promoted provider revision, with byte/revision rechecks. It
+retains complete Explore events and indexed vision/checkpoint history, including
+stride decisions, as historical context. The source owner validates Explore rows;
+framing, source-file digests and absence are checked against the sealed inventory.
+Malformed or moved history rejects the optional capture. These retained records
+do not activate a destination graph, old vision or historical effects.
 Unpromoted coordination retains its previous inert inventory only, explicitly
 without canonical context adoption. A controller can
 attach this retained context to an already owned destination Todo through the
@@ -762,7 +767,7 @@ readback. The source population, notes and original negative evidence are
 available as private context; current requirements, status, claims and leases
 remain current authority. Native profile and complete-history readback precede
 both preparation and adoption. A real native fork/resume plus CLI and canonical
-owner fixture consumes the captured candidate and negative Todo evidence, excludes
+owner fixture consumes the captured candidate, negative Todo/Explore evidence and vision, excludes
 later source evidence, and settles governed work. Its local deterministic provider
 qualifies transport/adoption and mechanical use, not research judgment or benefit;
 context-command retries now reuse the original prepare/adopt identities and
