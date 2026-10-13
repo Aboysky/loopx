@@ -169,6 +169,7 @@
     "tests/control_plane_ts/turn_journal_effects.test.ts",
     "tests/control_plane_ts/chat_turn_acceptance.test.ts",
     "tests/control_plane_ts/vision_checkpoint.test.ts",
+    "tests/control_plane_ts/stride_explore_pagination.test.ts",
     "tests/control_plane_ts/checkpoint_read_context.test.ts",
     "tests/control_plane_ts/checkpoint_provider_head.test.ts",
     "tests/control_plane_ts/checkpoint_commit_probe.ts",
