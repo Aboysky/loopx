@@ -16,6 +16,8 @@ from pathlib import Path
 
 from benchmark.runtime.codex import Execution, prepare_codex_home, process_environment
 
+PHASE_WORK_RESERVE_SECONDS = 160
+
 
 def read_json(text: str) -> dict:
     payload = json.loads(text)
@@ -282,12 +284,12 @@ def run_once(env: dict[str, str]) -> dict:
             remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
             # Reserve startup and settlement on every wake, then allow the
             # remaining time for work instead of reusing the initial timeout.
-            if remaining <= 160:
+            if remaining <= PHASE_WORK_RESERVE_SECONDS:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
             execution = replace(
-                execution, timeout_seconds=(remaining - 160 if execution.timeout_seconds is None
-                                             else min(execution.timeout_seconds, remaining - 160))
+                execution, timeout_seconds=(remaining - PHASE_WORK_RESERVE_SECONDS if execution.timeout_seconds is None
+                                             else min(execution.timeout_seconds, remaining - PHASE_WORK_RESERVE_SECONDS))
             )
         prepare_codex_home(
             home,

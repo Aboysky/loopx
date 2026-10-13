@@ -24,6 +24,7 @@ from .harbor import (
     BenchmarkCodex, _CONTROL, _GOAL_ID, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
 from .scheduler import worker_command
+from .worker import PHASE_WORK_RESERVE_SECONDS
 
 
 # Experiment profiles, local to the research runner; not new LoopX modes.
@@ -102,7 +103,7 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
-        if timeout_seconds <= 160:
+        if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
@@ -175,7 +176,7 @@ class SForgeWorker(CodexAgent):
         self.timeout_seconds = timeout_seconds
         # Let one call use the trial budget. The shared worker recomputes the
         # remaining deadline on every continuation, retaining cleanup time.
-        self.turn_timeout = timeout_seconds - 160
+        self.turn_timeout = timeout_seconds - PHASE_WORK_RESERVE_SECONDS
         self.runtime = None
         self.prepared = False
         # Only the official profile delegates continuation to SForge. Heartbeat

@@ -13,12 +13,14 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
+from benchmark.runtime.worker import PHASE_WORK_RESERVE_SECONDS
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -75,7 +77,7 @@ def _reference(value: dict) -> dict:
     return value
 
 
-def _bound_bank(folder: Path, reference: dict) -> None:
+def _bound_bank(folder: Path, reference: dict) -> dict:
     """Byte/source binding only; native restore owns eligibility and validity."""
     raw = _physical(folder / "manifest.json").read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
@@ -96,10 +98,37 @@ def _bound_bank(folder: Path, reference: dict) -> None:
             raise ValueError("Native selected archive differs from the captured reference")
     if {p.name for p in folder.iterdir()} != expected:
         raise ValueError("Native bank contains undeclared members")
+    return packet
+
+
+def _phase_budget(raw: bytes, native: dict) -> dict:
+    """Adapt the existing SForge integer phase clock, not quota authority.
+
+    Native capture owns this time. The declared physical Host file owns its
+    deadline. Neither fact qualifies complete Host/research-state capture.
+    """
+    if len(raw) > 64 or not re.fullmatch(rb"[0-9]+\n?", raw):
+        raise ValueError("Host phase deadline must be an integer epoch file")
+    epoch = int(raw)
+    captured = native.get("captured_at_epoch")
+    if (not 0 < epoch < 2 ** 53 or type(captured) not in (int, float) or
+            not math.isfinite(captured) or captured <= 0):
+        raise ValueError("Host/native phase clocks cannot be represented exactly")
+    return {"component_id": "host_phase_deadline", "source_deadline_epoch": epoch,
+            "captured_at_epoch": captured, "remaining_seconds": max(0, epoch - captured)}
+
+
+def _phase_destination(path: Path, *, root: Path, bank: Path) -> Path:
+    path = Path(path)
+    _physical(path.parent)
+    if (not path.is_absolute() or path.resolve() != path or path.exists() or path.is_symlink()
+            or path.is_relative_to(root) or path.is_relative_to(bank)):
+        raise ValueError("Host phase restoration requires a fresh physical file outside artifact/bank roots")
+    return path
 
 
 def capture(controller_file: Path, *, token: str, capture_id: str, destination: Path,
-            timeout: float = 30) -> dict:
+            timeout: float = 30, phase_deadline_file: Path | None = None) -> dict:
     """Capture one native-owned point without exporting controller configuration."""
     if not re.fullmatch(r"[0-9a-f]{32}", capture_id):
         raise ValueError("Capture identity must be the declared 32-hex native identity")
@@ -108,29 +137,52 @@ def capture(controller_file: Path, *, token: str, capture_id: str, destination: 
     if not destination.is_absolute() or destination != destination.resolve() or destination.exists():
         raise ValueError("Capture export requires a fresh physical destination")
     controller = _controller(controller_file)
+    phase_raw = None
+    if phase_deadline_file is not None:
+        phase_deadline_file = _physical(phase_deadline_file)
+        phase_raw = phase_deadline_file.read_bytes()
+        _phase_budget(phase_raw, {"captured_at_epoch": time.time()})
+        # An earlier native-only point cannot acquire a later Host clock.
+        if (controller["bank_root"] / capture_id).exists():
+            raise ValueError("Existing native point has no new Host phase capture boundary")
+        attempts = controller["bank_root"] / ".loopx-phase-attempts"
+        attempts.mkdir(mode=0o700, exist_ok=True)
+        _physical(attempts)
+        # First attempt wins, including lost responses or failed exports.
+        # A later source cannot replace the Host clock at that native point.
+        (attempts / capture_id).mkdir(mode=0o700)
     reference = _reference(_post(controller, "/api/v1/checkpoint/capture",
         {"token": token, "capture_id": capture_id}, timeout))
     if reference["checkpoint_id"] != capture_id:
         raise ValueError("Native capture returned a different identity")
     folder = _physical(controller["bank_root"] / capture_id)
-    _bound_bank(folder, reference)
+    native = _bound_bank(folder, reference)
     components = [{"id": "native_judge", "source_path": str(folder)}]
+    metadata = {"native_reference": reference}
+    if phase_raw is not None:
+        if phase_deadline_file.read_bytes() != phase_raw:
+            raise ValueError("Host phase deadline moved across native capture")
+        components.append({"id": "host_phase_deadline", "source_path": str(phase_deadline_file)})
+        metadata["host_phase_budget"] = _phase_budget(phase_raw, native)
     probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
     result = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "capture", "components": components, "destination": str(destination),
         "expected_source_sha256": probe["source_sha256"],
-        "point_metadata": {"native_reference": reference},
+        "point_metadata": metadata,
     }, retry_safe=False)
     # Bind the actually copied bytes, not merely a prior source observation.
     _bound_bank(destination / "components/native_judge", reference)
+    if phase_raw is not None and (destination / "components/host_phase_deadline").read_bytes() != phase_raw:
+        raise ValueError("Captured Host phase bytes differ from the native boundary")
     return {**result, "native_reference": reference}
 
 
 def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: str,
-            timeout: float = 30) -> dict:
+            timeout: float = 30, phase_deadline_file: Path | None = None) -> dict:
     """Import verified inert bytes, then ask fresh native authority to admit them.
 
-    Does not restore a model, LoopX Goal, effect authority or whole-trial budget.
+    An explicitly captured Host clock preserves its remaining phase duration.
+    Does not restore a model, LoopX Goal or effect authority.
     An uncertain response is not replayed under a different run or capture id.
     """
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
@@ -140,17 +192,36 @@ def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: 
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(root), "expected_sha256": expected_sha256})
     manifest = json.loads((root / "checkpoint.json").read_bytes())
-    if [c["id"] for c in manifest["components"]] != ["native_judge"]:
-        raise ValueError("Native import requires its single declared capsule component")
+    expected_components = ["native_judge"]
+    if phase_deadline_file is not None:
+        expected_components.append("host_phase_deadline")
+    if [c["id"] for c in manifest["components"]] != expected_components:
+        raise ValueError("Native import requires its declared capsule and explicit matching Host clock")
     reference = _reference(manifest["point_metadata"]["native_reference"])
     if run_id == reference["source_run_id"]:
         raise ValueError("Continuation requires a fresh run identity")
     folder = root / "components/native_judge"
-    _bound_bank(folder, reference)
+    native = _bound_bank(folder, reference)
     bank = controller["bank_root"]
+    phase_path = None
+    phase = None
+    if phase_deadline_file is not None:
+        phase = _phase_budget((root / "components/host_phase_deadline").read_bytes(), native)
+        if manifest["point_metadata"].get("host_phase_budget") != phase:
+            raise ValueError("Host phase metadata differs from sealed deadline/native clock")
+        if phase["remaining_seconds"] <= PHASE_WORK_RESERVE_SECONDS:
+            raise ValueError("Captured Host phase has no work allowance beyond its existing reserve")
+        phase_path = _phase_destination(phase_deadline_file, root=root, bank=bank)
     target = bank / reference["checkpoint_id"]
     stage = Path(tempfile.mkdtemp(prefix=".loopx-native-import-", dir=bank))
+    phase_fd = None
+    phase_published = False
+    native_attempted = False
     try:
+        if phase_path is not None:
+            # Empty is unusable by the existing SForge phase-entry shell.
+            # An uncertain native response must not fall back to a new budget.
+            phase_fd = os.open(phase_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         effect_runtime_result("runtime.checkpoint_artifacts", {
             "action": "materialize", "root": str(root), "expected_sha256": expected_sha256,
             "destination": str(stage / "unit"),
@@ -173,11 +244,42 @@ def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: 
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
-        return _post(controller, "/api/v1/checkpoint/restore", {
+        phase_epoch = None if phase is None else math.floor(time.time() + phase["remaining_seconds"])
+        if phase_epoch is not None and not 0 < phase_epoch < 2 ** 53:
+            raise ValueError("Destination Host phase clock is incompatible")
+        native_attempted = True
+        result = _post(controller, "/api/v1/checkpoint/restore", {
             "checkpoint_id": reference["checkpoint_id"], "manifest_sha256": reference["manifest_sha256"],
             "run_id": run_id,
         }, timeout)
+        if phase_fd is not None:
+            if not isinstance(result.get("token"), str) or not result["token"]:
+                raise ValueError("Native phase activation returned no fresh authority result")
+            # Charge activation/transport, not offline time or a fresh trial.
+            # Native alone owns accepted counters and remaining cooldown.
+            encoded = f"{phase_epoch}\n".encode()
+            if os.write(phase_fd, encoded) != len(encoded):
+                raise OSError("Destination Host phase write was incomplete")
+            os.fsync(phase_fd)
+            directory = os.open(phase_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            if phase_path.read_bytes() != f"{phase_epoch}\n".encode():
+                raise ValueError("Destination Host phase readback differs from activation")
+            phase_published = True
+        return result
     finally:
+        if phase_fd is not None:
+            try:
+                if native_attempted and not phase_published:
+                    os.ftruncate(phase_fd, 0)
+                    os.fsync(phase_fd)
+            finally:
+                os.close(phase_fd)
+            if not native_attempted:
+                phase_path.unlink()
         shutil.rmtree(stage)
 
 
@@ -189,16 +291,21 @@ def main(argv=None) -> None:
     capture_parser.add_argument("--token-file", required=True, type=Path)
     capture_parser.add_argument("--capture-id", required=True)
     capture_parser.add_argument("--destination", required=True, type=Path)
+    capture_parser.add_argument("--phase-deadline-file", type=Path,
+                                help="Explicit physical SForge Host phase file; omitted keeps native-only capture")
     restore_parser = commands.add_parser("restore")
     restore_parser.add_argument("--root", required=True, type=Path)
     restore_parser.add_argument("--expected-sha256", required=True)
     restore_parser.add_argument("--run-id", required=True)
     restore_parser.add_argument("--result-file", required=True, type=Path)
+    restore_parser.add_argument("--phase-deadline-file", type=Path,
+                                help="Fresh physical Host phase file, required for a capsule containing that participant")
     args = parser.parse_args(argv)
     if args.command == "capture":
         source_token = _physical(args.token_file).read_text().strip()
         result = capture(args.controller_file, token=source_token,
-                         capture_id=args.capture_id, destination=args.destination)
+                         capture_id=args.capture_id, destination=args.destination,
+                         phase_deadline_file=args.phase_deadline_file)
         print(json.dumps(result))
     else:
         # Reserve before admission. A lost output is explicit recovery, never a
@@ -209,7 +316,8 @@ def main(argv=None) -> None:
         with args.result_file.open("x") as result_file:
             args.result_file.chmod(0o600)
             result = restore(args.controller_file, root=args.root,
-                expected_sha256=args.expected_sha256, run_id=args.run_id)
+                expected_sha256=args.expected_sha256, run_id=args.run_id,
+                phase_deadline_file=args.phase_deadline_file)
             json.dump(result, result_file)
             result_file.flush()
             os.fsync(result_file.fileno())
