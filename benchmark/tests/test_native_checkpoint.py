@@ -411,14 +411,22 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
             "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
         current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
-        adopted_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.research_checkpoint",
+        context_command = [sys.executable, "-m", "benchmark.runtime.research_checkpoint",
             "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
             "--todo-id", destination_todo, "--operation-id", "branch-context",
             "--expected-revision", current["authority_read"]["provider_revision"],
-            "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])],
-            env=env, text=True, capture_output=True, timeout=60)
+            "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])]
+        adopted_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
         assert adopted_cli.returncode == 0, adopted_cli.stderr
         context_result = json.loads(adopted_cli.stdout)
+        # Retrying the exact CLI after a lost result reuses both original
+        # receipts; it must not fork, charge, edit the Todo or run a model.
+        replay_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
+        assert replay_cli.returncode == 0, replay_cli.stderr
+        replay_result = json.loads(replay_cli.stdout)
+        assert replay_result["continuation"]["adoption"]["status"] == "replayed"
+        assert replay_result["continuation"]["provider_revision"] == context_result["continuation"]["provider_revision"]
+        assert len(calls) == 1
         retained_context_path = str(Path(context_result["artifact"]).relative_to(workspace))
         assert Path(context_result["artifact"]).read_bytes() == context_raw and len(calls) == 1
         adopted_todo = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])

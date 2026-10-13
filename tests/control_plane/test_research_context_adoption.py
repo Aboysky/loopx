@@ -17,7 +17,8 @@ from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
 
-def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("lost_response", [None, "prepare", "adopt", "projection"])
+def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path, monkeypatch, capsys, lost_response):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     workspace = tmp_path / 'branch'
     workspace.mkdir()
@@ -96,6 +97,31 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         '--update-operation-id','later-source-evidence','--update-expected-provider-revision',source_context['snapshot']['provider_revision'],
         '--task-lease-idempotency-key','source-lease','--task-lease-expected-version','1')
     source_before=source_run('todo','list','--goal-id','source','--todo-id',source_todo)
+    if lost_response:
+        with monkeypatch.context() as interrupted:
+            if lost_response == "projection":
+                def lost_projection(*args, **kwargs):
+                    raise OSError("synthetic projection response lost")
+                interrupted.setattr("loopx.control_plane.todos.provider_projection.project_current_canonical_todos", lost_projection)
+            else:
+                from benchmark.runtime import research_checkpoint
+                original_handoff = research_checkpoint._handoff
+                def lost_handoff(env, payload):
+                    result = original_handoff(env, payload)
+                    if payload["action"] == lost_response:
+                        raise OSError("synthetic committed response lost")
+                    return result
+                interrupted.setattr(research_checkpoint, "_handoff", lost_handoff)
+            expected_error = ValueError if lost_response == "projection" else OSError
+            expected_message = "original projection receipt" if lost_response == "projection" else "response lost"
+            with pytest.raises(expected_error, match=expected_message):
+                adopt_todo_context(env,unit,digest,**args)
+        interrupted_todo=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
+        assert json.loads(interrupted_todo['todo']['note'])['source_session']=='source-session'
+        # A replacement identity cannot recover the original accepted operation.
+        with pytest.raises(ValueError, match='continuation rejected'):
+            adopt_todo_context(env,unit,digest,**{**args,'operation_id':'replacement-operation'})
+        assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)['todo']==interrupted_todo['todo']
     result=adopt_todo_context(env,unit,digest,**args)
     assert result['context_adopted'] and result['model_calls']==0 and not result['research_point_qualified']
     assert Path(result['artifact']).read_bytes()==raw
@@ -116,9 +142,27 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     assert source_run('todo','list','--goal-id','source','--todo-id',source_todo)==source_before
     assert run('task-lease','inspect','--goal-id','branch','--todo-id',destination_todo)['lease']==lease['lease']
     # The adapter does not mint another receipt/session when retried after commit.
+    replay=adopt_todo_context(env,unit,digest,**args)
+    assert replay['continuation']['adoption']['status']=='replayed'
+    assert replay['continuation']['provider_revision']==result['continuation']['provider_revision']
+    assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==after
     with pytest.raises(ValueError,match='execution authority changed'):
-        adopt_todo_context(env,unit,digest,**args)
+        adopt_todo_context(env,unit,digest,**{**args,'lease_version':999})
     with pytest.raises(ValueError,match='already has context'):
         adopt_todo_context(env,unit,digest,**{**args,'operation_id':'different-operation',
             'expected_revision':after['authority_read']['provider_revision']})
     assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)['todo']==after['todo']
+
+    target=Path(result['artifact'])
+    target.write_bytes(b'changed retained context')
+    with pytest.raises(ValueError,match='artifact already differs'):
+        adopt_todo_context(env,unit,digest,**args)
+    target.write_bytes(raw)
+    run('todo','update','--goal-id','branch','--todo-id',destination_todo,'--agent-id','branch-actor',
+        '--note','New destination evidence must not be replaced by a historical retry.',
+        '--update-operation-id','new-destination-evidence','--update-expected-provider-revision',after['authority_read']['provider_revision'],
+        '--task-lease-idempotency-key','branch-lease','--task-lease-expected-version','1')
+    moved=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
+    with pytest.raises(ValueError,match='continuation rejected'):
+        adopt_todo_context(env,unit,digest,**args)
+    assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==moved

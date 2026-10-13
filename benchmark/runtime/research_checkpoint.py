@@ -77,7 +77,9 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     same owner; this adapter never guesses a new identity or starts model work.
     """
     from loopx.control_plane.turn_driver.codex_sessions import select_codex_cli_session
-    from loopx.control_plane.todos.provider_projection import settle_canonical_todo_projection
+    from loopx.control_plane.todos.provider_projection import (
+        settle_canonical_todo_projection, projection_delivery_requires_ack,
+    )
 
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": digest})
@@ -123,16 +125,20 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
     # acceptance checks. Source records only contribute context; they are never
     # passed as operational fields to prepare or adopt.
     inspect = _handoff(env, {**common, "action": "inspect"})
-    if (inspect["provider_revision"] != expected_revision or
-            inspect["claimed_by"] != env["LOOPX_AGENT_ID"] or
+    if (inspect["claimed_by"] != env["LOOPX_AGENT_ID"] or
             inspect.get("execution_authority", {}).get("allowed") is not True):
         raise ValueError("destination context revision, owner or execution authority changed")
     destination = canonical_context(env, deadline=time.time() + 30)["snapshot"]
     current = next((row for row in destination["todos"] if row["todo_id"] == todo_id), None)
-    if destination["provider_revision"] != expected_revision or current is None:
+    if destination["provider_revision"] != inspect["provider_revision"] or current is None:
         raise ValueError("destination canonical context moved before preparation")
-    if current.get("note"):
-        raise ValueError("destination Todo already has context; inspect its original owner instead of replacing it")
+    if current.get("note") and destination["provider_revision"] == expected_revision:
+        raise ValueError("destination Todo already has context; replay its original operation and revision")
+    if not current.get("note") and destination["provider_revision"] != expected_revision:
+        raise ValueError("destination context revision, owner or execution authority changed")
+    # With an existing note, the caller's stale ORIGINAL revision can only
+    # replay prepare through its typed receipt owner; it cannot overwrite the
+    # current note. Changed operation/context/proof must still fail there.
     # Keep the complete source read in a workspace-relative private artifact.
     # Never overwrite a moved artifact on an operation retry.
     relative = Path(".local/checkpoint-context") / (digest + ".json")
@@ -169,15 +175,18 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
         raise ValueError("destination session changed; inspect the original prepared context")
     if _context_session(env, metadata) != session_id:
         raise ValueError("destination native branch changed; inspect the original prepared context")
+    # Preserve the original prepare commit revision. The outer readback may
+    # already include adoption if its response was lost; using that newer head
+    # would change the adopt request hash and defeat original-receipt recovery.
     adopted = _handoff(env, {**common, "action": "adopt", "artifacts": [relative.as_posix()],
-        "operation_id": operation_id + "-adopt", "expected_provider_revision": prepared["provider_revision"]})
+        "operation_id": operation_id + "-adopt", "expected_provider_revision": prepared["result"]["provider_revision"]})
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": digest})
     if target.read_bytes() != raw:
         raise ValueError("adopted context artifact changed; inspect the original continuation receipt")
     result = settle_canonical_todo_projection(adopted, registry_path=Path(env["LOOPX_REGISTRY"]),
         runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]), goal_id=env["LOOPX_GOAL_ID"])
-    if result.get("ok") is not True:
+    if result.get("ok") is not True or not projection_delivery_requires_ack(result["projection_delivery"]):
         raise ValueError("continuation committed; reconcile its original projection receipt")
     return {"context_adopted": True, "session_id": bound["session_id"], "todo_id": todo_id,
         "artifact": str(target), "context_sha256": declared["sha256"],
