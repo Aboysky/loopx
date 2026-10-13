@@ -576,7 +576,10 @@ def test_generated_domain_accepts_true_kernel_comparison() -> None:
     assert domain.walked - domain.kernel == {"settlement_binding_kind"}
     # M4 preserves the native lifecycle owner and relation, without claiming
     # its production liveness from the retired Python compatibility-only set.
-    assert domain.outside_by_tier == (("cross_runtime", 20),)
+    # Recovery registers one additional cross-runtime vocabulary without
+    # claiming a qualified producer scan for its offline observations.
+    assert "state_recovery_component_state" not in domain.walked
+    assert domain.outside_by_tier == (("cross_runtime", 21),)
 
 
 def test_canonical_domain_rejects_old_kernel_only_universe() -> None:
@@ -600,7 +603,7 @@ def test_domain_membership_change_requires_regenerated_prose() -> None:
     with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
         smoke["check_formal_model"](registry["formal_model"], registry)
     projected = smoke["producer_domain_prose"](registry)
-    assert "21 cross_runtime" in projected["F1_producer_closedness.statement"]
+    assert "22 cross_runtime" in projected["F1_producer_closedness.statement"]
     assert "5 kernel and 0 outside" in projected["universes.vocabularies"]
 
 
@@ -746,7 +749,7 @@ def test_adding_a_vocabulary_forces_the_declared_domain_to_move() -> None:
         "meaning": "probe", "tier": "cross_runtime", "status": "canonical",
         "owners": {"python": None, "typescript": None}, "values": ["probe_value"],
     }
-    with pytest.raises(smoke["Drift"], match="the registry holds 27"):
+    with pytest.raises(smoke["Drift"], match="the registry holds 28"):
         smoke["check_formal_model"](registry["formal_model"], registry)
 
 
