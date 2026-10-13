@@ -285,6 +285,23 @@ def test_periodic_successor_readback_uses_live_machine_stride(source_goal, tmp_p
     assert f["runs"].read_text() == "".join(json.dumps(row) + "\n" for row in rows)
 
 
+def test_historical_receipt_does_not_read_current_stride_configuration(source_goal, tmp_path, capsys, monkeypatch):
+    from loopx.capabilities.todo_replan_cadence import machine_defaults
+
+    f = source_goal
+    view = _call(f, tmp_path, capsys, "inspect")[1]
+    code, configured = _call(f, tmp_path, capsys, "configure", _root(view),
+        agent=None, operation_id="root", execute=True)
+    assert code == 0, configured
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("synthetic current configuration unavailable")
+
+    monkeypatch.setattr(machine_defaults, "resolve_todo_replan_cadence_goal", unavailable)
+    code, historical = _call(f, tmp_path, capsys, "receipt", {"receipt_operation_id": "root"})
+    assert code == 0 and historical["status"] == "found" and historical["historical_only"], historical
+
+
 def test_root_initialization_cannot_shrink_source_goal_commitments(source_goal, tmp_path, capsys):
     f = source_goal
     view = _call(f, tmp_path, capsys, "inspect")[1]
