@@ -376,12 +376,13 @@ Turn envelope 中保留：
 ### Configure and roll back the stride strategy
 
 Use the existing **Goal review and stride** capability editor, selecting device
-defaults or an explicit Goal target. Choose the review unit/count and strategy,
-preview once, confirm and read back the effective configuration/source. The
-whole Goal review override wins over the device review configuration; clearing
-it restores current device defaults. A legacy override without a strategy means
-`off`, even when the device strategy is enabled. No separate capability switch
-or per-field inheritance is added.
+defaults or an explicit Goal target. Preview, confirm and read back the effective
+configuration/source. A Goal can select only the strategy and keep inheriting
+the live device review interval (six settled work Turns by default). An explicit
+Goal review unit/count still pins that interval; an older cadence-only override
+without a strategy remains `off`, even when the device strategy is enabled.
+Clearing the interval alone retains the Goal strategy, while clearing both
+restores device defaults. There is no separate stride timer.
 
 ![Versioned stride strategy in the existing capability editor](assets/stride-strategy-editor.png)
 
@@ -392,8 +393,8 @@ installed-App adoption or research utility.
 CLI preview/apply and readback (replace `GOAL`):
 
 ```sh
-loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1
-loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1 --execute
+loopx configure-goal --goal-id GOAL --execution-stride-strategy evidence_conditioned_v1
+loopx configure-goal --goal-id GOAL --execution-stride-strategy evidence_conditioned_v1 --execute
 loopx --format json configure-goal --goal-id GOAL
 loopx configure-goal --goal-id GOAL --execution-stride-strategy off --execute
 ```
@@ -407,9 +408,11 @@ experiments, spend quota, clone a checkpoint, relax acceptance or rewrite a
 frozen experiment. Configuration is versioned; preregister the selected version
 and captured input scope for comparisons.
 
-在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal，设置计数依据、
-周期和策略，预览、确认并回读生效来源。Goal 整体覆盖设备配置；旧 Goal 覆盖中
-没有策略则为 off。关闭策略保留复盘周期；清除整个覆盖恢复设备默认值。
+在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal，预览、确认并
+回读生效来源。Goal 可仅选择策略，继续沿用设备的实时复盘周期（默认每 6 个已结算
+工作 Turn）；显式设置 Goal 计数依据和数量仍会固定该周期。旧的仅含周期覆盖没有
+策略时仍为 off。单独清除周期会保留 Goal 策略；两者都清除才恢复设备默认值。
+步幅策略没有第二个独立计时器。关闭策略保留复盘周期。
 历史引用仍可读取。启用不会授权实验、消耗配额、复制 checkpoint、放宽验收或
 改写冻结实验；比较时预先记录策略版本与输入覆盖范围。
 
