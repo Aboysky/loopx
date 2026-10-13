@@ -16,6 +16,7 @@ from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
 from test_chat_ordinary_project import ordinary  # noqa: F401
+from test_native_steward_private import steward  # noqa: F401
 
 
 def install_transport_failure(fake, *, failures=1, info=None, item_type="userMessage", unreadable=False,
@@ -50,13 +51,21 @@ def install_transport_failure(fake, *, failures=1, info=None, item_type="userMes
 
 
 @pytest.mark.parametrize("failure,expected_starts,expected_status", [
-    ({}, 2, "completed"), ({"failures": 2}, 2, "failed"),
+    ({}, 2, "completed"), ({"failures": 2}, 3, "completed"),
+    ({"failures": 3}, 4, "completed"), ({"failures": 4}, 4, "failed"),
+    ({"info": "serverOverloaded"}, 2, "completed"),
+    ({"info": "serverOverloaded", "failures": 2}, 3, "completed"),
+    ({"info": "serverOverloaded", "failures": 3}, 4, "completed"),
+    ({"info": "serverOverloaded", "failures": 4}, 4, "failed"),
+    ({"info": "serverOverloaded", "item_type": "commandExecution"}, 1, "failed"),
+    ({"info": "serverOverloaded", "readback_info": "other"}, 1, "failed"),
+    ({"info": "server overloaded"}, 1, "failed"),
     ({"info": "other"}, 1, "failed"), ({"info": "cyberPolicy"}, 1, "failed"),
     ({"info": "usageLimitExceeded"}, 1, "failed"), ({"info": "unauthorized"}, 1, "failed"),
     ({"item_type": "commandExecution"}, 1, "failed"), ({"unreadable": True}, 1, "failed"),
     ({"readback_info": {"responseStreamDisconnected": {"httpStatusCode": 503}}}, 1, "failed"),
 ])
-def test_core_recovers_one_effect_free_transport_attempt_without_reaccepting_request(
+def test_core_recovers_bounded_effect_free_transient_attempts_without_reaccepting_request(
     ordinary, failure, expected_starts, expected_status, monkeypatch,  # noqa: F811
 ):
     store, runtime, contexts, request, capture, fake, workspace = ordinary
@@ -83,11 +92,84 @@ def test_core_recovers_one_effect_free_transport_attempt_without_reaccepting_req
     assert len(planned) == expected_starts - 1
     if planned:
         assert planned[0]["payload"]["upstream_turn_id"] == "durable-turn-1"
-        assert completed["upstream_turn_id"] == "durable-turn-2"
+        assert [row["payload"]["attempt"] for row in planned] == list(range(1, len(planned) + 1))
+        assert completed["upstream_turn_id"] == f"durable-turn-{expected_starts}"
+        phases = [row["payload"] for row in store.events_after(sid, tid, None)
+                  if row["kind"] == "agent.phase" and row["payload"].get("phase") == "retrying"]
+        assert len(phases) == len(planned)
+        assert all(("模型暂时繁忙" in row["label"]) == (failure.get("info") == "serverOverloaded")
+                   for row in phases)
+        assert [row["label"].rsplit("（第 ", 1)[1].split(" 次重试）", 1)[0] for row in phases] == [
+            f"{attempt}/3" for attempt in range(1, len(planned) + 1)
+        ]
     runtime.close()
 
 
-def test_real_backoff_keeps_fifo_queue_and_gives_each_request_one_attempt(ordinary):  # noqa: F811
+@pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+def test_steward_transport_retry_preserves_input_and_next_request_refreshes_context(
+    steward, monkeypatch, profile, info,  # noqa: F811
+):
+    from test_native_steward_runtime import apply_profile
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    fake = Path(runtime.codex_bin)
+    install_transport_failure(fake, info=info)
+    apply_profile(store.root.parent, profile)
+    monkeypatch.setattr(runtime.closed, "wait", lambda _: False)
+
+    def admit(identity, text):
+        transport.admit("steward-app", provider.event("steward-app", identity, text))
+        row = next(item for item in transport.core.pending() if item["message"] == text)
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        return row
+
+    first = admit("first", "transport recovery")
+    second = admit("next", "Read fresh evidence for this next request.")
+    assert first["session_id"] == second["session_id"]
+    packets = [json.loads(line) for line in capture.read_text().splitlines()]
+    starts = [row["params"] for row in packets if row["method"] == "turn/start"]
+    assert len(starts) == 3 and starts[0] == starts[1]
+    # Scope/evidence collection still runs for both attempts; its new snapshot
+    # is not substituted into the existing request. A new user request gets it.
+    contexts = [row["payload"] for row in store.events_after(first["session_id"], first["turn_id"], None)
+                if row["kind"] == "manager.context"]
+    assert len(contexts) == 2 and contexts[0]["collection_completed_at"] != contexts[1]["collection_completed_at"]
+    assert contexts[0]["collection_completed_at"] in starts[0]["input"][0]["text"]
+    assert contexts[1]["collection_completed_at"] not in starts[1]["input"][0]["text"]
+    assert contexts[0]["collection_completed_at"] not in starts[2]["input"][0]["text"]
+    assert [row["text"] for row in store.messages(first["session_id"]) if row["role"] == "user"] == [
+        "transport recovery", "Read fresh evidence for this next request.",
+    ]
+
+
+@pytest.mark.parametrize("change", ["grant", "scope"])
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+def test_steward_transport_retry_still_stops_when_authority_changes(steward, monkeypatch, change, info):  # noqa: F811
+    from test_native_steward_runtime import apply_profile
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    install_transport_failure(Path(runtime.codex_bin), info=info)
+    apply_profile(store.root.parent, "trusted_owner")
+
+    def during_backoff(_):
+        if change == "grant":
+            apply_profile(store.root.parent, "restricted")
+        else:
+            runtime.registry_path.write_text(json.dumps({"schema_version": "0.1", "goals": [
+                {"id": "new-project", "repo": str(workspace)}]}))
+        return False
+
+    monkeypatch.setattr(runtime.closed, "wait", during_backoff)
+    transport.admit("steward-app", provider.event("steward-app", "fenced", "transport recovery"))
+    row = transport.core.pending()[0]
+    final = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert final["status"] == "failed"
+    packets = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+
+
+def test_real_backoff_keeps_fifo_queue_and_gives_each_request_its_bounded_retry(ordinary):  # noqa: F811
     store, runtime, contexts, request, capture, fake, workspace = ordinary
     install_transport_failure(fake, fail_each_request=True)
     sid = request("/api/chat/sessions", {"context_kind": "project",
@@ -116,9 +198,10 @@ def test_real_backoff_keeps_fifo_queue_and_gives_each_request_one_attempt(ordina
 
 
 @pytest.mark.parametrize("change", ["stop", "grant", "model", "session", "claim"])
-def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(ordinary, monkeypatch, change):  # noqa: F811
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(ordinary, monkeypatch, change, info):  # noqa: F811
     store, runtime, contexts, request, capture, fake, workspace = ordinary
-    install_transport_failure(fake)
+    install_transport_failure(fake, info=info)
     sid = request("/api/chat/sessions", {"context_kind": "project",
                   "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
 
@@ -149,9 +232,10 @@ def test_transport_backoff_observes_stop_and_authority_or_configuration_changes(
     runtime.close()
 
 
-def test_crash_after_retry_reservation_never_replays_the_uncertain_native_attempt(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("info", [None, "serverOverloaded"])
+def test_crash_after_retry_reservation_never_replays_the_uncertain_native_attempt(ordinary, monkeypatch, info):  # noqa: F811
     store, runtime, contexts, request, capture, fake, workspace = ordinary
-    install_transport_failure(fake)
+    install_transport_failure(fake, info=info)
     sid = request("/api/chat/sessions", {"context_kind": "project",
                   "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
     dispatch = {}

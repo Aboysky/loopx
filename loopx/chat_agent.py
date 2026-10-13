@@ -255,6 +255,11 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
         "unauthorized": ("unauthorized", "Codex 上游身份验证失败，本轮未完成。"),
     }
     selected = known.get(info) if isinstance(info, str) else None
+    # Reuse the v2 envelope validator. A prior retry is not the terminal
+    # classification; only an explicit terminal transport variant selects this.
+    safe_info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+    if isinstance(safe_info, dict) and "activeTurnNotSteerable" not in safe_info:
+        selected = ("upstream_transport_failure", "Codex 上游响应连接失败，本轮未完成。")
     if selected is None:
         return CodexChatAgentError(
             fallback,
@@ -263,7 +268,7 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
             ),
         )
     code, summary = selected
-    policy = info in {"cyberPolicy", "misalignmentPolicyViolation"}
+    policy = isinstance(info, str) and info in {"cyberPolicy", "misalignmentPolicyViolation"}
     return CodexChatAgentError(
         summary,
         error_code=code,
@@ -275,6 +280,8 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
                 if policy
                 else "请先核对已有结果，再决定是否稍后重试；本次请求不会自动重放。"
                 if code == "server_overloaded"
+                else "保留原会话并核对已有结果；连接错误不证明本轮没有产生副作用，不自动重放。"
+                if code == "upstream_transport_failure"
                 else "请处理对应的上游限制后再继续。"
             ),
         },
@@ -528,6 +535,13 @@ def _turn_prompt(
             "Inspect the implementation when documentation is insufficient, conflicts with the selected version, or the operator requests source verification. "
             "Answer directly with the needed version and source references. Explicit requests to change or execute project work still follow their existing authorized workflow. "
             if not execution_mode else ""
+        )
+        + (
+            "For bounded workspace edits, read applicable instructions completely, then start with the named files, their owning code and relevant tests. "
+            "Use repository-wide inventories or checksums only when the request, project rules or a necessary validator requires that scope. "
+            "Reuse unchanged reads. After editing, inspect the actual changed files or diff and run the required checks; repeat a read or check only after a relevant change, failure or unresolved concern. "
+            "Do not shorten required source coverage, omit permission or privacy negative cases, or widen the write scope to save diagnostic artifacts. "
+            if execution_mode or project_work or direct_work else ""
         )
         + (CONVERSATION_INTENT_RESOLUTION_INSTRUCTION if not execution_mode and not project_work else "")
         + (TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION if direct_work else "")
@@ -1344,7 +1358,7 @@ class CodexChatAgentSession:
     def transport_retry_readback(self, turn_id: str) -> dict[str, Any] | None:
         """Read native terminal/effect facts; notification history is insufficient.
 
-        Only a failed, latest Turn with a typed connection error and a complete
+        Only a failed, latest Turn with a typed connection/overload error and a complete
         text-only inventory is eligible. Unknown items, tools (including reads),
         delivery, additional user input and unreadable inventories stop recovery.
         This is adapter IO evidence, never permission to reopen a Core Turn.
@@ -1374,6 +1388,8 @@ class CodexChatAgentSession:
                 self._control_wait(deadline)
             error = turns[0].get("error")
             info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+            if info == "serverOverloaded":
+                return {"codex_error_info": info}
             if not isinstance(info, dict) or len(info) != 1:
                 return None
             variant, detail = next(iter(info.items()))

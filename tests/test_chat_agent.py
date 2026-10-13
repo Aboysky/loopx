@@ -114,6 +114,9 @@ def _stop_server(tmp_path, monkeypatch, *, failure=None):
     return session, state
 
 
+@pytest.mark.parametrize("info", [
+    {"responseStreamDisconnected": {"httpStatusCode": None}}, "serverOverloaded",
+])
 @pytest.mark.parametrize("fault", [
     None, "other", "cyberPolicy", "unauthorized", "usageLimitExceeded", "rateLimitExceeded",
     "http401", "http429", "bad-status", "commandExecution", "fileChange", "dynamicToolCall",
@@ -121,7 +124,7 @@ def _stop_server(tmp_path, monkeypatch, *, failure=None):
     "wrong-turn", "missing-data", "cursor-cycle", "new-turn", "late-tool", "changed-error",
     "native-error-before-terminal", "pending-terminal", "interrupted", "completed",
 ])
-def test_transport_recovery_requires_complete_native_terminal_and_effect_readback(tmp_path, monkeypatch, fault):
+def test_transient_recovery_requires_complete_native_terminal_and_effect_readback(tmp_path, monkeypatch, fault, info):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="recovery-thread", work_dir=tmp_path,
         response_timeout_sec=.2)
@@ -135,17 +138,17 @@ def test_transport_recovery_requires_complete_native_terminal_and_effect_readbac
         assert params["threadId"] == "recovery-thread"
         if method == "thread/turns/list":
             reads += 1
-            info = {"responseStreamDisconnected": {"httpStatusCode": None}}
+            observed_info = info
             if fault in {"other", "cyberPolicy", "unauthorized", "usageLimitExceeded", "rateLimitExceeded"}:
-                info = fault
+                observed_info = fault
             if fault in {"http401", "http429", "bad-status"}:
-                info = {"responseStreamDisconnected": {"httpStatusCode": {
+                observed_info = {"responseStreamDisconnected": {"httpStatusCode": {
                     "http401": 401, "http429": 429, "bad-status": True,
                 }[fault]}}
             if fault == "changed-error" and reads > 1:
-                info = "other"
+                observed_info = "other"
             result = {"data": [{"id": "failed-turn", "status": "failed", "error": {
-                "codexErrorInfo": info, "message": "private fixture detail",
+                "codexErrorInfo": observed_info, "message": "private fixture detail",
             }}]}
             if fault == "new-turn":
                 result["data"].insert(0, {"id": "new-turn", "status": "inProgress"})
@@ -177,7 +180,7 @@ def test_transport_recovery_requires_complete_native_terminal_and_effect_readbac
     proof = session.transport_retry_readback("failed-turn")
     if fault in {None, "native-error-before-terminal"}:
         assert proof == {"thread_id": "recovery-thread", "turn_id": "failed-turn", "item_count": 2,
-                         "codex_error_info": {"responseStreamDisconnected": {"httpStatusCode": None}}}
+                         "codex_error_info": info}
         assert reads == (3 if fault else 2) and len(calls) == reads + 2
         assert "private fixture" not in json.dumps(proof)
     else:
@@ -1079,6 +1082,7 @@ def test_trusted_manager_profile_reaches_app_server_and_turn_prompt(
         assert "effective runtime profile is trusted_owner" in prompt
         assert "Do not edit files" not in prompt
         assert "loopx_public_source_read" not in prompt
+        assert "For bounded workspace edits" in prompt
     finally:
         session.close()
 
@@ -1236,8 +1240,31 @@ def test_project_resume_uses_effective_host_settings_without_widening_grant(
         session.send("Continue the project request.")
         assert sent[0][1]["model"] == resume["model"]
         assert sent[0][1]["effort"] == resume["config"]["model_reasoning_effort"]
+        prompt = sent[0][1]["input"][0]["text"]
+        assert ("For bounded workspace edits" in prompt) is (grant == "workspace_write")
+        assert ("Do not edit files" in prompt) is (grant == "workspace_read")
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("execution_mode", [False, True])
+def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkeypatch, execution_mode):
+    session = chat_agent.CodexChatAgentSession(
+        process=SimpleNamespace(poll=lambda: None), messages=queue.Queue(),
+        thread_id="focused-edit-thread", work_dir=tmp_path, execution_mode=execution_mode,
+    )
+    sent = []
+    monkeypatch.setattr(session, "_request", lambda method, params, **kw: (
+        sent.append((method, params)) or {"turn": {"id": "focused-edit-turn"}}))
+    monkeypatch.setattr(session, "_next_event", lambda **kw: {
+        "method": "turn/completed", "params": {"turn": {"status": "completed"}},
+    })
+    session.send("Repair the named files; preserve the other project files.")
+    assert sent[0][0] == "turn/start" and sent[0][1]["threadId"] == session.thread_id
+    prompt = sent[0][1]["input"][0]["text"]
+    assert ("For bounded workspace edits" in prompt) is execution_mode
+    assert ("Do not edit files" in prompt) is not execution_mode
+    assert "protected_action" in prompt and "gate" in prompt
 
 
 @pytest.mark.parametrize("config", [[], {"model": 42}, {"model_reasoning_effort": {"invalid": "high"}}])
@@ -1298,6 +1325,13 @@ def test_project_resume_config_read_failure_does_not_resume_or_replace(monkeypat
         ("serverOverloaded", "server_overloaded"),
         ("contextWindowExceeded", "context_window_exceeded"),
         ("unauthorized", "unauthorized"),
+        ({"httpConnectionFailed": {}}, "upstream_transport_failure"),
+        ({"responseStreamConnectionFailed": {"httpStatusCode": 503}}, "upstream_transport_failure"),
+        ({"responseStreamDisconnected": {"httpStatusCode": None}}, "upstream_transport_failure"),
+        ({"responseTooManyFailedAttempts": {}}, "upstream_transport_failure"),
+        ({"responseStreamDisconnected": None}, "host_gate"),
+        ({"responseStreamDisconnected": {}, "httpConnectionFailed": {}}, "host_gate"),
+        ({"activeTurnNotSteerable": {"turnKind": "review"}}, "host_gate"),
         ("futureVariant", "host_gate"),
         ({"unknown": "cyberPolicy"}, "host_gate"),
         (None, "host_gate"),
