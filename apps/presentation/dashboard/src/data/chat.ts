@@ -730,7 +730,7 @@ export type AgentModelDiscovery = {
   schema_version: "loopx_chat_agent_model_options_v1";
   agent_id: string;
   supported: boolean;
-  model: { id: "model"; label: string; selected: string; options: AgentModelOption[] } | null;
+  model: { id: string; label: string; selected: string; options: AgentModelOption[] } | null;
 };
 
 export function discoverAgentModelOptions(agentId: string, signal?: AbortSignal) {

@@ -47,7 +47,7 @@ from .chat_manager import (
 )
 from .chat_session_open import open_chat_session
 from .chat_ssh_source_api import SshSourceRequestMixin
-from .chat_store import ChatSessionStore
+from .chat_store import ChatSessionStore, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
@@ -592,7 +592,8 @@ class ChatRequestHandler(
             # own default through its own owner instead of inheriting whatever
             # executor this client happens to ship with.
             requested_endpoint = _compact_text(body.get("agent_id"), limit=80)
-            requested_model = _compact_text(body.get("agent_model_id"), limit=160)
+            model_value = body.get("agent_model_id")
+            requested_model = normalize_agent_model_id(model_value) if model_value not in (None, "") else None
             mode = _compact_text(body.get("mode"), limit=40) or "resume_latest"
             context_kind = _compact_text(body.get("context_kind"), limit=40) or "goal"
             if context_kind not in {"goal", "manager", "project"}:

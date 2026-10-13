@@ -2651,6 +2651,7 @@ function PersonalGoalHome({
 
   function chooseAgentModel(agentId: string, modelId: string) {
     const selectionKey = agentModelSelectionKey(contextId, agentId);
+    if (selectedAgentModels[selectionKey] === modelId) return;
     setSelectedAgentModels((current) => current[selectionKey] === modelId ? current : { ...current, [selectionKey]: modelId });
     const key = `${contextId}:${agentId}`;
     sessionIds.current.delete(key);
