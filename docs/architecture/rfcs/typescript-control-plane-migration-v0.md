@@ -1757,6 +1757,16 @@ domain. Transport checks such as framing, authentication, and size limits stay
 separate from schema validation and semantic invariants. An unchecked
 `JSON.parse(...) as T` must not establish control-plane authority.
 
+For shipped Todo contracts, the coordination record codec reuses its first
+strict-JSON normalization after checking allowed and required fields. That tree
+already owns its containers and orders keys by Unicode code point; rebuilding
+the same fields and cloning them again adds no authority or isolation. Generic
+contracts retain legacy inherited-field selection when reconstruction is needed.
+Keep malformed-JSON rejection, schema-error order, canonical bytes and
+input/output independence unchanged.
+This is a bounded shared-codec cost repair, not a provider-format migration or
+qualification of sustained operation, CI capacity or release admission.
+
 `as unknown as T` is permitted only as a named migration seam: its exact call
 site, upstream validator, negative boundary coverage, and removal owner must be
 visible in the cutover PR. A migrated domain cannot pass its promotion gate
