@@ -249,12 +249,12 @@ def test_captured_interrupted_point_continues_with_fresh_authority(
     script = workspace / "continue.py"
     script.write_text("""import json,time,requests
 from pathlib import Path
-b=json.loads(Path('judge.json').read_text()); url,token=b['url'],b['token']
-h=requests.get(url+'/api/v1/history',params={'token':token},timeout=5).json()
+b=json.loads(Path('judge.json').read_text()); url,submission_token=b['url'],b['token']
+h=requests.get(url+'/api/v1/history',params={'token':submission_token},timeout=5).json()
 assert h['best_score']==7 and h['agent_submissions']==1
 assert Path('candidate.txt').read_text()=='original candidate'
 Path('candidate.txt').write_text('8')
-r=requests.post(url+'/api/v1/submit',data={'token':token},files={'archive':('candidate.tar.gz',b'8')},timeout=5)
+r=requests.post(url+'/api/v1/submit',data={'token':submission_token},files={'archive':('candidate.tar.gz',b'8')},timeout=5)
 r.raise_for_status(); sid=r.json()['submission_id']
 for _ in range(100):
  result=requests.get(url+'/api/v1/result/'+sid,timeout=5).json()
