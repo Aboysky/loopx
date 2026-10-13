@@ -9,6 +9,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIRECT_LOADER_ALLOWLIST = {
     "loopx/authority.py",
+    "loopx/control_plane/coordination/new_goal_storage_transport.py",
+    "loopx/chat_server.py",
+    "loopx/chat_status_api.py",
+    "loopx/control_plane/goals/goal_amendment_runtime.py",
+    "loopx/control_plane/goals/source_session_registration.py",
+    "loopx/presentation/goal_amendment_api.py",
     "loopx/attached_session.py",
     "loopx/bootstrap.py",
     "loopx/capabilities/manager_context/__init__.py",
@@ -96,6 +102,8 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
 
     assert callers == DIRECT_LOADER_ALLOWLIST
     source_session_owners = {
+        "loopx/control_plane/goals/goal_amendment_runtime.py",
+        "loopx/control_plane/goals/source_session_registration.py",
         "loopx/attached_session.py",
         "loopx/capabilities/manager_context/__init__.py",
         "loopx/capabilities/manager_context/roundtrip.py",
@@ -111,12 +119,22 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
         "loopx/control_plane/coordination/shadow_goal_scope.py",
         "loopx/control_plane/projects/registry.py",
     }
-    for relative, expected in METADATA_READER_FUNCTIONS.items():
+    # Metadata discovery and named lifecycle/settings owners grant no generic
+    # runtime admission. Keep every exception at its exact function; HTTP and
+    # native creation tests additionally prove the executable refusal boundary.
+    metadata_readers = {
+        **METADATA_READER_FUNCTIONS,
+        "loopx/chat_server.py": {"serve_chat"},
+        "loopx/chat_status_api.py": {"_status"},
+        "loopx/control_plane/coordination/new_goal_storage_transport.py": {"initialize_goal_storage_target"},
+        "loopx/presentation/goal_amendment_api.py": {"_source_registry", "_amendment_inspect"},
+    }
+    for relative, expected in metadata_readers.items():
         tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
         _assert_metadata_reader_functions(tree, expected)
         if relative == "loopx/control_plane/goals/source_session_recreation.py":
             _assert_recreation_reader_is_location_only(tree)
-    for relative in callers - source_session_owners - METADATA_READER_FUNCTIONS.keys():
+    for relative in callers - source_session_owners - metadata_readers.keys():
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert "require_runtime_compatible_project_registry(" in source, relative
     attached_owner = (REPO_ROOT / "loopx/attached_session.py").read_text(
