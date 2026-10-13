@@ -113,6 +113,16 @@ The existing delivery Todos should carry these concrete exits:
 This updates the existing R5/T4 frontier and release proposal; it creates no
 parallel migration owner, runtime gate or release activation.
 
+Team-plan recovery prerequisite: an unpromoted plan that published its original
+receipt can now recover through the Chat confirmation owner while shadow
+bootstrap is interrupted. Registry/Todo/source locks still protect the read,
+and the existing typed identity validator rejects changed intent, actor or
+reviewed basis. Recovery verifies source durability without loading the capture
+producer or admitting new writes; fresh plans still obey all source, management
+and promotion guards. This repairs the existing 1.x recovery path and does not
+activate the 2.0 cutoff or settle the remaining lease/outbox/Host obligations.
+
+
 The retained import-compatible field writer now composes resume normalization
 and contradictory-clear rejection in its existing typed field plan. Keep blank
 Python input omission and locked IO; retire the duplicate normalization crossing,
