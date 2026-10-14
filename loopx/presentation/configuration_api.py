@@ -30,12 +30,12 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
-            direction_api.GOAL_DIRECTION_PATH: self._direction_inspect,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_inspect,
             storage_api.CHAT_GOAL_STORAGE_PATH: self._storage_inspect,
             ownership_api.CHAT_GOAL_OWNERSHIP_PATH: self._ownership_inspect,
             cadence_api.CHAT_AUTOMATION_CADENCE_PATH: self._cadence_read,
             goal_api.CHAT_GOAL_CONFIGURATION_PATH: self._goal_configuration_inspect,
+            direction_api.GOAL_DIRECTION_PATH: self._direction_inspect,
             machine_api.CHAT_MACHINE_CONFIGURATION_PATH: self._machine_configuration_inspect,
             operator_api.CHAT_OPERATOR_PROVIDER_PATH: self._operator_provider_status,
             usage_api.CHAT_USAGE_STATISTICS_PATH: self._usage_statistics_status,
@@ -43,7 +43,6 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
-            direction_api.GOAL_DIRECTION_PATH: self._direction_configure,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_configure,
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/preview": lambda: self._storage_update(action="plan-migration"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/apply": lambda: self._storage_update(action="migrate"),
@@ -63,6 +62,7 @@ class ChatConfigurationRequestMixin(
             goal_api.CHAT_GOAL_CONFIGURATION_APPLY_PATH: lambda: self._goal_configuration_update(
                 execute=True
             ),
+            direction_api.GOAL_DIRECTION_PATH: self._direction_configure,
             machine_api.CHAT_MACHINE_CONFIGURATION_PREVIEW_PATH: lambda: self._machine_configuration_update(
                 execute=False
             ),
