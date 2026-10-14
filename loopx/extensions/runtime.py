@@ -32,6 +32,11 @@ EXTENSION_PROVIDER_READINESS_SCHEMA_VERSION = "loopx_extension_provider_readines
 EXTENSION_ACTIVATION_SCHEMA_VERSION = "loopx_extension_activation_v0"
 EXTENSION_RUN_SCHEMA_VERSION = "loopx_extension_run_receipt_v0"
 EXTENSION_DOCTOR_BATCH_SCHEMA_VERSION = "loopx_extension_doctor_batch_v0"
+# Content-free lifecycle non-admission codes. Optional capability resolution
+# reports them as `ExtensionCapabilityResolution.status`; hook-adapter discovery
+# reuses them for declared adapters whose extension it does not activate.
+EXTENSION_DISABLED_STATUS = "extension_disabled"
+EXTENSION_DOCTOR_NOT_READY_STATUS = "extension_doctor_not_ready"
 MAX_REVISIONS = 5
 # Requalification is required on eviction; unprobed artifacts never activate.
 MAX_VERIFIED_ENTRYPOINTS = 32
@@ -895,7 +900,7 @@ def _optional_binding_for_entry(
         )
     if not entry.get("enabled"):
         return _optional_binding_resolution(
-            status="extension_disabled",
+            status=EXTENSION_DISABLED_STATUS,
             extension_id=extension_id,
             installed=True,
             enabled=False,
@@ -904,7 +909,7 @@ def _optional_binding_for_entry(
         )
     if verified_entrypoint is None:
         return _optional_binding_resolution(
-            status="extension_doctor_not_ready",
+            status=EXTENSION_DOCTOR_NOT_READY_STATUS,
             extension_id=extension_id,
             installed=True,
             enabled=True,
