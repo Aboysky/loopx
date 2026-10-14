@@ -119,10 +119,10 @@ def test_legacy_cli_actor_survives_planning_clear_and_terminal_replay(tmp_path, 
     assert detail()["last_actor_agent_id"] == REVIEW_AGENT
     assert detail()["claimed_by"] == AUTHOR_AGENT
     # A supplied but unchanged copy field must not turn planning into a new actor.
-    call(*update, "--agent-id", AUTHOR_AGENT, "--note", "Peer copy correction", "--evidence", "")
+    call(*update, "--agent-id", AUTHOR_AGENT, "--note", "Peer copy correction", "--clear-priority")
     assert detail()["last_actor_agent_id"] == REVIEW_AGENT
     before = state.read_bytes()
-    call(*peer, "--note", "Peer copy correction", "--evidence", "", "--dry-run")
+    call(*peer, "--note", "Peer copy correction", "--clear-priority", "--dry-run")
     assert state.read_bytes() == before
 
     retire = ["todo", "supersede", "--goal-id", GOAL_ID, "--todo-id", todo,
