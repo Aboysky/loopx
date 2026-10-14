@@ -828,6 +828,20 @@ inline. This restores rules previously omitted by the default projection;
 30,697 characters before repair and 33,205 after repair, with 56,401 in detail.
 These are JSON fixture measurements, not token costs or model-behavior evidence.
 
+The shared CLI printer subsequently removes JSON presentation whitespace,
+preserving the complete decided payload and Markdown. Default and explicit
+detail JSON using that printer become one line; use `jq .` for indentation.
+The paired 36-Todo / 12-run default measures 48,418→39,726 characters, with
+identical decoded values and unchanged budgets. The [interface contract](../reference/contracts/interface-budget-contract.md)
+records the full character, UTF-8 byte, line and mode comparison. Check all
+affected shared-printer commands, vision-off paths, unknown fields and typed
+errors; do not count unchanged direct-output paths as new serialization gains.
+
+共用 CLI JSON 打印器仅删除展示空白，完整决策值与 Markdown 保持不变；默认及详情
+JSON 变为单行，人工缩进可用 `jq .`。同一 36 Todo／12 run 默认输出
+48,418→39,726 字符，预算不改。验证须覆盖所有受影响命令、vision 关闭、未知字段
+与类型化错误，直接输出路径的原样结果不算新增节省。
+
 The complete emitted-CLI qualification is a separate workload: the original
 36-Todo / 12-run vision case measures 45,313 lossy / 48,418 complete characters.
 Its 46,000 ceiling becomes 50,000 after checking all affected modes and preserving
