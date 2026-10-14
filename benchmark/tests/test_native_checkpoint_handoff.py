@@ -686,7 +686,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
             return
         assert len(result["checkpoint_handoffs"]) == 1
         event = result["checkpoint_handoffs"][0]
-        if capture == "native" and sys.platform == "darwin":
+        if json.loads(request.read_text())["native_session"] and sys.platform == "darwin":
             # Unsupported native interruption is refused before any signal;
             # the original tool result is delivered and no abort is fabricated.
             assert not event["captured"] and "not qualified on Darwin" in event["error"]
