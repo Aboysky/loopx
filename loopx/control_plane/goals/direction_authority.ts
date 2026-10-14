@@ -3,6 +3,7 @@
  * bytes are never persisted, and a provider read alone is not an Agent receipt.
  */
 import {createHash} from "node:crypto";
+import {BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore, AuthorityStoreHead} from "../coordination/authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
@@ -40,7 +41,7 @@ function safe(v: unknown, label: string, limit = 220): string {
   need(typeof v === "string" && v.trim() === v && !!v && [...v].length <= limit && !/[\r\n\t\0]/.test(v)
     && !v.startsWith("/") && !v.includes("://") && !INTERNAL_STATE_PRIVATE_TEXT_PATTERNS.some(p => p.test(v)), `${label} must be bounded public-safe text`);return v;
 }
-function hash(v: unknown): string {need(typeof v === "string" && /^[a-f0-9]{64}$/.test(v), "direction digest must be SHA-256");return v;}
+function hash(v: unknown): string {need(typeof v === "string" && BARE_SHA256_PATTERN.test(v), "direction digest must be SHA-256");return v;}
 function failure(reason: string): JsonObject & {schema_version: typeof SCHEMA} {
   return {schema_version: SCHEMA, ok: false, status: "failed", changed: false, reason,
     execution_authority_granted: false, acceptance_assessed: false};
@@ -56,7 +57,7 @@ function policyRegistry(value: unknown): JsonObject {
     need(item.required === true || item.required === false, "required must be boolean");
     need(["public", "public_safe", "local_private"].includes(String(item.boundary)), "direction source boundary is unsupported");
     need(Array.isArray(item.topics) && item.topics.length <= 16, "material topics must be bounded");
-    need(typeof item.revision === "string" && /^sha256:[a-f0-9]{64}$/.test(item.revision), "local material revision must be content SHA-256");
+    need(typeof item.revision === "string" && ENVELOPED_SHA256_PATTERN.test(item.revision), "local material revision must be content SHA-256");
     materials[id] = {id, source_ref_sha256: hash(item.source_ref_sha256), source_ref_redacted: true, source_kind: "document",
       role: "direction", owner_status: "reviewed", conflict_rule: "owner_wins", freshness: "current", gate_status: "readable",
       boundary: item.boundary, revision: item.revision};
@@ -111,7 +112,7 @@ function usage(head: JsonObject, goalRef: WireExactGoalRef): JsonObject[] {
     need(typeof receipt.recorded_at==="string"&&/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(receipt.recorded_at)
       &&Number.isFinite(Date.parse(receipt.recorded_at)),"usage receipt timestamp invalid");
     need(receipt.outcome==="unavailable"?receipt.observed_revision===null:
-      typeof receipt.observed_revision==="string"&&/^sha256:[a-f0-9]{64}$/.test(receipt.observed_revision),"usage receipt revision invalid");
+      typeof receipt.observed_revision==="string"&&ENVELOPED_SHA256_PATTERN.test(receipt.observed_revision),"usage receipt revision invalid");
     need(!ids.has(id), "duplicate usage receipt identity");ids.add(id);
     return receipt;
   });
