@@ -15,6 +15,11 @@ project's latest branch. It connects existing RFCs; it creates no policy,
 schema, scheduler, default change or execution grant. Source presence,
 installed behavior, model adoption and measured benefit remain separate.
 
+The cadence wording is additionally reconciled with main
+`3300dfdd29fe6e53e1aa4a0282ca3952db6e9e8f`: enabling the Goal strategy inherits
+the live review interval unless a Goal interval is explicitly pinned. The
+implementation proposals below are separate from this merged-source snapshot.
+
 ## Comparison method and evidence scope
 
 The comparison follows the same questions in each repository: who admits work,
@@ -630,6 +635,26 @@ its owning implementation, compatibility and default-off validation.
 | Direction and omitted Explore evidence | Pure direction M1 builder; production source-replayed result pages | Direction production receipt/consumer still unqualified; citation eligibility does not prove model adoption or constant-time reads |
 | Product explanation | Explicit artifact/review/revision/adoption view | Universal stride-decision→artifact story and complete Explore attachment/retry interaction |
 | Runtime efficiency | Specific owners and measurable candidate costs | Controlled workload, model and history-size measurements; source size or successful tests are not latency evidence |
+
+### Coordinate existing implementation proposals
+
+The source map must not turn work already present in a candidate PR into a
+request for another implementation. These proposals join different parts of
+the same path; their own current-head reviews and acceptance evidence still
+control readiness:
+
+| Existing proposal | Owned contribution to the path | Required handoff and boundary |
+| --- | --- | --- |
+| [Request correction and Goal effects, #6357](https://github.com/loopx-project/loopx/pull/6357) | Original conversation → revised request → reserved effect → authentic Goal terminal receipt → original-route return | Persist and read back the exact retry identity before dispatch. Keep committed history, current request revision and receiver adoption separate; a retained Goal change is not completed work. |
+| [Material reads and direction recovery, #6338](https://github.com/loopx-project/loopx/pull/6338) | Owner declaration → actual bounded source read → same-Agent acknowledgement → current basis and recovery | A failed current read must withdraw old currency even at the history limit. Preserve history and bounded owner recovery; read acknowledgement does not prove model understanding, changed work or acceptance. |
+| [Inert backup inspection, #6279](https://github.com/loopx-project/loopx/pull/6279) | Archive/manifest validation → isolated owner reads → readable historical evidence | Inspection retains the existing capacity and owner-decision gates. Activation, fresh authority, continuation under current requirements and independently accepted new work remain with the recovery RFC's later stages. |
+
+Each PR can deliver its own bounded outcome. A joined journey must observe the
+consumer using the upstream result; shared terminology or merging all three is
+not that evidence. Reconcile overlapping callers against current main and
+regenerate derived manifests from the resulting source. Keep qualification in
+the existing PR/RFC owners rather than creating a new dependency ledger or
+requiring unrelated recovery activation before ordinary corrections can ship.
 
 ## Integrate exploration without making every task research
 
