@@ -30,10 +30,10 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
-            recovery_api.STATE_RECOVERY_PATH: self._state_recovery_list,
-            f"{recovery_api.STATE_RECOVERY_PATH}/profile": self._state_recovery_profile,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_inspect,
             storage_api.CHAT_GOAL_STORAGE_PATH: self._storage_inspect,
+            recovery_api.STATE_RECOVERY_PATH: self._state_recovery_list,
+            f"{recovery_api.STATE_RECOVERY_PATH}/profile": self._state_recovery_profile,
             ownership_api.CHAT_GOAL_OWNERSHIP_PATH: self._ownership_inspect,
             cadence_api.CHAT_AUTOMATION_CADENCE_PATH: self._cadence_read,
             goal_api.CHAT_GOAL_CONFIGURATION_PATH: self._goal_configuration_inspect,
@@ -44,10 +44,6 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
-            f"{recovery_api.STATE_RECOVERY_PATH}/archive": lambda: self._state_recovery_upload("archive"),
-            f"{recovery_api.STATE_RECOVERY_PATH}/manifest": lambda: self._state_recovery_upload("manifest"),
-            f"{recovery_api.STATE_RECOVERY_PATH}/verify": self._state_recovery_verify,
-            f"{recovery_api.STATE_RECOVERY_PATH}/read": self._state_recovery_read,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_configure,
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/preview": lambda: self._storage_update(action="plan-migration"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/apply": lambda: self._storage_update(action="migrate"),
@@ -57,6 +53,10 @@ class ChatConfigurationRequestMixin(
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/import/recover": lambda: self._storage_import(action="readback"),
             f"{backup_api.CONFIGURATION_BACKUP_PATH}/export": self._configuration_backup_export,
             f"{backup_api.CONFIGURATION_BACKUP_PATH}/restore": self._configuration_backup_restore,
+            f"{recovery_api.STATE_RECOVERY_PATH}/archive": lambda: self._state_recovery_upload("archive"),
+            f"{recovery_api.STATE_RECOVERY_PATH}/manifest": lambda: self._state_recovery_upload("manifest"),
+            f"{recovery_api.STATE_RECOVERY_PATH}/verify": self._state_recovery_verify,
+            f"{recovery_api.STATE_RECOVERY_PATH}/read": self._state_recovery_read,
             f"{ownership_api.CHAT_GOAL_OWNERSHIP_PATH}/preview": lambda: self._ownership_update(execute=False),
             f"{ownership_api.CHAT_GOAL_OWNERSHIP_PATH}/apply": lambda: self._ownership_update(execute=True),
             cadence_api.CHAT_AUTOMATION_CADENCE_PREVIEW_PATH: lambda: self._cadence_update(execute=False),
