@@ -87,10 +87,12 @@ def test_workspace_and_boundary_guards_check_the_selected_todo_only(
 
 
 @pytest.mark.parametrize("with_due_monitor", [False, True])
+@pytest.mark.parametrize("write_scope", [["src/**"], []], ids=["covered", "missing"])
 def test_replan_route_does_not_guard_an_unselected_delivery_todo(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
     with_due_monitor: bool,
+    write_scope: list[str],
 ) -> None:
     product_delivery = quota_todo_item(
         todo_id="todo_product_delivery001",
@@ -155,7 +157,7 @@ def test_replan_route_does_not_guard_an_unselected_delivery_todo(
         coordination={
             "agent_model": "peer_v1",
             "registered_agents": [AGENT_ID, "codex-peer"],
-            "write_scope": ["src/**"],
+            "write_scope": write_scope,
         },
         claim_scope_agent_id=AGENT_ID,
         item_extra={"autonomous_replan_obligation": replan_obligation},
@@ -200,6 +202,8 @@ def test_replan_route_does_not_guard_an_unselected_delivery_todo(
     else:
         assert packet["selected_todo"]["todo_id"] == product_delivery["todo_id"]
     assert "workspace_guard" not in packet
+    assert "boundary_projection_gap" not in packet
+    assert packet["self_repair_allowed"] is False
     assert guarded_todo_ids == []
 
 

@@ -258,7 +258,8 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
     assert facts["receipt_replan_obligation_id"] == identity["replan_obligation_id"]
 
 
-def test_replan_preempts_default_todo_workspace_guard_on_selection_reentry(tmp_path):
+@pytest.mark.parametrize("write_scope", [["src/**"], []], ids=["covered", "missing"])
+def test_replan_preempts_unselected_todo_guards_on_selection_reentry(tmp_path, write_scope):
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -275,7 +276,7 @@ def test_replan_preempts_default_todo_workspace_guard_on_selection_reentry(tmp_p
     registry_data["goals"][0]["coordination"]["registered_agents"].append(
         "codex-peer"
     )
-    registry_data["goals"][0]["coordination"]["write_scope"] = ["src/**"]
+    registry_data["goals"][0]["coordination"]["write_scope"] = write_scope
     registry.write_text(json.dumps(registry_data) + "\n", encoding="utf-8")
     _initialize_git_checkout(project)
 
@@ -289,6 +290,8 @@ def test_replan_preempts_default_todo_workspace_guard_on_selection_reentry(tmp_p
     assert rc == 0, first
     assert first["decision"] == "autonomous_replan_required"
     assert "workspace_guard" not in first
+    assert "boundary_projection_gap" not in first
+    assert first["self_repair_allowed"] is False
 
     retained_todo_id = "todo_chain_000000000001"
     rc, resumed = _run_cli(
@@ -299,6 +302,8 @@ def test_replan_preempts_default_todo_workspace_guard_on_selection_reentry(tmp_p
     assert resumed["decision"] == "autonomous_replan_required"
     assert resumed["effective_action"] == "autonomous_replan_required"
     assert "workspace_guard" not in resumed
+    assert "boundary_projection_gap" not in resumed
+    assert resumed["self_repair_allowed"] is False
     assert resumed.get("selected_todo") is None
     assert resumed["retained_action_selection"]["disposition"] == (
         "bind_autonomous_replan"
