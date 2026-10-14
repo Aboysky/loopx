@@ -275,6 +275,52 @@ This is an experimental adapter implementing the RFC's P0 prototype
 components. It does not establish the RFC's P0 exit: C0 fidelity, a qualifying
 C1 run, and measured observer overhead remain separate evidence gates.
 
+## Optional native operation context (SDK prerequisite)
+
+The independently loaded `dsh-loopx-plugin/native-operation-context` subpath
+registers one read-only model tool, `loopx_operation_context`. It is absent from
+the default plugin tree and `cordis.patch.yml`; installing the package does not
+activate it. An explicit SDK Loader patch can load the built module:
+
+```yaml
+- insert:
+    - id: loopx-native-operation-context
+      name: file:///absolute/path/to/dsh-loopx-plugin/lib/native-operation-context.js
+```
+
+The tool accepts `{}` only. It derives the calling live session and open Turn
+from DSH's agent and session-projection services; caller-supplied identities,
+closed Turns, cancelled calls and disposed or shadowed tool registrations fail.
+Only provider, model and reasoning-effort options are returned. Other agent
+options, including credentials, are excluded. Profile options are observations,
+not HTTP wire attestation; `wire_profile_verified` and `execution_allowed` are
+always `false`. This module creates no Core actor, grant, binding, approval or
+account access, and consumes no approval.
+
+The initial runtime qualification uses the Python SDK and bundled DSH
+`0.1.5rc1`: a real native tool call returned the matching SDK session and open
+Turn. This does not qualify other DSH versions or the complete managed operation
+journey. From a source checkout, build and verify registration using an
+interpreter with the selected `deepseek-harness` SDK installed:
+
+```bash
+pnpm --dir packages/dsh-loopx-plugin build
+"$SDK_PYTHON" packages/dsh-loopx-plugin/smoke/dsh-native-context-sdk-smoke.py \
+  --module packages/dsh-loopx-plugin/lib/native-operation-context.js \
+  --provider deepseek-official --model deepseek-flash
+```
+
+This smoke initializes the real SDK with an isolated temporary home and dummy
+credentials, checks the runtime's schema registration, and makes zero model
+requests. It does not execute a Turn or test financial operations. Remove the
+explicit Loader row to disable the module, then restart the owning SDK runtime;
+the default plugin tree remains unchanged. Existing active sessions must be
+closed by their owner rather than treated as revoked by editing a patch file.
+
+Core parent admission, verified dispatch/profile identity, revocation and first
+approval consumption remain separate integration work. No frontend or Lark
+operation path is delivered by this prerequisite.
+
 ## GoalBar authority and privacy boundary
 
 The GoalBar carrier uses Connection's authenticated `/api/loopx.goalbar`

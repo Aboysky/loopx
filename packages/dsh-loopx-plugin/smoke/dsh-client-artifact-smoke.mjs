@@ -43,6 +43,7 @@ const packedStaticEntries = new Set([
   'package/lib/driver.js',
   'package/lib/index.js',
   'package/lib/init-command.js',
+  'package/lib/native-operation-context.js',
   'package/lib/observer.js',
   'package/lib/types/cli.d.ts',
   'package/lib/types/client/LoopXGoalBar.d.ts',
@@ -60,6 +61,7 @@ const packedStaticEntries = new Set([
   'package/lib/types/index.d.ts',
   'package/lib/types/init-command.d.ts',
   'package/lib/types/managed-runtime.d.ts',
+  'package/lib/types/native-operation-context.d.ts',
   'package/lib/types/observer.d.ts',
   'package/package.json',
 ])
@@ -142,6 +144,10 @@ async function assertManifest(root) {
   assert.deepEqual(manifest.exports?.['./observer'], {
     types: './lib/types/observer.d.ts',
     default: './lib/observer.js',
+  })
+  assert.deepEqual(manifest.exports?.['./native-operation-context'], {
+    types: './lib/types/native-operation-context.d.ts',
+    default: './lib/native-operation-context.js',
   })
   assert.deepEqual(manifest.dsh?.client, {
     inject: clientInject,
@@ -458,14 +464,16 @@ async function assertHostExports(root) {
     init: requireFromPlugin.resolve(`${packageId}/init-command`),
     driver: requireFromPlugin.resolve(`${packageId}/driver`),
     observer: requireFromPlugin.resolve(`${packageId}/observer`),
+    nativeContext: requireFromPlugin.resolve(`${packageId}/native-operation-context`),
     client: requireFromPlugin.resolve(`${packageId}/client`),
   }
   assert.equal(resolutions.client, join(root, 'lib', 'client.js'))
-  const [host, init, driver, observer] = await Promise.all([
+  const [host, init, driver, observer, nativeContext] = await Promise.all([
     import(pathToFileURL(resolutions.root).href),
     import(pathToFileURL(resolutions.init).href),
     import(pathToFileURL(resolutions.driver).href),
     import(pathToFileURL(resolutions.observer).href),
+    import(pathToFileURL(resolutions.nativeContext).href),
   ])
   assert.equal(typeof host.apply, 'function')
   assert.equal(host.name, packageId)
@@ -522,6 +530,10 @@ async function assertHostExports(root) {
   assert.deepEqual(observer.inject, [])
   assert.equal(typeof observer.apply, 'function')
   assert.equal(host.ShadowObserver, undefined)
+  assert.equal(nativeContext.name, 'loopx-native-operation-context')
+  assert.deepEqual(nativeContext.inject, ['agents', 'tools', 'sessionProjections'])
+  assert.equal(typeof nativeContext.apply, 'function')
+  assert.equal(host.createNativeContextTool, undefined)
 
   const [rootSource, driverSource, observerSource] = await Promise.all([
     readFile(resolutions.root, 'utf8'),
@@ -531,6 +543,7 @@ async function assertHostExports(root) {
   for (const source of [rootSource, driverSource]) {
     assert(!source.includes('LOOPX_DSH_SHADOW_OBSERVER_GOAL_ID'))
     assert(!source.includes('reliability_observer_envelope_v0'))
+    assert(!source.includes('loopx_operation_context'))
   }
   assert(observerSource.includes('LOOPX_DSH_SHADOW_OBSERVER_GOAL_ID'))
   assert(!observerSource.includes('.send('))
