@@ -20,7 +20,8 @@ def event(name: str, *, pr: int = 101, tag: str = "", backend: bool = True) -> d
         "github": SimpleNamespace(
             event_name=name,
             ref=f"refs/pull/{pr}/merge" if name == "pull_request" else "refs/heads/main",
-            event=SimpleNamespace(pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
+            # GitHub exposes the PR number both as `event.number` and `event.pull_request.number`.
+            event=SimpleNamespace(number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
         ),
         "inputs": SimpleNamespace(tag=tag),
         "needs": SimpleNamespace(changes=SimpleNamespace(outputs=SimpleNamespace(backend_tests=str(backend).lower()))),
