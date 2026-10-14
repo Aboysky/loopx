@@ -37,7 +37,11 @@ permissions:
 concurrency:
   # A merged PR's closed event uses main as github.ref; keep its original PR lane.
   group: python-tests-${{ github.event_name }}-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && format('pr-{0}', github.event.number) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event_name == 'push' }}
+  # Only a PR's own superseded head is cancelled. Main pushes queue: the running
+  # default-branch qualification completes and at most one newer push waits,
+  # replacing any older pending push, so the newest main always reaches a result
+  # without spending runner time on runs that can never finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
 
 env:
   LOOPX_USAGE_PING: "0"
