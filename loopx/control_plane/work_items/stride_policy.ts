@@ -1,10 +1,12 @@
 /** One opt-in work and research stride strategy; all execution authority retains its owners. */
 import {createHash} from "node:crypto";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import schema from "../stride_strategy_schema.json" with {type: "json"};
 import decisionSchema from "../stride_decision_schema.json" with {type: "json"};
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "../runtime_decode.ts";
+import {normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
 
 export function normalizeStrideStrategy(value: unknown): string {
   if (value === undefined) return schema.default;
@@ -133,14 +135,22 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
   }
   if (input.explore_review != null) {
     const review = requireJsonObject(input.explore_review, "stride_decision.explore_review");
-    exactFields(review, ["revision", "disposition", "considered_refs", "reason"], "explore_review");
-    if (review.revision !== null && !/^[a-f0-9]{64}$/.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
+    exactFields(review, ["revision", "disposition", "considered_refs", "reason", ...(!historical ? ["result_pages"] : [])], "explore_review");
+    if (review.revision !== null && !BARE_SHA256_PATTERN.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
     requireStringLiteral(review.disposition, decisionSchema.explore_dispositions, "explore_review.disposition");
     const considered = refs(review.considered_refs, "explore_review.considered_refs");
     if (review.disposition === "used" && !considered.length) throw new EffectRuntimeRequestError("used Explore evidence requires a delivered reference");
     output.explore_review = {...review, considered_refs: considered, reason: checked("explore_review.reason", review.reason, decisionSchema.review_text_limit)};
     for (const key of ["revision", "disposition"]) usage[`stride_decision.explore_review.${key}`] = String(review[key] ?? "").length;
     usage["stride_decision.explore_review.considered_refs"] = considered.join("").length;
+    if (Object.hasOwn(review, "result_pages")) {
+      if (review.disposition === "unavailable" || review.revision === null || !considered.length) {
+        throw new EffectRuntimeRequestError("Explore result pages require available evidence and considered references");
+      }
+      const pages = normalizeExploreResultPages(review.result_pages);
+      (output.explore_review as JsonObject).result_pages = pages;
+      usage["stride_decision.explore_review.result_pages"] = JSON.stringify(pages).length;
+    }
   }
   return [output, usage];
 }
@@ -214,6 +224,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
     omitted_finding_refs: Math.max(0, byId.size - 6),
     result_page: graph?.result_page ?? null,
     rule: "Use the existing Explore view for scope/applicability, counterevidence and omitted-result reads. " +
+      "For considered findings outside this list, copy revision/offset/limit from up to three global result pages you read into explore_review.result_pages; writeback replays them against the source. Keep explore_review.revision unchanged. " +
       "A planner selection or recorded finding does not certify execution, utility, refutation of other inputs, or spawn authority."};
 }
 
@@ -241,6 +252,15 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject):
   }
   if (explore.disposition === "unavailable") return "Available Explore evidence cannot be declared unreadable.";
   const allowed = new Set((basis.finding_refs as JsonObject[]).map(row => row.finding_id));
+  const deliveredPages = Array.isArray(context.explore_result_pages) ? context.explore_result_pages as JsonObject[] : [];
+  for (const page of (explore.result_pages ?? []) as JsonObject[]) {
+    const resolved = deliveredPages.find(row => row.revision === page.revision &&
+      row.offset === page.offset && row.limit === page.limit);
+    if (page.revision !== (basis.result_page as JsonObject | null)?.revision || !resolved) {
+      return "Explore result pages require current source replay; reread global pages under the original Turn.";
+    }
+    for (const ref of resolved.finding_refs as string[]) allowed.add(ref);
+  }
   if (considered.some(ref => !allowed.has(ref))) return "Explore review cites an undelivered or foreign finding.";
   return null;
 }
@@ -272,12 +292,14 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     previous_review_options: {adoption: decisionSchema.adoption_options, information_gain: decisionSchema.information_options, goal_gain: decisionSchema.gain_options},
     explore_basis: context.explore_basis ?? null, explore_dispositions: decisionSchema.explore_dispositions,
     minimal_example: example,
-    attachment: "agent_vision.stride_decision", requires_structured_fresh_path: true,
-    rule: "Enabled fresh Vision path reviews require an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
+    attachment: "agent_vision.stride_decision", requires_evidence_linked_path: true,
+    required_on_periodic_review: true,
+    rule: "Every due periodic review with this strategy enabled must record a stride decision before settlement, including when a typed progress, successor, blocker or terminal outcome is also reported. " +
+      "The decision requires an evidence-linked Vision path (including a terminal stop when supported by evidence), an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
       "Grow expands a supported route; switch names the reference method and changed mechanism; verify resolves a named grow-or-switch question. Size every action for a coherent accepted deliverable or complete interpretable experiment, including ordinary engineering and maintenance. Grow changes useful completed scope, not authority or settlement boundaries. " +
       "The minimal example demonstrates syntax, not the recommended action for the current evidence. " +
       "When a previous decision is delivered, assess its adoption, information and goal gain in previous_review against its exact reference. " +
       "When Explore basis is delivered, assess applicable findings/alternatives in explore_review; missing or omitted evidence stays unknown. " +
-      "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific exits remain unchanged.",
+      "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific outcomes remain legal but cannot bypass a due stride review.",
   };
 }

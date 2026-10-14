@@ -6,6 +6,7 @@ this named owner does not activate the generic source-session runtime profile.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -23,7 +24,8 @@ from .goal_frontier.ack_policy import replan_successor_transition_ack, autonomou
 from ..work_items.autonomous_replan_obligation import ensure_replan_novelty_policy
 
 
-def _replan_readback(derived: Mapping[str, Any], inventory: list[dict[str, Any]], view: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _replan_readback(derived: Mapping[str, Any], inventory: list[dict[str, Any]], view: Mapping[str, Any],
+                     *, stride_strategy: str = "off") -> list[dict[str, Any]]:
     """Transport the existing replan owner's decisions, never create an ACK."""
     if view.get("current_lifetime") is not True or not isinstance(view.get("intent"), dict):
         return []
@@ -39,9 +41,11 @@ def _replan_readback(derived: Mapping[str, Any], inventory: list[dict[str, Any]]
         obligation = obligations[item["obligation_id"]]
         for agent in item["bound_agent_ids"]:
             ack = replan_successor_transition_ack(None, agent_id=agent,
-                replan_obligation=obligation, agent_todo_items=view.get("work_items") or [])
+                replan_obligation=obligation, agent_todo_items=view.get("work_items") or [],
+                stride_strategy=stride_strategy)
             accepted = autonomous_replan_ack_satisfies_obligation(ack,
-                replan_obligation=obligation, acceptance_gaps=None)
+                replan_obligation=obligation, acceptance_gaps=None,
+                stride_strategy=stride_strategy)
             rows.append({"obligation_id": item["obligation_id"], "agent_id": agent,
                 "state": "settled" if accepted else "pending",
                 "acknowledgement": ack if accepted else None,
@@ -52,6 +56,7 @@ def _replan_readback(derived: Mapping[str, Any], inventory: list[dict[str, Any]]
 def execute_goal_amendment(
     *, registry_path: Path, goal_id: str, goal_instance_id: str,
     operation: str, actor_agent_id: str | None,
+    replan_configuration_reader: Callable[[Mapping[str, Any], Path], Mapping[str, Any]],
     parameters: Mapping[str, Any] | None = None,
     runtime_root: Path | None = None, execute: bool = False,
 ) -> dict[str, Any]:
@@ -86,6 +91,7 @@ def execute_goal_amendment(
             gate_path = source_turn_effect_gate_path(registry_path, goal_id)
             gate = json.loads(gate_path.read_text()) if gate_path.exists() else None
             agents = registered_agent_ids_for_goal(goal)
+            effective_replan_goal: Mapping[str, Any] | None = None
             derived = _derive_open_replan_obligation_inventory(runtime_root=root, goal_id=goal_id,
                 goal=goal, state_text="", goal_ref=goal_ref)
             obligations = _open_replan_obligation_inventory(goal_id=goal_id, registered_agents=agents, status_item=derived)
@@ -101,11 +107,17 @@ def execute_goal_amendment(
                 "runtime_root": str(root), "observed_at": now_utc_iso(), "source": source}
 
             def inspect() -> dict[str, Any]:
+                nonlocal effective_replan_goal
                 value = effect_runtime_result("goal.amendment.execute", {**common, "operation": "inspect", "dry_run": True},
                     timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
                 if not isinstance(value, dict):
                     raise TypeError("Goal amendment readback is invalid")
-                value["replan_observations"] = _replan_readback(derived, obligations, value)
+                # Resolve once for current review observations. Historical
+                # receipt lookup must not depend on current configuration IO.
+                if effective_replan_goal is None:
+                    effective_replan_goal = replan_configuration_reader(goal, root)
+                value["replan_observations"] = _replan_readback(derived, obligations, value,
+                    stride_strategy=(effective_replan_goal.get("execution_profile") or {}).get("stride_strategy", "off"))
                 return value
 
             if operation in {"propose", "commit", "claim"}:
