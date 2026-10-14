@@ -20,7 +20,8 @@ def event(name: str, *, pr: int = 101, tag: str = "", backend: bool = True) -> d
         "github": SimpleNamespace(
             event_name=name,
             ref=f"refs/pull/{pr}/merge" if name == "pull_request" else "refs/heads/main",
-            # GitHub exposes the PR number both as `event.number` and `event.pull_request.number`.
+            # Pull-request webhooks expose number at the payload root as well
+            # as inside pull_request; the shared concurrency owner uses both.
             event=SimpleNamespace(number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
         ),
         "inputs": SimpleNamespace(tag=tag),
@@ -79,8 +80,23 @@ def test_only_pr_heads_cancel_in_progress_and_main_pushes_queue() -> None:
     assert "schedule" in policy[True]
     concurrency = policy["concurrency"]
     contexts = [event(name) for name in ("push", "pull_request", "schedule", "workflow_dispatch", "merge_group")]
+    for context in contexts:
+        if context["github"].event_name != "pull_request":
+            del context["github"].event.number
     assert len({expression(concurrency["group"], context) for context in contexts}) == 5
     assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [False, True, False, False, False]
+
+
+@pytest.mark.parametrize("name", ["pull_request", "pull_request_target"])
+def test_python_pr_supersession_uses_the_payload_number(name: str) -> None:
+    concurrency = workflow("python-tests")["concurrency"]
+    first, second = event(name, pr=101), event(name, pr=102)
+    # pull_request_target uses the base ref, so the payload number must keep
+    # distinct PRs apart even when their refs match.
+    first["github"].ref = second["github"].ref = "refs/heads/main"
+    assert expression(concurrency["group"], first) == f"python-tests-{name}-pr-101"
+    assert expression(concurrency["group"], second) == f"python-tests-{name}-pr-102"
+    assert expression(concurrency["cancel-in-progress"], first) is True
 
 
 def test_required_merge_gate_workflow_is_not_suppressed_by_path_filters() -> None:
