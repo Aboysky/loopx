@@ -14,17 +14,66 @@ import pytest
 
 from loopx.cli import main
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from tests.control_plane.test_todo_mutation_authority import (
+    AUTHOR_AGENT, GOAL_ID, REVIEW_AGENT, _write_fixture,
+)
 
 
-@pytest.mark.parametrize("planning_edit", [
-    ["--evidence", "evidence:peer-validation"],
-    ["--clear-priority"],
-    ["--priority", "P1"],
+@pytest.mark.parametrize("edit,expected_actor", [
+    (["--evidence", "evidence:planning-only"], AUTHOR_AGENT),
+    (["--priority", "P2"], AUTHOR_AGENT),
+    (["--clear-priority"], AUTHOR_AGENT),
+    (["--note", "Peer context.", "--evidence", "evidence:mixed"], REVIEW_AGENT),
+    (["--text", "Clarify source.", "--evidence", "evidence:mixed"], REVIEW_AGENT),
+    (["--claimed-by", REVIEW_AGENT], REVIEW_AGENT),
 ])
-def test_legacy_planning_preserves_actor_and_mixed_copy_records_it(tmp_path, monkeypatch, planning_edit):
-    from tests.control_plane.test_todo_mutation_authority import (
-        AUTHOR_AGENT, GOAL_ID, REVIEW_AGENT, _add_agent_todo, _write_fixture,
-    )
+def test_legacy_cli_update_preserves_planning_actor(tmp_path, edit, expected_actor):
+    registry, state = _write_fixture(tmp_path, lifecycle_authority=[{
+        "agent_id": REVIEW_AGENT, "actions": ["update", "reassign"], "requires_reason": True,
+    }])
+    prefix = ["--registry", str(registry), "--runtime-root", str(tmp_path / "runtime"),
+              "--format", "json"]
+
+    def call(*args, code=0):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            actual = main([*prefix, *args])
+        payload = json.loads(output.getvalue())
+        assert actual == code, {key: payload.get(key) for key in ("error", "error_code")}
+        return payload
+
+    try:
+        todo = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+                    "--text", "Verify source.", "--priority", "P1",
+                    "--claimed-by", AUTHOR_AGENT, "--task-class", "advancement_task")["todo_id"]
+        common = ["todo", "update", "--goal-id", GOAL_ID, "--todo-id", todo]
+        call(*common, "--agent-id", AUTHOR_AGENT, "--note", "Owner context.",
+             "--evidence", "evidence:original")
+        detail = ["todo", "list", "--goal-id", GOAL_ID, "--todo-id", todo]
+        assert call(*detail)["todo"]["last_actor_agent_id"] == AUTHOR_AGENT
+        delegated = [*common, "--agent-id", REVIEW_AGENT, *edit]
+        before = state.read_bytes()
+        call(*delegated, code=1)  # A grant still requires its actual reason.
+        assert state.read_bytes() == before
+        delegated += ["--authority-reason", "Maintain the source."]
+        call(*delegated, "--dry-run")
+        assert state.read_bytes() == before
+        changed = call(*delegated)
+        assert changed["changed"]
+        row = call(*detail)["todo"]
+        assert row["last_actor_agent_id"] == expected_actor
+        if "--claimed-by" not in edit:
+            assert row["claimed_by"] == AUTHOR_AGENT
+        after = state.read_bytes()
+        assert not call(*delegated)["changed"]
+        assert state.read_bytes() == after
+    finally:
+        subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import restart_effect_runtime; restart_effect_runtime()"],
+                       env=dict(os.environ), check=True, capture_output=True, timeout=30)
+
+
+def test_legacy_cli_actor_survives_planning_clear_and_terminal_replay(tmp_path, monkeypatch):
+    from tests.control_plane.test_todo_mutation_authority import _add_agent_todo
 
     for variable in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.setenv(variable, str(tmp_path))
@@ -53,6 +102,7 @@ def test_legacy_planning_preserves_actor_and_mixed_copy_records_it(tmp_path, mon
     call(*update, "--agent-id", AUTHOR_AGENT, "--note", "Owner context", "--evidence", "evidence:owner-validation", "--priority", "P2")
     assert detail()["last_actor_agent_id"] == AUTHOR_AGENT
     peer = [*update, "--agent-id", REVIEW_AGENT, "--authority-reason", "Maintain validated planning evidence"]
+    planning_edit = ["--evidence", "evidence:peer-validation"]
     before = state.read_bytes()
     call(*update, "--agent-id", REVIEW_AGENT, "--evidence", "evidence:unadmitted", code=1)
     assert state.read_bytes() == before

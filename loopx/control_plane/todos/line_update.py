@@ -363,6 +363,7 @@ def apply_todo_update_to_lines(
     normalized_status = plan["normalized_status"]
     target_status = plan["target_status"]
     updates = plan["metadata_updates"]
+    accepted_actor = updates.pop("last_actor_agent_id", None)
     text = updates.pop("text", text)
     updated_priority = updates.pop("priority", todo_priority_label(block))
     updates.pop("title", None)
@@ -381,7 +382,7 @@ def apply_todo_update_to_lines(
         metadata_line = metadata_line_for_todo_block(block, updates)
     metadata_updated = upsert_todo_metadata(lines, block, metadata_line)
     effective_metadata = parse_todo_metadata_line(metadata_line or "") or {}
-    return serialize_todo_update_result(
+    result = serialize_todo_update_result(
         role=resolved_role, section=section, todo=block.get("text"),
         todo_id=normalized_todo_id, status=target_status, priority=updated_priority,
         status_changed=status_changed, text_changed=text_changed,
@@ -389,3 +390,5 @@ def apply_todo_update_to_lines(
         monitor_poll_transition=plan.get("monitor_poll_transition"),
         external_wait_transition=plan.get("external_wait_transition"),
     )
+    record_todo_mutation_actor(lines, result, accepted_actor)
+    return result

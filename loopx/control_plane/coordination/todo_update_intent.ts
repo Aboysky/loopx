@@ -8,7 +8,7 @@ import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorit
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {canonicalTodoRecord} from "./todo_presentation.ts";
 import {planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
-import {recordsTodoUpdateActor} from "../todos/public_update.ts";
+import {shouldRecordTodoMutationActor} from "../todos/public_update.ts";
 import {normalizeNativePlanningIntent, planNativeTodoUpdate} from "../todos/native_update_plan.ts";
 import {decodeMonitorPollObservation, type MonitorPollObservation} from "../todos/monitor_metadata.ts";
 import {
@@ -157,7 +157,8 @@ export function prepareUpdatedTodo(
   // Preserve the public planner's legacy metadata semantics. Raw copy edits
   // already carry actor attribution, while planning-only updates historically
   // leave last_actor_agent_id untouched.
-  if (recordsTodoUpdateActor(todo, input)) {
+  if (shouldRecordTodoMutationActor(todo, input.patch, input.clear_fields,
+      input.planning_intent ?? {}, input.monitor_observation)) {
     next.last_actor_agent_id = input.actor_agent_id;
   }
   next.updated_at = input.now.toISOString().replace(/\.\d{3}Z$/u, "Z");
