@@ -682,7 +682,7 @@ def _update_goal_todo_legacy(
 ) -> dict[str, Any]:
     monitor_intent = _prepared["monitor_intent"]
     shadow_runtime_root = _prepared["shadow_runtime_root"]
-    from .line_update import apply_todo_update_to_lines, record_todo_mutation_actor
+    from .line_update import apply_todo_update_to_lines
     from ..coordination.runtime_shadow_writer_adapter import begin_todo_runtime_shadow_capture, write_captured_todo_state, settle_todo_runtime_shadow_capture
 
     resolved_project, resolved_state_file = resolve_todo_state_path(
@@ -899,7 +899,7 @@ def _update_goal_todo_legacy(
             monitor_metadata=monitor_intent["metadata"],
             public_context={
                 "goal_id": goal_id, "role": target_role,
-                "actor_agent_id": effective_agent_id,
+                "actor_agent_id": mutation_authority.get("actor_agent_id"),
                 "registered_agents": registered_agent_ids_from_registry(registry_path, goal_id),
                 "monitor_observation": monitor_intent["observation"],
                 "enforce_monitor_boundedness": enforce_monitor_boundedness,
@@ -908,7 +908,6 @@ def _update_goal_todo_legacy(
             claim_only=claim_only,
             updated_at=updated_at,
         )
-        record_todo_mutation_actor(lines, update_result, mutation_authority.get("actor_agent_id"))
         changed = bool(update_result["changed"])
         new_text = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
         if changed:

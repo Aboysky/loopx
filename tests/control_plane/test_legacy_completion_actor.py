@@ -16,6 +16,76 @@ from loopx.cli import main
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 
+@pytest.mark.parametrize("planning_edit", [
+    ["--evidence", "evidence:peer-validation"],
+    ["--clear-priority"],
+    ["--priority", "P1"],
+])
+def test_legacy_planning_preserves_actor_and_mixed_copy_records_it(tmp_path, monkeypatch, planning_edit):
+    from tests.control_plane.test_todo_mutation_authority import (
+        AUTHOR_AGENT, GOAL_ID, REVIEW_AGENT, _add_agent_todo, _write_fixture,
+    )
+
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    registry, state = _write_fixture(tmp_path, lifecycle_authority=[{
+        "agent_id": REVIEW_AGENT, "actions": ["update"], "requires_reason": True,
+    }])
+    todo = _add_agent_todo(registry, claimed_by=None)["todo_id"]
+    prefix = ["--registry", str(registry), "--runtime-root", str(tmp_path / "runtime"), "--format", "json"]
+
+    def call(*args, code=0):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main([*prefix, *args])
+        payload = json.loads(output.getvalue())
+        assert rc == code, {key: payload.get(key) for key in ("error", "error_code", "reason", "mutation_authority")}
+        return payload
+
+    def detail():
+        return call("todo", "list", "--goal-id", GOAL_ID, "--todo-id", todo)["todo"]
+
+    update = ["todo", "update", "--goal-id", GOAL_ID, "--todo-id", todo]
+    call("todo", "claim", "--goal-id", GOAL_ID, "--todo-id", todo,
+         "--agent-id", AUTHOR_AGENT, "--claimed-by", AUTHOR_AGENT)
+    assert detail()["last_actor_agent_id"] == AUTHOR_AGENT
+    call(*update, "--agent-id", AUTHOR_AGENT, "--note", "Owner context", "--evidence", "evidence:owner-validation", "--priority", "P2")
+    assert detail()["last_actor_agent_id"] == AUTHOR_AGENT
+    peer = [*update, "--agent-id", REVIEW_AGENT, "--authority-reason", "Maintain validated planning evidence"]
+    before = state.read_bytes()
+    call(*update, "--agent-id", REVIEW_AGENT, "--evidence", "evidence:unadmitted", code=1)
+    assert state.read_bytes() == before
+    call(*peer, *planning_edit, "--dry-run")
+    assert state.read_bytes() == before
+    call(*peer, *planning_edit)
+    assert detail()["last_actor_agent_id"] == AUTHOR_AGENT
+    assert detail()["claimed_by"] == AUTHOR_AGENT
+    before = state.read_bytes()
+    call(*peer, *planning_edit)
+    assert state.read_bytes() == before
+
+    call(*peer, "--note", "Peer copy correction", "--evidence", "evidence:mixed-validation")
+    assert detail()["last_actor_agent_id"] == REVIEW_AGENT
+    assert detail()["claimed_by"] == AUTHOR_AGENT
+    # A supplied but unchanged copy field must not turn planning into a new actor.
+    call(*update, "--agent-id", AUTHOR_AGENT, "--note", "Peer copy correction", "--evidence", "")
+    assert detail()["last_actor_agent_id"] == REVIEW_AGENT
+    before = state.read_bytes()
+    call(*peer, "--note", "Peer copy correction", "--evidence", "", "--dry-run")
+    assert state.read_bytes() == before
+
+    retire = ["todo", "supersede", "--goal-id", GOAL_ID, "--todo-id", todo,
+              "--agent-id", AUTHOR_AGENT, "--reason", "Retire the validated approach."]
+    call(*retire, "--dry-run")
+    assert state.read_bytes() == before
+    call(*retire)
+    assert detail()["last_actor_agent_id"] == AUTHOR_AGENT
+    before = state.read_bytes()
+    call(*retire)
+    assert state.read_bytes() == before
+
+
 @pytest.mark.parametrize("historical_source", [False, True])
 def test_legacy_completion_actor_recovers_and_settles_exact_turn(tmp_path, monkeypatch, historical_source):
     monkeypatch.setenv("TMPDIR", str(tmp_path))
@@ -110,10 +180,10 @@ def test_legacy_completion_actor_recovers_and_settles_exact_turn(tmp_path, monke
 
         vision = tmp_path / "vision.json"
         vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0", "state": "vision_closed",
-            "vision_patch": {"acceptance_summary": "The authenticated source and identity fences are verified."},
+            "vision_patch": {"acceptance_summary": "The accepted source actor and identity fences are verified."},
             "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
                 "prior_assumption": "The source was unverified.", "observed_reality": "The source and contrary cases passed.",
-                "retained": ["Authenticated provenance and exact completion identity"],
+                "retained": ["Accepted actor provenance and exact completion identity"],
                 "stopped": ["Repeat validation of the completed fixture"], "evidence_refs": ["evidence:source-validated"]}}))
         call("refresh-state", "--goal-id", goal, "--agent-id", agent,
              "--turn-instance-id", turn, "--replan-obligation-id", obligation["obligation_id"],

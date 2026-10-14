@@ -178,6 +178,7 @@ def _field_update_plan(
                     **{key: block.get(key)
                     for key in (
                         "text",
+                        "note",
                         "todo_id",
                         "status",
                         "claimed_by",
