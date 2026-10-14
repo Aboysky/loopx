@@ -1,4 +1,5 @@
-import {observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
+import {LeaseWorktreeObservationError, observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
+import {isCanonicalTodoId} from "../todos/identity.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
 import {evaluateTaskLeaseWriteScopesOverlap, evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire, type AcquireDecisionOtherLease} from "./task_lease_acquire_decision.ts";
@@ -204,7 +205,7 @@ export function normalizeGoalId(value: unknown): string {
 
 export function normalizeTodoId(value: unknown, label = "todo_id"): string {
   const todoId = stringValue(value, label).trim().toLowerCase();
-  if (!/^todo_[a-z0-9_-]{3,64}$/u.test(todoId)) {
+  if (!isCanonicalTodoId(todoId)) {
     throw new TaskLeaseAcquireError(
       "todo id must use the todo_<token> shape",
       "invalid_todo_id",
@@ -1028,7 +1029,8 @@ export async function executeTaskLeaseAcquire(
         "--write-worktree requires canonical authority and nonempty code-edit scopes", "invalid_worktree_lease_request");
       try { request.write_workspace = await observeLeaseWorktree(request.write_worktree, path =>
         evaluateTaskLeaseWriteScopesOverlap({left: request.write_scopes, right: [path]}).overlap === true); }
-      catch { throw new TaskLeaseAcquireError("cannot verify independent Git worktree and origin for --write-worktree", "invalid_worktree_lease_request"); }
+      catch (error) { throw new TaskLeaseAcquireError(error instanceof LeaseWorktreeObservationError
+        ? error.message : "cannot verify independent Git worktree and origin for --write-worktree", "invalid_worktree_lease_request"); }
     }
   } catch (error) {
     if (error instanceof TaskLeaseAcquireError || error instanceof ShadowManagementError || error instanceof LegacyCoordinationWriteError) {

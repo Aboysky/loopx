@@ -68,6 +68,7 @@ def execute_turn_run_once(
     args: argparse.Namespace,
     *,
     payload: dict[str, Any],
+    decision: Mapping[str, Any] | None = None,
     registry_path: Path,
     runtime_root: Path,
     runtime_root_arg: str | None,
@@ -846,11 +847,18 @@ def execute_turn_run_once(
             )
 
         def on_managed_start_admitted() -> None:
+            replan_packet = stable_envelope.get("replan_action_packet")
+            capability_guard = (
+                replan_packet.get("capability_guard")
+                if isinstance(replan_packet, Mapping)
+                else None
+            )
             ensure_turn_heartbeat_settlement_receipt(
                 runtime_root,
                 settlement_identity,
                 semantic_replan_guard_scoped=replan_guard_scoped,
                 semantic_replan_obligation_id=replan_obligation_id,
+                semantic_replan_capability_guard=capability_guard,
                 goal_ref=goal_ref,
             )
 
@@ -866,6 +874,8 @@ def execute_turn_run_once(
         execution_started = bool(args.execute)
         result = run_loopx_turn_once(
             payload,
+            decision_capture_payload=decision,
+            require_decision_capture=True,
             host_argv=raw_argv,
             host_runner=host_runner,
             session_binding_resolver=session_binding_resolver,

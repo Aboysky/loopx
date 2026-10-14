@@ -31,9 +31,9 @@ T0–T4, not additional provider promotion or completed migration claims.
 
 <a id="current-delivery-frontier-2026-10-02"></a>
 
-## Current delivery frontier (2026-10-07)
+## Current delivery frontier (2026-10-12)
 
-Rechecked at main `06b6caa07`: #5413/#5466/#5283 and the affected creation,
+Rechecked at main `38cb407ed`: #5413/#5466/#5283 and the affected creation,
 Host-stop and UI-history owners #5500/#5805/#5308/#5398 are merged. Reuse
 their delivered boundaries rather than reopening the October 2 merge queue.
 The [current validation, migration and deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02)
@@ -64,7 +64,7 @@ without claiming code retirement:
 bootstrap, handoff, team-plan and Monitor still have supported source callers;
 keep capture/outbox and historical recovery until their own exits. [Caller and
 rollback inventory](../../reference/canonical-todo-completion-update.md#canonical-mutation-entrypoint-isolation).
-Production Todo consumers now bypass the historic `loopx.todos` re-export:
+Production Todo consumers use the concrete owners instead of the historic `loopx.todos` re-export:
 CLI registration/actions, quota and planning, capability writeback, source lease
 reads and the Lark source projection import the same concrete mutation, full-read,
 path or Markdown display owners. No new wrapper, decision or RPC is introduced.
@@ -73,9 +73,69 @@ Disposable source/normal-wheel probes remove the facade, the whole legacy Todo
 writer and four shadow producers together; real File/SQLite CLI lifecycle,
 once-only settlement, Monitor replay and App cold-import/action/restart journeys
 must still work, with missing-provider/lease and changed-source/backup refusals.
+The App HTTP receiver now also removes `bootstrap.py` from that same copied
+distribution and checks the complete removed set before each server start,
+restart and auxiliary CLI. Separate fixture results cannot prove this combined
+absence. The ordinary canonical CLI creation entrypoint remains with its owner;
+removing it from the cold-import receiver is a disposable qualification probe,
+not a supported package format or permission to break the additive 1.x line.
+中文：App 冷导入、后续写入和重启使用同一份缺少旧入口、writer 与 source producer 的
+隔离副本；不能拼接两组各自缺少一部分模块的结果。正常 canonical 创建仍保留其
+现有入口，这个临时卸除验收不等于已完成整族退役、自然试用或正式安装采用。
 Lark dry-run and Explore replay qualify local consumers only, not live external
-adoption. This closes the production re-export dependency, while last supported
-source writers, historical recovery, installed cohort and release exits remain.
+adoption. The fresh research execution path added by [#5280](https://github.com/loopx-project/loopx/pull/5280)
+reintroduced a function-local historic import after the earlier caller inventory.
+It now imports `todos/list_readback.py` directly, preserving the same typed
+current-Todo validation and the historical replay branch before that read.
+The qualification includes fresh research execution, actor/runnable/input
+refusals, exact lineage readback and replay after current input/Todo changes
+in the same facade-present/absent source and normal-wheel File/SQLite matrix.
+A whole-production Python import guard resolves relative imports and aliases;
+dynamic loading still requires the isolated real journeys. Keep this guard as
+new capabilities arrive, rather than treating a past inventory as a permanent
+exit. Last supported source writers, historical recovery, installed cohort
+and release exits remain independently open.
+
+The next T4 package is the [import-first normal-writer cutoff](../../reference/local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence),
+not another re-export or producer-loading extraction. At `38cb407ed`, live
+unpromoted callers remain in ordinary mutation, bootstrap/creation opt-out,
+team-plan, Monitor, ownership/source lease and active capture/binding. Reuse
+their typed admission/transaction owners; treat retained source capture,
+historical receipts and permanent document IO as recovery obligations.
+The existing delivery Todos should carry these concrete exits:
+
+- Qualify the installed import/backup/recovery journey for the declared source
+  matrix; importer implementation is already present and is not a missing-code
+  dependency. Do not reinterpret complete coordination backup as complete Goal
+  backup.
+- Run the bounded reversible core-developer SQLite trial before the breaking
+  cutoff, recording real Host adoption/use separately from conversion drills.
+- Deliver the cohesive 2.0 normal-writer cutoff: fresh unmigrated writes and
+  execution grants refuse before effects; canonical work and original-operation
+  recovery pass with the old writer physically absent. Keep the additive 1.x
+  import/deprecation line compatible.
+  Admission must preserve original lease release and receipt/outbox recovery
+  before import; denying the existing shared legacy fence indiscriminately
+  would also block these prerequisites. Remove the Python missing-fence bypass
+  with the typed cutoff and validate the combined recovery-to-import journey
+  specified in the linked release contract.
+- After the last source caller exits, reconcile pending outboxes and delete
+  unused capture producers/private decisions together. Keep supported historical
+  readers and current-head rollback; do not wait for every external user to
+  migrate or claim full T4/D2/default qualification from internal deletion.
+
+This updates the existing R5/T4 frontier and release proposal; it creates no
+parallel migration owner, runtime gate or release activation.
+
+Team-plan recovery prerequisite: an unpromoted plan that published its original
+receipt can now recover through the Chat confirmation owner while shadow
+bootstrap is interrupted. Registry/Todo/source locks still protect the read,
+and the existing typed identity validator rejects changed intent, actor or
+reviewed basis. Recovery verifies source durability without loading the capture
+producer or admitting new writes; fresh plans still obey all source, management
+and promotion guards. This repairs the existing 1.x recovery path and does not
+activate the 2.0 cutoff or settle the remaining lease/outbox/Host obligations.
+
 
 The retained import-compatible field writer now composes resume normalization
 and contradictory-clear rejection in its existing typed field plan. Keep blank
@@ -151,7 +211,12 @@ codec/replay has a small shared scheduler IO owner, while the existing TS batch
 still owns operation identity and decisions. File/SQLite CLI and normal-wheel
 source removal must preserve later canonical writes and original successors;
 promoted replay leaves old outbox bytes inert. Unpromoted markerless batch
-recovery retains its existing drain. This removes a canonical import dependency,
+recovery retains its existing bounded drain. Business-receipt replay does not
+guarantee shadow catch-up: lock deferral or an expired proof budget preserves
+pending evidence for an independent `authority-shadow drain`. Recovery keeps
+the original source bytes, successor IDs and once-only quota effect; it does
+not replay the writer to finish catch-up or increase the inline limits.
+This removes a canonical import dependency,
 not the supported legacy writer. The absent arm also removes all four shadow
 producer modules using the qualified CLI startup isolation above.
 [Retained duties and rollback](../../reference/canonical-todo-completion-update.md#monitor-source-writer-isolation).
@@ -1370,6 +1435,17 @@ Unidentifiable referenced history still needs explicit repair, not a post-promot
 Markdown fallback. This closes the demonstrated dependency omission, not all history
 import, provider qualification, soak, or D3 cutover requirements.
 
+Optional Vision fallback advice now composes resume evaluation and positive
+pending-target proof in `goal_frontier/fallback_disposition.ts`. Python retains
+persisted-input codecs, source I/O and presentation, not a second Monitor-wait or
+declaration aggregation rule. Live quota reads one complete canonical/legacy
+snapshot and selects at most 16 target/direct-dependency records, including
+archive; it no longer performs repeated per-Todo queries. Intentional corrections:
+alternatives resolve their own declaration symmetrically, uncertainty is scoped
+to unresolved declarations, and invalid/ambiguous wait evidence cannot suppress
+advice. This closes one T3 consumer, not all quota snapshot consistency or T1/T2;
+fallback declarations remain optional advisory input, never execution authority.
+
 - Audit Turn/quota, Dashboard, standing decisions, shared-goal alignment and
   amendment revision inputs. Reuse #4117's canonical source adapter and pass
   one snapshot through a decision; do not build another Todo inventory.
@@ -1704,6 +1780,16 @@ rely on the compiler instead of repeating ad hoc field checks throughout the
 domain. Transport checks such as framing, authentication, and size limits stay
 separate from schema validation and semantic invariants. An unchecked
 `JSON.parse(...) as T` must not establish control-plane authority.
+
+For shipped Todo contracts, the coordination record codec reuses its first
+strict-JSON normalization after checking allowed and required fields. That tree
+already owns its containers and orders keys by Unicode code point; rebuilding
+the same fields and cloning them again adds no authority or isolation. Generic
+contracts retain legacy inherited-field selection when reconstruction is needed.
+Keep malformed-JSON rejection, schema-error order, canonical bytes and
+input/output independence unchanged.
+This is a bounded shared-codec cost repair, not a provider-format migration or
+qualification of sustained operation, CI capacity or release admission.
 
 `as unknown as T` is permitted only as a named migration seam: its exact call
 site, upstream validator, negative boundary coverage, and removal owner must be

@@ -25,7 +25,7 @@ GOAL = "installed-authority-e2e"
 REQUIRED_STAGES = {
     "installed_python_ts_json_resources", "real_baseline_bootstrap",
     "three_mutations_one_receipt_each", "default_qualification_and_exact_candidate_read",
-    "rollback_inactive_write_new_lineage",
+    "rollback_inactive_write_new_lineage", "installed_fallback_dispatch",
 }
 
 
@@ -123,6 +123,7 @@ for relative in ['control_plane/coordination/runtime_shadow.ts', 'control_plane/
     'control_plane/coordination/file_authority_store.ts', 'control_plane/coordination/local_authority_shadow_identity.ts',
     'control_plane/coordination/legacy_writer_lock_paths.ts',
     'control_plane/runtime/receipt_log_snapshot.ts',
+    'control_plane/goals/goal_frontier/fallback_disposition.ts',
     'control_plane/work_items/task_lease_acquire.ts',
     'control_plane/coordination/coordination_state_contract_v0.json',
     'control_plane/coordination/coordination_state_contract.generated.ts']:
@@ -142,20 +143,49 @@ print(json.dumps({'executable': sys.executable, 'package': str(package),
         self.report["provenance"] = provenance
         self.checked("installed_python_ts_json_resources", resource_count=len(provenance["resources"]))
 
-        storage_defaults = {"schema_version": "loopx_goal_storage_defaults_v1", "new_goal_provider": "file",
-            "canonical_creation": False, "new_goal_handoff_mode": "hard_lease"}
-        storage_defaults_path = self.cwd / "goal-storage-defaults.json"
-        storage_defaults_path.write_text(json.dumps(storage_defaults), encoding="utf-8")
-        storage_preview = self.cli("legacy_goal_storage_preview", "machine-config", "preview", "--namespace",
-            "goal_storage", "--config-json", str(storage_defaults_path))
-        self.cli("legacy_goal_storage_apply", "machine-config", "apply", "--namespace", "goal_storage",
-            "--config-json", str(storage_defaults_path), "--expected-plan-revision",
-            str(storage_preview["plan_revision"]), "--execute")
-        self.cli("console_project_bootstrap", "bootstrap", "--project", str(self.project),
+        fallback_code = """
+import json
+from loopx.control_plane.effect_runtime import effect_runtime_result
+print(json.dumps(effect_runtime_result('goal.fallback_disposition.project', {
+    'schema_version': 'goal_fallback_disposition_request_v0',
+    'terminal': False, 'agent_id': 'agent-a', 'blocker_present': False,
+    'resume_planning': {}, 'source_state': 'complete', 'items': [],
+    'resume_evaluation': {}, 'legacy_selectable_ids': [], 'declarations': [],
+    'created_or_reopened_ids': [],
+})))
+"""
+        fallback = self.process("installed_fallback_dispatch", [str(self.python), "-I", "-c", fallback_code])
+        require(fallback.get("kind") == "resolved", "empty fallback declarations must resolve")
+        self.checked("installed_fallback_dispatch")
+
+        # This lifecycle qualifies pre-promotion capture. Explicitly retain the
+        # supported File target-only source instead of inheriting new-Goal
+        # canonical SQLite creation, which correctly fences legacy capture.
+        source_storage = {"schema_version": "loopx_goal_storage_defaults_v1",
+            "new_goal_provider": "file", "canonical_creation": False,
+            "new_goal_handoff_mode": "hard_lease"}
+        source_storage_path = self.cwd / "shadow-source-storage.json"
+        source_storage_path.write_text(json.dumps(source_storage), encoding="utf-8")
+        preview = self.cli("console_source_storage_preview", "machine-config", "preview",
+            "--namespace", "goal_storage", "--config-json", str(source_storage_path))
+        revision = preview.get("plan_revision")
+        require(isinstance(revision, str) and bool(revision), "source storage preview has no revision")
+        applied = self.cli("console_source_storage_apply", "machine-config", "apply",
+            "--namespace", "goal_storage", "--config-json", str(source_storage_path),
+            "--expected-plan-revision", revision, "--execute")
+        require(applied.get("readback_verified") is True
+            and applied["machine_configuration"]["namespaces"]["goal_storage"] == source_storage,
+            "target-only source configuration did not read back exactly")
+        created = self.cli("console_project_bootstrap", "bootstrap", "--project", str(self.project),
             "--goal-id", GOAL, "--objective", "Qualify installed authority transactions.",
             "--no-global-sync")
-        self.cli("console_handoff_mode_hard_lease", "handoff-mode", "set", "--goal-id", GOAL,
-            "--mode", "hard_lease")
+        require(created.get("storage_target") == {
+            "schema_version": "loopx_new_goal_storage_target_v0", "provider": "file"},
+            "shadow source was not created with the target-only File contract")
+        selection = created["storage_selection"]
+        require(selection.get("provider") == "file" and selection.get("promotion_performed") is False
+            and "authority_initialized" not in selection,
+            "shadow source unexpectedly initialized canonical authority")
         # Set configuration only, before shadow bootstrap creates the real binding.
         registry = json.loads(self.registry.read_text())
         goal = next(item for item in registry["goals"] if item["id"] == GOAL)

@@ -101,9 +101,9 @@ presentation, not read or write authority.
 
 The steward and Goal conversations share the same frontend activity view across task types. The reply shows the step in progress, such as "Reading notes.md". With the Codex executor, expand **Work steps** to follow each thought, read, search, command, tool call and file edit; a step's start and end share one row, failures show their exit code, and clicking a row reveals the full command, the changed files or the thinking text. Thinking text appears only when the model exposes it to the host (some models report only how long they thought). Command output, tool arguments and results, and file diffs are never shown; project paths read as relative paths, other local paths and credential-like values are hidden. A completed step means it ended, not that a check passed. Steps live only in the owner-only local session replay; the next LoopX Chat start after a Turn is more than 24 hours old clears them. Other executors keep **Recent activity** with the latest six observations; missing activity stays an honest waiting state. **Interrupt turn** targets that reply, preserves already visible text, and keeps the conversation available for continuation. A rejected interruption leaves the live reply visible; completion wins a race with interruption. This control does not stop the Goal. Attached hosts that do not expose interruption report that limitation.
 
-运行中可点击「调整本轮」，向原任务追加指令。当前支持原生 Codex 执行器；只有收到匹配的执行器回执后才显示已接收，这不代表调整后的任务已经完成。不支持的执行器、过期回合或无法确认的回执会保留草稿，不自动变成新任务。送达状态未知时，重试沿用同一请求编号，防止重复投递；执行器明确拒绝且确认未送达时，条件恢复后可用原文安全地重新发起。回合结束后，未发送的草稿仍可复制到输入框。草稿仅保存在当前页面，刷新前请自行保存。
+运行中可点击「调整本轮」，向原任务追加指令。当前支持原生 Codex 执行器；只有收到匹配的执行器回执后才显示已接收，这不代表调整后的任务已经完成。不支持的执行器、过期回合或无法确认的回执会保留草稿，不自动变成新任务。送达状态未知时，重试沿用同一请求编号，防止重复投递；执行器明确拒绝且确认未送达时，条件恢复后可用原文安全地重新发起。回合结束后，未发送的草稿仍可复制到输入框。「调整本轮」和普通会话输入框中的追加指令，在发送前必须将重试信息保存到当前标签页的浏览器存储并读回；刷新后恢复原请求身份，不自动发送。存储不可用时会提示尚未发送，草稿仅保留在当前页面；恢复存储后再重试。
 
-Use **Adjust turn** to add instructions to the running task. Native Codex executors currently support this control. A matching executor receipt confirms acceptance, not completion. Unsupported executors, expired turns and unconfirmed receipts retain the draft without starting another task. An unresolved delivery keeps the request identity on retry to prevent duplicates; a confirmed pre-delivery rejection allows the unchanged draft to start a new request after recovery. After the turn ends, copy an unsent draft to the composer. Drafts are page-local; save them before refreshing.
+Use **Adjust turn** to add instructions to the running task. Native Codex executors currently support this control. A matching executor receipt confirms acceptance, not completion. Unsupported executors, expired turns and unconfirmed receipts retain the draft without starting another task. An unresolved delivery keeps the request identity on retry to prevent duplicates; a confirmed pre-delivery rejection allows the unchanged draft to start a new request after recovery. After the turn ends, copy an unsent draft to the composer. Both **Adjust turn** and an ordinary conversation's in-turn composer save and read back retry information in tab-local browser storage before dispatch. Reload restores the original identity without sending. If storage is unavailable, the adjustment is not sent and its draft stays in the current page; restore storage before retrying.
 
 For API callers, `POST /api/chat/sessions/{session_id}/turns/{turn_id}/steer`
 accepts `message` (1–12000 characters) and a stable `client_ingress_id`.
@@ -158,25 +158,56 @@ loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner -
 
 ---
 
-### 创建 Goal 时选择已有工作目录 / Reuse a workspace when creating a Goal
+### 创建 Goal 时选择工作目录 / Choose a working directory when creating a Goal
 
-打开侧边栏的「创建 Goal」，填写目标和完成标准后，在「工作目录」中选择一个已有
-Goal，即可沿用它绑定的目录。检查配置并确认一次后，新的 Goal 在所选目录中创建；
-执行权限仍由表单中的权限选择与后端校验决定。对话草稿也可通过「修改」打开同一个表单。
+打开侧边栏的「创建 Goal」，填写目标和完成标准后，在「工作目录」中选择：
+
+- **Dashboard 工作区**：启动 Dashboard 时配置的目录（见下文），即使还没有 Goal 使用它；
+- **已有 Goal 的工作目录**：沿用该 Goal 绑定的目录；
+- **默认工作区**：由当前会话与连接配置解析。
+
+检查配置时，预览的「执行工作区」会写明目录名称、来源（Dashboard 工作区或与已有 Goal
+共用），以及是否为默认解析结果；确认后的 Goal 一定在预览所示目录中创建，执行权限仍由表单中的
+权限选择与后端校验决定。对话草稿也会显示同样的执行工作区，并可通过「修改」打开同一个表单改选。
 如果检查配置失败，目标文本与目录选择会保留供重试；失效或不可用的目录不会自动换成另一目录。
+预览只显示目录名称，不显示本机完整路径；同名目录（包括已有 Goal 的目录）会逐级附带上级目录名，直到可以区分。
 
-默认工作区继续由现有连接配置解析。这一入口支持沿用**已注册 Goal 的目录**，不提供任意
-本机路径输入或新目录接入；未连接的目录仍需先通过
-[项目连接流程](../guides/newcomer-command-path.md)接入。创建前检查预览中的工作区标识。
+要管理多个项目，可在启动时一次配置多个目录，之后每次创建 Goal 时分别选择：
 
-Open **Create Goal** in the sidebar, enter the objective and completion criteria, and select an
-existing Goal under **Working directory** to reuse its directory. Review and confirm once; the new
-Goal is created there under the selected execution permission and the existing backend checks.
-Conversational drafts reach the same form through **Edit**. A failed preview retains the text and
-selection for retry; unavailable selections do not silently redirect to another directory. The
-default still follows existing connection routing. This supports registered Goal workspaces, not
-arbitrary path entry or new-directory onboarding; connect a new project first and check the workspace
-reference in the creation preview.
+```bash
+loopx dashboard --scan-path ~/projects/app --scan-path ~/projects/docs-site
+```
+
+不在列表中的目录无法在页面上直接输入；请用 `--scan-path` 重新启动 Dashboard，或先通过
+[项目连接流程](../guides/newcomer-command-path.md)接入。选择目录不会增加执行权限。
+
+Open **Create Goal** in the sidebar, enter the objective and completion criteria, and choose a
+**Working directory**:
+
+- a **Dashboard workspace** — a directory the Dashboard was started with (below), even before any
+  Goal uses it;
+- an **existing Goal's directory** — reuse the directory that Goal is bound to;
+- the **default workspace** — resolved from the current conversation and connection routing.
+
+The review's **Workspace** field names the directory, where it comes from (a Dashboard workspace or
+shared with an existing Goal), and whether the default chose it. Confirming creates the Goal in
+exactly that directory, under the selected execution permission and the existing backend checks.
+Conversational drafts show the same field, and **Edit** opens the form to choose another directory.
+A failed preview retains the text and selection for retry; unavailable selections never silently
+redirect to another directory. The review shows directory names, not local paths; two directories
+with the same name, including existing Goals' directories, gain parent directory names until they
+read apart.
+
+To work on several projects, start the Dashboard once with each directory and pick one per Goal:
+
+```bash
+loopx dashboard --scan-path ~/projects/app --scan-path ~/projects/docs-site
+```
+
+Directories that are not listed cannot be typed into the page; restart the Dashboard with
+`--scan-path`, or connect the project first through the
+[project connection flow](../guides/newcomer-command-path.md). Choosing a directory does not expand
+execution permissions.
 
 ## 🎯 4. Goal 深度工作区
 
@@ -206,12 +237,40 @@ reference in the creation preview.
 
 ### 4.2 Goal 概览与交付依据 / Goal overview
 
+手机默认折叠目标与验收条件，可随时展开；顶部「全部工作」打开侧栏，Escape 关闭并返回入口。
+窄屏侧栏选择任务后关闭，沿用同一详情与 URL 选择；未知远端链接明确提示当前快照没有该任务。
+
+On phones, direction and criteria start folded. The top-bar **All work** control opens the rail; Escape closes it and returns focus. Selecting work opens the existing task details. Unknown remote links report unavailable snapshot details without querying local task owners.
+
 Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判断进展、推进工作、
 与 Agent 沟通和查看产出。选择一个 Goal 后仍默认进入四列任务看板；
 看板与列表保持原有任务范围。切换页面后，任务筛选、已加载历史和各页滚动位置保留。
 右上角设置直接打开既有能力配置；返回后保留工作区。切换 Goal 或数据源则重新建立页面上下文。
 
-点击一次 **概览**，即可查看当前进展、需要处理的决定、执行记录和用量。
+点击一次 **概览**，即可查看方向、需要处理的决定、当前工作和成果。
+「当前工作」默认按实际负责人分组，未分配的任务单列；延后与完成记录保留在「全部工作」。
+可在同一区域切换既有看板与关系图。选择任务打开原有详情，关闭详情后保留选中项；
+URL 的 `todo` 参数支持刷新与返回恢复检查上下文。来源中已找不到的任务仅能读取完整要求，
+不能沿用旧快照的操作权限。
+
+「添加任务」就在当前工作区域：输入一次，检查后确认一次，创建结果通过刷新读回。
+检查或应用失败时保留草稿，可从原有动作流程重新检查和确认；选择视图不会执行任务。
+右侧「全部工作」可按状态筛选并搜索已载入的任务；完成记录沿用既有分页与虚拟化历史。
+「活动」显示时间线中已结束的执行、已返回成果和已记录决定，覆盖范围取决于来源。
+
+The Overview composes Direction, Needs you, Now and Results. Now groups work by its recorded owner,
+with an explicit Unassigned group. Board and Map are lenses of the same work. Selecting a task opens
+its existing inspector; closing it retains selection, and `todo` in the URL restores inspection after
+reload or browser back. A task absent from the current source can read its exact request without
+retaining stale action authority. Add task uses one input and the existing preview/confirmation path;
+a failed preview or apply retains the draft. All work filters/searches listed tasks and reuses paginated,
+virtualized completed history. Activity shows ended runs, returned results and recorded decisions from
+the available timeline; it makes no complete-history claim.
+
+工作指标保持明确的覆盖范围：
+工作指标只有在来源提供完成数、且未完成列表覆盖已知时显示“完成 / 总数”。
+缺失或有界数据会保留“总数未知”，显示当前所列未完成项而不绘制完成比例；实际报告的零仍是零。
+任务卡片与时间线区分已安排、执行中、等待、需检查、已中断和已完成；排队不表示已开始执行。
 决定与执行记录直接打开原有详情；「查看任务」「查看成果」前往对应页面。
 低频仓库、连接和运行信息保留在「Goal 信息」中，不再充当查看进展的必经路径。
 
@@ -219,7 +278,7 @@ Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判�
 不需要额外打开复盘弹窗。可按标题、负责人或引用搜索，选择节点沿关系追溯，
 并打开当前工作区中的任务、决定或执行记录。交付链默认列表，桌面可切换关系图。
 
-**工作地图：**交付链上方展示整个 Goal 的工作形状：全部未归档任务、决定和持续监控，
+**工作地图：**在当前工作的「关系图」中查看 Goal 的工作形状：全部未归档任务、决定和持续监控，
 以及已记录的依赖、延续与替代关系。默认「当前工作」显示进行中和受阻的事项、它们的直接前序
 （单项超过 2 个已完成前序时折叠为计数），以及待决定事项会解锁的工作；已完成或延后的其余工作
 隐藏并计数。「全部」包含早期已完成工作。互不相连的工作链分框排列，需要决定的链在前；
@@ -229,7 +288,7 @@ Goal 顶部直接提供 **概览、任务、对话、成果**，分别用于判�
 
 **范围与刷新：**交付链覆盖当前选中工作及有限前序；完整 Goal 关系请看工作地图。
 缺失前序、来源裁剪与未展开决定可展开查看；任务完成或缺口列表为空都不代表通过验收。
-仅进入概览或点击「刷新快照」时读取交付链；离开概览取消未完成请求，
+概览与任务页共用一次交付快照读取；「刷新快照」可更新它，离开两页时取消未完成请求，
 不增加普通状态读取的图计算。状态变化后自动重读快照，重读完成前暂停来源跳转和导出；
 重读失败才提示快照已过期。
 读取失败保留其他概览内容并显示重试提示，不将失败视为工作已完成。
@@ -257,6 +316,10 @@ task filters, loaded history and scroll; a different Goal or source starts a new
 view session. Settings opens the existing capability editor directly.
 
 Overview brings progress, pending decisions, execution and usage into one page.
+The Work vital shows done/total only with a reported completion count and known complete open-work coverage.
+Missing or bounded totals show the listed open work and an explicit unknown-total notice, without a completion ribbon;
+a reported zero remains zero. Task cards and the timeline distinguish scheduled, running, waiting, failed,
+interrupted and completed observations. Scheduled work is not presented as executing.
 Its delivery section reads the bounded current chain and acceptance observations
 on entry or explicit refresh, with search, map/list layouts, source navigation
 and Markdown export. Leaving Overview aborts pending reads. A changed workspace

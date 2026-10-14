@@ -11,6 +11,8 @@ import {
   type DeliveryOutcome,
 } from "../work_items/delivery_outcome.ts";
 
+import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA, STRIDE_PROBE_LIMITS, STRIDE_AXIS_NAMES, STRIDE_PLAN_LIMIT, STRIDE_REASON_LIMIT, STRIDE_REVIEW_LIMIT} from "../work_items/stride_policy.ts";
+
 export const VISION_REFRESH_REQUEST_SCHEMA = "loopx_vision_refresh_request_v0";
 export const VISION_REFRESH_PREPARED_SCHEMA_VERSION =
   "vision_refresh_prepared_v0";
@@ -201,6 +203,7 @@ interface VisionRefreshPrepareRequest {
   existing_agent_vision: JsonObject | null;
   merge_patch: boolean;
   require_path_delta_for_durable_change: boolean;
+  allow_terminal_stride_path: boolean;
 }
 
 interface VisionRefreshFinalizeRequest {
@@ -554,6 +557,8 @@ function decodePrepareRequest(request: JsonObject): VisionRefreshPrepareRequest 
       request.require_path_delta_for_durable_change,
       "require_path_delta_for_durable_change",
     ),
+    allow_terminal_stride_path: request.allow_terminal_stride_path === undefined ? false
+      : requiredBoolean(request.allow_terminal_stride_path, "allow_terminal_stride_path"),
   };
 }
 
@@ -565,6 +570,13 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
     if (typeof container !== "object" || container === null || Array.isArray(container)) continue;
     for (const [field, value] of Object.entries(container)) {
       if (prefix === "agent_vision" && field === "path_delta") continue;
+      if (prefix === "agent_vision" && field === "stride_decision") continue;
+      if (field === STRIDE_DECISION_SCHEMA || field === RECORDED_STRIDE_SCHEMA ||
+          (prefix === "agent_vision.vision_patch" && field === "stride_decision") ||
+          (typeof value === "object" && value !== null && !Array.isArray(value) &&
+           [STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA].includes(String((value as JsonObject).schema_version)))) {
+        throw new EffectRuntimeRequestError(`${prefix}.${field} must be supplied as agent_vision.stride_decision`);
+      }
       if (field === GOAL_PATH_DELTA_SCHEMA_VERSION ||
           (prefix === "agent_vision.vision_patch" && field === "path_delta") ||
           (typeof value === "object" && value !== null && !Array.isArray(value) &&
@@ -631,6 +643,15 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
 
   const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta);
   Object.assign(fieldUsage, pathDeltaUsage);
+  const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision, boundedPublicText);
+  const allowedStridePaths = request.allow_terminal_stride_path
+    ? ["continue", "no_change", "replan", "stop"]
+    : ["continue", "no_change", "replan"];
+  if (strideDecision && (!pathDelta || !allowedStridePaths.includes(String(pathDelta.outcome)) ||
+      !Array.isArray(pathDelta.evidence_refs) || !pathDelta.evidence_refs.length)) {
+    throw new EffectRuntimeRequestError("stride_decision requires an evidence-linked path decision");
+  }
+  Object.assign(fieldUsage, strideUsage);
   const [fallbackDeclarations, fallbackUsage] = normalizeFallbackDeclarations(
     updatePacket.fallback_declarations,
   ) ?? [null, {}];
@@ -672,6 +693,18 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   for (const [field, [, itemLimit]] of Object.entries(GOAL_PATH_DELTA_LIST_LIMITS)) {
     fieldLimits[`path_delta.${field}[]`] = itemLimit;
   }
+  if (strideDecision) {
+    for (const [field, limit] of Object.entries(STRIDE_PROBE_LIMITS)) {
+      if (Object.hasOwn(strideDecision.next_probe as JsonObject, field)) fieldLimits[`stride_decision.next_probe.${field}`] = limit;
+    }
+    if (strideDecision.axis_reasons) for (const axis of STRIDE_AXIS_NAMES) fieldLimits[`stride_decision.axis_reasons.${axis}`] = STRIDE_REASON_LIMIT;
+    if (strideDecision.schema_version === STRIDE_DECISION_SCHEMA) for (const axis of STRIDE_AXIS_NAMES) {
+      fieldLimits[`stride_decision.axes.${axis}.plan`] = STRIDE_PLAN_LIMIT;
+      fieldLimits[`stride_decision.axes.${axis}.reason`] = STRIDE_REASON_LIMIT;
+    }
+    if (strideDecision.previous_review) fieldLimits["stride_decision.previous_review.lesson"] = STRIDE_REVIEW_LIMIT;
+    if (strideDecision.explore_review) fieldLimits["stride_decision.explore_review.reason"] = STRIDE_REVIEW_LIMIT;
+  }
   fieldLimits["fallback_declarations"] = VISION_FALLBACK_DECLARATION_ENTRY_LIMIT;
   fieldLimits["fallback_declarations[]"] = VISION_FALLBACK_DECLARATION_ID_LIMIT;
 
@@ -693,6 +726,7 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
     validation,
   };
   if (pathDelta !== null) agentVision.path_delta = pathDelta;
+  if (strideDecision !== null) agentVision.stride_decision = strideDecision;
   if (fallbackDeclarations !== null) {
     agentVision.fallback_declarations = fallbackDeclarations;
   }

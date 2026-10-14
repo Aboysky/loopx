@@ -12,11 +12,15 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 pub fn identity(app: &AppHandle) -> Result<Value, String> {
-    let path = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "runtime_bundle_missing")?
-        .join("runtime/identity.json");
+    identity_at(
+        &app.path()
+            .resource_dir()
+            .map_err(|_| "runtime_bundle_missing")?,
+    )
+}
+
+fn identity_at(resources: &Path) -> Result<Value, String> {
+    let path = resources.join("runtime/identity.json");
     let value: Value =
         serde_json::from_slice(&fs::read(path).map_err(|_| "runtime_bundle_missing")?)
             .map_err(|_| "runtime_bundle_invalid")?;
@@ -28,6 +32,19 @@ pub fn identity(app: &AppHandle) -> Result<Value, String> {
         return Err("runtime_bundle_invalid".into());
     }
     Ok(value)
+}
+
+// Availability describes inputs present now, not an integrity attestation.
+// install_snapshot still verifies archive contents before running the installer.
+// A failed App replacement can remove these resources while its process lives.
+pub(crate) fn repair_resources_available(app: &AppHandle) -> bool {
+    app.path()
+        .resource_dir()
+        .is_ok_and(|resources| repair_resources_available_at(&resources))
+}
+
+fn repair_resources_available_at(resources: &Path) -> bool {
+    identity_at(resources).is_ok() && resources.join("runtime/runtime-source.tar.gz").is_file()
 }
 
 pub fn journal(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -129,7 +146,10 @@ pub(crate) fn private_executable(app: &AppHandle) -> Result<std::path::PathBuf, 
         .join("loopx"))
 }
 
-pub(crate) fn install_private(app: &AppHandle) -> Result<String, String> {
+pub(crate) fn install_private(
+    app: &AppHandle,
+    selected_executable: &str,
+) -> Result<String, String> {
     let metadata = identity(app)?;
     let archive = app
         .path()
@@ -142,11 +162,16 @@ pub(crate) fn install_private(app: &AppHandle) -> Result<String, String> {
         .parent()
         .and_then(Path::parent)
         .ok_or("runtime_selection_unavailable")?;
-    install_snapshot(&bytes, &metadata, root)?;
+    install_snapshot(&bytes, &metadata, root, selected_executable)?;
     Ok(executable.to_string_lossy().into_owned())
 }
 
-fn install_snapshot(bytes: &[u8], metadata: &Value, private_root: &Path) -> Result<(), String> {
+fn install_snapshot(
+    bytes: &[u8],
+    metadata: &Value,
+    private_root: &Path,
+    selected_executable: &str,
+) -> Result<(), String> {
     let digest: String = Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -178,14 +203,19 @@ fn install_snapshot(bytes: &[u8], metadata: &Value, private_root: &Path) -> Resu
         .env("LOOPX_SHELL_PROFILE", root.join("shell-profile"))
         .env("LOOPX_MAN_ROOT", root.join("man"))
         .env("LOOPX_MAN_DIR", root.join("man/man1"));
-    let selected_executable = root.join("bin/loopx").to_string_lossy().into_owned();
-    // Preserve the working interpreter of an existing managed snapshot.
-    if let Ok(executable) = fs::canonicalize(&selected_executable) {
-        if let Some(release) = executable.parent().and_then(Path::parent) {
-            if let Ok(python) = fs::read_to_string(release.join(".loopx-python")) {
-                command.env("LOOPX_PYTHON", python.trim());
-            }
-        }
+    let private_executable = root.join("bin/loopx").to_string_lossy().into_owned();
+    // Finder may see only the system Python even when the selected managed CLI
+    // already has a working interpreter. Reuse its installer's record for a
+    // first private install; an existing App-owned snapshot keeps precedence.
+    let managed_python = |executable: &str| {
+        let executable = fs::canonicalize(executable).ok()?;
+        let release = executable.parent()?.parent()?;
+        fs::read_to_string(release.join(".loopx-python")).ok()
+    };
+    if let Some(python) =
+        managed_python(&private_executable).or_else(|| managed_python(selected_executable))
+    {
+        command.env("LOOPX_PYTHON", python.trim());
     }
     command
         .current_dir(source.path())
@@ -231,9 +261,12 @@ fn install_snapshot(bytes: &[u8], metadata: &Value, private_root: &Path) -> Resu
             Ok(Some(status)) => {
                 return if status.success() {
                     let installed =
-                        crate::services::runtime_identity_for_executable(&selected_executable);
+                        crate::services::runtime_identity_for_executable(&private_executable);
                     if installed.as_ref().map(|v| &v["source_revision"])
                         == Some(&metadata["source_revision"])
+                        && metadata.get("package_version").is_none_or(|version| {
+                            installed.as_ref().map(|v| &v["package_version"]) == Some(version)
+                        })
                     {
                         Ok(())
                     } else {
@@ -289,6 +322,49 @@ fn extract(bytes: &[u8], destination: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn repair_resources_follow_the_installed_bundle_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("Contents/Resources");
+        let runtime = resources.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        let manifest =
+            json!({"schema_version":"desktop_runtime_bundle_v1", "source_revision":"a".repeat(40)});
+        fs::write(runtime.join("identity.json"), manifest.to_string()).unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "manifest alone cannot reinstall"
+        );
+        fs::write(
+            runtime.join("runtime-source.tar.gz"),
+            b"qualification input",
+        )
+        .unwrap();
+        assert!(repair_resources_available_at(&resources));
+        fs::remove_file(runtime.join("runtime-source.tar.gz")).unwrap();
+        fs::create_dir(runtime.join("runtime-source.tar.gz")).unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "an archive path must be a file"
+        );
+        fs::remove_dir(runtime.join("runtime-source.tar.gz")).unwrap();
+        fs::write(
+            runtime.join("runtime-source.tar.gz"),
+            b"qualification input",
+        )
+        .unwrap();
+        fs::write(runtime.join("identity.json"), "{}").unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "invalid identity stays unavailable"
+        );
+        fs::write(runtime.join("identity.json"), manifest.to_string()).unwrap();
+        fs::rename(&resources, dir.path().join("moved-resources")).unwrap();
+        assert!(
+            !repair_resources_available_at(&resources),
+            "a moved-away App has no repair inputs"
+        );
+    }
+    #[test]
     #[ignore = "requires an isolated private installer root and built App bundle"]
     fn real_private_installer_keeps_the_default_cli_owner() {
         let bundle = std::path::PathBuf::from(std::env::var("LOOPX_TEST_BUNDLE").unwrap());
@@ -304,6 +380,7 @@ mod tests {
             &fs::read(bundle.join("runtime-source.tar.gz")).unwrap(),
             &metadata,
             &root,
+            &default,
         )
         .unwrap();
         let observed = crate::services::runtime_identity_for_executable(
@@ -311,6 +388,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(observed["source_revision"], metadata["source_revision"]);
+        if let Some(version) = metadata.get("package_version") {
+            assert_eq!(&observed["package_version"], version);
+        }
         let manifest: Value = serde_json::from_slice(
             &fs::read(
                 fs::canonicalize(root.join("bin/loopx"))
@@ -327,6 +407,18 @@ mod tests {
         assert!(
             manifest["source"]["git_ref"].is_null() && manifest["source"]["git_dirty"].is_null(),
             "a bundled archive has no Git checkout; host repository facts are not its provenance"
+        );
+        let mut wrong_version = metadata.clone();
+        wrong_version["package_version"] = json!("0.0.0-mismatch");
+        assert_eq!(
+            install_snapshot(
+                &fs::read(bundle.join("runtime-source.tar.gz")).unwrap(),
+                &wrong_version,
+                &root,
+                &default,
+            )
+            .unwrap_err(),
+            "runtime_identity_mismatch"
         );
         assert_eq!(
             fs::read(default).unwrap(),

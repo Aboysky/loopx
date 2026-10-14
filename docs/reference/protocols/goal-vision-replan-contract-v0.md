@@ -264,10 +264,45 @@ the same `agent_id` as the refresh run. This keeps `research-executor`,
 `evaluator-promoter`, and other roles from overwriting or satisfying each
 other's active vision.
 
+### Decision followthrough in replan context
+
+With `evidence_conditioned_v1` enabled, when the captured history contains a prior
+accepted evidence-linked Vision path,
+`replan_context.decision_followthrough` returns that path with the later recorded
+progress references. It uses the existing Goal/Agent/Turn binding and immutable
+history source order; timestamps do not decide causality. The full local index
+supplies append positions. Compact newest-first carriers and the named
+`newest_first_runs` builder reverse those positions without reordering ordinary
+evidence. Arbitrary iterables with unknown order supply no causal positions and
+therefore no decision-followthrough claim. An explicit current
+Goal instance excludes retired-instance sources. The normal history read resolves
+its evidence references; private transport facts are not returned. The derived
+`replan-decision-*` reference binds the normalized path and its original
+`replan-evidence-*` history reference. Changed paths cannot resolve an old
+decision reference; existing history reference identities are unchanged.
+
+Details are bounded to six distinct progress fingerprints with the full recorded
+count, omitted count, source completeness and missing-order count. These are
+recorded observations, not settled-effective-Turn counts or independent trials.
+`execution_and_goal_gain=unknown` stays explicit: a changed progress identifier,
+accepted replan or serialized observation proves neither a new mechanism nor its
+execution, candidate adoption, scientific improvement or Goal completion. A
+missing, rejected or malformed basis adds no followthrough projection. No
+selection, trigger, quota, acceptance, lease or scheduler rule changes.
+
+启用 `evidence_conditioned_v1` 且历史中已有被接受、绑定证据的 Vision 路线时，replan context 返回上次决定与之后的
+进度引用，按合格来源的顺序关联，而非根据时间戳或文案猜测因果。完整本地索引提供
+追加位置；已知最新在前的紧凑载体与 `newest_first_runs` 入口转换位置，保留普通
+证据原顺序。顺序未知的 iterable 不提供因果位置，也不生成决定接续投影。显式当前 Goal
+实例排除已退休实例。详情最多六项，保留总数、遗漏数、源完整性与顺序缺失数；
+正常 history 入口可读取引用，私有 transport facts 不公开。这些是记录中的观测，
+不等于有效结算 Turn、独立试验或执行/收益证明；后者明确保持 unknown。缺失、
+拒绝或损坏的依据不产生投影；选择、触发、结算及权限规则不变。
+
 ### Replan planning guidance
 
-The shared `replan_action_packet.planning_guidance` carries five Agent
-instructions through full/compact quota and the host Turn envelope:
+The shared `replan_action_packet.planning_guidance` carries five existing Agent
+instructions and an optional sixth stride instruction through full/compact quota and the host Turn envelope:
 
 - Preserve the requested end state under current user direction. A bounded
   slice retains outstanding requirements; easier tests cannot redefine
@@ -294,15 +329,24 @@ instructions through full/compact quota and the host Turn envelope:
   Prefer a discriminating probe, keep negative evidence scoped to tested
   conditions and proxies scoped to their coverage, and reuse still-applicable
   evidence when no new uncertainty warrants repetition.
+- **Only with `evidence_conditioned_v1`:** Review the previous path decision against subsequent work and authoritative
+  outcomes. When local tuning or repeated validation leaves the goal gap
+  unexplained, compare a bounded alternative mechanism with continuation or
+  replication. Elapsed time and one noisy result do not force a pivot. Protect
+  the best qualified artifact; name the next probe's distinguishing prediction,
+  adoption criterion and bounded cost, then check actual execution and outcome
+  at the next review. Research scope changes use existing paths or successors.
 
-This guidance is included by default whenever a replan action packet is
-projected. It is Agent judgment guidance, not a new machine-enforced acceptance
-gate or a permission grant. Typed semantic outcomes, lifecycle transitions and
-non-replan turns are unchanged. The existing TypeScript replan owner supplies
-the text; CLI and host projections preserve it without a new setting or editor.
-Transport tests prove delivery and unchanged gates, not improved model behavior.
+The first five instructions remain the ordinary replan contract. The optional
+TypeScript strategy component adds the sixth and the followthrough read model;
+`off` (the default, including legacy configurations) preserves ordinary context
+identity, evidence selection and guidance. Unknown versions fail before mutation.
+This is Agent judgment advice, not a new machine-enforced acceptance gate,
+permission, adaptive scheduler or automatic route actuator. Typed semantic
+outcomes and non-replan Turns are unchanged. Tests prove delivery and isolation;
+model adoption and utility require matched experiments.
 
-共享 replan action packet 默认携带五条指引，并在完整/精简 quota 与
+共享 replan action packet 保留五条默认指引，可选策略增加第六条，并在完整/精简 quota 与
 Turn envelope 中保留：
 
 - 不能为了容易通过测试而缩小目标；阶段成果保留剩余要求，遵守用户范围、
@@ -319,10 +363,203 @@ Turn envelope 中保留：
   确认改动进入实际执行路径和当前产物。优先选择能区分剩余解释的探针；负证据
   只覆盖已测条件，局部代理指标只覆盖其代表的范围。没有新不确定性时复用
   仍然适用的证据。
+- **仅启用 `evidence_conditioned_v1` 时：** 将上次路线决定与后续工作、权威结果对照。若局部调参或重复验证仍无法解释目标
+  缺口，比较有界的新机制、原路线接续与重复测量；不因固定时长或一次噪声结果
+  强制转向。保留最佳已验证产物，为下一探针说明判别性预测、采用条件与有界成本，
+  下次复查真实执行和结果；实验范围通过现有 path/successor 改变，不改变权限或验收。
 
-这是 Agent 判断指引，不新增机器验收门禁、配置或权限，不改变已有语义写回
-规则及非重规划 Turn。文本复用既有 TypeScript owner；投影测试证明送达和
-门禁保持，不能证明模型采用或效果提升。
+默认 `off` 及旧配置保持普通 context 身份、证据选择和前五条指引；启用策略时
+增加第六条与上次决定回读。未知版本在写入前拒绝。它提供 Agent 判断建议，
+不新增机器验收门禁、执行权限、自动调度或路线执行器；送达和隔离测试不能
+证明模型采用及收益。
+
+### Configure and roll back the stride strategy
+
+Use the existing **Goal review and stride** capability editor, selecting device
+defaults or an explicit Goal target. Choose the review unit/count and strategy,
+preview once, confirm and read back the effective configuration/source. The
+whole Goal review override wins over the device review configuration; clearing
+it restores current device defaults. A legacy override without a strategy means
+`off`, even when the device strategy is enabled. No separate capability switch
+or per-field inheritance is added.
+
+![Versioned stride strategy in the existing capability editor](assets/stride-strategy-editor.png)
+
+Isolated packaged editor with the real revision-checked configuration handler;
+workspace discovery is synthetic. This demonstrates configuration readback, not
+installed-App adoption or research utility.
+
+CLI preview/apply and readback (replace `GOAL`):
+
+```sh
+loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1
+loopx configure-goal --goal-id GOAL --execution-replan-after-turns 6 --execution-stride-strategy evidence_conditioned_v1 --execute
+loopx --format json configure-goal --goal-id GOAL
+loopx configure-goal --goal-id GOAL --execution-stride-strategy off --execute
+```
+
+Turning the strategy off retains the review interval and ordinary review. To
+restore device defaults for the entire review configuration, clear the cadence
+and strategy through the editor or `--clear-execution-replan-after-turns
+--clear-execution-replan-after-todos --clear-execution-stride-strategy --execute`.
+Historical evidence remains readable after disabling. Activation cannot authorize
+experiments, spend quota, clone a checkpoint, relax acceptance or rewrite a
+frozen experiment. Configuration is versioned; preregister the selected version
+and captured input scope for comparisons.
+
+在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal，设置计数依据、
+周期和策略，预览、确认并回读生效来源。Goal 整体覆盖设备配置；旧 Goal 覆盖中
+没有策略则为 off。关闭策略保留复盘周期；清除整个覆盖恢复设备默认值。
+历史引用仍可读取。启用不会授权实验、消耗配额、复制 checkpoint、放宽验收或
+改写冻结实验；比较时预先记录策略版本与输入覆盖范围。
+
+### Structured stride control
+
+One opt-in strategy is selectable: `off | evidence_conditioned_v1`. The existing
+activation token remains stable; the initial implementation now replaces its
+fixed evidence-label mapping with **three independently justified coordinates**.
+Pin the exact source revision when comparing runs. Frozen workers retain their
+installed source; historical fixed-vector declarations remain readable without
+being reinterpreted as new decisions.
+
+The full, compact CLI and Host packets expose `replan_action_packet.stride_control`.
+Declare `agent_vision.stride_decision` using `stride_decision_v2`, the strategy,
+actual context and admitted obligation references, Agent-assessed `basis`, and
+an explicit `action`:
+
+- `grow`: expand a supported route's complete implementation, scale or coverage;
+- `switch`: test a different mechanism against the declared reference method;
+- `verify`: resolve a specific uncertainty that determines whether to grow or switch.
+
+Each of the three `axes`
+contains a concrete `plan` (up to 120 characters) and `reason` (up to 96), instead
+of a relative adjustment enum. Work size describes a complete experiment;
+route distance names the reference method and changed assumption or mechanism;
+validation scope describes the evidence needed to decide. Expanding useful work
+is encouraged when supported. A switch can require a larger implementation and
+wider validation, while continued research can resolve uncertainty in the
+existing route. Basis does not select a vector, and tuning alone does not
+establish a route switch. The minimal packet example demonstrates authoring
+syntax; its action is not a recommendation for the current evidence.
+
+`shrink` is not a new decision option. Both historical v1 shapes remain readable
+with their original values, including normalized off-mode attachments, but cannot
+discharge a fresh enabled review. The wire-schema revision changes authoring,
+not the single selectable strategy or the meaning of recorded experiments.
+Required acceptance and authority remain unchanged.
+
+`next_probe` records `scope`, `prediction`, `minimum_evidence`,
+`adoption_criterion` and `cost_bound`. Choose a **complete experiment
+that can reach an interpretable conclusion**, including implementation and
+validation, rather than the smallest Todo. Preserve unfinished useful work and
+the best qualified artifact. Do not repeat a smaller probe merely because the
+previous decision was not adopted or a repeated observation added no information;
+resolve the execution gap or name the changed inputs/new uncertainty first.
+A `verify` action names the grow-or-switch decision its result will inform;
+repeated checking without new information is not a default continuation policy.
+
+When a prior accepted decision is delivered, `previous_review` references its
+exact `replan-decision-*` id and separately records:
+
+- `adoption`: executed, partially executed, not executed or unknown;
+- `information_gain`: new evidence, repeated evidence or unknown;
+- `goal_gain`: improved, flat, regressed or unknown;
+- delivered evidence references and the bounded lesson for the next experiment.
+
+A claim needs evidence references; unavailable evidence remains unknown. These
+are explicit Agent assessments, not host certification of scientific truth.
+The next review retains the assessment with the original decision and subsequent
+observations, so planning, execution, information and target benefit remain
+separately inspectable.
+
+Co-enabled Explore Graph/Harness supplies a scoped `explore_basis`: references
+into its existing findings, selected work branches and omitted-result read path.
+It does not create another graph or rerank branches. `explore_review` binds the
+basis revision and records considered finding ids, disposition (`used`,
+`deferred`, `no_applicable_evidence`, `unavailable`) and reason. A scoped
+counterexample is not a universal route ban, planner selection is not execution,
+and co-enablement is not evidence of synergy. Foreign/undelivered references,
+stale revisions and declaring unavailable evidence as empty are rejected. A
+changed evidence basis requires reassessment under the original Turn identity,
+not another quota debit. Disabled Explore adds no Explore assessment duty.
+
+For a considered finding omitted from the bounded basis, follow the global
+`result_page.next_command` (or increase its page size), then add
+`explore_review.result_pages: [{"revision": "<page revision>", "offset": 3, "limit": 3}]`.
+Copy these three coordinates from each page actually read; keep
+`explore_review.revision` bound to the original Explore basis. At most three
+distinct pages and three considered findings fit the existing Vision budget.
+Writeback replays the requested slices of the current, strictly validated
+Explore source and admits only findings present in those pages. The page
+revision binds the ordered full result contents and Goal/reader scope; it is
+not the bounded basis revision. Same-Goal peer findings remain reusable.
+Changed or unavailable source, forged membership and node-filtered pages are
+refused. Reread and reassess under the original Turn and obligation. This
+optional v2 field is retained in decision/history readback; ordinary reads stay
+read-only and no receipt store, claim, spawn or extra quota debit is created.
+Source replay verifies the declared citation, not that the model understood or
+adopted it. Existing v2 decisions without pages and historical v1 reads retain
+their behavior. Other detail routes are not supplemental citation sources.
+
+The typed owner validates shape, references and declared provenance before the
+fresh Vision path exit. When an enabled Goal reaches a periodic review, every
+accepted exit must also record a current `agent_vision.stride_decision`: a new
+progress observation, runnable successor, blocker or coverage-backed terminal
+result cannot silently replace that decision. The typed outcome remains legal
+and retains its own evidence gate. The decision references both the due
+obligation and its delivered review context. A terminal review may attach it to
+an evidence-linked `stop` path. A Todo successor transition alone cannot settle
+the due review. Other replan sources retain their existing exit policies.
+All attachment text counts toward the existing
+1,800-character Vision budget. The live packet exposes field limits. Legacy
+recorded declarations and old explicit off-mode attachments retain transport
+compatibility; a newly enabled fresh-path proposal requires v2 action,
+concrete plans/reasons and minimum evidence.
+
+The proposal does not execute or split a Todo, launch a child, submit a candidate,
+spend quota or certify gain. Ordinary Todo/Next Action and existing admission
+owners govern work. `off` preserves ordinary projection and review semantics.
+Evaluate actual artifact adoption, task outcomes and complete marginal cost
+before calling this strategy beneficial.
+
+**中文：** 初版只保留一套可选策略和总开关，沿用现有配置值，比较时固定确切源码。
+新提案使用 `stride_decision_v2` 数据格式，显式选择 `grow | switch | verify`，三个轴
+分别填写具体 `plan` 与 `reason`，移除 `shrink` 和含糊的 `hold` 选项。grow 扩大有
+支持的路线；switch 尝试不同机制；verify 解决决定扩大或切换的具体不确定性。
+切换需说明参照方法与
+机制变化，不能把调参重命名成新路线。工作单位是连贯的可验收交付或能产生可解释结论的完整实验，
+有支持时扩大工作；新路线可能需要更大实现，不稳定证据可能需要更多验证。
+最小示例仅演示格式，不是当前证据的行动推荐。下一实验须说明最低证据、预测、
+采用条件与完整成本。上轮复盘分别判断实际采用、新信息与目标收益，缺证据保持未知；
+不反复缩小未被采用或没有新信息的探针。Explore 开启时，绑定既有图谱/规划的证据
+revision 与具体 finding，说明采用、暂缓、无适用证据或读取不可用及理由，保留范围、
+反例和省略项的读取路径；不开新图或第二个 planner。错源、错引用、过期依据拒绝，
+按原 Turn 身份重新审视；不开额外执行权或配额。机器校验提案结构与引用，不能证明
+模型判断正确或已提升收益。两种历史 v1 决策保留原义读取兼容，但不能完成新的
+启用策略复盘；数据格式更新不增加可选策略版本。
+策略启用且周期复盘到期时，所有可接受出口都须记录绑定本次义务的
+`agent_vision.stride_decision`。新进展、可执行后续任务、阻塞或有覆盖证据的终止
+仍可作为结果，但不能代替复盘决定；决定须引用本次义务及交付的复盘上下文，
+单独创建后续 Todo 也不能结算到期义务。
+终止时可把决定附在有证据的 `stop` 路径上。其他 replan 来源沿用原有出口规则。
+
+The same opt-in strategy covers ordinary engineering, organizing and maintenance.
+`grow` expands a coherent accepted deliverable, including related integration,
+validation and readback; it does not enlarge authority, postpone settlement or
+bundle independent commitments. Compare complete marginal cost and quality in
+the next review. A synthetic admitted-work journey proves protocol adoption,
+not improved model decisions or net efficiency.
+
+同一可选策略也覆盖普通工程、整理和维护：grow 扩大连贯的可验收交付，包含相关
+集成、验证和回读，不扩大权限、延迟结算或捆绑独立承诺。下次复盘核查质量与完整
+边际成本；合成准入链路只能证明协议采用，不能证明模型决策或净效率改善。
+
+补读全局结果分页后，可在 `explore_review.result_pages` 中附上实际读取页面的
+`revision`、`offset`、`limit`，最多三页；`explore_review.revision` 仍引用原有界
+证据版本。提交时从当前可信来源重放页面并核对 `considered_refs`，支持同一 Goal
+其他 Agent 产出的证据。来源变化、不可用、伪造成员或按节点筛选的页面会被拒绝，
+应在原 Turn 和原复盘义务下补读并重新评估。读取不写入回执或扣额度，分页引用随
+决策保留到历史和下次复盘；来源核验不证明模型理解、采用或研究收益。
 
 ### Path Delta
 
@@ -839,6 +1076,37 @@ rule uses existing acceptance/lineage facts regardless of the optional advisory
 `fallback_declarations`. It neither discovers alternatives nor invents AND/OR
 relationships, and it grants no additional authority. Ownership, exclusions,
 capabilities, user gates, and quota remain independent execution constraints.
+
+For optional fallback advice, live quota takes one complete Todo source snapshot:
+canonical provider records after promotion, otherwise one legacy source read.
+Only the declared targets/successors and one layer of direct resume dependencies
+are transported to the typed projection (at most 16 records, including archived
+prerequisites). Deeper chains do not expand the selection or add reads. No
+declarations means no additional source read. This does not promise an atomic
+snapshot across the entire quota/status packet.
+Existing typed resume, ownership, and lifecycle rules decide availability.
+An unavailable, ambiguous, or malformed source read produces
+`vision_fallback_lookup_uncertain`; compact display evidence cannot override a
+failed authority read. Only absence from a complete source proves not-found.
+Pending `todo_done:<continuous_monitor>` keeps an unresolved fallback; a valid
+`monitor_changed` generation condition may establish a wait. `fallback_gaps`
+remains advisory and adds no replan obligation.
+
+Disposition is per declaration, not per candidate: a runnable, validly waiting,
+or bounded create/reopen alternative resolves its own declaration regardless of
+the other candidate's order, absence or uncertainty. It cannot clear a different
+declaration. Unavailable source/provider evidence stays uncertain; it is not proof of a
+valid wait. Waiting uses the shared positive target/generation/repository proof;
+an unbound PR reference, archived fallback itself, or contradictory done flag
+cannot suppress the advisory. Archived completed prerequisites remain valid
+evidence. No fallback declaration is required to discover canonical work, and
+none grants execution, user-decision or settlement authority.
+
+可选 fallback 提示从一次完整来源快照读取，最多输送 16 个直接相关记录，保留归档
+依赖；无声明不额外读取。按整条声明判断：一个可执行或有合法等待证据的候选即可
+消除该声明的提示，但不能替其他声明清账。候选顺序、另一个候选缺失或不确定不再
+误伤有效去向。等待复用 TS 的目标、generation 和仓库绑定正向证明；这仍是 advisory，
+不要求 Agent 为发现 canonical 工作额外维护声明，也不授予执行、审批或结算权限。
 
 等待资格现在逐项检查已有 acceptance 的 Todo 关联，并在展示裁剪前从完整来源计算。
 A 的等待不能遮住尚未落实的 B；有可执行工作则继续，相关工作都具有合法等待证据才暂缓。

@@ -55,9 +55,10 @@ from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     TERMINAL_TURN_STATES,
     ChatSessionStore,
+    normalize_agent_model_id,
     utc_now,
 )
-from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .chat_providers import ClaudeCodeAdapter, codex_model_options, direct_model_from_environment
 from .attached_session import (
     enqueue_attached_agent_turn,
     require_current_attached_session,
@@ -82,6 +83,12 @@ STEERING_NOT_DELIVERED_CODES = frozenset({
 # worker signature that carries it between methods does not open another
 # module-level `Any`.
 AttachmentPayload = dict[str, Any]
+
+# Bounded overload continuation: one original dispatch plus at most this many
+# effect-free retries, each reserved in the Turn event ledger before its backoff
+# so the remaining budget survives restart/compaction.
+TRANSPORT_RETRY_MAX_RETRIES = 3
+TRANSPORT_RETRY_BACKOFF_SECONDS = 2.0
 
 
 class ChatTurnAcceptanceUnavailableError(Exception):
@@ -309,7 +316,7 @@ class ChatRuntimeController:
         codex_bin: str,
         claude_bin: str = "claude",
         kiro_cli_bin: str = KIRO_CLI_BIN,
-        startup_timeout_sec: float = 30.0,
+        startup_timeout_sec: float | None = None,
         idle_timeout_sec: float = 180.0,
         hard_timeout_sec: float = 900.0,
         endpoint_registry: AgentEndpointRegistry | None = None,
@@ -330,9 +337,9 @@ class ChatRuntimeController:
             or os.environ.get("CODEX_HOME")
             or "~/.codex"
         ).expanduser().resolve()
-        self.claude_bin = claude_bin
-        self.kiro_cli_bin = kiro_cli_bin
-        self.startup_timeout_sec = startup_timeout_sec
+        self.claude_bin, self.kiro_cli_bin = claude_bin, kiro_cli_bin
+        self.acp_startup_timeout_sec = startup_timeout_sec
+        self.startup_timeout_sec = 30.0 if startup_timeout_sec is None else startup_timeout_sec
         self.idle_timeout_sec = idle_timeout_sec
         self.hard_timeout_sec = hard_timeout_sec
         self.endpoint_registry = endpoint_registry or AgentEndpointRegistry(store.root)
@@ -384,6 +391,44 @@ class ChatRuntimeController:
         )
         return [*builtins, *(endpoint.public_summary() for endpoint in self.endpoint_registry.list())]
 
+    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path) -> dict[str, Any]:
+        """Read model choices from one selected, available ACP endpoint.
+
+        This is intentionally not a PATH scan: the controller launches only an
+        endpoint already present in the built-in catalog or owner-local registry.
+        The temporary upstream session is closed before returning.
+        """
+        capability = next((row for row in self.capabilities() if row["agent_id"] == agent_id), None)
+        if capability is None or not capability.get("available"):
+            raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
+        if agent_id == "codex":
+            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin), "supported": True}
+        if agent_id == "claude-code":
+            return {
+                "agent_id": agent_id,
+                "supported": True,
+                "model": {
+                    "id": "model", "label": "Model", "selected": "sonnet",
+                    "options": [
+                        {"value": "sonnet", "label": "Sonnet"},
+                        {"value": "opus", "label": "Opus"},
+                        {"value": "fable", "label": "Fable"},
+                    ],
+                },
+            }
+        if str(capability.get("adapter_kind")) != "acp":
+            return {"agent_id": agent_id, "model": None, "supported": False}
+        adapter = self._start_adapter(
+            agent_id=agent_id,
+            work_dir=work_dir,
+            goal_id=None,
+            objective="",
+        )
+        try:
+            return {"agent_id": agent_id, "model": adapter.model_options(), "supported": True}
+        finally:
+            adapter.close_session()
+
     @staticmethod
     def _managed_upstream_mode(session: dict[str, Any]) -> str:
         if session.get("agent_id") == "codex":
@@ -431,6 +476,7 @@ class ChatRuntimeController:
         loopx_tools: bool = False,
         executor_model: Mapping[str, str | None] | None = None,
         project_context: dict[str, str] | None = None,
+        agent_config: dict[str, str] | None = None,
     ) -> ChatRuntimeAdapter:
         if project_context is not None:
             project_context_policy.validate_project_native_executor(agent_id, project_context)
@@ -473,6 +519,8 @@ class ChatRuntimeController:
                 if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
                 else executor_model or {}
             )
+            if agent_config and agent_config.get("model"):
+                model_config = {**model_config, "model": agent_config["model"]}
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
                 codex_home=self.codex_home,
@@ -514,6 +562,7 @@ class ChatRuntimeController:
                 resume_thread_id=resume_thread_id,
                 tool_scope="read_only",
                 context_summary=f"{goal_id}: {objective}".strip() if goal_id is not None else objective.strip(),
+                model=agent_config.get("model") if agent_config else None,
             )
         if agent_id == MANAGED_TURN_HOST:
             # The managed host has no interactive session transport, so this
@@ -555,10 +604,11 @@ class ChatRuntimeController:
                 command=kiro_cli_chat_command(self.kiro_cli_bin),
                 work_dir=work_dir,
                 resume_thread_id=resume_thread_id,
-                startup_timeout_sec=self.startup_timeout_sec,
+                startup_timeout_sec=self.acp_startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
+                config_values=agent_config,
             )
         endpoint = self.endpoint_registry.get(agent_id)
         if endpoint is not None:
@@ -567,10 +617,11 @@ class ChatRuntimeController:
                 work_dir=work_dir,
                 agent_work_dir=endpoint.mapped_work_dir(work_dir),
                 resume_thread_id=resume_thread_id,
-                startup_timeout_sec=self.startup_timeout_sec,
+                startup_timeout_sec=self.acp_startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
+                config_values=agent_config,
             )
         raise ValueError(f"unknown Agent endpoint: {agent_id}")
 
@@ -589,7 +640,10 @@ class ChatRuntimeController:
         project_ref: str | None = None,
         conversation_binding_id: str | None = None,
         source_context: dict[str, Any] | None = None,
+        agent_model_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
+        if agent_model_id:
+            agent_model_id = normalize_agent_model_id(agent_model_id)
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
@@ -674,6 +728,11 @@ class ChatRuntimeController:
                     latest = None
                 if latest is not None and goal_instance_id is not None and latest.get("goal_instance_id") != goal_instance_id:
                     latest = None
+                if latest is not None and agent_model_id and latest.get("agent_model_id") != agent_model_id:
+                    # A model is a session binding for ACP.  Never silently
+                    # retarget an existing conversation when the user chose a
+                    # different one; a new session makes that boundary visible.
+                    latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
             if capability is None:
@@ -696,20 +755,26 @@ class ChatRuntimeController:
                 manager_runtime=manager_runtime,
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
+                agent_config={"model": agent_model_id} if agent_model_id else None,
             )
-            persisted = self.store.create_session(
-                goal_id=goal_id,
-                goal_instance_id=goal_instance_id,
-                agent_id=agent_id,
-                executor_endpoint_id=agent_id,
-                adapter_kind=str(capability["adapter_kind"]),
-                upstream_thread_id=adapter.upstream_thread_id,
-                upstream_mode="chat" if agent_id == "codex" else "default",
-                channel_id=selected_channel,
-                codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
-                project_context=project_context,
-                steward_context=steward_context,
-            )
+            try:
+                persisted = self.store.create_session(
+                    goal_id=goal_id,
+                    goal_instance_id=goal_instance_id,
+                    agent_id=agent_id,
+                    executor_endpoint_id=agent_id,
+                    adapter_kind=str(capability["adapter_kind"]),
+                    upstream_thread_id=adapter.upstream_thread_id,
+                    upstream_mode="chat" if agent_id == "codex" else "default",
+                    channel_id=selected_channel,
+                    codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
+                    project_context=project_context,
+                    steward_context=steward_context,
+                    agent_model_id=adapter.current_model_id if isinstance(adapter, ACPStdioAdapter) else agent_model_id,
+                )
+            except Exception:
+                adapter.close_session()
+                raise
             persisted = self.project_contexts.initialize_bound_scope(self.store, persisted, runtime_root=self.coordination_runtime_root)
             if is_manager_channel(selected_channel):
                 assert manager_runtime is not None
@@ -939,6 +1004,7 @@ class ChatRuntimeController:
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
                 project_context=session.get("project_context"),
+                agent_config={"model": str(session["agent_model_id"])} if session.get("agent_model_id") else None,
             )
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                 try:
@@ -964,6 +1030,8 @@ class ChatRuntimeController:
         with self.lock:
             self.adapters[session_id] = adapter
         try:
+            if isinstance(adapter, ACPStdioAdapter):
+                self.store.update_session(session_id, agent_model_id=adapter.current_model_id)
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
@@ -1578,6 +1646,9 @@ class ChatRuntimeController:
                     expected_statuses={"starting", "running", "interrupting"},
                     upstream_turn_id=payload["upstream_turn_id"],
                 )
+            if kind == "agent.model_config":
+                self.store.update_session(session_id, agent_model_id=payload.get("model_id"))
+                return
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:
                     return
@@ -1734,7 +1805,7 @@ class ChatRuntimeController:
                 return
             if (not loopx_execution and parse_native_goal_command(message) is None
                     and isinstance(adapter, CodexAppServerAdapter)
-                    and exc.error_code in {"host_gate", "upstream_transport_failure"}
+                    and exc.error_code in {"host_gate", "upstream_transport_failure", "server_overloaded"}
                     and self._prepare_transport_retry(
                         session_id, turn_id, adapter, retry_binding, exc.native_error_info,
                     )):
@@ -1799,12 +1870,12 @@ class ChatRuntimeController:
         self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
         retry_binding: dict[str, str], native_error_info: dict[str, Any] | str | None,
     ) -> bool:
-        """One same-worker retry, reserved durably before backoff/dispatch.
+        """A bounded same-worker retry chain, reserved durably before each backoff.
 
         The existing queued CAS and Core active claim own execution. The event
-        ledger retains the attempt across restart/compaction; a new worker never
-        reopens starting/terminal Turns or resets this allowance. Lark delivery
-        and other adapters do not decide whether to replay a model request.
+        ledger retains every attempt and fixes the remaining budget; a new worker
+        never reopens starting/terminal Turns or resets this allowance, and other
+        adapters never decide whether to replay a model request.
         """
         from .control_plane.chat_turn_acceptance import managed_turn_execution_allowed
 
@@ -1819,24 +1890,25 @@ class ChatRuntimeController:
                                 for row in self.store.events_after(session_id, turn_id, None)))
 
         try:
-            if not isinstance(native_error_info, dict):
-                return False
-            if retry_binding.get("attempt") or not current() or any(row.get("kind") == "transport.retry_planned"
-                                    for row in self.store.events_after(session_id, turn_id, None)):
+            events = self.store.events_after(session_id, turn_id, None)
+            attempt = len([row for row in events if row.get("kind") == "transport.retry_planned"]) + 1
+            if ((not isinstance(native_error_info, dict) and native_error_info != "serverOverloaded")
+                    or attempt > TRANSPORT_RETRY_MAX_RETRIES or not current()):
                 return False
             original = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
             proof = adapter.session.transport_retry_readback(original) if original else None
             if proof is None or proof["codex_error_info"] != native_error_info or not current():
                 return False
-            delay = 2.0
-            retry_binding["attempt"] = "1"
+            delay = TRANSPORT_RETRY_BACKOFF_SECONDS * attempt
             self.store.append_event(session_id, turn_id, kind="transport.retry_planned", payload={
-                "attempt": 1, "upstream_turn_id": original,
+                "attempt": attempt, "upstream_turn_id": original,
                 "binding_sha256": retry_binding["sha256"], "readback": proof,
                 "not_before": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
             })
+            label = "模型暂时繁忙" if native_error_info == "serverOverloaded" else "连接暂时中断"
             self.store.append_event(session_id, turn_id, kind="agent.phase", payload={
-                "phase": "retrying", "label": "连接暂时中断，已核验本轮未执行工具；正在原会话继续。",
+                "phase": "retrying",
+                "label": f"{label}，已核验本轮未执行工具；正在原会话继续（第 {attempt}/{TRANSPORT_RETRY_MAX_RETRIES} 次重试）。",
             })
             if self.closed.wait(delay) or not current():
                 return False

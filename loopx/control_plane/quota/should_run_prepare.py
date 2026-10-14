@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..goals.goal_frontier.fallback_source import FallbackTodoSource
 
 from ...materials import goal_state_path
 
@@ -189,6 +192,7 @@ def _preserve_receipt_bound_replan_obligation(
     agent_id: str | None = None,
     replay_phase: ReceiptBoundReplayPhase | None = None,
     transition_candidates: list[dict[str, Any]] | None = None,
+    stride_strategy: str = "off",
 ) -> dict[str, Any] | None:
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
@@ -203,6 +207,7 @@ def _preserve_receipt_bound_replan_obligation(
             "agent_id": agent_id,
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
+            "stride_strategy": stride_strategy,
         })
     except EffectRuntimeRejected as exc:
         if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
@@ -519,6 +524,8 @@ def _prepare_quota_should_run_item(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_replan_obligation_id: str | None,
     receipt_bound_replan_guard_scoped: bool = False,
+    authoritative_fallback_todo_items: FallbackTodoSource = None,
+    replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
 ) -> _QuotaDecisionPreparation:
     quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
@@ -820,6 +827,7 @@ def _prepare_quota_should_run_item(
         else []
     )
     goal_frontier_context = build_goal_frontier_projection_context_from_status(
+        replan_explore_reader=replan_explore_reader,
         goal_id=safe_goal_id,
         agent_id=agent_frontier_id,
         status_payload=status_payload,
@@ -832,6 +840,8 @@ def _prepare_quota_should_run_item(
             project_asset.get("agent_todos") if project_asset else None,
             include_terminal=True,
         ),
+        fallback_todo_source_items=authoritative_fallback_todo_items,
+        available_capabilities=effective_available_capabilities,
         work_lane_contract=work_lane_contract,
         neutral_replan_ack_classifications=AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
         registered_agent_ids=registered_agent_ids,
@@ -850,6 +860,7 @@ def _prepare_quota_should_run_item(
             agent_id=agent_frontier_id,
             replay_phase=receipt_bound_replay_phase,
             transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
+            stride_strategy=goal_frontier_context["stride_strategy"],
         )
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}
