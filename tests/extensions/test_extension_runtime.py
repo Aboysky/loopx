@@ -281,9 +281,132 @@ ports = ["sample_report.request.bind_source"]
     )
 
     assert discovery.ports == ()
+    assert discovery.state_error_code is None
     assert len(discovery.failures) == 1
     assert discovery.failures[0].adapter_id == "sample-report-source"
     assert discovery.failures[0].error_code == "extension_hook_adapter_unavailable"
+
+    # An unreadable state file is a typed discovery-level condition, not an
+    # empty catalog: callers can tell "no provider installed" from "state broken".
+    state_file.write_text("{not json", encoding="utf-8")
+    broken = discover_extension_hook_adapters(
+        state_file=state_file,
+        phase="capability_action",
+        capability_id="sample-report",
+        target_hook_id="sample_report.request",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="sample-goal",
+        agent_id="sample-agent",
+    )
+    assert broken.ports == ()
+    assert broken.failures == ()
+    assert broken.state_error_code == "extension_state_unavailable"
+
+
+def test_capability_action_lifecycle_non_admission_is_named_without_factory_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.extensions import hook_adapters
+
+    provider = _provider(tmp_path / "provider")
+    manifest_path = _standalone_manifest(
+        tmp_path / "extension.toml",
+        entrypoint=provider,
+        permission="semantic_preference.read",
+    )
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8")
+        + """
+
+[[hook_adapters]]
+id = "sample-report-source"
+capability_id = "sample-report"
+target_hook_id = "sample_report.request"
+phase = "capability_action"
+factory = "sample_extension.hooks:build_adapter"
+required_permissions = ["semantic_preference.read"]
+ports = ["sample_report.request.bind_source"]
+
+[[hook_adapters]]
+id = "other-hook-source"
+capability_id = "sample-report"
+target_hook_id = "sample_report.other"
+phase = "capability_action"
+factory = "sample_extension.hooks:build_adapter"
+required_permissions = ["semantic_preference.read"]
+ports = ["sample_report.other.bind_source"]
+""",
+        encoding="utf-8",
+    )
+    state_file = tmp_path / "runtime" / "extensions" / "state.json"
+    install_extension(manifest_path, state_file=state_file, execute=True)
+    factory_loads: list[str] = []
+
+    def record_factory_load(reference: str) -> object:
+        factory_loads.append(reference)
+        raise ValueError("synthetic factory is not importable")
+
+    monkeypatch.setattr(hook_adapters, "_load_factory", record_factory_load)
+
+    def discover() -> object:
+        return discover_extension_hook_adapters(
+            state_file=state_file,
+            phase="capability_action",
+            capability_id="sample-report",
+            target_hook_id="sample_report.request",
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+            goal_id="sample-goal",
+            agent_id="sample-agent",
+        )
+
+    def named_failures(discovery: object) -> list[tuple[str, str, str]]:
+        return [
+            (failure.extension_id, failure.adapter_id, failure.error_code)
+            for failure in discovery.failures
+        ]
+
+    # Positive control: a ready extension reaches the factory loader.
+    ready = discover()
+    assert named_failures(ready) == [
+        (
+            "test-standalone-extension",
+            "sample-report-source",
+            "extension_hook_adapter_unavailable",
+        )
+    ]
+    assert factory_loads == ["sample_extension.hooks:build_adapter"]
+    factory_loads.clear()
+
+    disable_extension("test-standalone-extension", state_file=state_file, execute=True)
+    disabled_state = state_file.read_bytes()
+    disabled = discover()
+    assert disabled.ports == ()
+    assert disabled.state_error_code is None
+    assert named_failures(disabled) == [
+        ("test-standalone-extension", "sample-report-source", "extension_disabled")
+    ]
+    assert factory_loads == []
+    assert state_file.read_bytes() == disabled_state
+
+    enable_extension("test-standalone-extension", state_file=state_file, execute=True)
+    # Changing the doctor-verified executable invalidates its runtime identity.
+    _provider(provider, doctor_exit=2)
+    stale_state = state_file.read_bytes()
+    stale = discover()
+    assert stale.ports == ()
+    assert stale.state_error_code is None
+    assert named_failures(stale) == [
+        (
+            "test-standalone-extension",
+            "sample-report-source",
+            "extension_doctor_not_ready",
+        )
+    ]
+    assert factory_loads == []
+    assert state_file.read_bytes() == stale_state
 
 
 @pytest.mark.parametrize(

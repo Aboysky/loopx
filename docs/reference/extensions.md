@@ -792,7 +792,10 @@ manifest declarations and admits a factory only when the extension is enabled,
 doctor-ready, and authorized for every declared adapter permission. The
 factory must return exactly the declared callable ports. Import, activation,
 and factory failures become content-free optional-adapter failures; they do not
-execute or replace kernel logic.
+execute or replace kernel logic. A matching declaration of a disabled or
+doctor-stale extension is also reported, as `extension_disabled` or
+`extension_doctor_not_ready`, without importing its factory or running its
+doctor.
 
 `phase = "capability_action"` is for an explicit typed action whose semantics
 have already been decided by the Agent or caller. The adapter may bind and
