@@ -446,6 +446,18 @@ decision checkpoint、result-to-decision latency、原生结果和模型/observe
 不改变通用 heartbeat prompt 或所有 scheduler 默认行为。关闭策略恢复 fixed
 admission，保留 job/evidence history，不隐式杀作业，不改变 acceptance 或 accounting。
 
+分别测量观察间隔、准入耗时、用户停止请求排队、原生取消受理与确认 drain 的延迟。
+轮询间隔不是端到端停止时限。现有 managed ZCode broker 是具体测量候选：活动检查
+串行执行原生回读、validation、Core quota、validation，完成后再延迟安排下一检查；
+慢检查也可能延迟队列中的 pause。[Provider 分析](../long-running-execution-exploration-and-correction.zh-CN.md#loopx已有原生-goal-provider-及恢复边界)
+记录了当前 caller 与 timeout 边界，不代表已证明性能回归。仅在已证明的快照边界内
+合并未变读取，保留新工作准入、到期复核与撤销检查。
+
+单次原生 execution deadline 与 Goal 累计预算、恢复次数限制，以及验证/探索/子任务
+成本分别报告。ZCode 在每次明确 start/resume 后设一小时计时器，经过同一操作队列
+请求暂停；这既不是端到端硬停止上限，也不重置 Goal 总预算。未知原生用量保留
+unknown，不能写作零；共享读取或事件驱动观察的收益须先经相同负载测量。
+
 验收必须覆盖真实受控进程执行与 recovery，不只是 event 序列化：重复与乱序
 结果、candidate 改变、restart、丢失通知、deadline、取消、unknown effect、竞争
 claim 和 owner stop。Packaged frontend 旅程通过已有 task/capability surface 显示
@@ -843,6 +855,13 @@ M1 观察和源码层反馈已经存在：typed replan 投影返回上次 accept
 将产物、结果及剩余差距返回下一次复核。覆盖晚到纠正、丢失/重复投递及普通上下文
 恢复，保留当前权限与应做结算。打包后的任务/能力流程须展示等待、失败、过期/
 不可用及采用事实；仅模拟结论或 CLI 回执仍属部分交付。
+
+可使用已支持入口，如可选 managed ZCode native Goal 或限定范围的 Goal Chat
+接续，验证该场景的 Host 部分；这些路径不提供研究结果有效性，实验 provider 与
+首个决策合同仍归[Research §11.5](research-exploration-control-plane-v0.zh-CN.md#115-由证据驱动的实验决策修订提案)。
+加入 Goal instance 不变但 criterion/source scope 更新，以及慢检查期间请求停止
+的场景；读回下一受保护动作的当前依据与实际采用情况。绑定身份、原生 active 状态
+或计时器数值单独不足以通过。
 
 §7.7 单独验证需要相同研究快照及可比反馈机会的结论，不必阻塞上述有界集成。
 重复匹配结果及完整成本证据仍是 M5 推广前提；本文档细化不激活策略或额外模型调用。

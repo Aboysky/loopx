@@ -100,10 +100,11 @@ These directly determine whether a long-running team is usable. A directory or R
 
 The [execution, exploration and correction integration guide](../long-running-execution-exploration-and-correction.md)
 connects S3/S4/S6/S7/S10/S11 through existing Host, replan, Explore and acceptance
-owners. Its source comparison distinguishes implemented feedback, scoped result
-wake and Explore capture from unqualified generic result adoption, whole-Goal
-requirement coverage and runtime benefit. Qualification stays in the existing
-milestones; there is no parallel delivery program.
+owners. Its source comparison covers existing feedback, scoped wake, managed
+native Goal, contract acceptance and source-replayed Explore pages; Direction M1
+remains a pure candidate builder. Live adoption after current-basis recovery,
+whole-Goal requirement coverage and runtime benefit remain separate qualifications
+in the existing milestones; there is no parallel delivery program.
 
 | Area and existing entry | Streams | Next requirement in this roadmap |
 | --- | --- | --- |

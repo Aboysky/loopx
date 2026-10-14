@@ -819,6 +819,14 @@ against the selected Host's [declared input boundary](agent-session-execution-mo
 and preserve [requested/fallback/effective delivery semantics](desktop-execution-frontends-v0.md#agent-scoped-bot-ingress-modes).
 An exact steer must not silently become a new task on a later Turn.
 
+For the same long-running task, qualify each observed stage from its owning
+fact: queue acceptance from ingress, delivery from the Host receipt, consumption
+from the actual next request, adoption from subsequent work/artifact evidence,
+and acceptance from the configured validator. An unobserved stage stays unknown;
+the UI must not infer it from an earlier ACK. Preserve these distinctions in
+A23 readback using existing owners, not a new unified lifecycle writer. A
+reasoned decision to retain the current route is not a delivery failure.
+
 Continuation after correction or handoff also follows the
 [current Goal/criterion/source basis](shared-goal-alignment-and-governed-amendment-v0.md#38-invalid-evidence-and-affected-consumers).
 Receiving context, adopting a note and resuming a journal do not certify the

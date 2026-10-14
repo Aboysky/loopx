@@ -504,6 +504,25 @@ Do not change the generic heartbeat prompt or all scheduler defaults. Turning
 the policy off restores fixed admission while retaining job/evidence history;
 it neither kills work implicitly nor changes acceptance or accounting.
 
+Measure observation cadence, admission latency, user stop-request queueing,
+native cancellation acceptance and confirmed drain separately. A polling
+interval is not an end-to-end stop deadline. The existing managed ZCode broker
+is a concrete measurement candidate: active checks serialize native readback
+with validation, Core quota and validation, then schedule another check after
+the delay. Slow checks can also delay a queued pause. The
+[provider analysis](../long-running-execution-exploration-and-correction.md#loopx-an-existing-native-goal-provider-and-its-recovery-boundary)
+records the current caller and timeout boundaries; it does not establish a
+performance regression. Coalesce unchanged reads only within a demonstrated
+snapshot boundary, preserving fresh admission, due review and revocation checks.
+
+Report each native execution deadline separately from the Goal's cumulative
+budget, recovery-attempt limits and evaluator/exploration/child-work costs.
+ZCode's one-hour timer requests pause after each explicit start/resume and
+shares the operation queue; it is neither a hard end-to-end stop bound nor a
+Goal-wide budget reset. Missing native usage remains unknown, not zero. Shared
+reads or event-driven observation need same-workload measurements before any
+cost or latency benefit is claimed.
+
 Acceptance requires real controlled process execution and recovery, not just
 serialized events: duplicate and out-of-order results, changed candidates,
 restart, missed notification, deadline, cancellation, unknown effect, competing
@@ -987,6 +1006,16 @@ lost/duplicate delivery and ordinary context recovery, retaining current authori
 and owed settlement. The packaged task/capability journey must expose waiting,
 failure, stale/unavailable and adopted-result facts. A synthetic verdict or CLI
 receipt alone remains partial.
+
+Use an already supported execution entry, such as the opt-in managed ZCode
+native Goal or scoped Goal Chat continuation, to qualify the Host side of this
+episode. Those paths do not supply research-result validity: the experiment
+provider and first decision contract remain owned by
+[Research §11.5](research-exploration-control-plane-v0.md#115-evidence-conditioned-experiment-decisions-proposed-refinement).
+Include unchanged Goal-instance identity with amended criteria/source scope
+and a slow-check/stop case. Read back the next protected action's current basis
+and actual adoption; binding identity, native active status or a timer value
+alone is insufficient.
 
 §7.7 separately qualifies claims requiring the same captured research state and
 comparable feedback opportunities; it need not block this bounded integration.

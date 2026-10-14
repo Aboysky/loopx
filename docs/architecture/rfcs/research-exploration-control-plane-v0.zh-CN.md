@@ -623,6 +623,15 @@ Operational validity、新研究信息、原生结果提升和 Goal acceptance �
 observation。有效负实验可以是合法交付而没有涨分；连续负实验仍须暴露知识
 变化与剩余 frontier。
 
+渐进读取证据已经有生产回写消费者：当前来源会重放声明的 Explore result page，
+再准入首屏省略的 finding 引用。复用[Stride §7.6](hierarchical-agent-stride-control-v0.zh-CN.md#76-研究范围与证据驱动控制)
+的 page/basis 与恢复规则，不另建分页合同或 adoption receipt。页引用资格、显式
+委托结果使用和模型实际采用分别证明不同事实。验收顺序为 **provider 结果 → 当前
+来源回读 → 获准工作 → 可归属产物 → 独立结果 → 下一次复核**；覆盖来源不可用、
+有效但不适用的 finding、有范围负证据，以及支持保留现有方案的结果。复制 finding
+或填入引用不能单独证明采用；有依据的 no-change 仍然合法。历史增长时检查被省略
+反证，并分别测源扫描、排序、hash、序列化与交付上下文成本。
+
 #### 按能改变的决定选择调查
 
 初始未知、新机会、明确用户方向或反证都可以支持探索；重复失败不是必要条件，也不

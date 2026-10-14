@@ -687,6 +687,20 @@ native outcome improvement and Goal acceptance are separate observations. A
 useful negative result can be delivery without a score gain; a series of
 negative experiments must still expose changed knowledge and remaining frontier.
 
+Progressive evidence access already has a production writeback consumer: the
+current source replays declared Explore result pages before admitting omitted
+finding references. Reuse the page/basis and recovery rules in
+[Stride §7.6](hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control);
+do not define a second pagination or adoption receipt here. Page eligibility,
+explicit delegated-result use and actual model adoption establish different
+facts. Qualify the sequence **provider result → current source readback →
+admitted work → attributable artifact → independent outcome → next review**.
+Exercise unavailable sources, valid but inapplicable findings, scoped negative
+evidence and results that support continuing the incumbent. Copying a finding
+or filling an evidence reference is insufficient; a justified no-change decision
+remains legal. Inspect omitted counterevidence and measure source scan, sort,
+hash, serialization and delivered context separately as history grows.
+
 #### Choose investigation by the decision it can change
 
 Initial uncertainty, a new opportunity, explicit user direction or counterevidence

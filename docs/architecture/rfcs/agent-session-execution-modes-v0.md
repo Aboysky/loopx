@@ -175,7 +175,9 @@ Every implementation must preserve these properties.
 
 ## 4. Current-system contract
 
-Audited at `6c3da75ca`. These are current facts, not proposed behavior.
+The original mode/broker audit was at `6c3da75ca`; the managed ZCode row was
+checked at `3dd3c550afecfa0c525a34e8744a3cf06774ac94`. These are scoped source
+facts, not a qualification of every installed Host.
 
 | Boundary | Current behavior |
 | --- | --- |
@@ -187,6 +189,7 @@ Audited at `6c3da75ca`. These are current facts, not proposed behavior.
 | Runtime fencing | [`loopx/chat_runtime.py`](../../../loopx/chat_runtime.py) never starts a managed adapter for an attached session and fails closed with typed errors such as `attached_session_live_steering_unavailable`, `live_steering_requires_active_turn`, and `live_steering_session_not_attached`. |
 | CLI surface | `loopx worker-bridge attached-session-bind`, `-list`, `-claim`, and `-complete` exist in [`loopx/cli_commands/worker_bridge.py`](../../../loopx/cli_commands/worker_bridge.py), documented in the [broker guide](../../integrations/attached-agent-session-broker.md) and the [worker-bridge install contract](../../integrations/worker-bridge-install-contract.md). |
 | Existing-session delegation | [`loopx delegation`](../../reference/local-delegation.md#use-an-existing-agent-conversation-through-its-shell) exposes the same explicitly bound work as MCP to an existing shell-capable Agent. `operations` recovers requester-scoped work without remembered IDs, rechecks acceptance and exposes unavailable items and further pages. Newly tool-equipped Goal Chat consumes the same inventory; resumed native threads keep their original tool schema. It does not provision an Agent, migrate a host or install an automatic wake policy. |
+| Managed native Goal | The opt-in [ZCode provider](../../../loopx/zcode_goal_mode/README.md) binds an idle session, starts under Core admission, retains session/target on resume and confirms pause on cold recovery. Native revisions and journaled start intent guard lost replies. Native completion writes no Core acceptance or credit debit; connected status can still pause denied execution. This is one provider, not generic native-Goal qualification. |
 | Focused tests | [`tests/test_attached_session_cli.py`](../../../tests/test_attached_session_cli.py) and `tests/test_chat_codex_home.py::test_attached_session_uses_existing_host_not_managed_adapter` cover bind/claim/complete and the no-managed-adapter fence. |
 | Product-level proposal | The [Desktop execution frontends RFC](desktop-execution-frontends-v0.md) owns the Mode A/Mode B product comparison, the connector and event-source orthogonality, and the Desktop non-goals. |
 | Host-side loop guidance | [Codex CLI TUI loop](../../product/runtimes/codex-cli/codex-cli-tui-loop.md) documents session-attached automation and resume options for one visible host. |
@@ -292,6 +295,17 @@ context preparation/compaction and finalization; preserve source/target identity
 and observe the next eligible request or truthful pending/refusal. Then verify
 actual work adoption separately. Unsupported boundaries remain unavailable,
 not emulated by silently replacing the executor.
+
+A native resume must separately qualify its first new protected action after
+the same Goal instance's criterion or explicit source basis changes. The adapter
+must either deliver and demonstrate consumption of current owning requirements
+at that work boundary, or retain pending/paused work until the existing reentry
+path does so. Reconcile the original effect under its original operation/fence;
+do not replace its receipt to follow new intent. An unchanged session/target or
+startup-objective hash proves neither current semantic basis nor stale model
+behavior. Use existing criterion/source revisions, not whole-prompt hashes as
+substitute authority. Qualify an amendment arriving during restore and readable
+but no-longer-applicable evidence as well as outright source loss.
 
 For the first mixed managed cohort, qualify a cloud adapter against the same
 governed Turn contract as the local worker before expanding native Goal profiles.
@@ -600,6 +614,7 @@ future evidence and must not be reported as green.
 | Admission under restart and crash | Kill the host during execution with a bound session | No orphan executor; replacement binding has one owner and correct mode | Unverified for new hosts |
 | Feature-off parity | Run without any attached binding and without the preview host | Existing managed behavior, routes, and defaults unchanged | Unverified for new hosts |
 | Declared input boundary | Deliver a correction during a tool batch, compaction and finalization | Exact target/source retained; next eligible Host input or truthful pending/refusal; no implicit tool cancellation or retargeting | Per-adapter qualification; protocol fixtures do not prove model adoption |
+| Same native identity, changed basis | Pause, change an applicable criterion/source within the same Goal instance, then resume; also amend during restore | Original target/effect retained; first new protected action consumes current basis or remains pending/paused; no receipt rewriting | Combined qualification remains required beyond existing native identity/recovery tests |
 
 Deterministic package tests are not sufficient for admission. A new host needs
 at least one real-host row: a live process, a real bind, and a real restart.

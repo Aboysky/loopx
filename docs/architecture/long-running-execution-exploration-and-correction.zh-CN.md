@@ -7,7 +7,9 @@
 避免每个工具结果都引发一次完整规划。
 
 本文是实现地图与集成指南，基于 LoopX 源码
-`b77f63495f2619237380755178c0780ae10a0f26`，外部源码快照核验于 2026-10-13。
+`3dd3c550afecfa0c525a34e8744a3cf06774ac94`；2026-10-14 从首轮实现比较的
+`b77f63495f2619237380755178c0780ae10a0f26` 刷新。外部源码仍固定到 2026-10-13
+核验的版本，不代表各项目最新分支。
 它衔接现有 RFC，不创建新策略、schema、调度器、默认行为或执行授权。
 源码存在、安装后的行为、模型采用和实测收益分别成立。
 
@@ -20,7 +22,7 @@
 
 | 来源 | 固定版本 | 阅读范围 |
 | --- | --- | --- |
-| LoopX | `b77f63495f2619237380755178c0780ae10a0f26` | quota/replan、monitor、Explore 回写、Turn 恢复与工作区 steering |
+| LoopX | `3dd3c550afecfa0c525a34e8744a3cf06774ac94` | quota/replan、monitor、Explore 回写、Turn 恢复、工作区 steering、managed ZCode native Goal 与 direction M1 builder |
 | Grok Build | `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` | 公开 Rust CLI/runtime 的 Goal controller、插入消息与快照恢复 |
 | Codex | `9167a0b2d4a74d44a4d388057d304682e47313c6` | 公开 Rust turn loop、Goal extension、压缩与 Agent 通信 |
 | OpenCode | `be674e3158abb5f1b0c16b2bdeb3a9ba2b072774` | Session 准入/inbox、执行协调、重启和子任务结果投递 |
@@ -29,6 +31,11 @@
 引用的外部测试只读了源码，本轮没有运行；文档改动实际执行的 LoopX 验证在 PR 中
 披露。没有真实模型或同条件成本实验。Provider 模型调用、Host 回合和 LoopX 的
 accountable Turn 是不同单位，不能直接拿次数横向比较。
+
+主干刷新改变实现地图，不改变外部比较，也不证明部署就绪。新增的具体能力包括
+native Goal provider 和 Explore 页来源重放；direction M1 builder 也已存在，但
+没有生产 consumer 或回执 writer。版本化验收和显式 result-use 已有版本检查，
+后续应验证真实路径如何使用这些 owner，而非重新实现。
 
 ## 现有归属与已连接的路径
 
@@ -48,10 +55,14 @@ S4 Host、S6 证据、S7 调度与成本，以及 S10–S11 可靠性与评测�
 源码中的控制链如下。分支按条件进入，不要求额外模型调用依次走完全部步骤：
 
 ```text
-当前 Goal、要求、权限与证据
-  → 既有 quota / Todo 准入
-  → Host 连续执行一个有意义的工作片段
-  → 实际结果与持久回写
+Goal 身份、意图与适用验收合同
+  → Agent Vision / 保留要求 / 路线
+  → Todo / 显式依赖 / 当前工作边界
+  → Core quota、claim、lease 与动作准入
+  → 可记账 LoopX Turn 或经资格验证的 native Goal 集成
+  → 所选 Host session / native target / 工具批次
+  → 原操作 journal、效果与产物
+  → 当前 source-use 检查、独立验证与应做结算
        → 合格的接续工作：继续推进
        → 相关未知或反证：探索后重新判断
        → 已准入复核：履行既有来源绑定义务
@@ -59,6 +70,11 @@ S4 Host、S6 证据、S7 调度与成本，以及 S10–S11 可靠性与评测�
        → 等待 / 中断 / 停止：沿既有生命周期处理
   → 被接受的决定与之后工作进入下一次复盘
 ```
+
+这是职责地图，不声称每个 Host 都经过相同事务。Goal 可跨会话，会话可承载多个
+Turn；native Goal 完成先是 Host 观察，不能代替适用的 LoopX 验收。
+分别回答当前在执行什么、为什么允许继续、新输入何时消费、证据是否仍可用、
+谁有权关闭 Goal，不能用一个 `ready` 或 `complete` 回答五个问题。
 
 ### LoopX：从发现缺口到选择下一段工作
 
@@ -152,6 +168,100 @@ Explore 依据。它验证声明的来源与结构，不认证 Agent 解释为�
 `stride_decision`，绑定原义务与投递 context。进展、后继、blocker 和终止结果保留
 各自证据规则，其他 replan 来源保留原出口。这项机器约束不证明实际采用；优化不能
 绕过它、quota 结算、权限、lease 或版本检查。
+
+### LoopX：已有原生 Goal provider 及恢复边界
+
+[Managed ZCode provider](../../loopx/zcode_goal_mode/README.md)是 LoopX 内部的
+具体接入示例，不是第五个上游运行时的独立审计。当前调用链区分绑定、启动与恢复：
+
+```text
+CLI / Goal drawer → bridge 验证 canonical Goal/Agent/project
+  bind  → 创建/恢复 native session → 确认暂停 → 持久 binding
+  start → 当前 Core heartbeat 正文 → validation/quota/validation 准入
+        → 记录 start intent → native setGoal → 持久观察到的 target
+  resume → 按需恢复同一 session/target → 当前准入
+         → native resume，不再 setGoal
+  monitor/status → 观察 native 状态与所需 Core 检查
+                 → 拒绝/权威不可用：pause 并确认 drain
+  cold recovery → 对账原 intent/target → 确认暂停
+  native completed → 仅观察，不自动写 Core 完成或额度扣减
+```
+
+[`zcode_goal_operation`](../../loopx/zcode_goal_mode/bridge.py)在 bind/start
+生成新的规范 heartbeat 正文；[`NativeGoalController`](../../loopx/zcode_goal_mode/runtime.ts)
+串行执行操作，resume 保留原 native session/target，准入为 validation→quota→validation。
+`setGoal` 回执丢失时，仅有持久获准 start intent 与匹配 objective hash 才能恢复；
+冷恢复先暂停原 target，不自动续跑。[Controller 测试](../../tests/control_plane_ts/zcode_native_goal.test.ts)
+用受控 Host double 覆盖拒绝、身份替换、持久化失败、精确恢复和原生完成不写 Core。
+[Bridge 测试](../../tests/test_zcode_goal_bridge.py)覆盖另一层 Core/CLI 边界；测试代码
+或模型清单都不证明真实付费 provider 就绪。
+
+保留 target 只证明执行容器连续，不证明 resume 后消费了变化的 criterion。
+反过来，没有再次 `setGoal` 也不证明模型使用旧标准：保留的 heartbeat 正文可能要求
+Agent 读取当前 Core 状态。待补组合验收应保持同一 Goal instance，仅改变 criterion
+或显式来源适用性，观察第一项新受保护动作。它须使用现有 owner 的当前 revision；
+无法支持该刷新边界时保持 pending/paused。不能用整段 prompt hash 代替这项证据，
+也不能改写旧回执。
+
+[Broker](../../loopx/zcode_goal_mode/cli.ts)在一次串行检查结束后约两秒再安排下次
+monitor，每个准入子进程有十秒 timeout。在线 status 可以重查 quota 并暂停 target，
+不是对 Host 完全只读。Pause/stop 同样与串行队列竞争。每次执行的一小时安全期限
+既不是整个 Goal 的 token 预算，也不是硬实时停机保证；native 用量仍未知。
+这些是可测的成本/延迟边界，不是已确认瓶颈。合并观察前先测检查、子进程/IO、停止
+排队和实际 drain；原生失败或未验证结果既不能冒充已验收，也不免除 Core 应做结算。
+
+### LoopX：版本化合同验收与显式结果使用已经存在
+
+[Acceptance adapter](../../loopx/control_plane/goals/acceptance.py)读取当前 owner
+标准、执行 validator，再核对依据；[`acceptance_authority.ts`](../../loopx/control_plane/goals/acceptance_authority.ts)
+将验证绑定 contract revision/digest、work basis 和 provider CAS。
+[`projectGoalAcceptance`](../../loopx/control_plane/goals/acceptance_contract.ts)
+区分 partial、accepted scope、stale 和 held。只验证一个 Todo，不因该项测试通过就
+变成全合同 accepted；`selected_work` 合同的全量验证也只覆盖所选范围，不能代表
+更大 Goal 的所有要求。
+
+同样，[`qualifyDelegationResultUse`](../../loopx/control_plane/collaboration/delegation_result_use.ts)
+已检查显式 `uses` 祖先、精确产物版本、accepted 来源、输入可用性、循环与有界收集。
+A→B→C 中，即使 C 输出仍通过自身 validator，当前使用也可能不可用，历史
+accepted/done 继续保留。[Result-use 集成测试](../../tests/test_delegation_result_use.py)
+已有版本绑定重放、重连和传递失效且不重新 dispatch 原任务的用例。应组合这些机制，
+而不是把它们当成缺失的 adoption/dependency 账本。
+
+全 Goal 收口仍要证明当前合同覆盖已声明的必要要求，跨 Agent 必需工作已有合法处置，
+相关 amendment 不会推翻结论。可选研究分支无需全部做完；持续型 Goal 的等待/终止
+条件来自声明合同，一次观察成功不是永久完成。范围内验收、原回执、当前来源资格
+和全局收口分别成立。
+
+### LoopX：方向观察与渐进证据的接入程度不同
+
+[`buildGoalDirectionBaseline`](../../loopx/control_plane/goals/direction_baseline.ts)
+是对传入声明、资料 metadata 和同 Agent 使用回执的可选 M1 纯 builder。
+未声明时保持投影缺席；digest 描述声明的资料依据，不是 canonical Goal-intent
+revision 或动作授权。[Direction RFC](rfcs/goal-direction-baseline-v0.zh-CN.md)
+仍将入口/回执 writer/consumer 的资格标为未完成；调用方给出格式合法回执，不能
+认证真实资料使用。
+
+Explore 已接入实际生产读取/回写路径：
+
+```text
+turn-context 返回有界 findings + 版本绑定 next_command
+  → Agent 补读被省略结果页
+  → stride_decision.explore_review 携带有界页坐标
+  → state_refresh 获取当前 Explore 来源
+  → projectExploreTurnContext 重放所声明切片
+  → strideReviewMismatch 核对当前引用成员
+  → 同依据补充引用保持准入身份 → 所属语义回写
+```
+
+[`explore_result_page.ts`](../../loopx/control_plane/capabilities/explore_result_page.ts)
+限制描述符，[`explore_turn_context.ts`](../../loopx/control_plane/capabilities/explore_turn_context.ts)
+重放来源页，不相信调用方自报 finding 列表。
+[`stride_explore_pagination.test.ts`](../../tests/control_plane_ts/stride_explore_pagination.test.ts)
+覆盖陈旧/伪造/其他 consumer 页及来源可用性区别。它验证引用，不证明理解或采用。
+Page 与 bounded basis revision 范围不同；来源变化后须在原 Turn 重读，可更新
+context/basis，但不替换原 obligation/settlement 身份。当前仍构造完整来源/result
+rows，有界输出及较少单项 hash 不证明源 IO 为常数。测长历史时保留遗漏读取和有范围
+反证；来源缺失不是反证，适用范围改变必须使对应旧依据失效。
 
 ## 借鉴机制及其限制
 
@@ -325,6 +435,20 @@ AgentSession prompt / steer / followUp
   → event listener 将完成消息追加到 session history
 ```
 
+`finishTurn` 还是一个控制扩展点，不只是通知：
+
+```text
+finishTurn → end？→ agent_end
+  否则 → 有自然工具/steering 工作？→ 继续这项工作
+       → 有 follow-up？→ 带该输入继续
+       → 显式 continue？→ 一次 context-only turn
+       → 否则 agent_end
+```
+
+自然接续会消费显式继续请求，不额外重复；再做一次 context-only turn 需要新的
+continuation 决定。它支持可选的长任务 controller，但不把持久业务 Goal、独立
+验收或跨进程恢复自动加到基础循环。
+
 此版本在**整批工具调用结束后**消费 steering。Sequential mode 也先完成 batch；
 parallel 可以乱序完成，但结果按调用顺序进入上下文。Steering 不会终止已提交工具，
 follow-up 则等内层工具/steering 循环准备停下时才消费。
@@ -373,9 +497,9 @@ Grok 的[第三方声明](https://github.com/xai-org/grok-build/blob/2bdd1d6a636
 | --- | --- | --- |
 | Stride §6.4、§7.5–7.7、§11–12 | 事件驱动可能被读成跳过周期义务；已有反馈投影仍列为下一实现 | 保留配置义务，分开候选评审和验收；下一片段改为真实结果→采用工作→再次复核，包含上下文恢复与完整成本 |
 | Research Exploration §5.1、§11.5 | 通用捕获与未来科学决策/采用合同区分不足；有界输出暗示不读全来源 | 复用附件/重放，只识别仍缺的有效性/采用事实，测源 IO，分开验收捕获、使用和结果 |
-| Agent Session §1、§5、§10–11 | 笼统“无自动恢复”和统一 successor-wake 缺口掩盖已有有界接续 | 保留显式激活和单续跑 owner；说明 Host 消费边界，复用 Goal Chat wake 验证终结/重连，不泛称全 Host 完成 |
-| Manager A23、§10 | “steer 或 queue”可能让完成竞态后的精确纠正被静默改投 | 保留原 ingress/Turn，fallback 需预先许可或新的显式选择；provider ACK 与模型采用分开 |
-| Shared Goal Alignment §3.8 | 来源可读、note 采用、journal 可继续可能被当成统一恢复/就绪 | 新工作前连接 Goal/criterion/显式证据；原操作恢复保持不变；验证 restore 中的 amendment 和来源失效，不改写旧回执 |
+| Agent Session §1、§4–5、§10–11 | 笼统“无自动恢复”和统一 successor-wake 缺口掩盖已有接续；相同原生身份可能暗示语义已更新 | 记录 managed ZCode 路径，保持单接续 owner；逐 Host 验同实例 resume 后当前标准/来源消费，以及终结和重连 |
+| Manager A23、§10 | “steer 或 queue”可能静默改投纠正；投递 ACK 可能暗示后续采用 | 保留原 ingress/Turn 和已允许 fallback；queued、delivered、consumed、adopted、verified 各由所属事实证明 |
+| Shared Goal Alignment §3.7–3.8 | 来源可读、局部 accepted、note 采用、journal 可继续可能被当成整个 Goal 就绪 | 保留 accepted 范围和必要要求覆盖，新工作前重接当前标准/显式来源；Direction M1 只作候选观察，原操作恢复保持不变 |
 
 这些修改细化验收并澄清既有权威，不安装 evaluator、不改变当前周期，也不创造协议词表。
 额外机器约束仍需所属实现、兼容和关闭态验证。
@@ -389,6 +513,9 @@ Grok 的[第三方声明](https://github.com/xai-org/grok-build/blob/2bdd1d6a636
 | Explore 捕获与显式 M3 composition | 普通附件和 File/SQLite composition gate，见 Research §5 | §11.5 单实验结果/采用门、完整远端/安装验收与科学效用 |
 | 纠正与 accepted-result wake | 浏览器重试身份、exact-Turn ingress、有界 Goal Chat wake | 逐 Host/channel 的实际消费和采用，通用作业结果集成 |
 | 恢复与 required reads | typed 原操作恢复、当前 Todo/acceptance/lease 检查和来源读取 | 跨压缩/交接的完整 Goal 要求覆盖，不推断全局就绪 |
+| Managed native Goal | 可选 ZCode bind/start/pause/resume/stop、精确 native 身份、冷恢复暂停和 Core 准入 | 同实例恢复后消费当前标准、真实用量/成本与全部 Host 资格 |
+| Acceptance 与 result-use | 版本化合同验证/CAS，以及当前显式依赖祖先检查 | Accepted 合同范围不等于任意 Goal 意图完整覆盖，不推断全局依赖图 |
+| Direction 与省略的 Explore 证据 | 纯 direction M1 builder，生产路径来源重放结果页 | Direction 生产回执/consumer 未资格化；引用合法不证明模型采用或常数读取成本 |
 | 产品过程解释 | 显式产物/复核/修订/采用视图 | 通用 stride 决定→产物过程，以及完整 Explore 附件/重试操作 |
 | 运行效率 | 明确 owner 与可测成本候选 | 同负载、模型、历史规模的受控测量；代码量或测试通过不证明延迟 |
 
@@ -456,6 +583,33 @@ Grok 的[第三方声明](https://github.com/xai-org/grok-build/blob/2bdd1d6a636
 可以核验显式产物/复核/修订/采用关系，不是所有 stride decision 的通用可视历史。
 缺少前端附件提交/重试或决定到产物的连接时，仍是所属交付片段的配套工作；只有 CLI
 的前置实现应说明为部分交付。
+
+### 恢复与负向场景矩阵
+
+下表把已有回归接缝组合成**待验收的连贯场景**，不是全部用例已通过的报告。
+测试链接提供可复用起点；实际执行的测试、后端和跳过项在 PR 单独披露。
+沿原操作与当前来源版本连接证据，不新建账本。
+
+| 注入或变体 | 应观察到的结果 | 已有接缝与剩余验证 |
+| --- | --- | --- |
+| 暂停后保持 Goal instance，更新标准/来源范围再 resume；restore 期间再加入 amendment | 保留原生身份和原回执；第一项新受保护动作消费当前适用标准/来源，不支持的边界保持待处理 | [原生控制器测试](../../tests/control_plane_ts/zcode_native_goal.test.ts) 覆盖身份/恢复；跨 owner 恢复到真实模型行为仍待验 |
+| 显式 A → B → C 的祖先失效，但 C 自身 validator 仍通过 | 保留历史 accepted/done；祖先不合格时拒绝当前使用，不重新派发原任务 | [Result-use 集成测试](../../tests/test_delegation_result_use.py) 已由受控 worker 覆盖；再接所选 Host 入口 |
+| Native completed 而验收失败；selected-work 合同通过但仍有必要 Goal 工作 | 保留 provider 完成与局部 accepted，不升级为整个 Goal achieved；完成应做结算；仅可选研究未完成不必阻塞收口 | [验收 authority 测试](../../tests/control_plane_ts/goal_acceptance_authority.test.ts) 和原生完成测试覆盖独立 owner；最终组合回读仍待验 |
+| 最后 drain 与 idle 之间提交结果；重复通知、停止后旧 wake，再加入新获准输入 | 持久工作可发现；旧 wake 不复活已停执行；新输入由原接续 owner 按当前准入处理 | 复用[已验收结果 wake](../../loopx/chat_loopx_mode.py) 和 Host 接续路径；同时验证不重复启动与不丢工作，不能只验证锁 |
+| 工具、上下文准备或终结期间投递/重试 exact-Turn steer | 文本、ingress、目标不变；如实显示 pending/consumed/refused 和许可 fallback；steering 不等于工具取消 | [Steering 测试](../../tests/test_chat_turn_steering.py) 加每个 Host 的声明消费边界，不推广为全部 Host 通过 |
+| Native set 已发生但回执丢失；重放旧操作后再准入新恢复工作 | 只恢复匹配持久 start intent 的 target；冷恢复暂停；旧重放幂等，新 accountable Turn 仍履行结算 | 复用原生控制器和 [Turn recovery](../../loopx/control_plane/turn_driver/turn_journal.ts)，分别检查原操作与新 Turn 回执 |
+| Validation/quota 变慢时请求停止；到单次 deadline 后多次显式恢复 | 分别测请求排队、原生取消与确认 drain；跨计时器保留配置的累计预算及 unknown 用量 | [ZCode runtime/broker](../../loopx/zcode_goal_mode/cli.ts) 是测量候选，不是已证明的停止 SLO 或 token 用量限制 |
+| 经合法/伪造/陈旧/跨消费者页引用省略结果；新增与旧反证条件不同的正 finding | 当前来源重放；反证保留适用范围及读取入口；坏页与来源不可用分开。同依据页保留准入身份，源漂移可在原 Turn 更新 basis | [分页测试](../../tests/control_plane_ts/stride_explore_pagination.test.ts) 与 Stride §7.6 已有合同；仍须验证实际采用省略证据 |
+| 主工作提交后丢失 Explore 附件/关联确认 | 主工作仍成功；原操作下补回附件，不重复工作、不宣称已采用 | [Explore 回写测试](../../tests/control_plane/test_explore_result_writeback.py) 提供恢复接缝，验证产品重试与回读 |
+| 遍历启用策略的周期复核出口，再关闭策略或不声明 direction | Progress/successor/blocker/terminal 保留现有义务；关闭保留普通行为/历史；未声明 Direction M1 不加投影或权限 | [Stride 测试](../../tests/control_plane_ts/stride_policy.test.ts) 与 [direction 测试](../../tests/control_plane_ts/direction_baseline.test.ts)；压缩、轮询、UI 刷新不能解除工作义务 |
+| 分别给判别性结果、不可用来源、不适用 finding，以及支持保留原方案的结果 | 检查实际下一工作、产物和独立结果；有依据不换路合法。复述 finding 或单独声明 used 不足 | Research §11.5 与既有捕获/result-use owner；真实模型采用是独立 M3 验收，对比收益还需匹配证据 |
+| 保持渲染上下文上限并扩大历史 | 省略反证仍可恢复；分测扫描/排序/hash/序列化/上下文成本，保留适用范围版本 | 当前源码处理完整来源；先测冷/热负载，再宣称 IO 可扩展或净节约 |
+
+首行是对上述“验收不变”主场景的**显式授权改要求**变体，不允许 Agent 在普通优化时
+自行弱化验收。先在既有 owner 跑故障用例，再组合受支持产品旅程；仅为需要的结论
+追加真实模型或匹配实验。
+
+### 交付与收益验收
 
 | 交付片段 | 既有归属与决定性证据 |
 | --- | --- |

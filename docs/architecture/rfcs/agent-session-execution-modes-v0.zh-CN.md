@@ -133,7 +133,9 @@ LoopX 启动，另一种已经属于其他宿主。当绑定没有说明自己�
 
 ## 4. 当前系统契约
 
-在 `6c3da75ca` 上审计。以下是当前事实，不是提案行为。
+原模式/broker 审计基于 `6c3da75ca`，managed ZCode 行复核于
+`3dd3c550afecfa0c525a34e8744a3cf06774ac94`。以下是限定范围的源码事实，
+不代表每个已安装 Host 均完成资格验证。
 
 | 边界 | 当前行为 |
 | --- | --- |
@@ -145,6 +147,7 @@ LoopX 启动，另一种已经属于其他宿主。当绑定没有说明自己�
 | 运行时围栏 | [`loopx/chat_runtime.py`](../../../loopx/chat_runtime.py) 绝不为挂接会话启动托管适配器，并以类型化错误失败关闭，例如 `attached_session_live_steering_unavailable`、`live_steering_requires_active_turn`、`live_steering_session_not_attached`。 |
 | CLI 面 | `loopx worker-bridge attached-session-bind`、`-list`、`-claim`、`-complete` 存在于 [`loopx/cli_commands/worker_bridge.py`](../../../loopx/cli_commands/worker_bridge.py)，并在 [broker 指南](../../integrations/attached-agent-session-broker.md) 与 [worker-bridge 安装契约](../../integrations/worker-bridge-install-contract.md) 中记录。 |
 | 原会话委派 | [`loopx delegation`](../../reference/local-delegation.md#use-an-existing-agent-conversation-through-its-shell) 让有 shell 能力的原 Agent 使用与 MCP 相同的显式执行绑定；`operations` 无需记住 ID 即可找回自身委派，重新核验 accepted，明确单条不可用及剩余分页。新挂载工具的 Goal Chat 复用同一目录，已存在的原生线程恢复时保留原工具 schema；不创建 Agent、不迁移宿主，也不安装自动唤醒策略。 |
+| Managed native Goal | 可选 [ZCode provider](../../../loopx/zcode_goal_mode/README.md) 绑定空闲会话，经 Core 准入启动，同 session/target 恢复，冷恢复确认暂停。Native revision 和已记录 start intent 保护丢失回执。原生完成不写 Core acceptance/credit debit，但在线 status 可暂停被拒绝的执行。这是单个 provider，不是通用 native Goal 资格。 |
 | 聚焦测试 | [`tests/test_attached_session_cli.py`](../../../tests/test_attached_session_cli.py) 与 `tests/test_chat_codex_home.py::test_attached_session_uses_existing_host_not_managed_adapter` 覆盖 bind/claim/complete 与"不启动托管适配器"的围栏。 |
 | 产品级提案 | [桌面执行前端 RFC](desktop-execution-frontends-v0.zh-CN.md) 拥有 Mode A/Mode B 的产品对比、连接器与事件源正交性，以及桌面端非目标。 |
 | 宿主侧循环指引 | [Codex CLI TUI loop](../../product/runtimes/codex-cli/codex-cli-tui-loop.md) 记录了一个可见宿主的会话挂接自动化与恢复选项。 |
@@ -231,6 +234,14 @@ native Turn 或显式 inbox drain。复用既有[输入/唤醒策略](desktop-ex
 不另建队列权威。Steering ACK 不代表取消已提交工具或证明模型消费。覆盖工具执行、
 上下文准备/压缩、终结期间的输入，保留来源/目标身份，观察下一次合格请求或真实的
 pending/拒绝，再单独验证实际采用。不支持的边界保持不可用，不能悄悄换执行器模拟。
+
+同一 Goal instance 的 criterion 或显式来源依据改变后，native resume 还须单独验证
+第一项新受保护动作。Adapter 要么在该工作边界交付并证明消费了当前 owner 要求，
+要么保持 pending/paused，直到既有重入路径完成校准。原效果沿原 operation/fence
+对账，不为跟随新意图替换回执。Session/target 或启动 objective hash 不变，既不能
+证明语义依据最新，也不能证明模型用了旧标准。复用 criterion/source revision，
+不以整段 prompt hash 代替权威。还须覆盖 restore 期间 amendment 到达、来源可读但
+已不适用，以及来源直接丢失。
 
 首个混合 managed cohort 优先让云端 adapter 与本地 worker 通过同一 governed Turn
 合同，再扩展 native Goal profile。这是交付优先级，不是默认迁移；provider 资格由
@@ -478,6 +489,7 @@ root，都不同于注册身份数和展示上限。不要只为展示这些观�
 | 重启与崩溃下的接入 | 在已绑定会话期间杀掉宿主 | 无孤儿执行器；替换绑定只有一个属主且模式正确 | 对新宿主未验证 |
 | 关闭态一致性 | 在没有任何挂接绑定、也没有预览宿主的情况下运行 | 既有托管行为、路由与默认值不变 | 对新宿主未验证 |
 | 已声明输入边界 | 工具批次、压缩和终结期间交付纠正 | 保留确切目标/来源；进入下一合格 Host 输入或真实 pending/拒绝；不隐式取消工具或改投 | 按 adapter 验证；协议 fixture 不证明模型采用 |
+| Native 身份不变但依据变化 | 暂停后在同 Goal instance 改适用 criterion/source 再恢复，另测 restore 中 amendment | 原 target/effect 保留；第一项新受保护动作消费当前依据或保持 pending/paused；不改旧回执 | 既有 native 身份/恢复测试之外，仍需组合资格验证 |
 
 确定性的包测试不足以支撑接入。新宿主至少需要一条真实宿主行：一个真实进程、一次真实
 绑定、一次真实重启。

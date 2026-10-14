@@ -8,8 +8,10 @@ back to the existing LoopX decision boundary, and verifies the resulting work
 without turning every tool result into another planning cycle.
 
 This is an implementation map and integration guide, based on LoopX source
-`b77f63495f2619237380755178c0780ae10a0f26`. External source snapshots were
-inspected on 2026-10-13. It connects existing RFCs; it creates no policy,
+`3dd3c550afecfa0c525a34e8744a3cf06774ac94`, refreshed on 2026-10-14 from the
+initial comparison at `b77f63495f2619237380755178c0780ae10a0f26`. External
+snapshots remain pinned to the versions inspected on 2026-10-13, not each
+project's latest branch. It connects existing RFCs; it creates no policy,
 schema, scheduler, default change or execution grant. Source presence,
 installed behavior, model adoption and measured benefit remain separate.
 
@@ -25,7 +27,7 @@ separately from source behavior.
 
 | Source | Fixed revision | Inspected scope |
 | --- | --- | --- |
-| LoopX | `b77f63495f2619237380755178c0780ae10a0f26` | Quota/replan, monitor, Explore writeback, Turn recovery and workspace steering |
+| LoopX | `3dd3c550afecfa0c525a34e8744a3cf06774ac94` | Quota/replan, monitor, Explore writeback, Turn recovery, workspace steering, managed ZCode native Goal and direction M1 builder |
 | Grok Build | `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` | Public Rust CLI/runtime Goal controller, interjections and snapshot recovery |
 | Codex | `9167a0b2d4a74d44a4d388057d304682e47313c6` | Public Rust turn loop, Goal extension, compaction and Agent communication |
 | OpenCode | `be674e3158abb5f1b0c16b2bdeb3a9ba2b072774` | Session admission/inbox, execution coordinator, restart and child-result delivery |
@@ -36,6 +38,13 @@ LoopX validation executed for the documentation change is disclosed in the PR.
 No live-model or matched-cost experiment is implied. Provider model calls, Host
 turns and LoopX's accountable Turns are different units; counts across these
 projects are not directly comparable.
+
+The main-branch refresh changes the implementation map, not the external
+comparison or a deployment claim. It adds a concrete native-Goal provider and
+source-replayed Explore pages. The direction M1 builder is also present, but
+has no production consumer or receipt writer. Current acceptance and explicit
+result-use already provide version checks; subsequent qualification should
+exercise those owners rather than introduce replacements.
 
 ## Existing owners and the connected path
 
@@ -56,10 +65,14 @@ The source has the following control path. Branches are conditional; they are
 not a mandatory sequence of extra model calls:
 
 ```text
-Current Goal, requirements, authority and evidence
-  -> existing quota / Todo admission
-  -> Host executes one coherent work slice
-  -> observed result and durable writeback
+Goal identity, intent and applicable acceptance contract
+  -> Agent Vision / retained requirements / route
+  -> Todo / explicit dependencies / current work boundary
+  -> Core quota, claim, lease and action admission
+  -> accountable LoopX Turn or qualified native-Goal integration
+  -> selected Host session / native target / tool batch
+  -> original-operation journal, effects and artifacts
+  -> current source-use checks, independent validation and owed settlement
        -> eligible continuation: keep useful work moving
        -> relevant unknown or counterevidence: explore, then reconsider
        -> admitted review: satisfy its existing source-bound obligation
@@ -67,6 +80,13 @@ Current Goal, requirements, authority and evidence
        -> wait / interruption / stop: use the existing lifecycle
   -> accepted decision and later work feed the next review
 ```
+
+This is an ownership map, not a claim that every Host traverses an identical
+transaction. A Goal may span sessions; a session can carry several Turns; native
+Goal completion is a Host observation until the applicable LoopX acceptance
+path succeeds. Ask separately what is executing, why it may continue, when new
+input is consumed, whether its evidence is still usable, and which owner may
+close the Goal. One `ready` or `complete` flag cannot answer all five questions.
 
 ### LoopX: from a detected gap to the next selected work
 
@@ -188,6 +208,123 @@ context. Progress, successor, blocker and terminal outcomes keep their own
 evidence rules; other replan sources retain their existing exits. This enforced
 recording obligation does not prove actual adoption. Efficiency work must not
 bypass it, quota settlement, permission, lease or revision checks.
+
+### LoopX: an existing native-Goal provider and its recovery boundary
+
+The [managed ZCode provider](../../loopx/zcode_goal_mode/README.md) is a concrete
+example inside LoopX, not a fifth independent upstream runtime audit. Its
+current call chain separates binding, starting and resuming:
+
+```text
+CLI / Goal drawer -> bridge validates canonical Goal/Agent/project
+  bind  -> create or restore native session -> confirm paused -> persist binding
+  start -> current Core heartbeat task -> validate/quota/validate admission
+        -> journal start intent -> native setGoal -> persist observed target
+  resume -> restore same session/target if needed -> current admission
+         -> native resume (not another setGoal)
+  monitor/status -> observe native state + applicable Core checks
+                 -> denial/unavailable authority: pause and confirm drain
+  cold recovery -> reconcile original intent/target -> confirm paused
+  native completed -> observed only; no automatic Core completion or credit write
+```
+
+[`zcode_goal_operation`](../../loopx/zcode_goal_mode/bridge.py) generates a new
+canonical heartbeat task for bind/start. [`NativeGoalController`](../../loopx/zcode_goal_mode/runtime.ts)
+serializes operations and preserves the native session/target on resume. Its
+admission is validation → quota → validation. A lost `setGoal` reply is
+recoverable only when a durable admitted start intent and objective hash match;
+cold recovery pauses the recovered target rather than silently continuing it.
+The [controller tests](../../tests/control_plane_ts/zcode_native_goal.test.ts)
+cover denial, replaced identity, persistence failures, exact resume and native
+completion not writing Core state, using a controlled Host double. The
+[bridge tests](../../tests/test_zcode_goal_bridge.py) cover the separate Core/CLI
+boundary; neither test source nor a model list certifies paid-provider readiness.
+
+Keeping the same target proves execution-container continuity, not that a
+changed criterion was consumed after resume. Conversely, not issuing a new
+`setGoal` is not proof of stale model behavior: the retained heartbeat task can
+direct the Agent to obtain current Core state. The missing combined qualification
+changes criteria or explicit source applicability within the same Goal instance,
+then observes the first new protected action. It must use current owning
+revisions, or remain pending/paused at an unsupported refresh boundary. Do not
+replace that evidence with a hash of the entire prompt or rewrite the old receipt.
+
+The [broker](../../loopx/zcode_goal_mode/cli.ts) schedules another monitor about
+two seconds after a serialized check completes; its admission subprocesses each
+have a ten-second timeout. Online status can recheck quota and pause a target,
+so it is not a purely observational operation. Pause/stop also contend with the
+controller's serial queue. The one-hour per-execution safety deadline is not a
+whole-Goal token budget or a hard real-time stop guarantee. Native usage remains
+unknown. These are measurable cost/latency boundaries, not a diagnosed bottleneck:
+measure check duration, subprocess/IO cost, stop queueing and actual drain before
+coalescing work. A native failure or unverified result never waives Core's owed
+settlement or permits reporting the work as accepted.
+
+### LoopX: contract acceptance and explicit result use already exist
+
+The [acceptance adapter](../../loopx/control_plane/goals/acceptance.py) obtains
+current owner criteria, runs their validators and checks the basis again.
+[`acceptance_authority.ts`](../../loopx/control_plane/goals/acceptance_authority.ts)
+binds verification to contract revision/digest, work basis and provider CAS;
+[`projectGoalAcceptance`](../../loopx/control_plane/goals/acceptance_contract.ts)
+distinguishes partial verification, accepted scope, stale evidence and held work.
+Verifying one Todo cannot become full-contract accepted merely because its own
+tests pass. A full verification of a `selected_work` contract still covers only
+that selected scope, not every requirement of the wider Goal.
+
+Similarly, [`qualifyDelegationResultUse`](../../loopx/control_plane/collaboration/delegation_result_use.ts)
+checks explicit `uses` ancestry, exact artifact versions, accepted sources,
+input availability, cycles and bounded collection. A → B → C may become
+unavailable for current use even when C's own output still passes its local
+validator. Historical accepted/done records remain intact. The
+[result-use integration tests](../../tests/test_delegation_result_use.py) already
+exercise version-bound replay, reconnect and transitive invalidation without
+redispatching the original task. These are existing mechanisms to compose,
+not missing adoption or dependency ledgers.
+
+Whole-Goal closeout still needs evidence that the current contract covers its
+declared mandatory requirements, required work across Agents has a legal
+disposition, and relevant amendments cannot invalidate the conclusion. Optional
+research branches need not all finish. A recurring Goal's waiting or terminal
+condition comes from its declared contract; one successful observation is not
+permanent completion. Keep scoped acceptance, original receipts, current
+source eligibility and global closeout as separate facts.
+
+### LoopX: direction observation and progressive evidence have different reach
+
+[`buildGoalDirectionBaseline`](../../loopx/control_plane/goals/direction_baseline.ts)
+is an opt-in M1 pure builder over supplied declarations, material metadata and
+same-Agent usage receipts. No declaration preserves the absent projection.
+Its digest describes the declared material basis; it is neither a canonical
+Goal-intent revision nor an action grant. The [direction RFC](rfcs/goal-direction-baseline-v0.md)
+still records entry/receipt-writer/consumer qualification as incomplete. A
+schema-valid caller-supplied receipt does not authenticate real material use.
+
+Explore goes further along an existing production read/write path:
+
+```text
+turn-context shows bounded findings + revision-bound next_command
+  -> Agent reads an omitted result page
+  -> stride_decision.explore_review includes bounded page descriptors
+  -> state_refresh obtains current Explore source
+  -> projectExploreTurnContext replays the declared slices
+  -> strideReviewMismatch checks current citation membership
+  -> same-basis citation expansion preserves admission IDs -> owning writeback
+```
+
+[`explore_result_page.ts`](../../loopx/control_plane/capabilities/explore_result_page.ts)
+bounds descriptors; [`explore_turn_context.ts`](../../loopx/control_plane/capabilities/explore_turn_context.ts)
+replays source pages rather than trusting caller-provided finding lists.
+[`stride_explore_pagination.test.ts`](../../tests/control_plane_ts/stride_explore_pagination.test.ts)
+checks stale/forged/foreign pages and source availability distinctions. This
+qualifies citations, not understanding or adoption. Page and bounded-basis
+revisions have different scopes: source drift requires a current read in the
+original Turn, which may refresh its context/basis without replacing the original
+obligation or settlement identity. Current construction still
+processes the full source/result rows: bounded output and fewer emitted hashes
+do not establish constant-time source IO. Preserve omitted-result access and
+scoped refutations when measuring large histories; missing source is not refuted
+evidence and changed applicability must invalidate the corresponding old basis.
 
 ## Transfer mechanisms, with their limits
 
@@ -391,6 +528,21 @@ AgentSession prompt / steer / followUp
   -> event listener appends completed messages to session history
 ```
 
+`finishTurn` is also a control extension point, not only a notification:
+
+```text
+finishTurn -> end? -> agent_end
+  otherwise -> natural tool/steering work? -> continue that work
+            -> follow-up input? -> continue with that input
+            -> explicit continue? -> one context-only turn
+            -> otherwise agent_end
+```
+
+Natural continuation consumes the explicit request instead of duplicating it;
+another context-only turn needs another continuation decision. This enables an
+optional long-work controller without making persistent business Goals,
+independent acceptance or cross-process recovery part of the base loop.
+
 At this version, steering is consumed **after the entire tool-call batch**.
 Sequential mode also finishes the batch before injection; parallel execution
 can complete out of order while results enter context in call order. Steering
@@ -455,9 +607,9 @@ as missing LoopX features:
 | --- | --- | --- |
 | Stride §§6.4, 7.5–7.7, 11–12 | Event-driven review could be read as skipping periodic duty; feedback projection was still described as the next implementation | Retain configured obligations; separate candidate review from acceptance; make the next slice a real result→adopted work→next-review episode, with context recovery and full cost |
 | Research Exploration §§5.1, 11.5 | Generic result capture and the proposed scientific decision/adoption contract were insufficiently separated; bounded output implied no full source read | Reuse existing attachment/replay; identify only additional missing validity/adoption facts; measure source IO; qualify capture, use and outcome separately |
-| Agent Session §§1, 5, 10–11 | Blanket no-resume wording and a generic successor-wake gap obscured existing scoped continuation | Preserve explicit activation and one continuation owner; declare actual Host input boundaries; reuse Goal Chat wake and test finalization/reconnect instead of claiming all-Host readiness |
-| Manager A23 and §10 | “Steer or queue” could allow an exact-Turn correction to be silently moved after a completion race | Retain original ingress/Turn identity; fallback needs prior permission or a new explicit delivery choice; provider ACK and model adoption remain separate |
-| Shared Goal Alignment §3.8 | Source readability, note adoption and journal continuation could be collapsed into one recovered/ready result | Reconnect Goal/criterion/explicit evidence before new work; preserve original-operation recovery; test amendments and source loss during restore without rewriting old receipts |
+| Agent Session §§1, 4–5, 10–11 | Blanket no-resume wording and a generic successor-wake gap obscured existing scoped continuation; same native identity could imply current semantics | Record the managed ZCode path; preserve one continuation owner; qualify current criteria/source consumption after same-instance resume, finalization and reconnect per Host |
+| Manager A23 and §10 | “Steer or queue” could silently retarget a correction; a delivery ACK could imply later adoption | Retain original ingress/Turn identity and permitted fallback; derive queued, delivered, consumed, adopted and verified facts from their respective owners |
+| Shared Goal Alignment §§3.7–3.8 | Source readability, scoped acceptance, note adoption and journal continuation could be collapsed into whole-Goal readiness | Preserve accepted scope and mandatory-requirement coverage; reconnect current criteria/explicit sources before new work; treat Direction M1 as a candidate observation, retaining original-operation recovery |
 
 The revised text refines qualification and clarifies existing authority. It
 does not install an evaluator, change the current cadence or invent a new
@@ -473,6 +625,9 @@ its owning implementation, compatibility and default-off validation.
 | Explore capture and explicit M3 composition | Existing ordinary attachments and File/SQLite composition gate; see Research RFC §5 | Single-experiment result/adoption gate in §11.5, full remote/installed qualification and scientific utility |
 | Corrections and accepted-result wake | Browser retry identity, exact-Turn ingress and scoped Goal Chat wake | Declared consumption boundary and live adoption per Host/channel; generic job-result integration |
 | Recovery and required reads | Typed original-operation recovery, current Todo/acceptance/lease checks, source read paths | Full Goal requirement coverage across compaction/handoff; no inferred whole-Goal readiness |
+| Managed native Goal | Opt-in ZCode bind/start/pause/resume/stop, exact native identity, cold-recovery pause and Core admission | Same-instance/current-criterion consumption after resume, live usage/cost and general all-Host qualification |
+| Acceptance and result-use | Versioned contract verification/CAS and current explicit dependency ancestry | Accepted contract scope is not arbitrary Goal-intent completeness; no inferred global dependency graph |
+| Direction and omitted Explore evidence | Pure direction M1 builder; production source-replayed result pages | Direction production receipt/consumer still unqualified; citation eligibility does not prove model adoption or constant-time reads |
 | Product explanation | Explicit artifact/review/revision/adoption view | Universal stride-decision→artifact story and complete Explore attachment/retry interaction |
 | Runtime efficiency | Specific owners and measurable candidate costs | Controlled workload, model and history-size measurements; source size or successful tests are not latency evidence |
 
@@ -563,6 +718,37 @@ can inspect explicit artifact/review/revision/adoption relationships. It is not
 a universal visual history of every stride decision. A missing frontend
 attachment/retry or decision-to-artifact connection remains companion work in
 the owning slice; a CLI-only prerequisite should be described as partial.
+
+### Recovery and negative-case matrix
+
+The following combines existing regression seams with **proposed qualification
+of the connected episode**. It is not a report that all combinations passed.
+Existing test links identify reproducible starting points; the PR separately
+records which tests ran, their backend and skipped cases. Use the original
+operation and current source revisions to join observations, not a new ledger.
+
+| Injection or variant | Required observation | Existing seam and remaining qualification |
+| --- | --- | --- |
+| Pause, change criteria/source scope without replacing the Goal instance, then resume; also deliver an amendment during restore | Keep native identity and original receipts; the first new protected action consumes current applicable criteria/sources or remains pending at an unsupported boundary | [Native controller tests](../../tests/control_plane_ts/zcode_native_goal.test.ts) cover identity/recovery; cross-owner resume-to-model behavior remains to qualify |
+| Invalidate an ancestor in explicit A → B → C while C still passes its own validator | Preserve historical accepted/done facts; reject current use where ancestry is no longer eligible, without redispatching the original task | [Result-use integration](../../tests/test_delegation_result_use.py) covers this with a controlled worker; carry it through the selected Host entry |
+| Native reports completed but acceptance fails; selected-work contract passes while mandatory Goal work remains | Preserve provider completion and scoped acceptance without promoting either to whole-Goal achieved; execute owed settlement; optional research alone need not prevent closeout | [Acceptance authority tests](../../tests/control_plane_ts/goal_acceptance_authority.test.ts) and native completion tests cover separate owners; combined final readback remains |
+| Commit a result between final drain and idle; deliver duplicates and old wakes after stop, then a newly authorized input | Durable work remains discoverable; prior wakes cannot revive stopped execution; new input re-enters current admission through the same continuation owner | Existing [accepted-result wake](../../loopx/chat_loopx_mode.py) and Host continuation paths; qualify both no duplicate start and no lost work, not just a lock |
+| Deliver/retry an exact-Turn steer during tools, context preparation or finalization | Preserve text, ingress and target; show the actual pending/consumed/refused fact and permitted fallback; steering does not imply tool cancellation | [Steering tests](../../tests/test_chat_turn_steering.py) plus each Host's declared consumption boundary; no all-Host inference |
+| Lose the reply after native set; replay an old operation, then admit new recovery work | Recover only the target matching durable start intent; cold recovery pauses; old replay is idempotent while a new accountable Turn retains its settlement obligation | Native controller and [Turn recovery](../../loopx/control_plane/turn_driver/turn_journal.ts) are reused; inspect original-operation and new-Turn receipts separately |
+| Delay validation/quota while requesting stop; reach the execution deadline and explicitly resume repeatedly | Measure request queueing, native cancellation and confirmed drain; preserve configured cumulative budgets and unknown usage across per-execution timers | [ZCode runtime/broker](../../loopx/zcode_goal_mode/cli.ts) supplies a measurement candidate, not a proved stop SLO or token-usage bound |
+| Cite an omitted result via valid, forged, stale or foreign pages; add a positive finding under different conditions from an old refutation | Replay current source; keep counterevidence scoped and reachable; distinguish bad descriptors from unavailable source. Same-basis pages preserve admission identity; source drift can refresh basis within the original Turn | [Pagination tests](../../tests/control_plane_ts/stride_explore_pagination.test.ts) and Stride §7.6 own these rules; qualify actual omitted-evidence use |
+| Commit primary work, then lose Explore attachment/link confirmation | Preserve successful primary work; retry the attachment under the original operation without repeating work or declaring adoption | [Explore writeback tests](../../tests/control_plane/test_explore_result_writeback.py) supply the recovery seam; verify product retry/readback |
+| Exercise every enabled periodic-review exit, then disable strategy or omit direction declarations | Progress/successor/blocker/terminal exits retain their current duty; disabling preserves ordinary behavior/history; absent Direction M1 adds no projection or permission | [Stride tests](../../tests/control_plane_ts/stride_policy.test.ts) and [direction tests](../../tests/control_plane_ts/direction_baseline.test.ts); compaction, polling and UI refresh cannot discharge work obligations |
+| Provide a discriminating result, an unavailable source, an inapplicable finding and a result supporting the incumbent | Inspect actual next work, artifact and independent outcome; a justified no-change choice is valid. Repeating the finding or declaring use alone is insufficient | Research §11.5 and existing capture/result-use owners; real-model adoption is a separate M3 qualification, comparative gain needs matched evidence |
+| Grow history while holding rendered context bounds constant | Omitted counterevidence remains recoverable; report scan/sort/hash/serialization/context cost separately and preserve applicability revisions | Current full-source construction is visible; measure cold/warm workloads before claiming scalable IO or net savings |
+
+The first row is an explicitly authorized requirement-change variant of the
+unchanged-contract episode above. It does not authorize an Agent to weaken
+acceptance during ordinary optimization. Run fault cases at their existing
+owners before composing the supported product journey; add live-model and
+matched studies only for the claims that need them.
+
+### Delivery and benefit qualification
 
 | Delivery slice | Existing owner and decisive evidence |
 | --- | --- |

@@ -662,6 +662,11 @@ Session、精确 Turn、不变文本与 ingress 身份。当前前端发送前�
 验证工具执行、压缩和终结中的纠正，保留[请求/fallback/生效投递语义](desktop-execution-frontends-v0.md#agent-scoped-bot-ingress-modes)。
 精确 steer 不得悄悄变成后续 Turn 的新任务。
 
+对同一长任务逐段取证：ingress 证明排队受理，Host 回执证明送达，实际下一请求
+证明输入消费，后续工作/产物证明采用，配置的 validator 证明验收。未观测阶段保留
+unknown，UI 不从此前 ACK 推断后续事实。A23 回读沿既有 owner 保留这些区别，
+不新增统一生命周期 writer。有依据地保留当前路线不是投递失败。
+
 纠正或交接后接续还遵循[当前 Goal/criterion/source 依据](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#38-失效证据与受影响消费者)。
 收到上下文、adopt note 和恢复 journal 都不认证接收方下一决定。保留原操作恢复，
 再按当前依据准入新工作，回读实际产物并返回原入口。本地 Chat 路径不替代其他 Host
