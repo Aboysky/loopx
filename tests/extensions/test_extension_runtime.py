@@ -1364,6 +1364,124 @@ def test_install_disable_upgrade_and_rollback_preserve_verified_binding(
     ]
 
 
+def test_installed_snapshot_fails_closed_when_the_runtime_api_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot validated by an older runtime is not ready on a newer one.
+
+    `install` checks `requires_loopx_api` when it loads the manifest; the
+    saved copy must be re-checked by every runtime that reads it, otherwise
+    an extension written for API 1 keeps dispatching after LoopX moves to 2.
+    """
+    from loopx.extensions import manifest as manifest_module
+
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+    install_extension(v1, state_file=state_file, execute=True)
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is True
+
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 2)
+
+    [entry] = extension_catalog_entries(state_file=state_file)
+    assert entry["provider"]["installed"] is True
+    assert entry["provider"]["enabled"] is True
+    assert entry["provider"]["ready"] is False
+    [status] = extension_status(state_file=state_file)["extensions"]
+    assert status["enabled"] is True
+    assert status["doctor_verified"] is False
+
+    with pytest.raises(ValueError, match="requires LoopX extension API `>=1,<2`, but this runtime provides `2`"):
+        resolve_extension_activation("test-semantic-extension", state_file=state_file)
+    with pytest.raises(ValueError, match="requires LoopX extension API"):
+        resolve_extension_binding(
+            "test-semantic-extension",
+            state_file=state_file,
+            capability_id="semantic-preference",
+            protocol="semantic_preference_provider_v0",
+            permission="semantic_preference.read",
+        )
+    optional = resolve_optional_capability_binding(
+        state_file=state_file,
+        capability_id="semantic-preference",
+        protocol="semantic_preference_provider_v0",
+        permission="semantic_preference.read",
+    )
+    assert optional.status == "extension_incompatible"
+    assert optional.next_action == "install_compatible_extension"
+    assert optional.binding is None
+
+    with pytest.raises(ValueError, match="requires LoopX extension API"):
+        enable_extension("test-semantic-extension", state_file=state_file, execute=True)
+
+    doctor = doctor_installed_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert doctor["status"] == "api_incompatible"
+    assert doctor["verified"] is False
+    assert doctor["failure_kind"] == "api_incompatible"
+    assert doctor["external_writes_performed"] is False
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert "doctor_verified_revision" not in entry
+    batch = doctor_enabled_extensions(state_file=state_file, execute=True)
+    assert batch["ok"] is False
+    assert batch["blocked_count"] == 1
+
+    # Rolling back *to* a revision this runtime cannot admit is refused up
+    # front, instead of activating a revision every reader then rejects.
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 1)
+    install_extension(v2, state_file=state_file, operation="upgrade", execute=True)
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 2)
+    with pytest.raises(ValueError, match="rollback revision .* requires LoopX extension API"):
+        rollback_extension("test-semantic-extension", state_file=state_file, execute=True)
+    entry = json.loads(state_file.read_text(encoding="utf-8"))["extensions"][
+        "test-semantic-extension"
+    ]
+    assert entry["rollback_revision"] is not None  # still available once compatible
+
+    # The refused rollback left the API-2 doctor revocation in place, but the
+    # API-1 upgrade above probed v2 and recorded its own passing doctor, so on
+    # a compatible runtime the active revision is ready again.
+    monkeypatch.setattr(manifest_module, "LOOPX_EXTENSION_API_VERSION", 1)
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is True
+
+    # A revision whose proof was revoked is not ready until the operator
+    # re-runs the doctor: revoke v2's proof and confirm the catalog says so.
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    state["extensions"]["test-semantic-extension"].pop("doctor_verified_revision", None)
+    state["extensions"]["test-semantic-extension"].pop(
+        "doctor_verified_entrypoint_identities", None
+    )
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is False
+    repaired = doctor_installed_extension(
+        "test-semantic-extension", state_file=state_file, execute=True
+    )
+    assert repaired["verified"] is True
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"] is True
+
+
+def test_declared_manifest_for_an_installed_id_must_repeat_the_active_revision(
+    tmp_path: Path,
+) -> None:
+    """Two different manifests for one id fail closed; the same one is idempotent."""
+    provider = _provider(tmp_path / "provider")
+    v1 = _manifest(tmp_path / "v1.toml", entrypoint=provider, version="1.0.0")
+    v2 = _manifest(tmp_path / "v2.toml", entrypoint=provider, version="2.0.0")
+    state_file = tmp_path / "runtime" / "extensions.json"
+    installed = install_extension(v1, state_file=state_file, execute=True)
+
+    [entry] = extension_catalog_entries([v1], state_file=state_file)
+    assert entry["provider"]["installed"] is True
+    assert entry["provider"]["active_revision"] == installed["revision"]
+
+    with pytest.raises(ValueError, match="duplicate capability provider `test-semantic-extension`"):
+        extension_catalog_entries([v2], state_file=state_file)
+
+
 def test_failed_upgrade_keeps_the_active_revision(tmp_path: Path) -> None:
     ready = _provider(tmp_path / "ready-provider")
     broken = _provider(tmp_path / "broken-provider", doctor_exit=2)
