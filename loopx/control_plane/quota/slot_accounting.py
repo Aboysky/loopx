@@ -798,10 +798,16 @@ def build_quota_slot_preview_for_decision(
             "after": None,
         }
     delivery_workspace_validated = bool(delivery_workspace)
+    settlement_does_not_require_workspace = (
+        delivery_completion_run is not None
+        and settlement_identity is not None
+        and workspace_requirement == "not_required"
+    )
     workspace_repair_no_spend = (
         before.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
         and before.get("workspace_repair_allowed") is True
         and not delivery_workspace_validated
+        and not settlement_does_not_require_workspace
     )
     if workspace_repair_no_spend:
         return {
