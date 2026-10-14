@@ -122,7 +122,7 @@ shell；不能因为过滤了 `CI` 就恢复采集。不能按系统、安装渠
 
 `python-tests.yml` publishes `merge-gate` for every open pull request. Code,
 workflow, policy and unknown paths require the existing `pytest` aggregate
-(including TypeScript checks and all four Python shards), Stage 2C correctness
+(including TypeScript checks and all six Python shards), Stage 2C correctness
 aggregate, and Windows tests to succeed. Failed, cancelled, missing or
 unexpectedly skipped results cannot pass the gate. The client-only exception
 below retains common checks and substitutes packaged Dashboard qualification
@@ -203,8 +203,8 @@ The [job exemption policy](ci-impact-selection.md) additionally permits pure
 Dashboard-client changes to skip backend Python/Windows and Stage2c, while
 requiring frontend type-check/build, scoped coverage and real packaged Dashboard
 browser smoke. Backend-only TS/lint/minimum-Node jobs are also exempt.
-Mixed, prompt, dependency and unknown changes stay full. Full Python runs four
-complete shards and combines all four coverage files. The `ci:full` label forces
+Mixed, prompt, dependency and unknown changes stay full. Full Python runs six
+complete shards and combines all six coverage files. The `ci:full` label forces
 full qualification; main stays full. No selected-only report impersonates full
 coverage. 新的前端豁免由目标分支已审阅的策略控制；CI 自身变更仍全量验证。
 
@@ -616,7 +616,7 @@ network latency, provider availability, or a two-hour matrix.
 它刻意不包含真实模型调用和 full smoke catalog，因此普通迭代不依赖凭证、网络
 时延、模型服务可用性或两小时级测试矩阵。
 
-The Linux suite uses four hosted runners with two xdist workers each.
+The Linux suite uses six hosted runners with two xdist workers each.
 `pytest-split` partitions the complete collection using `least_duration`;
 without a timing file, tests have equal weight and alternate between shards.
 Lint, type checks, and the CLI budget run separately. The required `pytest`
@@ -630,14 +630,14 @@ An explicitly loaded CI observer also streams pytest-owned phase durations from
 the xdist controller. Read the downloaded log with
 `node scripts/ci/pytest_timing.ts JOB_LOG`; incomplete evidence remains incomplete
 and does not replace JUnit, coverage or the required gate. See the
-[timing observation boundary](ci-impact-selection.md#four-complete-python-shards).
+[timing observation boundary](ci-impact-selection.md#six-complete-python-shards).
 The reusable Sonar workflow consumes that same run's XML and never reruns
 pytest or reads cross-run artifacts. Missing Sonar tokens still skip analysis
 successfully; test jobs receive no Sonar secret. The trigger is the union of
 the former Python and Sonar paths. Client-only PRs use the exemption above;
 Sonar-configuration changes remain full, including on forks without a token.
 
-Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker。`pytest-split`
+Linux 全套测试分到六台 hosted runner，每台保留两个 xdist worker。`pytest-split`
 按完整 collection 分片；没有历史耗时时，等权测试交替分配。lint、类型检查和 CLI
 预算独立执行。必需的 `pytest` 汇总检查会拒绝失败／跳过的分片和缺失的 coverage，
 合并后再执行原有 19.6% 门槛；不要求单个分片达到全套覆盖率。coverage 使用相对路径，
@@ -646,12 +646,12 @@ Linux 全套测试分到四台 hosted runner，每台保留两个 xdist worker�
 CI 同时在 xdist controller 流式记录 pytest 原生 phase 耗时。下载日志后用
 `node scripts/ci/pytest_timing.ts JOB_LOG` 回读；不完整证据保持不完整，不能替代
 JUnit、coverage 或必过门禁。归属与测量边界见
-[分片耗时记录](ci-impact-selection.md#four-complete-python-shards)。
+[分片耗时记录](ci-impact-selection.md#six-complete-python-shards)。
 Sonar 只复用同一次 run 的 XML，不重复测试、不跨 run 取产物。缺少 token 仍成功跳过
 Sonar，测试 job 不接收 Sonar secret。触发范围取原有两套 workflow 的并集；纯前端
 PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token 的 fork。
 
-Full Python shards share four repository-wide job concurrency groups, one per
+Full Python shards share six repository-wide job concurrency groups, one per
 `matrix.shard`, across PR, main, merge-queue and manual runs carrying this
 workflow version. Each group admits one running job and uses `queue: max`
 to retain up to 100 pending jobs instead of replacing another current
@@ -666,16 +666,16 @@ unchanged: cancelled, skipped or incomplete dependencies cannot become a green
 aggregate. This adds one short trusted cleanup job per update without checkout,
 PR-code execution or new permissions on qualification jobs. Older workflow
 versions on the base branch retain only closed-event cleanup. Queue overflow, cancellation and missing coverage remain failures of
-the required gate; collection, four partitions, two workers, reports and the
+the required gate; collection, six partitions, two workers, reports and the
 coverage floor stay unchanged. Contributors can wait longer for a shard during
-overlapping full runs. This limits long-shard occupancy to four runners; it
+overlapping full runs. This limits long-shard occupancy to six runners; it
 does not reserve release capacity or prioritize releases over other jobs or
 repositories in the organization's shared hosted pool. Older workflow versions
 do not participate. Roll back by removing this job-level concurrency block,
 retaining workflow-level cancellation and the required gate. See GitHub's
 [concurrency queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
-全量 Python 分片按 `matrix.shard` 共用四个仓库级 job concurrency 组，适用于
+全量 Python 分片按 `matrix.shard` 共用六个仓库级 job concurrency 组，适用于
 携带本版 workflow 的 PR、main、merge queue 和手动运行。每组允许一个运行中 job，
 用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
 请求清退同 PR 的旧 head；可信 base 分支的 `synchronize` 清理还会取消遗留
@@ -685,13 +685,13 @@ PR、当前 head 和无关联 run 均被保护。必过汇总条件不变，取�
 不能变绿。每次更新增加一个短清理 job，不 checkout 或执行 PR 代码，不增加普通
 验证 job 的权限；base 分支旧版 workflow 仍只清理 closed 事件。队列溢出、取消
 和缺失 coverage 仍不能通过必需检查。
-完整 collection、四分片、双 worker、报告和覆盖率门槛保持不变；重叠的全量运行
-会增加贡献者等待分片的时间。此限制只把长分片占用约束到四台 runner，不预留发布
+完整 collection、六分片、双 worker、报告和覆盖率门槛保持不变；重叠的全量运行
+会增加贡献者等待分片的时间。此限制只把长分片占用约束到六台 runner，不预留发布
 容量，也不保证发布优先于组织共享 hosted 池中的其他 job 或仓库。旧版 workflow
 不参与该限制。回退时移除此 job 的 concurrency 块，保留 workflow 级取消和必需
 检查；队列行为遵循上述 GitHub 官方契约。
 
-Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 4 --group 1
+Reproduce one shard locally with `uv run --extra test python -m pytest -v -n 2 --splits 6 --group 1
 --splitting-algorithm least_duration --cov=loopx`. Omit the split arguments to
 run the complete suite locally. 全量本地测试仍省略分片参数即可。
 
