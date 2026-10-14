@@ -282,6 +282,9 @@ only the two complete-manifest checks opt into the existing 64 MiB private-file
 transport. These candidate bounds define this inspection profile. The RFC's
 Section 12 maintainer freeze, compound worst-case qualification and broader
 platform/provider qualification remain open. No production SLO is claimed.
+The RFC's [pending capacity-default decision](../architecture/rfcs/complete-state-recovery-v0.md#pending-m1-capacity-default-decision)
+lists the unchanged values, protection goals and evidence gaps for the maintainer;
+it is not an approval or an additional activation step for the operator.
 
 ### Measured local capacity cases
 

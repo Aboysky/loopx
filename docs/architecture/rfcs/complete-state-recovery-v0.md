@@ -683,7 +683,9 @@ The RFC pull request implements none of these runtime milestones.
 1. **M1 capacity defaults.** The backup/reliability maintainers must freeze
    archive, expansion, entry, graph, and verification-time defaults before M1
    merge. Recommendation: derive them from current backup-size telemetry and
-   fail closed with explicit overrides. This does not block the RFC.
+   fail closed with explicit overrides. This does not block the RFC. The
+   [pending decision below](#pending-m1-capacity-default-decision) makes the
+   current inspection profile reviewable; it does not record approval.
 2. **Exact replacement continuity.** The Goal lifecycle and provider owners must
    decide before M3 whether any local disaster-recovery profile may retain a
    source `goal_instance_id`. Recommendation: mint a new lifetime unless the old
@@ -697,6 +699,49 @@ The RFC pull request implements none of these runtime milestones.
    link, case, Unicode, sparse-file, and atomic-publication behavior before M3/M5
    claims support. M1 may report the platform as unqualified and stop before
    extraction.
+
+### Pending M1 capacity-default decision
+
+**Status: pending backup/reliability maintainer decision.** The proposal is to
+freeze the existing limits below for the v0 **local POSIX File/SQLite inert
+inspection** profile, without increasing a limit or adding an override. This
+would satisfy only the capacity-default decision in Section 12 item 1; the
+Section 11 M1 merge gate remains open until the owner records that decision.
+It would not approve compound maximum loads, a production SLO, another platform
+or provider, capture consistency, identity adoption, or M2/M3 reactivation.
+
+The archive adapter, typed audit owner and disposable worker enforce the
+current bounds; the [backup guide](../../reference/configuration-backup.md#measured-local-capacity-cases)
+retains the original source, environment, measurements and reproduction command.
+Those measurements are historical evidence, not measurements of a later merge.
+
+| Existing value proposed for this profile | What it protects | Available evidence and limit of that evidence |
+| --- | --- | --- |
+| Archive 128 MiB; expanded tar stream and regular-file total 512 MiB; expansion ratio 2,000 | Bound compressed input, copying and decompression amplification before publication | Guide: near-limit native inputs and over-limit refusals. Ratio is source-enforced; an independent exact-ratio boundary measurement is not recorded. |
+| External and embedded manifest 16 MiB each; extended tar header 128 KiB each and 16 MiB cumulative; JSON depth 64 | Bound metadata decoding and traversal | Guide: external 16 MiB / one-byte-over cases; recovery tests reject oversized PAX variants and sparse records before decoding. Maximum structured metadata, cumulative-header and depth combinations remain unqualified. |
+| 20,000 members; paths at most 64 components / 1,024 characters / 255 UTF-8 bytes per component; link resolution at most 40 hops | Bound inventory/path work and reject ambiguous or escaping extraction | Guide: exact 20,000 / 20,001 members; recovery tests cover path, link, collision and occupied-target refusals. Exact limits for every path shape and maximum link chains are not measured. |
+| 128 Goals; 128 SQLite files; 20,000 committed transactions per Goal | Bound owner inventory and complete historical reads, without truncating history | Guide: native 128 / 129 inventories. `test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication` covers 20,000 / 20,001. This is not a guarantee that 128 maximum-history Goals fit the other bounds or deadline. |
+| At most 258 emitted components and 128 dependency links in the current audit shape | Bound this profile's graph through the above inventories | Derived from one configuration component, up to 128 database components, up to 128 Goal components each linked to configuration, and one unknown remainder. This is not a general graph limit or a complete mutable-owner inventory; generic graph profiles remain outside this proposal. |
+| Disposable owner verifier: 90 seconds; V8 old-space 512 MiB; SQLite process-wide heap at most 64 MiB | Contain database/owner inspection outside the shared daemon | Timeout cleanup and SQLite-view refusal tests exercise containment. Heap values are source-enforced; process-tree peak memory and worst-case timing are not qualified. The timeout is not an end-to-end archive-processing deadline or RTO. |
+| Existing transport limits: 64 MiB private snapshot only for the two manifest checks; normal RPC and worker input 2 MiB; owner stdout 2 Mi characters; saved-audit input 16 MiB | Bound exchanges and historical report decoding without widening ordinary transport | Large-manifest transport and audit-integrity tests cover the path. These independent limits are not additive capacity or proof that every maximum-size audit is publishable. |
+| Free destination space at least copied regular-file bytes plus 16 MiB before copying | Refuse a known-insufficient destination before publication | Source check plus failure-cleanup tests; concurrent disk consumption and a successful worst-case space reservation are not guaranteed. |
+
+Source owners: [`state_recovery.py`](../../../loopx/state_recovery.py),
+[`state_recovery.ts`](../../../loopx/control_plane/state_recovery.ts), and
+[`state_recovery_worker.ts`](../../../loopx/control_plane/state_recovery_worker.ts).
+Existing [Python recovery cases](../../../tests/test_state_recovery.py) and
+[typed audit cases](../../../tests/control_plane_ts/state_recovery.test.ts)
+separate readability, rejection, cleanup and historical readback. No test count
+substitutes for the maintainer decision. Actual production backup-size telemetry
+and compound maximum-load qualification are not supplied by the synthetic guide.
+
+The requested decision is **approve these unchanged capacity defaults for this
+inert profile, or identify the specific value requiring further evidence or
+revision**. Record the owner, decision, reviewed implementation revision and
+profile here or in the exact-head PR review. Until then, keep this proposal and
+the current checkpoint pending. Readable copied state remains historical data:
+the decision cannot activate a Goal, confer a current Goal-basis writer, restore
+a lease, or authorize replay of a pending effect.
 
 ---
 

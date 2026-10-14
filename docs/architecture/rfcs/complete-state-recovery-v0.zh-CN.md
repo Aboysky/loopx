@@ -593,6 +593,7 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 1. **M1 capacity 默认值。** Backup/reliability maintainer 必须在 M1 合并前冻结
    archive、expansion、entry、graph 与 verification-time 默认值。建议从当前
    backup-size telemetry 推导，并以显式 override fail closed。这不阻塞 RFC。
+   [下述待决提案](#待决m1-容量默认值)列出当前检查 profile 的可审值，不代表批准。
 2. **精确 replacement continuity。** Goal lifecycle 与 provider owner 必须在 M3
    前决定是否允许任一本地 disaster-recovery profile 保留来源
    `goal_instance_id`。建议铸造新 lifetime，除非旧 authority 可证明已不可逆 fence，
@@ -604,6 +605,43 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 4. **Windows 与非 POSIX filesystem。** Platform owner 必须在声明 M3/M5 支持前
    验证 ACL、link、case、Unicode、sparse-file 和 atomic-publication 行为。M1 可以
    报告 platform unqualified，并在提取前停止。
+
+### 待决：M1 容量默认值
+
+**状态：等待 backup/reliability maintainer 决定。** 提案仅冻结下表既有默认值，
+范围为 v0 **本地 POSIX File/SQLite 惰性检查**，不提高上限、不新增 override。
+该决定只满足第 12 节第 1 项容量默认值要求；owner 记录决定之前，第 11 节 M1
+合并门保持开放。它不批准多个上限组合的最坏负载、生产 SLO、其它平台/provider、
+捕获一致性、身份接纳或 M2/M3 重新启用。
+
+当前上限由归档 adapter、typed audit owner 与隔离 worker 实施；
+[备份指南](../../reference/configuration-backup.md#measured-local-capacity-cases)
+保留原始源码版本、环境、测量值和复现命令。这些是历史证据，不是后续合并版本的实测。
+
+| 拟冻结的当前 profile 值 | 保护目标 | 已有证据及边界 |
+| --- | --- | --- |
+| 归档 128 MiB；展开 tar 流和普通文件总量 512 MiB；展开比例 2,000 | 发布前限制压缩输入、复制和解压放大 | 指南有接近上限的原生输入及超限拒绝。比例有源码限制，但未记录独立的精确比例边界测量。 |
+| 外部及内嵌清单各 16 MiB；扩展 tar header 每项 128 KiB、累计 16 MiB；JSON 深度 64 | 限制 metadata 解码与遍历 | 指南有外部清单 16 MiB／超一字节；恢复测试在解码前拒绝超大 PAX 变体及 sparse。最大结构化 metadata、累计 header 与深度组合未资格化。 |
+| 20,000 个 member；路径最多 64 段／1,024 字符／每段 255 UTF-8 字节；链接解析最多 40 跳 | 限制清单与路径处理，拒绝歧义或越界提取 | 指南有精确 20,000／20,001；测试覆盖路径、链接、碰撞与占用目标拒绝。并未测量所有路径形状的精确上限和最长链接链。 |
+| 128 个 Goal；128 个 SQLite 文件；每 Goal 20,000 个已提交事务 | 限制 owner 清单与完整历史读取，不截断历史 | 指南有原生 128／129 清单；`test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication` 覆盖 20,000／20,001。不保证 128 个满历史 Goal 同时符合其它上限与时限。 |
+| 当前 audit 结构最多 258 个 component、128 个 dependency link | 通过上述清单上限约束本 profile 的图 | 来自 1 个配置、最多 128 个数据库、最多 128 个各自依赖配置的 Goal，以及 1 个 unknown 余项。这不是通用 graph 上限或完整 mutable-owner 清单，通用 graph profile 不在本提案内。 |
+| 隔离 owner verifier：90 秒；V8 old-space 512 MiB；SQLite 进程级 heap 至多 64 MiB | 将数据库／owner 检查限制在共享 daemon 之外 | Timeout 清理和 SQLite view 拒绝测试覆盖隔离。Heap 有源码限制；整个进程树峰值内存、最坏耗时未资格化。该超时不是归档全流程 deadline 或 RTO。 |
+| 既有 transport：仅两项清单检查用 64 MiB private snapshot；普通 RPC 和 worker 输入 2 MiB；owner stdout 2 Mi 字符；历史 audit 输入 16 MiB | 限制传输和历史报告解码，不扩大普通 transport | 大清单 transport 与 audit 完整性测试覆盖路径。独立上限不能相加，也不保证任意最大 audit 均可发布。 |
+| 复制前目标剩余空间至少为普通文件复制字节数加 16 MiB | 发布前拒绝已知空间不足 | 有源码检查和失败清理测试；不保证抵御并发磁盘消耗，也不证明最坏空间预留成功。 |
+
+源码 owner 为 [`state_recovery.py`](../../../loopx/state_recovery.py)、
+[`state_recovery.ts`](../../../loopx/control_plane/state_recovery.ts) 和
+[`state_recovery_worker.ts`](../../../loopx/control_plane/state_recovery_worker.ts)。
+既有 [Python 恢复用例](../../../tests/test_state_recovery.py)及
+[typed audit 用例](../../../tests/control_plane_ts/state_recovery.test.ts)
+分别验证可读性、拒绝、清理和历史回读。测试数量不能代替维护者决定；合成指南没有
+提供实际生产 backup-size telemetry 或多个最大负载组合的资格证据。
+
+请求的决定仅为：**批准这些不变的容量默认值用于本惰性检查 profile，或指出需要
+更多证据／调整的具体值**。在本节或精确 head 的 PR review 记录 owner、决定、
+已审实现版本及 profile；此前提案和当前 checkpoint 均保持 pending。可读副本仍是
+历史数据：该决定不启用 Goal、不授予当前 Goal 依据的 writer、不恢复 lease，
+也不授权重放未决 effect。
 
 ---
 
