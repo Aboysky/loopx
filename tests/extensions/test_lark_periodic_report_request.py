@@ -270,6 +270,104 @@ def test_request_port_discovery_preserves_multiple_complete_adapters(
         ports.select_source_adapter(None)
 
 
+def test_request_ports_name_declared_adapters_that_failed_activation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A declared adapter that did not activate is reported, not dropped.
+
+    Discovery already isolates factory/lifecycle failures as content-free
+    records; the request path used to discard them, so an operator saw only
+    "source adapter is unavailable" with no adapter id or next action.
+    """
+    from loopx.extensions.hook_adapters import ExtensionHookAdapterFailure
+
+    def bind_source(**_kwargs: object) -> dict[str, object]:
+        return {}
+
+    def settle_source(**_kwargs: object) -> dict[str, object]:
+        return {}
+
+    def port(adapter_id: str, port_name: str) -> ExtensionHookAdapterPortBinding:
+        return ExtensionHookAdapterPortBinding(
+            extension_id=f"fixture-{adapter_id}",
+            adapter_id=adapter_id,
+            capability_id="periodic-report",
+            target_hook_id=REQUEST_HOOK_ID,
+            phase=REQUEST_ADAPTER_PHASE,
+            port_name=port_name,
+            handler=bind_source if port_name == REQUEST_BIND_PORT else settle_source,
+        )
+
+    failure = ExtensionHookAdapterFailure(
+        extension_id="fixture-source-broken",
+        adapter_id="source-broken",
+        capability_id="periodic-report",
+        target_hook_id=REQUEST_HOOK_ID,
+        phase=REQUEST_ADAPTER_PHASE,
+    )
+    monkeypatch.setattr(
+        request_action,
+        "discover_extension_hook_adapters",
+        lambda **_kwargs: ExtensionHookAdapterDiscovery(
+            ports=(
+                port("source-partial", REQUEST_BIND_PORT),
+                port("source-dup", REQUEST_BIND_PORT),
+                port("source-dup", REQUEST_BIND_PORT),
+                port("source-dup", REQUEST_SETTLE_PORT),
+            ),
+            failures=(failure,),
+        ),
+    )
+    ports = discover_periodic_report_request_ports(
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+    )
+
+    assert ports.adapter_ids == ()
+    assert ports.failed_adapters == {
+        "source-broken": "extension_hook_adapter_unavailable",
+        "source-dup": "ambiguous_adapter_ports",
+        "source-partial": "incomplete_adapter_ports",
+    }
+    assert ports.state_error_code is None
+    with pytest.raises(ValueError) as named:
+        ports.select_source_adapter("source-broken")
+    assert "source-broken is declared but failed activation" in str(named.value)
+    assert "extension_hook_adapter_unavailable" in str(named.value)
+    assert "loopx extension doctor" in str(named.value)
+    with pytest.raises(ValueError) as unknown:
+        ports.select_source_adapter("never-declared")
+    assert str(unknown.value).endswith(": never-declared")
+    with pytest.raises(ValueError) as unselected:
+        ports.select_source_adapter(None)
+    assert "declared adapters failed activation" in str(unselected.value)
+    assert "source-broken (extension_hook_adapter_unavailable)" in str(unselected.value)
+    assert "source-dup (ambiguous_adapter_ports)" in str(unselected.value)
+
+
+def test_request_ports_name_unreadable_extension_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        request_action,
+        "discover_extension_hook_adapters",
+        lambda **_kwargs: ExtensionHookAdapterDiscovery(
+            ports=(), failures=(), state_error_code="extension_state_unavailable"
+        ),
+    )
+    ports = discover_periodic_report_request_ports(
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+    )
+    assert ports.state_error_code == "extension_state_unavailable"
+    with pytest.raises(ValueError, match="extension state could not be read"):
+        ports.select_source_adapter(None)
+
+
 def test_lark_inbox_rejects_same_name_mention_with_different_provider_identity() -> (
     None
 ):

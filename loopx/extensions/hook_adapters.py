@@ -39,10 +39,18 @@ class ExtensionHookAdapterFailure:
 
 @dataclass(frozen=True, slots=True)
 class ExtensionHookAdapterDiscovery:
-    """Activated provider ports plus isolated content-free failures."""
+    """Activated provider ports plus isolated content-free failures.
+
+    `failures` names each declared adapter that matched the requested hook but
+    could not be activated (lifecycle, permission, factory import or port
+    mismatch). `state_error_code` is set when the extension state itself could
+    not be read, so an empty `ports` is distinguishable from "no provider is
+    installed". Neither carries provider output or exception text.
+    """
 
     ports: tuple[ExtensionHookAdapterPortBinding, ...]
     failures: tuple[ExtensionHookAdapterFailure, ...]
+    state_error_code: str | None = None
 
 
 def _load_factory(reference: str) -> Callable[..., Mapping[str, Callable[..., Any]]]:
@@ -88,7 +96,9 @@ def discover_extension_hook_adapters(
     try:
         catalog = extension_catalog_entries(state_file=state_file)
     except (OSError, TypeError, ValueError):
-        return ExtensionHookAdapterDiscovery(ports=(), failures=())
+        return ExtensionHookAdapterDiscovery(
+            ports=(), failures=(), state_error_code="extension_state_unavailable"
+        )
 
     ports: list[ExtensionHookAdapterPortBinding] = []
     failures: list[ExtensionHookAdapterFailure] = []

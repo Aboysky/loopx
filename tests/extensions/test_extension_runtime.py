@@ -281,9 +281,27 @@ ports = ["sample_report.request.bind_source"]
     )
 
     assert discovery.ports == ()
+    assert discovery.state_error_code is None
     assert len(discovery.failures) == 1
     assert discovery.failures[0].adapter_id == "sample-report-source"
     assert discovery.failures[0].error_code == "extension_hook_adapter_unavailable"
+
+    # An unreadable state file is a typed discovery-level condition, not an
+    # empty catalog: callers can tell "no provider installed" from "state broken".
+    state_file.write_text("{not json", encoding="utf-8")
+    broken = discover_extension_hook_adapters(
+        state_file=state_file,
+        phase="capability_action",
+        capability_id="sample-report",
+        target_hook_id="sample_report.request",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="sample-goal",
+        agent_id="sample-agent",
+    )
+    assert broken.ports == ()
+    assert broken.failures == ()
+    assert broken.state_error_code == "extension_state_unavailable"
 
 
 @pytest.mark.parametrize(

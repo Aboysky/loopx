@@ -74,7 +74,12 @@ automatically. With multiple active providers, the Agent selects the provider
 explicitly with `--source-adapter-id <adapter-id>`. The journal retains that
 adapter identity, and later settlement resolves only that owner regardless of
 extension discovery order. A temporarily unavailable owner leaves the request
-pending; LoopX never falls through to another provider.
+pending; LoopX never falls through to another provider. A declared adapter
+whose extension did not activate (disabled, doctor-stale, API-incompatible,
+factory import or port mismatch) is reported by adapter id with a content-free
+code and the `loopx extension doctor` next step; it is never silently dropped,
+and an unreadable extension state is reported as such rather than as "no
+provider installed".
 
 The adapter id is part of the request idempotency namespace together with the
 Goal, Agent, and provider-local source reference. Two providers may therefore
