@@ -706,13 +706,14 @@ source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
 stand in for the review. This closes the decision-recording gap; it does not
 establish that the proposed action was adopted or improved the Goal.
-
 The effective review cadence remains owned by the
 [Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
-and Goal/device configuration. It is not Todo size, an experiment boundary or
-a mandatory route switch; this refinement changes neither counting nor discharge.
-Matched continuation must qualify actual adoption,
-target benefit and full cost before promotion or synergy claims.
+and Goal/device configuration. Six effective work Turns is the default; enabling
+the stride strategy for one Goal inherits its live review cadence, and only an
+explicit Goal cadence override pins a separate count or unit. The cadence is not
+Todo size, an experiment boundary or a mandatory route switch; this refinement
+changes neither counting nor discharge. Matched continuation must qualify actual
+adoption, target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical
 baselines as descriptive references. A fresh concurrent baseline is not required
