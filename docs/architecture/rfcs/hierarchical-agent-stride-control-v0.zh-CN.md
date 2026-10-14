@@ -765,6 +765,15 @@ controller 验证，捕获发生在模型看见 fresh replan 之前。已提交 
 推进，原生提交仍返回 429，不消耗轮次也不调用 grader。另一已 eligible 的 cursor
 用例取得下一次评分。这两种合法状态须保持区分；恢复研究点不让下一次提交立即 eligible。
 
+completed 源用例现在通过六个真实 native 工作 wake 及单次 CLI 结算自然触发
+复盘，不插入历史行。stride 开启，Explore planning 分别关闭/开启；先捕获，
+再记录三个轴独立计划的 grow 决策，随后完成较大的合成工作切片。新隔离目标
+使用封存代码/上下文并保留未到期冷却。此项验证机械组合，不证明模型判断、
+目标 graph/policy 自动采用或科研收益。当前验证的 Darwin Host 在中断后会丢失
+pending command；延迟重读及仅向主进程发信号均未恢复。因此该 profile 在发信号
+前明确拒绝中途 native 捕获，继续原工具响应。Linux interrupted 与 completed-wake
+路径分别保留验收，不放宽历史、歧义、源或期限检查。
+
 
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和
