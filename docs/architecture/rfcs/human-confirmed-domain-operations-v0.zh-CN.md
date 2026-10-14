@@ -348,6 +348,12 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 真实 context 探针只在当前拥有的 home 创建新的受管 GPT session，不建提案、
 不造群确认、不执行金融副作用；合成批准夹具不是真实用户批准。
 
+可选的 [DSH 原生上下文模块](../../../packages/dsh-loopx-plugin/README.md#optional-native-operation-context-sdk-prerequisite)
+交付独立加载的只读 SDK 前置组件。真实 SDK/内置 runtime `0.1.5rc1` 的工具调用
+已返回当前调用 session、开放的原生 Turn 和白名单 agent options；该观察不是 Core
+actor，也不证明 HTTP wire 实际配置。受管 DSH 准入、撤销、首次批准消费及原渠道
+结果回传仍未验；模块始终返回 `execution_allowed: false`，其它 DSH 版本仍未验。
+
 公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
 意外返回 actor 成功，也没有 proof-import 捷径。

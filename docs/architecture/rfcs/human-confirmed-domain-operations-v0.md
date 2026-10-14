@@ -445,6 +445,14 @@ and packaged presentation. The live context probe creates a new managed GPT
 session in its owning home; it performs no proposals, group clicks or financial
 effects. Synthetic approval fixtures are not genuine user approval.
 
+The optional [DSH native context module](../../../packages/dsh-loopx-plugin/README.md#optional-native-operation-context-sdk-prerequisite)
+adds a separately loaded, read-only SDK prerequisite. A real SDK/bundled runtime
+`0.1.5rc1` tool call returned its calling session, open native Turn and whitelisted
+agent options. This observation is neither a Core actor nor effective wire-profile
+attestation. Managed DSH admission, revocation, first approval consumption and
+original-channel outcome return remain unqualified; the module always reports
+`execution_allowed: false`. Other DSH runtime versions remain unqualified.
+
 Public `goal-channel inspect-operation/consume-operation/report-operation`
 remain fail-closed before private reads or writes, even with matching
 `CODEX_THREAD_ID`, route flags, self-signed proof or an older runtime's actor
