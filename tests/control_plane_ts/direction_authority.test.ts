@@ -118,6 +118,15 @@ for(const provider of ["file","sqlite","postgresql"]){
   const originalHistory=await store.readReceipt("ack");
   assert.equal(originalHistory.status,"found");
   if(originalHistory.status==="found")assert.deepEqual(originalHistory.receipts,historical.receipts);
+  // The same Agent cannot evict a different material to make space either.
+  const secondMaterial={...material,material_id:"other",required:false};
+  const expanded=await invoke(request("configure",{actor_agent_id:null,operation_id:"add-other-material",
+    expected_provider_revision:final.provider_revision,materials:[material,secondMaterial]}));
+  const beforeOther=await store.loadAuthority();
+  await assert.rejects(invoke({...missing,operation_id:"other-material-unavailable",material_id:"other",
+    authority_digest:expanded.authority_digest}),/no retained observation for this Agent\/material/);
+  assert.deepEqual(await store.loadAuthority(),beforeOther);
+  assert.equal((await store.readReceipt("other-material-unavailable")).status,"missing");
 
  });
 }

@@ -47,7 +47,7 @@ try:
 finally:
     restart_effect_runtime()
 `);
-const child = spawn(backend.command, [...backend.args, root, String(port)], {cwd: root, env: {...process.env, LOOPX_USAGE_PING: '0', TMPDIR: root,
+const child = spawn(backend.command, [...backend.args, root, String(port)], {cwd: root, env: {...process.env, LOOPX_USAGE_PING: '0', TMPDIR: root, TEMP: root, TMP: root,
   NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --experimental-sqlite`}, stdio: ['ignore', 'pipe', 'pipe']});
 const lines = createInterface({input: child.stdout});
 let serverLog = '';
@@ -111,7 +111,7 @@ call('acknowledge',{'read_operation_id':'peer-read-'+episode,'delivery_digest':r
 assert call('inspect')['projection']['direction_state']=='current'
 `);
   const run=spawnSync(invoke.command,[...invoke.args,root,'initial'],{cwd:root,encoding:'utf8',timeout:60_000,
-    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root,NODE_OPTIONS:`${process.env.NODE_OPTIONS??''} --experimental-sqlite`}});
+    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root,TEMP:root,TMP:root,NODE_OPTIONS:`${process.env.NODE_OPTIONS??''} --experimental-sqlite`}});
   assert.equal(run.status,0,run.stdout+run.stderr);
   await panel.getByRole('button',{name:'读取当前方向状态',exact:true}).click();
   await panel.getByText('已确认当前资料版本',{exact:true}).waitFor();
@@ -156,14 +156,14 @@ assert code==1 and failed['read_outcome']=='unavailable',failed
 _,cold=call('inspect');assert cold['projection']['direction_state']=='blocked' and cold['receipt_count']==4096,cold
 `);
   const exhausted=spawnSync(capacity.command,[...capacity.args,root],{cwd:root,encoding:'utf8',timeout:60_000,
-    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root}});
+    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root,TEMP:root,TMP:root}});
   assert.equal(exhausted.status,0,exhausted.stdout+exhausted.stderr);
   await panel.getByRole('button',{name:'读取当前方向状态',exact:true}).click();
   await panel.getByText('仍有资料未读取或不可用',{exact:true}).waitFor();
   await page.screenshot({path:resolve(output,'full-capacity-blocked.png')});
   await writeFile(resolve(root,'project/direction.md'),await readFile(resolve(root,'capacity-original.txt')));
   const capacityRecovered=spawnSync(invoke.command,[...invoke.args,root,'capacity-recovery'],{cwd:root,encoding:'utf8',timeout:60_000,
-    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root}});
+    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root,TEMP:root,TMP:root}});
   assert.equal(capacityRecovered.status,0,capacityRecovered.stdout+capacityRecovered.stderr);
   await panel.getByRole('button',{name:'读取当前方向状态',exact:true}).click();
   await panel.getByText('已确认当前资料版本',{exact:true}).waitFor();
@@ -182,7 +182,7 @@ _,cold=call('inspect');assert cold['projection']['direction_state']=='blocked' a
   await panel.getByText('资料版本已变化，需要重新评估方向',{exact:true}).waitFor();
   await panel.screenshot({path:resolve(output,'revision-drift.png')});
   const reread=spawnSync(invoke.command,[...invoke.args,root,'updated'],{cwd:root,encoding:'utf8',timeout:60_000,
-    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root,NODE_OPTIONS:`${process.env.NODE_OPTIONS??''} --experimental-sqlite`}});
+    env:{...process.env,LOOPX_USAGE_PING:'0',TMPDIR:root,TEMP:root,TMP:root,NODE_OPTIONS:`${process.env.NODE_OPTIONS??''} --experimental-sqlite`}});
   assert.equal(reread.status,0,reread.stdout+reread.stderr);
   await panel.getByRole('button',{name:'读取当前方向状态',exact:true}).click();
   await panel.getByText('已确认当前资料版本',{exact:true}).waitFor();
