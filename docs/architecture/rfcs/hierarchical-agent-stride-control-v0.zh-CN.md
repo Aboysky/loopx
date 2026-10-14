@@ -828,6 +828,50 @@ pending command；延迟重读及仅向主进程发信号均未恢复。因此�
 前明确拒绝中途 native 捕获，继续原工具响应。Linux interrupted 与 completed-wake
 路径分别保留验收，不放宽历史、歧义、源或期限检查。
 
+目标侧显式恢复准备可复用既有 cadence owner 来安排首次复盘：配置
+`--execution-replan-after-turns 1`，完成并结算一次真实恢复检查，再准入新到期的
+periodic review。检查读取保留的研究/代码与公开评测机会，不改候选、不提交。
+复盘使用当前 Goal/Todo/lease 及新 context 身份；源工作结算仅作历史证据。
+复盘结算后，通过 `configure-goal` 恢复预注册的正常频率，再准入研究工作。
+隔离的 native receiver 验证已记录三个轴独立计划的 grow，实际采用一次包含
+两个候选的完整工作切片，并检查 deadline、未到期冷却、已用轮次和 incumbent
+不变；默认 receiver 路径单独验证。公开的
+[`qualify_checkpoint_joint.py`](../../../benchmark/tests/qualify_checkpoint_joint.py)
+入口先由非 root controller 捕获六个真实工作 wake 后的源状态，再在两个全新
+guest 分别运行普通和 stride receiver；
+[benchmark 操作步骤](../../../benchmark/README.md#controller-only-native-capsule-transport)
+固定 checkpoint provider、准备 guest 依赖并列出显式 Codex/Node 输入。
+缺少前置条件会报错，不以 skip 充当资格通过。私有 receipt 与日志保留输入来源，
+只读 Git 对象覆盖 controller 的权限边界。
+源声明整个 workspace 目录并保留调用者的 component ID；非 root receiver 按
+封存的原 workspace 路径定位，由类型化 owner 物化。复制的源 registry/state
+只是历史，新外置 registry/runtime 拒绝原 Goal 准入，同时保留证据并完成候选
+写入。这资格化目录与写入者衔接，不证明真实题目数据集或科研接续收益。
+这是显式且经测试的组合，不是恢复时自动
+触发的 hook，也不改变默认行为。补后继 Todo 的生命周期修复本身不等于可记账的
+periodic 策略复盘。匹配分支须声明相同的准备/频率迁移，并计入完整成本。
+脚本式 native provider 验证传输与机械采用，不证明模型判断、源 Explore graph
+权限恢复或科研收益；中后期研究点选择与真实分支准入仍待完成。
+
+恢复会话重新开启捕获须完成目标侧决策，换一个 Goal/Agent 或本地尚未见过的
+replan ID 都不够。模型前与 wake 中两处 hook 共用门槛：当前 Goal 的 canonical
+结算须接受一个语义 replan，其 Vision 证据引用 `checkpoint:<artifact-sha256>`，
+且目标原生历史已完成接续、保留原完整历史前缀。刚消费的义务本身仍不可捕获；
+后续真正的新节点才可捕获。重试、重启或准入回复丢失保留原 source-root/digest
+绑定。这是机器执行的捕获门槛，不增加执行或预算权限。
+
+模型前的 completed 点现在也将原 pending guard 作为封存参与方，中断点已有
+此参与方。目标在当前 guard 下将原包读作历史决策依据，不重跑源命令、claim、
+身份与 effect。旧 pending 点缺少此参与方时不能重新开启捕获。消费后 Host 不再
+重复注入这段上下文。接续读取 digest 绑定的 manifest 依据，核验实际使用的
+pending 包与原生历史，不在每个工作 wake 重算大型代码/incumbent archive 的哈希，
+也不把这个有限读取称为新的全成员验证；原生准入仍须完整验证产物。捕获本身
+不自动恢复分支。外层“每个新点都恢复”的编排也须通过同一门槛与当前准入；
+其是否存在以及科研收益不能由本 receiver 验证推导。
+
+产物复制保留只读文件模式，同步复制的字节时不额外索取写权限。非 root 控制器
+捕获 `0444` 参与方此前失败，修复后通过；Git object store 是这类成员的常见来源。
+仅在 root 容器中验证不足以覆盖此 Host 边界。源权限和字节保持不变。
 
 inert verification unit 不授予执行权。目标侧使用新的实验/Host 身份，通过既有
 Goal/session/state admission 进入。历史租约、quota、timer、pending effect 和
