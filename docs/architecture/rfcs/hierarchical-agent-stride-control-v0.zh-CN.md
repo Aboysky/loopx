@@ -314,6 +314,11 @@ writeback。Delivery settlement 是 autonomous segment 的 memory 与 replay bou
 Wake signal 只表示 host 可以检查当前状态。它不证明需要新 Todo、coherence slice
 已经结束，或 human attention 有价值。Durable state 应使 missed/duplicate wake 可恢复。
 
+观察交付、方向复核和候选验收有不同触发条件。稳定接续不要求每次工具操作后
+另调规划/评估模型。事件合并和无变化结果抑制仍须保留到期周期复核、变化后的
+权限与未完成结算。复核可保留当前路线，但仍须记录所属义务允许的合法处置；
+本细化不改变周期或义务解除规则。
+
 ### 6.5 更强的模型不会让每层都变宽
 
 模型能力是多维的：
@@ -404,6 +409,14 @@ capability。
 | 准入决策 | 现有 scheduler/Turn 路径重新检查 Goal lifetime、ownership、quota、capability 与 authority。Ready observation 是输入，不是执行许可。等待此实验时仍可推进其他 runnable 工作。 |
 | 消费并继续 | 在负责消费的可记账 Turn 中，通过普通 writeback 提交 result adoption 与下一步骤，再确认消费。重放/重复交付恢复原 receipt，不重复 launch 或 adoption。同一 Turn identity 的结算重放幂等；新获准 recovery Turn 仍正常结算。 |
 
+接收、待投递、进入上下文和动作采用保持不同事实。沿既有
+[Host 消费边界](agent-session-execution-modes-v0.md)及
+[输入/唤醒策略](desktop-execution-frontends-v0.md#delivery-intent-does-not-choose-the-wake-policy)
+验证工具执行、上下文准备和最后接收点到 idle 期间到达的纠正与结果。
+准入前取消须保留可恢复输入。晚到的 exact-Turn steer 不得静默改投，fallback
+需要已允许的策略或新的显式投递选择。合并后的通知可以消失，但持久工作仍须
+可发现。Transport ACK 和进入模型上下文，都不能证明后续工作采用了结果。
+
 当前 Todo resume condition 已有 `monitor_changed` 与 `resume_at`。若足够，
 实现应复用 typed monitor generation 与 timeout fallback。
 **缺失的是 provider-result binding 和 material-generation 更新集成**，不是
@@ -433,6 +446,18 @@ decision checkpoint、result-to-decision latency、原生结果和模型/observe
 不改变通用 heartbeat prompt 或所有 scheduler 默认行为。关闭策略恢复 fixed
 admission，保留 job/evidence history，不隐式杀作业，不改变 acceptance 或 accounting。
 
+分别测量观察间隔、准入耗时、用户停止请求排队、原生取消受理与确认 drain 的延迟。
+轮询间隔不是端到端停止时限。现有 managed ZCode broker 是具体测量候选：活动检查
+串行执行原生回读、validation、Core quota、validation，完成后再延迟安排下一检查；
+慢检查也可能延迟队列中的 pause。[Provider 分析](../long-running-execution-exploration-and-correction.zh-CN.md#loopx已有原生-goal-provider-及恢复边界)
+记录了当前 caller 与 timeout 边界，不代表已证明性能回归。仅在已证明的快照边界内
+合并未变读取，保留新工作准入、到期复核与撤销检查。
+
+单次原生 execution deadline 与 Goal 累计预算、恢复次数限制，以及验证/探索/子任务
+成本分别报告。ZCode 在每次明确 start/resume 后设一小时计时器，经过同一操作队列
+请求暂停；这既不是端到端硬停止上限，也不重置 Goal 总预算。未知原生用量保留
+unknown，不能写作零；共享读取或事件驱动观察的收益须先经相同负载测量。
+
 验收必须覆盖真实受控进程执行与 recovery，不只是 event 序列化：重复与乱序
 结果、candidate 改变、restart、丢失通知、deadline、取消、unknown effect、竞争
 claim 和 owner stop。Packaged frontend 旅程通过已有 task/capability surface 显示
@@ -442,6 +467,10 @@ readback 属于 partial slice。科学效用遵循
 的独立资格验证。
 
 ### 7.6 研究范围与证据驱动控制
+
+[执行、探索与纠偏集成指南](../long-running-execution-exploration-and-correction.zh-CN.md)
+将此边界连接到 Host 接续、Explore 回写、恢复和产品回读，提供源码对照与一次
+连贯验收场景；合同与里程碑的权威仍属于本 RFC。
 
 普通工作与研究的步幅包含三个独立选择的坐标。前两个是主要控制量，第三个限定采取行动所需
 证据与成本：
@@ -521,6 +550,12 @@ switch（尝试不同机制）或 verify（解决决定扩大或切换的具体�
 4. **反馈**将实际执行、结果、保留产物与完整成本返回下次复盘。提案、采用和
    收益分别可回放；缺失反馈不能变成成功。
 
+候选评审可在所属能力存在具体证据缺口时引入 critic，不是每个 Turn 的必经模型。
+结论、置信度或多数票仍是评估；相关 criterion 须由现有验收 owner 根据当前且
+可归因的证据判定。工具缺失、输出无效或评审传输失败保持不可用，不算验收通过
+或科学反证。保留未解决问题，将新增 blocker 对应当前标准；策略不能降低验收，
+反复评审也不能增加无关要求或隐藏新缺陷。
+
 初版 TypeScript 组件仅保留 `evidence_conditioned_v1` 一套可选策略及 off 总开关。
 当前实现替换 basis 到整组向量的固定映射：显式选择 `grow | switch | verify`，工作
 大小、路线距离、验证广度各自声明具体计划与理由，不再提供 `shrink` 或含糊的 `hold` 选项。
@@ -553,10 +588,11 @@ revision、考虑的 finding 与适用/暂缓等理由，不建新图或第二�
 启用策略的周期复盘到期后，任何结算路径都须留下绑定本次来源的 stride 决定。
 类型化进展、后续任务和终止结果仍可作为证据与结果，但单独的 Todo 后续转换不能
 代替复盘。这补齐决定记录闭环，不证明提案已被采用或提升了 Goal。
-六个有效工作 Turn 仍是默认复盘周期，不是 Todo、实验或路线变化的大小。策略采用、
-目标收益、完整成本和交互增益须通过匹配接续等实验验证后再作结论。
-对单个 Goal 启用步幅策略时沿用实时复盘周期；只有显式设置 Goal 复盘周期，才固定
-该 Goal 的计数依据或数量。
+有效复核周期仍由[Goal Vision/replan 契约](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
+及 Goal/设备配置负责。六个有效工作 Turn 是默认值；对单个 Goal 启用步幅策略时
+沿用实时复盘周期，只有显式设置 Goal 复盘周期，才固定该 Goal 的计数依据或数量。
+周期不是 Todo 大小、实验边界或强制换路信号；本细化不改变计数或解除条件。
+策略采用、目标收益、完整成本和交互增益须通过匹配接续等实验验证后再作结论。
 
 敏捷探索可只跑启用策略的测试组，以历史基线作描述性参照；不要求每次迭代都
 重启并发基线。这类运行用于观察路线采用与迭代收益，不单独证明因果净收益或
@@ -569,6 +605,11 @@ promotion 资格。需要相应结论时，再执行匹配接续与重复验证�
 来源核验也不证明模型采用或研究收益。
 
 ### 7.7 研究状态分支与匹配接续
+
+普通压缩和 session 恢复先遵循[当前工作/Goal 依据契约](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#37-当前工作与-goal-要求)。
+重建上下文不算有效工作、结果采用，也不能清除到期复核。原恢复操作及结算身份
+保持不变，新工作重新进入当前准入。下述研究状态捕获为公平比较增加要求，不是
+普通恢复的前置条件，也不是另一份执行权威。
 
 可恢复研究点包含**会话位置、研究证据、代码/候选产物与观测机会**。单独源码
 归档或轨迹前缀不是完整研究点。捕获与验证复用既有[备份/恢复 owner](complete-state-recovery-v0.zh-CN.md)、
@@ -805,14 +846,25 @@ authority。测试不能仅因输出包含某个关键词就通过。
 
 ## 11. 最小有用实现切片
 
-M1 只读观测仍可用。下一完整、可逆切片把既有被接受的决定与后续证据投递到现有
-replan 入口，配合 §7.6 指引；不新增分类器、调度器或验收门。先验证真实 CLI/Host
-投影、不可变引用回读、缺失/损坏/陈旧输入及不变的语义 discharge。
+M1 观察和源码层反馈已经存在：typed replan 投影返回上次 accepted path 和之后
+记录的进展，可选策略校验来源绑定的提案。保留精确入口、陈旧/损坏输入和关闭态
+资格验证。这不证明真实模型采用或科研/成本收益，也不需要另建反馈账本。
 
-随后按 §7.7 资格化一个研究状态捕获/接续 profile，区分归档验证、可执行接续、
-模型采用和科学收益。匹配接续 pilot 判断范围复盘能否产生判别性实验与真实采用
-的改进；重复研究及完整成本证据先于自适应策略 promotion。部分 Host export 或
-只读决定投影都不闭合整项实现计划。
+下一条可用 M3 场景将一个真实 capability/provider 结果接入既有任务/replan 回写
+与回读：交付当前依据，准入有界 continuation/successor，观察实际采用工作，
+将产物、结果及剩余差距返回下一次复核。覆盖晚到纠正、丢失/重复投递及普通上下文
+恢复，保留当前权限与应做结算。打包后的任务/能力流程须展示等待、失败、过期/
+不可用及采用事实；仅模拟结论或 CLI 回执仍属部分交付。
+
+可使用已支持入口，如可选 managed ZCode native Goal 或限定范围的 Goal Chat
+接续，验证该场景的 Host 部分；这些路径不提供研究结果有效性，实验 provider 与
+首个决策合同仍归[Research §11.5](research-exploration-control-plane-v0.zh-CN.md#115-由证据驱动的实验决策修订提案)。
+加入 Goal instance 不变但 criterion/source scope 更新，以及慢检查期间请求停止
+的场景；读回下一受保护动作的当前依据与实际采用情况。绑定身份、原生 active 状态
+或计时器数值单独不足以通过。
+
+§7.7 单独验证需要相同研究快照及可比反馈机会的结论，不必阻塞上述有界集成。
+重复匹配结果及完整成本证据仍是 M5 推广前提；本文档细化不激活策略或额外模型调用。
 
 ## 12. Milestone
 
@@ -842,6 +894,7 @@ replan 入口，配合 §7.6 指引；不新增分类器、调度器或验收门
 - Todo 与 replan 仍是唯一 execution authority。
 - 在真实 replan 入口资格化 §7.6 决策接续，观察下一探针是否改变有用信息，
   而非仅改变标识；
+- 将已有反馈投影接到 §11 的 provider/采用场景，包含晚到纠正、上下文恢复与产品回读；
 - 资格化一个 §7.7 研究状态分支与匹配接续 profile；
 
 - 在 shadow 中验证 §7.5 的 provider checkpoint/monitor binding，区分模型
