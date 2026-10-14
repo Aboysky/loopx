@@ -1058,9 +1058,15 @@ function buildPersonalHomeModel(
       hostThreadActivity: goal.host_thread_activity ? {
         completeness: goal.host_thread_activity.completeness,
         threads: goal.host_thread_activity.threads.map((thread) => ({
+          agentId: thread.agent_id ?? null,
           hostSurface: thread.host_surface,
           lastEventAt: thread.last_event_at ?? null,
           state: thread.state,
+          deliveryWindow: thread.delivery_window ? {
+            state: thread.delivery_window.state,
+            ageHours: thread.delivery_window.age_hours ?? null,
+            reason: thread.delivery_window.reason ?? null,
+          } : null,
         })),
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,

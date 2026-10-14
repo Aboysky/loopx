@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { goalHostSurfaces, goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import { goalHostDeliveryWindows, goalHostSurfaces, goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
 import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
@@ -46,9 +46,21 @@ export function useGoalActivity(goal: GoalActivitySubject): GoalActivity & { tex
   const { t } = useWorkspaceI18n();
   const activity = presentGoalActivity(goal);
   const detail = useExecutionDetail(goal.execution);
+  const hostWindows = goalHostDeliveryWindows(goal);
   const parts = [t(activity.labelKey as WorkspaceMessageKey)];
   if (activity.alsoKey) parts.push(t(activity.alsoKey as WorkspaceMessageKey, { host: hostNames(goalHostSurfaces(goal)) }));
   if (activity.labelKey === "activity.running" || activity.labelKey === "activity.hostClaimed") parts.push(...detail);
+  for (const hostWindow of hostWindows) {
+    const host = hostSurfaceLabel(hostWindow.hostSurface);
+    const agent = hostWindow.agentId || "Agent";
+    if (hostWindow.state === "stale") {
+      parts.push(t("activity.hostWindowStale", { host, agent, hours: Math.round((hostWindow.ageHours ?? 0) * 10) / 10 }));
+    } else if (hostWindow.state === "missing") {
+      parts.push(t("activity.hostWindowMissing", { host, agent }));
+    } else {
+      parts.push(t("activity.hostWindowFresh", { host, agent }));
+    }
+  }
   return { ...activity, text: parts.join(" · ") };
 }
 
