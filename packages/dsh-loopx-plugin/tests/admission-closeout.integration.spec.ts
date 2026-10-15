@@ -289,22 +289,39 @@ describe('DSH admission-to-closeout integration', () => {
     )
     expect(admission.kind).toBe('enter')
 
+    const unselected = await runCli(testFixture, [
+      'quota', 'should-run',
+      '--goal-id', goalId,
+      '--agent-id', agentId,
+      '--runtime-profile', 'generic_cli',
+      '--turn-instance-id', turnInstanceId,
+    ])
+    expect(unselected.exitCode).toBe(0)
+    const unselectedChannel = record(record(unselected.payload.interaction_contract).cli_channel)
+    expect(unselectedChannel.selection_required).toBe(true)
+    expect(unselectedChannel.settlement_plan).toBeUndefined()
+
     // The queued conversation lets the agent choose work; it does not claim
-    // the fixture's Todo or bind the Turn on the agent's behalf.
+    // the fixture's Todo or bind the Turn on the agent's behalf, so the agent
+    // claims the work it selected before the exact receipt is bound.
     const claimed = await runCli(testFixture, [
       'todo', 'claim', '--goal-id', goalId, '--todo-id', todoId,
       '--agent-id', agentId, '--claimed-by', agentId,
     ])
     expect(claimed.exitCode, JSON.stringify(claimed.payload)).toBe(0)
     expect(claimed.payload.ok).toBe(true)
-    const guard = await runCli(testFixture, [
+
+    const guardArgs = [
       'quota', 'should-run',
       '--goal-id', goalId,
-      '--agent-id', agentId,
       '--todo-id', todoId,
+      '--agent-id', agentId,
       '--runtime-profile', 'generic_cli',
       '--turn-instance-id', turnInstanceId,
-    ])
+    ]
+    const guard = await runCli(testFixture, guardArgs)
+    const guardReplay = await runCli(testFixture, guardArgs)
+    expect(guardReplay.exitCode).toBe(0)
     expect(guard.exitCode).toBe(0)
     expect(guard.payload.ok).toBe(true)
     const heartbeatReceipt = record(guard.payload.heartbeat_receipt)
@@ -312,6 +329,8 @@ describe('DSH admission-to-closeout integration', () => {
     const cliChannel = record(record(guard.payload.interaction_contract).cli_channel)
     const rawPlan = record(cliChannel.settlement_plan)
     const identity = record(rawPlan.identity)
+    const replayChannel = record(record(guardReplay.payload.interaction_contract).cli_channel)
+    expect(record(record(replayChannel.settlement_plan).identity)).toEqual(identity)
     const effectId = String(identity.effect_id)
     expect(identity.turn_instance_id).toBe(turnInstanceId)
     expect(identity.todo_id).toBe(todoId)
@@ -375,11 +394,18 @@ describe('DSH admission-to-closeout integration', () => {
       && event.agent_id === agentId
       && event.run_id === turnInstanceId
     ))
-    // Explicit selection upgrades the same receipt, producing another audit
-    // observation. The invariant is one Turn/effect and one spend, not one read.
-    expect(admissionReceipts.length).toBeGreaterThan(0)
-    expect(new Set(admissionReceipts.map(event => event.run_id)))
-      .toEqual(new Set([turnInstanceId]))
+    expect(admissionReceipts).toHaveLength(2)
+    const initialAdmission = admissionReceipts.find(event => (
+      record(event.details).settlement_effect_id === null
+    ))
+    const selectedAdmission = admissionReceipts.find(event => (
+      record(event.details).settlement_effect_id === effectId
+    ))
+    expect(record(record(initialAdmission).details).delivery_allowed).toBe(false)
+    const selectedDetails = record(record(selectedAdmission).details)
+    expect(selectedDetails.todo_id).toBe(todoId)
+    expect(selectedDetails.settlement_receipt_revision).toBe('identity_upgrade')
+    expect(record(record(selectedAdmission).causality).caused_by).toBe(record(initialAdmission).event_id)
     expect(events.filter(event => (
       event.event_kind === 'quota_should_run'
       && event.run_id !== turnInstanceId
