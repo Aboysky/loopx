@@ -72,10 +72,7 @@ def test_signed_desktop_prs_do_not_share_either_publication_channel() -> None:
     assert expression(concurrency["group"], event("schedule")) == expression(concurrency["group"], event("workflow_dispatch"))
 
 
-def test_only_pr_heads_cancel_in_progress_and_main_pushes_queue() -> None:
-    # A main push must never cancel the running default-branch qualification;
-    # it waits as the single pending successor so the newest main always reaches
-    # a result. Nightly, manual and merge-queue runs keep their own lanes.
+def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification() -> None:
     policy = workflow("python-tests")
     assert "schedule" in policy[True]
     concurrency = policy["concurrency"]
@@ -84,7 +81,7 @@ def test_only_pr_heads_cancel_in_progress_and_main_pushes_queue() -> None:
         if context["github"].event_name != "pull_request":
             del context["github"].event.number
     assert len({expression(concurrency["group"], context) for context in contexts}) == 5
-    assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [False, True, False, False, False]
+    assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [True, True, False, False, False]
 
 
 @pytest.mark.parametrize("name", ["pull_request", "pull_request_target"])

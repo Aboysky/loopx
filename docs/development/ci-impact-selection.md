@@ -193,11 +193,9 @@ to one and background shard occupancy from five runners to two; the complete
 sweep may take longer. The existing fleet-health readback still checks receipts.
 
 Python Tests also runs daily at `20:17 UTC`. Its event-scoped concurrency keeps
-that full run separate from main pushes and PRs. A new PR head cancels that
-PR's superseded run. Main pushes queue instead: the running default-branch
-qualification completes, at most one newer push waits, and a further push
-replaces that pending successor before it starts. Scheduled, manual and
-merge-queue qualification is never cancelled by this policy. Release-artifact, desktop-artifact, signed-desktop,
+that full run separate from main pushes and PRs. New PR heads and main pushes
+cancel superseded runs; scheduled, manual and merge-queue qualification is not
+cancelled by that policy. Release-artifact, desktop-artifact, signed-desktop,
 DCO and optional Ark PR checks cancel only superseded validation for the same PR.
 Signed-desktop PRs use separate groups from each other and from channel publication.
 Release publication remains serialized and is never cancelled by a PR update.
@@ -205,9 +203,7 @@ Release publication remains serialized and is never cancelled by a PR update.
 全量 smoke 改为每天一次与指定 ref 的手动运行，不再随普通主干提交启动。五个完整
 分片共享一次源码绑定的前端构建，同一时刻最多运行两个分片；全量用例仍保留，
 代价是后台 sweep 可能更久。每日完整 Python 验证与 PR／主干提交使用不同并发组，
-避免新提交取消夜间基线。同一 PR 的过时 head 会被取消；主干提交改为排队：运行中的
-主干验证跑完，最多保留一个更新的待运行提交，再新的提交在其启动前替换它。发布通道
-仍保留串行发布保护。
+避免新提交取消夜间基线。过时 PR 检查可取消，发布通道仍保留串行发布保护。
 
 To force a complete smoke sweep before release, open Actions → Full Public
 Smokes → Run workflow and select the candidate ref. `ci:full` forces full Python
