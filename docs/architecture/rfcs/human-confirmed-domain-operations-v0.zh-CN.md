@@ -384,8 +384,15 @@ callback。模块开关默认关闭，不能与 `--dsh-runner` 或其它 host �
 拒绝并记录 `not_executed`；typed wait 仍是 rejected delegation，不是业务完成。
 endpoint 原字节的哈希纳入不可变 profile，不序列化凭据。通用
 `--confirmed-operation-id`、`--operation-source-route-json` 保留旧 Codex 别名。
-前端/Lark 回传、其它 runtime 和真实金融效果仍未验；CLI 夹具不证明原卡送达
-或真实用户批准。
+CLI 夹具不证明原卡送达或真实用户批准。
+
+后续有界真实验收使用实际模型、真实 Lark 卡片及经过认证的人类确认。正常原生
+CLI 续接恢复原 DSH session/profile，首次消费一次，登记规范 `not_executed`，
+并更新同一原卡；独立 provider 读回验证结果，金融动作是零。此续接由角色在
+callback 后手动调用：无人值守唤醒尚未配置，实际确认至宿主启动约 246 秒，
+不满足下文健康自动路径 60 秒目标。其它 runtime、全局安装、账户副作用和金融
+效用仍未验。本机较旧 Core 在 inbox 投影时拒绝新的 DSH executor，候选源码
+入口可读；回滚须保留这些 pin，不能假定旧 reader 兼容。
 
 公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时

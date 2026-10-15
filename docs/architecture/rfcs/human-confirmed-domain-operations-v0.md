@@ -493,8 +493,20 @@ and record `not_executed`; the typed wait remains a rejected delegation rather
 than validated domain completion. Provider endpoint bytes join the immutable
 profile without serializing credentials. The generic `--confirmed-operation-id`
 and `--operation-source-route-json` flags retain their Codex aliases.
-Frontend/Lark return, other runtimes and live financial effects remain
-unqualified. The CLI fixture does not certify original-card delivery or approval.
+The CLI fixture does not certify original-card delivery or genuine approval.
+
+A subsequent bounded live qualification used the real model, an actual Lark
+card and authenticated human confirmation. Normal native CLI continuation
+restored the original DSH session/profile, consumed once, recorded canonical
+`not_executed` and patched the same original card; independent provider
+readback verified the result. This involved zero financial action. The
+continuation was manually invoked after the callback: unattended wakeup was
+not configured, and the approximately 246-second confirmation-to-host-start
+observation does not meet the 60-second healthy automatic-path target below.
+Other runtimes, global installation, account effects and financial utility
+remain unqualified. An older globally installed Core rejects the new DSH
+executor during inbox projection; the candidate-source entry reads it, so
+rollback must retain those pins rather than assume old-reader compatibility.
 
 Public `goal-channel inspect-operation/consume-operation/report-operation`
 remain fail-closed before private reads or writes, even with matching
