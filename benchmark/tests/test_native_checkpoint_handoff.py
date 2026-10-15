@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from loopx.control_plane.turn_driver.codex_checkpoint import native_session_checkpoint
+from loopx.hosts.codex_checkpoint import native_session_checkpoint
 from tests.control_plane.codex_checkpoint_fixture import real_native_source
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
     NativeGoalProtocolError, StdioNativeGoalTransport,
@@ -740,7 +740,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 # Reconstruct the earlier captured store after the source has
                 # already continued. Fixed guest paths require an isolated home;
                 # retain and restore the source bytes around this synthetic test.
-                from loopx.control_plane.turn_driver.codex_checkpoint import fork_native_checkpoint, admit_native_checkpoint_session
+                from loopx.hosts.codex_checkpoint import fork_native_checkpoint, admit_native_checkpoint_session
                 from benchmark.runtime.codex import Execution
                 home = Path(native["guest_home"])
                 saved_home = home.with_name(home.name + "-retained")

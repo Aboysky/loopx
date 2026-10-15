@@ -340,11 +340,11 @@ def test_namespace_restart_cannot_certify_failed_exit_observation(tmp_path, monk
     monkeypatch.setattr(effect_runtime, "_serving_token", lambda _: (True, "replacement"))
     monkeypatch.setattr(effect_runtime, "_pid_is_alive", lambda _: True)
 
-    def unavailable(pid):
+    def unavailable(pid, timeout):
         assert pid == info["pid"]
         raise observation_error("synthetic unavailable exit observation")
 
-    monkeypatch.setattr(process_runtime, "_wait_for_posix_process_group_stop", unavailable)
+    monkeypatch.setattr(process_runtime, "_posix_owned_group_has_exited", unavailable)
     result = effect_runtime.restart_effect_runtime(wait_for_exit=True)
     assert result["status"] == "shutdown_pending"
     assert result["stopped"] is False

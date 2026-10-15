@@ -32,11 +32,11 @@ def test_captured_point_continues_with_fresh_authority(
     assert os.getuid() != 0, "Workspace continuation must qualify the actual non-root writer"
     from benchmark.edgebench.checkpoint_controller import restore
     from benchmark.runtime.codex import Execution
-    from loopx.control_plane.turn_driver.codex_checkpoint import (
+    from loopx.hosts.codex_checkpoint import (
         admit_native_checkpoint_session,
         native_session_checkpoint,
     )
-    from loopx.control_plane.runtime.research_checkpoint import adopt_todo_context
+    from loopx.hosts.research_checkpoint import adopt_todo_context
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from benchmark.runtime.worker import native_command
     from loopx.cli import main

@@ -301,6 +301,16 @@ describe('DSH admission-to-closeout integration', () => {
     expect(unselectedChannel.selection_required).toBe(true)
     expect(unselectedChannel.settlement_plan).toBeUndefined()
 
+    // The queued conversation lets the agent choose work; it does not claim
+    // the fixture's Todo or bind the Turn on the agent's behalf, so the agent
+    // claims the work it selected before the exact receipt is bound.
+    const claimed = await runCli(testFixture, [
+      'todo', 'claim', '--goal-id', goalId, '--todo-id', todoId,
+      '--agent-id', agentId, '--claimed-by', agentId,
+    ])
+    expect(claimed.exitCode, JSON.stringify(claimed.payload)).toBe(0)
+    expect(claimed.payload.ok).toBe(true)
+
     const guardArgs = [
       'quota', 'should-run',
       '--goal-id', goalId,
@@ -313,6 +323,7 @@ describe('DSH admission-to-closeout integration', () => {
     const guardReplay = await runCli(testFixture, guardArgs)
     expect(guardReplay.exitCode).toBe(0)
     expect(guard.exitCode).toBe(0)
+    expect(guard.payload.ok).toBe(true)
     const heartbeatReceipt = record(guard.payload.heartbeat_receipt)
     expect(heartbeatReceipt.turn_instance_id).toBe(turnInstanceId)
     const cliChannel = record(record(guard.payload.interaction_contract).cli_channel)
