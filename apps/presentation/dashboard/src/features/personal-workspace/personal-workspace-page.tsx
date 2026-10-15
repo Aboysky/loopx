@@ -2155,6 +2155,7 @@ export function PersonalWorkspacePage({
               <summary>{selectedGoal && goalSuggestions.length
                 ? t("suggestions.summary", { first: goalSuggestionLabel(goalSuggestions[0]) })
                 : locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
+            <div className="personal-composer-tools-panel">
             {selectedGoal && goalSuggestions.length ? (
               <div aria-label={t("suggestions.row")} className="personal-goal-suggestions" data-testid="goal-suggestions" role="group">
                 {goalSuggestions.map((suggestion) => (
@@ -2178,6 +2179,7 @@ export function PersonalWorkspacePage({
                 <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
               </div>
             )}
+            </div>
             </details> : null;
   const taskBoard = (active: boolean) => selectedGoal ? (<GoalTasksView digest={workspaceDigest}
                     historyEnabled={!readOnly} historyActive={active}
