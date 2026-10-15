@@ -500,6 +500,9 @@ def test_native_lease_writer_cannot_reuse_a_sequence_when_its_cursor_is_missing(
     assert json.loads(pending[0].read_text())["seq"] == 2
     assert not cursor.exists()  # The writer recovers a sequence, never a cursor.
     cli(registry, runtime, "todo", "add", "--goal-id", "goal-a", "--role", "agent", "--text", "Trigger bounded drain")
+    # Inline capture may leave receipt-proven cleanup for explicit recovery.
+    drained = cli(registry, runtime, "authority-shadow", "drain", "--goal-id", "goal-a")
+    assert drained["pending_after"] == drained["prepared_only_after"] == 0, drained
     transactions = history(tmp_path, runtime)
     lease_receipts = [row["receipts"][0] for row in transactions[1:] if row["receipts"][0]["partition"] == "leases"]
     assert [receipt["seq"] for receipt in lease_receipts] == [1, 2]
