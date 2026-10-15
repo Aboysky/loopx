@@ -406,6 +406,22 @@ Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时�
 继续普通清理。一秒额度不涵盖定位文件锁、存储等待或操作系统调度；故障注入不能
 代替原生平台资格验证，V8 CPU 样本也不测量内核 IO。
 
+Smoke cleanup owns every valid runtime locator in its newly created private
+temporary namespace, including runtimes loaded by temporary base checkouts.
+It uses the existing authenticated shutdown protocol, then observes actual
+process exit before deleting the namespace; serving-locator turnover alone
+does not establish that Node has finished its exit-time cache writes. Namespace
+and locator symlinks are not followed. A cleanup failure retains the fixture
+and reports a failed check with the original command output. Operator restart
+keeps its existing serving-handoff semantics. This fixture repair does not
+qualify native intermittent failures or sustained operation.
+
+Smoke 清理覆盖新建私有临时目录中所有合法 runtime locator，包括临时基线 checkout
+启动的进程。它复用既有认证 shutdown，等实际进程退出后再删目录；定位文件退休不代表
+Node 的退出缓存写入已经结束。清理不跟随 namespace 或 locator 符号链接；无法证明
+退出时保留 fixture，以失败结果报告并保留原命令输出。操作员 restart 仍沿用既有服务
+交接语义；该 fixture 修复不认证原生间歇故障或持续运行。
+
 Keep a deterministic, public-safe production-scale fixture beside the focused
 cases. Its envelope should cover realistic role/status distributions,
 multi-agent claims, user gates and standing decisions, current and retired
