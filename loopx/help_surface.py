@@ -339,6 +339,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Explicitly bind and inspect one managed ZCode CLI native Goal session.",
             },
             {
+                "command": "loopx research-checkpoint --help",
+                "purpose": "Explicitly capture, verify, or adopt a sealed checkpoint through current Goal and native Host owners.",
+            },
+            {
                 "command": "loopx promotion-readiness",
                 "purpose": "Record release-scoped canary readiness evidence in the shared runtime ledger.",
             },
