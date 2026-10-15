@@ -368,11 +368,14 @@ File/SQLite Goal authority 消费者继续使用原 action-store owner。内核 
 批准账本或副作用重试，旧 Codex executor 编码和默认关闭行为保持兼容。
 
 该阶段是使用本地合成响应源的后端集成，不是真实用户批准、原卡送达或金融效用。
-SDK 在进程退出后仍尝试创建已有 session，实际出现的 `session already exists`
-失败予以保留；新宿主会在启动 runtime 前拒绝这种恢复。嵌入 driver 须保留原连接，
-或先资格化上游 SDK 的持久会话恢复，不能静默替换获批身份。公开 CLI/delegation
-入口仍仅支持 Codex；DSH 跨进程恢复、前端/Lark 回传、其它 runtime 和真实金融
-效果仍未验，不能因后端结果开启公开 DSH preflight。
+SDK `0.1.5rc1` 的跨进程恢复仍在启动前拒绝，原 `session already exists` 失败保留。
+隔离候选使用上游 `2fbf4359` 官方脚本构建的 Python SDK `0.2.1a3` wheel，配合
+显式 npm runtime `@deepseek-ai/dsh@0.2.1-alpha.3`，通过公开 `resume_session`
+恢复原身份。SDK 文件、Node/入口原字节及完整 npm closure 纳入冻结 profile。
+File/SQLite 重启用例恢复同一操作；历史丢失/不可读时拒绝，不向模型发送输入，
+不替换绑定，失败 client 不可复用。这只是候选源码资格，不能当作已发布 Python
+runtime 或整个插件的兼容性证明。公开 CLI/delegation 仍仅支持 Codex，前端/Lark
+回传、其它 runtime 和真实金融效果仍未验，不能据此开启公开 DSH preflight。
 
 公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时

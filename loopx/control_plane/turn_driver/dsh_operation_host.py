@@ -11,6 +11,7 @@ import hashlib
 from contextlib import ExitStack
 import importlib.metadata
 import json
+import shutil
 import threading
 import uuid
 from pathlib import Path
@@ -47,12 +48,54 @@ from .dsh_operation_connection import DshOperationConnection
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
 
-TRANSPORT = "dsh-native-operation-tools-v0"
+DSH_OPERATION_TRANSPORT = "dsh-native-operation-tools-v0"
 
 
-def _sdk_runtime_pin() -> dict[str, Any]:
+def _sdk_runtime_pin(runtime_bin: Path | None = None) -> dict[str, Any]:
     # The private process handle is fail-closed and qualified against this SDK.
     # A new SDK/runtime version needs its own real-path qualification first.
+    sdk = importlib.metadata.distribution("deepseek-harness-sdk")
+    if runtime_bin is not None:
+        entry = runtime_bin.resolve(strict=True)
+        package = entry.parent.parent
+        manifest = json.loads((package / "package.json").read_text())
+        modules = package.parent.parent
+        if (
+            sdk.version != "0.2.1a3"
+            or manifest.get("name") != "@deepseek-ai/dsh"
+            or manifest.get("version") != "0.2.1-alpha.3"
+            or entry != package / "lib" / "bin.js"
+            or modules.name != "node_modules"
+        ):
+            raise ValueError("explicit DSH operation runtime is not qualified")
+        node = shutil.which("node")
+        if node is None:
+            raise ValueError("explicit DSH operation runtime requires Node")
+        closure = hashlib.sha256()
+        for path in sorted(modules.rglob("*")):
+            if not path.is_file():
+                continue
+            if not path.resolve().is_relative_to(modules):
+                raise ValueError("DSH runtime closure contains an external file")
+            closure.update(str(path.relative_to(modules)).encode() + b"\0")
+            closure.update(bytes.fromhex(_digest(path)))
+        return {
+            "versions": {
+                "deepseek-harness-sdk": sdk.version,
+                "@deepseek-ai/dsh": manifest["version"],
+            },
+            "sdk_files": {
+                str(path): _digest(Path(sdk.locate_file(path)))
+                for path in sdk.files or ()
+                if str(path).startswith("deepseek_harness/")
+                and str(path).endswith(".py")
+            },
+            "launch_files": {
+                str(entry): _digest(entry),
+                str(Path(node).resolve()): _digest(Path(node)),
+            },
+            "npm_closure_sha256": closure.hexdigest(),
+        }
     from deepseek_harness_runtime import resolve_bundled_launch_args
 
     versions = {
@@ -96,6 +139,7 @@ def _run_dsh_operation_host(
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     confirmed_operation_id: str | None = None,
     on_notification: Any = None,
+    runtime_bin: Path | None = None,
     owner: OwnedDshOperationHost,
 ) -> dict[str, Any]:
     """One owned SDK run; final prose cannot create an operation outcome."""
@@ -119,7 +163,7 @@ def _run_dsh_operation_host(
     module = operation_module.resolve(strict=True)
     patch = cordis.resolve(strict=True) if cordis else None
     profile = {
-        "transport": TRANSPORT,
+        "transport": DSH_OPERATION_TRANSPORT,
         "provider": provider,
         "model": model,
         "reasoning_effort": reasoning_effort,
@@ -136,7 +180,7 @@ def _run_dsh_operation_host(
             },
         },
         "patch": {"path": str(patch), "sha256": _digest(patch)} if patch else None,
-        "runtime": _sdk_runtime_pin(),
+        "runtime": _sdk_runtime_pin(runtime_bin),
     }
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
@@ -159,13 +203,14 @@ def _run_dsh_operation_host(
     ):
         raise ValueError("managed DSH session changed after Turn planning")
     if binding and (
-        binding.get("operation_transport") != TRANSPORT
+        binding.get("operation_transport") != DSH_OPERATION_TRANSPORT
         or binding.get("operation_profile_digest") != profile_digest
     ):
         raise ValueError(
             "DSH operation profile changed; select fresh and obtain fresh approval"
         )
-    if binding and owner.session_id is None:
+    can_restore = profile["runtime"]["versions"]["deepseek-harness-sdk"] == "0.2.1a3"
+    if binding and owner.session_id is None and not can_restore:
         raise ValueError(
             "DSH SDK cannot resume a persisted session in a new process; retain the owned connection or qualify upstream resume"
         )
@@ -264,7 +309,7 @@ def _run_dsh_operation_host(
             dsh_home=dsh_home.resolve(),
             max_tokens=max_tokens,
             cordis=patch,
-            runtime_bin=None,
+            runtime_bin=str(runtime_bin.resolve()) if runtime_bin else None,
             request_timeout_seconds=timeout_seconds,
         )
         config["patches"] = (*config.get("patches", ()), str(owned_patch))
@@ -276,6 +321,10 @@ def _run_dsh_operation_host(
         if process is None or process.poll() is not None:
             raise ValueError("SDK owned process handle is unavailable")
         connection.bind(process.pid, owner.handle)
+        if binding:
+            # Official restore rejects absent/unreadable/occupied sessions. It
+            # sends no prompt and never creates a replacement identity.
+            harness.resume_session(session_id)
     connection, harness = owner.connection, owner.harness
     if harness is None or connection is None:
         raise ValueError("owned DSH connection is unavailable")
@@ -371,11 +420,6 @@ def _run_dsh_operation_host(
         outcome = normalize_runner_outcome(
             harness.run(prompt, session_id=session_id, on_notification=observe)
         )
-    except BaseException:
-        # A callback/transport timeout can return while the native agent is
-        # still running. Quiesce the owned SDK instead of reusing that Turn.
-        owner.close()
-        raise
     finally:
         timer.cancel()
     if (
@@ -393,9 +437,8 @@ def _run_dsh_operation_host(
 class OwnedDshOperationHost:
     """Own one SDK connection across separately admitted Turns.
 
-    No background scheduler or approval store. SDK 0.1.5rc1 cannot rehydrate a
-    persisted session after process exit, so another instance refuses resume.
-    The embedding driver must retain this context or wait for upstream support.
+    No background scheduler or approval store. SDK 0.1.5rc1 requires a retained
+    connection; the qualified explicit runtime uses the official restore API.
     """
 
     def __init__(self) -> None:
@@ -419,6 +462,11 @@ class OwnedDshOperationHost:
             raise ValueError("owned DSH host is closed or already running")
         try:
             return _run_dsh_operation_host(request, owner=self, **options)
+        except BaseException:
+            # Failed initialization/restore must not leave a reusable client
+            # whose next prompt could create an un-restored session instead.
+            self.close()
+            raise
         finally:
             self.handler = None
             self.on_start = None
@@ -447,6 +495,6 @@ class OwnedDshOperationHost:
 def run_dsh_operation_host(
     request: Mapping[str, Any], **options: Any
 ) -> dict[str, Any]:
-    """Convenience for one fresh run. Resume requires a retained owned host."""
+    """Own one run; restore only through a qualified SDK/runtime's public API."""
     with OwnedDshOperationHost() as host:
         return host.run(request, **options)

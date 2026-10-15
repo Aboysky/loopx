@@ -342,14 +342,22 @@ canonical `not_executed` outcome. Synthetic confirmation is not human approval;
 no venue/account effect or paid model call is involved. The read-only real-model
 probe above and this integrated synthetic-provider test prove different stages.
 
-The SDK's `session/prompt` creates sessions and cannot reload a persisted
-session after process exit in this version (`session already exists`). A new
-host therefore refuses resume before starting a runtime; it never replaces the
-approved session silently. Retaining an owned context is not a new daemon or
-scheduler. Cross-process resume, public CLI/delegation activation, frontend/Lark
-original-card return, other runtime versions and actual financial execution
-remain unqualified. The public managed-operation preflight remains Codex-only
-until those entry points are integrated. Disable by omitting this explicit
+SDK `0.1.5rc1` cannot reload persisted sessions (`session already exists`);
+a new host still refuses that version's resume before runtime launch.
+An isolated candidate uses Python SDK `0.2.1a3`, built with the official wheel
+script from [upstream source `2fbf4359`](https://github.com/deepseek-ai/deepseek-harness/tree/2fbf4359b82fb94c03dcce0b831660d87f12ea5c),
+and an explicit `runtime_bin` pointing to npm `@deepseek-ai/dsh@0.2.1-alpha.3`.
+The SDK's public `resume_session` restores the same persisted identity without
+sending input. The host pins SDK files, the executable/Node and complete npm
+closure into the immutable profile; changes require fresh admission/approval.
+File/SQLite tests close the first process, restore the original session and
+repeat the operation sequence. Missing or unreadable history refuses without
+a provider call, replacement binding or reusable failed client. This candidate
+does not qualify the default plugin's peer range or a published Python release.
+
+Public CLI/delegation activation, frontend/Lark original-card return and actual
+financial execution remain unqualified. The public managed-operation preflight
+remains Codex-only until those entry points are integrated. Disable by omitting this explicit
 module and closing its owned host; do not interpret patch removal as revoking
 an already running process.
 

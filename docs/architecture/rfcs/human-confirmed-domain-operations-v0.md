@@ -471,14 +471,18 @@ bounded Unix connection; there is no bearer, caller actor, second approval store
 or effect retry. Legacy Codex executor encoding and default/off behavior remain.
 
 This stage is a backend integration with a scripted loopback provider, not
-genuine user approval, original-card delivery or financial utility. The SDK
-creates sessions instead of rehydrating persisted ones after process exit;
-the observed `session already exists` failure is retained. A new owned host
-refuses such resume before runtime launch. The embedding driver must retain
-the context or qualify upstream SDK resume; no silent replacement is allowed.
-Public CLI/delegation activation stays Codex-only, and DSH cross-process resume,
-frontend/Lark return, other runtime versions and live financial effects remain
-unqualified. Do not enable the public DSH preflight from these backend results.
+genuine user approval, original-card delivery or financial utility. SDK
+`0.1.5rc1` still refuses cross-process resume before launch; its observed
+`session already exists` failure is retained. An isolated Python SDK `0.2.1a3`
+wheel built from upstream `2fbf4359`, with explicit npm runtime
+`@deepseek-ai/dsh@0.2.1-alpha.3`, uses public `resume_session` instead of
+replacing identity. SDK files, Node/entry bytes and the entire npm closure join
+the frozen profile. File/SQLite restart cases recover the original operation;
+missing/unreadable history refuses without provider input or a reusable failed
+client. This is candidate-source qualification, not a published Python runtime
+or whole-plugin compatibility claim. Public CLI/delegation stays Codex-only;
+frontend/Lark return, other runtimes and live financial effects remain
+unqualified. Do not enable public DSH preflight from these backend results.
 
 Public `goal-channel inspect-operation/consume-operation/report-operation`
 remain fail-closed before private reads or writes, even with matching

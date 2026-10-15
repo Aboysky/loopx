@@ -8,6 +8,7 @@ Confirmation is an authenticated *fixture*, never live transaction authority.
 import json
 import os
 import threading
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -72,7 +73,7 @@ def tool_results(notifications):
         event = notification.payload.get("event") or {}
         if event.get("type") == "tool/result":
             for block in event.get("data", {}).get("message", {}).get("content") or []:
-                for part in block.get("content", []):
+                for part in block.get("content") or [block]:
                     if part.get("type") == "text":
                         try:
                             results.append(json.loads(part["text"]))
@@ -82,13 +83,19 @@ def tool_results(notifications):
 
 
 @pytest.mark.parametrize("authority_provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "connection_lifetime", ["retained", "restarted", "missing", "unreadable"]
+)
 def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocation(
-    tmp_path, monkeypatch, authority_provider
+    tmp_path, monkeypatch, authority_provider, connection_lifetime
 ):
     pytest.importorskip("deepseek_harness")
     module = os.environ.get("DSH_NATIVE_OPERATION_MODULE")
     if not module:
         pytest.skip("explicit built native-operation module required")
+    runtime_bin = os.environ.get("DSH_NATIVE_OPERATION_RUNTIME")
+    if connection_lifetime != "retained" and not runtime_bin:
+        pytest.skip("explicit resume-capable runtime required")
     service, store = fixtures.service(tmp_path)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     projection = build_todo_runtime_shadow_projection(
@@ -210,6 +217,49 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
                     "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
                     + "data: [DONE]\n\n"
                 ).encode()
+                if self.path.endswith("/messages"):
+                    # 0.2.1's official adapter uses Messages SSE; 0.1.5 uses
+                    # Chat Completions. Both are actual loopback wire paths.
+                    block = (
+                        {"type": "text", "text": delta["content"]}
+                        if finish == "stop"
+                        else {
+                            "type": "tool_use",
+                            "id": f"sdk-native-call-{index}",
+                            "name": "loopx_operation",
+                            "input": arguments(index),
+                        }
+                    )
+                    events = [
+                        {
+                            "type": "message_start",
+                            "message": {
+                                "id": f"fixture-{index}",
+                                "model": "fixture-model",
+                                "usage": {"input_tokens": 1, "output_tokens": 0},
+                            },
+                        },
+                        {
+                            "type": "content_block_start",
+                            "index": 0,
+                            "content_block": block,
+                        },
+                        {"type": "content_block_stop", "index": 0},
+                        {
+                            "type": "message_delta",
+                            "delta": {
+                                "stop_reason": "end_turn"
+                                if finish == "stop"
+                                else "tool_use"
+                            },
+                            "usage": {"output_tokens": 1},
+                        },
+                        {"type": "message_stop"},
+                    ]
+                    data = "".join(
+                        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                        for event in events
+                    ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Content-Length", str(len(data)))
@@ -250,10 +300,13 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
         "timeout_seconds": 45,
         "cordis": patch,
     }
+    if runtime_bin:
+        options["runtime_bin"] = Path(runtime_bin)
     notifications = []
     turn = request()
     try:
-        with OwnedDshOperationHost() as host:
+        with ExitStack() as hosts:
+            host = hosts.enter_context(OwnedDshOperationHost())
             first = host.run(turn, **options, on_notification=notifications.append)
             assert first["result_kind"] == "wait", (first, errors)
             assert len(steps) == 4, (steps, errors)
@@ -267,8 +320,44 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
                 decision="confirm",
                 confirmation=fixtures.confirmation(delivered),
             )
+            if connection_lifetime != "retained":
+                first_process = host.harness.client._proc
+                host.close()
+                assert first_process.poll() is not None
+                host = hosts.enter_context(OwnedDshOperationHost())
             turn["session"]["action"] = "resume"
             turn["turn_key"] = "sha256:" + "b" * 64
+            if connection_lifetime in {"missing", "unreadable"}:
+                original_binding = load_codex_cli_session(
+                    options["runtime_root"], lineage=_lineage(turn), host="dsh"
+                )
+                sessions = options["dsh_home"] / "sessions"
+                if connection_lifetime == "missing":
+                    sessions.rename(options["dsh_home"] / "saved-sessions")
+                else:
+                    persisted = next(sessions.rglob("session.*.jsonl*"))
+                    persisted.rename(persisted.with_suffix(persisted.suffix + ".saved"))
+                    persisted.write_bytes(b"not a session stream")
+                from deepseek_harness.errors import JsonRpcError
+
+                with pytest.raises(JsonRpcError):
+                    host.run(
+                        turn, **options, confirmed_operation_id=proposal["proposal_id"]
+                    )
+                assert not host.connection.path.exists()
+                with pytest.raises(ValueError, match="closed"):
+                    host.run(turn, **options)
+                assert (
+                    load_codex_cli_session(
+                        options["runtime_root"], lineage=_lineage(turn), host="dsh"
+                    )
+                    == original_binding
+                )
+                assert len(steps) == 4 and not errors
+                assert operation()["operation"].get("agent_handoff") is None
+                if connection_lifetime == "missing":
+                    assert not list(sessions.rglob("session.*.jsonl*"))
+                return
             second = host.run(
                 turn,
                 **options,
@@ -315,10 +404,24 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
             with pytest.raises(ValueError, match="profile changed"):
                 host.run(turn, **{**options, "model": "replacement-model"})
             assert len(steps) == 9  # Profile drift refused before a provider request.
-            with pytest.raises(ValueError, match="cannot resume a persisted session"):
-                run_dsh_operation_host(turn, **options)
+            if not runtime_bin:
+                with pytest.raises(
+                    ValueError, match="cannot resume a persisted session"
+                ):
+                    run_dsh_operation_host(turn, **options)
             assert len(steps) == 9
     finally:
+        (tmp_path / "native-events.json").write_text(
+            json.dumps(
+                [
+                    {"method": row.method, "payload": row.payload}
+                    for row in notifications
+                ]
+            )
+        )
+        (tmp_path / "provider-steps.json").write_text(
+            json.dumps({"steps": steps, "errors": errors})
+        )
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
@@ -354,6 +457,8 @@ def test_callback_failure_quiesces_owned_sdk_before_host_can_be_reused(
             "max_tokens": 128,
             "timeout_seconds": 15,
         }
+        if os.environ.get("DSH_NATIVE_OPERATION_RUNTIME"):
+            options["runtime_bin"] = Path(os.environ["DSH_NATIVE_OPERATION_RUNTIME"])
         with pytest.raises(RuntimeError, match="fixture callback aborted"):
             host.run(request(), **options, on_notification=fail)
         assert len(processes) == 1 and processes[0].poll() is not None
