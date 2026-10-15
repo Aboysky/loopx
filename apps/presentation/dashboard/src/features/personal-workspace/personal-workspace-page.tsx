@@ -88,6 +88,8 @@ import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
 import { compareProposalRecency } from "./proposal-recency";
+import { deriveGoalSuggestions, type GoalSuggestion } from "./goal-suggestions";
+import { projectGoalAcceptanceCriteria } from "../../data/goal-acceptance-observation";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
 import "./personal-workspace.css";
@@ -1246,6 +1248,46 @@ export function PersonalWorkspacePage({
     && (selectedGoalTab === "overview" || selectedGoalTab === "tasks") && !selectedGoal?.loadState, selectionScope);
   const workspaceDigest = useGoalWorkspaceDigest(selectedGoal, model.userTodos, items,
     workspaceReview.usable ? workspaceReview.snapshot?.goal_map : null);
+  const goalSuggestions = useMemo<GoalSuggestion[]>(() => {
+    if (!selectedGoal) return [];
+    const contract = selectedGoal.acceptanceObservation?.goal_acceptance_contract;
+    return deriveGoalSuggestions({
+      digest: workspaceDigest,
+      todos: selectedGoal.agentTodos.map((todo) => ({ todoId: todo.todoId, text: todo.text })),
+      execution: selectedGoal.execution ? { kind: selectedGoal.execution.kind } : null,
+      criteria: contract?.enabled ? projectGoalAcceptanceCriteria(contract) : null,
+    });
+  }, [selectedGoal, workspaceDigest]);
+  function goalSuggestionLabel(suggestion: GoalSuggestion): string {
+    switch (suggestion.kind) {
+      case "open_decisions": return t("suggestions.openDecisions", { count: suggestion.count });
+      case "explain_blocked": return t("suggestions.explainBlocked", { count: suggestion.count });
+      case "explain_failed_criterion": return t("suggestions.explainFailedCriterion", { criterion: suggestion.criterion });
+      case "continue_idle": return t("suggestions.continueIdle", { count: suggestion.open });
+      case "review_results": return t("suggestions.reviewResults", { count: suggestion.done });
+    }
+  }
+  function applyGoalSuggestion(suggestion: GoalSuggestion) {
+    const quote = (title: string) => locale === "zh-CN" ? `「${title}」` : `“${title}”`;
+    switch (suggestion.kind) {
+      case "open_decisions":
+        setSelectedGoalTab("overview");
+        setRailScope(selectionScope);
+        return;
+      case "review_results":
+        setSelectedGoalTab("files");
+        return;
+      case "explain_blocked":
+        void sendMessage(t("suggestions.explainBlockedPrompt", { count: suggestion.count, titles: suggestion.titles.map(quote).join(locale === "zh-CN" ? "、" : ", ") }));
+        return;
+      case "explain_failed_criterion":
+        void sendMessage(t("suggestions.explainFailedCriterionPrompt", { criterion: suggestion.criterion }));
+        return;
+      case "continue_idle":
+        void sendMessage(t("suggestions.continueIdlePrompt", { count: suggestion.open }));
+        return;
+    }
+  }
   const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {
     if (selection?.kind === "settings") return null;
     if (selection?.kind === "proposal") {
@@ -2110,7 +2152,17 @@ export function PersonalWorkspacePage({
     event.currentTarget.open = false;
     event.currentTarget.querySelector("summary")?.focus();
   }}>
-              <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
+              <summary>{selectedGoal && goalSuggestions.length
+                ? t("suggestions.summary", { first: goalSuggestionLabel(goalSuggestions[0]) })
+                : locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
+            {selectedGoal && goalSuggestions.length ? (
+              <div aria-label={t("suggestions.row")} className="personal-goal-suggestions" data-testid="goal-suggestions" role="group">
+                {goalSuggestions.map((suggestion) => (
+                  <button data-suggestion={suggestion.kind} disabled={quickPromptBlocked && suggestion.kind !== "open_decisions" && suggestion.kind !== "review_results"}
+                    key={suggestion.kind} onClick={() => applyGoalSuggestion(suggestion)} type="button">{goalSuggestionLabel(suggestion)}</button>
+                ))}
+              </div>
+            ) : null}
             {selectedGoal ? (
               <div className="personal-quick-prompts">
                 <button aria-label={t("composer.nextAction")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>

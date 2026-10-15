@@ -600,4 +600,17 @@ for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoa
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
 
+// State-aware suggestions cite digest, Todo, execution and acceptance facts;
+// they never replace the shipped steward prompt row, and a stopped Goal or an
+// unknown execution state produces none.
+const goalSuggestions = source("./goal-suggestions.ts");
+assert.match(goalSuggestions, /if \(digest\.lifecycle\.activation === "stopped"\) return \[\];/, "A stopped Goal invites nothing");
+assert.match(goalSuggestions, /input\.execution\?\.kind === "idle"/, "Idle needs an observed idle executor, never unknown");
+assert.match(page, /deriveGoalSuggestions\(\{\s*digest: workspaceDigest,/, "The page derives suggestions from the shared digest");
+assert.match(page, /className="personal-goal-suggestions"/, "Derived suggestions render in their own row");
+assert.match(page, /<div className="personal-quick-prompts">\n\s*<button aria-label=\{t\("composer\.nextAction"\)\}/, "The steward prompt row stays as shipped");
+for (const key of ["suggestions.openDecisions", "suggestions.explainBlocked", "suggestions.explainBlockedPrompt", "suggestions.explainFailedCriterion", "suggestions.continueIdle", "suggestions.reviewResults"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
 console.log("personal workspace drawer contract smoke passed");
