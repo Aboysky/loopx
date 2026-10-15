@@ -322,3 +322,41 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_callback_failure_quiesces_owned_sdk_before_host_can_be_reused(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("deepseek_harness")
+    module = os.environ.get("DSH_NATIVE_OPERATION_MODULE")
+    if not module:
+        pytest.skip("explicit built native-operation module required")
+    service, store = fixtures.service(tmp_path)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "loopback-fixture-placeholder")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "http://127.0.0.1:9")
+    processes = []
+    with OwnedDshOperationHost() as host:
+
+        def fail(notification):
+            if notification.payload.get("event", {}).get("type") == "turn/start":
+                processes.append(host.harness.client._proc)
+                raise RuntimeError("fixture callback aborted")
+
+        options = {
+            "runtime_root": store.root.parent.parent,
+            "registry_path": service.registry_path,
+            "project": service.registry_path.parent.parent,
+            "dsh_home": tmp_path / "sdk-home",
+            "operation_module": Path(module),
+            "provider": "deepseek-official",
+            "model": "fixture-model",
+            "reasoning_effort": "high",
+            "max_tokens": 128,
+            "timeout_seconds": 15,
+        }
+        with pytest.raises(RuntimeError, match="fixture callback aborted"):
+            host.run(request(), **options, on_notification=fail)
+        assert len(processes) == 1 and processes[0].poll() is not None
+        assert not host.connection.path.exists()
+        with pytest.raises(ValueError, match="closed"):
+            host.run(request(), **options)
