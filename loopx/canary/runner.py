@@ -353,6 +353,7 @@ def _run_check(
                 # Retain the owned namespace if shutdown cannot be proved.
                 # Do not mask the check with unconditional second deletion.
                 cleanup_error = f"fixture cleanup failed; retained {root}: {error}"
+
     except subprocess.TimeoutExpired as exc:
         result.update(
             {

@@ -20,7 +20,6 @@ from threading import Lock
 from typing import IO, Any
 
 from ..file_lock import process_is_alive
-from ..extensions.process_runtime import _posix_owned_group_has_exited
 from .runtime.file_reads import iter_binary_file_reads
 from .runtime.node_probe import (
     HOST_PERMISSION_RECOMMENDATION,
@@ -592,18 +591,20 @@ def _locator_retirement_pending(info_path: Path) -> bool:
         return True
 
 
-def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
+def restart_effect_runtime(*, timeout: float = 5.0, wait_for_exit: bool = False) -> dict[str, Any]:
     """Stop the managed runtime serving this source revision.
 
     The replacement runtime resolves Node from the PATH of the next request, so
     this is the operator action after installing a qualified Node: a runtime
-    started earlier keeps its own Node until it exits.
+    started earlier keeps its own Node until it exits. ``wait_for_exit`` is for
+    disposable namespace owners: serving retirement alone permits a delayed
+    exit-time cache write, whereas filesystem cleanup requires observed exit.
     """
 
     fingerprint = _runtime_fingerprint()
     info_path = _runtime_info_path(fingerprint)
     info = _read_info(info_path, fingerprint=fingerprint)
-    return _stop_effect_runtime(info_path, info, timeout=timeout)
+    return _stop_effect_runtime(info_path, info, timeout=timeout, wait_for_process_exit=wait_for_exit)
 
 
 def _stop_effect_runtime(
@@ -651,6 +652,8 @@ def _stop_effect_runtime(
     stopped = False
     while time.monotonic() < deadline:
         if wait_for_process_exit:
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+                break
             _reap_exited_runtime_child(info)
             if not _pid_is_alive(pid):
                 stopped = True
@@ -658,6 +661,7 @@ def _stop_effect_runtime(
             if os.name == "posix":
                 # A non-child zombie cannot write, but kill(pid, 0) still sees
                 # it. Managed runtimes start in their own session/process group.
+                from ..extensions.process_runtime import _posix_owned_group_has_exited
                 try:
                     stopped = _posix_owned_group_has_exited(
                         pid, max(.001, deadline - time.monotonic()),
