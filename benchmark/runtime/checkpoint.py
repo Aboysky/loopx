@@ -17,7 +17,7 @@ from typing import Any
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
-from loopx.control_plane.runtime.research_checkpoint import (
+from loopx.hosts.research_checkpoint import (
     _participant_id, native_binding_participant, research_participants, verify_research_participants,
 )
 
@@ -324,7 +324,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             metadata["evaluation_opportunity"] = {"component_id": opportunity_id,
                                                    "incumbent_component_id": incumbent_id}
         if request.get("native_session"):
-            from loopx.control_plane.turn_driver.codex_checkpoint import native_session_checkpoint
+            from loopx.hosts.codex_checkpoint import native_session_checkpoint
             from .codex import Execution
             from .sessions import BenchmarkSessionWake
 
