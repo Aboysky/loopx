@@ -500,6 +500,14 @@ def test_workspace_directory_reports_a_missing_registry_as_an_empty_workspace(tm
         assert payload["ok"] is True
         assert payload["schema_version"] == "loopx_workspace_directory_v1"
         assert payload["goals"] == []
+        # The discovery view states the source fact in the full status's own
+        # words, with the registry path redacted, so the first-Goal home can
+        # show why the workspace is empty without a local path.
+        assert payload["contract"]["ok"] is True
+        assert payload["contract"]["warnings"] == ["registry file does not exist: [project]"]
+        assert payload["contract"]["summary"] == {"errors": 0, "warnings": 1, "checks": 0}
+        assert payload["contract"]["errors"] == []
+        assert str(tmp_path) not in json.dumps(payload)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -681,3 +689,23 @@ def test_workspace_access_code_does_not_change_other_status_routes(monkeypatch, 
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_workspace_directory_states_no_warning_for_a_present_registry(tmp_path) -> None:
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text(json.dumps({"goals": []}), encoding="utf-8")
+    server, thread = _start_server()
+    server.registry_path = registry_path
+    try:
+        response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?view=workspace-directory")
+        payload = json.loads(response.read().decode("utf-8"))
+        assert response.status == 200
+        assert payload["goals"] == []
+        assert payload["contract"]["warnings"] == []
+        assert payload["contract"]["summary"]["warnings"] == 0
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
