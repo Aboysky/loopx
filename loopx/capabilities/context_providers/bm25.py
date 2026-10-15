@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...lexical_retrieval import lexical_tokens, score_bm25
+from .lexical_retrieval import lexical_tokens, score_bm25
 from .base import ContextProviderItem, ContextProviderRetrieval, ContextProviderSync
 
 

@@ -305,7 +305,8 @@ def main() -> int:
         assert (release_root / "loopx" / "cli.py").is_file(), release_root
         repair = codex_home / "skills" / "loopx-self-repair" / "scripts" / "find_pattern.py"
         assert repair.with_name("lexical_retrieval.py").read_bytes() == (
-            release_root / "loopx" / "lexical_retrieval.py"
+            release_root / "loopx" / "capabilities" / "context_providers"
+            / "lexical_retrieval.py"
         ).read_bytes()
         repair_query = subprocess.run(
             [sys.executable, "-I", str(repair), "--query", "closeout recovery"],

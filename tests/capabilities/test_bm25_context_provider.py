@@ -10,7 +10,7 @@ from loopx.capabilities.context_providers.bm25 import (
     BM25ContextProvider,
     han_bigram_tokens,
 )
-from loopx.lexical_retrieval import score_bm25
+from loopx.capabilities.context_providers.lexical_retrieval import score_bm25
 
 
 def corpus(tmp_path: Path, documents=None) -> Path:

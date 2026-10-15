@@ -1,6 +1,6 @@
 # Shared lexical retrieval / 共享词法检索
 
-`loopx.lexical_retrieval.score_bm25(documents, query)` is a standard-library-only
+`loopx.capabilities.context_providers.lexical_retrieval.score_bm25(documents, query)` is a standard-library-only
 scorer, reused by the self-repair lookup and the financial-evidence consumer.
 It accepts document strings and returns one score plus matched terms per input,
 and corpus-wide unmatched query terms. It keeps input positions; the consumer
@@ -8,13 +8,13 @@ owns filtering, stable keys, tie-breaks, exact-match precedence and pagination.
 Repository review experience and the local ContextProvider also reuse this
 same scorer; they keep their own source and qualification boundaries.
 
-`loopx.lexical_retrieval.score_bm25(documents, query)` 仅依赖标准库，自修复查询和
+`loopx.capabilities.context_providers.lexical_retrieval.score_bm25(documents, query)` 仅依赖标准库，自修复查询和
 金融证据消费者共用它。输入文档字符串，返回与每个输入对应的分数、匹配词项，以及整个
 语料未命中的查询词项。保留输入位置；筛选、稳定身份、同分排序、准确匹配优先级和分页
 由消费者负责。
 
 ```python
-from loopx.lexical_retrieval import score_bm25
+from loopx.capabilities.context_providers.lexical_retrieval import score_bm25
 
 result = score_bm25(["lease recovery proof", "display refresh"], "recovery proof")
 assert result.documents[0].score > result.documents[1].score
@@ -39,6 +39,14 @@ This is one shared scorer, not a separately copied BM25 implementation. The
 repair/review/evidence consumers keep their previous behavior. Specialized
 computation and file/provider transport remain Python; no parallel state or
 decision owner is introduced by this bounded extension.
+
+The implementation lives with the existing context-provider owner, not at the
+package root. Repair lookup, repository review, and the BM25 adapter import the
+same module; installation/wheel packaging copies that exact standalone source.
+`loopx.lexical_retrieval` contains only compatibility re-exports for independently
+distributed evidence consumers of the previously documented import. It owns no
+algorithm, registry, state, or new caller; remove that facade only after those
+consumers migrate. No new generic utility package or capability is introduced.
 
 ## Local context provider
 

@@ -1,6 +1,6 @@
 """Neutral scoring and caller-owned relevance boundaries."""
 
-from loopx.lexical_retrieval import lexical_tokens, score_bm25
+from loopx.capabilities.context_providers.lexical_retrieval import lexical_tokens, score_bm25
 
 
 def test_rare_multiple_terms_beat_repeated_generic_word():
@@ -51,3 +51,15 @@ def test_optional_analysis_is_used_by_query_and_documents_without_another_ranker
     assert seen == ["态机", "状态机", "状态"]
     assert result.documents[0].score > result.documents[1].score
     assert score_bm25(["状态机"], "态机").documents[0].score == 0
+
+
+def test_legacy_library_import_reexports_the_single_provider_owned_scorer():
+    from loopx import lexical_retrieval as legacy
+    from loopx.capabilities.context_providers import lexical_retrieval as owner
+
+    # Independently distributed consumers keep their import and exact objects;
+    # the root module must not maintain another formula or result type.
+    assert legacy.score_bm25 is owner.score_bm25
+    assert legacy.lexical_tokens is owner.lexical_tokens
+    assert legacy.BM25Hit is owner.BM25Hit
+    assert legacy.BM25Scores is owner.BM25Scores
