@@ -104,8 +104,9 @@ the variable available to argument expansion in Bash/zsh. Reuse the same value
 on retries. Native Goal entry remains host-specific and does not inherit this
 heartbeat bootstrap.
 
-Thin's presentation regression ceiling is 3,000 characters (previously 2,500);
-compact remains 6,500. These are measured regression budgets, not external host
+Thin's presentation regression ceiling is 3,200 characters; compact is 6,700.
+The stop/readback repair adds 117/127 characters respectively; the supported
+320-character scope and compact scoped fixtures retain their full obligations. These are measured regression budgets, not external host
 limits or execution quota. Keep admission, continuation, scope and authority
 instructions readable rather than abbreviating them to fit a historical number.
 Peer workspace and claim/lease requirements come from the current quota contract
@@ -655,9 +656,16 @@ after a final quota/replan check confirms repeated unchanged polls. App-hosted
 heartbeats should search/use `automation_update` when available. If
 `scheduler_hint.action=stop_until_explicit_resume` and
 `scheduler_hint.app_automation.host_action=pause_or_delete_current_heartbeat`: in
-that terminal case, call `automation_update` once to pause the current
-heartbeat (delete only if pause is unavailable), verify the host result, spend
-no quota, and end the turn without a scheduler ACK. Otherwise call it only when
+that stop case, call `automation_update` once to pause the current heartbeat,
+verify the host result, spend no quota, and end the turn without a scheduler ACK.
+Full, compact, brief and thin generated bodies retain this same stop clause.
+If the tool is unavailable or the result does not confirm the current heartbeat
+stopped, leave that outcome unresolved; do not claim success, retry, change the
+RRULE as fallback, or perform new work/spend. Output still follows the user
+notification contract. An App-owned wake may already have invoked the model
+before it reaches this guard. Regenerating a body does not update an existing
+installed automation: apply the new body through the existing host update flow,
+retain its identity, and read back its prompt/status. Otherwise call it only when
 `scheduler_hint.app_automation.stateful_backoff.apply_needed=true` and
 `scheduler_hint.app_automation.recommended_rrule` is present. After a successful
 RRULE update, run `loopx` with

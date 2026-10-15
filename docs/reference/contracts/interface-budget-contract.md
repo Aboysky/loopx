@@ -51,14 +51,37 @@ for the richer generator packet; neither is the recurring Agent hot path.
 
 The heartbeat envelope ceiling covers the unbound and representative agent/scope-bound
 Codex App thin fixtures. Its 5,400-character JSON ceiling remains independent of
-the **3,000-character thin task body**, 4,000-character native Goal body,
+the **3,200-character thin task body**, 4,000-character native Goal body,
 structural limits, and emitted CLI ceilings. These are presentation regression
 budgets, not external host limits, token counts, execution quota, or permission.
+
+All scoped heartbeat envelope fixtures now measure that same shipped Agent
+projection, rather than generator diagnostics. On the unchanged two-scope fixture,
+the shared stop/readback clause changes Agent JSON from 3,182 to 3,299 characters;
+the 5,400 JSON ceiling stays unchanged. Separately, the compact
+scoped body grows from 7,086 to 7,213 normalized characters, including the fixed
+640-character Reward Memory allowance, exceeding its previous 7,140 limit.
+The compact base allowance becomes 6,700 (7,340 with that optional contract),
+preserving the exact heartbeat target, single attempt, verified result and
+unconfirmed-stop handling instead of deleting those obligations. The real thin CLI
+fixture with a supported 320-character scope grows from 2,992 to 3,109; its body
+ceiling becomes 3,200. Full/brief/native Goal body limits, key counts and execution
+budgets do not change. The broader full-scoped fixture already
+exceeded its limit before this repair and remains an overflow diagnostic.
+
+同一 scoped fixture 的 Agent JSON 从 3,182 增至 3,299 字符，仍沿用 5,400 上限；
+不再把生成器诊断误算为 Agent 输入。compact 正文从 7,086 增至 7,213（均含可选契约的
+640 字符余量），超过旧 7,140；基础展示预算仅从 6,500 调至 6,700，保留停止对象、
+单次尝试、结果确认与未确认处理。真实 thin CLI 的 320 字符范围输入从 2,992 增至 3,109，正文上限调至 3,200；
+full／brief／native Goal、字段数和执行预算不变；原已超限的 full
+大范围 fixture 仍如实报告超限。
+
 Do not abbreviate admission, continuation, scope, safety or settlement instructions
 solely to fit a historical character count, or copy dynamic quota decisions into
 the static prompt.
 
-The thin body ceiling rises from 2,500 to 3,000 to retain readable peer guidance.
+The earlier readable-peer qualification raised the thin body ceiling from 2,500
+to 3,000; those historical measurements follow.
 On the same real CLI fixture with a host scope and three runtime capabilities,
 latest main measured 2,515 normalized body characters, the earlier compressed
 PR measured 2,495, and readable guidance measures 2,632. With the supported
@@ -78,7 +101,7 @@ missing or altered authority wording, other surfaces, and subsequent edits after
 this block is in the base use the ordinary growth budget. Absolute emitted
 ceilings, line limits and semantic anchors remain enforced.
 
-thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
+此前 thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
 CLI、host scope 和三项 runtime 能力下，最新 main／此前压缩版本／清晰版本分别为
 2,515／2,495／2,632 字符；320 字符 scope 时为 2,805／2,785／2,922，新预算余量
 78 字符。单 peer 与双 peer 结果相同。计量只替换 Goal 与 state 路径，不缩短身份、

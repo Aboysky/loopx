@@ -352,8 +352,22 @@ closure; `--force-resume` only re-arms the host and cannot bypass Core. These ar
 provider adapter changes consuming existing decisions, not a new shared policy
 owner. OpenCode 2's inactivity hold is not proof of explicit user pause.
 
+Codex has separate transport and scheduler boundaries. In managed Goal Chat,
+Stop and cold recovery re-read `thread/goal/get` after requesting pause; an ACK
+without a non-active readback closes the owned transport and remains a failure.
+A native turn-start event arriving during Stop is retained only for interrupt,
+not queued-input delivery or resume-context steering. Explicit resume retains
+the objective and cumulative native usage; LoopX mode rebuilds current context.
+For Codex App, full/compact/brief/thin generated heartbeat bodies share the same
+one-attempt pause and result-verification clause. An unavailable or unconfirmed
+host stop ends the turn without claiming success, retrying, applying an RRULE
+fallback or doing new work/spend. The existing external CLI scheduler separately
+consumes Core's local stop directive before launching its configured wake command.
+None of these paths grants automatic resume from another wake.
+
 Qualification uses the production adapters with controlled host/probe seams and
-filesystem binding/CLI tests. It does not establish installed vendor/model
+filesystem binding/CLI tests, Codex Goal Chat controller/store recovery, and
+generated Agent-input checks. It does not establish installed vendor/model
 adoption or cancellation latency. App-owned heartbeats remain host-owned: Core
 emits the existing one-attempt stop instruction and requires host result readback;
 without a host pre-dispatch hook, the first wake may already invoke a model. Do
@@ -365,6 +379,8 @@ resume; denied admission with a runnable hint; restart before initial dispatch;
 continued external wait; unresolved Core stop after host resume; validated closure
 without standby. Read back binding, dispatched requests and remaining timers,
 then independently verify any original in-flight settlement.
+Codex cases also cover pause ACK without effect, unavailable/disappeared readback,
+late start events, cold recovery refusal, and stop obligations across prompt modes.
 
 ### Model selection within Agent creation and attachment
 

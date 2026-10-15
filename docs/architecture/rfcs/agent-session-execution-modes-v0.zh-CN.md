@@ -347,9 +347,22 @@ generation。OpenCode bridge 在 Core 准入后才自动恢复原生 Goal，串�
 `--force-resume` 仅重新启用宿主，不能绕过 Core。这里是消费既有决策的 provider 适配修改，
 不是新的共享策略 owner。OpenCode 2 的无活动 hold 不能证明用户明确暂停。
 
-资格化使用生产适配器及受控 host/probe、文件 binding／CLI 测试，不证明已安装厂商／模型
+Codex 分为宿主传输与调度两个边界。managed Goal Chat 的 Stop 与冷恢复，在请求暂停后
+重新读取 `thread/goal/get`；ACK 后未读到非 active 状态就关闭自有连接并保留失败。
+Stop 期间迟到的原生 turn-start 事件只用于中断对应回合，不再投递排队消息或恢复上下文。
+显式恢复沿用目标和累计原生用量；LoopX 模式重新构建当前上下文。Codex App 的
+full／compact／brief／thin 心跳正文共用一次暂停与结果核验条款；宿主停止不可用或
+未确认时结束本轮，不声称成功、不重试、不退回 RRULE 修改，也不做新工作／扣费。
+既有外部 CLI scheduler 则在启动所配置的 wake 命令前消费 Core local stop 指令。
+这些路径都不从另一次 wake 推断恢复授权。
+
+资格化使用生产适配器及受控 host/probe、文件 binding／CLI、Codex Goal Chat controller／
+store 恢复及生成 Agent 输入测试，不证明已安装厂商／模型
 采用或取消延迟。App 心跳仍由宿主拥有：Core 返回既有的一次停止指令并要求结果读回；
 宿主没有下发前 hook 时，第一次 wake 可能已经调用模型，不能称为零模型唤醒或已确认停调度。
+
+Codex 另覆盖暂停 ACK 无效果、读回不可用／目标消失、迟到 start 事件、冷恢复拒绝，以及
+各 prompt 模式是否保留停止义务。
 
 决定性场景：硬暂停后重复 idle／事件；成功和失败检查过程中暂停；旧结果返回前暂停→恢复；
 恢复后迟到的取消 callback；拒绝准入与可运行提示矛盾；首次下发前重启；正常外部等待；

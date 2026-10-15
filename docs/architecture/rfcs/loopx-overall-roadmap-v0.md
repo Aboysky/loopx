@@ -139,7 +139,9 @@ fleet qualification gate.
 Automatic dispatch now has a concrete provider checkpoint in the
 [session pause/resume boundary](agent-session-execution-modes-v0.md#pause-resume-and-automatic-dispatch-boundaries):
 Pi and OpenCode fence pre-pause checks; OpenCode 2 gates initial dispatch;
-Core stop and validated closure disarm provider continuation. Controlled adapter,
+Core stop and validated closure disarm provider continuation. Codex Goal Chat
+verifies pause readback and rejects late input delivery; Codex App prompt modes
+preserve one-attempt stop/verification and unresolved-stop handling. Controlled adapter,
 filesystem and CLI qualification remain separate from installed host stop latency
 and App-owned heartbeat shutdown. Existing dependency waits retain their owner.
 

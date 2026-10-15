@@ -105,7 +105,8 @@ S6/S8 的有界来源读取切片提供[现有 Ego Page 的只读 MCP adapter](.
 自动下发现有具体 provider 检查点，见
 [会话暂停／恢复边界](agent-session-execution-modes-v0.zh-CN.md#暂停恢复与自动下发边界)：
 Pi 与 OpenCode 隔离暂停前检查，OpenCode 2 首次下发也经过准入，Core stop 与已验证终态
-解除 provider 自动续跑。受控适配器、文件与 CLI 资格化不等于安装态停止延迟或 App 心跳
+解除 provider 自动续跑。Codex Goal Chat 核验暂停读回并拒绝迟到输入投递；Codex App
+各 prompt 模式保留一次停止、核验及未确认结果的处理。受控适配器、文件与 CLI 资格化不等于安装态停止延迟或 App 心跳
 已关闭；既有依赖等待仍由原 owner 处理。
 
 ## 3. 组合里程碑、资源次序与完成定义
