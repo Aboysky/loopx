@@ -6,6 +6,7 @@ from . import workspace_preferences_api as preferences_api
 from . import configuration_backup_api as backup_api
 from . import goal_ownership_api as ownership_api
 from . import goal_amendment_api as amendment_api
+from . import request_control_api as request_api
 from . import goal_storage_api as storage_api
 from .. import chat_usage_statistics_api as usage_api
 from .. import chat_goal_configuration_api as goal_api
@@ -16,6 +17,7 @@ from .. import chat_automation_cadence_api as cadence_api
 
 
 class ChatConfigurationRequestMixin(
+    request_api.RequestControlMixin,
     preferences_api.WorkspacePreferencesRequestMixin,
     amendment_api.GoalAmendmentRequestMixin,
     storage_api.GoalStorageRequestMixin,
@@ -32,6 +34,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            request_api.REQUEST_CONTROL_PATH: self._request_control_read,
             preferences_api.SIDEBAR_GOAL_ORDER_PATH: self._sidebar_order_read,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_inspect,
             storage_api.CHAT_GOAL_STORAGE_PATH: self._storage_inspect,
@@ -46,6 +49,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            request_api.REQUEST_CONTROL_PATH: self._request_control_write,
             preferences_api.SIDEBAR_GOAL_ORDER_PATH: self._sidebar_order_save,
             amendment_api.CHAT_GOAL_AMENDMENT_PATH: self._amendment_configure,
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/preview": lambda: self._storage_update(action="plan-migration"),
