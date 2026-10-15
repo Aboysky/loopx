@@ -478,11 +478,11 @@ def extension_status(
                 "enabled": bool(entry.get("enabled")),
                 "active_revision": entry.get("active_revision"),
                 "rollback_available": bool(entry.get("rollback_revision")),
-                # Readiness is the same predicate the catalog and dispatch use:
-                # a stale proof under an incompatible API is not "verified".
+                # Legacy records stay readable but unverified. Check the proof
+                # before parsing their possibly absent revision metadata.
                 "doctor_verified": bool(entry.get("enabled"))
-                and _active_manifest_incompatibility(entry) is None
-                and _verified_entrypoint(entry) is not None,
+                and _verified_entrypoint(entry) is not None
+                and _active_manifest_incompatibility(entry) is None,
                 "revision_count": len(entry.get("revisions") or []),
             }
             for entry in visible
