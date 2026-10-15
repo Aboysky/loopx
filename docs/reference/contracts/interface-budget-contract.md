@@ -119,6 +119,29 @@ warning and any already-over-budget fixture instead of truncating requirements.
 仅人工诊断输出上限由 5,100 调至 5,250，机器 JSON／正文／行数／执行预算不变。
 重规划指导增加 363 字节，独立指导预算为 1,800；8 KiB 总包告警及原有超限仍保留。
 
+The same qualification also covers emitted `--compact` Markdown, independently
+of the task-body and thin-output limits. On the unchanged native mode fixture,
+base `3e611660a` emits 11,315 characters and the pause/correction head
+`84e00bac1` emits 11,530, failing the old 11,500 ceiling; both have 145 lines.
+The 215-character growth carries the current-heartbeat single stop attempt,
+confirmation and unresolved-stop handling, plus evidence-scoped correction and
+original settlement obligations. These clauses guide different decisions and
+are not removable duplicate diagnostics. Preserve the complete text and raise
+only this Markdown regression ceiling to 11,750, leaving 220 characters of
+headroom (the base had 185) for bounded wording variation. JSON grows from
+12,658 to 12,873 under the unchanged 13,500 ceiling; the 155-line cap, semantic
+anchors, fixture population, growth checks and execution limits remain intact.
+This qualifies readable output size, not installed host behavior or model adoption.
+
+同一资格化还须独立覆盖 `--compact` 的完整 Markdown 输出：不改原生 mode 夹具时，
+基线 `3e611660a` 为 11,315 字符，暂停／纠偏头 `84e00bac1` 为 11,530，
+确实超过旧 11,500 上限；两者均为 145 行。新增 215 字符承载当前心跳单次停止、
+结果确认、未确认处理、证据限定的局部纠偏及原结算义务，各自支持不同决定，
+不能作为重复诊断删除。保留全文，仅将该 Markdown 回归上限调至 11,750，
+留 220 字符余量供有界措辞变化（基线余量为 185）。JSON 从 12,658 增至
+12,873，仍遵守原 13,500 上限；155 行、语义锚点、夹具规模、增长检查和执行限制
+不变。这只资格化可读输出尺寸，不证明安装态行为或模型采纳。
+
 此前 thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
 CLI、host scope 和三项 runtime 能力下，最新 main／此前压缩版本／清晰版本分别为
 2,515／2,495／2,632 字符；320 字符 scope 时为 2,805／2,785／2,922，新预算余量
