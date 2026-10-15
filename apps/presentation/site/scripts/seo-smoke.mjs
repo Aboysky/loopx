@@ -36,7 +36,9 @@ for (const [path, subject] of [["", "long-running"], ["benchmarks/swe-marathon/"
   assert(html.includes(`rel="canonical" href="${origin}${path}"`), `${path}: canonical matches route`);
   if (!path) {
     const footer = html.match(/<footer class="site-footer">(.*?)<\/footer>/s)?.[1] ?? "";
-    assert(footer.includes('href="/loopx/skill.md"'), "homepage footer discovers the skill under the project base");
+    const basePath = html.match(/<script\b[^>]*\bsrc="([^"]*)site-assets\/[^"]+"/)?.[1];
+    assert(basePath !== undefined, "homepage contains the built application script");
+    assert(footer.includes(`href="${basePath}skill.md"`), "homepage footer discovers the skill under the built base");
     const structured = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)?.[1] ?? "null");
     assert.equal(structured?.["@type"], "SoftwareSourceCode");
     assert.equal(structured?.codeRepository, "https://github.com/loopx-project/loopx");
