@@ -96,7 +96,7 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(tmp
     session.admission.accept_result(lambda: _store_codex_cli_session(runtime, lineage=session.lineage,
         session_scope='agent', session_id=source_session, goal_ref=session.goal_ref, session_profile_digest=session.digest))
     observations = []
-    from loopx.control_plane.turn_driver.codex_checkpoint import native_session_checkpoint
+    from loopx.hosts.codex_checkpoint import native_session_checkpoint
     def native(env, session_id, **kwargs):
         observations.append(session_id)
         if real_host:
@@ -104,7 +104,11 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(tmp
         return {'components': [{'id': 'native_history', 'source_path': str(history)}],
             'metadata': {'session_id': session_id, 'turn_ids': ['completed-work'], 'completed_turn_id': 'completed-work',
                 'store_members': [{'id': 'native_history', 'name': history.name}], 'execution_authority_granted': False}}
-    monkeypatch.setattr('loopx.control_plane.turn_driver.codex_checkpoint.native_session_checkpoint', native)
+    monkeypatch.setattr('loopx.hosts.codex_checkpoint.native_session_checkpoint', native)
+    if not real_host:
+        from contextlib import nullcontext
+        monkeypatch.setattr('loopx.hosts.codex_checkpoint.native_checkpoint_reader',
+                            lambda *args, **kwargs: nullcontext(None))
     destination = tmp_path / 'points' / 'captured'
     capture_request = tmp_path / 'capture.json'
     capture_request.write_text(json.dumps({'destination': str(destination), 'components': [{'id': 'code', 'source_path': str(code)}],

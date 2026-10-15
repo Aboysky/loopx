@@ -76,16 +76,19 @@ export const goalWorkspaceM2Scenario = {
       await now.locator('.work-map').waitFor();
       await now.getByRole('button',{name:'按负责人',exact:true}).click();
       await now.locator('[data-todo-id="showcase-reconcile"]').click();
+      await page.waitForURL(value => value.searchParams.get("todo") === "showcase-reconcile");
       await page.locator('.personal-drawer-close').click();
-      await page.waitForFunction(() => !new URL(location.href).searchParams.has("todo"));
-      assert.equal(await page.locator('.personal-context-drawer').count(), 0);
-      // Closing details records the cleared selection. Back restores the task
-      // just closed, not an older selection from before the view switches.
+      await page.waitForURL(value => !value.searchParams.has("todo"));
+      await page.locator('.personal-context-drawer').waitFor({state:"hidden"});
       await page.goBack({waitUntil:"domcontentloaded"});
+      // Back restores the task just closed, not a selection from an earlier view.
+      await page.waitForURL(value => value.searchParams.get("todo") === "showcase-reconcile");
       await page.locator('.personal-context-drawer').waitFor();
-      assert.equal(new URL(page.url()).searchParams.get("todo"), "showcase-reconcile");
-      assert.equal(await now.locator('[data-todo-id="showcase-reconcile"]').getAttribute('aria-pressed'), 'true');
-      await page.locator('.personal-drawer-close').click();
+      await now.locator('[data-todo-id="showcase-reconcile"][aria-pressed="true"]').waitFor();
+      assert.equal(await now.locator('[data-todo-id="showcase-reconcile"]').getAttribute('aria-pressed'),'true');
+      await page.goForward({waitUntil:"domcontentloaded"});
+      await page.waitForURL(value => !value.searchParams.has("todo"));
+      await page.locator('.personal-context-drawer').waitFor({state:"hidden"});
       assert.equal(writes.length,0,`Read-only navigation made an effect request: ${writes}`);
       await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-desktop.png'),animations:'disabled'});
       await page.setViewportSize({width:390,height:844});
