@@ -101,6 +101,24 @@ missing or altered authority wording, other surfaces, and subsequent edits after
 this block is in the base use the ordinary growth budget. Absolute emitted
 ceilings, line limits and semantic anchors remain enforced.
 
+The pause/correction qualification measures the same small/crowded/multi-Agent
+thin CLI fixtures at `a59aed703` as 3,070 JSON / 4,998 Markdown characters,
+the pause-only branch as 3,187 / 5,115, and the correction refinement as
+3,224 / 5,152; all remain 65 Markdown lines. The prior 5,100 Markdown ceiling
+already fails on pause-only instructions. Retain verified-stop and Core-owned
+correction clauses and raise only that human diagnostic ceiling to 5,250;
+the 3,400 JSON ceiling, body, line, key and execution budgets stay unchanged.
+The ordinary generated full body shrinks by 215 characters; compact/brief/thin
+grow by 88/46/37 on the matched public fixture. No second summary or model call
+is added. Replan advice gains 363 text bytes for local scope and outcome checks;
+its separate advice allocation becomes 1,800 bytes, preserving the 8 KiB envelope
+warning and any already-over-budget fixture instead of truncating requirements.
+
+暂停／纠偏的同一三场景 thin CLI 从 main 的 3,070／4,998 字符，经过暂停补丁的
+3,187／5,115，变为 3,224／5,152（JSON／Markdown）；Markdown 均为 65 行。
+仅人工诊断输出上限由 5,100 调至 5,250，机器 JSON／正文／行数／执行预算不变。
+重规划指导增加 363 字节，独立指导预算为 1,800；8 KiB 总包告警及原有超限仍保留。
+
 此前 thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
 CLI、host scope 和三项 runtime 能力下，最新 main／此前压缩版本／清晰版本分别为
 2,515／2,495／2,632 字符；320 字符 scope 时为 2,805／2,785／2,922，新预算余量

@@ -156,6 +156,25 @@ not active host Goal objectives or benchmark prompts already pinned to a run.
 An installed runtime supplies updated dynamic contracts on later reads; upgrading
 it does not retroactively remove old text from an existing Goal.
 
+Current instructions follow one chain: fresh guard → typed `work_context` and
+pending `required_reads` → full quota or `TurnEnvelope` → Host. Use these sources
+for a bounded working brief of evidenced progress/change, current blockers,
+next work, acceptance and stops. Missing comparison evidence is unknown, not
+unchanged. Preserve complete requirement reads and original settlement identity;
+do not freeze a progress summary into the recurring automation or call another
+model merely to rewrite it. A changed source requires the existing re-entry.
+This is context delivery and Agent guidance, not proof of adoption or improvement.
+
+**Behavior change:** generated full/compact/thin bodies and the managed project
+skill no longer invent two-stall replan/self-pause thresholds or a fixed count of
+alternative candidates. All modes defer to current Core obligations and explicit
+stop boundaries. Existing Core stall detection and periodic-review cadence remain;
+local correction preserves valid work, a due review may retain its path, and
+broader changes need relevant current evidence. The generic external worker also
+rejects non-boolean admission before its configured wake command; a terminal
+directive still wins. App-owned automations require the existing Host stop/update
+and readback path, so this does not promise a pre-model App dispatch hook.
+
 Claude Code's MCP-backed `loop.md` follows the same work-sizing rule and current
 quota contract, without a fixed one-segment limit or empty-Todo-list completion
 shortcut. Its `complete_task` tool already owns the ordered writeback/spend
@@ -547,9 +566,9 @@ If the result says should_run=true:
    Check `delivery_batch_scale`, `delivery_outcome`,
    `post_handoff_outcome_gap_streak`, and `handoff_delivery_contract`; for
    repeated-small or surface-only loops, obey the contract.
-2. Run a short steering audit before choosing work: list at least three
-   plausible next-action candidates across different P0/P1/P2 lanes when
-   useful; if the same topic has consumed several recent delivery slices, apply
+2. Run a short steering audit when new evidence or a projected review warrants
+   changing the selected work; compare relevant alternatives without a fixed
+   candidate count. If the same topic has consumed several recent delivery slices, apply
    a continuation check and state why continuing still wins; keep compute quota
    separate from focus quota; record any losing high-value candidate that should
    not be forgotten. Include a product bottleneck lens: ask whether the core
@@ -558,22 +577,16 @@ If the result says should_run=true:
    concrete bottleneck candidate when it should outrank the nearest local TODO.
    Plan/top todo/route changes need todo/Next Action writeback or
    no-writeback rationale.
-3. Run the no-progress self-repair check before choosing delivery work. First
-   obey any machine-readable `autonomous_replan_obligation` or
-   `execution_obligation.must_attempt_work=true` returned by
-   `quota should-run`; that hard contract overrides a quiet no-op even when the
-   heartbeat prompt is short. Inspect recent active-state progress and public
-   run history for consecutive eligible heartbeat turns. Count a turn as
-   no-progress only when it produced no substantive artifact, no adapter or
-   implementation progress, no new gate or user decision, no new validation
-   signal, and only repeated status/brief-check/compact-checkpoint state edits.
-   Treat `quota_monitor_poll` events as no-spend stall evidence for this guard.
-   If 2 consecutive eligible heartbeats are no-progress loops, run one bounded
-   self-repair/replan segment before another quiet no-op. Delete or pause the
-   automation only when that repair path is itself stuck for 2 more eligible
-   turns, do not append a quota spend for the self-cancel turn, and return
-   NOTIFY explaining that the automation was cancelled because it was spinning
-   without progress.
+3. Run the no-progress self-repair check against current evidence. Obey
+   `autonomous_replan_obligation`, `replan_action_packet` and
+   `execution_obligation.must_attempt_work` from the guard. Preserve ongoing
+   valid work; retry only after reconciling ambiguous effects. Repair the affected
+   path first; broader changes require current goal/path/dependency/acceptance
+   evidence. A due review can retain the path. At the next review check actual
+   adoption and outcomes, not just the plan. Wake counts do not authorize replan
+   or self-pause; stopping follows explicit instructions or the current Core/host
+   boundary, with original settlement still owed. Future-monitor liveness
+   receipts do not establish stalled work; Core owns eligible stall detection.
 4. Choose scope-bounded work toward a verifiable result. Size by task, evidence
    and risk, not calls, files or wake cadence. Related implementation, research,
    tests, docs and writeback may form one coherent effort; a focused correction
@@ -751,9 +764,8 @@ instruction/evidence/todo/stale source/safe handoff exists. Check
 `post_handoff_outcome_gap_streak`, and `handoff_delivery_contract`; for
 repeated-small or surface-only loops, obey the contract. Then obey any
 machine-readable `autonomous_replan_obligation` or
-`execution_obligation.must_attempt_work=true`; if 2 consecutive eligible
-heartbeats are no-progress loops, run bounded self-repair/replan before another
-quiet no-op. Do one bounded verifiable progress batch when a real boundary
+`execution_obligation.must_attempt_work=true`; follow the projected repair/replan
+obligation without inventing a wake-count threshold or self-pause rule. Do one bounded verifiable progress batch when a real boundary
 exists: implementation, validation, docs, and state writeback may belong in the
 same batch. Do not stop at the first tiny substep when the validation/writeback
 boundary is already clear. Validate it, write back changed files / validation /
@@ -818,9 +830,10 @@ For every automatic heartbeat turn, the agent-facing checklist is:
 10. Check `delivery_batch_scale`, `delivery_outcome`,
    `post_handoff_outcome_gap_streak`, and `handoff_delivery_contract`; for
    repeated-small or surface-only loops, obey the contract.
-11. Start bounded self-repair/replan if 2 consecutive eligible turns are only
-   repeated no-progress status loops. Cancel or pause instead of spending only
-   if that repair path is itself stuck for 2 more eligible turns.
+11. Follow current Core repair/replan obligations. Correct the affected work
+    first; widen only on relevant evidence and check subsequent adoption/results.
+    A due review may keep the route. Wake counts grant no replan or self-pause
+    authority; explicit/Core/host stops and original settlement still apply.
 12. Ordinary completion links a successor before settlement. Final no-follow-up
     completion happens only after the accountable refresh and matching spend receipt.
 13. Plans/top todos/route changes need LoopX todo / Next Action

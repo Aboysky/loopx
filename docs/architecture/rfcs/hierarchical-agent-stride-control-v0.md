@@ -413,6 +413,13 @@ Todo owns the bounded postcondition. Replan owns direction change. A stride
 controller may recommend split, merge, continue, settle, or escalate, but it
 must not close a Todo, fabricate evidence, or clear a replan obligation.
 
+The [wake/context/correction chain](agent-session-execution-modes-v0.md#wake-current-context-and-correction-form-one-chain)
+keeps prompt prose subordinate to these owners. Local correction preserves
+unaffected work; widening requires relevant current evidence. A due review may
+retain the path, and later work/outcome readback qualifies correction benefit.
+Heartbeat templates no longer add independent two-stall replan/self-pause rules.
+This does not remove Core stall triggers or change configured review cadence.
+
 Research goals may also consume the typed frontier defined by the Research
 Exploration RFC. A composition experiment can be one delivery slice; the
 stride model does not create another research graph.

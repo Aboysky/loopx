@@ -144,6 +144,10 @@ verifies pause readback and rejects late input delivery; Codex App prompt modes
 preserve one-attempt stop/verification and unresolved-stop handling. Controlled adapter,
 filesystem and CLI qualification remain separate from installed host stop latency
 and App-owned heartbeat shutdown. Existing dependency waits retain their owner.
+The same chain now rejects malformed external-worker admission, delivers current
+source context, and routes correction through the existing typed replan owner;
+prompt wake counts no longer authorize replan or self-pause. Source delivery and
+recorded decisions still do not establish model adoption or correction benefit.
 
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 

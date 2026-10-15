@@ -382,6 +382,27 @@ then independently verify any original in-flight settlement.
 Codex cases also cover pause ACK without effect, unavailable/disappeared readback,
 late start events, cold recovery refusal, and stop obligations across prompt modes.
 
+### Wake, current context and correction form one chain
+
+These stages implement roadmap S4/S7 and consume the existing Goal Vision and
+Stride owners; none is another scheduler or Goal authority.
+
+| Stage | Actual owner and handoff | Required counterexample |
+|---|---|---|
+| Before dispatch | `external_scheduler_worker` consumes the Core local stop directive first, then a strict boolean `should_run`. Existing monitor/reset-token/backoff rules retain waits; a changed signal requires current admission. | A string `"false"`, integer, missing or otherwise malformed admission cannot launch the configured wake command, even with `run_now`. Stop still exits without polling or a final repair probe. |
+| Current instruction | The stable heartbeat entry reads a fresh guard. Typed `interaction_contract` projects current work sources, scoped blockers and pending full Goal/acceptance reads; `turn_envelope` and the Codex Host consume that same observation. Compose a bounded working brief of evidenced change, blocker, next work, acceptance and stops. | Same Todo identity with changed requirements must deliver the new condition. Missing sources deny dependent work; absent comparison evidence means unknown, not unchanged. A display summary cannot replace a full requirement or source revision. |
+| Correction and review | Use local operation recovery, selected-work correction and existing `replan_action_packet.planning_guidance`. Widen only for relevant Goal/path/dependency/acceptance evidence. Core may require a due review; retaining the path is a valid qualified outcome. | Quiet monitor receipts alone cannot trigger a prompt-owned two-stall replan or self-pause. A decision receipt alone cannot prove that later work adopted it or improved the outcome. |
+
+The current patch removes legacy heartbeat/skill count rules and the fixed
+candidate-count audit, preserves Core stall/periodic-review policies, and adds
+the correction/followthrough guidance to the existing typed owner. Agent-authored
+working briefs are source-grounded instructions, not a new persisted summary,
+automatic language-model summarizer or authority record. The full Goal document
+remains a progressive read; bounded transport does not permit truncating stops.
+App-owned wake suppression still depends on a qualified host pre-dispatch hook.
+Arbitrary provider-result events and live correction benefit remain the Stride
+§7.5/§7.6 qualification, not inferred from synthetic dispatch/context tests.
+
 ### Model selection within Agent creation and attachment
 
 This is a proposed refinement of the reusable Agent operations above, not a
