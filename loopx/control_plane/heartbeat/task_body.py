@@ -112,6 +112,8 @@ If that preflight still fails: no work/spend; quiet `DONT_NOTIFY`.
 
 {USER_TODO_FINAL_MESSAGE_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
+{SCHEDULER_HINT_APPLICATION_RULE} App automation cadence changes are host
+scheduling updates only; they never consume quota or authorize delivery work.
 
 If the result says `should_run=false`:
 
@@ -149,8 +151,6 @@ If the result says `should_run=false`:
 - Otherwise, do not do implementation work, adapter work, file edits, research,
   or project exploration in this turn. Return a quiet heartbeat `DONT_NOTIFY`
   response with the skip reason.
-  {SCHEDULER_HINT_APPLICATION_RULE} App automation cadence changes are host
-  scheduling updates only; they never consume quota or authorize delivery work.
 
 If the result says `should_run=true`:
 
@@ -318,11 +318,11 @@ Fail:quiet.
 {HEARTBEAT_NOTIFICATION_RULE_SHORT}
 {SCOPE_BOUNDED_WORK_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
+{SCHEDULER_HINT_THIN_RULE}
 
 `should_run=false`: follow user channel; `monitor_quiet_skip` records
 receipt/stall. Wait: one read-only poll; only new evidence permits
 writeback/spend; retry the same id.
-{SCHEDULER_HINT_THIN_RULE}
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
 `should_run=true`: read compact, `status --limit 3`, and
