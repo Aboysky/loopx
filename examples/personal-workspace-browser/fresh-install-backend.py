@@ -1,7 +1,9 @@
 """Real LoopX Chat service on a fresh runtime: no registry, Goal, model or credential exists.
 
 The scan root is an empty project directory, exactly the state an installed
-LoopX opens for the first time; nothing here is synthetic except the browser.
+LoopX opens for the first time. The only Agent executable is a stub that
+exits at once, so the service sees an installed Codex CLI without any model
+ever running; the machine's real CLIs and API keys are never consulted.
 """
 import json
 import os
@@ -14,6 +16,12 @@ from loopx.chat_server import default_chat_assets_dir, serve_chat
 
 root = Path(sys.argv[1]).resolve()
 (root / "project").mkdir(parents=True, exist_ok=True)
+bins = root / "bin"
+bins.mkdir(exist_ok=True)
+(bins / "codex").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+(bins / "codex").chmod(0o755)
+for variable in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+    os.environ.pop(variable, None)
 os.environ["LOOPX_USAGE_PING"] = "0"
 os.environ["DO_NOT_TRACK"] = "1"
 with socket.socket() as probe:
@@ -27,6 +35,9 @@ serve_chat(
     scan_roots=[root / "project"],
     host="127.0.0.1",
     port=port,
+    codex_bin=str(bins / "codex"),
+    claude_bin=str(bins / "claude"),
+    kiro_cli_bin=str(bins / "kiro-cli"),
     assets_dir=default_chat_assets_dir(),
     open_browser=False,
 )

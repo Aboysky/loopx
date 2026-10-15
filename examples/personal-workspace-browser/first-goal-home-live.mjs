@@ -16,6 +16,10 @@ import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs
 // open to the first-Goal state, not a health banner, keep that warning in the
 // collapsed diagnostics without a local path, let an example fill the composer
 // without sending, and open the typed Goal form fed by the real project catalog.
+// Confirming the first Goal goes through the real action owner. The only Agent
+// is a stub that exits at once, so no model ever runs: the service registers
+// the Goal and its first task, reports the first Turn it could not start, and
+// offers the original operation to retry; a false success would be the defect.
 
 export const firstGoalHomeLiveScenario = {
   id: "first-goal-home-live",
@@ -93,12 +97,16 @@ export const firstGoalHomeLiveScenario = {
       const drawer = page.locator(".personal-context-drawer");
       await drawer.waitFor({ state: "visible", timeout: 20_000 });
       await drawer.getByText("新 Goal · 待你确认", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
-      assert.equal(await drawer.getByText("提案状态刷新失败", { exact: false }).count(), 0, "the real proposal snapshot reads back");
+      // The snapshot readback completes shortly after the card appears; a stale-card notice must not remain.
+      await drawer.getByText("提案状态刷新失败", { exact: false }).waitFor({ state: "hidden", timeout: 15_000 });
       await drawer.locator(".personal-primary-action").click();
       const applyButton = drawer.getByRole("button", { name: "确认并应用", exact: true });
       if (await applyButton.count()) await applyButton.click();
-      await drawer.getByText("新 Goal · 已应用", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
-      await drawer.getByText("操作已完成", { exact: false }).first().waitFor({ state: "visible", timeout: 10_000 });
+      await drawer.getByText("新 Goal · 出错", { exact: true }).waitFor({ state: "visible", timeout: 60_000 });
+      const outcome = (await drawer.innerText()).replace(/\s+/g, " ");
+      assert.match(outcome, /Goal 初始化尚未完成/, `the service names what is not finished: ${outcome.slice(0, 300)}`);
+      assert.match(outcome, /Goal ID: goal-[0-9a-f-]+ · 已应用/, "the Goal itself was registered before the first Turn failed");
+      assert.ok(await drawer.getByRole("button", { name: "重试原操作", exact: true }).count(), "the original operation can be retried");
       await page.screenshot({ path: resolve(outputDir, "first-goal-home-live-applied.png"), animations: "disabled" });
 
       // The real service now has a registry with exactly this Goal, and the
@@ -113,7 +121,7 @@ export const firstGoalHomeLiveScenario = {
       await page.locator(".personal-goal-row", { hasText: title }).first().waitFor({ state: "visible", timeout: 20_000 });
       await firstGoal.waitFor({ state: "hidden", timeout: 20_000 });
       await page.screenshot({ path: resolve(outputDir, "first-goal-home-live-home.png"), animations: "disabled" });
-      return { coverageEntries: await session.close(), note: "real loopx chat on a fresh runtime: zero-Goal discovery with its own warning, first Goal created from the page through the real action owner, registry written, directory lists it" };
+      return { coverageEntries: await session.close(), note: "real loopx chat on a fresh runtime: zero-Goal discovery with its own warning; first Goal registered from the page through the real action owner with the stub Agent's failed first Turn reported honestly; registry written, directory lists it" };
     } catch (error) {
       if (diagnostics) process.stderr.write(diagnostics);
       await session?.close().catch(() => {});
