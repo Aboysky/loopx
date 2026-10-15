@@ -279,12 +279,33 @@ and virtual tables cannot masquerade as authority tables. WAL-mode copies and
 unsupported/service-owned providers remain unknown and need their existing
 owner; PostgreSQL is never contacted. The normal 2 MiB RPC wire is unchanged;
 only the two complete-manifest checks opt into the existing 64 MiB private-file
-transport. These candidate bounds define this inspection profile. The RFC's
-Section 12 maintainer freeze, compound worst-case qualification and broader
-platform/provider qualification remain open. No production SLO is claimed.
-The RFC's [pending capacity-default decision](../architecture/rfcs/complete-state-recovery-v0.md#pending-m1-capacity-default-decision)
-lists the unchanged values, protection goals and evidence gaps for the maintainer;
-it is not an approval or an additional activation step for the operator.
+transport. These unchanged bounds are approved for local POSIX File/SQLite
+inert inspection by the [recorded maintainer decision](../architecture/rfcs/complete-state-recovery-v0.md#m1-capacity-default-decision).
+Compound worst cases and broader platforms/providers remain unqualified; no
+production SLO or merge authority follows from capacity consent.
+
+### Choosing backup inspection or a research checkpoint
+
+Use this Settings entry or `backup-state verify` to read a complete archive when
+the original source is unavailable. Its tasks/history are historical evidence;
+unknown components remain unknown, and the report does not resume work.
+[Research checkpoints](research-checkpoint.md) instead capture a settled research
+boundary and explicitly admit a distinct Goal/session before adopting context.
+They already reuse backup inventory and SQLite snapshot owners, but their
+component format is not accepted by `backup-state verify`, and a full archive
+is not a research checkpoint input.
+
+The [shared-owner and staged recovery contract](../architecture/rfcs/complete-state-recovery-v0.md#backup-inspection-and-research-checkpoint-reuse)
+keeps format/capture qualification in M2 and guided continuation in M3. No manual
+format conversion can establish missing authority or consistency. Keep the
+original archive and read the existing report's component states and holds;
+automatic activation and the joint recovery journey are not available in M1.
+
+中文：完整备份检查用于原来源不可用时找回可读任务和历史；报告不恢复执行。
+研究 checkpoint 用于已稳定的研究边界，在独立 Goal／会话准入后显式采用上下文。
+两者已共用备份清单和 SQLite 快照，但格式不互换。缺失组件或捕获事实仍为未知，
+不能手工改格式来取得权限；M2 负责资格，M3 才交付引导式继续工作，M1 保留原报告
+的状态和 hold 供读取。
 
 ### Measured local capacity cases
 
