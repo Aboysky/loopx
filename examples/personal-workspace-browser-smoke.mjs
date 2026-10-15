@@ -5,6 +5,7 @@ import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-wor
 import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
 import {goalWorkspaceM2Scenario} from "./personal-workspace-browser/goal-workspace-m2.mjs";
 import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-workspace-selection.mjs";
+import {sinceYouLookedScenario} from "./personal-workspace-browser/since-you-looked.mjs";
 import {firstGoalHomeScenario} from "./personal-workspace-browser/first-goal-home.mjs";
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
@@ -110,6 +111,7 @@ scenarioCatalog.push(zcodeGoalScenario);
 scenarioCatalog.push(goalWorkspaceM2Scenario);
 scenarioCatalog.push(goalWorkspaceCreateScenario);
 scenarioCatalog.push(goalWorkspaceSelectionScenario);
+scenarioCatalog.push(sinceYouLookedScenario);
 scenarioCatalog.push(firstGoalHomeScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(agentModelSelectionScenario);

@@ -88,6 +88,7 @@ import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
 import { compareProposalRecency } from "./proposal-recency";
+import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
 import "./personal-workspace.css";
@@ -1246,6 +1247,66 @@ export function PersonalWorkspacePage({
     && (selectedGoalTab === "overview" || selectedGoalTab === "tasks") && !selectedGoal?.loadState, selectionScope);
   const workspaceDigest = useGoalWorkspaceDigest(selectedGoal, model.userTodos, items,
     workspaceReview.usable ? workspaceReview.snapshot?.goal_map : null);
+  // "Since you looked" (RFC goal-workspace-surface §5.7): compare the current
+  // digest with this browser's last acknowledged look at this Goal on this
+  // source. Nothing here writes to the service or reads cost. Comparing on
+  // open can only under-count while a Goal is still loading (every count is
+  // "present now and not in the marker"); the marker itself advances from
+  // the latest complete look when the owner marks it seen or leaves.
+  const seenStatusSource = statusSourceControl?.activeSource.statusUrl ?? "/status.json";
+  const seenGoalLoaded = Boolean(selectedGoal && !selectedGoal.loadState);
+  const seenMarkerInput = useMemo<SeenMarkerInput | null>(() => {
+    if (!selectedGoal || !seenGoalLoaded) return null;
+    return {
+      observedAt: workspaceDigest.observedAt,
+      counts: { open: workspaceDigest.work.open, blocked: workspaceDigest.work.classes.blocked, done: workspaceDigest.work.done },
+      decisionIds: model.userTodos.filter((item) => item.goalId === selectedGoal.goalId).map((item) => item.todoId),
+      doneTodoIds: workspaceDigest.work.rail.done,
+      blockedTodoIds: workspaceDigest.work.rail.blocked,
+      resultIds: items.flatMap((item) => item.kind === "output" && item.output.goalId === selectedGoal.goalId ? [item.output.outputId] : []),
+    };
+  }, [selectedGoal, seenGoalLoaded, workspaceDigest, model.userTodos, items]);
+  const latestSeenInputsRef = useRef(new Map<string, SeenMarkerInput>());
+  const seenScopeKey = (source: string, goalId: string) => JSON.stringify([source, goalId]);
+  useEffect(() => {
+    if (selectedGoal && seenMarkerInput) latestSeenInputsRef.current.set(seenScopeKey(seenStatusSource, selectedGoal.goalId), seenMarkerInput);
+  }, [selectedGoal, seenMarkerInput, seenStatusSource]);
+  const [sinceYouLooked, setSinceYouLooked] = useState<{ goalId: string; source: string; delta: SinceYouLookedDelta } | null>(null);
+  const seenComparedRef = useRef<string | null>(null);
+  const seenVisitRef = useRef<{ source: string; goalId: string } | null>(null);
+  function advanceSeenMarker(goalId: string, source: string) {
+    const input = latestSeenInputsRef.current.get(seenScopeKey(source, goalId));
+    if (input) writeSeenMarker(window.localStorage, seenMarkerStorageKey(source, goalId), buildSeenMarker(input));
+  }
+  useEffect(() => {
+    if (!selectedGoal || !seenGoalLoaded || !seenMarkerInput) return;
+    const scope = seenScopeKey(seenStatusSource, selectedGoal.goalId);
+    if (seenComparedRef.current === scope) return;
+    seenComparedRef.current = scope;
+    const key = seenMarkerStorageKey(seenStatusSource, selectedGoal.goalId);
+    const previous = readSeenMarker(window.localStorage, key);
+    if (!previous) { writeSeenMarker(window.localStorage, key, buildSeenMarker(seenMarkerInput)); return; }
+    const delta = compareSeenMarker(previous, seenMarkerInput);
+    if (delta.material) setSinceYouLooked({ goalId: selectedGoal.goalId, source: seenStatusSource, delta });
+  }, [selectedGoal, seenGoalLoaded, seenMarkerInput, seenStatusSource]);
+  // Leaving a Goal records the owner's latest look at it; if the line was
+  // shown, that look acknowledges it.
+  useEffect(() => {
+    const current = selectedGoal && seenGoalLoaded ? { source: seenStatusSource, goalId: selectedGoal.goalId } : null;
+    const previous = seenVisitRef.current;
+    if (previous && (!current || current.goalId !== previous.goalId || current.source !== previous.source)) {
+      advanceSeenMarker(previous.goalId, previous.source);
+      seenComparedRef.current = null;
+      setSinceYouLooked((shown) => shown && shown.goalId === previous.goalId && shown.source === previous.source ? null : shown);
+    }
+    if (current) seenVisitRef.current = current;
+    else if (!selectedGoal) seenVisitRef.current = null;
+  }, [selectedGoal, seenGoalLoaded, seenStatusSource]);
+  function markSeen() {
+    if (!sinceYouLooked) return;
+    advanceSeenMarker(sinceYouLooked.goalId, sinceYouLooked.source);
+    setSinceYouLooked(null);
+  }
   const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {
     if (selection?.kind === "settings") return null;
     if (selection?.kind === "proposal") {
@@ -2295,7 +2356,7 @@ export function PersonalWorkspacePage({
             ) : selectedGoal ? (
               <GoalWorkspacePanels key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
                 activeTab={selectedGoalTab} scrollRef={channelScrollRef} panels={{
-                  overview: <GoalOverview onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
+                  overview: <GoalOverview sinceYouLooked={sinceYouLooked?.goalId === selectedGoal.goalId ? sinceYouLooked.delta : null} onMarkSeen={markSeen} onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview")}
