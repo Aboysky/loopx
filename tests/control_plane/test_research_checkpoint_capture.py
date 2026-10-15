@@ -320,7 +320,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
         # provider fork entry, retaining the original home for byte comparison.
         # Fixed paths are swapped in this fixture; this is not guest isolation.
         import shutil
-        from loopx.control_plane.turn_driver.codex_checkpoint import fork_native_checkpoint
+        from loopx.hosts.codex_checkpoint import fork_native_checkpoint
 
         native = manifest["point_metadata"]["native_session"]
         assert all(member["id"] != caller_id for member in native["store_members"])
@@ -636,7 +636,7 @@ def test_research_participants_preserve_legal_caller_ids(tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize('gap', ['shared_registry','wrong_actor','wrong_runtime','missing_state','symlink_state','overlap'])
 def test_loopx_participant_rejects_wrong_or_ambiguous_routes(tmp_path, gap):
-    from loopx.control_plane.runtime.research_checkpoint import _loopx_state_components
+    from loopx.hosts.research_checkpoint import _loopx_state_components
     project, runtime, registry = cli._write_fixture(tmp_path)
     runtime.mkdir()
     (project/'solver.py').write_text('candidate = 7\n')
@@ -667,7 +667,7 @@ def test_loopx_participant_rejects_wrong_or_ambiguous_routes(tmp_path, gap):
 
 
 def test_loopx_participant_preserves_legacy_and_current_owned_goal_directories(tmp_path):
-    from loopx.control_plane.runtime.research_checkpoint import _loopx_state_components
+    from loopx.hosts.research_checkpoint import _loopx_state_components
     from benchmark.runtime.checkpoint import parse_checkpoint_request
     project, runtime, registry = cli._write_fixture(tmp_path)
     # These are legitimate controller partitions, not two Goal registrations.

@@ -12,7 +12,7 @@ import pytest
 
 from loopx.cli import main
 from loopx.control_plane.effect_runtime import effect_runtime_result
-from loopx.control_plane.runtime.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
+from loopx.hosts.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
@@ -96,7 +96,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         session_scope='agent',session_id='branch-session',session_profile_digest='synthetic-profile')
     # This owner-focused fixture substitutes only native history verification.
     # The real Host + CLI + canonical context journey lives in test_native_checkpoint.
-    monkeypatch.setattr('loopx.control_plane.runtime.research_checkpoint._context_session', lambda *_: 'branch-session')
+    monkeypatch.setattr('loopx.hosts.research_checkpoint._context_session', lambda *_: 'branch-session')
     before=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
     args=dict(source_todo_id=source_todo,todo_id=destination_todo,operation_id='context-adoption',
         expected_revision=before['authority_read']['provider_revision'],lease_key='branch-lease',lease_version=1)
@@ -138,7 +138,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
                     raise OSError("synthetic committed knowledge response lost")
                 interrupted.setattr(result_log, "append_explore_result_events", lost_append)
             else:
-                from loopx.control_plane.runtime import research_checkpoint
+                from loopx.hosts import research_checkpoint
                 original_handoff = research_checkpoint._handoff
                 def lost_handoff(env, payload):
                     result = original_handoff(env, payload)
@@ -369,7 +369,7 @@ def test_research_history_is_complete_and_bound_to_original_source(tmp_path, mon
     with pytest.raises(ValueError, match="appeared before sealing"):
         verify_context_sources(absent, components, appeared["source_witness"])
     # An append during the canonical read is also rejected, not silently mixed.
-    from loopx.control_plane.runtime import research_checkpoint
+    from loopx.hosts import research_checkpoint
     original_read = research_checkpoint.canonical_context
     def racing_read(*args, **kwargs):
         result = original_read(*args, **kwargs)

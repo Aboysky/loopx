@@ -285,7 +285,7 @@ effective configuration digest and Host version; tools/skills and credentials ne
 their existing installation/authentication owners. Native state is opaque and its
 storage layout remains a pinned provider qualification.
 
-`loopx.control_plane.turn_driver.codex_checkpoint.fork_native_checkpoint` verifies a unit and
+`loopx.hosts.codex_checkpoint.fork_native_checkpoint` verifies a unit and
 reconstructs a distinct native session in a **new isolated environment preserving
 the captured guest paths**, with matching configuration and Host version. It checks
 the full history digest and cursor, starts no model and registers no LoopX binding.
@@ -303,7 +303,7 @@ it does not remove historical authority. The controller environment and explicit
 configuration are not exported as authority or credentials.
 
 ```sh
-python -m loopx.control_plane.turn_driver.codex_checkpoint \
+python -m loopx.hosts.codex_checkpoint \
   --root /private/captured-point --expected-sha256 CAPTURE_DIGEST \
   --config-path /private/qualified-config.toml --sandbox read-only
 ```
@@ -464,7 +464,7 @@ adopt this retained context on an **already claimed and leased destination Todo*
 whose note is empty:
 
 ```sh
-python -m loopx.control_plane.runtime.research_checkpoint \
+python -m loopx.hosts.research_checkpoint \
   --root /private/checkpoints/point --expected-sha256 CHECKPOINT_SHA256 \
   --source-todo-id SOURCE_TODO --todo-id DESTINATION_TODO \
   --operation-id CONTEXT_OPERATION --expected-revision CURRENT_REVISION \

@@ -136,8 +136,8 @@ def _handoff(env, payload):
 
 def _context_session(env, metadata):
     """Read the admitted native branch before publishing captured Todo context."""
-    from ..turn_driver.codex_agent_session import CodexAgentSession
-    from ..turn_driver.codex_checkpoint import native_session_checkpoint
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    from loopx.hosts.codex_checkpoint import native_session_checkpoint
 
     wake = CodexAgentSession(env, context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"], receipt={})
     native = metadata["native_session"]
@@ -384,7 +384,7 @@ def _loopx_state_components(env, components, output_dir):
 
 
 def native_binding_participant(env, components, metadata):
-    from ..turn_driver.codex_agent_session import CodexAgentSession
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
     source_wake = CodexAgentSession(env, context="resume",
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"), receipt={})
     if source_wake.session_id != metadata["session"].get("session_id"):
@@ -452,9 +452,9 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
     """
     import math
     import tempfile
-    from ..quota.settlement import read_heartbeat_settlement
-    from ..turn_driver.codex_checkpoint import native_session_checkpoint
-    from ..turn_driver.codex_agent_session import CodexAgentSession
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
 
     if (not isinstance(request, dict) or
             set(request) != {"destination", "components", "point_metadata"} or
@@ -489,30 +489,34 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
         if research is None:
             raise ValueError("research capture requires canonical source coordination")
         components, observed_session = native_binding_participant(env, components, metadata)
-        native = native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time()))
-        allocated = {}
-        for entry in native["components"]:
-            name = _participant_id(components, entry["id"])
-            allocated[entry["id"]] = name
-            components = [*components, {**entry, "id": name}]
-        metadata["native_session"] = {**native["metadata"], "store_members": [
-            {**entry, "id": allocated[entry["id"]]} for entry in native["metadata"]["store_members"]]}
-        probe = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "probe", "components": components, "deadline_epoch_ms": deadline*1000},
-            timeout=max(.1, deadline-time.time()), retry_safe=False)
-        if native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time())) != native:
-            raise ValueError("native checkpoint source moved before sealing")
-        _, confirmed = native_binding_participant(env, components, metadata)
-        if ((confirmed.session_id, confirmed.goal_ref, confirmed.digest) !=
-                (observed_session.session_id, observed_session.goal_ref, observed_session.digest)):
-            raise ValueError("research checkpoint session binding moved before sealing")
-        verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
-        if settled().identity.value != original.identity.value:
-            raise ValueError("research checkpoint source settlement moved")
-        result = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "capture", "destination": str(destination), "components": components,
-            "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
-            "deadline_epoch_ms": deadline*1000}, timeout=max(.1, deadline-time.time()), retry_safe=False)
+        # Reopening the native reader after probing can checkpoint its history
+        # database and invalidate our own byte witness. Keep one inspection
+        # process open; the original logical reread and byte fence both remain.
+        with native_checkpoint_reader(env, timeout=max(.1, deadline-time.time())) as reader:
+            native = native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time()), transport=reader)
+            allocated = {}
+            for entry in native["components"]:
+                name = _participant_id(components, entry["id"])
+                allocated[entry["id"]] = name
+                components = [*components, {**entry, "id": name}]
+            metadata["native_session"] = {**native["metadata"], "store_members": [
+                {**entry, "id": allocated[entry["id"]]} for entry in native["metadata"]["store_members"]]}
+            probe = effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "probe", "components": components, "deadline_epoch_ms": deadline*1000},
+                timeout=max(.1, deadline-time.time()), retry_safe=False)
+            if native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time()), transport=reader) != native:
+                raise ValueError("native checkpoint source moved before sealing")
+            _, confirmed = native_binding_participant(env, components, metadata)
+            if ((confirmed.session_id, confirmed.goal_ref, confirmed.digest) !=
+                    (observed_session.session_id, observed_session.goal_ref, observed_session.digest)):
+                raise ValueError("research checkpoint session binding moved before sealing")
+            verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
+            if settled().identity.value != original.identity.value:
+                raise ValueError("research checkpoint source settlement moved")
+            result = effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "capture", "destination": str(destination), "components": components,
+                "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
+                "deadline_epoch_ms": deadline*1000}, timeout=max(.1, deadline-time.time()), retry_safe=False)
     return result
 
 
