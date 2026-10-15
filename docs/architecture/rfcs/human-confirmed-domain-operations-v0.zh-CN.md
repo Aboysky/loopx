@@ -357,8 +357,22 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 可选的 [DSH 原生上下文模块](../../../packages/dsh-loopx-plugin/README.md#optional-native-operation-context-sdk-prerequisite)
 交付独立加载的只读 SDK 前置组件。真实 SDK/内置 runtime `0.1.5rc1` 的工具调用
 已返回当前调用 session、开放的原生 Turn 和白名单 agent options；该观察不是 Core
-actor，也不证明 HTTP wire 实际配置。受管 DSH 准入、撤销、首次批准消费及原渠道
-结果回传仍未验；模块始终返回 `execution_allowed: false`，其它 DSH 版本仍未验。
+actor，也不证明 HTTP wire 实际配置；该只读模块始终返回 `execution_allowed: false`。
+
+独立可选的 `native-operation` 模块和内部 `OwnedDshOperationHost` 现将真实
+SDK/内置 runtime `0.1.5rc1` 接到既有 Core handler。同一活 SDK 连接的两个独立
+已准入 Turn 覆盖原生 session/Turn/call 配对、实际观察的 profile、规范准备、
+确认前拒绝、夹具确认、首次消费、重复拒绝与规范 `not_executed` 结果。
+File/SQLite Goal authority 消费者继续使用原 action-store owner。内核 peer PID
+及精确原生工具参数必须匹配私有有界 Unix 连接；不新增 bearer、调用者 actor、
+批准账本或副作用重试，旧 Codex executor 编码和默认关闭行为保持兼容。
+
+该阶段是使用本地合成响应源的后端集成，不是真实用户批准、原卡送达或金融效用。
+SDK 在进程退出后仍尝试创建已有 session，实际出现的 `session already exists`
+失败予以保留；新宿主会在启动 runtime 前拒绝这种恢复。嵌入 driver 须保留原连接，
+或先资格化上游 SDK 的持久会话恢复，不能静默替换获批身份。公开 CLI/delegation
+入口仍仅支持 Codex；DSH 跨进程恢复、前端/Lark 回传、其它 runtime 和真实金融
+效果仍未验，不能因后端结果开启公开 DSH preflight。
 
 公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时

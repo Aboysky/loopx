@@ -457,9 +457,28 @@ The optional [DSH native context module](../../../packages/dsh-loopx-plugin/READ
 adds a separately loaded, read-only SDK prerequisite. A real SDK/bundled runtime
 `0.1.5rc1` tool call returned its calling session, open native Turn and whitelisted
 agent options. This observation is neither a Core actor nor effective wire-profile
-attestation. Managed DSH admission, revocation, first approval consumption and
-original-channel outcome return remain unqualified; the module always reports
-`execution_allowed: false`. Other DSH runtime versions remain unqualified.
+attestation; the read-only module always reports `execution_allowed: false`.
+
+The separate optional `native-operation` module and internal
+`OwnedDshOperationHost` now connect the real SDK/bundled runtime `0.1.5rc1`
+to the existing Core handler. Two separately admitted Turns on one retained
+SDK connection qualify native session/Turn/call pairing, observed profile,
+canonical preparation, refusal before confirmation, fixture confirmation,
+one-shot consumption, rejected repetition and canonical `not_executed` outcome.
+File/SQLite Goal authority consumers retain the original action-store owner.
+Kernel peer PID and exact SDK-native tool arguments must match the private
+bounded Unix connection; there is no bearer, caller actor, second approval store
+or effect retry. Legacy Codex executor encoding and default/off behavior remain.
+
+This stage is a backend integration with a scripted loopback provider, not
+genuine user approval, original-card delivery or financial utility. The SDK
+creates sessions instead of rehydrating persisted ones after process exit;
+the observed `session already exists` failure is retained. A new owned host
+refuses such resume before runtime launch. The embedding driver must retain
+the context or qualify upstream SDK resume; no silent replacement is allowed.
+Public CLI/delegation activation stays Codex-only, and DSH cross-process resume,
+frontend/Lark return, other runtime versions and live financial effects remain
+unqualified. Do not enable the public DSH preflight from these backend results.
 
 Public `goal-channel inspect-operation/consume-operation/report-operation`
 remain fail-closed before private reads or writes, even with matching

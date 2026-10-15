@@ -89,16 +89,20 @@ export function projectManagedOperationTransport(input: JsonObject): JsonObject 
 export function normalizeAgentOperationExecutor(input: JsonObject): JsonObject {
   const executor = requireJsonObject(input.executor, "agent executor");
   if (executor.kind === "managed_turn") {
-    const keys = ["kind", "todo_id", "session_id", "profile_digest", "model", "reasoning_effort", "revision"];
+    const keys = ["kind", "todo_id", "session_id", "profile_digest", "model", "reasoning_effort", "revision",
+      ...("host" in executor ? ["host"] : [])];
     if (Object.keys(executor).length !== keys.length || keys.some(key => !(key in executor))
       || executor.revision !== MANAGED_OPERATION_REVISION
       || typeof executor.profile_digest !== "string" || !BARE_SHA256_PATTERN.test(executor.profile_digest)) {
       throw new EffectRuntimeRequestError("managed operation executor binding is invalid");
     }
+    if ("host" in executor && executor.host !== "dsh") {
+      throw new EffectRuntimeRequestError("unsupported managed operation host");
+    }
     return {kind: "managed_turn", todo_id: id(executor.todo_id, "todo_id"),
       session_id: id(executor.session_id, "session_id"), profile_digest: executor.profile_digest,
       model: id(executor.model, "model"), reasoning_effort: id(executor.reasoning_effort, "reasoning_effort"),
-      revision: MANAGED_OPERATION_REVISION};
+      revision: MANAGED_OPERATION_REVISION, ...("host" in executor ? {host: executor.host} : {})};
   }
   const keys = ["kind", "host_surface", "thread_id", "revision"];
   if (Object.keys(executor).length !== keys.length || keys.some(key => !(key in executor))
@@ -107,6 +111,15 @@ export function normalizeAgentOperationExecutor(input: JsonObject): JsonObject {
   }
   return {kind: "agent_session", host_surface: id(executor.host_surface, "host_surface"),
     thread_id: id(executor.thread_id, "thread_id"), revision: AGENT_OPERATION_REVISION};
+}
+
+/** Legacy tickets retain their exact Codex encoding; new hosts are explicit
+ * immutable executor operands, never inferred from the calling transport. */
+function managedHost(executor: JsonObject): string {
+  return executor.host === "dsh" ? "dsh" : "codex-cli";
+}
+function managedSurface(executor: JsonObject): string {
+  return managedHost(executor) === "dsh" ? "loopx-managed-dsh" : "loopx-managed-codex";
 }
 
 /** Filesystem/session observations are supplied by the existing Turn session
@@ -124,10 +137,12 @@ export function managedOperationBindingCurrent(input: JsonObject): JsonObject {
     : observedRef !== null && expectedRef.goal_id === observedRef.goal_id
       && expectedRef.goal_instance_id === observedRef.goal_instance_id;
   return {current: executor.kind === "managed_turn" && session !== null
-    && session.schema_version === "loopx_codex_cli_session_v1"
+    && (managedHost(executor) === "dsh"
+      ? session.schema_version === "loopx_managed_cli_session_v1" && session.host === "dsh"
+      : session.schema_version === "loopx_codex_cli_session_v1" && (session.host == null || session.host === "codex-cli"))
     && session.goal_id === parameters.goal_id && session.agent_id === parameters.agent_id
     && session.todo_id === executor.todo_id && session.session_id === executor.session_id
-    && session.operation_transport === "app-server-operation-tools-v0"
+    && session.operation_transport === (managedHost(executor) === "dsh" ? "dsh-native-operation-tools-v0" : "app-server-operation-tools-v0")
     && session.operation_profile_digest === executor.profile_digest
     && session.operation_model === executor.model && session.operation_reasoning_effort === executor.reasoning_effort
     && sameGoalRef};
@@ -158,7 +173,7 @@ function historicalAccess(input: JsonObject, route: JsonObject, consumed: boolea
   return {mode: original ? "original_session" : "replacement_reconciliation", owner,
     original_route: route, permission: "historical_evidence_only", execution_allowed: false,
     authority_source: original ? "original_operation_route"
-      : actor.host_surface === "loopx-managed-codex" ? "current_turn_session_binding" : "current_registry_binding"};
+      : actor.host_surface === "loopx-managed-codex" || actor.host_surface === "loopx-managed-dsh" ? "current_turn_session_binding" : "current_registry_binding"};
 }
 
 export function planAgentOperationHandoff(input: JsonObject): JsonObject {
@@ -186,7 +201,7 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
   const expires = timestamp(operation.expires_at);
   const managed = executor.kind === "managed_turn";
   const route: JsonObject = {goal_id: parameters.goal_id, agent_id: parameters.agent_id,
-    ...(managed ? {host_surface: "loopx-managed-codex", thread_id: executor.session_id,
+    ...(managed ? {host_surface: managedSurface(executor), thread_id: executor.session_id,
       todo_id: executor.todo_id, profile_digest: executor.profile_digest}
       : {host_surface: executor.host_surface, thread_id: executor.thread_id})};
   const base: JsonObject = {schema_version: "loopx_operation_agent_handoff_v0", operation_id: operation.operation_id,
@@ -221,7 +236,7 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
     const launch = requireJsonObject(input.launch_context, "operation wake launch context");
     const selected = requireJsonObject(input.executor_route, "operation wake executor route");
     requireThat(managed && input.binding_current === true
-      && launch.host === "codex-cli" && launch.operation_tools === true
+      && launch.host === managedHost(executor) && launch.operation_tools === true
       && launch.iteration_context !== "fresh"
       && Object.entries(route).every(([key, value]) => selected[key] === value)
       && selected.model === executor.model && selected.reasoning_effort === executor.reasoning_effort,

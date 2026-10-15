@@ -317,9 +317,41 @@ explicit Loader row to disable the module, then restart the owning SDK runtime;
 the default plugin tree remains unchanged. Existing active sessions must be
 closed by their owner rather than treated as revoked by editing a patch file.
 
-Core parent admission, verified dispatch/profile identity, revocation and first
-approval consumption remain separate integration work. No frontend or Lark
-operation path is delivered by this prerequisite.
+The read-only module alone delivers no frontend or Lark operation path.
+
+## Optional owned SDK operation connection
+
+`dsh-loopx-plugin/native-operation` is a separate, explicit Loader module for
+the internal `OwnedDshOperationHost`. It registers `loopx_operation` with an
+absolute, parent-owned Unix socket supplied by the host; it is absent from the
+default exports and patch. Installing the package grants no execution access.
+
+The host retains the original SDK stdio connection across separately admitted
+Turns. Kernel peer PID, native session/Turn/call ID, exact native arguments and
+the observed provider/model/effort must match before dispatch to the existing
+Core operation handler. The existing Turn session file and typed operation
+store own profile binding, revocation, approval, first consumption and outcome;
+there is no second approval store or public actor/proof/consume endpoint.
+Changing the module/package JS, model profile or session requires fresh
+admission and approval. Transport loss never permits an automatic effect retry.
+
+The real SDK/bundled runtime `0.1.5rc1` qualifies two Turns on one retained
+connection with a scripted loopback provider: prepare, reject before approval,
+fixture confirmation, inspect, one permitted consumption, rejected repeat and
+canonical `not_executed` outcome. Synthetic confirmation is not human approval;
+no venue/account effect or paid model call is involved. The read-only real-model
+probe above and this integrated synthetic-provider test prove different stages.
+
+The SDK's `session/prompt` creates sessions and cannot reload a persisted
+session after process exit in this version (`session already exists`). A new
+host therefore refuses resume before starting a runtime; it never replaces the
+approved session silently. Retaining an owned context is not a new daemon or
+scheduler. Cross-process resume, public CLI/delegation activation, frontend/Lark
+original-card return, other runtime versions and actual financial execution
+remain unqualified. The public managed-operation preflight remains Codex-only
+until those entry points are integrated. Disable by omitting this explicit
+module and closing its owned host; do not interpret patch removal as revoking
+an already running process.
 
 ## GoalBar authority and privacy boundary
 

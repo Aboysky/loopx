@@ -11,9 +11,10 @@ interface NativeAgent {
   options: { provider?: unknown, model?: unknown, reasoningEffort?: unknown }
 }
 
-interface Execution {
+export interface Execution {
   agent?: NativeAgent
   signal: AbortSignal
+  callId?: string
 }
 
 interface NativeContext {
@@ -39,7 +40,7 @@ export interface NativeContextTool {
 export interface NativeContextHost {
   agents: { get(id: string): object | undefined }
   tools: {
-    register(tool: NativeContextTool): unknown
+    register(tool: object): unknown
     get(name: string, scope: object): object | undefined
   }
   sessionProjections: {
@@ -54,6 +55,34 @@ const nullableString = { oneOf: [{ type: 'string' }, { type: 'null' }] }
 
 function observedString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+/** Reads DSH-owned services, never caller-supplied identity. Used by both the
+ * read-only observation tool and the explicit managed-operation transport. */
+export function readNativeContext(host: NativeContextHost, tool: { name: string }, exec: Execution): NativeContext {
+  if (exec.signal.aborted) throw new Error('native context call aborted')
+  const agent = exec.agent
+  if (!agent || typeof agent.id !== 'string' || !agent.id
+    || agent.session?.id !== agent.id || agent.status !== 'running'
+    || host.agents.get(agent.id) !== agent
+    || host.tools.get(tool.name, agent) !== tool) {
+    throw new Error('native context requires the current live calling agent and tool')
+  }
+  const boundary = host.sessionProjections.stateOf(agent.session, 'turnBoundary')
+  if (!boundary || !Number.isSafeInteger(boundary.lastTurn) || boundary.lastTurn < 1
+    || !Number.isSafeInteger(boundary.openTurnStartSeq) || (boundary.openTurnStartSeq ?? -1) < 0) {
+    throw new Error('native context requires an open native Turn')
+  }
+  return {
+    schema_version: 'loopx_dsh_native_context_v0', session_id: agent.id,
+    native_turn_number: boundary.lastTurn, turn_start_seq: boundary.openTurnStartSeq as number,
+    profile_source: 'agent_options',
+    profile: {
+      provider: observedString(agent.options?.provider), model: observedString(agent.options?.model),
+      reasoning_effort: observedString(agent.options?.reasoningEffort),
+    },
+    wire_profile_verified: false, execution_allowed: false,
+  }
 }
 
 export function createNativeContextTool(host: NativeContextHost): NativeContextTool {
@@ -88,29 +117,7 @@ export function createNativeContextTool(host: NativeContextHost): NativeContextT
       if (args === null || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length !== 0) {
         throw new Error('native context takes no caller identity or arguments')
       }
-      if (exec.signal.aborted) throw new Error('native context call aborted')
-      const agent = exec.agent
-      if (!agent || typeof agent.id !== 'string' || !agent.id
-        || agent.session?.id !== agent.id || agent.status !== 'running'
-        || host.agents.get(agent.id) !== agent
-        || host.tools.get(NATIVE_CONTEXT_TOOL, agent) !== tool) {
-        throw new Error('native context requires the current live calling agent and tool')
-      }
-      const boundary = host.sessionProjections.stateOf(agent.session, 'turnBoundary')
-      if (!boundary || !Number.isSafeInteger(boundary.lastTurn) || boundary.lastTurn < 1
-        || !Number.isSafeInteger(boundary.openTurnStartSeq) || (boundary.openTurnStartSeq ?? -1) < 0) {
-        throw new Error('native context requires an open native Turn')
-      }
-      return {
-        schema_version: 'loopx_dsh_native_context_v0', session_id: agent.id,
-        native_turn_number: boundary.lastTurn, turn_start_seq: boundary.openTurnStartSeq as number,
-        profile_source: 'agent_options',
-        profile: {
-          provider: observedString(agent.options?.provider), model: observedString(agent.options?.model),
-          reasoning_effort: observedString(agent.options?.reasoningEffort),
-        },
-        wire_profile_verified: false, execution_allowed: false,
-      }
+      return readNativeContext(host, tool, exec)
     },
   }
   return tool
