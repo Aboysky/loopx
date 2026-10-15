@@ -272,13 +272,17 @@ Goal 对话页的「快捷提问」折叠行，除了固定的几条问题外，
 建议，每条只引用投影里的真实事实：有事项等你决定时是「先处理 N 项等你决定的事项」，点击直接打开
 概览页的需要你栏；有受阻任务时是「解释 N 项受阻任务」，点击把这些任务的标题带进问题立即发送；
 验收条件未通过时是「为什么「…」未通过」；观察到没有运行中的工作且仍有未完成任务时是「继续推进」；
-任务全部完成时是「查看成果」。已停止的 Goal 不给建议；执行状态未知时不会假装空闲。折叠时摘要行
-会带出第一条建议，便于一眼看到。
+任务全部完成时是「查看成果」。「等你决定」只计需要你介入的事项，可选提醒会列出但不计入；
+「查看成果」只在工作列表完整且已知没有未完成任务时出现，只列出一部分的投影不会被当作全部完成。
+已停止的 Goal 不给建议；执行状态未知时不会假装空闲。折叠时摘要行会带出第一条建议，便于一眼看到。
 
 The "Suggestions" disclosure on a Goal's Chat view adds up to three suggestions derived from the
 Goal's current projection, each citing a real fact: decisions waiting on you (opens the overview's
 needs-you rail), blocked tasks (sends a question naming those tasks), a failing acceptance
-criterion, no observed running work with open tasks, or all tasks done. A stopped Goal gets no
+criterion, no observed running work with open tasks, or all tasks done. "Decisions" counts only
+items that wait on you; an optional reminder is listed but not counted. "All done" appears only
+when the work list is complete and the owner's open count is known to be zero; a partial listing is
+never read as finished. A stopped Goal gets no
 suggestion and unknown execution is never read as idle. The collapsed summary line shows the first
 suggestion.
 

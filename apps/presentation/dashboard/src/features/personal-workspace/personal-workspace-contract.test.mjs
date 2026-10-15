@@ -606,6 +606,9 @@ for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoa
 const goalSuggestions = source("./goal-suggestions.ts");
 assert.match(goalSuggestions, /if \(digest\.lifecycle\.activation === "stopped"\) return \[\];/, "A stopped Goal invites nothing");
 assert.match(goalSuggestions, /input\.execution\?\.kind === "idle"/, "Idle needs an observed idle executor, never unknown");
+assert.match(goalSuggestions, /const waiting = needsYou\?\.blocking \?\? null;/, "Decisions are the attention owner's blocking count; optional items and unknown counts are never decisions");
+assert.doesNotMatch(goalSuggestions, /needsYou\.listed/, "The listed attention count is never read as the decision count");
+assert.match(goalSuggestions, /digest\.work\.coverage === "complete" && digest\.work\.projectedOpen === 0 && digest\.work\.open === 0/, "All done needs complete work coverage with a known zero open count");
 assert.match(page, /deriveGoalSuggestions\(\{\s*digest: workspaceDigest,/, "The page derives suggestions from the shared digest");
 assert.match(page, /className="personal-goal-suggestions"/, "Derived suggestions render in their own row");
 assert.match(page, /<div className="personal-quick-prompts">\n\s*<button aria-label=\{t\("composer\.nextAction"\)\}/, "The steward prompt row stays as shipped");

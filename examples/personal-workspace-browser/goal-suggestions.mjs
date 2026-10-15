@@ -20,6 +20,39 @@ function addGate(fixture) {
   first.user_todos.total_count = first.user_todos.items.length;
 }
 
+// An optional user action (no gate) is listed but is not a decision, and a
+// partial projection (five open by the owner's count, none listed) is never
+// "all done": both are legal states the shared overview already shows truthfully.
+function optionalAndPartial(fixture) {
+  const first = fixture.attention_queue.items[0];
+  // Nothing waits on the owner: the Goal waits on its Agent, and the only user item is optional.
+  first.waiting_on = "codex";
+  first.user_todos = { items: [{ done: false, status: "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_action", todo_id: "optional-rename", text: "Consider renaming the export folder", updated_at: "2026-10-15T08:00:00Z" }], open_count: 1, source_section: "User Todo", total_count: 1 };
+  if (first.project_asset?.user_todos) first.project_asset.user_todos = { ...first.project_asset.user_todos, items: first.user_todos.items, open: 1, done: 0, total: 1 };
+  // The global index lists the same Agent items; drop them so nothing is listed for this Goal.
+  if (fixture.todo_index?.items) {
+    fixture.todo_index.items = fixture.todo_index.items.filter((item) => !(item.goal_id === first.goal_id && item.role === "agent"));
+    fixture.todo_index.total_count = fixture.todo_index.items.length;
+  }
+  // Agent rows contribute their current Todo to the Goal's list; none is current here.
+  for (const agent of fixture.agent_management_projection?.agents ?? []) {
+    if (agent.current_todo?.goal_id === first.goal_id) agent.current_todo = null;
+  }
+  // Every queue item of this Goal carries the same emptied listing and owner counts.
+  const groups = fixture.attention_queue.items.filter((item) => item.goal_id === first.goal_id).flatMap((item) => [item.agent_todos, item.project_asset?.agent_todos]);
+  for (const group of groups) {
+    if (!group) continue;
+    // No listed items at all (every list the projection carries), while the owner still counts five open.
+    for (const [key, value] of Object.entries(group)) if (Array.isArray(value)) group[key] = [];
+    if ("open_count" in group) group.open_count = 5;
+    if ("open" in group) group.open = 5;
+    if ("done_count" in group) group.done_count = 3;
+    if ("done" in group) group.done = 3;
+    if ("total_count" in group) group.total_count = 8;
+    if ("total" in group) group.total = 8;
+  }
+}
+
 export const goalSuggestionsScenario = {
   id: "goal-suggestions",
   async run({ browser, collectCoverage, url }) {
@@ -82,7 +115,33 @@ export const goalSuggestionsScenario = {
         assert.equal(await page.getByTestId("goal-suggestions").count(), 0);
         await page.locator(".personal-quick-prompts").first().waitFor({ state: "visible" });
       }
-      return { coverageEntries: await session.close() };
+      const coverageEntries = await session.close();
+
+      // Counterexamples: optional attention and a partial listing suggest neither a decision nor completion.
+      const second = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 },
+        beforeGoto: (secondApi) => { secondApi.transformStatus = optionalAndPartial; } });
+      try {
+        const { page: other } = second;
+        await other.locator(".personal-goal-row").first().locator(".personal-goal-link").click();
+        await other.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
+        const vitals = (await other.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ");
+        assert.match(vitals, /0 等你决定|可选/, `the lane shows the item as optional: ${vitals}`);
+        assert.match(vitals, /已列出 5 项中的 0 项/, `the lane shows the partial listing truthfully: ${vitals}; listed: ${(await other.locator(".goal-overview").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 400)}`);
+        await other.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
+        const otherSummary = other.locator(".personal-composer-tools > summary");
+        await otherSummary.waitFor({ state: "visible", timeout: 15_000 });
+        await other.waitForTimeout(500);
+        const text = (await otherSummary.innerText()).trim();
+        assert.doesNotMatch(text, /等你决定/, `an optional user action is not a decision: ${text}`);
+        assert.doesNotMatch(text, /全部完成|查看成果/, `five open by the owner's count with none listed is not finished: ${text}`);
+        await otherSummary.click();
+        const labels = (await other.getByTestId("goal-suggestions").locator("button").allInnerTexts().catch(() => [])).join(" / ");
+        assert.doesNotMatch(labels, /等你决定|全部完成|查看成果/, `no derived decision or completion: ${labels}`);
+        return { coverageEntries: [...coverageEntries, ...await second.close()] };
+      } catch (error) {
+        await second.close().catch(() => {});
+        throw error;
+      }
     } catch (error) {
       await session.close().catch(() => {});
       throw error;

@@ -32,9 +32,12 @@ export function deriveGoalSuggestions(input: GoalSuggestionInput): GoalSuggestio
   const { digest } = input;
   if (digest.lifecycle.activation === "stopped") return [];
   const suggestions: GoalSuggestion[] = [];
-  const waiting = digest.needsYou.availability === "ok" ? digest.needsYou.listed : 0;
-  if (waiting > 0) {
-    suggestions.push({ kind: "open_decisions", count: waiting, oldestWaitingSince: digest.needsYou.availability === "ok" ? digest.needsYou.oldestWaitingSince : null });
+  // Decisions are what the attention owner classifies as waiting on the owner.
+  // An optional item is not a decision, and an unknown count is not zero.
+  const needsYou = digest.needsYou.availability === "ok" ? digest.needsYou : null;
+  const waiting = needsYou?.blocking ?? null;
+  if (waiting !== null && waiting > 0) {
+    suggestions.push({ kind: "open_decisions", count: waiting, oldestWaitingSince: needsYou?.oldestWaitingSince ?? null });
   }
   const blocked = digest.work.classes.blocked;
   if (blocked > 0) {
@@ -46,11 +49,17 @@ export function deriveGoalSuggestions(input: GoalSuggestionInput): GoalSuggestio
   if (failed.length > 0) {
     suggestions.push({ kind: "explain_failed_criterion", criterion: failed[0].description, failedCount: failed.length });
   }
-  // Idle needs an observed idle executor; the owner being the blocker is not idleness.
-  if (input.execution?.kind === "idle" && digest.work.open > 0 && waiting === 0) {
-    suggestions.push({ kind: "continue_idle", open: digest.work.open });
+  // Idle needs an observed idle executor, open work and a known absence of
+  // decisions; the owner being the blocker is not idleness. The count is the
+  // owner's projected open work when it is known, never only the listed part.
+  const openWork = digest.work.projectedOpen ?? digest.work.open;
+  if (input.execution?.kind === "idle" && openWork > 0 && waiting === 0) {
+    suggestions.push({ kind: "continue_idle", open: openWork });
   }
-  if (digest.work.open === 0 && (digest.work.done ?? 0) > 0 && waiting === 0 && blocked === 0) {
+  // "All done" is a completeness claim: it needs the owner's complete work
+  // coverage with a known zero open count, not an empty listing of a partial one.
+  const finished = digest.work.coverage === "complete" && digest.work.projectedOpen === 0 && digest.work.open === 0;
+  if (finished && (digest.work.done ?? 0) > 0 && waiting === 0 && blocked === 0) {
     suggestions.push({ kind: "review_results", done: digest.work.done ?? 0 });
   }
   return suggestions.slice(0, goalSuggestionLimit);

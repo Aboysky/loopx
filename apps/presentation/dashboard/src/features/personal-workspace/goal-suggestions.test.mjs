@@ -4,11 +4,11 @@ import test from "node:test";
 import { deriveGoalSuggestions, goalSuggestionLimit } from "./goal-suggestions.ts";
 
 const classes = (overrides = {}) => ({ running_observed: 0, needs_you: 0, waiting_dependency: 0, open: 0, blocked: 0, deferred: 0, done: 0, ...overrides });
-const digest = ({ activation = "active", open = 0, done = 0, blocked = 0, blockedIds = [], waiting = 0, oldest = null, needsYouUnavailable = false } = {}) => ({
+const digest = ({ activation = "active", open = 0, done = 0, blocked = 0, blockedIds = [], waiting = 0, optional = 0, listed = waiting + optional, oldest = null, needsYouUnavailable = false, coverage = "complete", projectedOpen = open } = {}) => ({
   lifecycle: { activation, finishingTurn: false },
-  work: { open, done, total: open + done, classes: classes({ open, blocked, done }), rows: [], groups: [],
-    rail: { needsYou: [], open: [], blocked: blockedIds, done: [] }, coverage: "complete", listedOpen: open, projectedOpen: open },
-  needsYou: needsYouUnavailable ? { availability: "unavailable" } : { availability: "ok", blocking: waiting, optional: 0, coverage: "complete", listed: waiting, oldestWaitingSince: oldest },
+  work: { open, done, total: coverage === "complete" ? open + done : null, classes: classes({ open, blocked, done }), rows: [], groups: [],
+    rail: { needsYou: [], open: [], blocked: blockedIds, done: [] }, coverage, listedOpen: open, projectedOpen },
+  needsYou: needsYouUnavailable ? { availability: "unavailable" } : { availability: "ok", blocking: waiting, optional, coverage, listed, oldestWaitingSince: oldest },
 });
 const todos = [{ todoId: "t1", text: "Backfill March exports" }, { todoId: "t2", text: " Reconcile totals " }, { todoId: "t3", text: "Third" }];
 
@@ -46,8 +46,22 @@ test("a finished Goal points at its results only when nothing waits or blocks", 
   assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 0, done: 0 }), todos }), [], "an empty Goal suggests nothing");
 });
 
-test("needs-you unavailable is not zero and never suggests decisions", () => {
-  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 1, needsYouUnavailable: true }), todos, execution: { kind: "idle" } }), [{ kind: "continue_idle", open: 1 }]);
+test("needs-you unavailable or unknown is not zero: no decisions, no idle, no finish", () => {
+  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 1, needsYouUnavailable: true }), todos, execution: { kind: "idle" } }), [], "unavailable attention cannot prove nothing waits");
+  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 1, waiting: null, listed: 0 }), todos, execution: { kind: "idle" } }), [], "an unknown blocking count is not zero");
+  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 0, done: 4, waiting: null, listed: 0 }), todos }), [], "an unknown blocking count never finishes a Goal");
+});
+
+test("an optional user action is listed but is not a decision", () => {
+  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 2, waiting: 0, optional: 1 }), todos, execution: { kind: "idle" } }), [{ kind: "continue_idle", open: 2 }]);
+  const [first] = deriveGoalSuggestions({ digest: digest({ open: 2, waiting: 2, optional: 3, listed: 1 }), todos });
+  assert.deepEqual(first, { kind: "open_decisions", count: 2, oldestWaitingSince: null }, "the owner's blocking count, not the listed items, is the decision count");
+});
+
+test("a partial listing never claims the Goal is finished and counts projected open work", () => {
+  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 0, done: 3, coverage: "partial", projectedOpen: 5 }), todos }), [], "zero listed items of five open is not finished");
+  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 0, done: 3, coverage: "unknown", projectedOpen: null }), todos }), [], "unknown coverage is not finished");
+  assert.deepEqual(deriveGoalSuggestions({ digest: digest({ open: 1, done: 3, coverage: "partial", projectedOpen: 5 }), todos, execution: { kind: "idle" } }), [{ kind: "continue_idle", open: 5 }], "idle continues the projected open work");
 });
 
 test("at most three suggestions, in owner priority order", () => {
