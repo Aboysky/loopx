@@ -450,7 +450,8 @@ def test_public_handoff_todo_and_atomic_monitor_batch_capture_each_primary_mutat
     assert len(transactions) == 5  # Baseline, handoff, todo add, monitor add, atomic Monitor batch.
     batch_todos = {todo["todo_id"]: todo for todo in transactions[-1]["projection"]["todos"]}
     assert batch_todos[monitor["todo_id"]]["result_hash"] == "release-v1"
-    assert batch_todos[result["successor_todo_ids"][0]]["text"] == "Validate the released head"
+    successor = batch_todos[result["successor_todo_ids"][0]]
+    assert (successor["text"], successor["priority"]) == ("[P1] Validate the released head", "P1")
     receipts = [transaction["receipts"][0] for transaction in transactions[1:]]
     assert len({receipt["entry_id"] for receipt in receipts}) == 4
     assert [receipt["seq"] for receipt in receipts] == [1, 2, 3, 4]
