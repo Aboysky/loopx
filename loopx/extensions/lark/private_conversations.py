@@ -216,8 +216,9 @@ class LarkPrivateConversations:
                 return text[len(leading[0]["key"]):].strip()
         return text
 
-    def _inbox(self, record: dict[str, Any]) -> Path:
-        observation = self.bindings.observe(record["profile"])
+    def _inbox(self, record: dict[str, Any], *, observation: dict[str, Any] | None = None) -> Path:
+        if observation is None:
+            observation = self.bindings.observe(record["profile"])
         scope = record["source"]["source_ref"]
         path = self.runtime_root / ".loopx" / "config" / "private-chat" / f"{scope}.json"
         _atomic_write_json(path, {
@@ -639,15 +640,20 @@ class LarkPrivateConversations:
             if record["status"] in {"captured", "delivered"}:
                 return 0
             config: Path | None = None
+            selected: dict[str, Any] | None = None
 
             def inbox() -> Path:
                 nonlocal config
                 if config is None:
-                    config = self._inbox(record)
+                    # The binding owner just verified this exact source. Only
+                    # reuse its presentation metadata; outbound provenance and
+                    # Core recovery/admission keep their own fresh checks.
+                    config = self._inbox(record, observation=selected["observation"] if selected else None)
                 return config
 
             try:
-                self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+                selected = self.bindings.resolve(binding_id=record["binding_id"],
+                                                 include_observation=True, **record["source"])
                 if record["status"] in {"command_queued", "command_completed", "commission_running"}:
                     native = self.core.read_request(record["request_ref"])
                     if native["status"] == "command_queued":
