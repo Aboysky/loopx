@@ -136,6 +136,19 @@ qualifies that bounded recovery path; per-call hard budgets, live billing, Deskt
 Automations and multi-Agent acceptance remain separate. This closes no G1 or
 fleet qualification gate.
 
+Automatic dispatch now has a concrete provider checkpoint in the
+[session pause/resume boundary](agent-session-execution-modes-v0.md#pause-resume-and-automatic-dispatch-boundaries):
+Pi and OpenCode fence pre-pause checks; OpenCode 2 gates initial dispatch;
+Core stop and validated closure disarm provider continuation. Codex Goal Chat
+verifies pause readback and rejects late input delivery; Codex App prompt modes
+preserve one-attempt stop/verification and unresolved-stop handling. Controlled adapter,
+filesystem and CLI qualification remain separate from installed host stop latency
+and App-owned heartbeat shutdown. Existing dependency waits retain their owner.
+The same chain now rejects malformed external-worker admission, delivers current
+source context, and routes correction through the existing typed replan owner;
+prompt wake counts no longer authorize replan or self-pause. Source delivery and
+recorded decisions still do not establish model adoption or correction benefit.
+
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 
 S streams describe ongoing ownership, G milestones qualify a product combination, and R cards specify the current core implementation slices. These are cross-references, not a runtime state machine. Progress is evidence-gated rather than date-promised. Changes in capacity or business priority update canonical Todos rather than assuming every stream starts simultaneously.
