@@ -362,4 +362,3 @@ def test_first_creation_persists_under_the_serving_chat_runtime_root(tmp_path, m
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
-

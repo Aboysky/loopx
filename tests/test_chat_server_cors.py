@@ -708,4 +708,3 @@ def test_workspace_directory_states_no_warning_for_a_present_registry(tmp_path) 
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
-
