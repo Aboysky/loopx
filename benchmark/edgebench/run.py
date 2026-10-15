@@ -139,6 +139,10 @@ def main(argv=None):
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
     args = parser.parse_args(argv)
+    api_base_url = os.environ.get("OPENAI_BASE_URL") or None
+    api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
+    if api_base_url and not api_key:
+        parser.error("OPENAI_BASE_URL requires OPENAI_API_KEY; no login fallback")
     args.timeout = _task_default(args.task, "timeout_seconds", args.timeout, DEFAULT_TIMEOUT_SECONDS)
     args.eval_interval = (0 if args.feedback == "native" and args.eval_interval is None else
                          _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300))
@@ -217,6 +221,7 @@ def main(argv=None):
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
         task_objective = native_task_objective()
     config = SForgeConfig(
+        agent_api_base_url=api_base_url, agent_api_key=api_key,
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
         work_cpu_limit=4, work_mem_limit="16g",
@@ -286,7 +291,7 @@ def main(argv=None):
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
         checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, trial / "checkpoints")
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
-                                     oauth_proxy=bool(args.api_proxy_url),
+                                     oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):

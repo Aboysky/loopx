@@ -114,6 +114,25 @@ preserved for inspection; the companion notice governs their current evidence
 status. Neither archive category is the architecture for new work or grants
 runner, verifier, submission, or publication authority.
 
+## Matched model provider routing
+
+For a custom Responses-compatible model endpoint, set `OPENAI_BASE_URL` and
+`OPENAI_API_KEY` in the private runner environment before invoking
+`python -m benchmark.edgebench.run` for either arm. The native SForge config,
+official Codex home and LoopX worker use the same endpoint and environment-key
+credential contract. A base URL without a key fails before creating the attempt;
+the custom route does not copy or fall back to `CODEX_AUTH_JSON_PATH`. Credentials
+are not embedded in Codex settings or the logged scheduler command. The operator
+still owns endpoint access, actual model/tool qualification and private evidence.
+
+With `OPENAI_BASE_URL` unset, login-file behavior is unchanged, including the
+required `CODEX_AUTH_JSON_PATH`; an ambient API key alone does not select the
+custom route. Change routes only between fresh attempts. Checkpoint continuation
+must retain the captured endpoint/configuration and supply fresh credentials
+externally. This routing repair enables matched experiments under the
+[long-horizon research contract](../docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md);
+it establishes neither sustained operation nor a solver-quality improvement.
+
 ## Inert checkpoint capture
 
 This is a developer prerequisite for the [research checkpoint contract](../docs/architecture/rfcs/hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation),
