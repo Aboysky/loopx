@@ -7,6 +7,7 @@ recall order, never confidence. Kept standalone for the packaged repair skill.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from math import log1p
 import re
 from typing import Iterable, NamedTuple
@@ -28,14 +29,19 @@ def lexical_tokens(text: str) -> list[str]:
     return re.findall(r"[^\W_]+", text.casefold())
 
 
-def score_bm25(documents: Iterable[str], query: str) -> BM25Scores:
+def score_bm25(
+    documents: Iterable[str],
+    query: str,
+    *,
+    tokenizer: Callable[[str], Iterable[str]] = lexical_tokens,
+) -> BM25Scores:
     """BM25 k1=1.2, b=.75, positive Lucene IDF; no query-frequency boost.
 
     Every input receives a score, including zero-match documents. Filtering,
     pagination, exact-ID precedence and stable ordering belong to the caller.
     """
-    terms = set(lexical_tokens(query))
-    counts = [Counter(lexical_tokens(text)) for text in documents]
+    terms = set(tokenizer(query))
+    counts = [Counter(tokenizer(text)) for text in documents]
     lengths = [sum(document.values()) for document in counts]
     average = sum(lengths) / len(lengths) if lengths else 1
     frequencies = Counter(term for document in counts for term in document)
@@ -43,9 +49,10 @@ def score_bm25(documents: Iterable[str], query: str) -> BM25Scores:
     for document, length in zip(counts, lengths):
         matched = tuple(sorted(terms & document.keys()))
         score = sum(
-            log1p((len(counts) - frequencies[term] + .5) / (frequencies[term] + .5))
-            * document[term] * 2.2
-            / (document[term] + 1.2 * (.25 + .75 * length / (average or 1)))
+            log1p((len(counts) - frequencies[term] + 0.5) / (frequencies[term] + 0.5))
+            * document[term]
+            * 2.2
+            / (document[term] + 1.2 * (0.25 + 0.75 * length / (average or 1)))
             for term in matched
         )
         scores.append(BM25Hit(score, matched))
