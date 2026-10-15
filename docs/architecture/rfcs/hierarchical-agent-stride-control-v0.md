@@ -1024,6 +1024,18 @@ call inward and add evaluator/budget participants. Capture and adoption are
 separate explicit operations. This CLI/Host stage does not complete the packaged
 frontend or disaster-replacement acceptance.
 
+File coverage and knowledge adoption are separate acceptance dimensions. An
+integrity-verified archive proves its declared roots, not the availability of
+every candidate, data file or report mentioned in native history. The SForge
+receiver now offers explicit selection of captured research components outside
+the workspace, with fresh data destinations and post-copy byte/mode verification.
+Source capture still requires explicit roots; neither path inference nor later
+salvage completes an earlier point. Validate a retained experiment requiring
+those files before claiming usable research-state continuity. Existing points,
+active runs, default workspace-only restoration, budgets and feedback are
+unchanged. This closes a provider transport omission; automatic dependency
+coverage and the generic frontend remain open.
+
 Retaining historical research files alone does not deliver them to a current
 typed review. Explicit warm-context adoption now seeds the fresh Goal's Explore
 knowledge log from the verified source, preserving scoped findings, counterevidence

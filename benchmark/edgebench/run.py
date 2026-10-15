@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 import logging
@@ -130,6 +131,8 @@ def main(argv=None):
     parser.add_argument("--restore-goal")
     parser.add_argument("--restore-agent")
     parser.add_argument("--restore-source-todo")
+    parser.add_argument("--restore-research-component", action="append", default=[],
+                        help="Opt-in captured file component ID to restore at its original research path; repeat per component")
     parser.add_argument("--restore-phase-extension-seconds", type=int, default=0,
                         help="Explicit authorized extra continuation time; omitted preserves the checkpoint's remaining phase")
     parser.add_argument("--eval-interval", type=int,
@@ -175,6 +178,8 @@ def main(argv=None):
     if (not 0 <= args.restore_phase_extension_seconds < 2 ** 53 or
             (args.restore_phase_extension_seconds and not args.restore_checkpoint)):
         parser.error("A non-negative phase extension requires an explicit warm checkpoint continuation")
+    if args.restore_research_component and not args.restore_checkpoint:
+        parser.error("Research component restoration requires an explicit warm checkpoint continuation")
     if args.restore_checkpoint and (not handoff or args.eval_interval != 0 or args.replan_after_todos is not None):
         parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
@@ -253,7 +258,8 @@ def main(argv=None):
         # Validate session/workspace participants before native registration.
         candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
             args.restore_goal, args.restore_agent, args.restore_source_todo,
-            int(time.time()) + args.timeout, args.replan_after_turns or 6)
+            int(time.time()) + args.timeout, args.replan_after_turns or 6,
+            tuple(args.restore_research_component))
         candidate.verify(task.cwd)
         warm_start = candidate
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
@@ -302,8 +308,7 @@ def main(argv=None):
             expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
             phase_deadline_file=clock, phase_extension_seconds=args.restore_phase_extension_seconds)
         epoch = int(clock.read_text())
-        warm_start = WarmStart(candidate.root, candidate.sha256, candidate.config,
-            candidate.goal_id, candidate.agent_id, candidate.source_todo_id, epoch, candidate.normal_cadence)
+        warm_start = replace(candidate, deadline_epoch=epoch)
         reference = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["native_reference"]
         restored_registration = RestoredRegistration(reference["checkpoint_id"],
             reference["manifest_sha256"], epoch, capsule / "components/native_judge/manifest.json")
