@@ -143,6 +143,22 @@ def test_verification_cannot_admit_a_checkpoint_after_its_deadline(point, monkey
     assert not workspace.with_name("workspace.before-checkpoint").exists()
 
 
+def test_expiry_during_context_validation_cannot_admit_the_checkpoint(point, monkeypatch):
+    start, workspace = point
+    clock = [float(int(time.time()))]
+    start = replace(start, deadline_epoch=int(clock[0]) + 7)
+    monkeypatch.setattr(warm, "time", SimpleNamespace(time=lambda: clock[0]))
+    context = (start.root / "components/context").read_bytes()
+    def digest(data):
+        result = hashlib.sha256(data)
+        if data == context:
+            clock[0] += 8
+        return result
+    monkeypatch.setattr(warm, "hashlib", SimpleNamespace(sha256=digest))
+    with pytest.raises(ValueError, match="expired during checkpoint verification"):
+        start.verify(str(workspace))
+
+
 def test_restore_replaces_image_files_preserves_modes_and_refuses_second_attempt(point):
     start, workspace = point
     assert start.verify(str(workspace))
