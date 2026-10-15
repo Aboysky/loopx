@@ -9,7 +9,7 @@ import pytest
 
 from tests.control_plane.codex_checkpoint_fixture import real_native_source
 
-from loopx.control_plane.turn_driver.codex_checkpoint import native_session_checkpoint
+from loopx.hosts.codex_checkpoint import native_session_checkpoint
 from benchmark.tests.test_checkpoint_controller import controllers  # noqa: F401 -- shared real HTTP fixture
 
 
@@ -43,8 +43,8 @@ def fixture(tmp_path, monkeypatch, pages):
             assert method == "thread/turns/list"  # No model or fork is requested.
             return pages.pop(0)
 
-    monkeypatch.setattr("loopx.control_plane.turn_driver.codex_checkpoint.StdioNativeGoalTransport.spawn", lambda *a, **k: Native())
-    monkeypatch.setattr("loopx.control_plane.turn_driver.codex_checkpoint.subprocess.check_output", lambda *a, **k: "codex-cli fixture")
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.StdioNativeGoalTransport.spawn", lambda *a, **k: Native())
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.subprocess.check_output", lambda *a, **k: "codex-cli fixture")
     return {"CODEX_HOME": str(home), "CODEX_BIN": "/fixture/codex", "LOOPX_PROJECT": str(tmp_path)}, calls
 
 
@@ -208,7 +208,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     import sys
     from pathlib import Path
     from benchmark.runtime.codex import Execution
-    from loopx.control_plane.turn_driver.codex_checkpoint import admit_native_checkpoint_session
+    from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from benchmark.runtime.worker import native_command
     from loopx.cli import main
@@ -251,7 +251,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
     guard = json.loads(capsys.readouterr().out)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
-    from loopx.control_plane.runtime.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
+    from loopx.hosts.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
     source_prefix = ["--format", "json", "--registry", str(source_registry), "--runtime-root", str(source_runtime)]
     def invoke(arguments):
         code = main(arguments)
@@ -406,7 +406,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         with monkeypatch.context() as automatic:
             def forbidden_automatic_fork(*args, **kwargs):
                 raise AssertionError("an unsupported automatic Goal profile must fail before native reconstruction")
-            automatic.setattr("loopx.control_plane.turn_driver.codex_checkpoint.fork_native_checkpoint", forbidden_automatic_fork)
+            automatic.setattr("loopx.hosts.codex_checkpoint.fork_native_checkpoint", forbidden_automatic_fork)
             with pytest.raises(ValueError, match="automatic Goals explicitly disabled"):
                 admit_native_checkpoint_session(env, unit, digest, unsupported_config, sandbox=(execution).sandbox, timeout=30)
         with pytest.raises(ValueError, match="distinct destination"):
@@ -414,7 +414,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                                             config, sandbox=(execution).sandbox, timeout=30)
         assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
         if case == "scope_change":
-            from benchmark.runtime import native_checkpoint
+            from loopx.hosts import codex_checkpoint as native_checkpoint
             original_fork = native_checkpoint.fork_native_checkpoint
             def change_scope_after_real_fork(*args, **kwargs):
                 result = original_fork(*args, **kwargs)
@@ -441,7 +441,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             return
         recovered_fork = None
         if case in {"fork_reply_loss", "fork_missing", "fork_ambiguous"}:
-            from loopx.control_plane.turn_driver.codex_checkpoint import StdioNativeGoalTransport
+            from loopx.hosts.codex_checkpoint import StdioNativeGoalTransport
             original_request = StdioNativeGoalTransport.request
             forks = []
             def lose_fork_reply(self, method, params):
@@ -474,7 +474,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             recovered_fork = forks[0]
             # The isolated attempt is bound to this destination, not merely an
             # equivalent visible history or another Goal's transport directory.
-            from loopx.control_plane.turn_driver.codex_checkpoint import fork_native_checkpoint
+            from loopx.hosts.codex_checkpoint import fork_native_checkpoint
             with pytest.raises(ValueError, match="attempt differs"):
                 fork_native_checkpoint({**env, "LOOPX_AGENT_ID": "unrelated-destination"},
                     unit, digest, config, timeout=30)
@@ -491,7 +491,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent")["checkpoint_artifact_sha256"] == digest
             assert len(calls) == 1
-        admitted_cli = subprocess.run([sys.executable, "-m", "loopx.control_plane.turn_driver.codex_checkpoint",
+        admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
             "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", execution.sandbox],
             env=env, text=True, capture_output=True, timeout=40)
         assert admitted_cli.returncode == 0, admitted_cli.stderr
@@ -508,7 +508,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         with monkeypatch.context() as replay:
             def forbidden_fork(*args, **kwargs):
                 raise AssertionError("a repeated admission must not create a second native fork")
-            replay.setattr("loopx.control_plane.turn_driver.codex_checkpoint.fork_native_checkpoint", forbidden_fork)
+            replay.setattr("loopx.hosts.codex_checkpoint.fork_native_checkpoint", forbidden_fork)
             recovered = admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
             assert recovered == admitted
             assert bound["checkpoint_artifact_sha256"] == digest
@@ -549,11 +549,12 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
             "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
         current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
-        context_command = [sys.executable, "-m", "loopx.control_plane.runtime.research_checkpoint",
+        context_command = [sys.executable, "-m", "loopx.hosts.research_checkpoint",
             "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
             "--todo-id", destination_todo, "--operation-id", "branch-context",
             "--expected-revision", current["authority_read"]["provider_revision"],
             "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])]
+        assert not explore_result_log_path(runtime, destination_goal).exists(), "session admission must not adopt knowledge"
         adopted_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
         assert adopted_cli.returncode == 0, adopted_cli.stderr
         context_result = json.loads(adopted_cli.stdout)
@@ -644,7 +645,24 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         assert "fresh samples reversed its pilot gain" in json.dumps(requests[2])
         assert "Complete a fresh-sample experiment" in json.dumps(requests[2])
         assert source_context["research_evidence"]["explore_events"][0]["status"] == "dead_end"
-        assert not explore_result_log_path(runtime, destination_goal).exists()
+        # Explicit context adoption seeds verified knowledge, never historical
+        # execution observations. Native session admission alone above did not.
+        from loopx.capabilities.explore.result_log import EVENT_KIND_EDGE
+        adopted_events = [json.loads(line) for line in
+            explore_result_log_path(runtime, destination_goal).read_text().splitlines()]
+        captured_events = source_context["research_evidence"]["explore_events"]
+        assert len(adopted_events) == len(captured_events)
+        for captured, adopted_event in zip(captured_events, adopted_events, strict=True):
+            assert adopted_event["goal_id"] == destination_goal
+            assert adopted_event["run_id"] == "checkpoint:" + digest + ":" + captured["event_id"]
+            assert adopted_event["event_id"] != captured["event_id"]
+            assert "research_observation" not in adopted_event
+            changed_identity = {"goal_id", "run_id", "event_id", "research_observation"}
+            if captured["event_kind"] == EVENT_KIND_EDGE:
+                changed_identity.add("result_id")
+            assert all(adopted_event.get(key) == value for key, value in captured.items()
+                       if key not in changed_identity)
+
         assert "Candidate 999" not in json.dumps(requests[2])
         assert "Future route outside this checkpoint" not in json.dumps(requests[2])
         assert canonical_context({**env, "LOOPX_GOAL_ID": source_goal,
@@ -703,7 +721,7 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     """A stopped command is eligible only at the declared pre-output boundary."""
     import copy
     import shlex
-    from loopx.control_plane.turn_driver.codex_checkpoint import _verify_interrupted_guard
+    from loopx.hosts.codex_checkpoint import _verify_interrupted_guard
 
     guard = {"cli": "/fixture/loopx", "workspace": str(tmp_path), "registry": "/fixture/registry.json",
              "runtime_root": "/fixture/runtime", "goal_id": "research", "agent_id": "worker",

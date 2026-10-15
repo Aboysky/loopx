@@ -65,12 +65,12 @@ def handle_research_checkpoint(args: argparse.Namespace, *, registry_path: Path,
             missing = [key for key in ("CODEX_BIN", "CODEX_HOME", "MODEL_NAME", "REASONING_EFFORT") if not env.get(key)]
             if missing:
                 raise ValueError("Explicit Codex Host environment is missing: " + ", ".join(missing))
-            from ..control_plane.runtime.research_checkpoint import capture_research_checkpoint, adopt_todo_context
+            from ..hosts.research_checkpoint import capture_research_checkpoint, adopt_todo_context
             if args.operation == "capture":
                 result = capture_research_checkpoint(env, json.loads(args.request_file.read_bytes()),
                     turn_instance_id=args.turn_instance_id, timeout=args.timeout_seconds)
             elif args.operation == "admit-session":
-                from ..control_plane.turn_driver.codex_checkpoint import admit_native_checkpoint_session
+                from ..hosts.codex_checkpoint import admit_native_checkpoint_session
                 result = admit_native_checkpoint_session(env, args.root, args.expected_sha256,
                     args.config_path, sandbox=args.sandbox, timeout=args.timeout_seconds)
             else:

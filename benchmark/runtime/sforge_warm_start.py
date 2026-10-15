@@ -145,8 +145,8 @@ def _prepare_native_skills(home: Path, installed: Path) -> None:
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     """Join actual session + research owners on one freshly bootstrapped Goal."""
     from benchmark.runtime.codex import Execution
-    from loopx.control_plane.turn_driver.codex_checkpoint import admit_native_checkpoint_session
-    from loopx.control_plane.runtime.research_checkpoint import adopt_todo_context
+    from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
+    from loopx.hosts.research_checkpoint import adopt_todo_context
     from benchmark.runtime.worker import loopx_command
     import subprocess
 
