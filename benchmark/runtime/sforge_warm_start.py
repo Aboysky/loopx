@@ -21,6 +21,9 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _SRC
 
 
+_CHECKPOINT_VERIFY_TIMEOUT_SECONDS = 60
+
+
 @dataclass(frozen=True)
 class WarmStart:
     root: Path
@@ -43,8 +46,16 @@ class WarmStart:
         if any(not path.is_absolute() or path.resolve(strict=True) != path
                for path in (self.root, self.config)):
             raise ValueError("Warm start requires physical absolute participant paths")
+        # Hashing a complete checkpoint can exceed the ordinary RPC budget.
+        # This read allowance never extends the original execution deadline.
+        remaining = self.deadline_epoch - time.time()
+        if remaining <= 0:
+            raise ValueError("Original warm start deadline expired before checkpoint verification")
         effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "verify", "root": str(self.root), "expected_sha256": self.sha256})
+            "action": "verify", "root": str(self.root), "expected_sha256": self.sha256},
+            timeout=min(_CHECKPOINT_VERIFY_TIMEOUT_SECONDS, remaining))
+        if self.deadline_epoch <= time.time():
+            raise ValueError("Original warm start deadline expired during checkpoint verification")
         metadata = json.loads((self.root / "checkpoint.json").read_bytes())["point_metadata"]
         native, source = metadata["native_session"], metadata["loopx_state"]
         if (native["guest_workspace"] != workspace or native["guest_home"] != _CODEX_HOME
