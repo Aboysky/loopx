@@ -44,7 +44,7 @@ export const firstGoalHomeLiveScenario = {
       session = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 }, beforeGoto: async (_api, page) => {
         // The document URL also ends in "status.json" (its statusUrl query), so match paths, not a glob.
         const proxied = new Set(["/status.json", "/api/chat/capabilities", "/api/chat/projects"]);
-        await page.route((target) => proxied.has(target.pathname), async (route) => {
+        await page.route((target) => proxied.has(target.pathname) || target.pathname.startsWith("/api/actions"), async (route) => {
           try { const response = await fetchWorkspaceBackend(route, backend); await route.fulfill({ response }); }
           catch { await route.abort().catch(() => {}); }
         });
@@ -82,9 +82,38 @@ export const firstGoalHomeLiveScenario = {
       assert.ok(projects.projects.length >= 1, "the real service registers the scan root as a project");
       await form.getByLabel("工作目录").locator("option", { hasText: projects.projects[0].title }).waitFor({ state: "attached", timeout: 10_000 });
       await page.screenshot({ path: resolve(outputDir, "first-goal-home-live-create.png"), animations: "disabled" });
-      await page.keyboard.press("Escape");
-      await form.waitFor({ state: "hidden", timeout: 10_000 });
-      return { coverageEntries: await session.close(), note: "real loopx chat on a fresh runtime: zero-Goal discovery with its own warning, no local path, real project catalog in the Goal form" };
+
+      // The first Goal is created from this page through the real action
+      // owner: review, confirm, readback. No terminal, no pre-existing registry.
+      const title = "Track the weekly release checklist";
+      await form.getByLabel("目标").fill(title);
+      await form.getByLabel("完成标准").fill("A checklist exists and is reviewed every week");
+      await form.getByLabel("工作目录").selectOption({ label: projects.projects[0].title });
+      await form.locator("button[type=submit]").click();
+      const drawer = page.locator(".personal-context-drawer");
+      await drawer.waitFor({ state: "visible", timeout: 20_000 });
+      await drawer.getByText("新 Goal · 待你确认", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+      assert.equal(await drawer.getByText("提案状态刷新失败", { exact: false }).count(), 0, "the real proposal snapshot reads back");
+      await drawer.locator(".personal-primary-action").click();
+      const applyButton = drawer.getByRole("button", { name: "确认并应用", exact: true });
+      if (await applyButton.count()) await applyButton.click();
+      await drawer.getByText("新 Goal · 已应用", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+      await drawer.getByText("操作已完成", { exact: false }).first().waitFor({ state: "visible", timeout: 10_000 });
+      await page.screenshot({ path: resolve(outputDir, "first-goal-home-live-applied.png"), animations: "disabled" });
+
+      // The real service now has a registry with exactly this Goal, and the
+      // home shows it instead of the first-Goal state.
+      const { existsSync } = await import("node:fs");
+      assert.ok(existsSync(join(ready.project, ".loopx", "registry.json")), "the first creation writes the registry");
+      const after = await (await fetch(`${backend}/status.json?view=workspace-directory`)).json();
+      assert.deepEqual(after.goals.map((goal) => goal.display_name), [title], "the real discovery view lists the created Goal");
+      assert.deepEqual(after.contract.warnings, [], "no missing-registry warning remains");
+      await page.locator(".personal-drawer-close").click();
+      await page.getByRole("button", { name: "刷新状态", exact: true }).click();
+      await page.locator(".personal-goal-row", { hasText: title }).first().waitFor({ state: "visible", timeout: 20_000 });
+      await firstGoal.waitFor({ state: "hidden", timeout: 20_000 });
+      await page.screenshot({ path: resolve(outputDir, "first-goal-home-live-home.png"), animations: "disabled" });
+      return { coverageEntries: await session.close(), note: "real loopx chat on a fresh runtime: zero-Goal discovery with its own warning, first Goal created from the page through the real action owner, registry written, directory lists it" };
     } catch (error) {
       if (diagnostics) process.stderr.write(diagnostics);
       await session?.close().catch(() => {});
