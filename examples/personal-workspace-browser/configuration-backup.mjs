@@ -84,8 +84,7 @@ export const configurationBackupScenario = {
           await route.fulfill({response});
         });
         await page.route("**/api/chat/state-recovery**", async route => {
-          const path = new URL(route.request().url()).pathname;
-          const response = await route.fetch({url: `http://127.0.0.1:${port}${path}`});
+          const response = await fetchWorkspaceBackend(route, `http://127.0.0.1:${port}`);
           await route.fulfill({response});
         });
       }});
@@ -117,7 +116,12 @@ export const configurationBackupScenario = {
       await recovery.getByLabel("配套清单", {exact: true}).focus();
       await page.keyboard.press("Tab");
       assert.equal(await page.evaluate(() => document.activeElement.textContent), "验证并建立隔离副本");
+      const uploadedArchive = page.waitForResponse(response =>
+        new URL(response.url()).pathname === "/api/chat/state-recovery/archive"
+        && response.request().method() === "POST");
       await page.keyboard.press("Enter");
+      const uploadResponse = await uploadedArchive;
+      assert.ok(uploadResponse.ok(), `Archive upload failed (HTTP ${uploadResponse.status()})`);
       await recovery.getByText("隔离副本已核对；Goal 尚未启用。", {exact: true}).waitFor();
       await recovery.getByText("recovery-fixture", {exact: false}).first().waitFor();
       await recovery.getByText("保存的任务: 1", {exact: false}).waitFor();
