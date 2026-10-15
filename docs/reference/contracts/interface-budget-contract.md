@@ -133,6 +133,18 @@ headroom (the base had 185) for bounded wording variation. JSON grows from
 anchors, fixture population, growth checks and execution limits remain intact.
 This qualifies readable output size, not installed host behavior or model adoption.
 
+The base/head differential independently detects the same instruction rollout:
+work-context text adds 208 characters (one receipt character may vary), optional
+replan advice adds 363, and thin/brief/compact heartbeat output adds 154/163/215.
+The existing probe records complete historical/current clauses and grants a
+one-time allowance only on their named carriers: 224 characters for context,
+384 for replan advice, or 224 for heartbeat text. Context and replan allowances
+combine only when both transitions are observed. JSON bytes/compact characters
+follow the same bounded allowance; line limits and absolute ceilings do not
+change. Missing or contradictory observations, already-upgraded bases, other
+surfaces and growth beyond the allowance retain ordinary failure behavior.
+This evidence does not qualify arbitrary future wording or runtime authority.
+
 同一资格化还须独立覆盖 `--compact` 的完整 Markdown 输出：不改原生 mode 夹具时，
 基线 `3e611660a` 为 11,315 字符，暂停／纠偏头 `84e00bac1` 为 11,530，
 确实超过旧 11,500 上限；两者均为 145 行。新增 215 字符承载当前心跳单次停止、
@@ -141,6 +153,13 @@ This qualifies readable output size, not installed host behavior or model adopti
 留 220 字符余量供有界措辞变化（基线余量为 185）。JSON 从 12,658 增至
 12,873，仍遵守原 13,500 上限；155 行、语义锚点、夹具规模、增长检查和执行限制
 不变。这只资格化可读输出尺寸，不证明安装态行为或模型采纳。
+
+base/head 差异门独立测得工作上下文增加 208 字符（回执可能差 1 字符）、可选
+replan 指引增加 363、thin/brief/compact 输出增加 154/163/215。既有 probe
+记录完整的新旧条款，仅在对应输出表面首次迁移时分别允许 224、384 或 224 字符；
+上下文与 replan 余量只有同时观察到两项迁移才相加。字节及 compact JSON 使用同一
+有界余量，行数和绝对上限不变。缺失／矛盾观察、已升级基线、其他表面或超额增长
+仍失败；这不资格化未来任意措辞，也不改变运行时权限。
 
 此前 thin 正文回归预算从 2,500 调至 3,000，保留完整的准入、接续与权限说明。同一真实
 CLI、host scope 和三项 runtime 能力下，最新 main／此前压缩版本／清晰版本分别为
