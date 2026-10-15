@@ -20,6 +20,9 @@ from loopx.state_recovery import StateRecoveryError, read_state_recovery_audit, 
 from tests.control_plane.canonical_authority_fixture import promoted_create_fixture
 
 
+pytestmark = pytest.mark.usefixtures("isolated_effect_runtime")
+
+
 def _cli(*args: object) -> tuple[int, dict]:
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *map(str, args)],
         capture_output=True, text=True, env={**os.environ, "LOOPX_USAGE_PING": "0"}, timeout=90)
