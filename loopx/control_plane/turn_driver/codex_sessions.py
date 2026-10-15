@@ -161,6 +161,7 @@ def codex_cli_session_binding(
     *,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     session_scope: str = "todo",
+    host: str = "codex-cli",
 ) -> dict[str, str] | None:
     lineage = _lineage({"turn_envelope": dict(turn_envelope)})
     session = select_codex_cli_session(
@@ -168,6 +169,7 @@ def codex_cli_session_binding(
         lineage=lineage,
         session_scope=session_scope,
         goal_admission=goal_admission,
+        host=host,
     )
     if session is None:
         return None

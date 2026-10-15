@@ -67,10 +67,11 @@ export function resolveOperationSourceRoute(input: JsonObject): JsonObject {
  * Accept the CLI's provider-neutral effort vocabulary; actual model support
  * remains a host qualification, not something this preflight can establish. */
 export function projectManagedOperationTransport(input: JsonObject): JsonObject {
-  const supportedHosts = ["codex-cli"];
-  const supportedSandboxes = ["read-only", "workspace-write"];
+  const dshTransport = input.host === "dsh" && input.dsh_operation_module_configured === true;
+  const supportedHosts = input.dsh_operation_module_configured === true ? ["codex-cli", "dsh"] : ["codex-cli"];
+  const supportedSandboxes = dshTransport ? [] : ["read-only", "workspace-write"];
   const reason = typeof input.host !== "string" || !supportedHosts.includes(input.host) ? "operation_transport_host_unsupported"
-    : typeof input.sandbox !== "string" || !supportedSandboxes.includes(input.sandbox) ? "operation_transport_sandbox_unsupported"
+    : !dshTransport && (typeof input.sandbox !== "string" || !supportedSandboxes.includes(input.sandbox)) ? "operation_transport_sandbox_unsupported"
     : typeof input.model !== "string" || !ID.test(input.model)
       || typeof input.reasoning_effort !== "string"
       || !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(input.reasoning_effort)
@@ -79,7 +80,8 @@ export function projectManagedOperationTransport(input: JsonObject): JsonObject 
     : reason === "operation_transport_sandbox_unsupported" ? ["select_supported_operation_sandbox"]
     : reason === "operation_transport_profile_required" ? ["correct_execution_profile"] : [];
   return {reason, remediation, transport: {schema_version: "loopx_operation_transport_v0",
-    kind: "owned_app_server", revision: "app-server-operation-tools-v0",
+    kind: dshTransport ? "owned_native_sdk" : "owned_app_server",
+    revision: dshTransport ? "dsh-native-operation-tools-v0" : "app-server-operation-tools-v0",
     supported_hosts: supportedHosts, supported_sandboxes: supportedSandboxes,
     configuration_valid: reason === null, runtime_qualified: false,
     identity_source: "native_thread_turn_metadata", human_confirmation_required: true,

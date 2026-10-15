@@ -1,4 +1,4 @@
-"""Opt-in SDK-owned operation host; not wired to the public Turn CLI yet.
+"""Explicitly opted-in SDK-owned operation host for managed Turns.
 
 The ordinary DSH adapter/default plugin remain unchanged. This internal host
 requires an admitted Todo request and explicit compiled module. It preserves
@@ -140,6 +140,7 @@ def _run_dsh_operation_host(
     confirmed_operation_id: str | None = None,
     on_notification: Any = None,
     runtime_bin: Path | None = None,
+    env: Mapping[str, str] | None = None,
     owner: OwnedDshOperationHost,
 ) -> dict[str, Any]:
     """One owned SDK run; final prose cannot create an operation outcome."""
@@ -182,6 +183,12 @@ def _run_dsh_operation_host(
         "patch": {"path": str(patch), "sha256": _digest(patch)} if patch else None,
         "runtime": _sdk_runtime_pin(runtime_bin),
     }
+    if env is not None:
+        # CLI-owned credentials stay out of state. Bind an explicitly resolved
+        # endpoint without serializing its potentially private URL.
+        profile["provider_endpoint_sha256"] = hashlib.sha256(
+            env.get("DEEPSEEK_BASE_URL", "").encode()
+        ).hexdigest()
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -311,6 +318,7 @@ def _run_dsh_operation_host(
             cordis=patch,
             runtime_bin=str(runtime_bin.resolve()) if runtime_bin else None,
             request_timeout_seconds=timeout_seconds,
+            env=env,
         )
         config["patches"] = (*config.get("patches", ()), str(owned_patch))
         harness = owner.resources.enter_context(
