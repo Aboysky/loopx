@@ -468,11 +468,16 @@ service it compares the look that lands, not the snapshot it replaces. One refin
 recorded: "Mark seen" acknowledges what is on screen, while leaving a Goal records only the look
 that was compared on that visit, so a visit with nothing new still advances the observation time
 and a change that arrived during the visit without being presented is reported next time. A
-browser that denies local storage loses only this memory; the Goal stays readable.
+browser that denies local storage loses only this memory; the Goal stays readable. "Mark seen"
+becomes the look the visit stands on and no write moves the marker back behind a newer
+acknowledgment. Stored ids are evidence only while they cover the owner's whole set: past the
+200-id cap, or for a partially listed set, only growth of the owner's count reports a new decision
+or result, so an unchanged set never reports a change.
 V5 is covered by a node test (no-change pair, trimmed marker, unavailable done count, denied
-storage), a fixture browser scenario (first visit silent, no-change return silent, work and
-decision changes shown and dismissed, leave-acknowledge, reload, no service write, denied storage
-getter) and a real-service scenario against a disposable Todo owner (optional user action silent,
+storage, 201 unchanged decisions past the cap, resolved-and-raised within it), a fixture browser
+scenario (first visit silent, no-change return silent, work and decision changes shown and
+dismissed, leave-acknowledge, refresh then Mark seen then leave keeps the acknowledgment, 201
+unchanged decisions silent, reload, no service write, denied storage getter) and a real-service scenario against a disposable Todo owner (optional user action silent,
 CLI completion and gate counted as the lane counts them, Mark seen). Cost stays omitted per D7.
 Target declaration (the other half of M3) remains undelivered.
 

@@ -50,7 +50,7 @@ export const sinceYouLookedScenario = {
       assert.ok(goalId, "The first visit seeds a marker for this source and Goal");
       assert.equal(await line.count(), 0, "A first visit has nothing to compare");
       const marker = await page.evaluate((id) => JSON.parse(localStorage.getItem(`loopx-pw-seen:/status.json:${id}`)), goalId);
-      assert.equal(marker.schema, "goal_seen_marker_v0");
+      assert.equal(marker.schema, "goal_seen_marker_v1");
       assert.deepEqual(Object.keys(marker).sort(), ["counts", "decisionIds", "doneTodoIds", "observedAt", "resultIds", "schema"], "typed counts and ids only");
 
       // A return with nothing new stays quiet.
@@ -87,6 +87,30 @@ export const sinceYouLookedScenario = {
       await page.waitForTimeout(500);
       assert.equal(await line.count(), 0, "Leaving the Goal after the line was shown acknowledged it");
 
+      // An explicit Mark seen during a visit is never undone by leaving: the
+      // owner returns to two new decisions, refreshes to a third while looking,
+      // marks seen, leaves, and comes back to silence with all three retained.
+      await home();
+      const threeGates = (fixture) => { addDone(fixture, "seen-done-1", "Reconcile the March export"); addGate(fixture, "seen-gate-1", "Approve the restated FY2023 operating cash flow"); addGate(fixture, "seen-gate-2", "Approve the vendor list"); addGate(fixture, "seen-gate-3", "Approve the Q4 calendar"); };
+      api.transformStatus = threeGates;
+      await refresh();
+      await openGoal();
+      await line.waitFor({ state: "visible", timeout: 15_000 });
+      api.transformStatus = (fixture) => { threeGates(fixture); addGate(fixture, "seen-gate-4", "Approve the audit scope"); };
+      await refresh();
+      await page.waitForTimeout(500);
+      await line.getByRole("button", { name: "标记已读" }).click();
+      await line.waitFor({ state: "hidden", timeout: 5_000 });
+      const acknowledged = await page.evaluate((id) => JSON.parse(localStorage.getItem(`loopx-pw-seen:/status.json:${id}`)), goalId);
+      assert.ok(acknowledged.decisionIds.includes("seen-gate-4"), "Mark seen records the refreshed look");
+      await home();
+      const afterLeave = await page.evaluate((id) => JSON.parse(localStorage.getItem(`loopx-pw-seen:/status.json:${id}`)), goalId);
+      assert.ok(afterLeave.decisionIds.includes("seen-gate-4"), "Leaving does not move the marker back behind the acknowledgment");
+      assert.ok(afterLeave.observedAt >= acknowledged.observedAt);
+      await openGoal();
+      await page.waitForTimeout(500);
+      assert.equal(await line.count(), 0, "Nothing is new after the acknowledged look");
+
       // Reload keeps the marker; nothing was written to the service.
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible", timeout: 15_000 });
@@ -94,6 +118,32 @@ export const sinceYouLookedScenario = {
       await page.waitForTimeout(500);
       assert.equal(await line.count(), 0, "The marker survives a reload");
       assert.deepEqual(writes.filter((row) => !/\/api\/chat\/(sessions|capabilities|agent-model-options|projection-messages|lark|goal-results)/.test(row)), [], `no service writes for the marker: ${writes.join(", ")}`);
+
+      // Past the marker's id cap an unchanged set stays silent: 201 decisions on
+      // the first look, the same 201 on the return, no "new" decision.
+      const capped = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 },
+        beforeGoto: (cappedApi) => { cappedApi.transformStatus = (fixture) => { for (let i = 0; i <= 200; i += 1) addGate(fixture, `seen-cap-${i}`, `Approve item ${i}`); }; } });
+      try {
+        const cappedPage = capped.page;
+        const cappedLine = cappedPage.getByTestId("goal-since-you-looked");
+        const openCapped = async () => {
+          await cappedPage.locator(".personal-goal-row").first().locator(".personal-goal-link").click();
+          await cappedPage.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
+          await cappedPage.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
+        };
+        await openCapped();
+        await cappedPage.waitForTimeout(500);
+        const cappedMarker = await cappedPage.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith("loopx-pw-seen:")).map(([, value]) => JSON.parse(value))[0]);
+        assert.ok(cappedMarker && cappedMarker.decisionIds.length === 200 && cappedMarker.counts.decisions >= 201, `the marker keeps 200 ids and the owner's count: ${JSON.stringify(cappedMarker?.counts)}`);
+        await cappedPage.getByRole("button", { name: /^LoopX 管家/ }).first().click();
+        await openCapped();
+        await cappedPage.waitForTimeout(800);
+        assert.equal(await cappedLine.count(), 0, "201 unchanged decisions are not one new decision");
+        await capped.close();
+      } catch (error) {
+        await capped.close().catch(() => {});
+        throw error;
+      }
 
       // A browser that denies storage (the property getter itself throws) keeps
       // the Goal readable; only the local look memory is lost.

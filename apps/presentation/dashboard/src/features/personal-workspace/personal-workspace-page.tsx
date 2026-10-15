@@ -1259,7 +1259,10 @@ export function PersonalWorkspacePage({
     if (!selectedGoal || !seenGoalLoaded) return null;
     return {
       observedAt: workspaceDigest.observedAt,
-      counts: { open: workspaceDigest.work.open, blocked: workspaceDigest.work.classes.blocked, done: workspaceDigest.work.done },
+      counts: {
+        open: workspaceDigest.work.open, blocked: workspaceDigest.work.classes.blocked, done: workspaceDigest.work.done,
+        decisions: workspaceDigest.needsYou.availability === "ok" ? workspaceDigest.needsYou.blocking : null,
+      },
       // Only an item that waits on the owner is a decision; an optional user action keeps the typed owner's classification.
       decisionIds: model.userTodos.filter((item) => item.goalId === selectedGoal.goalId && item.blocking).map((item) => item.todoId),
       doneTodoIds: workspaceDigest.work.rail.done,
@@ -1276,13 +1279,21 @@ export function PersonalWorkspacePage({
   const seenComparedRef = useRef<string | null>(null);
   const comparedSeenInputsRef = useRef(new Map<string, SeenMarkerInput>());
   const seenVisitRef = useRef<{ source: string; goalId: string } | null>(null);
-  // "Mark seen" acknowledges what is on screen now; leaving acknowledges only
-  // the look that was compared (and shown when material), so a change that
-  // arrived during the visit without being presented is still reported next time.
+  // "Mark seen" acknowledges what is on screen now and becomes the look this
+  // visit stands on; leaving acknowledges only the compared look (shown when
+  // material), so a change that arrived during the visit without being
+  // presented is still reported next time. No write moves the marker back
+  // behind a newer acknowledgment.
   function advanceSeenMarker(goalId: string, source: string, look: "latest" | "compared") {
     const scope = seenScopeKey(source, goalId);
     const input = look === "latest" ? latestSeenInputsRef.current.get(scope) : comparedSeenInputsRef.current.get(scope);
-    if (input) writeSeenMarker(seenMarkerStorage(), seenMarkerStorageKey(source, goalId), buildSeenMarker(input));
+    if (!input) return;
+    const storage = seenMarkerStorage();
+    const key = seenMarkerStorageKey(source, goalId);
+    const stored = readSeenMarker(storage, key);
+    if (stored && stored.observedAt > input.observedAt) return;
+    writeSeenMarker(storage, key, buildSeenMarker(input));
+    if (look === "latest") comparedSeenInputsRef.current.set(scope, input);
   }
   useEffect(() => {
     if (!selectedGoal || !seenGoalLoaded || !seenMarkerInput) return;
