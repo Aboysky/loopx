@@ -88,7 +88,7 @@ import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
 import { compareProposalRecency } from "./proposal-recency";
-import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
+import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
 import "./personal-workspace.css";
@@ -1260,7 +1260,8 @@ export function PersonalWorkspacePage({
     return {
       observedAt: workspaceDigest.observedAt,
       counts: { open: workspaceDigest.work.open, blocked: workspaceDigest.work.classes.blocked, done: workspaceDigest.work.done },
-      decisionIds: model.userTodos.filter((item) => item.goalId === selectedGoal.goalId).map((item) => item.todoId),
+      // Only an item that waits on the owner is a decision; an optional user action keeps the typed owner's classification.
+      decisionIds: model.userTodos.filter((item) => item.goalId === selectedGoal.goalId && item.blocking).map((item) => item.todoId),
       doneTodoIds: workspaceDigest.work.rail.done,
       blockedTodoIds: workspaceDigest.work.rail.blocked,
       resultIds: items.flatMap((item) => item.kind === "output" && item.output.goalId === selectedGoal.goalId ? [item.output.outputId] : []),
@@ -1273,29 +1274,40 @@ export function PersonalWorkspacePage({
   }, [selectedGoal, seenMarkerInput, seenStatusSource]);
   const [sinceYouLooked, setSinceYouLooked] = useState<{ goalId: string; source: string; delta: SinceYouLookedDelta } | null>(null);
   const seenComparedRef = useRef<string | null>(null);
+  const comparedSeenInputsRef = useRef(new Map<string, SeenMarkerInput>());
   const seenVisitRef = useRef<{ source: string; goalId: string } | null>(null);
-  function advanceSeenMarker(goalId: string, source: string) {
-    const input = latestSeenInputsRef.current.get(seenScopeKey(source, goalId));
-    if (input) writeSeenMarker(window.localStorage, seenMarkerStorageKey(source, goalId), buildSeenMarker(input));
+  // "Mark seen" acknowledges what is on screen now; leaving acknowledges only
+  // the look that was compared (and shown when material), so a change that
+  // arrived during the visit without being presented is still reported next time.
+  function advanceSeenMarker(goalId: string, source: string, look: "latest" | "compared") {
+    const scope = seenScopeKey(source, goalId);
+    const input = look === "latest" ? latestSeenInputsRef.current.get(scope) : comparedSeenInputsRef.current.get(scope);
+    if (input) writeSeenMarker(seenMarkerStorage(), seenMarkerStorageKey(source, goalId), buildSeenMarker(input));
   }
   useEffect(() => {
     if (!selectedGoal || !seenGoalLoaded || !seenMarkerInput) return;
+    // An owner refresh still in flight when the Goal opens belongs to this
+    // look: against a real service it lands after the open, so compare once
+    // it has, not against the snapshot it is about to replace.
+    if (refreshState === "loading") return;
     const scope = seenScopeKey(seenStatusSource, selectedGoal.goalId);
     if (seenComparedRef.current === scope) return;
     seenComparedRef.current = scope;
+    comparedSeenInputsRef.current.set(scope, seenMarkerInput);
+    const storage = seenMarkerStorage();
     const key = seenMarkerStorageKey(seenStatusSource, selectedGoal.goalId);
-    const previous = readSeenMarker(window.localStorage, key);
-    if (!previous) { writeSeenMarker(window.localStorage, key, buildSeenMarker(seenMarkerInput)); return; }
+    const previous = readSeenMarker(storage, key);
+    if (!previous) { writeSeenMarker(storage, key, buildSeenMarker(seenMarkerInput)); return; }
     const delta = compareSeenMarker(previous, seenMarkerInput);
     if (delta.material) setSinceYouLooked({ goalId: selectedGoal.goalId, source: seenStatusSource, delta });
-  }, [selectedGoal, seenGoalLoaded, seenMarkerInput, seenStatusSource]);
-  // Leaving a Goal records the owner's latest look at it; if the line was
-  // shown, that look acknowledges it.
+  }, [selectedGoal, seenGoalLoaded, seenMarkerInput, seenStatusSource, refreshState]);
+  // Leaving a Goal records the look that was compared on this visit; if the
+  // line was shown, that look acknowledges it.
   useEffect(() => {
     const current = selectedGoal && seenGoalLoaded ? { source: seenStatusSource, goalId: selectedGoal.goalId } : null;
     const previous = seenVisitRef.current;
     if (previous && (!current || current.goalId !== previous.goalId || current.source !== previous.source)) {
-      advanceSeenMarker(previous.goalId, previous.source);
+      advanceSeenMarker(previous.goalId, previous.source, "compared");
       seenComparedRef.current = null;
       setSinceYouLooked((shown) => shown && shown.goalId === previous.goalId && shown.source === previous.source ? null : shown);
     }
@@ -1304,7 +1316,7 @@ export function PersonalWorkspacePage({
   }, [selectedGoal, seenGoalLoaded, seenStatusSource]);
   function markSeen() {
     if (!sinceYouLooked) return;
-    advanceSeenMarker(sinceYouLooked.goalId, sinceYouLooked.source);
+    advanceSeenMarker(sinceYouLooked.goalId, sinceYouLooked.source, "latest");
     setSinceYouLooked(null);
   }
   const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {

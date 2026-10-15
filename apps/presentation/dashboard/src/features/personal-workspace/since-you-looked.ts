@@ -85,7 +85,26 @@ export function seenMarkerStorageKey(statusSource: string, goalId: string): stri
   return `loopx-pw-seen:${statusSource}:${goalId}`;
 }
 
-export function readSeenMarker(storage: Pick<Storage, "getItem">, key: string): SeenMarker | null {
+export type SeenMarkerStorage = Pick<Storage, "getItem" | "setItem">;
+
+/**
+ * Acquire the browser's local storage for the marker, or null when the
+ * browser denies it. Reading the `localStorage` property itself can throw
+ * (a SecurityError under a storage policy), so the acquisition sits inside
+ * the same boundary as the reads and writes: without storage the owner only
+ * loses the local look memory, never the Goal.
+ */
+export function seenMarkerStorage(scope: { localStorage?: SeenMarkerStorage } = typeof window === "undefined" ? {} : window): SeenMarkerStorage | null {
+  try {
+    const storage = scope.localStorage;
+    return storage && typeof storage.getItem === "function" && typeof storage.setItem === "function" ? storage : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readSeenMarker(storage: Pick<Storage, "getItem"> | null, key: string): SeenMarker | null {
+  if (!storage) return null;
   try {
     const raw = storage.getItem(key);
     if (!raw) return null;
@@ -103,7 +122,8 @@ export function readSeenMarker(storage: Pick<Storage, "getItem">, key: string): 
   }
 }
 
-export function writeSeenMarker(storage: Pick<Storage, "setItem">, key: string, marker: SeenMarker): boolean {
+export function writeSeenMarker(storage: Pick<Storage, "setItem"> | null, key: string, marker: SeenMarker): boolean {
+  if (!storage) return false;
   try {
     storage.setItem(key, JSON.stringify(marker));
     return true;

@@ -94,6 +94,17 @@ export const sinceYouLookedScenario = {
       await page.waitForTimeout(500);
       assert.equal(await line.count(), 0, "The marker survives a reload");
       assert.deepEqual(writes.filter((row) => !/\/api\/chat\/(sessions|capabilities|agent-model-options|projection-messages|lark|goal-results)/.test(row)), [], `no service writes for the marker: ${writes.join(", ")}`);
+
+      // A browser that denies storage (the property getter itself throws) keeps
+      // the Goal readable; only the local look memory is lost.
+      await home();
+      await page.evaluate(() => { Object.defineProperty(window, "localStorage", { configurable: true, get() { throw new DOMException("Storage is disabled", "SecurityError"); } }); });
+      await openGoal();
+      await page.waitForTimeout(500);
+      assert.equal(await line.count(), 0, "Without storage there is no marker to compare");
+      assert.doesNotMatch(await page.locator("body").innerText(), /页面暂时无法显示|Page unavailable/, "Denied storage never takes the Goal down");
+      await line.waitFor({ state: "hidden" });
+      await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 5_000 });
       return { coverageEntries: await session.close() };
     } catch (error) {
       await session.close().catch(() => {});

@@ -461,13 +461,20 @@ Section 5.7 is implemented in the packaged page: a browser-local marker per (sta
 holding typed counts, decision ids, bounded done Todo and result ids and the observation time;
 no titles, content or cost, no server write. On open the page compares the current digest with the
 marker and shows one line only for a material delta (newly done, new decisions, newly blocked,
-results returned), dismissable with "Mark seen". One refinement of 5.7 is recorded: leaving a Goal
-always records the owner's latest complete look, so a visit with nothing new still advances the
-observation time and a Goal still loading on open can only under-count, never invent a change.
-V5 is covered by a node test (no-change pair, trimmed marker, unavailable done count) and a browser
-scenario (first visit silent, no-change return silent, work and decision changes shown and
-dismissed, leave-acknowledge, reload, no service write). Cost stays omitted per D7. Target
-declaration (the other half of M3) remains undelivered.
+results returned), dismissable with "Mark seen". A decision is an item the typed attention lane
+classifies as waiting on the owner; an optional user action is listed but never counted. The
+comparison waits for an owner refresh still in flight when the Goal opens, so against a real
+service it compares the look that lands, not the snapshot it replaces. One refinement of 5.7 is
+recorded: "Mark seen" acknowledges what is on screen, while leaving a Goal records only the look
+that was compared on that visit, so a visit with nothing new still advances the observation time
+and a change that arrived during the visit without being presented is reported next time. A
+browser that denies local storage loses only this memory; the Goal stays readable.
+V5 is covered by a node test (no-change pair, trimmed marker, unavailable done count, denied
+storage), a fixture browser scenario (first visit silent, no-change return silent, work and
+decision changes shown and dismissed, leave-acknowledge, reload, no service write, denied storage
+getter) and a real-service scenario against a disposable Todo owner (optional user action silent,
+CLI completion and gate counted as the lane counts them, Mark seen). Cost stays omitted per D7.
+Target declaration (the other half of M3) remains undelivered.
 
 **Checkpoint 2026-10-12 (M2 candidate, #6255).**
 The existing TypeScript digest classifies responsibility, unassigned work and recorded decision dependencies;

@@ -602,15 +602,23 @@ for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoa
 
 // Since you looked (RFC goal-workspace-surface §5.7): a browser-local marker
 // per source and Goal, typed counts and ids only, no cost, no service write;
-// the line appears only for a material delta and advances on Mark seen or on
-// leaving the Goal after it was shown.
+// the line appears only for a material delta. Mark seen acknowledges what is
+// on screen; leaving acknowledges the look that was compared on that visit.
+// Decisions reuse the typed attention classification, the comparison waits
+// for an owner refresh still in flight, and denied storage only loses memory.
 const sinceYouLooked = source("./since-you-looked.ts");
 const seenMarkerType = sinceYouLooked.slice(sinceYouLooked.indexOf("export type SeenMarker = {"), sinceYouLooked.indexOf("};", sinceYouLooked.indexOf("export type SeenMarker = {")));
 assert.doesNotMatch(seenMarkerType, /cost|title|text|usd/i, "The marker carries no titles, text or cost");
 assert.match(sinceYouLooked, /export const seenMarkerIdLimit = 200;/, "Done and result ids are bounded");
 assert.match(page, /seenMarkerStorageKey\(seenStatusSource, selectedGoal\.goalId\)/, "Markers are scoped per status source and Goal");
 assert.match(page, /if \(delta\.material\) setSinceYouLooked\(/, "Only a material delta shows the line");
-assert.match(page, /advanceSeenMarker\(previous\.goalId, previous\.source\);[\s\S]*?setSinceYouLooked\(\(shown\) => shown && shown\.goalId === previous\.goalId/, "Leaving the Goal records the latest look and acknowledges a shown line");
+assert.match(page, /advanceSeenMarker\(previous\.goalId, previous\.source, "compared"\);[\s\S]*?setSinceYouLooked\(\(shown\) => shown && shown\.goalId === previous\.goalId/, "Leaving the Goal records the compared look and acknowledges a shown line");
+assert.match(page, /advanceSeenMarker\(sinceYouLooked\.goalId, sinceYouLooked\.source, "latest"\)/, "Mark seen acknowledges the current look");
+assert.match(page, /decisionIds: model\.userTodos\.filter\(\(item\) => item\.goalId === selectedGoal\.goalId && item\.blocking\)/, "Only items that wait on the owner are decisions; optional user actions keep the typed classification");
+assert.match(page, /if \(refreshState === "loading"\) return;[\s\S]*?seenComparedRef\.current = scope;/, "The comparison waits for an owner refresh still in flight instead of latching on the snapshot it replaces");
+const seenBlock = page.slice(page.indexOf("const seenStatusSource"), page.indexOf("function markSeen"));
+assert.doesNotMatch(seenBlock, /window\.localStorage/, "Storage is acquired through the guarded helper, never read as a bare property");
+assert.match(sinceYouLooked, /export function seenMarkerStorage\([\s\S]*?try \{[\s\S]*?scope\.localStorage/, "Acquiring storage sits inside the failure boundary");
 assert.doesNotMatch(sinceYouLooked + page.slice(page.indexOf("const seenStatusSource"), page.indexOf("function markSeen")), /fetch\(|requestJson|\/api\//, "No service write or read belongs to the marker");
 for (const key of ["since.lead", "since.newlyDone", "since.newDecisions", "since.newlyBlocked", "since.resultsReturned", "since.markSeen"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);

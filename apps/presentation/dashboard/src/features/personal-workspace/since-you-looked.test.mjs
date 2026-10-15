@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerIdLimit, seenMarkerStorageKey, writeSeenMarker } from "./since-you-looked.ts";
+import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerIdLimit, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker } from "./since-you-looked.ts";
 
 const input = (overrides = {}) => ({ observedAt: "2026-10-15T08:00:00Z", counts: { open: 5, blocked: 1, done: 20 }, decisionIds: ["d1"], doneTodoIds: ["a", "b"], blockedTodoIds: ["x"], resultIds: ["r1"], ...overrides });
 
@@ -62,4 +62,18 @@ test("storage round-trips per source and Goal and tolerates garbage", () => {
   const throwing = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
   assert.equal(readSeenMarker(throwing, key), null);
   assert.equal(writeSeenMarker(throwing, key, marker), false);
+});
+
+test("a browser that denies storage leaves the marker silent, whether the property or its methods throw", () => {
+  const key = seenMarkerStorageKey("/status.json", "g1");
+  const denied = {};
+  Object.defineProperty(denied, "localStorage", { get() { throw new Error("SecurityError: storage denied"); } });
+  assert.equal(seenMarkerStorage(denied), null, "a throwing localStorage getter is caught at acquisition");
+  assert.equal(seenMarkerStorage({}), null, "an absent storage is null, not a crash");
+  assert.equal(seenMarkerStorage({ localStorage: undefined }), null);
+  assert.equal(readSeenMarker(null, key), null);
+  assert.equal(writeSeenMarker(null, key, buildSeenMarker(input())), false);
+  const store = new Map();
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => { store.set(k, v); } };
+  assert.equal(seenMarkerStorage({ localStorage: storage }), storage, "a usable storage passes through unchanged");
 });
