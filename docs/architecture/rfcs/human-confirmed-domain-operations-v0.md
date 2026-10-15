@@ -480,9 +480,21 @@ replacing identity. SDK files, Node/entry bytes and the entire npm closure join
 the frozen profile. File/SQLite restart cases recover the original operation;
 missing/unreadable history refuses without provider input or a reusable failed
 client. This is candidate-source qualification, not a published Python runtime
-or whole-plugin compatibility claim. Public CLI/delegation stays Codex-only;
-frontend/Lark return, other runtimes and live financial effects remain
-unqualified. Do not enable public DSH preflight from these backend results.
+or whole-plugin compatibility claim.
+
+The explicit `turn run-once --host dsh --dsh-operation-module /absolute/native-operation.js`
+entry now shares this owner, the existing Todo session planner and the
+operator-granted delegation callback. The module flag is default-off and
+cannot be combined with `--dsh-runner` or another host. Configuration readback
+identifies `owned_native_sdk` but retains `runtime_qualified: false`.
+File/SQLite qualification uses the actual CLI, SDK and detached callback to
+resume the original persisted session/profile, consume once, reject repetition
+and record `not_executed`; the typed wait remains a rejected delegation rather
+than validated domain completion. Provider endpoint bytes join the immutable
+profile without serializing credentials. The generic `--confirmed-operation-id`
+and `--operation-source-route-json` flags retain their Codex aliases.
+Frontend/Lark return, other runtimes and live financial effects remain
+unqualified. The CLI fixture does not certify original-card delivery or approval.
 
 Public `goal-channel inspect-operation/consume-operation/report-operation`
 remain fail-closed before private reads or writes, even with matching

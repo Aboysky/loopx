@@ -374,8 +374,18 @@ SDK `0.1.5rc1` 的跨进程恢复仍在启动前拒绝，原 `session already ex
 恢复原身份。SDK 文件、Node/入口原字节及完整 npm closure 纳入冻结 profile。
 File/SQLite 重启用例恢复同一操作；历史丢失/不可读时拒绝，不向模型发送输入，
 不替换绑定，失败 client 不可复用。这只是候选源码资格，不能当作已发布 Python
-runtime 或整个插件的兼容性证明。公开 CLI/delegation 仍仅支持 Codex，前端/Lark
-回传、其它 runtime 和真实金融效果仍未验，不能据此开启公开 DSH preflight。
+runtime 或整个插件的兼容性证明。
+
+显式 `turn run-once --host dsh --dsh-operation-module /absolute/native-operation.js`
+入口现复用该 owner、原 Todo session planner 和 operator 授权的 delegation
+callback。模块开关默认关闭，不能与 `--dsh-runner` 或其它 host 混用。配置读回
+标明 `owned_native_sdk`，仍保持 `runtime_qualified: false`。File/SQLite 使用
+真实 CLI、SDK 和独立 callback 进程恢复原持久 session/profile，首次消费、重复
+拒绝并记录 `not_executed`；typed wait 仍是 rejected delegation，不是业务完成。
+endpoint 原字节的哈希纳入不可变 profile，不序列化凭据。通用
+`--confirmed-operation-id`、`--operation-source-route-json` 保留旧 Codex 别名。
+前端/Lark 回传、其它 runtime 和真实金融效果仍未验；CLI 夹具不证明原卡送达
+或真实用户批准。
 
 公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
