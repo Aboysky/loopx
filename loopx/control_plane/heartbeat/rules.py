@@ -8,7 +8,8 @@ OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
     "Read agent_channel.work_context and required_reads (or envelope) before work. "
     "Size by task/evidence/risk within authority/budget, not ops/files/wakes; "
-    "calls/writeback ≠ completion; obey stop/replan."
+    "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, "
+    "never wake counts."
 )
 
 USER_TODO_FINAL_MESSAGE_RULE = (
