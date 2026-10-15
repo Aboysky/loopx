@@ -69,7 +69,8 @@ function coversWholeSet(ids: readonly string[], count: number | null): boolean {
 /**
  * Compare the current observation with the stored marker. Newly done work is
  * the done ids not in the marker, bounded by the growth of the done count
- * when the owner projects one, so a trimmed marker never inflates it. New
+ * when the owner projects one, so a trimmed marker never inflates it; with
+ * no done total, ids count only while the marker kept them all. New
  * decisions and results are ids not seen before while the marker covered the
  * whole set; past the cap only growth of the owner's count is evidence, so an
  * unchanged set never reports a change. Newly blocked work is the growth of
@@ -80,9 +81,16 @@ export function compareSeenMarker(previous: SeenMarker, current: SeenMarkerInput
   const seenDecisions = new Set(previous.decisionIds);
   const seenResults = new Set(previous.resultIds);
   const doneById = current.doneTodoIds.filter((id) => !seenDone.has(id)).length;
-  const doneByCount = previous.counts.done !== null && current.counts.done !== null
-    ? Math.max(0, current.counts.done - previous.counts.done) : doneById;
-  const newlyDone = Math.min(doneById, doneByCount) || Math.max(0, doneByCount > 0 && doneById === 0 ? doneByCount : 0);
+  let newlyDone: number;
+  if (previous.counts.done !== null && current.counts.done !== null) {
+    // The owner's done total is the evidence; ids can only refine it downward.
+    const doneByCount = Math.max(0, current.counts.done - previous.counts.done);
+    newlyDone = Math.min(doneById, doneByCount) || (doneByCount > 0 && doneById === 0 ? doneByCount : 0);
+  } else {
+    // Without a done total the ids are the only evidence, and only while the
+    // marker kept every one it saw; a capped history cannot prove a completion.
+    newlyDone = coversWholeSet(previous.doneTodoIds, null) ? doneById : 0;
+  }
   const newDecisions = coversWholeSet(previous.decisionIds, previous.counts.decisions)
     ? current.decisionIds.filter((id) => !seenDecisions.has(id)).length
     : previous.counts.decisions !== null && current.counts.decisions !== null

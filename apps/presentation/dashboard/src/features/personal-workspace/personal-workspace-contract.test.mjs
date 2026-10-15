@@ -617,6 +617,7 @@ assert.match(page, /advanceSeenMarker\(sinceYouLooked\.goalId, sinceYouLooked\.s
 assert.match(page, /if \(stored && stored\.observedAt > input\.observedAt\) return;/, "No write moves the marker back behind a newer acknowledgment");
 assert.match(page, /if \(look === "latest"\) comparedSeenInputsRef\.current\.set\(scope, input\);/, "Mark seen becomes the look the visit stands on, so leaving cannot undo it");
 assert.match(sinceYouLooked, /function coversWholeSet\(/, "Capped or partial id sets report count growth, never unretained ids as new");
+assert.match(sinceYouLooked, /newlyDone = coversWholeSet\(previous\.doneTodoIds, null\) \? doneById : 0;/, "With no done total a capped done history proves no completion");
 assert.match(page, /decisionIds: model\.userTodos\.filter\(\(item\) => item\.goalId === selectedGoal\.goalId && item\.blocking\)/, "Only items that wait on the owner are decisions; optional user actions keep the typed classification");
 assert.match(page, /if \(refreshState === "loading"\) return;[\s\S]*?seenComparedRef\.current = scope;/, "The comparison waits for an owner refresh still in flight instead of latching on the snapshot it replaces");
 const seenBlock = page.slice(page.indexOf("const seenStatusSource"), page.indexOf("function markSeen"));

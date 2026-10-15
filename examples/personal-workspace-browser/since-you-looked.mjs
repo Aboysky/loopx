@@ -119,10 +119,19 @@ export const sinceYouLookedScenario = {
       assert.equal(await line.count(), 0, "The marker survives a reload");
       assert.deepEqual(writes.filter((row) => !/\/api\/chat\/(sessions|capabilities|agent-model-options|projection-messages|lark|goal-results)/.test(row)), [], `no service writes for the marker: ${writes.join(", ")}`);
 
-      // Past the marker's id cap an unchanged set stays silent: 201 decisions on
-      // the first look, the same 201 on the return, no "new" decision.
+      // Past the marker's id cap an unchanged set stays silent: 201 decisions
+      // and 201 completed rows with no done total on the first look, the same
+      // on the return, no "new" decision and no "newly done".
+      const cappedHistory = (fixture) => {
+        for (let i = 0; i <= 200; i += 1) { addGate(fixture, `seen-cap-${i}`, `Approve item ${i}`); addDone(fixture, `seen-done-cap-${i}`, `Completed item ${i}`); }
+        const first = firstGoal(fixture);
+        for (const group of [first.agent_todos, first.project_asset?.agent_todos]) {
+          if (!group) continue;
+          for (const key of ["advancement_done_count", "done_count", "done"]) delete group[key];
+        }
+      };
       const capped = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 },
-        beforeGoto: (cappedApi) => { cappedApi.transformStatus = (fixture) => { for (let i = 0; i <= 200; i += 1) addGate(fixture, `seen-cap-${i}`, `Approve item ${i}`); }; } });
+        beforeGoto: (cappedApi) => { cappedApi.transformStatus = cappedHistory; } });
       try {
         const cappedPage = capped.page;
         const cappedLine = cappedPage.getByTestId("goal-since-you-looked");
@@ -135,10 +144,11 @@ export const sinceYouLookedScenario = {
         await cappedPage.waitForTimeout(500);
         const cappedMarker = await cappedPage.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith("loopx-pw-seen:")).map(([, value]) => JSON.parse(value))[0]);
         assert.ok(cappedMarker && cappedMarker.decisionIds.length === 200 && cappedMarker.counts.decisions >= 201, `the marker keeps 200 ids and the owner's count: ${JSON.stringify(cappedMarker?.counts)}`);
+        assert.ok(cappedMarker.doneTodoIds.length === 200 && cappedMarker.counts.done === null, `the done history is capped with no total: ${JSON.stringify(cappedMarker.counts)}`);
         await cappedPage.getByRole("button", { name: /^LoopX 管家/ }).first().click();
         await openCapped();
         await cappedPage.waitForTimeout(800);
-        assert.equal(await cappedLine.count(), 0, "201 unchanged decisions are not one new decision");
+        assert.equal(await cappedLine.count(), 0, "201 unchanged decisions and 201 unchanged completions with no total report nothing");
         await capped.close();
       } catch (error) {
         await capped.close().catch(() => {});

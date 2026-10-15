@@ -471,10 +471,12 @@ and a change that arrived during the visit without being presented is reported n
 browser that denies local storage loses only this memory; the Goal stays readable. "Mark seen"
 becomes the look the visit stands on and no write moves the marker back behind a newer
 acknowledgment. Stored ids are evidence only while they cover the owner's whole set: past the
-200-id cap, or for a partially listed set, only growth of the owner's count reports a new decision
-or result, so an unchanged set never reports a change.
+200-id cap, or for a partially listed set, only growth of the owner's count reports a new decision,
+result or completion, and with no done total a capped done history reports nothing, so an unchanged
+set never reports a change.
 V5 is covered by a node test (no-change pair, trimmed marker, unavailable done count, denied
-storage, 201 unchanged decisions past the cap, resolved-and-raised within it), a fixture browser
+storage, 201 unchanged decisions past the cap, 201 unchanged completions with no done total,
+resolved-and-raised within it), a fixture browser
 scenario (first visit silent, no-change return silent, work and decision changes shown and
 dismissed, leave-acknowledge, refresh then Mark seen then leave keeps the acknowledgment, 201
 unchanged decisions silent, reload, no service write, denied storage getter) and a real-service scenario against a disposable Todo owner (optional user action silent,

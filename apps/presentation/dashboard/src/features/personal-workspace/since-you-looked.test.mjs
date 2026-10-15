@@ -101,3 +101,14 @@ test("results past the cap follow the same rule", () => {
   assert.equal(compareSeenMarker(marker, input({ resultIds: ids })).resultsReturned, 0);
   assert.equal(compareSeenMarker(marker, input({ resultIds: [...ids, "r-new"] })).resultsReturned, 1);
 });
+
+test("with no done total a capped done history proves nothing; within the cap the ids decide", () => {
+  const ids = Array.from({ length: seenMarkerIdLimit + 1 }, (_, i) => `done${i}`);
+  const marker = buildSeenMarker(input({ doneTodoIds: ids, counts: { open: 5, blocked: 0, done: null, decisions: 1 } }));
+  assert.equal(marker.doneTodoIds.length, seenMarkerIdLimit);
+  assert.equal(compareSeenMarker(marker, input({ doneTodoIds: ids, counts: { open: 5, blocked: 0, done: null, decisions: 1 } })).newlyDone, 0, "201 unchanged completions with no total are not one new completion");
+  assert.equal(compareSeenMarker(marker, input({ doneTodoIds: [...ids, "done-new"], counts: { open: 5, blocked: 0, done: null, decisions: 1 } })).newlyDone, 0, "past the cap with no total there is no evidence either way");
+  const within = buildSeenMarker(input({ doneTodoIds: ["a", "b"], counts: { open: 5, blocked: 0, done: null, decisions: 1 } }));
+  assert.equal(compareSeenMarker(within, input({ doneTodoIds: ["a", "b", "c"], counts: { open: 5, blocked: 0, done: null, decisions: 1 } })).newlyDone, 1, "a complete history still counts a real completion");
+  assert.equal(compareSeenMarker(marker, input({ doneTodoIds: [...ids, "done-new"], counts: { open: 5, blocked: 0, done: 202, decisions: 1 } })).newlyDone, 0, "a total that appears later cannot be compared with a marker that had none");
+});
