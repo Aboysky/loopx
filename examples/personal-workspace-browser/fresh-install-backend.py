@@ -12,9 +12,17 @@ import socket
 import sys
 from pathlib import Path
 
-from loopx.chat_server import default_chat_assets_dir, serve_chat
-
 root = Path(sys.argv[1]).resolve()
+# The implicit default runtime root lives under HOME; point it inside this
+# disposable root before LoopX is imported so a creation that ignored the
+# service's selected root would land somewhere the scenario can observe, and
+# never in the tester's real state.
+home = root / "home"
+home.mkdir(parents=True, exist_ok=True)
+os.environ["HOME"] = str(home)
+
+from loopx.chat_server import default_chat_assets_dir, serve_chat  # noqa: E402
+
 (root / "project").mkdir(parents=True, exist_ok=True)
 bins = root / "bin"
 bins.mkdir(exist_ok=True)
@@ -27,7 +35,12 @@ os.environ["DO_NOT_TRACK"] = "1"
 with socket.socket() as probe:
     probe.bind(("127.0.0.1", 0))
     port = probe.getsockname()[1]
-print(json.dumps({"port": port, "project": str(root / "project")}), flush=True)
+print(json.dumps({
+    "port": port,
+    "project": str(root / "project"),
+    "runtime": str(root / "runtime"),
+    "default_runtime": str(home / ".loopx"),
+}), flush=True)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 serve_chat(
     registry_path=root / "project" / ".loopx" / "registry.json",

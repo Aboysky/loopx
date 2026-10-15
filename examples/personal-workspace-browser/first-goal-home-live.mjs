@@ -111,8 +111,17 @@ export const firstGoalHomeLiveScenario = {
 
       // The real service now has a registry with exactly this Goal, and the
       // home shows it instead of the first-Goal state.
-      const { existsSync } = await import("node:fs");
-      assert.ok(existsSync(join(ready.project, ".loopx", "registry.json")), "the first creation writes the registry");
+      const { existsSync, readFileSync, readdirSync } = await import("node:fs");
+      const registryPath = join(ready.project, ".loopx", "registry.json");
+      assert.ok(existsSync(registryPath), "the first creation writes the registry");
+      // The Goal persists where the serving Chat keeps its own state (its
+      // selected runtime root), never in the implicit default beside it.
+      const registry = JSON.parse(readFileSync(registryPath, "utf8"));
+      assert.equal(resolve(String(registry.common_runtime_root)), resolve(ready.runtime), `the registry records the service's runtime root: ${registry.common_runtime_root}`);
+      const goalId = registry.goals[0].id;
+      const underRuntime = (dir) => existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String) : [];
+      assert.ok(underRuntime(ready.runtime).some((entry) => entry.includes(goalId)), "the Goal's canonical state lives under the service's runtime root");
+      assert.ok(!underRuntime(ready.default_runtime).some((entry) => entry.includes(goalId)), "nothing of the Goal lands in the implicit default runtime root");
       const after = await (await fetch(`${backend}/status.json?view=workspace-directory`)).json();
       assert.deepEqual(after.goals.map((goal) => goal.display_name), [title], "the real discovery view lists the created Goal");
       assert.deepEqual(after.contract.warnings, [], "no missing-registry warning remains");
