@@ -295,8 +295,18 @@ class ChatActionService(
         return goal
 
     def _registry_fingerprint(self) -> str:
+        """Identity of the registry a proposal was previewed against.
+
+        A fresh install has no registry until its first Goal is created. That
+        absence is a stable fact to fingerprint, so the first creation can be
+        reviewed and confirmed from the page; a registry that appears between
+        preview and apply still reads as a change and asks for a new review.
+        """
+
         try:
             content = self.registry_path.read_bytes()
+        except FileNotFoundError:
+            return "registry-absent"
         except OSError as exc:
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()

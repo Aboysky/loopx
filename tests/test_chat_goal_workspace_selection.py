@@ -240,3 +240,30 @@ def test_project_list_survives_unreadable_goal_registry_while_creation_refuses(t
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_fresh_install_previews_its_first_goal_before_any_registry_exists(tmp_path):
+    # An installed LoopX has no registry until the first Goal is created, and
+    # the first-Goal home invites exactly that creation. The proposal must be
+    # reviewable then: the absent registry is a stable fact to fingerprint, a
+    # registry that appears afterwards reads as a change, and an unreadable
+    # registry still refuses.
+    project = tmp_path / "project"
+    project.mkdir()
+    registry = project / ".loopx" / "registry.json"
+    service = ChatActionService(store=ChatActionStore(tmp_path / "actions"),
+        registry_path=registry, workspace_roots=[project])
+
+    proposal = preview(service, "current", key="first")
+
+    assert proposal["action_kind"] == "goal.create"
+    assert proposal["workspace_binding"]["label"] == "project"
+    assert proposal["expected_state_fingerprint"] == "registry-absent"
+    assert service._registry_fingerprint() == "registry-absent", "still absent at apply time: the review stands"
+    registry.parent.mkdir()
+    registry.write_text(json.dumps({"schema_version": 1, "goals": []}))
+    assert service._registry_fingerprint() != "registry-absent", "a registry that appeared in between is a change"
+    service.registry_path = registry.parent  # a directory, not a file: unreadable, not absent
+    with pytest.raises(ValueError, match="registry is unavailable"):
+        service._registry_fingerprint()
+
