@@ -694,15 +694,22 @@ export function createLoopxGoalPlugin({
 
     const tools = { ...baseTools, loopx_goal_activate: activateTool }
 
-    const wrapTool = (name, after) => {
+    const pauseBinding = async (sessionID, reason) => {
+      cancelScheduled(sessionID)
+      await updateBinding(sessionID, { autoResume: false, lastPausedReason: reason })
+    }
+    const wrapTool = (name, after, before) => {
       const original = tools[name]
       if (!original || typeof original.execute !== "function") return
       tools[name] = {
         ...original,
         execute: async (args, toolCtx) => {
-          const result = await original.execute(args, toolCtx)
           const sessionID = toolCtx?.sessionID || toolCtx?.session_id || toolCtx?.session?.id
-          if (sessionID) await after(sessionID, args || {}, result)
+          // Local stop intent fences pending admission before waiting for host IO.
+          // Host failure remains a failure; it must not re-arm our own driver.
+          if (sessionID) await before?.(sessionID, args || {})
+          const result = await original.execute(args, toolCtx)
+          if (sessionID) await after?.(sessionID, args || {}, result)
           return result
         },
       }
@@ -727,15 +734,7 @@ export function createLoopxGoalPlugin({
       }
     })
     for (const name of ["goal_pause", "goal_block"]) {
-      wrapTool(name, async (sessionID, _args, result) => {
-        if (toolResultSucceeded(result)) {
-          await updateBinding(sessionID, {
-            autoResume: false,
-            lastPausedReason: name === "goal_pause" ? "goal_pause" : "goal_block",
-          })
-          cancelScheduled(sessionID)
-        }
-      })
+      wrapTool(name, null, sessionID => pauseBinding(sessionID, name))
     }
     wrapTool("update_goal", async (sessionID, args, result) => {
       if (
@@ -754,15 +753,14 @@ export function createLoopxGoalPlugin({
       const status = String(args.status || "").trim().toLowerCase()
       if (status === "complete") {
         await detachBinding(sessionID)
-      } else if (status === "paused" || status === "blocked") {
-        await updateBinding(sessionID, {
-          autoResume: false,
-          lastPausedReason: status === "paused" ? "goal_status_paused" : "goal_status_blocked",
-        })
-        cancelScheduled(sessionID)
       } else if (status === "resumed") {
         await updateBinding(sessionID, { autoResume: true, lastPausedReason: "" })
         initializedSessions.add(sessionID)
+      }
+    }, async (sessionID, args) => {
+      const status = String(args.status || "").trim().toLowerCase()
+      if (status === "paused" || status === "blocked") {
+        await pauseBinding(sessionID, status === "paused" ? "goal_status_paused" : "goal_status_blocked")
       }
     })
 
@@ -781,6 +779,9 @@ export function createLoopxGoalPlugin({
         await base.config?.(config)
       },
       "command.execute.before": async (input, output) => {
+        if (input?.command === "goal" && input?.sessionID && commandKind(String(input.arguments || "").trim()) === "pause") {
+          await pauseBinding(input.sessionID, "goal_pause")
+        }
         await baseCommand?.(input, output)
         if (input?.command !== "goal" || !input?.sessionID) return
         const sessionID = input.sessionID
@@ -792,12 +793,6 @@ export function createLoopxGoalPlugin({
         } else if (kind === "resume") {
           await updateBinding(sessionID, { autoResume: true, lastPausedReason: "" })
           initializedSessions.add(sessionID)
-        } else if (kind === "pause") {
-          await updateBinding(sessionID, {
-            autoResume: false,
-            lastPausedReason: "goal_pause",
-          })
-          cancelScheduled(sessionID)
         }
       },
       "chat.message": async (input, output) => {

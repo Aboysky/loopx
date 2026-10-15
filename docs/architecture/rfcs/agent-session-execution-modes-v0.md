@@ -346,7 +346,9 @@ stop latency separately from idle dispatch suppression.
 advances its existing persisted generation on host pause/resume. The OpenCode
 bridge gates automatic native resume on Core admission, serializes local binding
 updates, fences in-flight results across pause/resume, and latches permission
-rejection. OpenCode 2 gates the initial task as well as continuation, retains an
+rejection. Local stop intent is fenced before awaiting native pause/block IO;
+an unavailable host stop stays an error while local continuation remains disarmed.
+OpenCode 2 gates the initial task as well as continuation, retains an
 unstarted objective in its private worker state, and exits on Core stop/validated
 closure; `--force-resume` only re-arms the host and cannot bypass Core. These are
 provider adapter changes consuming existing decisions, not a new shared policy

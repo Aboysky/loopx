@@ -54,6 +54,10 @@ Goal stop or zero compute must also be resolved through its owning Goal/quota
 settings; host resume does not grant work. Idle events and ordinary chat do not
 clear an explicit pause. Permission denial or host errors also disarm the bridge.
 An interrupted tool's result/settlement remains the original operation's duty.
+The bridge disarms its local continuation before awaiting a pause/block tool or
+pause-command hook. A slow or failed native stop cannot admit another idle
+continuation. Native errors remain visible; local disarming is not proof that
+the host cancelled an already-submitted request.
 
 This changes the previous default for validated terminal closure: the bridge
 stops rather than polling every five minutes. A recurring Goal that still has

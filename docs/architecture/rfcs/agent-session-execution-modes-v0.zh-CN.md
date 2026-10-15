@@ -342,7 +342,9 @@ debit 义务。在途停止延迟与 idle 下发抑制分开测量。
 
 **实现检查点。** Pi 消费 Core stop hint 后持久解除自动续跑，宿主暂停／恢复递增既有
 generation。OpenCode bridge 在 Core 准入后才自动恢复原生 Goal，串行更新本地 binding，
-隔离暂停／恢复之间的旧检查结果，权限拒绝后保持暂停。OpenCode 2 的首次正文与续跑均经过
+隔离暂停／恢复之间的旧检查结果，权限拒绝后保持暂停。等待原生 pause／block IO 之前先
+阻断本地续跑；宿主停止失败仍报错，本地保持解除状态，不冒充在途请求已取消。
+OpenCode 2 的首次正文与续跑均经过
 准入，未下发正文保留在私有 worker state，Core stop／已验证终态让 worker 退出；
 `--force-resume` 仅重新启用宿主，不能绕过 Core。这里是消费既有决策的 provider 适配修改，
 不是新的共享策略 owner。OpenCode 2 的无活动 hold 不能证明用户明确暂停。
