@@ -1016,16 +1016,19 @@ function buildPersonalHomeModel(
       (right.lastActivity ?? "").localeCompare(left.lastActivity ?? ""),
     );
     const knownAgentIds = new Set(sortedGoalAgentRows.map((agent) => agent.agentId));
+    const agentHostSurfaces = (id: string) => Array.from(new Set((goal.coordination?.thread_agent_bindings ?? [])
+      .flatMap(binding => binding.agent_id === id && binding.host_surface ? [binding.host_surface] : [])));
     const goalAgentLanes = [
       ...sortedGoalAgentRows.map((agent) => ({
         agentId: agent.agentId,
         label: agent.agentId,
         lastActivityAt: agent.lastActivity,
         state: agent.status.label,
+        hostSurfaces: agentHostSurfaces(agent.agentId),
       })),
       ...registeredAgentIds
         .filter((agentId) => !knownAgentIds.has(agentId))
-        .map((agentId) => ({ agentId, label: agentId, lastActivityAt: null, state: "registered" })),
+        .map((agentId) => ({ agentId, label: agentId, lastActivityAt: null, state: "registered", hostSurfaces: agentHostSurfaces(agentId) })),
     ];
     const agentRow = sortedGoalAgentRows[0];
     const goalAgentTodos = mergePersonalAgentTodos(personalAgentTodos(row), sortedGoalAgentRows, row);
@@ -1191,6 +1194,8 @@ function PersonalGoalHome({
   sourceError,
   selectedView,
   selectedTodoId,
+  selectedWorkAgentId,
+  onSelectWorkAgent,
   onSelectTodo,
   onSelectView,
   onGoalActivationStateChange,
@@ -1213,6 +1218,8 @@ function PersonalGoalHome({
   sourceError: string | null;
   selectedView?: WorkspaceGoalTab;
   selectedTodoId?: string | null;
+  selectedWorkAgentId?: string | null;
+  onSelectWorkAgent: (agentId: string | null) => void;
   onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
@@ -2975,6 +2982,7 @@ function PersonalGoalHome({
           onSelectAgentModel: chooseAgentModel,
           onSelectGoal: (goalId, view) => onSelectGoal(goalId ?? "", view),
           onSelectView,
+          onSelectWorkAgent,
           onSelectTodo,
           onSendMessage: async (message, agentId, targetContextId, attachments) => sendManagerQuestion(message, { agentId, contextId: targetContextId, attachments }),
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
@@ -2984,6 +2992,7 @@ function PersonalGoalHome({
         goalArchiveLoadState={goalArchiveLoadState}
         selectedView={selectedView}
         selectedTodoId={selectedTodoId}
+        selectedWorkAgentId={selectedWorkAgentId}
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
@@ -3206,6 +3215,7 @@ export function DashboardPage() {
         search: (current) => ({
           ...current,
           statusUrl: url,
+          workAgent: "statusUrl" in current && (!current.statusUrl || current.statusUrl === url) ? current.workAgent : undefined,
         }),
       });
     }
@@ -3459,6 +3469,7 @@ export function DashboardPage() {
         ...current,
         goalId,
         workspace: undefined,
+        workAgent: undefined,
         todo: undefined,
         view: view === "chat" ? "conversation" : view,
       }),
@@ -3466,7 +3477,7 @@ export function DashboardPage() {
   }
 
   function selectWorkspace(projectRef: string | null) {
-    void navigate({ search: (current) => ({ ...current, goalId: "", todo: undefined, workspace: projectRef ?? undefined, view: "conversation" }) });
+    void navigate({ search: (current) => ({ ...current, goalId: "", todo: undefined, workAgent: undefined, workspace: projectRef ?? undefined, view: "conversation" }) });
   }
 
   if (statusRequestActive) {
@@ -3487,6 +3498,12 @@ export function DashboardPage() {
       goalArchiveLoadState={goalArchiveLoadState}
       sourceError={loadError}
       selectedTodoId={search.todo ?? null}
+      selectedWorkAgentId={search.workAgent ?? null}
+      onSelectWorkAgent={(agentId) => {
+        const goalId = search.goalId, statusUrl = search.statusUrl;
+        void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+          ? {...current, todo: undefined, workAgent: agentId ?? undefined, view: agentId === null ? "overview" : "conversation"} : current});
+      }}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
         void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
@@ -3494,7 +3511,7 @@ export function DashboardPage() {
       }}
       selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
       onSelectView={(view) => {
-        void navigate({ search: current => ({ ...current, view: view === "chat" ? "conversation" : view }) });
+        void navigate({ search: current => ({ ...current, workAgent: undefined, view: view === "chat" ? "conversation" : view }) });
       }}
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;
