@@ -426,6 +426,13 @@ silently convert a proposal into authority.
 
 ### 7.5 Long-running work and decision checkpoints (proposed refinement)
 
+Pause and wake eligibility precede this observation loop. Follow the
+[session pause/resume boundary](agent-session-execution-modes-v0.md#pause-resume-and-automatic-dispatch-boundaries):
+explicit stops disarm continuation; dependency waits retain bounded observation;
+validated no-follow-up ends polling. A result event or scheduler timer cannot
+clear a stop, and a pre-pause admission cannot survive resume. Qualify actual
+request/timer readback separately from prompt guidance and in-flight settlement.
+
 This 2026-10-04 refinement is a proposal for M3/M5, not shipped adaptive
 scheduling. It separates an **experiment boundary**, a **model decision
 checkpoint**, and an **accountable Turn boundary**. One experiment can span

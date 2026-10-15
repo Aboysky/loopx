@@ -314,6 +314,58 @@ This is a delivery priority, not a default migration. The
 Reuse the existing profile editor and session projections; do not add a
 manager-only creation service, task ledger or scheduling loop.
 
+### Pause, resume and automatic dispatch boundaries
+
+A wakeup is an observation opportunity, not execution or resume authority. Use
+existing Goal activation, quota, Todo dependency and host binding owners; do not
+add a parallel pause ledger. Apply the following precedence before a new model
+request or host continuation:
+
+| Current fact | Permitted handling | Resume boundary |
+|---|---|---|
+| Explicit Goal stop, zero compute, or explicit host pause | Disarm automatic continuation and cancel owned timers. Repeated idle/results must not poll the model or repair/replan around the stop. | Resume the stopped owner explicitly, then obtain fresh Core admission. A new chat message or increased quota alone does not clear a separate host pause. |
+| User/permission gate on selected work | Block that path. Keep independently admitted work available; notifications follow the existing reminder policy. | The owning gate is resolved; reselect and recheck affected work. A notification is not gate clearance. |
+| External dependency or temporary quota exhaustion | Use the existing bounded event/wait/backoff contract without model calls on unchanged checks. | Current source-qualified evidence or the budget window permits fresh admission; neither overrides an explicit stop. |
+| Unknown effect or interrupted work | Reconcile the original operation and preserve owed settlement. Stop new effects while authority is unknown. | Original identity/receipt recovery and current authority checks succeed. |
+| Validated terminal no-follow-up | End recurring polling. Completing one Todo is not this terminal fact. | An explicit new/resumed operation, or a separately qualified new-work event, obtains current admission. No unconditional standby polling. |
+
+`should_run=false` cannot be overridden by `scheduler_hint.action=run_now`.
+`stop_until_explicit_resume` takes precedence over a contradictory runnable hint.
+Capture the current binding generation when probing; pause/resume must invalidate
+pre-pause results even when the Goal/session id is unchanged. Cancelled timer
+callbacks must not consume a replacement timer or dispatch after resume. Reuse
+existing provider serialization/generation fences rather than another scheduler.
+
+Pause scope must be visible: a host pause stops that bound executor, a Goal stop
+blocks that Goal's new work, and a dependency gate blocks only affected paths.
+Stop new dispatch at the owning boundary; do not claim already-submitted tools
+were cancelled or abandon original writeback/debit obligations. Measure in-flight
+stop latency separately from idle dispatch suppression.
+
+**Implementation checkpoint.** The Pi adapter now latches Core stop hints and
+advances its existing persisted generation on host pause/resume. The OpenCode
+bridge gates automatic native resume on Core admission, serializes local binding
+updates, fences in-flight results across pause/resume, and latches permission
+rejection. OpenCode 2 gates the initial task as well as continuation, retains an
+unstarted objective in its private worker state, and exits on Core stop/validated
+closure; `--force-resume` only re-arms the host and cannot bypass Core. These are
+provider adapter changes consuming existing decisions, not a new shared policy
+owner. OpenCode 2's inactivity hold is not proof of explicit user pause.
+
+Qualification uses the production adapters with controlled host/probe seams and
+filesystem binding/CLI tests. It does not establish installed vendor/model
+adoption or cancellation latency. App-owned heartbeats remain host-owned: Core
+emits the existing one-attempt stop instruction and requires host result readback;
+without a host pre-dispatch hook, the first wake may already invoke a model. Do
+not report this as zero model wakeups or confirmed scheduler shutdown.
+
+Decisive cases: hard pause plus repeated idle/events; pause during successful and
+failed probes; pause→resume before an old result returns; cancelled callback after
+resume; denied admission with a runnable hint; restart before initial dispatch;
+continued external wait; unresolved Core stop after host resume; validated closure
+without standby. Read back binding, dispatched requests and remaining timers,
+then independently verify any original in-flight settlement.
+
 ### Model selection within Agent creation and attachment
 
 This is a proposed refinement of the reusable Agent operations above, not a

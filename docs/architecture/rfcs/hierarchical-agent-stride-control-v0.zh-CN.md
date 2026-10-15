@@ -379,6 +379,12 @@ policy 继续拥有 permission 权限。Supervisor、dashboard 与 scheduler pro
 
 ### 7.5 长作业与决策 checkpoint（修订提案）
 
+暂停与唤醒资格判断先于本节观察循环。遵循
+[会话暂停／恢复边界](agent-session-execution-modes-v0.zh-CN.md#暂停恢复与自动下发边界)：
+显式停止解除续跑，依赖等待保留有界观察，已验证 no-follow-up 结束轮询。
+结果事件或计时器不能解除停止，暂停前准入不能沿用到恢复后。实际请求／timer 读回、
+prompt 指导和原在途结算分别资格化。
+
 这项 2026-10-04 修订属于 M3/M5 提案，不代表 adaptive scheduling 已交付。
 需要分开**实验边界**、**模型决策 checkpoint**和**可记账 Turn 边界**。
 一个实验可以跨多个 Turn；每个已获准且需要记账的 Turn 仍以自己的 identity
