@@ -687,7 +687,11 @@ File/SQLite 完整 head、全部 committed journal、未引用的归档要求、
 capture/rollback/已释放 lease 字节。回读前让原项目与 runtime 不可访问；选定 provider
 存储缺失时明确失败，不新建替代库或回退 File。导入前备份另行保留投影前的原始
 Markdown。这资格化独立数据与历史回读，不代表身份采用、pending effect 处置或
-Host 重新激活。继续既有 R5/T4 的这些边界和 packaged App 恢复旅程，通过后才退役
+Host 重新激活。有界的完整恢复 M1 检查现增加 `backup-state verify` 与打包设置旅程：
+建立新隔离副本，复用 File/SQLite Todo/history reader，区分可读、仅历史与未知。
+损坏输入、已有目标及危险路径被拒绝，数据库验证在有时间/内存边界的独立进程内进行。
+源码与隔离 wheel 旅程保留原 Goal 字节，不注册或启用副本；v0 的 capture/owner 缺口使
+审计保持 held。继续既有 R5/T4 的身份、pending effect 与授权采用边界，通过后才退役
 受影响旧 writer；D2 与发布默认值继续开放。详见
 [全量状态恢复边界](../../reference/configuration-backup.md#full-state-recovery-after-cold-import)。
 

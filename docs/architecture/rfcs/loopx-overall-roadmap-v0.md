@@ -1089,9 +1089,16 @@ bytes. Readback runs with the original project/runtime unreachable; missing
 selected-provider storage fails without replacement or File fallback. The
 pre-import backup separately retains original Markdown before later projection.
 This qualifies independent data/history recovery, not identity adoption, pending
-effect disposition or live Host reactivation. Continue those boundaries and the
-packaged App recovery journey through the existing owners. Do not retire the last
-normal Markdown writer or claim the released SQLite default from this checkpoint.
+effect disposition or live Host reactivation. The bounded complete-recovery M1
+inspection now adds `backup-state verify` and a packaged Settings journey: a new
+inert copy, existing File/SQLite Todo/history readers, and explicit readable,
+historical and unknown components. Corrupt inputs, occupied targets and unsafe
+archive paths refuse; a bounded offline worker isolates database verification.
+Source and installed-wheel journeys retain old Goal bytes and never register or
+activate the copy. Legacy capture/owner gaps keep every v0 audit held. Continue
+identity, pending-effect disposition and authorized adoption through the existing
+owners; do not retire the last normal Markdown writer or claim the released
+SQLite default from this inspection checkpoint.
 
 The qualified shadow→canonical archive→isolated File/SQLite restore path retains
 committed dependency archives, terminal lease facts and later canonical writes.
