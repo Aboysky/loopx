@@ -325,6 +325,23 @@ modified bytes. Neither check launches the App or writes to an installed App or
 user data. These qualify the native recovery and signature boundaries; they do
 not replace packaged UI checks of download failure, restart, or runtime handoff.
 
+### Recover An Interrupted App Update
+
+If replacement leaves the App incomplete and a backup is available, the update
+panel exposes **Restore previous version** directly. Restore it, then choose
+**Restart to finish**. This removes two navigation disclosures from the failure
+path; choosing a healthy installation's rollback remains under Advanced options.
+The native updater still verifies the backup before replacement. An unavailable
+or invalid backup reports its cause without recommending an unavailable runtime
+repair. Restoring the App does not overwrite a separately managed CLI.
+
+| Previous recovery panel | Direct recovery action |
+| --- | --- |
+| ![Recovery hidden in Advanced options](docs/recovery-before.png) | ![Restore action beside the incomplete-installation message](docs/recovery-after.png) |
+
+These packaged-panel captures use synthetic native status for presentation
+comparison; they do not certify an installed update or an executing task's recovery.
+
 `npm run build` produces the configured platform bundles under
 `src-tauri/target/release/bundle/`. The release workflow builds macOS `.dmg`
 and `.app.zip` artifacts on macOS, Windows `.msi` and `.exe` artifacts on
