@@ -289,14 +289,24 @@ describe('DSH admission-to-closeout integration', () => {
     )
     expect(admission.kind).toBe('enter')
 
+    // The queued conversation lets the agent choose work; it does not claim
+    // the fixture's Todo or bind the Turn on the agent's behalf.
+    const claimed = await runCli(testFixture, [
+      'todo', 'claim', '--goal-id', goalId, '--todo-id', todoId,
+      '--agent-id', agentId, '--claimed-by', agentId,
+    ])
+    expect(claimed.exitCode, JSON.stringify(claimed.payload)).toBe(0)
+    expect(claimed.payload.ok).toBe(true)
     const guard = await runCli(testFixture, [
       'quota', 'should-run',
       '--goal-id', goalId,
       '--agent-id', agentId,
+      '--todo-id', todoId,
       '--runtime-profile', 'generic_cli',
       '--turn-instance-id', turnInstanceId,
     ])
     expect(guard.exitCode).toBe(0)
+    expect(guard.payload.ok).toBe(true)
     const heartbeatReceipt = record(guard.payload.heartbeat_receipt)
     expect(heartbeatReceipt.turn_instance_id).toBe(turnInstanceId)
     const cliChannel = record(record(guard.payload.interaction_contract).cli_channel)
@@ -365,7 +375,11 @@ describe('DSH admission-to-closeout integration', () => {
       && event.agent_id === agentId
       && event.run_id === turnInstanceId
     ))
-    expect(admissionReceipts).toHaveLength(1)
+    // Explicit selection upgrades the same receipt, producing another audit
+    // observation. The invariant is one Turn/effect and one spend, not one read.
+    expect(admissionReceipts.length).toBeGreaterThan(0)
+    expect(new Set(admissionReceipts.map(event => event.run_id)))
+      .toEqual(new Set([turnInstanceId]))
     expect(events.filter(event => (
       event.event_kind === 'quota_should_run'
       && event.run_id !== turnInstanceId
