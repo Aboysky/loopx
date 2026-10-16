@@ -552,6 +552,17 @@ publication when they differ or lack a witness. File/SQLite tests cover both a
 persistent change and A → B → A; a later live-path reread cannot prove this case.
 Routed sources and missing witnesses have separate negative coverage.
 
+The discovery-to-copy interval has a separate refusal: a registry declaration
+could previously change after planning, leaving the old selected document beside
+a new raw registry and a matching new configuration checkpoint. New full-backup
+plans retain the exact registry reads and freeze their archive routes; copied
+members must agree with those reads as well. Routing, discovery and configuration
+reuse the existing registry codec's immutable-read option. File/SQLite fixtures
+prove refusal, fresh-plan recovery and source-loss inert readback. This is a
+conservative byte-level check (even unrelated registry changes require retry),
+not a required-material export, shared owner epoch or M2 profile qualification.
+Historical plans and the scoped migration producer retain their prior contracts.
+
 The same rule covers the existing stored machine-configuration owner. Its exact
 read supplies the checkpoint and witness together, including confirmed absence;
 changed, newly created or removed configuration cannot contradict the raw copy.
