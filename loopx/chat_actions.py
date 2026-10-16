@@ -301,6 +301,51 @@ class ChatActionService(
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()
 
+    def _creation_agent_eligibility(
+        self, agent_id: str, *, project: Path | None = None
+    ) -> dict[str, Any]:
+        """Eligibility for a Goal's first Agent, refused as a typed gate.
+
+        A fresh install often has no usable Agent yet. The owner who clicks
+        "Create a Goal" needs the reason in their own language and the way to
+        fix it, not a protocol sentence: the preview answers with a gate that
+        names the Agent and, when the catalog states it, why it is unavailable.
+        Nothing is written and nothing is granted; a working Agent still goes
+        through the same eligibility check.
+        """
+
+        try:
+            return self._agent_eligibility(agent_id, project=project)
+        except ValueError as exc:
+            capabilities = (
+                self.runtime_controller.capabilities()
+                if self.runtime_controller is not None
+                else []
+            )
+            row = next(
+                (
+                    item
+                    for item in capabilities
+                    if isinstance(item, Mapping)
+                    and str(item.get("agent_id") or "") == agent_id
+                ),
+                None,
+            )
+            gate: dict[str, Any] = {
+                "kind": "agent_unavailable",
+                "agent_id": agent_id,
+                "registered": row is not None,
+                "summary": f"The selected Agent ({agent_id}) is not available to start this Goal.",
+                "next_action": "Install and sign in to the Agent, then create the Goal again.",
+                "detail": str(exc),
+            }
+            if row is not None:
+                for field in ("unavailable_reason", "executable", "environment_variable"):
+                    value = row.get(field)
+                    if isinstance(value, str) and value:
+                        gate[field] = value
+            raise ProtectedActionGate("goal.create", gate=gate) from exc
+
     def _agent_eligibility(
         self,
         agent_id: str,
@@ -1190,7 +1235,7 @@ class ChatActionService(
                 }
             )
             agent_id = str(normalized.get("agent_id") or "codex")
-            eligibility = self._agent_eligibility(agent_id, project=project)
+            eligibility = self._creation_agent_eligibility(agent_id, project=project)
             workspace_binding = self._goal_workspace_binding(
                 project, source_goal, requested_ref=str(normalized.get("workspace_ref") or "current")
             )

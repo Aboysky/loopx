@@ -659,3 +659,14 @@ for (const route of ["./views/frontstage-developer-page", "./views/benchmark-stu
 assert.equal((page.match(/<Suspense fallback=\{<p className="personal-lazy-loading" role="status">/g) ?? []).length, 1, "The lazy settings site shows a loading status");
 
 console.log("personal workspace drawer contract smoke passed");
+
+// An unavailable first Agent: the service refuses the creation preview with a
+// typed gate (kind, agent, catalog reason) and the page tells the owner in
+// their language, never with the protocol sentence; nothing is written.
+assert.match(page, /const agentGate = gateKind === "agent_unavailable"/, "The page maps the typed Agent gate to owner-language copy");
+assert.match(page, /reasonCode === "executable_not_found"[\s\S]*?reasonCode === "api_key_not_set"[\s\S]*?rawGate\.registered === false/, "The reason follows the catalog's own fields");
+assert.match(source("./context-drawer.tsx"), /selection\.item\.gate\?\.kind === "agent_unavailable" \? selection\.item\.title/, "The drawer shows the Agent gate's own title, not host confirmation");
+for (const key of ["proposal.agentGate.title", "proposal.agentGate.summary", "proposal.agentGate.reason.executable_not_found", "proposal.agentGate.reason.api_key_not_set", "proposal.agentGate.reason.unregistered", "proposal.agentGate.reason.unavailable", "proposal.agentGate.nextAction", "proposal.agentGate.impact"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+

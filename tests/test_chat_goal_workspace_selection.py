@@ -240,3 +240,83 @@ def test_project_list_survives_unreadable_goal_registry_while_creation_refuses(t
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_first_goal_preview_refuses_an_unavailable_agent_as_a_typed_gate(tmp_path):
+    # A fresh install often has no usable Agent yet. "Create a Goal" must not
+    # fail with a protocol sentence: the preview answers with a typed gate that
+    # names the Agent and the catalog's own reason, writes nothing, and the same
+    # request previews once the Agent is available.
+    import http.client
+    import runpy
+    import threading
+    from pathlib import Path
+
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_actions import goal_workspace_ref
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    fixture = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/loopx-chat-actions-smoke.py"))
+    runtime = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    registry = project / ".loopx" / "registry.json"
+    sessions = ChatSessionStore(runtime)
+    controller = fixture["FakeRuntimeController"](sessions)
+    controller.project_contexts = ChatProjectContexts([project])
+    catalog = {"rows": [{"agent_id": "codex", "available": False, "tool_calls": True, "trust_scope": "read_only",
+                         "unavailable_reason": "executable_not_found", "executable": "/opt/bins/codex"}]}
+    controller.capabilities = lambda: list(catalog["rows"])
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.runtime_root_override = registry, runtime, str(runtime)
+    server.action_store = ChatActionStore(runtime / "chat/actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=registry,
+        chat_store=sessions, runtime_controller=controller, workspace_roots=[project])
+    server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        try:
+            connection.request("GET" if body is None else "POST", path,
+                None if body is None else json.dumps(body), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    create = {"action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": "no-agent",
+              "context": {"kind": "manager", "goal_id": None},
+              "normalized_parameters": {"goal_id": "goal-first", "title": "First Goal", "objective": "Start here",
+                                        "agent_id": "codex", "workspace_ref": goal_workspace_ref(project)}}
+    try:
+        status, gated = request("/api/actions/preview", create)
+        assert status == 409, gated
+        assert gated["error_code"] == "action_preview_gate" and gated["write_attempted"] is False
+        gate = gated["gate"]
+        assert gate["kind"] == "agent_unavailable" and gate["agent_id"] == "codex" and gate["registered"] is True
+        assert gate["unavailable_reason"] == "executable_not_found" and gate["executable"] == "/opt/bins/codex"
+        assert not registry.exists(), "a refused preview writes nothing"
+        assert request("/api/actions")[1]["proposals"] == [], "a refused preview stores no proposal"
+
+        catalog["rows"] = []
+        status, unregistered = request("/api/actions/preview", create)
+        assert status == 409 and unregistered["gate"]["kind"] == "agent_unavailable"
+        assert unregistered["gate"]["registered"] is False and "unavailable_reason" not in unregistered["gate"]
+
+        # With a usable Agent the same request previews. (A registry is written
+        # here only because this check is about the Agent gate, not about the
+        # fresh-install fingerprint that a separate change covers.)
+        catalog["rows"] = [{"agent_id": "codex", "available": True, "tool_calls": True, "trust_scope": "read_only"}]
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps({"schema_version": 1, "goals": []}), encoding="utf-8")
+        status, previewed = request("/api/actions/preview", create)
+        assert status == 201, previewed
+        assert previewed["proposal"]["action_kind"] == "goal.create"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+

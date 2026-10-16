@@ -36,8 +36,7 @@ import {
   type LarkGoalConnection,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
-  type TypedActionProposal,
-} from "../../data/chat";
+  type TypedActionProposal, agentBackendLabel } from "../../data/chat";
 import { useTypedActionReadback, useTypedActionProposalReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
@@ -1546,6 +1545,24 @@ export function PersonalWorkspacePage({
       const gateKind = String(rawGate.kind ?? "workspace_selection_required");
       const requiresAgentBinding = gateKind === "agent_binding_required"
         || gateKind === "agent_identity_selection_required";
+      // An unavailable first Agent is told in the owner's language from the
+      // service's typed facts (which Agent, the catalog's own reason), never
+      // from its protocol sentence; the form and its draft stay available.
+      const agentGate = gateKind === "agent_unavailable" ? (() => {
+        const agent = agentBackendLabel(String(rawGate.agent_id ?? "codex"));
+        const reasonCode = String(rawGate.unavailable_reason ?? "");
+        const reason = reasonCode === "executable_not_found" && typeof rawGate.executable === "string"
+          ? t("proposal.agentGate.reason.executable_not_found", { executable: rawGate.executable })
+          : reasonCode === "api_key_not_set" && typeof rawGate.environment_variable === "string"
+            ? t("proposal.agentGate.reason.api_key_not_set", { variable: rawGate.environment_variable })
+            : rawGate.registered === false ? t("proposal.agentGate.reason.unregistered") : t("proposal.agentGate.reason.unavailable");
+        return {
+          title: t("proposal.agentGate.title", { agent }),
+          summary: t("proposal.agentGate.summary", { reason }),
+          nextAction: t("proposal.agentGate.nextAction", { agent }),
+          impact: t("proposal.agentGate.impact"),
+        };
+      })() : null;
       local = {
         actionKind: request.actionKind,
         fields: workspaceCandidates.map((candidate) => ({
@@ -1555,16 +1572,16 @@ export function PersonalWorkspacePage({
         })),
         gate: {
           kind: gateKind,
-          nextAction: typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
-          summary: String(rawGate.summary ?? t("proposal.workspaceGate.defaultSummary")),
+          nextAction: agentGate ? agentGate.nextAction : typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
+          summary: agentGate ? agentGate.summary : String(rawGate.summary ?? t("proposal.workspaceGate.defaultSummary")),
         },
-        impact: requiresAgentBinding
+        impact: agentGate ? `${agentGate.summary} ${agentGate.impact}` : requiresAgentBinding
           ? t("proposal.workspaceGate.agentImpact")
           : t("proposal.workspaceGate.selectionImpact"),
         previewId: `workspace-choice-${Date.now().toString(36)}`,
         sourceRequest: request,
         status: "gated",
-        title: requiresAgentBinding ? t("proposal.workspaceGate.agentTitle") : t("proposal.workspaceGate.selectionTitle"),
+        title: agentGate ? agentGate.title : requiresAgentBinding ? t("proposal.workspaceGate.agentTitle") : t("proposal.workspaceGate.selectionTitle"),
         workspaceCandidates,
       };
     }

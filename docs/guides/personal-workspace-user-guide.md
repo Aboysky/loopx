@@ -77,14 +77,16 @@ graph TD
 Goal 是什么、一个 **创建 Goal** 按钮（打开与侧边栏 `+` 相同的创建表单），以及三条示例
 请求。点选示例只会填入输入框，按发送前不会发出任何内容。状态来源自身的检查行（例如
 本机尚未建立注册表）折叠在「状态来源详情」里。只有状态来源真的不健康（例如注册表损坏）
-时才显示健康告警，并以可读句子描述问题，原始检查行同样折叠在「诊断信息」里。
+时才显示健康告警，并以可读句子描述问题，原始检查行同样折叠在「诊断信息」里。本机还没有可用的
+Agent（例如 Codex 未安装或未登录）时，「创建 Goal」的检查会直接告诉你是哪个 Agent、缺什么（命令
+或环境变量）以及下一步怎么做，不会写入任何内容，表单内容也会保留。
 
 When no Goal exists yet, the overview shows a first-Goal state instead of empty lanes or a
 health banner: what a Goal is, a **Create a Goal** button (the same form as the sidebar `+`),
 and three example requests that only fill the composer. The status source's own check
 lines (such as "no registry yet on this machine") stay collapsed under "Status source
 details". A health banner appears only when the source is actually unhealthy, in plain
-sentences, with the raw check lines collapsed under "Diagnostics".
+sentences, with the raw check lines collapsed under "Diagnostics". When this machine has no usable Agent yet (Codex not installed or not signed in), the Goal creation review names that Agent, what is missing (the command or the environment variable) and the next step; nothing is written and the form keeps what you typed.
 
 ### 核心功能区
 1. **「你不在的时候」离线概览**：
