@@ -532,3 +532,20 @@ def test_expired_workspace_verification_preserves_image_before_mutation(point, m
                                 "deadline_epoch": 1001}, workspace)
     assert not workspace.with_name("workspace.before-checkpoint").exists()
     assert (workspace / "candidate").read_text() == "retained candidate"
+
+
+@pytest.mark.parametrize("legacy", [True, False, "false"])
+def test_removed_post_replan_declaration_rejects_before_native_effects(tmp_path, legacy):
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+    declaration = tmp_path / "warm.json"
+    declaration.write_text(json.dumps({"fresh_after_replan": legacy, "fresh_replan": True}))
+    # No usable session: rejection must precede all native/session access.
+    with pytest.raises(ValueError, match="no longer supported"):
+        prepare_session_refresh({"LOOPX_WARM_START": str(declaration)}, None, tmp_path)
+
+
+def test_omitted_fresh_replan_keeps_default_native_history(tmp_path):
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+    declaration = tmp_path / "warm.json"
+    declaration.write_text("{}")
+    assert prepare_session_refresh({"LOOPX_WARM_START": str(declaration)}, None, tmp_path) == ""
