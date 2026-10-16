@@ -61,13 +61,15 @@ def authoring_input_observations(text: str) -> dict[str, bool]:
     try:
         collect(json.loads(text))
     except json.JSONDecodeError:
-        observed["first_delivery_guidance"] = bool(re.search(
-            r"^3\. Todos: [^\n]*" + re.escape(first_delivery_guidance) + r"$",
-            text, re.MULTILINE,
-        )) or bool(re.search(
-            r"^goal_start_contract\.planner\.first_delivery_guidance:\n"
-            + re.escape(_FIRST_DELIVERY_GUIDANCE) + r"$", text, re.MULTILINE,
-        ))
+        lines = text.split("\n")
+        observed["first_delivery_guidance"] = any(
+            line.startswith("3. Todos: ") and line.endswith(first_delivery_guidance)
+            for line in lines
+        ) or any(
+            line == "goal_start_contract.planner.first_delivery_guidance:"
+            and following == _FIRST_DELIVERY_GUIDANCE
+            for line, following in zip(lines, lines[1:])
+        )
         # Existential across every rendered candidate: an earlier line whose purpose is
         # not exact must not mask a later complete instruction.
         rendered_candidates = re.finditer(
