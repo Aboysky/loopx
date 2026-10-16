@@ -55,6 +55,12 @@ tree 相同；后续 main 同步与自动合并结果相同，并包含 #6597 �
 
 沿用[既有 R5 交付顺序](loopx-overall-roadmap-v0.zh-CN.md#post-6396-delivery-plan)：
 
+[计划内 Agent 迁移细化](complete-state-recovery-v0.zh-CN.md#planned-agent-transfer)
+提出产品优先级：把工作迁到目标并继续完成，下述安装升级/准入作为必要伴随。
+按完整旅程的实证断点选择 TS 改动，不用语言迁移或捕获字段系列代替用户结果。
+源端可用的迁移与原源不可用的灾难恢复分别资格化；这里不授予任何一方 activation，
+也不声称迁移已经实现。
+
 1. 在冻结的最终 main 源码和正常安装的 CLI／App／受影响 Host 上收尾 T4/C1、
    D1 采用：完整数据、新旧 proof、原操作重试、中断、后写及可逆迁移。剩余 transport
    按真实 caller 判断；native 进程内接管时删除废弃跨界，不新增逐字段 bridge。
