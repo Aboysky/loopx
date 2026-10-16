@@ -147,6 +147,43 @@ def test_owner_isolation_unknown_ids_and_keys_are_rejected(pack):
         cancel_pack(**{**operation, "analysis_key": "a" * 64})
 
 
+def test_digest_rejections_preserve_registration_and_create_no_job(pack):
+    scope, operation, _, _, _, _ = pack
+    root = scope["runtime_root"]
+    before = {
+        p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()
+    }
+    malformed = (
+        "a" * 63,
+        "a" * 65,
+        "A" * 64,
+        "g" * 64,
+        "sha256:" + "a" * 64,
+        " " + "a" * 64,
+        "a" * 64 + " ",
+        "\n" + "a" * 64,
+        "a" * 64 + "\n",
+        "a" * 64 + "\r\n",
+        "a" * 64 + "\0",
+        True,
+        64,
+        {"id": "a" * 64},
+        ["a" * 64],
+    )
+    for value in malformed:
+        with pytest.raises(PackUnavailable, match="^invalid_identifier$"):
+            inspect_pack(**scope, pack_id=value)
+    for value in (*malformed, "", None, False, 0, {}, []):
+        with pytest.raises(PackUnavailable, match="^invalid_identifier$"):
+            execute_pack(**{**operation, "analysis_key": value}, codex="must-not-run")
+    for value in ("0" * 64, "0123456789abcdef" * 4, "f" * 64):
+        with pytest.raises(PackUnavailable, match="^pack_not_registered$"):
+            inspect_pack(**scope, pack_id=value)
+    assert {
+        p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()
+    } == before
+
+
 def test_registration_requires_real_hash_literal_excerpt_and_contained_path(
     pack, tmp_path
 ):

@@ -10,8 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
-import re
 
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...file_lock import exclusive_file_lock
 from .trajectory_assessment import _digest, _write, execute, read_job, request_cancel
@@ -28,7 +28,7 @@ class PackUnavailable(ValueError):
 
 
 def _opaque(value: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+    if not isinstance(value, str) or not BARE_SHA256_PATTERN.fullmatch(value):
         raise PackUnavailable("invalid_identifier")
     return value
 
