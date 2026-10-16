@@ -1450,6 +1450,57 @@ def test_completed_stop_default_overlaps_readonly_observations_but_joins_and_rec
     assert not provider.writes and not provider.reaction_creates
 
 
+@pytest.mark.parametrize("revoke", [False, True])
+def test_completed_stop_reply_worker_waits_for_both_reads_and_does_not_send_after_revocation(
+    completed_group_stop, monkeypatch, revoke,
+):
+    _, provider, transport, _, event, record = completed_group_stop
+    checking_source, source_started, identity_started, release = (
+        threading.Event() for _ in range(4)
+    )
+    original_verify = transport._source_verified
+    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+
+    def verify(value):
+        checking_source.set()
+        return original_verify(value)
+
+    def sources(*args):
+        source_started.set()
+        assert release.wait(3)
+        return original_sources(*args)
+
+    def observe(*args, **kwargs):
+        observation = original_observe(*args, **kwargs)
+        if checking_source.is_set():
+            identity_started.set()
+            assert release.wait(3)
+        return observation
+
+    monkeypatch.setattr(transport, "_source_verified", verify)
+    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport.bindings, "observe", observe)
+    path = transport.root / f"{record['request_ref']}.json"
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        pending = caller.submit(transport.reconcile_request, path)
+        try:
+            assert source_started.wait(2) and identity_started.wait(2)
+            assert not pending.done() and not provider.writes
+            if revoke:
+                state = transport.bindings.read()
+                transport.bindings.disconnect(binding_id=record["binding_id"], expected_revision=state["revision"])
+        finally:
+            release.set()
+        assert pending.result(timeout=3) == (0 if revoke else 1)
+    delivered = json.loads(path.read_text())
+    if revoke:
+        assert not provider.writes and not delivered["deliveries"].get("terminal", {}).get("verified")
+    else:
+        assert delivered["deliveries"]["terminal"]["verified"]
+        assert len(provider.writes) == 1
+        assert provider.messages[event["message_id"]]["root_id"] == event["root_id"]
+
+
 @pytest.mark.parametrize("followup", [False, True])
 @pytest.mark.parametrize("identity_fails", [False, True])
 def test_group_outbound_joins_current_source_and_identity_before_root_read(ordinary, monkeypatch, followup, identity_fails):  # noqa: F811
