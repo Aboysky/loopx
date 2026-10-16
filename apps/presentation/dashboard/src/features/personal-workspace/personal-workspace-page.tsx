@@ -100,6 +100,7 @@ import {
   type AttentionNotificationSupport,
 } from "./attention-notifications";
 import { compareProposalRecency } from "./proposal-recency";
+import { deriveRuntimeReadiness, runtimeRequirement, runtimeSetupGuideUrl, type RuntimeAgentReadiness, type RuntimeReadiness } from "./runtime-readiness";
 import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
 import { deriveGoalSuggestions, type GoalSuggestion } from "./goal-suggestions";
 import { projectGoalAcceptanceCriteria } from "../../data/goal-acceptance-observation";
@@ -132,6 +133,30 @@ function activityTimeLabel(value: string | undefined, locale: string, t: Workspa
   return new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
 }
 
+function runtimeMissingLine(agent: RuntimeAgentReadiness, t: WorkspaceTranslate): string {
+  const requirement = runtimeRequirement(agent);
+  if (requirement.kind === "executable") return t("readiness.missingExecutable", { label: agent.label, name: requirement.name });
+  if (requirement.kind === "environment_variable") return t("readiness.missingEnvironment", { label: agent.label, name: requirement.name });
+  return requirement.reason ? t("readiness.missingOther", { label: agent.label, reason: requirement.reason }) : t("readiness.missingUnknown", { label: agent.label });
+}
+
+/** The home's in-place readiness notice: what is missing, where to set it up, and a re-check that reads back. */
+function RuntimeReadinessNotice({ readiness, rechecking, onRecheck }: { readiness: RuntimeReadiness; rechecking: boolean; onRecheck?: () => void }) {
+  const { t } = useWorkspaceI18n();
+  if (readiness.kind !== "none_available") return null;
+  return (
+    <section aria-labelledby="runtime-readiness-title" className="personal-runtime-readiness" data-testid="runtime-readiness" role="status">
+      <h2 id="runtime-readiness-title">{t("readiness.noneTitle")}</h2>
+      <p>{t("readiness.noneLead")}</p>
+      <ul>{readiness.missing.map((agent) => <li key={agent.agentId}>{runtimeMissingLine(agent, t)}</li>)}</ul>
+      <div className="personal-runtime-readiness-actions">
+        {onRecheck ? <button disabled={rechecking} onClick={onRecheck} type="button">{rechecking ? t("readiness.rechecking") : t("readiness.recheck")}</button> : null}
+        <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
+      </div>
+    </section>
+  );
+}
+
 function ManagerHomeBoard({
   goals,
   onSelectGoal,
@@ -140,6 +165,9 @@ function ManagerHomeBoard({
   onboarding,
   onRequestGoalCreate,
   onSuggestRequest,
+  runtimeReadiness,
+  recheckingRuntimes,
+  onRecheckRuntimes,
   systemHealth,
   operations,
   onSelectOperation,
@@ -153,6 +181,9 @@ function ManagerHomeBoard({
   onboarding?: WorkspaceHomeOnboarding;
   onRequestGoalCreate?: () => void;
   onSuggestRequest?: (text: string) => void;
+  runtimeReadiness?: RuntimeReadiness;
+  recheckingRuntimes?: boolean;
+  onRecheckRuntimes?: () => void;
   systemHealth?: WorkspaceSystemHealth;
   operations: WorkspaceActionPreview[];
   onSelectOperation: (proposal: WorkspaceActionPreview) => void;
@@ -187,6 +218,7 @@ function ManagerHomeBoard({
   );
   return (
     <section aria-label={t("home.workspace")} className="personal-home-board">
+      {runtimeReadiness ? <RuntimeReadinessNotice readiness={runtimeReadiness} rechecking={recheckingRuntimes ?? false} onRecheck={onRecheckRuntimes} /> : null}
       {systemHealth && (!systemHealth.ok || systemHealth.issues.length > 0 || systemHealth.freshnessWarning) ? (
         <div className="personal-system-health-banner" role="alert">
           <div className="personal-system-health-header">
@@ -1009,6 +1041,27 @@ export function PersonalWorkspacePage({
   const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const goalAgentId = goalCreationAgentId(selectedAgentId, agents);
+  // Only execution runtimes count: the read-only status projection answers
+  // questions but runs nothing, and the loading placeholder is not a fact.
+  const runtimeReadiness = useMemo(() => deriveRuntimeReadiness(agents
+    .filter((agent) => agent.adapterKind !== "status_projection" && agent.source !== "detecting")
+    .map((agent) => ({
+      agentId: agent.agentId, label: agent.label, available: agent.available,
+      unavailableReason: agent.unavailableReason ?? null, executable: agent.executable ?? null, environmentVariable: agent.environmentVariable ?? null,
+    })), selectedAgentId), [agents, selectedAgentId]);
+  // A re-check reads the runtime catalog again; the answer arrives as new agents.
+  const [recheckingRuntimes, setRecheckingRuntimes] = useState(false);
+  useEffect(() => { setRecheckingRuntimes(false); }, [agents]);
+  useEffect(() => {
+    if (!recheckingRuntimes) return;
+    const timer = window.setTimeout(() => setRecheckingRuntimes(false), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [recheckingRuntimes]);
+  function recheckRuntimes() {
+    if (!callbacks.onRecheckRuntimes) return;
+    setRecheckingRuntimes(true);
+    callbacks.onRecheckRuntimes();
+  }
   const conversationKey = selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
     : selectedGoalId ?? "manager";
@@ -2642,6 +2695,7 @@ export function PersonalWorkspacePage({
             ) : !managerChatOpen ? (
               <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
+                runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
                 onViewAllOperations={() => setSelectedGoalTab("chat")} />
             ) : (
@@ -2744,6 +2798,14 @@ export function PersonalWorkspacePage({
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
+            {!readOnly && (selectedGoal || managerChatOpen) && (runtimeReadiness.kind === "none_available" || runtimeReadiness.kind === "selected_unavailable") ? (
+              <p className="personal-composer-status personal-runtime-readiness-line" data-testid="runtime-readiness-line" role="status">
+                <span>{runtimeReadiness.kind === "none_available" ? t(agents.some((agent) => agent.adapterKind === "status_projection" && agent.available)
+                  ? "readiness.selectedUnavailableReadonly" : "readiness.selectedUnavailableNone") : t("readiness.selectedUnavailable", { label: runtimeReadiness.selected.label })}</span>
+                {callbacks.onRecheckRuntimes ? <button disabled={recheckingRuntimes} onClick={recheckRuntimes} type="button">{recheckingRuntimes ? t("readiness.rechecking") : t("readiness.recheck")}</button> : null}
+                <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
+              </p>
+            ) : null}
             {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
               ? (locale === "zh-CN" ? "本轮进行中 · 发消息可调整当前工作" : "Turn in progress · send instructions to adjust this work")
               : t("composer.turnRunning")}</p> : null}
