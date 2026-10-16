@@ -427,6 +427,14 @@ Selecting a route/attempt once exposes its decisive authorized evidence,
 artifact/input version, check and next decision inline. Refresh, back and
 return to the whole graph preserve scoped focus or explain its invalidation.
 
+When only Explore records are available, label the scope as recorded Explore
+history. `recorded_at` is record time, including delayed analysis and historical
+backfills, not an established native attempt timestamp or complete route/adoption
+coverage. Parent/topic containment remains grouping even when an older projection
+encoded it as `supports` with `materialized_from=node_parent_id`; it is not
+scientific supporting evidence. Explicit source relationships retain their basis,
+without being promoted to independent verification.
+
 **Layer 2 — requested Agent analysis.** This is the product consumer of the
 benchmark research owner's deep trajectory evaluation, not a second judge
 built into the frontend. Reuse its analysis method and versioned result
