@@ -647,7 +647,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _configuration_source_witnesses(
-    sources: dict[Path, bytes], included: list[dict[str, Any]], members: list[dict[str, Any]],
+    sources: dict[Path, bytes | None], included: list[dict[str, Any]], members: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Compare the actual decoded source bytes with every regular tar copy.
 
@@ -664,11 +664,15 @@ def _configuration_source_witnesses(
                 continue
             paths.add(str(PurePosixPath(target["archive_path"]) / relative.as_posix()))
         witnesses = [row for row in members if row["archive_path"] in paths]
+        if raw is None:
+            if witnesses:
+                raise ValueError("backup configuration source absence differs from copied bytes; retry the backup")
+            continue
         sha256 = hashlib.sha256(raw).hexdigest()
         if not witnesses:
-            raise ValueError("backup configuration registry has no copied bytes witness; include its regular source file")
+            raise ValueError("backup configuration source has no copied bytes witness; include its regular source file")
         if any(row["sha256"] != sha256 for row in witnesses):
-            raise ValueError("backup configuration registry differs from copied bytes; retry the backup")
+            raise ValueError("backup configuration source differs from copied bytes; retry the backup")
         result.extend(witnesses)
     return result
 
@@ -746,20 +750,20 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 capture_configuration_backup,
                 verify_configuration_backup,
             )
-            registry_snapshots: dict[Path, bytes] = {}
+            source_snapshots: dict[Path, bytes | None] = {}
             configuration_started_at = datetime.now(timezone.utc).isoformat()
             configuration = capture_configuration_backup(
                 registry_path=Path(payload["configuration_source_registry"]),
                 runtime_root=Path(payload["runtime_root"]),
                 goal_ids=payload.get("configuration_goal_ids"),
-                registry_snapshots=registry_snapshots,
+                source_snapshots=source_snapshots if tar.record_file_members else None,
             )
             if tar.record_file_members:
                 updated["execution"]["configuration_capture"] = {
                     "started_at": configuration_started_at,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "source_revisions": _configuration_source_witnesses(
-                        registry_snapshots, included, tar.file_members),
+                        source_snapshots, included, tar.file_members),
                 }
             configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("configuration-backup.json")

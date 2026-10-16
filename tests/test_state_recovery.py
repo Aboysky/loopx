@@ -82,7 +82,7 @@ def test_backup_refuses_configuration_from_different_copied_registry_bytes(
 
     monkeypatch.setattr(tarfile.TarFile, "add", after_copy)
     monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_capture)
-    with pytest.raises(ValueError, match="configuration registry.*copied bytes"):
+    with pytest.raises(ValueError, match="configuration source.*copied bytes"):
         _backup(tmp_path, provider)
     assert len(copied) == 1
     assert not list((tmp_path / "backups").iterdir()), "a mixed backup pair must not be published"
@@ -97,7 +97,7 @@ def test_backup_refuses_a_required_configuration_source_without_copied_bytes(tmp
         output_dir=tmp_path / "backups", include_registry_projects=False,
         include_automations=False, include_skills=False)
     plan["included"] = [row for row in plan["included"] if row["key"] != "configuration_source_registry"]
-    with pytest.raises(ValueError, match="configuration registry has no copied bytes witness"):
+    with pytest.raises(ValueError, match="configuration source has no copied bytes witness"):
         execute_state_backup_plan(plan)
     assert not list((tmp_path / "backups").iterdir())
 
@@ -121,14 +121,21 @@ def _rewrite(archive: Path, manifest: Path, extra: tarfile.TarInfo | None = None
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_legacy_mixed_revision_archive_remains_readable_and_inert(tmp_path, provider):
+@pytest.mark.parametrize("owner", ["registry", "machine"])
+def test_legacy_mixed_revision_archive_remains_readable_and_inert(tmp_path, provider, owner):
     from loopx.capabilities.configuration_backup import capture_configuration_backup, verify_configuration_backup
 
     archive, manifest = _backup(tmp_path, provider)
     registry = tmp_path / "registry.json"
-    value = json.loads(registry.read_text())
-    value["goals"][0]["description"] = "Later configuration in a historical archive"
-    registry.write_text(json.dumps(value))
+    if owner == "registry":
+        value = json.loads(registry.read_text())
+        value["goals"][0]["description"] = "Later configuration in a historical archive"
+        registry.write_text(json.dumps(value))
+    else:
+        machine = tmp_path / "runtime/machine/configuration.json"
+        machine.parent.mkdir(exist_ok=True)
+        machine.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+            "goal_storage": {"schema_version": "loopx_goal_storage_defaults_v0", "new_goal_provider": "sqlite"}}}))
     later = capture_configuration_backup(registry_path=registry, runtime_root=tmp_path / "runtime")
     content = json.dumps(later, ensure_ascii=False, indent=2).encode()
     # Construct the supported historical v0 case deliberately. The current
@@ -149,6 +156,10 @@ def test_legacy_mixed_revision_archive_remains_readable_and_inert(tmp_path, prov
     with tarfile.open(archive) as saved:
         earlier = json.load(saved.extractfile("configuration/registry.source.json"))
     assert "description" not in earlier["goals"][0]
+    if owner == "machine":
+        assert later["data"]["machine_configuration"] is not None
+        with tarfile.open(archive) as saved:
+            assert "runtime-root/machine/configuration.json" not in saved.getnames()
     for name in ("project", "runtime", "registry.json"):
         (tmp_path / name).rename(tmp_path / f"unavailable-{name}")
     audit = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)

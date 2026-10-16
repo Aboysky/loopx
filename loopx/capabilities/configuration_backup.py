@@ -11,20 +11,29 @@ from .machine_configuration.store import read_stored_machine_configuration
 
 def capture_configuration_backup(
     *, registry_path: Path, runtime_root: Path, goal_ids: list[str] | None = None,
-    registry_snapshots: dict[Path, bytes] | None = None,
+    source_snapshots: dict[Path, bytes | None] | None = None,
 ) -> dict[str, Any]:
     # One immutable read per source supplies both the decoded values and, when
     # requested by full backup, their exact IO provenance. A later path reread
     # cannot witness the bytes used here (the source may change A -> B -> A).
-    sources = registry_snapshots if registry_snapshots is not None else {}
+    sources = source_snapshots if source_snapshots is not None else {}
 
     def read_registry(path: Path) -> dict[str, Any]:
         source = path.expanduser().resolve()
         if source not in sources:
-            sources[source] = source.read_bytes()
-        return decode_registry_snapshot(path, sources[source])
+            try:
+                sources[source] = source.read_bytes()
+            except FileNotFoundError:
+                sources[source] = None
+        raw = sources[source]
+        if raw is None:
+            raise FileNotFoundError(path)
+        return decode_registry_snapshot(path, raw)
 
-    registry = read_registry(registry_path) if registry_path.exists() else {"goals": []}
+    try:
+        registry = read_registry(registry_path)
+    except FileNotFoundError:
+        registry = {"goals": []}
     selected = goal_ids if goal_ids is not None else [str(goal["id"]) for goal in registry_goals(registry)]
     if len(selected) != len(set(selected)):
         raise ValueError("configuration backup Goal ids must be unique")
@@ -37,7 +46,8 @@ def capture_configuration_backup(
             raise ValueError("configuration backup requires exactly one source-owned Goal")
         snapshots.append({"goal_id": goal_id, "goal_configuration": matches[0]})
     data = {
-        "machine_configuration": read_stored_machine_configuration(runtime_root), "goals": snapshots,
+        "machine_configuration": read_stored_machine_configuration(
+            runtime_root, source_snapshots=source_snapshots), "goals": snapshots,
     }
     backup: dict[str, Any] = effect_runtime_result("configuration.backup", {"action": "capture", "data": data})
     if backup.get("data") != data:
