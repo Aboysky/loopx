@@ -230,6 +230,7 @@ async function inspectGoal(root: string | null, goalId: string, standaloneSqlite
     return component(id, "coordination_authority", "readable", "historical_head_and_history_readable",
       "review_goal_identity_before_adoption", {...goalFacts, provider: handle.provider,
         head_digest: canonicalAuthoritySha256(loaded.head), history_commits: count,
+        provider_revision: loaded.provider_revision, cursor: loaded.cursor,
         todo_count: collection.projection.todo_ids.length,
         historical_lease_count: collection.leaseIndex?.lease_todo_ids.length ?? 0}, ["configuration"]);
   } catch (error) {

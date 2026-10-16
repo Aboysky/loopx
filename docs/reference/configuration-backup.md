@@ -344,14 +344,29 @@ pending external operation is resumed. This is the M1 inspection path in the
 [complete recovery RFC](../architecture/rfcs/complete-state-recovery-v0.md),
 not controlled reactivation.
 
-The following public synthetic scene uses a built wheel and the real File
-backend. Before this change, the entry only restored configuration snapshots.
-The new path reads the saved Goal work after its original source was removed;
-it does not register that Goal. The phone view is explicitly a historical report.
+Readable File/SQLite Goal components retain the `provider_revision` and `cursor`
+read from the captured authority after its complete head/history check. The JSON
+audit, CLI summary and the packaged view's existing **Verification details** show
+that historical checkpoint, even when the original source is unavailable or has
+later commits. Saved-report readback preserves the recorded position; older
+reports without it keep the checkpoint unknown. These are positions in the saved
+component, not producer capture intervals, a shared consistency point or current
+execution authority. Other owners and M2/M3 qualification remain unchanged.
+
+中文：可读 File/SQLite Goal 的报告保留隔离副本实际读取的存储版本和游标，
+可在 JSON、CLI 和原有“核对信息”中核对。来源之后的新提交不会成为这份备份的
+恢复位置；历史报告重读保留原值，旧报告缺少该信息时仍为未知。这只标识保存组件的
+历史检查点，不证明跨 owner 捕获一致性，也不授予继续执行的权限。
+
+These public synthetic scenes use the existing offline owners after source
+loss. The configuration and phone references use a built wheel and real File
+backend; the current desktop checkpoint view uses the packaged bundle and real
+SQLite backend. None registers the saved Goal. The phone view is explicitly a
+historical report, and checkpoint identifiers stay behind Verification details.
 
 | Before: configuration only | Inert full-archive inspection | Phone historical readback |
 | --- | --- | --- |
-| ![Configuration-only entry](images/state-recovery/before-configuration.png) | ![Inert backup audit](images/state-recovery/inert-audit-desktop.png) | ![Historical audit on phone](images/state-recovery/historical-audit-phone.png) |
+| ![Configuration-only entry](images/state-recovery/before-configuration.png) | ![Inert backup audit with its captured checkpoint](images/state-recovery/authority-checkpoint.png) | ![Historical audit on phone](images/state-recovery/historical-audit-phone.png) |
 
 Use **Previous inspections** after reloading to read the saved, digest-checked
 report. A historical report describes its recorded observation time; reading it

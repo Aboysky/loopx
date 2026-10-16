@@ -294,6 +294,19 @@ def test_legacy_archive_without_source_bindings_keeps_original_runtime_readback(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_backup_recovers_readable_authority_after_original_sources_disappear(tmp_path, provider):
     archive, manifest = _backup(tmp_path, provider)
+    source_args = ("--registry", tmp_path / "registry.json", "--runtime-root", tmp_path / "runtime")
+    code, captured = _cli(*source_args, "todo", "list", "--goal-id", "goal-a")
+    assert code == 0, captured
+    captured_position = captured["authority_read"]
+    assert captured_position["cursor"] == "2"
+    # A later real source commit must not become this backup's recovery point.
+    code, later = _cli(*source_args, "todo", "add", "--goal-id", "goal-a", "--role", "agent",
+                       "--claimed-by", "agent-a", "--operation-id", "after-backup",
+                       "--text", "This later work is outside the captured checkpoint")
+    assert code == 0, later
+    code, current = _cli(*source_args, "todo", "list", "--goal-id", "goal-a")
+    assert code == 0, current
+    assert current["authority_read"]["provider_revision"] != captured_position["provider_revision"]
     (tmp_path / "project").rename(tmp_path / "unavailable-project")
     (tmp_path / "runtime").rename(tmp_path / "unavailable-runtime")
     (tmp_path / "registry.json").rename(tmp_path / "unavailable-registry.json")
@@ -320,6 +333,11 @@ def test_real_backup_recovers_readable_authority_after_original_sources_disappea
     assert goal["facts"]["todo_count"] == 1
     assert goal["facts"]["history_commits"] == 2
     assert goal["facts"]["provider"] == provider
+    assert goal["facts"]["provider_revision"] == captured_position["provider_revision"]
+    assert goal["facts"]["cursor"] == captured_position["cursor"]
+    assert captured_position["provider_revision"] in render_state_recovery_markdown(audit)
+    saved = read_state_recovery_audit(destination)
+    assert saved["components"] == audit["components"]
     captures = json.loads(manifest.read_text())["included"]
     state_path = next(row["archive_path"] for row in captures if row["key"] == "registry_active_state:goal-a")
     assert "Preserve the full Goal, including unfinished acceptance." in (destination / "data" / state_path).read_text()

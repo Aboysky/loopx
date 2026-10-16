@@ -143,3 +143,22 @@ test("recorded measurements reject invalid values and absent historical measurem
     }
   }
 });
+
+test("historical authority positions stay optional but supplied positions must agree with the inspected history", () => {
+  const input = audit();
+  input.components[0] = {...input.components[0], component_id: "goal:fixture",
+    owner_kind: "coordination_authority", facts: {history_commits: 2}};
+  assert.doesNotThrow(() => decodeStateRecoveryAudit(input));
+  const position = {provider_revision: `file:2:${"a".repeat(24)}`, cursor: "2"};
+  const positioned = (facts: Record<string, unknown>) => ({...input,
+    components: [{...input.components[0], facts: {history_commits: 2, ...facts}}]});
+  assert.doesNotThrow(() => decodeStateRecoveryAudit(positioned(position)));
+  for (const facts of [{provider_revision: position.provider_revision}, {cursor: "2"},
+    {...position, cursor: "3"}, {...position, cursor: "02"}, {...position, cursor: 2},
+    {...position, provider_revision: "/private/source"}, {...position, provider_revision: "a".repeat(129)}]) {
+    assert.throws(() => decodeStateRecoveryAudit(positioned(facts)));
+  }
+  const wrongOwner = positioned(position);
+  wrongOwner.components[0].owner_kind = "configuration";
+  assert.throws(() => decodeStateRecoveryAudit(wrongOwner));
+});
