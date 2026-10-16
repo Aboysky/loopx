@@ -16,7 +16,9 @@ from typing import Any, Protocol
 from . import __version__
 from .paths import _is_redirected_path, select_default_runtime_root
 from .presentation.markdown import markdown_scalar
+from .registry import registry_goals
 from .control_plane.effect_runtime import effect_runtime_result
+from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.document_io import fsync_state_directory
 
 
@@ -51,18 +53,6 @@ def _archive_segment(value: Any, *, fallback: str) -> str:
     compact = ARCHIVE_SEGMENT_PATTERN.sub("-", raw).strip("-._") or fallback
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
     return f"{compact[:48]}-{digest}"
-
-
-def _registry_goals(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"{path} must contain a JSON object")
-    goals = payload.get("goals")
-    if not isinstance(goals, list):
-        return []
-    return [goal for goal in goals if isinstance(goal, dict) and goal.get("id")]
 
 
 def _should_skip(path: Path, exclude_roots: list[Path]) -> bool:
@@ -183,7 +173,7 @@ def _discover_targets(
     registry_source_registry_included_count = 0
     if include_registry_projects or discovery_registry.exists():
         try:
-            goals = _registry_goals(discovery_registry)
+            goals = registry_goals(load_registry(discovery_registry))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             goals = []
             warnings.append(f"could not discover registry projects from {discovery_registry}: {exc}")
