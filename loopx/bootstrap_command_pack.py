@@ -892,6 +892,7 @@ def build_loopx_bootstrap_command_pack(
         goal_id=resolved_goal_id,
         agent_id=str(selected_agent_id) if selected_agent_id else None,
         fine_grained=fine_grained,
+        inline_first_delivery_guidance=False,
     )
     slash_command_catalog = build_slash_command_catalog(cli_bin=cli_bin)
 
@@ -2039,6 +2040,14 @@ Identity-aware choices:
 Rerun `{payload.get("canonical_cli_command")} --agent-id <registered-agent-id>`
 with the selected identity before continuing."""
     elif goal_text:
+        planner = goal_start_contract.get("planner") or {}
+        quality = planner.get("first_delivery_guidance")
+        # Structured packs carry this once in the shared planner. Message-only
+        # consumers need its complete text here, without another packet read.
+        quality_block = (
+            f"goal_start_contract.planner.first_delivery_guidance:\n{quality}\n\n"
+            if isinstance(quality, str) and quality else ""
+        )
         action = f"""This is an explicit goal-start invocation. Connect project-local LoopX state if needed:
 
 ```bash
@@ -2048,7 +2057,7 @@ with the selected identity before continuing."""
 Then plan before writing todos. Preserve relative priority by write order:
 
 ````text
-{commands.get("goal_start_plan_prompt", "")}
+{quality_block}{commands.get("goal_start_plan_prompt", "")}
 ````
 
 Write the planned todos with `loopx todo add` in the exact planned order. Same-priority items use that write order as the tie-breaker.

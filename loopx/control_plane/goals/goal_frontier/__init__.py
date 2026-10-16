@@ -1763,6 +1763,7 @@ def build_goal_frontier_projection_context_from_status(
             newest_first_runs=(), source_status=status_payload,
             stride_strategy=strategy,
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
+            todo_items=agent_todo_source_items,
         )
 
     goal_frontier_projection = build_goal_frontier_projection_from_summaries(

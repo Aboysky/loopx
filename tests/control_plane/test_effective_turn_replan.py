@@ -419,6 +419,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
             "changed": ["Validate the independent source before claiming completion"],
             "evidence_refs": ["evidence:independent-source-review"]},
         "stride_decision": decision,
+        "todo_delta": [f"create:{successor['todo_id']}", "create:compare two methods"],
     }
     decision_path.write_text(json.dumps({**vision_packet,
         "stride_decision": {**decision, "reference_context_id": "replan-context-" + "b" * 24}}))
@@ -450,15 +451,23 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     for index in range(2):
         turn = f"stride-followthrough-{index}"
         call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn,
+             "--agent-id", AGENT_ID, "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
              "--scan-path", str(project))
-        call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-             "--todo-id", TODO_ID, "--turn-instance-id", turn,
+        # Synthetic candidate work under the real selected Todo. A worse
+        # result is still evidence; it must not be rewritten into goal gain.
+        (project / f"candidate-result-{index}.json").write_text(json.dumps({
+            "reference_error": sum(value * value for value in (1, 1)),
+            "candidate_error": sum(value * value for value in (1, 2)),
+        }))
+        work = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
              "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
              "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+             *(["--progress-result-class", "unchanged", "--progress-evidence-id", f"fixture:negative-result-{index}"]
+               if index == 0 else []),
              "--no-global-sync", "--suppress-external-sinks")
         call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-             "--todo-id", TODO_ID, "--turn-instance-id", turn,
+             "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
              "--slots", "1", "--source", "heartbeat", "--execute")
     next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID,
@@ -480,6 +489,20 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert previous["stride_decision"] == decision
     assert follow["execution_and_goal_gain"] == "unknown"
     assert next_control["previous_decision_ref"] == previous["evidence_ref"]
+    assert next_control["decision_followthrough"] == follow
+    assert follow["todo_source_available"] is True
+    planned = follow["planned_work"]
+    assert len(planned) == 1 and planned[0]["todo_id"] == successor["todo_id"]
+    assert planned[0]["current"]["claimed_by"] == AGENT_ID
+    assert len(planned[0]["observation_refs"]) == 1
+    assert follow["unresolved_planned_work_count"] == 1
+    last_work = json.loads(Path(work["json_path"]).read_text())
+    assert "progress_observation" not in last_work
+    ordinary_ref = next(row["evidence_ref"] for row in next_obligation["replan_context"]["evidence"]
+        if row["generated_at"] == last_work["generated_at"])
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    envelope = build_turn_envelope(next_guard)
+    assert envelope["replan_action_packet"]["stride_control"]["decision_followthrough"] == follow
     resolved = call("history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                     "--evidence-ref", previous["evidence_ref"])
     assert resolved["evidence"]["stride_decision"] == decision
@@ -495,9 +518,14 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert missing_review.get("appended") is not True
     assert "previous" in missing_review["error"].lower()
     next_decision["previous_review"] = {"reference_decision_ref": previous["evidence_ref"],
-        "adoption": "unknown", "information_gain": "unknown", "goal_gain": "unknown",
+        "adoption": "executed", "information_gain": "new_evidence", "goal_gain": "regressed",
         "evidence_refs": [previous["history_evidence_ref"]],
-        "lesson": "The decision is recorded; subsequent work does not yet prove target gain."}
+        "lesson": "The completed candidate regressed; retain the reference artifact and scoped negative result."}
+    decision_path.write_text(json.dumps({**vision_packet, "stride_decision": next_decision}))
+    old_evidence = call(*refresh_args, expected_code=1)
+    assert old_evidence.get("appended") is not True
+    assert "subsequent" in old_evidence["error"].lower()
+    next_decision["previous_review"]["evidence_refs"] = [ordinary_ref]
     decision_path.write_text(json.dumps({**vision_packet, "stride_decision": next_decision}))
     next_accepted = call(*refresh_args)
     assert next_accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True

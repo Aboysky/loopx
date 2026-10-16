@@ -758,14 +758,15 @@ def _authoring_input_migration(
                       "bootstrap_command_pack", "bootstrap_command_pack_message_only"}
             and before.get("first_delivery_guidance") is False
             and after.get("first_delivery_guidance") is True):
-        # Frozen 96-row fixture: +2,340 JSON chars, +3,496 for explicit
-        # command-pack detail, +578 Markdown. Keep all existing consumers and
-        # the full guidance; no additional lines or absolute budget increase.
+        # Structured prompts now reference the shared planner (one full copy,
+        # two with the standalone message in detail). The standalone message
+        # retains the expanded 1,238-byte guidance plus its explicit reference
+        # label/spacing. Keep growth scoped to the first introduction only.
         chars = (
             (3_600 if surface == "start_goal_guided_command_pack_detail" else 2_400)
-            if base.get("format") == "json" else 600
+            if base.get("format") == "json" else 1_400
         )
-        limits = {"chars": chars, "utf8_bytes": chars, "lines": 0,
+        limits = {"chars": chars, "utf8_bytes": chars, "lines": 4,
                   "compact_payload_chars": chars if base.get("format") == "json" else 0}
         reason = "complete initial-delivery quality guidance added"
     return limits, [reason + "; bounded one-time growth"] if limits else []

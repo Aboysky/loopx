@@ -170,9 +170,9 @@ function recordedDecision(row: JsonObject): JsonObject | null {
  * Append order belongs to the captured history, not timestamps or prose. A
  * progress observation proves neither execution nor scientific improvement.
  */
-function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullIndex: boolean): JsonObject | null {
+function orderedDecisionRows(rows: JsonObject[], goalFacts: unknown): JsonObject[] {
   const currentRef = objectOrNull(objectOrNull(goalFacts)?.goal_ref);
-  const scoped = rows.filter(row => {
+  return rows.filter(row => {
     const source = objectOrNull(row._source_facts);
     const ref = objectOrNull(source?.goal_ref);
     return source && Number.isSafeInteger(source.history_position) &&
@@ -181,6 +181,53 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
         ref?.goal_instance_id === currentRef.goal_instance_id));
   }).sort((a, b) => Number(objectOrNull(b._source_facts)!.history_position) -
     Number(objectOrNull(a._source_facts)!.history_position));
+}
+
+function plannedTodoIds(source: JsonObject): string[] {
+  // todo_delta predates typed work links and permits descriptive text. A
+  // legacy description remains unresolved; it must not poison later reads.
+  const declared = Array.isArray(source.planned_todo_ids) ? source.planned_todo_ids : [];
+  return [...new Set(declared.filter((id): id is string => typeof id === "string" && ID.test(id)))];
+}
+
+function observationTodo(row: JsonObject): unknown {
+  const work = objectOrNull(row.progress_observation)?.work_item_id;
+  return work == null ? row.todo_id : row.todo_id == null || row.todo_id === work ? work : null;
+}
+
+/** Resolve only the cited refs against full scoped source facts at writeback.
+ * Display limits never decide evidence eligibility. Ordinary work rows do not
+ * need an optional typed progress attachment to remain attributable. */
+function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
+  const scoped = orderedDecisionRows(rows, request.goal_facts);
+  const previous = scoped.find(acceptedDecisionSource);
+  const decision = previous ? recordedDecision(previous) : null;
+  if (!decision || decision.evidence_ref !== request.previous_decision_ref) {
+    throw new EffectRuntimeRequestError("previous decision changed; refresh replan context before reviewing its outcome");
+  }
+  const refs = request.evidence_refs;
+  if (!Array.isArray(refs) || refs.length > 3 || new Set(refs).size !== refs.length) {
+    throw new EffectRuntimeRequestError("previous review accepts at most three distinct evidence references");
+  }
+  for (const ref of refs) identifier(ref, "review evidence reference");
+  const source = objectOrNull(previous!._source_facts)!;
+  const targets = new Set(plannedTodoIds(source));
+  const citations = refs.map(ref => {
+    const matches = scoped.filter(row => "replan-evidence-" + digest(publicEvidenceRow(row)) === ref
+      || (objectOrNull(row.progress_observation)?.evidence_ids as unknown[] | undefined)?.includes(ref));
+    const subsequent = matches.filter(row => {
+      const facts = objectOrNull(row._source_facts)!;
+      return Number(facts.history_position) > Number(source.history_position) && !facts.quota_spend_commit;
+    });
+    return {evidence_ref: ref, available: matches.length > 0, subsequent: subsequent.length > 0,
+      declared_work: subsequent.some(row => targets.has(String(observationTodo(row))))};
+  });
+  return {previous_decision_ref: decision.evidence_ref, has_declared_work: targets.size > 0, citations};
+}
+
+function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullIndex: boolean,
+  todoItems: unknown): JsonObject | null {
+  const scoped = orderedDecisionRows(rows, goalFacts);
   const previous = scoped.find(acceptedDecisionSource);
   if (!previous) return null;
   // Do not fall back to an older decision when the latest basis is corrupt.
@@ -196,21 +243,49 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
   }
   // The complete denominator is retained even when the review details are capped.
   const observations = [...subsequent.values()];
+  const declared = Array.isArray(source.planned_todo_ids) ? source.planned_todo_ids : [];
+  const todoIds = plannedTodoIds(source);
+  const todos = todoItems == null ? [] : objects(todoItems, "Todo source");
+  const plannedWork = todoIds.slice(0, 6).map(todoId => {
+    const matched = todos.filter(todo => todo.todo_id === todoId && todo.role === "agent"
+      && (todo.goal_id == null || todo.goal_id === previous.goal_id));
+    if (matched.length > 1) throw new EffectRuntimeRequestError("planned Todo source identity is ambiguous");
+    const current = matched[0];
+    return {todo_id: todoId,
+      current: current ? Object.fromEntries(["status", "claimed_by", "task_class", "action_kind"]
+        .filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]])) : null,
+      observation_refs: observations.filter(row => observationTodo(row) === todoId)
+        .slice(0, 6).map(row => "replan-evidence-" + digest(publicEvidenceRow(row)))};
+  });
+  // Keep relevant experiment observations in the small visible window even
+  // when newer unrelated work would otherwise crowd them out.
+  const linkedRefs = new Set(plannedWork.flatMap(work => work.observation_refs));
+  const visible = [...observations.filter(row => linkedRefs.has("replan-evidence-" + digest(publicEvidenceRow(row)))),
+    ...observations.filter(row => !linkedRefs.has("replan-evidence-" + digest(publicEvidenceRow(row))))].slice(0, 6);
+  const visibleRefs = new Set(visible.map(row => "replan-evidence-" + digest(publicEvidenceRow(row))));
+  for (const work of plannedWork) work.observation_refs = work.observation_refs.filter(ref => visibleRefs.has(ref));
   return {
     previous_decision: decision,
     source_history_complete: fromFullIndex,
     unsequenced_progress_count: rows.filter(row => row.progress_observation &&
       !Number.isSafeInteger(objectOrNull(row._source_facts)?.history_position)).length,
     recorded_progress_count: observations.length,
-    observations: observations.slice(0, 6).map(row => ({
+    observations: visible.map(row => ({
       evidence_ref: "replan-evidence-" + digest(publicEvidenceRow(row)),
       generated_at: row.generated_at, todo_id: row.todo_id,
       coverage_ref: (row.progress_observation as JsonObject).fingerprint,
     })),
     omitted_observation_count: Math.max(0, observations.length - 6),
+    todo_source_available: todoItems != null,
+    planned_work: plannedWork,
+    omitted_planned_work_count: Math.max(0, todoIds.length - plannedWork.length),
+    unresolved_planned_work_count: declared.filter(id => typeof id !== "string" || !ID.test(id)).length,
     execution_and_goal_gain: "unknown",
     guidance: "Compare the previous path decision with subsequent work and authoritative outcomes. " +
       "Recorded progress and changed identifiers do not prove execution, a new mechanism, or goal gain. " +
+      "Use planned_work to compare declared Todo targets with their current state and subsequent observations. " +
+      "A missing row or observation is unknown, not proof of non-execution; a done Todo does not certify objective gain. " +
+      "Cited evidence is replayed against full scoped history at writeback; this display is not an eligibility boundary. " +
       "Resolve evidence before deciding what to retain, change, or test next.",
   };
 }
@@ -261,6 +336,27 @@ export function validateReplanContext(value: unknown): JsonObject {
     }
     normalizeGoalPathDelta(previous.path_delta);
     normalizeRecordedStrideDecision(previous.stride_decision);
+    if (follow.planned_work !== undefined) {
+      const work = objects(follow.planned_work, "planned work");
+      const ids = work.map(row => identifier(row.todo_id, "planned Todo identity"));
+      const refs = new Set(observations.map(row => row.evidence_ref));
+      if (work.length > 6 || new Set(ids).size !== ids.length || typeof follow.todo_source_available !== "boolean"
+        || !Number.isSafeInteger(follow.omitted_planned_work_count) || Number(follow.omitted_planned_work_count) < 0) {
+        throw new EffectRuntimeRequestError("invalid planned work followthrough");
+      }
+      for (const row of work) {
+        if (!Array.isArray(row.observation_refs) || row.observation_refs.some(ref => !refs.has(ref))) {
+          throw new EffectRuntimeRequestError("planned work requires delivered subsequent observations");
+        }
+        if (row.current !== null) {
+          const current = requireJsonObject(row.current, "planned work current state");
+          if (!follow.todo_source_available || Object.entries(current).some(([key, value]) =>
+            !["status", "claimed_by", "task_class", "action_kind"].includes(key) || value !== null && typeof value !== "string")) {
+            throw new EffectRuntimeRequestError("planned work current state requires available canonical facts");
+          }
+        }
+      }
+    }
   }
   return context;
 }
@@ -272,7 +368,7 @@ export async function projectReplanContextSnapshot(value: unknown): Promise<Json
 export function projectReplanContext(value: unknown): JsonObject {
   const request = requireJsonObject(value, "replan context request");
   if (request.operation === "validate") return validateReplanContext(request.context);
-  if (request.operation !== "project" && request.operation !== "resolve") {
+  if (request.operation !== "project" && request.operation !== "resolve" && request.operation !== "review_evidence") {
     throw new EffectRuntimeRequestError("unsupported replan context operation");
   }
   const goal = identifier(request.goal_id, "goal_id");
@@ -297,6 +393,10 @@ export function projectReplanContext(value: unknown): JsonObject {
       }
       identifier(progress.fingerprint, "progress_observation.fingerprint");
     }
+  }
+  if (request.operation === "review_evidence") {
+    if (!agent) throw new EffectRuntimeRequestError("review evidence requires agent_id");
+    return reviewEvidence(rows, request);
   }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
     JSON.stringify(publicEvidenceRow(a)).localeCompare(JSON.stringify(publicEvidenceRow(b))));
@@ -392,7 +492,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent && strideStrategy !== "off"
-    ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true) : null;
+    ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
     ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
     ...(followthrough ? {decision_followthrough: followthrough} : {}),

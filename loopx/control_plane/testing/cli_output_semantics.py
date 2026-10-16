@@ -10,6 +10,7 @@ from loopx.control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 
 def authoring_input_observations(text: str) -> dict[str, bool]:
+    from ..goals.start_contract import _FIRST_DELIVERY_GUIDANCE
     """Recognize complete reviewed guidance for one-time output qualification.
 
     These observations never classify runtime authority. Match the structured
@@ -41,7 +42,7 @@ def authoring_input_observations(text: str) -> dict[str, bool]:
 
     def collect(value: Any) -> None:
         if isinstance(value, dict):
-            if value.get("first_delivery_guidance") == first_delivery_guidance:
+            if value.get("first_delivery_guidance") in (first_delivery_guidance, _FIRST_DELIVERY_GUIDANCE):
                 observed["first_delivery_guidance"] = True
             if (value.get("id") == "read_back_authored_todos"
                     and value.get("kind") == "operator_or_agent_actions"
@@ -63,6 +64,9 @@ def authoring_input_observations(text: str) -> dict[str, bool]:
         observed["first_delivery_guidance"] = bool(re.search(
             r"^3\. Todos: [^\n]*" + re.escape(first_delivery_guidance) + r"$",
             text, re.MULTILINE,
+        )) or bool(re.search(
+            r"^goal_start_contract\.planner\.first_delivery_guidance:\n"
+            + re.escape(_FIRST_DELIVERY_GUIDANCE) + r"$", text, re.MULTILINE,
         ))
         # Existential across every rendered candidate: an earlier line whose purpose is
         # not exact must not mask a later complete instruction.
