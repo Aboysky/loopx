@@ -131,6 +131,15 @@ reconciled. Readback never runs checks. A stored successful receipt cannot
 certify changed files, independent reviewer identity, adoption or Goal completion.
 A later finished/cancelled plan does not resurrect an older draft.
 
+Prepared plans bind the reviewed acceptance configuration and declared work,
+rather than every update to the Goal's provider revision. Notes and work outside
+an explicit `selected_work` scope do not require preparing the same plan again.
+Changed covered requirements, a new owner configuration or another Goal instance
+still invalidate it. TypeScript classifies that context; each actual write keeps
+the current provider CAS. The original operation and configuration context remain
+bound to native receipts, including recovery after a lost response. Historical
+plans without a reviewed context retain their original strict revision check.
+
 Count the complete task: with an Agent-prepared plan already delivered, the owner
 has one required decision. If the original request still lacks acceptance intent
 or authority, that missing decision is an additional round; preparing a proposal
@@ -149,6 +158,9 @@ Goal、Agent 与运行目录由宿主固定，暂停、过期 Turn 或撤销配�
 概览将同一个交付检查交互放在“方向”正文中，先于工作和成果列表；目标、条件和当前结果
 使用同一验收读回。桌面展开检查细节，窄屏默认折叠条件、版本记录与高级迁移入口，但不折叠
 必需动作、命令影响或失败反馈。已有配置的重查使用次要按钮，待采用方案保留明确的采用决定。
+待采用方案绑定实际审阅的验收规则与工作声明；备注或明确范围外的工作变化，不要求重复准备。
+覆盖任务要求、所有者配置或 Goal 实例变化仍使方案失效。TypeScript 判断依据，写入继续使用
+当前 provider CAS；原操作与配置依据由原生回执保留。旧方案维持原来的严格版本检查。
 
 For advanced CLI configuration, inspect the current provider revision:
 
