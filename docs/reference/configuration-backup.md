@@ -56,6 +56,15 @@ paths outside conventional Goal directories. Relative routes resolve against
 the registered repository. The selected project's `.loopx/registry.json` owns
 this scope, even when `--registry` names another project. Other projects are not
 followed; default host-wide discovery continues to use the global registry.
+For global discovery, the existing canonical source route owns the Goal: relative
+`source_registry` values resolve against the global registry's parent, and the
+source registry supplies the current repository, full `state_file` and declared
+`common_runtime_root`. Distinct source runtimes are captured once and shared by
+their Goals. Review the dry-run paths before execution: this can include more
+private state than the shared runtime alone. An unavailable source or an
+undeclared external runtime remains missing; discovery does not copy an implicit
+host-wide default to fill that gap.
+
 Inspect `included`, `missing` and `warnings`: successful publication alone does
 not prove every registered source was reachable. Full-state copies retain raw
 Markdown history and runtime files; inert extraction does not import their
@@ -70,11 +79,33 @@ publication; global discovery registries remain object-only. This does not
 qualify lifecycle journals for capture or change the v0 consistency and recovery
 holds below.
 
+New v0 archives record `registry_discovery.goal_runtime_roots` as archive-relative
+capture bindings. Inert owner inspection reads each Goal from its captured source
+root. An absent Goal binding, an explicit null, a missing directory or a symlink
+root remains unknown; another runtime's same-named Goal is not a substitute.
+Bindings must name safe included roots. Historical archives without the entire
+binding map retain their original `runtime-root` readback. The map records capture
+location, not cross-owner consistency, complete owner coverage or activation
+eligibility.
+
 中文：状态发现与配置捕获复用同一个 registry reader；旧对象格式及有效 strict-v1
 项目信封均保存声明的外置路径及原始 registry 字节。可读信封的最低 writer 协议
 不授予写入权，备份只保留数据。无效信封和仅供生命周期操作的 `source_session_v1`
 项目仍拒绝发布，global registry 仍只接受对象。这不代表已完成生命周期日志捕获
 资格，也不改变下文 v0 的一致性限制与恢复 hold。
+
+全局发现沿用 canonical source 路由：相对 `source_registry` 以 global registry
+父目录为基准，当前仓库、完整 `state_file` 与显式 `common_runtime_root` 均来自
+源 registry；多个 Goal 共用的 runtime 只捕获一次。执行前检查 dry-run 路径，
+捕获范围可能比共享 runtime 更大，并包含私有状态。源不可达或外部 runtime 未声明
+时保留缺失，不擅自复制隐式主机默认目录。`--current-project-only` 仍保留所选
+runtime 及以注册仓库为基准的历史相对路径规则。
+
+新 v0 清单的 `registry_discovery.goal_runtime_roots` 只记录归档内的源位置，隔离
+读回按此定位；缺少 Goal 条目、null、目录缺失或根目录是符号链接均为 unknown，
+不能拿另一 runtime 的同名 Goal 代替。绑定必须指向安全且已列入清单的根路径。
+完全不含此映射的旧归档继续按 `runtime-root` 读回。映射不证明跨 owner 一致性、
+owner 完整覆盖或可激活性。
 
 Settings → Capability Center → **Configuration backup and recovery** offers
 download, file verification and isolated recovery through the same typed owner.
