@@ -180,6 +180,33 @@ and Host quiescence, lease/outbox disposition, immutable source/target binding,
 explicit confirmation and original-operation recovery. Neither this manifest
 nor configuration verification authorizes an import or a new execution grant.
 
+Full backups also compare every regular copied registry member with the exact
+source snapshot decoded into `configuration-backup.json`. If a required snapshot
+has no copied-byte witness, capture refuses publication and asks for its regular
+source file. A revision mismatch reports
+`backup configuration registry differs from copied bytes; retry the backup`.
+This changes the earlier best-effort behavior that could publish an older raw
+registry beside newer configuration. A later source-path reread cannot replace
+the snapshot witness: an A → B → A change must still be caught when the checkpoint
+used B. Unchanged sources retain the same configuration envelope and v0 archive
+format. The bounded migration backup keeps its existing source-owner witness
+contract. Older archives remain readable under the existing recovery holds.
+
+The private `execution.configuration_capture` records the configuration capture
+interval and matching member revisions. It covers registry bytes used by that
+checkpoint, including routed source registries; it does not qualify machine
+configuration, authority, effects or other owners as a common point in time, or
+make the M2 `online` profile eligible.
+
+中文：完整备份将配置解码时实际使用的 registry 快照，与归档中每份普通文件副本
+的字节见证比较。缺少见证或字节不同就停止发布，提示重试；原先可能发布“旧原始
+registry + 新配置”的 best-effort 行为因此收紧。比较的不是事后重读路径，所以配置
+使用了 B 时，即使源发生 A → B → A 回退也会拒绝。未变化来源、v0 格式及旧归档
+读回保持兼容；有界 migration backup 仍使用原 source owner 的见证契约。
+`execution.configuration_capture` 私有记录捕获区间与匹配成员 revision，包括路由到
+外部的源 registry；它不证明 machine 配置、authority、effect 等 owner 处于同一时刻，
+也不代表 M2 `online` profile 合格。
+
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after
