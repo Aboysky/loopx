@@ -552,6 +552,9 @@ The same rule covers the existing stored machine-configuration owner. Its exact
 read supplies the checkpoint and witness together, including confirmed absence;
 changed, newly created or removed configuration cannot contradict the raw copy.
 Unusable machine sources refuse capture rather than become an absent envelope.
+Self-contained local aliases reuse the included regular target witness; a retained
+tar link cannot masquerade as an owner-confirmed absence. Repointed aliases,
+including A → B → A, are compared through the saved route.
 This closes the configuration-source IO boundary, not the complete recovery
 set's owner closure or consistency profile.
 

@@ -188,7 +188,10 @@ A revision mismatch reports
 `backup configuration source differs from copied bytes; retry the backup`.
 This tightens the earlier best-effort behavior that could publish older raw
 configuration beside a newer checkpoint, or claim absence beside an earlier
-file. A later source-path reread cannot replace the snapshot witness: an
+file. Self-contained local aliases resolve through saved tar metadata to an
+included regular target witness; repointing a live symlink cannot select another
+saved target. A retained tar link also prevents a false absence. A later
+source-path reread cannot replace the snapshot witness: an
 A → B → A change must still be caught when the checkpoint used B. A malformed
 or unreadable machine source is not a confirmed absence. Unchanged sources
 retain the same configuration envelope and v0 archive format. The bounded
@@ -204,7 +207,10 @@ other owners, or qualify the M2 `online` profile.
 中文：完整备份将配置 owner 实际解码的 registry 与 machine 配置字节，同每份
 映射的普通 tar 副本比较。缺少见证或字节不同就停止发布；owner 确认源不存在而
 归档仍保留其旧文件，也会拒绝。原先可能发布“旧原始配置 + 新 checkpoint”或把
-旧文件误作不存在的 best-effort 行为因此收紧。比较的不是事后重读路径，所以配置
+旧文件误作不存在的 best-effort 行为因此收紧。自包含链接复用归档内普通目标文件：
+硬链接与符号链接只按保存的 tar route 解析，live 链接改向不能重选别的见证；保留的
+tar 链接也不能
+被误判为不存在。比较的不是事后重读路径，所以配置
 使用 B 后即使源回退为 A 仍会拒绝。损坏或不可读的 machine 源不当作确认不存在。
 未变化来源、v0 格式和历史归档读回保持兼容；有界 migration backup 仍使用原
 source owner 的见证契约。私有 `execution.configuration_capture` 记录配置捕获

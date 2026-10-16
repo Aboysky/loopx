@@ -466,7 +466,9 @@ source registry 旁的 `.loopx/lifecycle/goal-instance`。外部 registry 的这
 
 同一规则也覆盖既有 machine 配置 store owner：checkpoint 和见证使用同一次
 实际读取，包括确认不存在。变更、新建或删除配置都不能与已复制文件矛盾；
-不可用的 machine 来源拒绝捕获，不被标成不存在。这只关闭配置来源的 IO 边界，
+不可用的 machine 来源拒绝捕获，不被标成不存在。自包含的本地链接复用归档内
+普通目标文件的见证；保留的 tar 链接不能伪装成 owner 确认不存在。这只关闭配置
+来源的 IO 边界；链接改向及 A → B → A 均按已保存的 route 核对。
 尚未关闭完整恢复集的 owner closure 或一致性 profile。
 
 历史 v0 归档仍可能包含上述组合。[恢复测试](../../../tests/test_state_recovery.py)

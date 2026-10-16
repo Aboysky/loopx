@@ -199,6 +199,84 @@ def test_full_backup_refuses_machine_configuration_from_another_capture(
     assert not list((tmp_path / "backups").iterdir()), "contradictory configuration must not publish"
 
 
+@pytest.mark.parametrize("removed", [False, True], ids=["retained", "removed-after-copy"])
+@pytest.mark.parametrize("link_kind", ["hardlink", "internal-symlink"])
+def test_machine_configuration_alias_uses_copied_target_witness(
+    environment, tmp_path, monkeypatch, removed, link_kind,
+):
+    from loopx.capabilities import configuration_backup
+
+    source, runtime, _, _ = environment
+    machine = runtime / "machine/configuration.json"
+    # A regular copy can witness a supported local alias. Confirmed absence
+    # still cannot contradict either retained kind of link.
+    target = runtime / "earlier-machine.json"
+    if link_kind == "hardlink":
+        os.link(machine, target)
+    else:
+        if os.name == "nt":
+            pytest.skip("native Windows symlink privilege is not qualified")
+        machine.rename(target)
+        machine.symlink_to("../earlier-machine.json")
+    original_capture = configuration_backup.capture_configuration_backup
+
+    def after_copy(**kwargs):
+        if removed:
+            machine.unlink()
+        return original_capture(**kwargs)
+
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_copy)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    if removed:
+        with pytest.raises(ValueError, match="configuration source absence differs from copied bytes"):
+            execute_state_backup_plan(plan)
+        assert not list((tmp_path / "backups").iterdir())
+    else:
+        payload = execute_state_backup_plan(plan)
+        with tarfile.open(payload["archive_path"]) as archive:
+            member = archive.getmember("runtime-root/machine/configuration.json")
+            assert member.islnk() if link_kind == "hardlink" else member.issym()
+            checkpoint = json.load(archive.extractfile("configuration-backup.json"))
+            assert json.load(archive.extractfile(member)) == checkpoint["data"]["machine_configuration"]
+        assert any(row["archive_path"] == "runtime-root/earlier-machine.json"
+            for row in payload["execution"]["configuration_capture"]["source_revisions"])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native Windows symlink privilege is not qualified")
+@pytest.mark.parametrize("restore_alias", [False, True], ids=["repointed", "aba"])
+def test_machine_configuration_alias_route_must_match_saved_target(
+    environment, tmp_path, monkeypatch, restore_alias,
+):
+    from loopx.capabilities import configuration_backup
+
+    source, runtime, _, _ = environment
+    machine = runtime / "machine/configuration.json"
+    first, second = runtime / "first-machine.json", runtime / "second-machine.json"
+    machine.rename(first)
+    changed = json.loads(first.read_text())
+    changed["namespaces"]["goal_storage"]["new_goal_provider"] = "file"
+    second.write_text(json.dumps(changed))
+    machine.symlink_to("../first-machine.json")
+    original_capture = configuration_backup.capture_configuration_backup
+
+    def after_copy(**kwargs):
+        machine.unlink()
+        machine.symlink_to("../second-machine.json")
+        checkpoint = original_capture(**kwargs)
+        if restore_alias:
+            machine.unlink()
+            machine.symlink_to("../first-machine.json")
+        return checkpoint
+
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_copy)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    with pytest.raises(ValueError, match="configuration source differs from copied bytes"):
+        execute_state_backup_plan(plan)
+    assert not list((tmp_path / "backups").iterdir())
+
+
 @pytest.mark.parametrize("invalid", ["directory", "malformed", "broken-link"])
 def test_full_backup_does_not_treat_unreadable_machine_source_as_absent(
     environment, tmp_path, invalid,

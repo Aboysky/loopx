@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import shutil
 import tarfile
@@ -648,13 +649,25 @@ def _sha256_file(path: Path) -> str:
 
 def _configuration_source_witnesses(
     sources: dict[Path, bytes | None], included: list[dict[str, Any]], members: list[dict[str, Any]],
+    archive_members: list[tarfile.TarInfo],
 ) -> list[dict[str, Any]]:
     """Compare the actual decoded source bytes with every regular tar copy.
 
-    Covered aliases may be hardlinks; at least one regular copied-byte witness
+    Saved aliases resolve to their regular copied-byte witnesses; at least one
     is required. Equality is an IO check, not cross-owner capture qualification.
     """
     result = []
+    # Resolve only saved archive metadata. The live alias may already point at
+    # another included file whose bytes would otherwise pass independently.
+    link_targets: dict[str, set[str]] = {}
+    for member in archive_members:
+        if member.islnk():
+            linked_path = member.linkname
+        elif member.issym() and not PurePosixPath(member.linkname).is_absolute():
+            linked_path = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+        else:
+            continue
+        link_targets.setdefault(member.name, set()).add(linked_path)
     for source, raw in sources.items():
         paths = set()
         for target in included:
@@ -663,11 +676,19 @@ def _configuration_source_witnesses(
             except ValueError:
                 continue
             paths.add(str(PurePosixPath(target["archive_path"]) / relative.as_posix()))
-        witnesses = [row for row in members if row["archive_path"] in paths]
         if raw is None:
-            if witnesses:
+            # A retained link is still a captured source, even though it has no
+            # separate regular-file byte witness of its own.
+            if any(member.name in paths for member in archive_members):
                 raise ValueError("backup configuration source absence differs from copied bytes; retry the backup")
             continue
+        pending = list(paths)
+        while pending:
+            for target_path in link_targets.get(pending.pop(), ()):
+                if target_path not in paths:
+                    paths.add(target_path)
+                    pending.append(target_path)
+        witnesses = [row for row in members if row["archive_path"] in paths]
         sha256 = hashlib.sha256(raw).hexdigest()
         if not witnesses:
             raise ValueError("backup configuration source has no copied bytes witness; include its regular source file")
@@ -763,7 +784,7 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
                     "started_at": configuration_started_at,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "source_revisions": _configuration_source_witnesses(
-                        source_snapshots, included, tar.file_members),
+                        source_snapshots, included, tar.file_members, tar.getmembers()),
                 }
             configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("configuration-backup.json")
