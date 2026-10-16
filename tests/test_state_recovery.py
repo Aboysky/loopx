@@ -120,6 +120,47 @@ def _rewrite(archive: Path, manifest: Path, extra: tarfile.TarInfo | None = None
     manifest.write_text(json.dumps(data))
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_legacy_mixed_revision_archive_remains_readable_and_inert(tmp_path, provider):
+    from loopx.capabilities.configuration_backup import capture_configuration_backup, verify_configuration_backup
+
+    archive, manifest = _backup(tmp_path, provider)
+    registry = tmp_path / "registry.json"
+    value = json.loads(registry.read_text())
+    value["goals"][0]["description"] = "Later configuration in a historical archive"
+    registry.write_text(json.dumps(value))
+    later = capture_configuration_backup(registry_path=registry, runtime_root=tmp_path / "runtime")
+    content = json.dumps(later, ensure_ascii=False, indent=2).encode()
+    # Construct the supported historical v0 case deliberately. The current
+    # producer refuses it; its new provenance claims must not enter this fixture.
+    legacy = json.loads(manifest.read_text())
+    legacy["registry_discovery"].pop("goal_runtime_roots")
+    execution = legacy["execution"]
+    execution.pop("configuration_capture")
+    execution["configuration_backup"] = verify_configuration_backup(later)
+    execution["archive_sha256"] = execution["archive_size_bytes"] = None
+    execution.pop("archive_to_logical_ratio", None)
+    for row in execution["file_members"]:
+        if row["archive_path"] == "configuration-backup.json":
+            row.update(size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
+    manifest.write_text(json.dumps(legacy))
+    _rewrite(archive, manifest, replacements={"configuration-backup.json": content,
+        "manifest.json": json.dumps(legacy).encode()})
+    with tarfile.open(archive) as saved:
+        earlier = json.load(saved.extractfile("configuration/registry.source.json"))
+    assert "description" not in earlier["goals"][0]
+    for name in ("project", "runtime", "registry.json"):
+        (tmp_path / name).rename(tmp_path / f"unavailable-{name}")
+    audit = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+    [work] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert work["state"] == "readable" and work["facts"]["todo_count"] == 1
+    assert work["facts"]["history_commits"] == 2
+    assert audit["manifest_verified"] is True and audit["file_witnesses_verified"] is True
+    assert audit["status"] == "held" and audit["capture_profile"] == "legacy_best_effort"
+    assert any(row["reason_code"] == "legacy_manifest_incomplete" for row in audit["findings"])
+    assert audit["activation_eligible"] is False and audit["execution_authority_granted"] is False
+
+
 def _global_source_backup(root: Path, provider: str) -> tuple[dict, dict[str, bytes]]:
     registry, source_runtime, state = promoted_create_fixture(root / "host/canonical", provider=provider)
     _, shared_runtime, _ = promoted_create_fixture(root / "host", provider="sqlite" if provider == "file" else "file")
