@@ -1171,14 +1171,14 @@ def completed_group_stop(ordinary):  # noqa: F811
         runtime.close()
 
 
-def test_completed_stop_batches_only_its_core_bound_source_and_root(completed_group_stop):
+def test_completed_stop_batches_its_core_bound_source_and_root_with_one_current_identity(completed_group_stop):
     _, provider, transport, root, event, record = completed_group_stop
     assert transport._source_verified(record)
     calls = [a for a in provider.calls if "GET" in a]
     assert len(calls) == 1 and calls[0][calls[0].index("GET") + 1].endswith("/mget")
     assert json.loads(calls[0][calls[0].index("--params") + 1]) == {
         "message_ids": [event["message_id"], root["message_id"]]}
-    assert sum("auth" in a for a in provider.calls) == 2
+    assert sum("auth" in a for a in provider.calls) == 1
     provider.messages[root["message_id"]]["mentions"] = []
     assert not transport._source_verified(record)  # Re-read, never cache the old root.
     assert not provider.writes and not provider.reaction_creates
@@ -1353,8 +1353,32 @@ def test_completed_stop_batch_rejects_partial_or_ambiguous_results(completed_gro
     assert not provider.writes and not provider.reaction_creates
 
 
+@pytest.mark.parametrize("change", ["unverified_app", "other_app", "root_mention", "source_parent"])
+def test_completed_stop_source_verification_reuses_one_current_observation_only_within_the_call(
+    completed_group_stop, change,
+):
+    _, provider, transport, _, _, record = completed_group_stop
+    provider.calls.clear()
+    assert transport._source_verified(record)
+    # The binding check already verified this App. Its observation also checks
+    # the root mention; a second network identity probe adds no new authority.
+    assert sum("auth" in args for args in provider.calls) == 1
+    if change == "unverified_app":
+        provider.bot_ready = False
+    elif change == "other_app":
+        provider.profile_apps[record["profile"]] = "cli_other_app"
+    elif change == "root_mention":
+        provider.messages[record["event"]["root_id"]]["mentions"] = []
+    else:
+        provider.messages[record["event"]["message_id"]]["parent_id"] = "om_other_parent"
+    provider.calls.clear()
+    assert not transport._source_verified(record)
+    assert sum("auth" in args for args in provider.calls) == 1
+    assert not provider.writes and not provider.reaction_creates
+
+
 @pytest.mark.parametrize("identity_fails", [False, True])
-def test_completed_stop_batch_joins_a_separate_fresh_identity(completed_group_stop, monkeypatch, identity_fails):
+def test_completed_stop_preselected_without_observation_joins_a_fresh_identity(completed_group_stop, monkeypatch, identity_fails):
     _, provider, transport, _, _, record = completed_group_stop
     started, observed, release = threading.Event(), threading.Event(), threading.Event()
     original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
@@ -1376,15 +1400,53 @@ def test_completed_stop_batch_joins_a_separate_fresh_identity(completed_group_st
 
     monkeypatch.setattr(transport, "_completed_stop_sources", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
+    selected = transport.bindings.resolve(binding_id=record["binding_id"], **record["source"])
     with ThreadPoolExecutor(max_workers=1) as caller:
-        pending = caller.submit(transport._source_verified, record)
+        pending = caller.submit(transport._source_message, record, selected=selected, render_content=False)
         try:
             assert started.wait(2) and observed.wait(2)
             assert not pending.done()
         finally:
             release.set()
-        assert pending.result(timeout=3) is not identity_fails
+        assert bool(pending.result(timeout=3)) is not identity_fails
     assert len(observations) == 2
+    assert not provider.writes and not provider.reaction_creates
+
+
+@pytest.mark.parametrize("failure", [None, "identity", "source", "revoked"])
+def test_completed_stop_default_overlaps_readonly_observations_but_joins_and_rechecks_authority(
+    completed_group_stop, monkeypatch, failure,
+):
+    _, provider, transport, _, _, record = completed_group_stop
+    source_started, identity_started, release = threading.Event(), threading.Event(), threading.Event()
+    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+
+    def sources(*args):
+        source_started.set()
+        assert release.wait(3)
+        return (None, None) if failure == "source" else original_sources(*args)
+
+    def observe(*args, **kwargs):
+        observation = original_observe(*args, **kwargs)
+        identity_started.set()
+        assert release.wait(3)
+        if failure == "identity":
+            raise ValueError("current App observation unavailable")
+        return observation
+
+    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport.bindings, "observe", observe)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        pending = caller.submit(transport._source_verified, record)
+        try:
+            assert source_started.wait(2) and identity_started.wait(2)
+            assert not pending.done() and not provider.writes
+            if failure == "revoked":
+                state = transport.bindings.read()
+                transport.bindings.disconnect(binding_id=record["binding_id"], expected_revision=state["revision"])
+        finally:
+            release.set()
+        assert pending.result(timeout=3) is (failure is None)
     assert not provider.writes and not provider.reaction_creates
 
 
