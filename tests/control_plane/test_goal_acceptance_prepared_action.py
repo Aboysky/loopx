@@ -175,6 +175,91 @@ def prepare(acceptance_goal):
     return project, cli, service, result["proposal"]
 
 
+@pytest.mark.parametrize("change", ["selected_note", "unselected_work"])
+def test_reviewed_selected_plan_survives_unrelated_progress(acceptance_goal, change):
+    project, document, cli, run = acceptance_goal
+    raw = json.loads(document.read_text())
+    raw["scope"] = {"kind": "selected_work", "todo_ids": ["todo_export"]}
+    document.write_text(json.dumps(raw))
+    _, _, service, proposal = prepare(acceptance_goal)
+    if change == "selected_note":
+        code, result = run("todo", "update", "--goal-id", "goal-acceptance",
+            "--todo-id", "todo_export", "--agent-id", "agent-a", "--note", "Work is progressing")
+    else:
+        code, result = run("todo", "add", "--goal-id", "goal-acceptance", "--role", "agent",
+            "--text", "Independent work", "--action-kind", "implement", "--claimed-by", "agent-a")
+    assert code == 0, result
+    assert cli("inspect")[1]["goal_acceptance_contract"] == {"enabled": False}
+    assert not (project / "runs.txt").exists()
+    result = service.apply(proposal["proposal_id"])
+    assert result["proposal"]["status"] == "applied"
+    assert (project / "runs.txt").read_text() == "x"
+    assert service.apply(proposal["proposal_id"])["proposal"] == result["proposal"]
+    assert (project / "runs.txt").read_text() == "x"
+
+
+def test_historical_revision_only_plan_keeps_strict_admission(acceptance_goal):
+    project, _, _, run = acceptance_goal
+    _, _, service, proposal = prepare(acceptance_goal)
+    historical = service.store.create_preview(
+        **{key: proposal[key] for key in (
+            "action_kind", "summary", "normalized_parameters", "context",
+            "permission_classification", "validation_evidence", "available_transitions")},
+        expected_state_fingerprint=json.loads(proposal["expected_state_fingerprint"])["provider_revision"],
+        idempotency_key="historical-revision-only-plan",
+    )
+    code, result = run("todo", "update", "--goal-id", "goal-acceptance", "--todo-id", "todo_export",
+        "--agent-id", "agent-a", "--note", "Progress after a historical plan")
+    assert code == 0, result
+    assert service.apply(historical["proposal_id"])["proposal"]["status"] == "stale"
+    assert not (project / "runs.txt").exists()
+
+
+def test_reviewed_plan_rejects_changed_covered_work(acceptance_goal):
+    project, _, _, run = acceptance_goal
+    _, _, service, proposal = prepare(acceptance_goal)
+    code, changed = run("todo", "update", "--goal-id", "goal-acceptance", "--todo-id", "todo_export",
+        "--agent-id", "agent-a", "--text", "Deliver a different export")
+    assert code == 0, changed
+    assert service.apply(proposal["proposal_id"])["proposal"]["status"] == "stale"
+    assert not (project / "runs.txt").exists()
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_configuration_response_loss_keeps_its_original_review_basis(acceptance_goal, monkeypatch, changed):
+    project, document, cli, run = acceptance_goal
+    _, _, service, proposal = prepare(acceptance_goal)
+    original = service.store.save_checkpoint
+
+    def lost(*args, **kwargs):
+        if kwargs["step"] == "acceptance_configured":
+            raise RuntimeError("lost configured checkpoint")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service.store, "save_checkpoint", lost)
+    with pytest.raises(RuntimeError, match="lost"):
+        service.apply(proposal["proposal_id"])
+    monkeypatch.setattr(service.store, "save_checkpoint", original)
+    if changed:
+        before = cli("inspect")[1]
+        code, result = cli("configure", "--document", str(document),
+            "--expected-provider-revision", before["provider_revision"],
+            "--operation-id", "new-owner-configuration", "--execute")
+    else:
+        code, result = run("todo", "update", "--goal-id", "goal-acceptance", "--todo-id", "todo_export",
+            "--agent-id", "agent-a", "--note", "Progress after the response was lost")
+    assert code == 0, result
+    if changed:
+        before = cli("inspect")[1]
+        with pytest.raises(ActionConflictError, match="basis changed"):
+            service.apply(proposal["proposal_id"])
+        assert cli("inspect")[1] == before
+        assert not (project / "runs.txt").exists()
+    else:
+        assert service.apply(proposal["proposal_id"])["proposal"]["status"] == "applied"
+        assert (project / "runs.txt").read_text() == "x"
+
+
 def test_agent_preparation_does_not_approve_or_execute(acceptance_goal):
     project, cli, service, proposal = prepare(acceptance_goal)
     assert cli("inspect")[1]["goal_acceptance_contract"] == {"enabled": False}
