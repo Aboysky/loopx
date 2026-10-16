@@ -217,6 +217,26 @@ source owner 的见证契约。私有 `execution.configuration_capture` 记录�
 区间与匹配成员 revision，包括外部 registry 和存在的 machine 配置；它不证明
 与 authority、effect 等其他 owner 的跨源同时刻，也不代表 M2 `online` 合格。
 
+New full-backup plans also bind the registry bytes used to discover documents,
+source runtimes and lifecycle journals. The private
+`registry_discovery.source_capture` freezes their read interval, hashes and
+archive routes; publication checks those hashes against the saved members.
+Changing a declaration after planning now reports
+`backup discovery source differs from copied bytes; retry the backup` instead of
+saving old dependencies beside a new registry. Rebuild the plan and retry with
+fresh output names. Any registry byte change can require a retry, including
+unrelated metadata. Routing and configuration decoding reuse the same immutable
+registry reads. Historical plans without this evidence remain readable, and
+migration-only backups retain their existing contract. This IO agreement does
+not freeze document contents or establish a complete recovery-set profile.
+
+中文：新完整备份计划还绑定发现文档、源 runtime 和生命周期日志时实际读取的
+registry 字节。私有 `registry_discovery.source_capture` 固定读取区间、哈希与
+归档路径，并在发布前核对已保存成员。计划后声明改变会拒绝发布，避免保存
+“旧依赖 + 新 registry”；应重新规划并以新输出名称重试。任意 registry 字节变化
+（包括无关 metadata）都可能要求重试；路由与配置解码复用同一不可变读取。
+历史计划和迁移专用备份保持原契约。这不冻结文档内容，也不使完整恢复集合格。
+
 Full-backup discovery also retains declared local `authority_sources` entries
 with `kind=goal_doc`, including documents outside conventional state directories.
 The existing material resolver confines reads to the selected Goal's repository,
