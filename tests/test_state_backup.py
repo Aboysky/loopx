@@ -215,6 +215,54 @@ def _strict_registry(payload: dict, writer: str = "goal_instance_v1") -> list:
              "payload_sha256": "sha256:" + hashlib.sha256(canonical).hexdigest()}, payload]
 
 
+def test_global_discovery_deduplicates_shared_canonical_runtimes(tmp_path):
+    runtime, source_runtime = tmp_path / "runtime", tmp_path / "canonical-runtime"
+    runtime.mkdir()
+    source_runtime.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    state = project / "current.md"
+    state.write_text("Original unfinished commitments")
+    goals = [{"id": goal_id, "repo": str(project), "state_file": "current.md"}
+             for goal_id in ("goal-a", "goal-b")]
+    source = tmp_path / "canonical.json"
+    source.write_text(json.dumps({"common_runtime_root": str(source_runtime), "goals": goals}))
+    (runtime / "registry.global.json").write_text(json.dumps({"registry_role": "global-local",
+        "common_runtime_root": str(runtime), "goals": [{**goal, "source_registry": "../canonical.json"} for goal in goals]}))
+    plan = build_state_backup_plan(project=project, runtime_root=runtime, output_dir=tmp_path / "backups",
+        include_automations=False, include_skills=False)
+    roots = plan["registry_discovery"]["goal_runtime_roots"]
+    assert roots["goal-a"] == roots["goal-b"] != "runtime-root"
+    assert sum(row["source_path"] == str(source_runtime) for row in plan["included"]) == 1
+    assert sum(row["source_path"] == str(source) for row in plan["included"]) == 1
+
+
+@pytest.mark.parametrize("source_state", ["missing", "undeclared-runtime", "missing-repository"])
+def test_global_discovery_records_unavailable_sources_without_copying_implicit_host_state(tmp_path, monkeypatch, source_state):
+    from loopx import paths
+
+    runtime, implicit = tmp_path / "runtime", tmp_path / "implicit-host-runtime"
+    runtime.mkdir()
+    implicit.mkdir()
+    (implicit / "unselected.txt").write_text("Outside the explicitly selected backup roots")
+    monkeypatch.setattr(paths, "select_default_runtime_root", lambda: implicit)
+    project = tmp_path / "project"
+    project.mkdir()
+    source = tmp_path / "source.json"
+    goal = {"id": "goal-a", "repo": str(project), "state_file": "current.md"}
+    if source_state != "missing":
+        source.write_text(json.dumps({"goals": [goal if source_state != "missing-repository" else {"id": "goal-a"}]}))
+    (runtime / "registry.global.json").write_text(json.dumps({"registry_role": "global-local",
+        "common_runtime_root": str(runtime), "goals": [{**goal, "source_registry": "../source.json"}]}))
+    plan = build_state_backup_plan(project=project, runtime_root=runtime, output_dir=tmp_path / "backups",
+        include_automations=False, include_skills=False)
+    assert plan["registry_discovery"]["goal_runtime_roots"] == {"goal-a": None}
+    assert any(row["key"] == "registry_runtime:goal-a" for row in plan["missing"])
+    assert not any(row["source_path"] == str(implicit) for row in plan["included"])
+    if source.exists():
+        assert any(row["source_path"] == str(source) for row in plan["included"])
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("writer", [None, "goal_instance_v1", "future_writer_v99"],
                          ids=["legacy", "strict-v1", "readable-future-writer"])

@@ -69,6 +69,123 @@ def _rewrite(archive: Path, manifest: Path, extra: tarfile.TarInfo | None = None
     manifest.write_text(json.dumps(data))
 
 
+def _global_source_backup(root: Path, provider: str) -> tuple[dict, dict[str, bytes]]:
+    registry, source_runtime, state = promoted_create_fixture(root / "host/canonical", provider=provider)
+    _, shared_runtime, _ = promoted_create_fixture(root / "host", provider="sqlite" if provider == "file" else "file")
+    for source, runtime, count in ((registry, source_runtime, 1), (root / "host/registry.json", shared_runtime, 3)):
+        for index in range(count):
+            code, result = _cli("--registry", source, "--runtime-root", runtime, "todo", "add",
+                "--goal-id", "goal-a", "--role", "agent", "--claimed-by", "agent-a",
+                "--operation-id", f"retained-{index}", "--text", f"Unfinished commitment {index}")
+            assert code == 0, result
+    current = registry.parent / "current-goal.md"
+    current.write_text(state.read_text() + "\n## Original commitments\nThe source-owned full Goal.\n")
+    payload = json.loads(registry.read_text())
+    payload["goals"][0]["state_file"] = "../current-goal.md"
+    registry.write_text(json.dumps(payload))
+    cached = {**payload["goals"][0], "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
+              "source_registry": "../canonical/registry.json"}
+    (shared_runtime / "registry.global.json").write_text(json.dumps({"registry_role": "global-local",
+        "common_runtime_root": str(shared_runtime), "goals": [cached]}))
+    wrong = registry.parent / "canonical/registry.json"
+    wrong.parent.mkdir()
+    wrong.write_bytes(b'{"wrong_repository_relative_copy": true}')
+    code, backup = _cli("--runtime-root", shared_runtime, "backup-state", "--project", state.parents[3],
+        "--output-dir", root / "backups", "--backup-id", "source", "--no-automations", "--no-skills", "--execute")
+    assert code == 0 and backup["ok"], backup
+    expected = {"registry": registry.read_bytes(), "goal": current.read_bytes(), "wrong": wrong.read_bytes()}
+    (root / "host").rename(root / "unavailable-host")
+    return backup, expected
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_global_backup_inspects_the_canonical_source_not_a_same_alias_shared_store(tmp_path, provider):
+    backup, expected = _global_source_backup(tmp_path, provider)
+    destination = tmp_path / "inert"
+    code, audit = _cli("backup-state", "verify", "--archive", backup["archive_path"],
+        "--manifest", backup["manifest_path"], "--destination", destination, "--execute")
+    assert code == 0, audit
+    [authority] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "readable", authority
+    assert authority["facts"]["provider"] == provider
+    assert authority["facts"]["todo_count"] == 1 and authority["facts"]["history_commits"] == 2
+    assert audit["status"] == "held" and audit["activation_eligible"] is False
+    assert audit["execution_authority_granted"] is False
+    assert audit["workspace"] == {"isolation": "inert", "registered": False}
+    assert str(tmp_path) not in json.dumps(audit)
+    with tarfile.open(backup["archive_path"]) as archive:
+        files = [archive.extractfile(row).read() for row in archive if row.isfile()]
+    assert expected["goal"] in files and expected["registry"] in files
+    assert expected["wrong"] not in files
+    roots = backup["registry_discovery"]["goal_runtime_roots"]
+    assert roots["goal-a"] != "runtime-root"
+    assert (destination / "data" / roots["goal-a"]).is_dir()
+    assert not (destination / "registry.global.json").exists()
+
+
+def test_explicit_missing_source_bindings_never_fall_back_to_the_shared_store(tmp_path):
+    from loopx.control_plane.state_recovery_io import _audit_owners
+
+    backup, _ = _global_source_backup(tmp_path, "file")
+    destination = tmp_path / "inert"
+    audit = verify_state_backup(archive=Path(backup["archive_path"]), manifest=Path(backup["manifest_path"]),
+                                destination=destination, execute=True)
+    data = destination / "data"
+    sqlite_members = [path.relative_to(data).as_posix() for path in data.rglob("*.sqlite")]
+    request = {"data_root": str(data), "measurements": audit["measurements"],
+        "verified": {key: audit[key] for key in ("ok", "schema_version", "recovery_id", "backup", "file_count",
+            "file_witnesses_verified", "manifest_verified", "capture_profile", "execution_authority_granted")},
+        "sqlite_members": sqlite_members, "standalone_sqlite_members": sqlite_members,
+        "included": backup["included"]}
+    for roots in ({}, {"goal-a": None}):
+        result = _audit_owners({**request, "registry_discovery": {"goal_runtime_roots": roots}})
+        [authority] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+        assert authority["state"] == "unknown", authority
+        assert result["execution_authority_granted"] is False
+    root = data / backup["registry_discovery"]["goal_runtime_roots"]["goal-a"]
+    root.rename(tmp_path / "unavailable-captured-source")
+    result = _audit_owners({**request, "registry_discovery": backup["registry_discovery"]})
+    [authority] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "unknown", authority
+    assert not root.exists()
+    root.symlink_to(data / "runtime-root", target_is_directory=True)
+    result = _audit_owners({**request, "registry_discovery": backup["registry_discovery"]})
+    [authority] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "unknown", authority
+    assert result["execution_authority_granted"] is False
+
+
+def test_unsafe_source_binding_is_refused_before_extracting_any_files(tmp_path):
+    archive, manifest = _backup(tmp_path)
+    external = json.loads(manifest.read_text())
+    with tarfile.open(archive) as source:
+        embedded = json.load(source.extractfile("manifest.json"))
+    for payload in (external, embedded):
+        payload["registry_discovery"]["goal_runtime_roots"] = {"goal-a": "../outside"}
+        payload["included"].append({"archive_path": "../outside"})
+    manifest.write_text(json.dumps(external))
+    _rewrite(archive, manifest, replacements={"manifest.json": json.dumps(embedded).encode()})
+    destination = tmp_path / "inert"
+    with pytest.raises(StateRecoveryError, match="backup_manifest_invalid"):
+        verify_state_backup(archive=archive, manifest=manifest, destination=destination, execute=True)
+    assert not destination.exists() and not (tmp_path / "outside").exists()
+
+
+def test_legacy_archive_without_source_bindings_keeps_original_runtime_readback(tmp_path):
+    archive, manifest = _backup(tmp_path, "file")
+    external = json.loads(manifest.read_text())
+    with tarfile.open(archive) as source:
+        embedded = json.load(source.extractfile("manifest.json"))
+    for payload in (external, embedded):
+        payload["registry_discovery"].pop("goal_runtime_roots", None)
+    manifest.write_text(json.dumps(external))
+    _rewrite(archive, manifest, replacements={"manifest.json": json.dumps(embedded).encode()})
+    audit = verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+    [authority] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert authority["state"] == "readable" and authority["facts"]["todo_count"] == 1
+    assert audit["status"] == "held" and audit["execution_authority_granted"] is False
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_backup_recovers_readable_authority_after_original_sources_disappear(tmp_path, provider):
     archive, manifest = _backup(tmp_path, provider)

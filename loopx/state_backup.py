@@ -20,6 +20,10 @@ from .registry import registry_goals
 from .control_plane.effect_runtime import effect_runtime_result
 from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.document_io import fsync_state_directory
+from .control_plane.runtime.runtime_projection_route import (
+    _resolved_source_registry,
+    resolve_goal_source_runtime_route,
+)
 
 
 STATE_BACKUP_SCHEMA_VERSION = "loopx_state_backup_v0"
@@ -128,14 +132,13 @@ def _discover_targets(
     targets: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     warnings: list[str] = []
-    seen_sources: set[str] = set()
+    seen_sources: dict[str, str | None] = {}
     exclude_roots = [_resolved(output_dir)]
 
-    def add(key: str, source_path: Path, archive_path: str) -> None:
+    def add(key: str, source_path: Path, archive_path: str) -> str | None:
         source_key = str(_resolved(source_path))
         if source_key in seen_sources:
-            return
-        seen_sources.add(source_key)
+            return seen_sources[source_key]
         found, absent, target_warnings = _target(
             key=key,
             source_path=source_path.expanduser(),
@@ -147,6 +150,9 @@ def _discover_targets(
         if absent is not None:
             missing.append(absent)
         warnings.extend(target_warnings)
+        captured = archive_path if found is not None else None
+        seen_sources[source_key] = captured
+        return captured
 
     add("runtime_root", runtime_root, "runtime-root")
     # Import must bind the original registry bytes, even when its caller-owned
@@ -171,9 +177,11 @@ def _discover_targets(
     registry_active_state_included_count = 0
     registry_source_registry_count = 0
     registry_source_registry_included_count = 0
+    goal_runtime_roots: dict[str, str | None] = {}
     if include_registry_projects or discovery_registry.exists():
         try:
-            goals = registry_goals(load_registry(discovery_registry))
+            registry = load_registry(discovery_registry)
+            goals = registry_goals(registry)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             goals = []
             warnings.append(f"could not discover registry projects from {discovery_registry}: {exc}")
@@ -187,8 +195,57 @@ def _discover_targets(
         for goal in goals:
             goal_id = str(goal.get("id") or "").strip()
             goal_segment = _archive_segment(goal_id, fallback="goal")
+            if goal_id in goal_runtime_roots:
+                raise ValueError("backup discovery requires unique Goal ids")
+            goal_runtime_roots[goal_id] = None
+            source_registry: Path | None = None
+            if include_registry_projects:
+                try:
+                    # Reuse the same source route as configuration capture. A
+                    # cached global row cannot replace the source-owned Goal.
+                    source_registry = _resolved_source_registry(goal, registry_path=discovery_registry)
+                    route = resolve_goal_source_runtime_route(
+                        registry_path=discovery_registry, goal_id=goal_id, registry=registry,
+                    )
+                    source = Path(route["source_registry"])
+                    source_payload = registry if source == _resolved(discovery_registry) else load_registry(source)
+                    matches = [row for row in registry_goals(source_payload) if row.get("id") == goal_id]
+                    if len(matches) != 1:
+                        raise ValueError("backup requires exactly one source-owned Goal")
+                    goal = matches[0]
+                    if source_registry is not None:
+                        source_registry = source
+                    source_runtime = Path(route["source_runtime_root"])
+                    if source_runtime != runtime_root and not source_payload.get("common_runtime_root"):
+                        raise ValueError("external source runtime is undeclared; refusing implicit host-wide discovery")
+                    runtime_segment = hashlib.sha256(str(source_runtime).encode()).hexdigest()
+                    goal_runtime_roots[goal_id] = add(
+                        f"registry_runtime:{goal_id}", source_runtime, f"source-runtimes/{runtime_segment}",
+                    )
+                except (OSError, ValueError) as exc:
+                    missing.append({"key": f"registry_runtime:{goal_id}", "source_path": "",
+                                    "reason": f"source runtime route unavailable: {exc}"})
+                    warnings.append(f"could not capture source runtime for {goal_id}: {exc}")
+            else:
+                # Project-scoped recovery keeps its explicitly selected runtime.
+                goal_runtime_roots[goal_id] = seen_sources.get(str(_resolved(runtime_root)))
             repo_text = str(goal.get("repo") or "").strip()
-            if not repo_text:
+            repo = _resolved(Path(repo_text)) if repo_text else None
+            source_registry_text = str(goal.get("source_registry") or "").strip()
+            if not include_registry_projects and source_registry_text:
+                source_registry = Path(source_registry_text).expanduser()
+                if not source_registry.is_absolute():
+                    source_registry = repo / source_registry if repo is not None else None
+            if source_registry is not None:
+                add(
+                    f"registry_source_registry:{goal_id}",
+                    source_registry,
+                    f"registry-goals/{goal_segment}/source-registry/{source_registry.name}",
+                )
+                registry_source_registry_count += 1
+                if source_registry.exists() or source_registry.is_symlink():
+                    registry_source_registry_included_count += 1
+            if repo is None:
                 missing.append(
                     {
                         "key": f"registry_project:{goal_id}",
@@ -197,7 +254,6 @@ def _discover_targets(
                     }
                 )
                 continue
-            repo = _resolved(Path(repo_text))
             registry_project_roots.add(str(repo))
             project_segment = _archive_segment(repo, fallback="project")
             if not repo.exists():
@@ -253,20 +309,6 @@ def _discover_targets(
                     }
                 )
 
-            source_registry_text = str(goal.get("source_registry") or "").strip()
-            if source_registry_text:
-                source_registry = Path(source_registry_text).expanduser()
-                if not source_registry.is_absolute():
-                    source_registry = repo / source_registry
-                add(
-                    f"registry_source_registry:{goal_id}",
-                    source_registry,
-                    f"registry-goals/{goal_segment}/source-registry/{source_registry.name}",
-                )
-                registry_source_registry_count += 1
-                if source_registry.exists() or source_registry.is_symlink():
-                    registry_source_registry_included_count += 1
-
     codex_home = _codex_home()
     if include_automations:
         add("codex_automations", codex_home / "automations", "codex/automations")
@@ -301,6 +343,7 @@ def _discover_targets(
         "source_registry_missing_count": (
             registry_source_registry_count - registry_source_registry_included_count
         ),
+        "goal_runtime_roots": goal_runtime_roots,
     }
     return targets, missing, warnings, discovery
 
@@ -317,7 +360,7 @@ def _sum_target_stats(targets: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _target_category(key: str) -> str:
-    if key == "runtime_root":
+    if key == "runtime_root" or key.startswith("registry_runtime:"):
         return "runtime"
     if key.startswith("project_") or key.startswith("registry_project_"):
         return "project_state"
