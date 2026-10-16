@@ -50,7 +50,6 @@ def _listener_background_stop_journey(fixture, monkeypatch, failure, *, owner=Fa
     from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
     import loopx.extensions.lark.private_conversations as private
-    import loopx.capabilities.native_chat.codex_background_control as background
 
     if owner:
         store, runtime, provider, transport = connect(fixture)
@@ -114,12 +113,15 @@ def _listener_background_stop_journey(fixture, monkeypatch, failure, *, owner=Fa
         # reconstructed target or replacement model request is supplied.
         transport.core = ChatExternalConversations(runtime)
         wire.failure = None
-        inventory = background.completed_background_turns
-        def delayed(*args):
-            entered.set()
-            assert release.wait(10)
-            return inventory(*args)
-        monkeypatch.setattr(background, "completed_background_turns", delayed)
+        write = wire.session._write
+        def delayed(packet):
+            if packet["method"] == "thread/backgroundTerminals/list" and not release.is_set():
+                # Block inside the native RPC, with its adapter lock held.
+                # New admission must persist without waiting for native IO.
+                entered.set()
+                assert release.wait(10)
+            return write(packet)
+        monkeypatch.setattr(wire.session, "_write", delayed)
         service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {},
             runtime_root=transport.runtime_root, runtime_controller=runtime,
             private_conversations=transport)
@@ -137,14 +139,15 @@ def _listener_background_stop_journey(fixture, monkeypatch, failure, *, owner=Fa
         assert accepted.result(timeout=5)["status"] == "durably_accepted"
         newer = next(r for r in transport.core.pending() if r["message"] == newer_event["content"])
         assert newer["session_id"] == sid
-        _wait_for_native_turn(store, sid, newer["turn_id"])
-        newer_native = store.load_turn(sid, newer["turn_id"])["upstream_turn_id"]
+        assert store.load_turn(sid, newer["turn_id"])["status"] in {"queued", "starting", "running"}
         assert newer["turn_id"] not in frozen["background_turn_ids"]
         assert not release.is_set() and not repeated.done()
         assert wire.children["owned"].poll() is None
         assert not any("停止" in text for _, text in provider.writes)
         release.set()
         assert repeated.result(timeout=10)["status"] == "command_completed"
+        _wait_for_native_turn(store, sid, newer["turn_id"])
+        newer_native = store.load_turn(sid, newer["turn_id"])["upstream_turn_id"]
         deadline = time.monotonic() + 10
         while True:
             record = json.loads((transport.root / f"{frozen['request_ref']}.json").read_text())
@@ -166,12 +169,18 @@ def _listener_background_stop_journey(fixture, monkeypatch, failure, *, owner=Fa
         assert all(store.load_turn(sid, key) == value for key, value in completed.items())
         replies = list(provider.writes)
         assert sum("停止" in text for _, text in replies) == 1
+        terminal = dict(record["deliveries"]["terminal"])
+        stop_reply = ("notes-app", terminal["text"])
+        assert provider.writes.count(stop_reply) == 1
         if not owner:
             assert any(topic == root["message_id"] and "停止" in text for _, topic, text in provider.topic_writes)
         terminations = [call for call in wire.calls if call[0].endswith("/terminate")]
         admit("notes-app", stop)
         transport.reconcile()
-        assert provider.writes == replies
+        # The newly admitted Turn may emit its own first progress now. Only
+        # the original stop's frozen reply/effect must remain unchanged.
+        assert provider.writes.count(stop_reply) == 1
+        assert json.loads((transport.root / f"{frozen['request_ref']}.json").read_text())["deliveries"]["terminal"] == terminal
         assert [call for call in wire.calls if call[0].endswith("/terminate")] == terminations
     finally:
         release.set()
