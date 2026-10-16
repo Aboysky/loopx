@@ -700,11 +700,20 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                    LOOPX_CODEX_HOME=str(tmp_path / "worker-home"), LOOPX_SHARED_SKILLS=str(skills),
                    MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=base_url,
                    OPENAI_API_KEY="synthetic-local-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60")
+        deadline = str(time.time() + 600)
+        env["LOOPX_PHASE_DEADLINE_EPOCH"] = deadline
         if capture != "off":
             env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
         result = run_once(env)
         assert result["ok"] and not result["timed_out"], result
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+        # Checkpoint preloading keeps the existing heartbeat contract without
+        # injecting a Host countdown or runtime guidance.
+        worker_input = next(t for t in texts(requests[1]) if "quota should-run" in t and "```sh" in t)
+        assert deadline not in worker_input
+        assert "Absolute phase deadline" not in worker_input
+        assert "Current wake execution limit" not in worker_input
+        assert "The Host enforces runtime limits externally" not in worker_input
         if capture == "off":
             assert "checkpoint_handoffs" not in result
             assert "--decision-handoff-socket" not in guards[0]
