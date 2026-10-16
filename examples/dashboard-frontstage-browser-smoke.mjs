@@ -93,13 +93,15 @@ async function assertTimeMachineJourney(page, lang) {
     assert.equal(await page.locator(".tm-revealed h3").innerText(), title, "either choice reveals the same historical outcome");
     await page.getByRole("button", { name: lang === "zh" ? "核对这条发现" : "Inspect this finding", exact: true }).click();
     await page.locator(".tm-original").waitFor({ state: "visible" });
+    // Inspect queues a focus transfer; finish it before sending the next key.
+    await page.waitForFunction(() => document.querySelector(".tm-original h3") === document.activeElement);
     assert.equal(await page.locator(".tm-record-body").textContent(), finding.summary, "the outcome opens its original finding");
     assert.equal(await page.locator(".tm-source").getAttribute("href"), `/loopx/lab/time-machine/data/${id}.json`);
     const cursor = page.locator("#tm-cursor");
     assert.equal(await cursor.getAttribute("max"), String(count));
     await cursor.press("End");
+    await page.waitForFunction((summary) => document.querySelector(".tm-record-body")?.textContent === summary, capture.events.at(-1).summary);
     assert.equal(await cursor.inputValue(), String(count));
-    assert.equal(await page.locator(".tm-record-body").textContent(), capture.events.at(-1).summary);
     await page.locator(".tm-return").click();
     assert.ok(await page.locator("#tm-question").evaluate((heading) => heading === document.activeElement));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "Time Machine fits the viewport");
