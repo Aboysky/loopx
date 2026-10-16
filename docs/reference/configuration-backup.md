@@ -264,6 +264,35 @@ an owner export, a consistent capture profile nor permission to reactivate.
 包含更多私有原始字节；有界 migration 备份不变。这些仍是各自见证的历史文件，
 不证明 owner export、一致性 profile 或再激活权限。
 
+## Moving an Agent to another environment
+
+The desired result is continued work with the Goal, full Todo/history, necessary
+Agent context, materials and capability configuration available at the
+destination. The current backup/inspection entry does not deliver that result:
+it creates readable isolated evidence and grants no destination execution.
+The [planned-transfer proposal](../architecture/rfcs/complete-state-recovery-v0.md#planned-agent-transfer)
+defines one prepared source-to-destination journey and its required product,
+identity, credential and failure-recovery boundaries. It is not an available
+transfer command or a qualification claim.
+
+`migrate-state` is the retained legacy Goal Harness copy tool. Both its dry-run
+and execution now check source and destination eligibility, including the old
+runtime of an existing target registry. A canonical provider, promotion fence
+or protected shadow source refuses instead of producing a successful copy
+preview. This is a change to preview behavior; execution keeps its existing
+locked recheck. A valid preview can become stale and grants no future write.
+Do not use this command or an isolated `authority-archive restore` as a shortcut
+to resume a modern Agent from a backup.
+
+中文：目标是让 Agent 带着目标、完整待办/历史、必要上下文、材料和能力配置，在
+目标环境继续工作。当前备份检查入口只提供隔离可读证据，尚未完成这个结果。
+[计划内迁移提案](../architecture/rfcs/complete-state-recovery-v0.zh-CN.md#planned-agent-transfer)
+定义完整旅程及产品、身份、凭证和失败恢复边界，不是已经可用的迁移命令。
+`migrate-state` 仍只复制旧 Goal Harness 状态；现在 dry-run 和执行都会检查源端、
+目标端及目标 registry 原 runtime 的准入，canonical/fence/受保护 shadow 均拒绝。
+这是预览行为变更；执行时仍在原锁内重验，成功预览不保证以后可写。该旧工具和
+隔离 `authority-archive restore` 都不能作为备份后恢复现代 Agent 执行的捷径。
+
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after

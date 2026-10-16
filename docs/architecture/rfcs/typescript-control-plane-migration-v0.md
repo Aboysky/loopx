@@ -63,6 +63,14 @@ failed/untested cases retain their original revisions and applicability.
 
 Follow the [existing R5 delivery sequence](loopx-overall-roadmap-v0.md#post-6396-delivery-plan):
 
+The [planned Agent transfer refinement](complete-state-recovery-v0.md#planned-agent-transfer)
+sets the proposed product priority: move work and continue it in the destination,
+with the necessary installed upgrade/admission companions below. Select TS
+changes from actual breaks in that whole journey; do not advance a language or
+capture-field series as a substitute. Source-available transfer and unavailable-
+source disaster recovery keep distinct qualification. This does not authorize
+either activation or claim that a transfer is implemented.
+
 1. Close T4/C1 and D1 adoption on pinned final-main source and normal installed
    CLI/App/affected Host entrypoints: complete data, fresh and stale proofs,
    original-operation retry, interruption, later writes and reversible migration.
