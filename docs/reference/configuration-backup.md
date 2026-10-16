@@ -61,6 +61,21 @@ not prove every registered source was reachable. Full-state copies retain raw
 Markdown history and runtime files; inert extraction does not import their
 leases, pending effects or historical receipts as new execution authority.
 
+Discovery uses the same registry reader as configuration capture. Legacy project
+objects and valid strict-v1 project envelopes both retain their declared external
+routes and the original registry bytes. A readable envelope's minimum writer
+protocol does not authorize a writer: backup only preserves data. Invalid
+envelopes and lifecycle-only `source_session_v1` project registries still refuse
+publication; global discovery registries remain object-only. This does not
+qualify lifecycle journals for capture or change the v0 consistency and recovery
+holds below.
+
+中文：状态发现与配置捕获复用同一个 registry reader；旧对象格式及有效 strict-v1
+项目信封均保存声明的外置路径及原始 registry 字节。可读信封的最低 writer 协议
+不授予写入权，备份只保留数据。无效信封和仅供生命周期操作的 `source_session_v1`
+项目仍拒绝发布，global registry 仍只接受对象。这不代表已完成生命周期日志捕获
+资格，也不改变下文 v0 的一致性限制与恢复 hold。
+
 Settings → Capability Center → **Configuration backup and recovery** offers
 download, file verification and isolated recovery through the same typed owner.
 Device scope includes all invoked Goals and machine settings; Goal scope
