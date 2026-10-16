@@ -443,7 +443,7 @@ dependency closure，区分 owner 确认不存在、来源不可读和来源无�
 
 | 可变边界与既有 owner | 当前捕获／读回 | 尚缺的捕获或 adoption 证据 |
 | --- | --- | --- |
-| Registry route 与 machine/Goal 配置：[配置捕获 adapter](../../../loopx/capabilities/configuration_backup.py)、[类型化 checkpoint envelope](../../../loopx/control_plane/configuration_backup.ts)、[machine 配置 store](../../../loopx/capabilities/machine_configuration/store.py) | 完整备份比较配置解码实际使用的 registry 字节与已复制字节见证；缺少副本或字节不同则拒绝，包括 A → B → A。私有清单记录匹配 revision 与配置捕获区间。 | 仍需绑定 machine 配置、authority 及其他必要 owner 的独立区间与依赖；registry 字节一致和有效 envelope 不证明跨 owner 一致性。 |
+| Registry route 与 machine/Goal 配置：[配置捕获 adapter](../../../loopx/capabilities/configuration_backup.py)、[类型化 checkpoint envelope](../../../loopx/control_plane/configuration_backup.ts)、[machine 配置 store](../../../loopx/capabilities/machine_configuration/store.py) | 完整备份比较各自 owner 实际解码的 registry 与 machine 配置字节和映射副本见证；缺失／不同副本、A → B → A，以及确认不存在却仍保留旧副本均拒绝发布。私有清单记录匹配 revision 与配置捕获区间。 | 仍需绑定 authority 和其他所有必要 owner 的独立区间与依赖；配置来源一致和有效 envelope 不证明跨 owner 一致性。 |
 | Goal 正文、vision 与权威材料引用：registry 解析的 active state、[vision checkpoint owner](../../../loopx/control_plane/goals/vision_checkpoint.ts) | 复制发现的 active-state 路径及 included root 内文件，不递归解析外部材料引用。 | 保留完整 Goal 与绑定 revision 的必要 artifact，分类不可用依赖，并让派生 Markdown 投影服从其 owner。 |
 | Canonical 工作、租约及保留的 operation history：[本地 provider selection](../../../loopx/control_plane/coordination/local_authority_provider.ts)、[authority archive owner](../../../loopx/control_plane/coordination/authority_archive.ts)、[legacy writer fence](../../../loopx/control_plane/coordination/legacy_writer_fence.ts) | File head/history 位于同一原子 envelope；SQLite 使用[既有 physical snapshot owner](../../../loopx/control_plane/coordination/sqlite_backup.ts)。M1 只打开已有 store 并验证 head/history，不选定 live 目标。 | 绑定 provider/store identity、selector、fence、revision 与 cursor，取得 owner export 或合格 snapshot。组件本地一致性不证明跨 owner 一致性，也不使历史租约有效。 |
 | Quota 记账与 Turn settlement：[accounting artifact transaction](../../../loopx/control_plane/quota/accounting_artifact_transaction.ts)、[spend owner](../../../loopx/control_plane/quota/spend_commit.ts)、[Turn journal commit](../../../loopx/control_plane/turn_driver/turn_journal_effects.ts) | 保留 included runtime/project root 内文件；M1 不 reconcile 其 transaction lineage。 | 将已提交 receipt、index 与进行中 journal input 按精确 settlement identity 一起捕获；由原 owner 处置 replay 或歧义，避免第二次扣账。 |
@@ -463,6 +463,11 @@ source registry 旁的 `.loopx/lifecycle/goal-instance`。外部 registry 的这
 快照，比较每份已映射普通文件副本；字节不同或缺少见证就停止发布。File/SQLite
 覆盖持续变化与 A → B → A 回退，事后重读 live 路径不能证明这类情况；路由到
 外部的源 registry 与缺少见证各有负向覆盖。
+
+同一规则也覆盖既有 machine 配置 store owner：checkpoint 和见证使用同一次
+实际读取，包括确认不存在。变更、新建或删除配置都不能与已复制文件矛盾；
+不可用的 machine 来源拒绝捕获，不被标成不存在。这只关闭配置来源的 IO 边界，
+尚未关闭完整恢复集的 owner closure 或一致性 profile。
 
 历史 v0 归档仍可能包含上述组合。[恢复测试](../../../tests/test_state_recovery.py)
 显式构造保留较早原始 registry／工作、较晚 owner 验证配置的旧归档，不携带新的
