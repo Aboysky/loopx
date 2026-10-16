@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { chmod, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -79,7 +79,7 @@ async function realUnavailableAgent({ browser, collectCoverage, url }) {
     const text = (await drawer.innerText()).replace(/\s+/g, " ");
     assert.match(text, /还不能开始这个 Goal/);
     assert.match(text, /codex/i);
-    assert.match(text, /先安装并登录/);
+    assert.match(text, /根据上述原因修复/);
     assert.match(text, /没有写入任何 Goal/);
     assert.doesNotMatch(text, /endpoint is not healthy|invalid_action_preview/);
     assert.doesNotMatch(text, /提案状态刷新失败/, "A refused local preview has no stored action to read back");
@@ -113,6 +113,101 @@ async function realUnavailableAgent({ browser, collectCoverage, url }) {
   }
 }
 
+
+async function realRemoteMapping({ browser, collectCoverage, url, locale }) {
+  const root = await mkdtemp(join(tmpdir(), "loopx-first-goal-mapping-"));
+  const python = resolveTestPython({ repoRoot });
+  const child = spawn(python, ["-u", resolve(repoRoot, "examples/personal-workspace-browser/fresh-install-backend.py"), root, "--no-agent"], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot }, stdio: ["ignore", "pipe", "pipe"] });
+  const closed = once(child, "close"), lines = createInterface({ input: child.stdout });
+  let diagnostics = "", session;
+  child.stderr.on("data", chunk => diagnostics = (diagnostics + chunk).slice(-4000));
+  try {
+    const ready = await Promise.race([once(lines, "line").then(([line]) => JSON.parse(line)), closed.then(() => { throw new Error(`mapping backend exited: ${diagnostics}`); })]);
+    const backend = `http://127.0.0.1:${ready.port}`;
+    await waitForHttp(`${backend}/status.json?view=workspace-directory`);
+    const binary = join(ready.bins, "remote-fixture");
+    const marker = join(root, "remote-was-executed");
+    await writeFile(binary, `#!/bin/sh\necho unexpected > "${marker}"\nexit 0\n`); await chmod(binary, 0o755);
+    const register = mapped => execFileSync(python, ["-c", `
+import json, sys
+from pathlib import Path
+from loopx.chat_endpoints import AgentEndpointRegistry
+runtime, binary, project, mapped = sys.argv[1:]
+endpoint = {"agent_id":"remote-first", "display_name":"Remote fixture", "command":[binary], "location":"remote"}
+if mapped == "yes": endpoint["workspace_mapping"] = [{"local_root":project,"agent_root":"/synthetic/workspace"}]
+AgentEndpointRegistry(Path(runtime)/"chat").upsert(endpoint)
+`, ready.runtime, binary, ready.project, mapped ? "yes" : "no"], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot } });
+    register(false);
+    const catalog = await (await fetch(`${backend}/api/chat/capabilities`)).json();
+    const agent = catalog.adapters.find(row => row.agent_id === "remote-first");
+    assert.equal(agent.available, true); assert.equal(agent.tool_calls, true); assert.equal(agent.trust_scope, "read_only");
+    const posts = [], previews = [], responses = [];
+    {
+      session = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: locale === "en" ? 390 : 1440, height: 900 }, beforeGoto: async (_api, page) => {
+        await page.addInitScript(value => localStorage.setItem("loopx-pw-locale", value), locale);
+        const proxied = new Set(["/status.json", "/api/chat/capabilities", "/api/chat/projects"]);
+        await page.route(target => proxied.has(target.pathname) || target.pathname.startsWith("/api/actions"), async route => route.fulfill({ response: await fetchWorkspaceBackend(route, backend) }));
+      } });
+      const { page } = session;
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      page.on("request", req => { if (req.method() === "POST") posts.push(new URL(req.url()).pathname); });
+      page.on("response", response => { if (new URL(response.url()).pathname === "/api/actions/preview") responses.push(response.status()); });
+      page.on("request", req => { if (req.method() === "POST" && new URL(req.url()).pathname === "/api/actions/preview") previews.push(req.postDataJSON()); });
+      const first = page.getByTestId("personal-first-goal"); await first.waitFor();
+      await first.locator(".personal-first-goal-create").click();
+      const form = page.locator("dialog.personal-action-form"); await form.waitFor();
+      const objective = form.getByLabel(locale === "en" ? "Objective" : "目标", { exact: true });
+      const completion = form.getByLabel(locale === "en" ? "Completion criteria" : "完成标准", { exact: true });
+      await objective.fill("Review the remote release checklist"); await completion.fill("A reviewed checklist is retained");
+      const before = previews.length;
+      await form.locator("button[type=submit]").click();
+      const notice = page.getByRole("alert").filter({ hasText: "remote Agent endpoint needs a workspace mapping" });
+      await notice.waitFor({ timeout: 10_000 });
+      assert.equal(previews.at(-1).normalized_parameters.agent_id, "remote-first");
+      assert.equal(responses.at(-1), 400);
+      assert.equal(await form.isVisible(), true);
+      assert.equal(await objective.inputValue(), "Review the remote release checklist");
+      assert.equal(await completion.inputValue(), "A reviewed checklist is retained");
+      assert.doesNotMatch(await page.locator("body").innerText(), /先安装并登录|not installed or not signed in|Install and sign in/);
+      await page.screenshot({ path: resolve(outputDir, `first-goal-mapping-${locale}.png`), animations: "disabled" });
+      const registry = join(ready.project, ".loopx", "registry.json");
+      await assert.rejects(stat(registry), { code: "ENOENT" });
+      assert.deepEqual((await (await fetch(`${backend}/api/actions`)).json()).proposals, []);
+      let refused = previews.length - 1;
+      if (locale === "zh-CN") {
+        // A deliberate edit is a new request; unchanged retry must retain it.
+        await objective.fill("Review the corrected remote release checklist");
+        const rejectedAgain = page.waitForResponse(response => new URL(response.url()).pathname === "/api/actions/preview");
+        await form.locator("button[type=submit]").click();
+        assert.equal((await rejectedAgain).status(), 400);
+        refused = previews.length - 1;
+        assert.notEqual(previews[refused].idempotency_key, previews[before].idempotency_key);
+        assert.notEqual(previews[refused].normalized_parameters.goal_id, previews[before].normalized_parameters.goal_id);
+      }
+      register(true);
+      await form.locator("button[type=submit]").click();
+      const drawer = page.locator(".personal-context-drawer"); await drawer.waitFor();
+      await drawer.getByText(locale === "en" ? "New Goal · Awaiting you" : "新 Goal · 待你确认", { exact: true }).waitFor();
+      assert.equal(responses.at(-1), 201);
+      assert.equal(previews.length, refused + 2);
+      assert.deepEqual(previews[refused + 1], previews[refused], "Only repairing mapping replays the exact request, without retyping");
+      await assert.rejects(stat(registry), { code: "ENOENT" });
+      await assert.rejects(stat(marker), { code: "ENOENT" });
+      assert.ok(posts.every(path => !/\/apply$|\/turns$|\/sessions$/.test(path)), "Mapping repair grants no Goal apply, Session or model Turn");
+      await page.keyboard.press("Escape");
+      await session.close(); session = null;
+    }
+    return [];
+  } catch (error) {
+    if (diagnostics) process.stderr.write(diagnostics);
+    await session?.page.screenshot({ path: resolve(outputDir, "first-goal-mapping-failed.png") }).catch(() => {});
+    throw error;
+  } finally {
+    await session?.close().catch(() => {}); lines.close();
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); const kill = setTimeout(() => child.kill("SIGKILL"), 5000); try { await closed; } finally { clearTimeout(kill); } }
+  }
+}
+
 export const firstGoalAgentUnavailableScenario = {
   id: "first-goal-agent-unavailable",
   async run({ browser, collectCoverage, url }) {
@@ -135,7 +230,7 @@ export const firstGoalAgentUnavailableScenario = {
       const text = (await drawer.innerText()).replace(/\s+/g, " ");
       assert.match(text, /还不能开始这个 Goal/, `the owner reads which Agent cannot start the Goal: ${text.slice(0, 300)}`);
       assert.match(text, /本机没有找到命令 \/opt\/loopx\/bin\/codex/, "the catalog's own reason is shown");
-      assert.match(text, /先安装并登录/, "the next action is stated");
+      assert.match(text, /根据上述原因修复/, "the next action follows the reported availability fact");
       assert.match(text, /没有写入任何 Goal/, "nothing was written");
       assert.doesNotMatch(text, /endpoint is not healthy|not available to start/, "no protocol sentence reaches the owner");
       await page.screenshot({ path: resolve(outputDir, "first-goal-agent-unavailable.png"), animations: "disabled" });
@@ -151,7 +246,10 @@ export const firstGoalAgentUnavailableScenario = {
       await drawer.waitFor({ state: "visible", timeout: 10_000 });
       await drawer.getByText("新 Goal · 待你确认", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
       const coverageEntries = await session.close();
-      if (packaged) coverageEntries.push(...await realUnavailableAgent({ browser, collectCoverage, url }));
+      if (packaged) {
+        coverageEntries.push(...await realUnavailableAgent({ browser, collectCoverage, url }));
+        for (const locale of ["zh-CN", "en"]) coverageEntries.push(...await realRemoteMapping({ browser, collectCoverage, url, locale }));
+      }
       return { coverageEntries };
     } catch (error) {
       await session.close().catch(() => {});

@@ -441,3 +441,83 @@ def test_first_goal_preview_refuses_an_unavailable_agent_as_a_typed_gate(tmp_pat
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+@pytest.mark.parametrize("restriction,message", [
+    ("tools", "selected Agent endpoint cannot execute Goal tools"),
+    ("trust", "selected Agent endpoint has an incompatible trust scope"),
+    ("mapping", "remote Agent endpoint needs a workspace mapping"),
+])
+def test_available_first_agent_retains_its_real_eligibility_refusal(tmp_path, restriction, message):
+    import http.client
+    import sys
+    import threading
+
+    from loopx.chat_actions import goal_workspace_ref
+    from loopx.chat_endpoints import AgentEndpointRegistry
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    project = tmp_path / "project"
+    project.mkdir()
+    registry = project / ".loopx/registry.json"
+    runtime = tmp_path / "runtime"
+    sessions = ChatSessionStore(runtime)
+    endpoints = AgentEndpointRegistry(sessions.root)
+    endpoint = {"agent_id": "remote-first", "display_name": "Remote first Agent",
+                "command": [sys.executable], "location": "remote"}
+    endpoints.upsert(endpoint)
+    controller = ChatRuntimeController(store=sessions, endpoint_registry=endpoints,
+        codex_bin=str(tmp_path / "no-codex"), claude_bin=str(tmp_path / "no-claude"),
+        kiro_cli_bin=str(tmp_path / "no-kiro"))
+    native_capabilities = controller.capabilities
+    def capabilities():
+        rows = native_capabilities()
+        for row in rows:
+            if row["agent_id"] == "remote-first":
+                if restriction == "tools":
+                    row["tool_calls"] = False
+                if restriction == "trust":
+                    row["trust_scope"] = "incompatible"
+        return rows
+    controller.capabilities = capabilities
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.runtime_root_override = registry, runtime, str(runtime)
+    server.action_store = ChatActionStore(runtime / "chat/actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=registry,
+        chat_store=sessions, runtime_controller=controller, workspace_roots=[project])
+    server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = {"action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": "same-first-request",
+               "context": {"kind": "manager", "goal_id": None},
+               "normalized_parameters": {"goal_id": "goal-first", "title": "First Goal", "objective": "Start here",
+                                         "agent_id": "remote-first", "workspace_ref": goal_workspace_ref(project)}}
+    encoded = json.dumps(request)
+    def preview():
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        try:
+            connection.request("POST", "/api/actions/preview", encoded, {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+    try:
+        assert endpoints.get("remote-first").available()
+        status, rejected = preview()
+        assert status == 400, rejected
+        assert rejected["error"] == message and "gate" not in rejected
+        assert not registry.exists() and server.action_store.list() == []
+        controller.capabilities = native_capabilities
+        endpoints.upsert({**endpoint, "workspace_mapping": [
+            {"local_root": str(project), "agent_root": "/synthetic/workspace"}]})
+        status, recovered = preview()
+        assert status == 201, recovered
+        assert recovered["proposal"]["normalized_parameters"]["agent_id"] == "remote-first"
+        assert len(server.action_store.list()) == 1 and not registry.exists()
+        assert sessions.list_sessions() == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

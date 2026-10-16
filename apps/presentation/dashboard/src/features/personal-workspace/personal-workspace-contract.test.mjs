@@ -710,4 +710,3 @@ assert.match(source("./context-drawer.tsx"), /selection\.item\.gate\?\.kind === 
 for (const key of ["proposal.agentGate.title", "proposal.agentGate.summary", "proposal.agentGate.reason.executable_not_found", "proposal.agentGate.reason.api_key_not_set", "proposal.agentGate.reason.unregistered", "proposal.agentGate.reason.unavailable", "proposal.agentGate.nextAction", "proposal.agentGate.impact"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
-
