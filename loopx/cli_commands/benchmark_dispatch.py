@@ -126,7 +126,7 @@ def handle_benchmark_command(
     if args.command != "benchmark":
         return None
     handled = handle_benchmark_trajectory_command(
-        args, print_payload=print_payload, output_format=output_format,
+        args, registry_path=registry_path, print_payload=print_payload, output_format=output_format,
     )
     if handled is not None:
         return handled

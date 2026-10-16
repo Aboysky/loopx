@@ -1,7 +1,8 @@
 # Evidence-bound trajectory assessment
 
-Status: an opt-in analysis producer and metric protocol. The packaged Goal-view
-journey and independent evaluator calibration remain separate acceptance work.
+Status: an opt-in analysis producer, source-verified pack registry and metric
+protocol. The packaged Goal-view consumer and independent evaluator calibration
+remain separate acceptance work.
 This implements the read-only producer slice of the S5/S11
 [research episode assessment](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement).
 It does not change solver prompts, benchmark scoring, checkpoints or research budgets.
@@ -131,8 +132,54 @@ A crashed adapter's stale lock/running receipt requires operator inspection;
 this slice deliberately does not guess process ownership or silently re-launch.
 No model call occurs on opening a history page, preview or status read.
 
-The existing Goal research-history product owner consumes this sidecar. Its
-remaining delivery includes authorized source-pack creation, explicit execution,
-progress/cancel/retry, stale-input and denied/missing-source states, source return
-and packaged frontend/backend readback. CLI success alone does not complete that
+## Register a fixed case for the research workbench
+
+A trusted operator registers an authorized, fixed evidence pack for the owner
+Goal. This is preparation by the Agent, not a path-entry task assigned to the
+workbench user:
+
+```sh
+loopx benchmark trajectory-pack-register --goal-id OWNER_GOAL \
+  --input-json evidence-pack.json --source-root authorized-capture \
+  --title "Case · fixed observation window" --format json
+loopx benchmark trajectory-packs --goal-id OWNER_GOAL --format json
+```
+
+The command uses the selected registry/runtime. Registration verifies every full
+artifact SHA-256 and literal excerpt against files within the supplied source
+root, rejecting traversal and escaping symlinks. It stores an immutable input
+snapshot and opaque pack ID in private runtime storage. Registration does not
+launch a model, copy permissions or alter the solver Goal. Multiple case/window
+packs can belong to one research workbench; the most recently registered pack is
+the default selection. A pack's actual solver Goal/case/run/window and sample
+coverage must remain visible instead of being relabelled as the owner Goal's
+whole history. This registry does not infer episode boundaries from every log
+line or automatically qualify arbitrary captures.
+
+The existing authenticated Goal host uses the provider in
+`trajectory_assessment_store.py`: `discover`, `inspect_pack`, `execute_pack`,
+`cancel_pack`, and `read_citation`. The host resolves the authorized runtime and
+owner Goal before each call. Renderer requests contain only opaque pack IDs,
+analysis keys and cited ranges; no file paths, shell commands or free-form model
+configuration. There is no renderer registration endpoint. The filesystem and
+Codex adapters remain Python because they own local provider I/O; shared
+assessment/eligibility rules remain in the existing TypeScript owner.
+
+Opening or polling a pack only reads. Explicit execution rechecks source hashes
+and excerpts, resolves the registered configuration and calls the same exclusive
+process owner. Results are requalified from model output; citation reads return
+only exact ranges already cited in that result, from the immutable captured
+excerpt. Missing/changed sources block new execution but preserve the historical
+result and captured citations with a historical applicability label. A changed
+assessment method requires a newly registered pack and does not silently relabel
+old judgments as current; old raw artifacts remain in private storage for host
+inspection. Raw provider errors, local paths and process IDs are not projected
+to the workbench. Same-key success reuses the prior result; explicit retry is
+reserved for failed/cancelled attempts.
+
+The Goal research-history product owner consumes this API. Its companion journey
+must finish case selection, explicit trigger, progress/cancel/retry, unavailable
+and historical states, inline source return and packaged frontend/backend
+readback. Present the key finding and uncertainty first, episode decisions next,
+and citations/method/cost on demand. CLI success alone does not complete that
 journey or qualify the model assessor.
