@@ -26,6 +26,7 @@ from .control_plane.goals.orphaned_goal_state import (
 from .control_plane.goals.start_contract import (
     build_goal_start_contract,
     build_goal_start_prompt,
+    render_goal_start_quality_message,
 )
 from .control_plane.goals.start_goal_todo_delta import (
     append_todo_delta_render_line,
@@ -2040,14 +2041,7 @@ Identity-aware choices:
 Rerun `{payload.get("canonical_cli_command")} --agent-id <registered-agent-id>`
 with the selected identity before continuing."""
     elif goal_text:
-        planner = goal_start_contract.get("planner") or {}
-        quality = planner.get("first_delivery_guidance")
-        # Structured packs carry this once in the shared planner. Message-only
-        # consumers need its complete text here, without another packet read.
-        quality_block = (
-            f"goal_start_contract.planner.first_delivery_guidance:\n{quality}\n\n"
-            if isinstance(quality, str) and quality else ""
-        )
+        quality_block = render_goal_start_quality_message(goal_start_contract)
         action = f"""This is an explicit goal-start invocation. Connect project-local LoopX state if needed:
 
 ```bash

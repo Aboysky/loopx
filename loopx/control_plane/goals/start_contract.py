@@ -184,6 +184,19 @@ def build_goal_start_contract(
     return contract
 
 
+
+def render_goal_start_quality_message(contract: dict[str, Any]) -> str:
+    """Render the shared planner's complete instruction for standalone messages."""
+    planner = contract.get("planner") or {}
+    quality = planner.get("first_delivery_guidance")
+    # Structured packs carry this once in the shared planner. Message-only
+    # consumers need its complete text here, without another packet read.
+    return (
+        f"goal_start_contract.planner.first_delivery_guidance:\n{quality}\n\n"
+        if isinstance(quality, str) and quality else ""
+    )
+
+
 def build_goal_start_prompt(
     *,
     goal_text: str | None,
