@@ -5,6 +5,8 @@ import sys
 import tarfile
 import threading
 import http.client
+import hashlib
+from datetime import datetime
 from pathlib import Path
 import venv
 
@@ -142,6 +144,43 @@ def test_full_state_backup_has_first_class_configuration_component(environment, 
         backup = json.load(archive.extractfile("configuration-backup.json"))
     assert backup["data"]["goals"][0]["goal_configuration"] == goal
     assert payload["execution"]["configuration_backup"]["readback_verified"] is True
+    capture = payload["execution"]["configuration_capture"]
+    assert datetime.fromisoformat(capture["started_at"]) <= datetime.fromisoformat(capture["completed_at"])
+    with tarfile.open(payload["archive_path"]) as archive:
+        # The shared projection and the routed source each retain their actual
+        # copied bytes. Aliases can be links to the first regular member.
+        witnesses = capture["source_revisions"]
+        assert len(witnesses) >= 2
+        assert {row["sha256"] for row in witnesses} == {
+            hashlib.sha256(source.read_bytes()).hexdigest(), hashlib.sha256(registry.read_bytes()).hexdigest(),
+        }
+        for row in witnesses:
+            raw = archive.extractfile(row["archive_path"]).read()
+            assert row["sha256"] == hashlib.sha256(raw).hexdigest()
+            assert row["size_bytes"] == len(raw)
+
+
+def test_full_backup_refuses_a_changed_routed_registry_source(environment, tmp_path, monkeypatch):
+    source, runtime, _, _ = environment
+    original_add = tarfile.TarFile.add
+    changed = []
+
+    def after_copy(tar, path, *args, **kwargs):
+        result = original_add(tar, path, *args, **kwargs)
+        if str(kwargs.get("arcname", "")).endswith("/source-registry/registry.json"):
+            captured = json.loads(source.read_text())
+            captured["goals"][0]["description"] = "Changed canonical source"
+            source.write_text(json.dumps(captured))
+            changed.append(True)
+        return result
+
+    monkeypatch.setattr(tarfile.TarFile, "add", after_copy)
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_skills=False, include_automations=False)
+    with pytest.raises(ValueError, match="configuration registry differs from copied bytes"):
+        execute_state_backup_plan(plan)
+    assert changed == [True]
+    assert not list((tmp_path / "backups").iterdir())
 
 
 def test_full_archive_explicit_configuration_cohort_retains_missing_source_inventory(environment, tmp_path):

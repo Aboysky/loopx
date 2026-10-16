@@ -51,6 +51,57 @@ def _backup(root: Path, provider: str | None = None) -> tuple[Path, Path]:
     return Path(result["archive_path"]), Path(result["manifest_path"])
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("restore_source", [False, True], ids=["persistent-change", "aba"])
+def test_backup_refuses_configuration_from_different_copied_registry_bytes(
+    tmp_path, monkeypatch, provider, restore_source,
+):
+    from loopx.capabilities import configuration_backup
+
+    original_add = tarfile.TarFile.add
+    original_capture = configuration_backup.capture_configuration_backup
+    copied = []
+
+    def after_copy(tar, source, *args, **kwargs):
+        result = original_add(tar, source, *args, **kwargs)
+        if kwargs.get("arcname") == "configuration/registry.source.json":
+            registry = tmp_path / "registry.json"
+            copied.append(registry.read_bytes())
+            value = json.loads(copied[0])
+            value["goals"][0]["description"] = "Different source revision"
+            registry.write_text(json.dumps(value))
+        return result
+
+    def after_capture(**kwargs):
+        checkpoint = original_capture(**kwargs)
+        if restore_source:
+            # Restore A only after the real source owner captured B. Comparing
+            # the live path after capture would miss this A -> B -> A change.
+            (tmp_path / "registry.json").write_bytes(copied[0])
+        return checkpoint
+
+    monkeypatch.setattr(tarfile.TarFile, "add", after_copy)
+    monkeypatch.setattr(configuration_backup, "capture_configuration_backup", after_capture)
+    with pytest.raises(ValueError, match="configuration registry.*copied bytes"):
+        _backup(tmp_path, provider)
+    assert len(copied) == 1
+    assert not list((tmp_path / "backups").iterdir()), "a mixed backup pair must not be published"
+
+
+def test_backup_refuses_a_required_configuration_source_without_copied_bytes(tmp_path):
+    project, runtime, registry = tmp_path / "project", tmp_path / "runtime", tmp_path / "registry.json"
+    project.mkdir()
+    runtime.mkdir()
+    registry.write_text(json.dumps({"goals": []}))
+    plan = build_state_backup_plan(project=project, runtime_root=runtime, registry_path=registry,
+        output_dir=tmp_path / "backups", include_registry_projects=False,
+        include_automations=False, include_skills=False)
+    plan["included"] = [row for row in plan["included"] if row["key"] != "configuration_source_registry"]
+    with pytest.raises(ValueError, match="configuration registry has no copied bytes witness"):
+        execute_state_backup_plan(plan)
+    assert not list((tmp_path / "backups").iterdir())
+
+
 def _rewrite(archive: Path, manifest: Path, extra: tarfile.TarInfo | None = None,
              body: bytes = b"", replacements: dict[str, bytes] | None = None) -> None:
     with tarfile.open(archive, "r:gz") as source:

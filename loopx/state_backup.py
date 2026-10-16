@@ -6,7 +6,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import tarfile
@@ -508,13 +508,13 @@ def build_scoped_state_backup_plan(
     missing: list[dict[str, Any]] = []
     warnings: list[str] = []
     seen_sources: set[str] = set()
-    for key, source, archive_path in sources:
+    for key, source, member_name in sources:
         source_key = str(_resolved(source))
         if source_key in seen_sources:
             continue
         seen_sources.add(source_key)
         found, absent, target_warnings = _target(key=key, source_path=source.expanduser(),
-            archive_path=archive_path, exclude_roots=exclude_roots)
+            archive_path=member_name, exclude_roots=exclude_roots)
         if found is not None:
             included.append(found)
         if absent is not None:
@@ -646,6 +646,33 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _configuration_source_witnesses(
+    sources: dict[Path, bytes], included: list[dict[str, Any]], members: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compare the actual decoded source bytes with every regular tar copy.
+
+    Covered aliases may be hardlinks; at least one regular copied-byte witness
+    is required. Equality is an IO check, not cross-owner capture qualification.
+    """
+    result = []
+    for source, raw in sources.items():
+        paths = set()
+        for target in included:
+            try:
+                relative = source.relative_to(_resolved(Path(target["source_path"])))
+            except ValueError:
+                continue
+            paths.add(str(PurePosixPath(target["archive_path"]) / relative.as_posix()))
+        witnesses = [row for row in members if row["archive_path"] in paths]
+        sha256 = hashlib.sha256(raw).hexdigest()
+        if not witnesses:
+            raise ValueError("backup configuration registry has no copied bytes witness; include its regular source file")
+        if any(row["sha256"] != sha256 for row in witnesses):
+            raise ValueError("backup configuration registry differs from copied bytes; retry the backup")
+        result.extend(witnesses)
+    return result
+
+
 def _publish_backup_file(source: Path, destination: Path) -> None:
     """Create a new name, retaining exclusive creation on link-less filesystems."""
     try:
@@ -719,11 +746,21 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 capture_configuration_backup,
                 verify_configuration_backup,
             )
+            registry_snapshots: dict[Path, bytes] = {}
+            configuration_started_at = datetime.now(timezone.utc).isoformat()
             configuration = capture_configuration_backup(
                 registry_path=Path(payload["configuration_source_registry"]),
                 runtime_root=Path(payload["runtime_root"]),
                 goal_ids=payload.get("configuration_goal_ids"),
+                registry_snapshots=registry_snapshots,
             )
+            if tar.record_file_members:
+                updated["execution"]["configuration_capture"] = {
+                    "started_at": configuration_started_at,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "source_revisions": _configuration_source_witnesses(
+                        registry_snapshots, included, tar.file_members),
+                }
             configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("configuration-backup.json")
             info.size, info.mode = len(configuration_bytes), 0o600
