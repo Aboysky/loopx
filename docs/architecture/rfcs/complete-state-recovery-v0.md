@@ -42,6 +42,27 @@ remains partial for compound worst cases and broader platform/provider profiles.
 This checkpoint does not qualify M2/M3, live adoption, remote providers or the G1
 team journey. No original identity or receipt is rewritten.
 
+### Delivery after the writer cutoff (2026-10-16)
+
+The landed [R5/T4 cutoff](loopx-overall-roadmap-v0.md#post-6396-delivery-plan)
+provides a simpler current mutation owner, not a stronger capture profile or
+activation receipt. Reuse M1's verifier, safe extraction and readable audit.
+The next implementation is the existing M2 for one local File/SQLite profile:
+record required component-owner revisions and achieved capture consistency;
+exercise concurrent/quiescence/crash and downgrade cases, while v0 remains
+readable and incomplete audits remain held.
+
+Then deliver M3's one-Goal packaged recovery, reusing the Goal-lifetime work in
+[#5206](https://github.com/loopx-project/loopx/issues/5206). Before the drill,
+freeze owner support, source/destination fencing, the replacement/new-lifetime
+decision, effect disposition and RPO/RTO. Original operations, later writes and
+unsupported/unknown effects retain their owners; copied leases or provider
+identity cannot activate the destination. Return an independently accepted
+unfinished-work result through the initiating product entry, with recovered,
+lost/unknown work and human interventions recorded. Keep service and additional
+platform profiles with M4/M5. This coordination checkpoint implements no M2/M3
+behavior and starts no recovery or activation.
+
 ### First supported user outcome
 
 The first bounded user promise is recovery of one local Goal after its source
