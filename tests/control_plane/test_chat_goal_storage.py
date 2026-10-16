@@ -26,12 +26,13 @@ from tests.control_plane.canonical_authority_fixture import (
 @pytest.fixture(params=["file", "sqlite"])
 def api(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    provider, handoff_mode = request.param if isinstance(request.param, tuple) else (request.param, "hard_lease")
     runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
     rows = []
     for goal in ["example", "other"]:
         state = tmp_path / f"{goal}.md"
-        state.write_text("---\nhandoff_mode: legacy\n---\n\n## Agent Todo\n")
+        state.write_text(f"---\nhandoff_mode: {handoff_mode}\n---\n\n## Agent Todo\n")
         rows.append(
             {
                 "id": goal,
@@ -41,10 +42,10 @@ def api(tmp_path, monkeypatch, request):
             }
         )
         projection = build_todo_runtime_shadow_projection(
-            goal_id=goal, handoff_mode="legacy", todos=[]
+            goal_id=goal, handoff_mode=handoff_mode, todos=[]
         )
         initialize_canonical_authority(
-            runtime, goal, projection, state_path=state, provider=request.param
+            runtime, goal, projection, state_path=state, provider=provider
         )
     registry.write_text(
         json.dumps({"common_runtime_root": str(runtime), "goals": rows})
@@ -346,9 +347,34 @@ def test_no_automatic_migration_or_caller_paths_and_active_lease_rejected(api):
     import time
     time.sleep(1.1)
     leased = read(runtime)
+    from datetime import datetime, timezone
+    assert datetime.fromisoformat(acquired["lease"]["expires_at"]) <= datetime.now(timezone.utc)
+    assert leased["leases"][0]["status"] == "active", "Expiry does not settle retained execution"
     assert call()[1]["current"]["unsettled_lease_count"] == 1
     assert call("preview", {"goal_id": "example", "provider": target})[0] == 409
     assert read(runtime) == leased and call()[1]["current"]["provider"] == initial
+
+
+@pytest.mark.parametrize("api", [
+    pytest.param(("file", "legacy"), id="file-legacy"),
+    pytest.param(("sqlite", "legacy"), id="sqlite-legacy"),
+], indirect=True)
+def test_retired_policy_remains_inspectable_but_cannot_grant_host_execution(api):
+    from loopx.control_plane.work_items.task_lease import acquire_task_lease, TaskLeaseError
+
+    call, runtime, registry = api
+    initial = call()[1]["current"]["provider"]
+    task = add_goal_todo(registry_path=registry, goal_id="example", role="agent",
+                        text="Retained legacy ownership", claimed_by="agent-a")
+    before = read(runtime)
+    display = (runtime.parent / "example.md").read_bytes()
+    with pytest.raises(TaskLeaseError) as rejected:
+        acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id="example",
+            todo_id=task["todo_id"], owner="agent-a", idempotency_key="retired-host", ttl_seconds=60)
+    assert rejected.value.code == "handoff_mode_retired"
+    assert read(runtime) == before and before["leases"] == []
+    assert (runtime.parent / "example.md").read_bytes() == display
+    assert call()[1]["current"]["provider"] == initial
 
 
 def test_original_receipt_is_readable_when_live_provider_is_unavailable(api):
@@ -414,17 +440,23 @@ def test_a_preview_cannot_bypass_a_later_host_lease_and_requires_a_fresh_plan(ap
     assert read(runtime) == copied
 
 
-@pytest.fixture(params=[False, True], ids=["cold", "retained-capture"])
-def old_api(tmp_path, monkeypatch, request):
-    from tests.control_plane.test_cold_source_inspection import cold_workspace
+@pytest.fixture
+def old_api(tmp_path, monkeypatch):
     from tests.control_plane.shadow_e2e_fixture import workspace
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    ws = workspace(tmp_path) if request.param else cold_workspace(tmp_path)
-    if request.param:
-        ws.add("Private original history must stay on disk")
-        outbox = ws.runtime / "authority-shadow" / "outbox" / ws.goal / "todos"
-        (outbox / "original-unrecognized.json").write_bytes(b"{malformed original outbox")
+    ws = workspace(tmp_path, bootstrap=False)
+    registry = json.loads(ws.registry.read_text())
+    registry["goals"][0]["coordination"].pop("runtime_shadow")
+    ws.registry.write_text(json.dumps(registry))
+    ws.state.write_text(
+        "---\ngoal_id: goal-e2e\nhandoff_mode: soft_claim\n---\n"
+        "## Agent Todo\n- [ ] Keep active\n"
+        "  <!-- loopx:todo todo_id=todo_active role=agent status=open "
+        "claimed_by=agent-a -->\n"
+        "## Todo Archive\n- [x] Keep archived evidence\n"
+        "  <!-- loopx:todo todo_id=todo_archived role=agent status=done -->\n"
+    )
     directory = ws.runtime / "goals" / ws.goal / "task-leases"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "removed.json").write_text(json.dumps({
@@ -449,7 +481,7 @@ def old_api(tmp_path, monkeypatch, request):
         assert "old-work" not in encoded and "malformed original outbox" not in encoded
         return response.status, result
 
-    yield call, ws, request.param
+    yield call, ws, False
     server.shutdown()
     thread.join(5)
     server.server_close()
@@ -469,11 +501,12 @@ def test_registered_old_source_read_failure_is_unavailable_and_recovers(old_api)
 
 
 def test_old_source_http_inventory_keeps_history_and_does_not_grant_import(old_api):
-    from tests.control_plane.test_cold_source_inspection import capture_bytes
-
     call, ws, captured = old_api
-    before = capture_bytes(ws)
     source = ws.state.read_bytes(), ws.registry.read_bytes()
+    leases = {
+        path: path.read_bytes()
+        for path in (ws.runtime / "goals" / ws.goal / "task-leases").glob("*.json")
+    }
     for _ in range(2):
         code, result = call()
         assert code == 200 and result["ok"], result
@@ -488,8 +521,8 @@ def test_old_source_http_inventory_keeps_history_and_does_not_grant_import(old_a
         assert old["writer_stop_verified"] is old["outbox_reconciliation_verified"] is old["import_ready"] is False
         assert result["authority_changed"] is result["execution_authority_granted"] is False
         assert "outbox_review" not in json.dumps(result)
-    assert before == capture_bytes(ws)
     assert source == (ws.state.read_bytes(), ws.registry.read_bytes())
+    assert leases == {path: path.read_bytes() for path in leases}
     assert not (ws.runtime / "authority").exists()
 
 

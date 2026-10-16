@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-07
+- Last revised：2026-10-15
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -29,7 +29,48 @@ R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 
 <a id="当前交付边界2026-10-02"></a>
 
-## 当前交付边界（2026-10-07）
+## 当前交付边界（2.0 候选，2026-10-15）
+
+贡献者主导的 [#6396](https://github.com/loopx-project/loopx/pull/6396)，
+已评审 head `5d29213d3`，承接 C1/T4 普通 Markdown writer 截止与 live `legacy`
+所有权策略退役，已纳入 fork 补缺及 #6366 中有价值的不变量和恢复检查，见
+[吸收清单](../../reference/local-authority-provider-selection.md#retirement-proposal-reconciliation)。
+候选已删除废弃 writer 实现及 capture producer；canonical mutation、创建、
+team-plan、Monitor 和 lease 消费者复用既有 typed owner。不能根据下方旧清单
+再次派生同样的删除工作。兼容的 1.x 线和仍开放的 2.0 提案是不同交付基线；
+本 checkpoint 不宣称截止行为已发布。
+
+后续整合以正常双亲 merge 连接 `7c0215f26` 与冻结主干 `77d6b07fb`。
+吸收兼容的 1.4.2 修复时保留退役候选 `2.0.0a1`；仅保留相同源码的单亲
+snapshot 会丢失主干祖先关系，破坏上游 diff 的可评审性。新 canonical 创建
+同时保留结构化 P1 和兼容显示，原回执仍保持记录时的意图。producer 删除后，
+历史 outbox 恢复复用既有 native delivery／drain 反例；已释放 lease 的 cutover
+检查迁到有备份的 File／SQLite cold import，保留完整终态记录、后续 canonical
+工作与原导入回执重放，不重建 source writer。后续主干 revision 和安装后的
+Host 采用仍需分别验证其适用证据。
+
+新执行／配置目标统一使用 `ExecutionHandoffMode`，从既有
+`EXECUTION_HANDOFF_MODES`（`soft_claim`／`hard_lease`）派生；历史 `HandoffMode`
+及回执 codec 仍识别 `legacy`。typed 策略 owner 拒绝 fresh legacy 执行、
+acquire／维护及当前 proof 授权，包括 delegation 启动／恢复；历史原回执恢复、
+精确 release 与有备份的 plan／migrate 保留。存储转换和所有权迁移仍是不同操作；
+提案不自动迁移任何活跃 Goal。
+
+当前工作是候选集成与采用验证，不是再做 writer extraction：保留兼容 1.x 的
+升级／备份／恢复路线，完成有界可回退核心开发者试用及受影响的真实 Host／App
+旅程，保持正式 D2 的失败／缺失证据与发布默认资格开放。永久 Markdown 文档／
+显示 IO、历史 reader 及未完成的 receipt／outbox 处置仍需保留。转换演练通过
+不代表自然采用或 Goal-instance 退役完成。
+
+后续以[当前退役 ledger](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#current-candidate-checkpoint)
+为准。[精确 head 评审](https://github.com/loopx-project/loopx/pull/6396#pullrequestreview-5535116423)
+和[组合 tree 证据](https://github.com/loopx-project/loopx/pull/6396#issuecomment-6195855339)
+各自保留源码 revision，不认证未验证的后续 head／base、安装 cohort 或全部 RFC 验收。
+
+### 历史 1.x 前置 checkpoint（截至 2026-10-12）
+
+以下记录解释具名源码上的前置条件与验证。“writer 仍可达”及“下一次截止”
+描述当时的 1.x 基线，不是上方候选仍未实现的工作。
 
 按 main `06b6caa07` 复核，#5413/#5466/#5283，以及创建、Host 停止、UI 历史
 相关 owner #5500/#5805/#5308/#5398 均已合并。复用各自已交付的边界，不重开
