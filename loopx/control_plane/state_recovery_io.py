@@ -439,4 +439,9 @@ def render_state_recovery_markdown(payload: dict[str, Any]) -> str:
     if isinstance(measurements, dict):
         lines.append(f"Archive: {measurements['archive_bytes']} bytes; regular files: {measurements['regular_file_bytes']} bytes; "
                      f"archive checks/copy: {measurements['archive_processing_ms']} ms; owner reads: {measurements['owner_read_ms']} ms.")
+    for component in payload.get("components", []):
+        facts = component["facts"]
+        if "provider_revision" in facts:
+            lines.append(f"Captured authority {component['component_id']}: "
+                         f"provider revision {facts['provider_revision']}; cursor {facts['cursor']}.")
     return "\n".join(lines)
