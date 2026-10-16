@@ -350,6 +350,8 @@ export type WorkspaceActionPreview = {
   // See proposal-recency.ts.
   createdAt?: string;
   previewId: string;
+  /** False for a refused preview held only in this page; no stored action exists to read back. */
+  persisted?: boolean;
   regeneratedFrom?: string | null;
   primaryLabel?: string;
   errorMessage?: string;
@@ -569,6 +571,8 @@ export type PersonalWorkspaceCallbacks = {
   onReconcileStatus?: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   /** Full refresh by default; error recovery can explicitly read missing Goals only. */
   onRefresh?: (scope?: WorkspaceReadScope) => void | WorkspaceRefreshResult | Promise<void | WorkspaceRefreshResult>;
+  /** Re-read the workspace without a loading state; used by background freshness such as notifications. */
+  onBackgroundRefresh?: () => void | Promise<void>;
   onRetryGoalArchive?: () => void | Promise<void>;
   onPreviewAction?: (request: WorkspaceActionPreviewRequest) => WorkspaceActionPreview | Promise<WorkspaceActionPreview>;
   onRequestGoalCreate?: () => WorkspaceActionPreview | Promise<WorkspaceActionPreview | void> | void;

@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { goalCreateRequest } from "./goal-create-request.ts";
+import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request.ts";
 import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import { taskSessionStatus } from "./goal-activity.ts";
 import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
+const projectionAgent = { agentId: "status-only", adapterKind: "status_projection", available: true, label: "Status" };
+const missingAgent = { agentId: "codex", available: false, label: "Codex" };
+const availableAgent = { agentId: "claude", available: true, label: "Claude" };
+assert.equal(goalCreationAgentId("status-only", [missingAgent, projectionAgent]), "codex", "Creation diagnoses the real missing executor, never the read-only snapshot");
+assert.equal(goalCreationAgentId("status-only", [missingAgent, availableAgent, projectionAgent]), "claude", "Creation can use the discovered available executor");
+assert.equal(goalCreationAgentId("codex", [missingAgent, availableAgent, projectionAgent]), "codex", "An explicit unavailable executor remains selected for its own gate");
+assert.equal(goalCreationAgentId("custom", [missingAgent, projectionAgent]), "custom", "An unknown explicit identity is left for backend eligibility");
+assert.equal(goalCreationAgentId("status-only", [projectionAgent]), "status-only", "An empty executor catalog cannot manufacture an executor");
 const answerText = source("./answer-text.ts");
 const model = source("./personal-workspace-model.ts");
 const activity = source("./goal-activity.ts");
@@ -597,6 +605,26 @@ assert.match(page, /data-testid="personal-first-goal"/, "The home renders the fi
 assert.match(page, /onSuggestRequest\(t\(`home\.firstGoal\.example\./, "Example requests only fill the composer");
 assert.match(page, /personal-first-goal-diagnostics/, "Status source details stay in a collapsed disclosure");
 for (const key of ["home.firstGoal.title", "home.firstGoal.lead", "home.firstGoal.create", "home.health.contractFailed", "home.health.concerns"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}
+
+// Needs-you desktop notifications: a per-browser opt-in. Off by default, the
+// page neither asks for permission nor re-reads the workspace in the background.
+const attentionNotifications = source("./attention-notifications.ts");
+assert.match(attentionNotifications, /export function shouldNotifyAttention/, "Notification admission is one typed rule");
+assert.match(page, /const attentionNotificationsActive = attentionNotificationsEnabled && attentionNotificationSupportState === "granted" && !readOnly;/, "Polling and notifying share one activation predicate that includes read-only");
+assert.match(page, /if \(!attentionNotificationsActive \|\| !backgroundRefreshRef\.current\) return;/, "No background re-read unless notifications are active");
+assert.match(page, /Notification\.requestPermission\(\)/, "Permission is requested from the owner's toggle, not on load");
+assert.doesNotMatch(page.replace(/async function updateAttentionNotifications[\s\S]*?\n  }\n/, ""), /requestPermission/, "Only the toggle handler asks for permission");
+assert.match(page, /seenAttentionKeysRef\.current = new Set\(model\.userTodos\.map\(attentionNotificationKey\)\)/, "Enabling seeds every listed item so nothing already listed is replayed");
+assert.match(page, /const fresh = notifiableAttention\(newAttentionItems\(seen, items\)\);/, "Only an item first seen while it waits on the owner notifies; optional actions never do");
+assert.match(page, /const remembered = seen \? new Set\(seen\) : new Set<string>\(\);\s*for \(const item of items\) remembered\.add\(attentionNotificationKey\(item\)\);/, "Seen identities are kept for the activation lifetime; a partial read never forgets one");
+assert.doesNotMatch(page.slice(page.indexOf("const remembered = seen"), page.indexOf("const fresh = notifiableAttention")), /seenAttentionKeysRef\.current = keys/, "The seen set is never replaced by the current read");
+assert.match(attentionNotifications, /export function notifiableAttention[\s\S]*?items\.filter\(\(item\) => item\.blocking\)/, "Notifiable means the attention owner's blocking classification, never the whole list");
+assert.match(page, /window\.addEventListener\("focus", readBack\);[\s\S]*?document\.addEventListener\("visibilitychange", readBack\);[\s\S]*?navigator\.permissions\?\.query\(\{ name: "notifications" \}\)/, "The browser's permission answer is read back on return, on settings and on change");
+assert.doesNotMatch(page.slice(page.indexOf("const readBack = () =>"), page.indexOf("const attentionNotificationsActive")), /requestPermission|setAttentionNotificationsEnabled\(true\)/, "Reading the answer back never asks for permission or enables on its own");
+assert.match(dashboard, /onBackgroundRefresh=\{\(\) => loadFromUrl\([^\n]*\{ background: true, readScope: "all"/, "The background re-read keeps snapshots on screen and re-reads every Goal");
+for (const key of ["settings.attentionNotifications", "settings.attentionNotificationsToggle", "settings.attentionNotificationsDenied", "settings.attentionNotificationsUnsupported", "notifications.attentionMore"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
 

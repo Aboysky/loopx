@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
-import { outputDir } from "./fixture.mjs";
-import { openWorkspacePage } from "./scenario-context.mjs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { chmod, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
+import { waitForHttp } from "../dashboard-browser-smoke-support.mjs";
+import { outputDir, packaged, repoRoot } from "./fixture.mjs";
+import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 // A fresh install without a usable Agent: the service refuses the first Goal's
 // preview with a typed gate (which Agent, the catalog's reason). The page must
@@ -25,6 +32,85 @@ function emptyWorkspace(fixture) {
   if (fixture.usage_summary) fixture.usage_summary.goals = [];
   fixture.contract = { ok: true, summary: { errors: 0, warnings: 1, checks: 1 }, errors: [],
     warnings: ["registry file does not exist: [local-path]"], checks: ["run-history goals=0 runs=0"] };
+}
+
+async function realUnavailableAgent({ browser, collectCoverage, url }) {
+  const root = await mkdtemp(join(tmpdir(), "loopx-first-goal-no-agent-"));
+  const python = resolveTestPython({ repoRoot });
+  const child = spawn(python, ["-u", resolve(repoRoot, "examples/personal-workspace-browser/fresh-install-backend.py"), root, "--no-agent"], { cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot }, stdio: ["ignore", "pipe", "pipe"] });
+  const closed = once(child, "close");
+  const lines = createInterface({ input: child.stdout });
+  let diagnostics = "", session;
+  child.stderr.on("data", (chunk) => { diagnostics = (diagnostics + chunk).slice(-4000); });
+  try {
+    const ready = await Promise.race([once(lines, "line").then(([line]) => JSON.parse(line)), closed.then(() => { throw new Error(`fresh-install backend exited: ${diagnostics}`); })]);
+    const backend = `http://127.0.0.1:${ready.port}`;
+    await waitForHttp(`${backend}/status.json?view=workspace-directory`);
+    const catalog = await (await fetch(`${backend}/api/chat/capabilities`)).json();
+    assert.equal(catalog.adapters.find((row) => row.agent_id === "codex").available, false);
+    session = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 }, beforeGoto: async (_api, page) => {
+      const proxied = new Set(["/status.json", "/api/chat/capabilities", "/api/chat/projects"]);
+      await page.route((target) => proxied.has(target.pathname) || target.pathname.startsWith("/api/actions"), async (route) => {
+        const response = await fetchWorkspaceBackend(route, backend);
+        await route.fulfill({ response });
+      });
+    } });
+    const { page } = session;
+    const requests = [];
+    const previews = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST") requests.push(new URL(request.url()).pathname);
+      if (request.method() === "POST" && new URL(request.url()).pathname === "/api/actions/preview") previews.push(request.postDataJSON());
+    });
+    const firstGoal = page.getByTestId("personal-first-goal");
+    await firstGoal.waitFor({ state: "visible", timeout: 20_000 });
+    const title = "Track the weekly release checklist";
+    async function preview() {
+      await firstGoal.locator(".personal-first-goal-create").click();
+      const form = page.locator("dialog.personal-action-form");
+      await form.waitFor({ state: "visible" });
+      await form.getByLabel("目标").fill(title);
+      await form.getByLabel("完成标准").fill("A checklist exists and is reviewed every week");
+      await form.locator("button[type=submit]").click();
+    }
+    await preview();
+    const drawer = page.locator(".personal-context-drawer");
+    await drawer.waitFor({ state: "visible", timeout: 20_000 });
+    const text = (await drawer.innerText()).replace(/\s+/g, " ");
+    assert.match(text, /还不能开始这个 Goal/);
+    assert.match(text, /codex/i);
+    assert.match(text, /先安装并登录/);
+    assert.match(text, /没有写入任何 Goal/);
+    assert.doesNotMatch(text, /endpoint is not healthy|invalid_action_preview/);
+    assert.doesNotMatch(text, /提案状态刷新失败/, "A refused local preview has no stored action to read back");
+    assert.equal(await drawer.getByRole("button", { name: "稍后", exact: true }).count(), 0, "No persisted defer/reject operation exists for a refused preview");
+    assert.equal(await drawer.getByRole("button", { name: "拒绝", exact: true }).count(), 0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: resolve(outputDir, "first-goal-agent-unavailable-live-phone.png"), animations: "disabled" });
+    const registry = join(ready.project, ".loopx", "registry.json");
+    await assert.rejects(stat(registry), { code: "ENOENT" });
+    assert.deepEqual((await (await fetch(`${backend}/status.json?view=workspace-directory`)).json()).goals, []);
+
+    // Only a temporary exit-only executable becomes available. Preview never
+    // applies a Goal or starts a Turn; real credentials/binaries stay isolated.
+    await writeFile(join(ready.bins, "codex"), "#!/bin/sh\nexit 0\n");
+    await chmod(join(ready.bins, "codex"), 0o755);
+    await drawer.getByRole("button", { name: "按最新状态重新检查", exact: true }).click();
+    await drawer.getByText("新 Goal · 待你确认", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    await assert.rejects(stat(registry), { code: "ENOENT" });
+    assert.equal(requests.filter((path) => path === "/api/actions/preview").length, 2);
+    assert.equal(previews[0].normalized_parameters.title, title);
+    assert.deepEqual(previews[1], previews[0], "Rechecking retains the owner's original draft and operation identity");
+    assert.ok(requests.every((path) => !/\/apply$|\/turns$/.test(path)), "preview recovery grants no apply or Turn");
+    return await session.close();
+  } catch (error) {
+    if (diagnostics) process.stderr.write(diagnostics);
+    await session?.close().catch(() => {});
+    throw error;
+  } finally {
+    lines.close();
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); const kill = setTimeout(() => child.kill("SIGKILL"), 5000); try { await closed; } finally { clearTimeout(kill); } }
+  }
 }
 
 export const firstGoalAgentUnavailableScenario = {
@@ -64,7 +150,9 @@ export const firstGoalAgentUnavailableScenario = {
       await form.locator("button[type=submit]").click();
       await drawer.waitFor({ state: "visible", timeout: 10_000 });
       await drawer.getByText("新 Goal · 待你确认", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-      return { coverageEntries: await session.close() };
+      const coverageEntries = await session.close();
+      if (packaged) coverageEntries.push(...await realUnavailableAgent({ browser, collectCoverage, url }));
+      return { coverageEntries };
     } catch (error) {
       await session.close().catch(() => {});
       throw error;
