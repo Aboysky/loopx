@@ -191,7 +191,8 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
     cli.chmod(0o755)
     for name, value in {"_CONTROL": control, "_TASK_DOC": control / "task.md",
                         "_REGISTRY": control / "registry.json", "_CLI": cli,
-                        "_LOOPX_RUNTIME": tmp_path / "runtime"}.items():
+                        "_LOOPX_RUNTIME": tmp_path / "runtime",
+                        "_SRC": Path(__file__).resolve().parents[2]}.items():
         monkeypatch.setattr(harbor, name, str(value))
     # Exercise real shell, task uploads, bootstrap/configure and planner without
     # staging binaries, contacting a model or creating a task/grader container.
@@ -243,7 +244,7 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         assert packet["existing_todos"] == [] and packet["execution_handoff"]["spends_quota"] is False
         # Real typed replan owner reads the bootstrapped registry/state, not a
         # hand-built objective fixture. It must retain both ordered priorities
-        # and the trailing constraint after Markdown/public-safe projection.
+        # and the trailing constraint through the scoped source projection.
         readback = subprocess.run([sys.executable, "-c",
             "import json,sys; from loopx.control_plane.work_items.replan_context_codec "
             "import project_replan_context; print(json.dumps(project_replan_context("
