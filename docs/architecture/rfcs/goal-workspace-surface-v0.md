@@ -419,12 +419,27 @@ return to the whole graph preserve scoped focus or explain its invalidation.
 benchmark research owner's deep trajectory evaluation, not a second judge
 built into the frontend. Reuse its analysis method and versioned result
 sidecar, then generate an explanatory graph and conclusions over the same
-history. The whole trajectory is the coverage container; the research owner
-defines episode segmentation, including cross-Turn episodes, and its explicit
-mapping to source events/artifacts. A display grouping does not establish an
+history. The whole run and prospectively fixed comparison windows own coverage,
+native outcomes and marginal cost; the research owner defines episode
+segmentation, including cross-Turn episodes, and its explicit mapping through
+source references, submission ids and artifact digests in the same snapshot.
+A display grouping does not establish an
 evaluation unit. Rubric, calibration and scientific claims remain with the
 [long-horizon research program](long-horizon-harness-benchmark-research-program-v0.md#63-long-horizon-control-quality)
 and [research evaluation owner](research-exploration-control-plane-v0.md#15-evaluation-and-claim-boundary).
+
+**Current producers, not a completed analysis service.** Existing
+[`benchmark_behavior_finding_v0` / `benchmark_behavior_report_v0`](../../reference/benchmark-behavior-findings.md)
+support bounded `exploratory_behavior` observations and interpretations, not
+scientific scoring. The toolkit's
+[`public_trajectory_summary_v0`](../../../loopx/capabilities/benchmark_toolkit/README.md)
+is a compact native Goal lifecycle projection, initially for DeepSWE, not a
+complete research graph or quality assessment. The existing experiment board
+owns native runs, comparability and integrity; its counts do not prove research
+progress. A general deep-research evaluation service, product assessment-sidecar
+schema and calibrated model rubric are not implemented. Initial integration
+can consume the research owner's permitted, versioned analysis artifacts;
+these existing producers must not be relabeled as the missing service.
 
 Product and research must reconcile these existing producer/consumer facts
 before choosing a runtime schema; this table is an integration requirement,
@@ -433,9 +448,9 @@ not a new protocol or a claim that a producer already supplies every item:
 | Shared basis | Product consumption requirement |
 | --- | --- |
 | Source snapshot | Same Goal/source, revisions, full requested window, observed coverage, episode-to-event/artifact bindings and permitted audience; unknown and unallocated work retained |
-| Evaluation basis | Method/rubric and model revisions, assessment time, qualification state, actual cost/coverage and comparable controls; proposed or uncalibrated judgments labeled as such |
-| Analysis result | One referenced, versioned sidecar with observations, interpretations, checks, adoption, supporting/counterevidence, uncertainty, abstentions and disagreements; generated graph claims point back to it |
-| Validity | Input/artifact changes leave the prior result readable on its historical basis and mark its current applicability unestablished; a new result does not silently replace the old one |
+| Evaluation basis | Input digest and coverage, method/code revision, model/configuration only if used, assessment time, qualification, actual cost/coverage and comparable controls; proposed or uncalibrated judgments labeled as such |
+| Analysis result | One referenced, versioned sidecar and artifact digest with observations, interpretations, checks, adoption, supporting/counterevidence, uncertainty, abstentions and disagreements; generated graph claims point back to it |
+| Validity | Input/artifact or method changes leave the prior result readable on its historical basis and mark its current applicability unestablished; a new result does not silently replace the old one |
 
 With intent and scoped authority already present, one optional request should
 be enough: reuse a valid matching assessment or let the existing authorized
@@ -445,7 +460,10 @@ from a real missing fact, permission or cost boundary. Opening, refreshing or
 selecting history never starts analysis. Show unavailable permissions/budget,
 in-progress, cancellation, failure and retry through the existing action owner;
 failure leaves Layer 1 usable. Repeated clicks or navigation do not duplicate
-the request. This RFC neither creates that action nor grants model/run budget.
+the request. Expose execution only when its owning path can actually perform it;
+otherwise explain its unavailability. Analysis cannot borrow a frozen solver's
+budget, cooldown or feedback opportunities. This RFC neither creates that action
+nor grants model/run budget.
 
 Keep the factual graph available while viewing the generated explanation.
 Observation, Agent interpretation, independent check and actual adoption remain
@@ -508,7 +526,7 @@ the local delta marker can be deleted at any time without effect.
 | V9 No side effects | Browser network assertions while opening, refreshing, switching lenses and opening the palette | No action, quota or validator request | — |
 | V10 Render budget | 200-node Goal (the map node limit) | Threshold frozen before measuring, then met | Not live-team display scale |
 | V11 Whole research history | Packaged UI and real read-only owner over an authorized multi-hour history with competing routes and multiple attempts; flat best score, negatives, old/missing anchors, absent timestamps/relations, pagination, duplicates, out-of-order events, disconnect and another Goal | Default zero-configuration whole covered interval; gaps/partiality explicit; one optional selection exposes decisive evidence; refresh/back, 390px, keyboard and reduced motion preserve meaning; no inferred causal edge or execution effect | A synthetic graph qualifies a prototype only; incomplete coverage cannot qualify complete history |
-| V12 Shared deep analysis | The same pinned research assessment consumed by the packaged workspace, including uncalibrated/abstaining results, changed inputs, denied access/budget, repeated request, cancellation and failed/retried analysis | One authorized request, one execution and source-linked explanation; source/version/coverage agree with the assessment; stale results stay historical; Layer 1 survives failure; no scoring/solver-feedback side effect | Product usability and independent benchmark/evaluator qualification require separate evidence; specification or model agreement is not calibration |
+| V12 Shared deep analysis | The same pinned research assessment consumed by the packaged workspace, including uncalibrated/abstaining results, changed inputs/method, denied access/budget, repeated request, cancellation and failed/retried analysis | One authorized request reuses a matching result or executes once; source-linked explanation agrees with the assessment's source/version/coverage; stale results stay historical; Layer 1 survives failure; no scoring/solver-feedback side effect | Product usability and independent benchmark/evaluator qualification require separate evidence; specification or model agreement is not calibration |
 
 Synthetic fixtures may prove composition. Journeys V4, V5, V7 and V8 also need
 the real owning backend on disposable state. A skipped row is not green.
