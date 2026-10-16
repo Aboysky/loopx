@@ -759,8 +759,36 @@ these facts do not change the admitted context/basis identity. Changed source
 requires rereading within the original Turn. Page coordinates persist with the
 decision into subsequent review; node-filtered/planner detail routes remain
 outside this bounded citation path. No separate receipt store is introduced.
-These are provenance and proposal-shape obligations, not automatic proof that
-research was executed or useful. Ordinary Todo/Next Action carries admitted work.
+The enabled review also carries the prior decision's existing `todo_delta`
+targets in `decision_followthrough.planned_work`: current canonical status and
+claim, plus references to causally later observations of that exact work item.
+Legacy descriptive Todo deltas remain readable with unresolved linkage; an
+overlong reference is never truncated into a different Todo identity.
+Missing Todo sources and omitted work remain explicit; a missing observation
+does not prove non-execution, and Todo completion does not prove objective gain.
+Related observations survive unrelated recent activity in the bounded window.
+The same bounded followthrough is included in `stride_control` so compact Host
+envelopes expose it without requiring another full-context read. Historical
+decision identities and off-mode output remain unchanged.
+
+Outcome claims require at least one subsequent observation; earlier evidence
+can still be cited for comparison. Writeback replays up to three cited references
+against the complete scoped history through the existing typed replan owner.
+Neither the six-row followthrough display nor the main evidence display limits
+eligibility. Ordinary work rows remain usable without optional typed-progress
+attachments, while accounting-only rows cannot establish execution. Execution
+or gain claims for declared work must cite that work's subsequent observation,
+not another Todo's activity. This
+is a provenance check, not a quality threshold or an automatic truth verdict.
+An executed negative experiment remains a legal outcome. Planning guidance uses
+existing `todo_delta` action/id entries to connect `next_probe` with real Todo
+work, preserves unfinished useful experiments and separates informative
+evaluation from adopting a replacement artifact. No mandatory new proposal
+field, acceptance document, spawn permission or score gate is introduced.
+Ordinary Todo/Next Action still carries admitted work. Real File/SQLite CLI
+qualification covers a decision, selected successor execution, negative evidence,
+next-review readback and rejection/recovery of a claim citing only old evidence;
+model adoption and score or cost benefits remain unqualified.
 
 The activation vocabulary and existing Goal/device editor stay unchanged; no
 second selectable strategy or policy database is added. Off retains ordinary
