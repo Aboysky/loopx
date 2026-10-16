@@ -211,7 +211,18 @@ mod tests {
     #[test]
     fn ordinary_reopen_keeps_selection_across_ports_without_replaying_other_inputs() {
         let old = origin(49123);
-        let page = old.join("?goalId=example&view=conversation&workAgent=worker&todo=todo_123&statusUrl=%2Fstatus.json&token=secret&prompt=run&reportSessionId=report#secret").unwrap();
+        let mut page = old.clone();
+        page.query_pairs_mut().extend_pairs([
+            ("goalId", "example"),
+            ("view", "conversation"),
+            ("workAgent", "worker"),
+            ("todo", "todo_123"),
+            ("statusUrl", "/status.json"),
+            ("token", "secret"),
+            ("prompt", "run"),
+            ("reportSessionId", "report"),
+        ]);
+        page.set_fragment(Some("secret"));
         let selection = LocalWorkspace::capture(&page, &old).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("app/workspace-location.json");
