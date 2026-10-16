@@ -3,36 +3,9 @@ import {createHash} from 'node:crypto';
 import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 
 export const TRAJECTORY_METHOD = 'research-episodes-v2';
-export const TRAJECTORY_METRICS = ['goal_alignment', 'benefit_test', 'discrimination', 'information_gain', 'evidence_adoption', 'redundancy'] as const;
-export type TrajectoryMetric = typeof TRAJECTORY_METRICS[number];
-export type AssessmentVerdict = 'yes' | 'no' | 'unknown';
-export interface TrajectorySource {
-  id: string; artifact: string; artifact_sha256: string; first_line: number; text: string;
-}
-export interface TrajectoryEpisode {
-  id: string; question: string; source_ids: string[]; eligible_metrics: TrajectoryMetric[];
-}
-export interface TrajectoryInput {
-  schema_version: 'trajectory_assessment_input_v1';
-  scope: {goal_id: string; case_id: string; run_id: string; revision: string; window: string};
-  objective: string;
-  selection: {rule: string; population_episodes: number | null; exhaustive: boolean};
-  sources: TrajectorySource[]; episodes: TrajectoryEpisode[];
-}
-export interface AssessmentCitation {source_id: string; first_line: number; last_line: number}
-export interface EpisodeAssessment {
-  episode_id: string; metric: TrajectoryMetric; verdict: AssessmentVerdict;
-  reason: string; citations: AssessmentCitation[];
-}
-export interface TrajectoryAssessment {
-  schema_version: 'trajectory_assessment_v1'; method_version: string; analysis_key: string;
-  scope: TrajectoryInput['scope']; selection: TrajectoryInput['selection'];
-  evidence_manifest: Omit<TrajectorySource, 'text'>[];
-  calibration: 'uncalibrated_model'; assessments: EpisodeAssessment[];
-  metrics: Array<{metric: TrajectoryMetric; yes: number; no: number; unknown: number; eligible: number;
-    assessed_fraction: number | null; missing_data_bounds: [number, number] | null}>;
-  limitations: string[];
-}
+import {TRAJECTORY_METRICS} from './trajectory_assessment_types.ts';
+import type {TrajectoryMetric, TrajectoryInput, AssessmentVerdict, TrajectoryAssessment} from './trajectory_assessment_types.ts';
+export * from './trajectory_assessment_types.ts';
 const object = (v: unknown, name: string): Record<string, unknown> => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new EffectRuntimeRequestError(`${name} must be an object`);
   return v as Record<string, unknown>;

@@ -66,7 +66,9 @@ Never impute missing dollars from an unverified model price.
 
 Capability owner: existing `benchmark-toolkit`. Shared input validation, fixed
 rubric, applicability identity and count reduction live in TypeScript at
-`loopx/control_plane/capabilities/trajectory_assessment.ts`. The built-in Codex
+`loopx/control_plane/capabilities/trajectory_assessment.ts`; browser-safe shapes
+and metric vocabulary live in the adjacent `trajectory_assessment_types.ts`.
+The built-in Codex
 adapter only owns local process and file I/O; it is not another solver runner,
 LoopX Turn, scheduler, Explore writer, native judge or capability.
 
@@ -172,8 +174,12 @@ only exact ranges already cited in that result, from the immutable captured
 excerpt. Missing/changed sources block new execution but preserve the historical
 result and captured citations with a historical applicability label. A changed
 assessment method requires a newly registered pack and does not silently relabel
-old judgments as current; old raw artifacts remain in private storage for host
-inspection. Raw provider errors, local paths and process IDs are not projected
+old judgments as current. Historical display verifies the original receipt,
+input/config/key and qualified sidecar digest without applying the new rubric.
+Legacy results lacking that proof remain unavailable for automatic historical
+display; original raw artifacts are retained for host inspection. While the
+original method is still available, explicit same-key reuse requalifies its
+output and records the proof. Raw provider errors, local paths and process IDs are not projected
 to the workbench. Same-key success reuses the prior result; explicit retry is
 reserved for failed/cancelled attempts.
 

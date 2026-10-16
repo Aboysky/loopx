@@ -11,11 +11,10 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
-from typing import Any
 
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...file_lock import exclusive_file_lock
-from .trajectory_assessment import _write, execute, read_job, request_cancel
+from .trajectory_assessment import _digest, _write, execute, read_job, request_cancel
 
 DEFAULT_CONFIG = {"model": "gpt-6.1-sol", "effort": "max", "service_tier": "fast"}
 
@@ -26,12 +25,6 @@ class PackUnavailable(ValueError):
     def __init__(self, reason_code: str):
         self.reason_code = reason_code
         super().__init__(reason_code)
-
-
-def _digest(value: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()
 
 
 def _opaque(value: str) -> str:
@@ -266,14 +259,37 @@ def inspect_pack(
             or job["scope"] != record["input"]["scope"]
         ):
             raise PackUnavailable("receipt_mismatch")
-        if job["status"] == "succeeded" and reason != "method_changed":
-            result = effect_runtime_result(
-                "benchmark.trajectory.qualify",
-                {
-                    **prepared,
-                    "output": json.loads((directory / "model-output.json").read_text()),
-                },
-            )
+        if job["status"] == "succeeded":
+            if reason == "method_changed":
+                # Read a previously qualified artifact without applying today's
+                # rubric. The old receipt must bind its frozen input and bytes.
+                payload = (directory / "assessment.json").read_bytes()
+                if (
+                    job.get("input_sha256") != _digest(record["input"])
+                    or job.get("assessment_sha256")
+                    != hashlib.sha256(payload).hexdigest()
+                    or job.get("config") != record["config"]
+                ):
+                    raise PackUnavailable("historical_result_unverified")
+                result = json.loads(payload)
+                if (
+                    result.get("schema_version") != "trajectory_assessment_v1"
+                    or result.get("analysis_key") != record["analysis_key"]
+                    or result.get("scope") != record["input"]["scope"]
+                    or result.get("method_version") != record["method_version"]
+                    or job.get("method_version") != record["method_version"]
+                ):
+                    raise PackUnavailable("historical_result_unverified")
+            else:
+                result = effect_runtime_result(
+                    "benchmark.trajectory.qualify",
+                    {
+                        **prepared,
+                        "output": json.loads(
+                            (directory / "model-output.json").read_text()
+                        ),
+                    },
+                )
     return {
         "ok": True,
         **_summary(record, reason),

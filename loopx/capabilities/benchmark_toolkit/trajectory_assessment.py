@@ -5,6 +5,7 @@ No solver state, score authority, scheduler or Explore writer is used here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,21 @@ import time
 from typing import Any
 
 from ...control_plane.effect_runtime import effect_runtime_result
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def _result_proof(directory: Path, prepared: dict[str, Any]) -> dict[str, str]:
+    return {
+        "input_sha256": _digest(prepared["input"]),
+        "assessment_sha256": hashlib.sha256(
+            (directory / "assessment.json").read_bytes()
+        ).hexdigest(),
+    }
 
 
 def _write(path: Path, value: Any) -> None:
@@ -95,6 +111,8 @@ def execute(
                     },
                 )
                 _write(directory / "assessment.json", verified)
+                prior.update(_result_proof(directory, prepared))
+                _write(directory / "receipt.json", prior)
                 return {**prior, "reused": True}
             if not retry or prior["status"] == "running":
                 return {
@@ -207,7 +225,9 @@ def execute(
                 "benchmark.trajectory.qualify", {**prepared, "output": output}
             )
             _write(directory / "assessment.json", result)
-            receipt.update(status="succeeded", ok=True)
+            receipt.update(
+                status="succeeded", ok=True, **_result_proof(directory, prepared)
+            )
         for line in (directory / "events.jsonl").read_text().splitlines():
             try:
                 event = json.loads(line)

@@ -82,6 +82,7 @@ def pack(tmp_path):
     executable = tmp_path / "codex-fixture"
     executable.write_text(f"""#!{sys.executable}
 import json,sys
+from pathlib import Path
 sys.stdin.read()
 Path(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(json.dumps(output))})
 print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_tokens':2}}}}))
@@ -183,3 +184,46 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
     )
     with pytest.raises(PackUnavailable, match="source_unavailable"):
         execute_pack(**operation, codex="must-not-run")
+
+
+def test_method_upgrade_reads_verified_old_result_without_rejudging(pack, monkeypatch):
+    from loopx.capabilities.benchmark_toolkit import (
+        trajectory_assessment_store as store,
+    )
+
+    scope, operation, _, _, _, provider = pack
+    execute_pack(**operation, codex=provider)
+    current = inspect_pack(**scope)
+    original_prepare = store._prepared
+
+    def upgraded_method(record):
+        # Simulate a new method identity at the typed-owner boundary. The real
+        # old method, child process and stored receipt were exercised above.
+        return {
+            **original_prepare(record),
+            "analysis_key": "b" * 64,
+            "method_version": "future-method",
+        }
+
+    monkeypatch.setattr(store, "_prepared", upgraded_method)
+    historical = inspect_pack(**scope)
+    assert historical["reason_code"] == "method_changed"
+    assert historical["applicability"] == "historical"
+    assert historical["result"] == current["result"]
+    assert historical["result"]["method_version"] != "future-method"
+    assert (
+        read_citation(**operation, source_id="source", first_line=2, last_line=2)[
+            "applicability"
+        ]
+        == "historical"
+    )
+    with pytest.raises(PackUnavailable, match="method_changed"):
+        execute_pack(**operation, codex="must-not-run")
+    result_file = next(
+        scope["runtime_root"].glob(
+            "benchmark/trajectory-assessments/*/jobs/*/assessment.json"
+        )
+    )
+    result_file.write_text("{}")
+    with pytest.raises(PackUnavailable, match="historical_result_unverified"):
+        inspect_pack(**scope)
