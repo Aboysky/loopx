@@ -758,12 +758,14 @@ def _authoring_input_migration(
                       "bootstrap_command_pack", "bootstrap_command_pack_message_only"}
             and before.get("first_delivery_guidance") is False
             and after.get("first_delivery_guidance") is True):
-        # Structured prompts now reference the shared planner (one full copy,
-        # two with the standalone message in detail). The standalone message
-        # retains the expanded 1,238-byte guidance plus its explicit reference
-        # label/spacing. Keep growth scoped to the first introduction only.
+        # Structured prompts reference the shared planner once. JSON packs that
+        # also carry their rendered message hold the expanded 1,238-byte
+        # guidance twice: the planner field plus the labelled block the
+        # message-only consumer needs (bootstrap measured 2,821; detail more).
+        # Keep growth scoped to the first introduction only.
         chars = (
-            (3_600 if surface == "start_goal_guided_command_pack_detail" else 2_400)
+            (3_600 if surface == "start_goal_guided_command_pack_detail"
+             else 3_000 if surface == "bootstrap_command_pack" else 2_400)
             if base.get("format") == "json" else 1_400
         )
         limits = {"chars": chars, "utf8_bytes": chars, "lines": 4,

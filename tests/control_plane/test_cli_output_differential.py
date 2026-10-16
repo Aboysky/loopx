@@ -67,7 +67,7 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     ("quota_should_run", "json", "vision_cli_authoring", (3049, 94, 1807)),
     ("loopx_turn_plan", "json", "vision_cli_authoring", (237, 0, 237)),
     ("start_goal_guided", "json", "first_delivery_guidance", (2340, 0, 2340)),
-    ("bootstrap_command_pack", "json", "first_delivery_guidance", (2340, 0, 2340)),
+    ("bootstrap_command_pack", "json", "first_delivery_guidance", (2821, 0, 2821)),
     ("bootstrap_command_pack", "markdown", "first_delivery_guidance", (578, 0, 0)),
     ("start_goal_guided_command_pack_detail", "json", "first_delivery_guidance", (3496, 0, 3496)),
     ("bootstrap_command_pack_message_only", "markdown", "first_delivery_guidance", (578, 0, 0)),
