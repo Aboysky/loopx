@@ -6,6 +6,7 @@ export const agentModelSelectionScenario = {
   id: "agent-model-selection",
   async run({ browser, collectCoverage, url }) {
     let createdCount = 0;
+    let managerModelKnown = false;
     const requests = [];
     let discoveryCount = 0;
     const context = await openWorkspacePage(browser, url, {
@@ -24,11 +25,11 @@ export const agentModelSelectionScenario = {
           requests.push(body);
           const runtime = page.__loopxRuntime;
           const channel = body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`;
-          const existing = body.mode === "resume_latest" ? [...runtime.sessions.values()].find(session =>
-            session.channel_id === channel && session.agent_id === body.agent_id) : null;
+          const existing = body.mode === "resume_latest" ? [...runtime.sessions.values()].findLast(session =>
+            session.channel_id === channel && session.agent_id === (body.agent_id ?? "codex")) : null;
           const session = existing ?? {
-            session_id: `model-session-${++createdCount}`, goal_id: body.goal_id, agent_id: body.agent_id,
-            agent_model_id: body.agent_model_id ?? "runtime-default", agent_reasoning_effort: body.agent_reasoning_effort ?? "high", agent_service_tier: "priority", adapter_kind: "codex_app_server", channel_id: channel,
+            session_id: `model-session-${++createdCount}`, goal_id: body.goal_id || "loopx-manager", agent_id: body.agent_id ?? "codex",
+            agent_model_id: body.context_kind === "manager" && !managerModelKnown ? null : body.agent_model_id ?? "runtime-default", agent_reasoning_effort: body.agent_reasoning_effort ?? "high", agent_service_tier: "priority", adapter_kind: "codex_app_server", channel_id: channel,
             status: "ready", active_turn_id: null, last_error_code: null, resumable: true,
             created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z",
           };
@@ -42,6 +43,32 @@ export const agentModelSelectionScenario = {
     });
     const { page, api } = context;
     try {
+      const assertReadableHeader = async () => {
+        const layout = await page.locator(".personal-channel-header").evaluate(header => {
+          const title = header.querySelector("h1");
+          const runtime = header.querySelector(".personal-runtime-details > summary");
+          const oneLine = node => {
+            if (!node) return false;
+            const text = document.createRange();
+            text.selectNodeContents(node);
+            return text.getBoundingClientRect().height <= parseFloat(getComputedStyle(node).lineHeight) * 1.1;
+          };
+          return { title: oneLine(title), runtime: oneLine(runtime), fits: document.documentElement.scrollWidth <= innerWidth + 1 };
+        });
+        assert.deepEqual(layout, { title: true, runtime: true, fits: true }, "The manager title and runtime label remain readable beside known or unknown model readback");
+      };
+      await page.locator(".personal-model-current").filter({hasText: "模型未回传"}).waitFor();
+      await page.setViewportSize({width: 390, height: 844});
+      await assertReadableHeader();
+      assert.equal(discoveryCount, 0, "Unknown current facts do not start catalog discovery");
+      managerModelKnown = true;
+      await page.evaluate(() => fetch("/api/chat/sessions", { method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ context_kind: "manager", agent_id: "codex", mode: "new" }) }));
+      await page.reload({waitUntil: "networkidle"});
+      await page.locator(".personal-model-current").filter({hasText: "runtime-default"}).waitFor();
+      await assertReadableHeader();
+      await page.setViewportSize({width: 1512, height: 982});
+      await assertReadableHeader();
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const menu = page.locator(".personal-chat-model-menu");
@@ -98,6 +125,8 @@ export const agentModelSelectionScenario = {
       assert.equal(requests.at(-1).agent_model_id, "vendor/model  fast", "an explicit choice uses the exact model identifier");
       await page.setViewportSize({width: 390, height: 844});
       await openSettings();
+      const panel = await page.locator(".personal-chat-model-panel").boundingBox();
+      assert.ok(panel.x >= 0 && panel.x + panel.width <= 390, "The whole model menu stays inside the phone viewport, including its labels and controls");
       const width = await modelControl.locator(".personal-select-value").evaluate(node => node.clientWidth);
       assert.ok(width >= 100, "the exact current model remains readable on a phone");
       const readback = menu.locator("summary small");

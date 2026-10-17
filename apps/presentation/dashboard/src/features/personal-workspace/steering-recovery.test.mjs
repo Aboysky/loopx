@@ -17,7 +17,7 @@ test("steering identity survives reload only after exact persistent readback", a
   assert.equal(reloaded.readSteeringRequest(key), undefined);
 });
 
-test("unavailable storage preserves the page draft but refuses dispatch qualification", async () => {
+test("an undispatched storage failure leaves the draft editable after recovery", async () => {
   let available = false, stored = null;
   globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {
     if (!available) throw new Error("synthetic storage failure");
@@ -25,18 +25,19 @@ test("unavailable storage preserves the page draft but refuses dispatch qualific
   }}};
   const recovery = await import("./steering-recovery.ts?unavailable");
   assert.equal(recovery.retainSteeringRequest(key, request), false);
-  assert.deepEqual(recovery.readSteeringRequest(key), request, "The unsent draft is still editable in this page");
+  assert.equal(recovery.readSteeringRequest(key), undefined, "A refused dispatch cannot become an uncertain delivery");
   available = true;
-  assert.equal(recovery.retainSteeringRequest(key, request), true);
+  const edited = {...request, text: "Revised before any dispatch", id: "edited-request"};
+  assert.equal(recovery.retainSteeringRequest(key, edited), true);
   const reloaded = await import("./steering-recovery.ts?recovered");
-  assert.deepEqual(reloaded.readSteeringRequest(key), request, "Repair does not mint a new operation identity");
+  assert.deepEqual(reloaded.readSteeringRequest(key), edited, "The first qualified attempt retains the edited draft and identity");
 });
 
 test("a silently dropped browser write is not a durable retry identity", async () => {
   globalThis.window = {sessionStorage: {getItem: () => null, setItem() {}}};
   const recovery = await import("./steering-recovery.ts?dropped");
   assert.equal(recovery.retainSteeringRequest(key, request), false);
-  assert.deepEqual(recovery.readSteeringRequest(key), request);
+  assert.equal(recovery.readSteeringRequest(key), undefined);
 });
 
 
@@ -80,7 +81,8 @@ test("legacy recovery moves one exact Session/Turn identity into the composer", 
 });
 
 test("failed legacy migration retains recovery and cannot overwrite a composer retry", async () => {
-  let stored = JSON.stringify([[key, request]]), writable = false;
+  const other = {...request, id: "other-ingress"};
+  let stored = JSON.stringify([[key, request], ["other-composer", other]]), writable = false;
   globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {
     if (!writable) throw new Error("QuotaExceededError");
     stored = value;
@@ -88,14 +90,15 @@ test("failed legacy migration retains recovery and cannot overwrite a composer r
   const recovery = await import("./steering-recovery.ts?legacy-failed");
   assert.deepEqual(recovery.restoreLegacySteeringRequest("composer", key, "session"), request);
   assert.deepEqual(recovery.readSteeringRequest(key), request, "The durable old location survives a failed copy");
+  assert.equal(recovery.readSteeringRequest("composer"), undefined, "A failed copy creates no qualified composer retry");
   assert.deepEqual(recovery.restoreLegacySteeringRequest("composer", key, "session"), request, "The same identity remains restorable after clearing the input");
-  assert.equal(recovery.retainSteeringRequest("other-composer", {...request, id: "other-ingress"}), false);
+  assert.equal(recovery.retainSteeringRequest("other-composer", {...request, id: "replacement-ingress"}), false);
   assert.equal(recovery.restoreLegacySteeringRequest("other-composer", key, "session"), undefined, "A different retry is never replaced");
   assert.equal(recovery.retainSteeringRequest("composer", request), false, "Memory alone cannot qualify dispatch");
   writable = true;
   assert.equal(recovery.retainSteeringRequest("composer", request), true);
   recovery.retireSteeringRequest("composer", request.id);
-  assert.deepEqual(JSON.parse(stored), [["other-composer", {...request, id: "other-ingress"}]], "Acknowledgement retires only its legacy alias, preserving the other composer");
+  assert.deepEqual(JSON.parse(stored), [["other-composer", other]], "Acknowledgement retires only its legacy alias, preserving the other composer");
 });
 
 test("an unsaved edit cannot replace the original uncertain retry identity", async () => {
