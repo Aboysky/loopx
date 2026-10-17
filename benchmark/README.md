@@ -713,6 +713,8 @@ physical capture root. A missing or symlinked root closes that connection;
 the original source can correct its path and continue through the same listener.
 The refusal neither captures nor releases the old packet and does not renew the
 original wake deadline. The transport does not create or follow a foreign root.
+Host failures before a connection is accepted remain execution failures. They
+are not packet refusals and cannot enter the source-preserving retry loop.
 
 To reproduce **joint source capture and both fresh-guest receivers**, use
 [`qualify_checkpoint_joint.py`](tests/qualify_checkpoint_joint.py) from the current
@@ -933,6 +935,8 @@ worker 保留原 guard，controller 暂停全部容器写入者，核对仍有�
 原生交接先接收并读取一条有界请求，再校验捕获根目录的物理路径。目录缺失或为
 符号链接时关闭该连接，原来源可纠正路径后经同一监听器继续；拒绝不捕获、不释放
 旧 packet，不延长原 wake 截止时间，也不创建或跟随外来根目录。
+连接尚未接收时的 Host 故障仍是执行失败，不是一次 packet 拒绝，不进入保留
+来源的请求重试循环。
 显式开启的两处完整 controller 捕获 hook 共用 90 秒窗口（原为 30 秒），覆盖完整原生/研究上下文
 准备、一致性复核与 live-source 捕获，并受原试验 phase 截止时间约束。controller
 沿用同一个绝对截止时间；解除暂停后，只能在原 phase 内再用至多 30 秒封存静态副本。

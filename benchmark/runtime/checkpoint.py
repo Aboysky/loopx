@@ -415,7 +415,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
 @contextmanager
 def held_quota_decision(listener, capture_root: Path, *, goal_id: str, agent_id: str,
                         turn_instance_id: str | None, native_process=None, interrupt_timeout: float = 10,
-                        interrupt_when=None, deadline: float | None = None):
+                        interrupt_when=None, deadline: float | None = None, accepted_channel=None):
     """Host-side counterpart of the explicit quota pre-output transport.
 
     The existing typed owner decides whether this exact packet admits a fresh
@@ -442,7 +442,9 @@ def held_quota_decision(listener, capture_root: Path, *, goal_id: str, agent_id:
             raise TimeoutError("original wake budget expired during decision handoff")
         return limit
 
-    channel, _ = listener.accept()
+    channel = accepted_channel
+    if channel is None:
+        channel, _ = listener.accept()
     with channel:
         channel.settimeout(remaining())
         with channel.makefile("rb") as stream:

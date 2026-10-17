@@ -563,3 +563,54 @@ def test_wake_receipt_error_tail_is_bounded_message():
     assert tail["error_kind"] == "ValueError"
     assert tail["error"].startswith("decision handoff must reference this Host's capture root")
     assert len(tail["error"]) == 500 and "\n" not in tail["error"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+def test_accept_failure_is_not_retried_as_a_refused_packet(tmp_path, monkeypatch):
+    import errno
+    import socket
+    import tempfile
+    from contextlib import contextmanager
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import benchmark.runtime.worker as worker
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+
+    processes, accepts = [], []
+    owned_child = worker.child_process
+
+    @contextmanager
+    def record_child(*args, **kwargs):
+        with owned_child(*args, **kwargs) as process:
+            processes.append(process)
+            yield process
+
+    monkeypatch.setattr(worker, "child_process", record_child)
+    env = {**os.environ, "LOOPX_PROJECT": str(tmp_path), "LOOPX_WAKE_LOG_DIR": str(tmp_path),
+           "LOOPX_GOAL_ID": "source", "LOOPX_AGENT_ID": "agent"}
+    wake = CheckpointWake(env, {"turn_id": "turn", "mode": "heartbeat", "stage": "execute"})
+    with tempfile.TemporaryDirectory(prefix="accept-failure-", dir="/tmp") as short:
+        address = str(Path(short).resolve() / "host.sock")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(address)
+            listener.listen(1)
+
+            class UnavailableListener:
+                def fileno(self):
+                    return listener.fileno()
+
+                def accept(self):
+                    accepts.append(True)
+                    raise OSError(errno.EMFILE, "file descriptor capacity exhausted")
+
+            wake.listener = UnavailableListener()
+            code = ("import socket; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); "
+                    f"s.connect({address!r}); s.sendall(b'{{}}\\n'); s.recv(1)")
+            monkeypatch.setattr(worker, "native_command", lambda *args: [sys.executable, "-c", code])
+            with (tmp_path / "out").open("w") as stdout, (tmp_path / "err").open("w") as stderr:
+                with pytest.raises(OSError, match="capacity exhausted"):
+                    wake.run(SimpleNamespace(), "body", tmp_path, None, stdout, stderr, 1)
+    assert len(accepts) == 1
+    assert "checkpoint_handoffs" not in wake.receipt
+    assert len(processes) == 1 and processes[0].poll() is not None
