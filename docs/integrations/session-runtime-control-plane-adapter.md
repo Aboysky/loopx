@@ -139,7 +139,13 @@ Changed defaults create a distinct ordinary Session at the next idle open;
 existing history stays addressable. Active Turns, exact Session resumes,
 attached Agents, task workers and an already started Agent Loop retain their
 original identity. The header separates **New conversation model/reasoning**
-choices from the current Session readback. Effort and tier appear only when the native host reports
+choices from the current Session readback. Its compact model control keeps the
+observed model and settings visible; opening it shows the complete observation
+and optional new-conversation choices in place. Native catalog discovery begins
+when those choices are opened, rather than while reading an overview or typing
+an ordinary message. Closing or changing the executor cancels that read; retry
+remains explicit, and catalog failures do not replace the observed model.
+Effort and tier appear only when the native host reports
 them; Fast may be returned as `priority`. Model selection does not enable a
 LoopX Agent Loop: its separate settings own coordinator identity, token
 allowance and member bindings, and its start control remains explicit.
@@ -151,7 +157,7 @@ catalog, separately for each model. ACP choices use the host's
 and model selection is applied before reading its dependent options. An absent
 option is unavailable, never a guessed list of levels. Status-only answers are
 a separate read mode, not an executor or a model choice. Unknown actual models
-remain status text outside the model menu; catalog failure has a retry and
+remain status text and never become a model option; catalog failure has a retry and
 does not claim to refresh the current model.
 
 An explicit pick applies when opening the next distinct ordinary conversation;
