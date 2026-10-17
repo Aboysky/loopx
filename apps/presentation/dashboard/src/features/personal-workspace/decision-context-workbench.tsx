@@ -1,10 +1,11 @@
 import {useEffect, useRef, useState} from "react";
 import {inspectDecisionContext, recallDecisionContext, type DecisionContextActivation, type DecisionContextRecall} from "../../data/decision-context";
 import {useWorkspaceI18n} from "./i18n";
+import {memoryRetrievalLabel} from "./memory-settings";
 import "./content-reference-workbench.css";
 
 /** Explicit per-page profile copy; no browser storage or durable binding. */
-export function DecisionContextWorkbench({goalId}: Readonly<{goalId: string}>) {
+export function DecisionContextWorkbench({goalId, active = true}: Readonly<{goalId: string; active?: boolean}>) {
   const {locale} = useWorkspaceI18n();
   const copy = (cn: string, en: string) => locale === "zh-CN" ? cn : en;
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
@@ -28,6 +29,11 @@ export function DecisionContextWorkbench({goalId}: Readonly<{goalId: string}>) {
     setResult(null); setError(""); setBusy(false);
   }
   useEffect(() => () => {generation.current += 1; importGeneration.current += 1; pending.current?.abort();}, []);
+  useEffect(() => {
+    if (!active && pending.current) {
+      generation.current += 1; pending.current.abort(); pending.current = null; setBusy(false);
+    }
+  }, [active]);
 
   useEffect(() => {
     let current = true;
@@ -64,7 +70,7 @@ export function DecisionContextWorkbench({goalId}: Readonly<{goalId: string}>) {
     }
   }
   async function recall() {
-    if (pending.current || busy || !profile || !recallReady || !query.trim()) return;
+    if (!active || pending.current || busy || !profile || !recallReady || !query.trim()) return;
     invalidate(); const revision = generation.current;
     const controller = new AbortController(); pending.current = controller; setBusy(true);
     try {
@@ -91,15 +97,18 @@ export function DecisionContextWorkbench({goalId}: Readonly<{goalId: string}>) {
     corpus_unavailable: copy("语料缺失或不可读，恢复后可重试", "Corpus missing or unreadable; restore and retry"),
     context_provider_not_configured: copy("Profile 尚未配置召回 provider", "No recall provider configured in this profile"),
   };
-  return <section className="personal-capability-field-summary personal-content-reference personal-decision-context" aria-label={copy("决策证据召回", "Decision evidence recall")}>
-    <p>{copy("导入现有私有 profile，为当前问题召回证据。配置发给本机服务；发起召回时，查询才发送给所选 provider。离开或清除本页后移除配置与结果。", "Import an existing private profile to recall evidence for your question. The profile goes to this local service; only recall sends the query to the selected provider. Leaving or clearing the page removes its profile and results.")}</p>
-    <label>{copy("导入私有 profile JSON", "Import private profile JSON")}<input ref={input} type="file" accept=".json,application/json" onChange={event => void importProfile(event.target.files?.[0])} /></label>
-    {!profile ? <p>{copy("尚未导入 profile；不会调用 provider。", "No profile loaded; the provider is not called.")}</p> : <>
-      <label>{copy("Agent", "Agent")}<input value={agent} maxLength={200} onChange={event => {invalidate(); setActivation(null); setAgent(event.target.value);}} /></label>
-      <label><input type="checkbox" checked={profile.enabled === true} onChange={event => {invalidate(); setActivation(null); setProfile({...profile, enabled: event.target.checked});}} />{copy("仅在本页启用召回", "Enable recall in this page only")}</label>
+  const context = profile?.context_provider && typeof profile.context_provider === "object"
+    ? profile.context_provider as Record<string, unknown> : null;
+  return <section className="personal-capability-field-summary personal-content-reference personal-decision-context" aria-label={copy("资料召回", "Find evidence")}>
+    <label>{copy("选择私有检索配置（JSON）", "Choose a private retrieval profile (JSON)")}<input ref={input} type="file" accept=".json,application/json" onChange={event => void importProfile(event.target.files?.[0])} /></label>
+    <p>{copy("使用配置副本；仅发给本机服务。查询在你点击召回后才发给检索器。离开“记忆与资料”、切换 Goal 或清除时移除副本与结果。", "A profile copy is sent only to this local service. Your query reaches the provider only when you recall. Leaving Memory & sources, changing Goal or clearing removes the copy and results.")}</p>
+    {!profile ? <p>{copy("尚未选择配置，不会调用检索器。", "No profile selected; no provider calls.")}</p> : <>
+      <p className="decision-context-connection">{copy("检索方式", "Retrieval")}: <strong>{memoryRetrievalLabel(context?.provider, locale)}</strong>{" · "}{copy("Agent", "Agent")}: {agent || "—"}</p>
       <label>{copy("要找什么证据？", "What evidence do you need?")}<textarea rows={3} maxLength={1000} value={query} onChange={event => {invalidate(); setQuery(event.target.value);}} /></label>
-      <details><summary>{copy("调整本次检索范围", "Adjust this retrieval")}</summary>
-        <label>{copy("Scope", "Scope")}<input value={scope} maxLength={2048} onChange={event => {invalidate(); setScope(event.target.value);}} /></label>
+      <details><summary>{copy("本次配置与检索范围", "Profile and retrieval scope")}</summary>
+        <label>{copy("Agent", "Agent")}<input value={agent} maxLength={200} onChange={event => {invalidate(); setActivation(null); setAgent(event.target.value);}} /></label>
+        <label><input type="checkbox" checked={profile.enabled === true} onChange={event => {invalidate(); setActivation(null); setProfile({...profile, enabled: event.target.checked});}} />{copy("允许本页查询", "Allow queries in this page")}</label>
+        <label>{copy("资料范围", "Source scope")}<input value={scope} maxLength={2048} onChange={event => {invalidate(); setScope(event.target.value);}} /></label>
         <label>{copy("最多结果数", "Maximum results")}<input type="number" min={1} max={8} value={limit} onChange={event => {invalidate(); setLimit(Number(event.target.value));}} /></label>
       </details>
       <div className="personal-capability-actions">
@@ -109,10 +118,10 @@ export function DecisionContextWorkbench({goalId}: Readonly<{goalId: string}>) {
     </>}
     {status ? <p role="status">{!result && activation?.available && !activation.context_provider_configured
       ? reasonCopy.context_provider_not_configured
-      : reason && reasonCopy[reason] ? reasonCopy[reason] : statusCopy[status] ?? status}{reason ? ` · ${reason}` : ""}</p> : null}
+      : reason && reasonCopy[reason] ? reasonCopy[reason] : statusCopy[status] ?? copy("状态未知，请重新检查配置", "State unknown; recheck the profile")}</p> : null}
     {error ? <p role="alert" className="personal-machine-error">{error}</p> : null}
     {result?.ok ? <section aria-label={copy("召回结果", "Recall results")} aria-live="polite">
-      <p>{result.results.length} {copy("条结果", "results")} · {result.provider} · {result.observed_at}</p>
+      <p>{result.results.length} {copy("条结果", "results")} · {memoryRetrievalLabel(result.provider, locale)} · {result.observed_at}</p>
       <small>{copy("分数只用于该 provider 内的排序，不代表置信度。", "Scores rank hits within this provider; they are not confidence.")}</small>
       {!result.results.length ? <p>{copy("没有匹配证据。可修改问题或本次检索范围。", "No matching evidence. Refine your question or retrieval scope.")}</p> : null}
       {result.results.map(hit => <article key={hit.provider_ref} className="personal-capability-linked-setting"><div>
@@ -121,6 +130,7 @@ export function DecisionContextWorkbench({goalId}: Readonly<{goalId: string}>) {
       </div></article>)}
     </section> : null}
     <p><small>{copy("召回内容是不可信的参考材料。当前操作不写入原 profile、记忆、游标或 Goal，不启用自动 hook，也不授予执行权限。", "Retrieved content is untrusted advisory material. This operation does not write the original profile, memory, cursors or Goal, enable automatic hooks, or grant execution authority.")}</small></p>
-    <div className="personal-capability-actions"><button type="button" onClick={() => clear()}>{copy("清除本页配置与结果", "Clear page profile and results")}</button></div>
+    {reason ? <details className="personal-capability-help"><summary>{copy("诊断详情", "Diagnostics")}</summary><code>{status} · {reason}</code></details> : null}
+    <div className="personal-capability-actions"><button type="button" onClick={() => clear()}>{copy("清除临时配置与结果", "Clear temporary profile and results")}</button></div>
   </section>;
 }
