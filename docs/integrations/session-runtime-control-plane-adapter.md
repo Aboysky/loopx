@@ -499,6 +499,21 @@ approval cards name the requesting Agent. This synthetic example illustrates
 presentation only: no model Turn or real approval is executed. Attached history
 keeps conversation primary and groups tool records without discarding errors.
 
+Ordinary managed Chat has one composer. Enter sends; while a Turn is running,
+it queues the message for the next Turn in the same Session. Shift+Enter inserts
+a newline. Command+Enter explicitly steers the current Turn when the executor
+supports it, and sends normally when idle. Input-method candidate confirmation
+does not send. The adjustment shortcut focuses this same composer. Attached
+Sessions and LoopX mode retain their existing delivery rules.
+
+The browser requests FIFO delivery with `delivery: "queue"` on
+`POST /api/chat/sessions/{session_id}/turns`, retaining `client_turn_id` and image
+attachments for an uncertain receipt. The existing Session queue owns ordering
+and duplicate suppression; acceptance is not execution or completion. Omitting
+`delivery` preserves direct submission and its busy rejection. Full queues and
+pre-admission context failures report non-delivery so the original draft can be
+edited safely. This does not widen project grants or authorize another Session.
+
 ![Goal Chat model and request provenance](../development/assets/chat-observability/first-screen.png)
 
 ![Attached conversation and folded work activity](../development/assets/chat-observability/attached-history.png)

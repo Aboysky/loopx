@@ -784,12 +784,15 @@ class ChatRequestHandler(
                 status=404,
                 session_invalidated=True,
                 turn_replay_safe=True,
+                delivery_state="not_delivered",
             )
             return
         try:
             body = self._read_json(max_bytes=CHAT_TURN_MAX_BODY_BYTES)
-            if set(body) - {"message", "client_turn_id", "attachments"}:
+            if set(body) - {"message", "client_turn_id", "attachments", "delivery"}:
                 raise ValueError("unknown turn field")
+            if body.get("delivery") not in (None, "queue"):
+                raise ValueError("delivery must be queue when supplied")
             validate_chat_turn_envelope(body)
             message = str(body.get("message") or "").strip()
             if not message:
@@ -802,13 +805,21 @@ class ChatRequestHandler(
         try:
             context = self._session_context(session)
             runtime_objective = str(context["objective"] or context["title"])
-            turn, created = self.server.runtime_controller.submit_turn(
+        except (ValueError, KeyError) as exc:
+            # No Turn has been admitted when its owning context cannot resolve.
+            self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
+            return
+        try:
+            submit = (self.server.runtime_controller.enqueue_turn if body.get("delivery") == "queue"
+                      else self.server.runtime_controller.submit_turn)
+            turn, created = submit(
                 session_id=session_id,
                 client_turn_id=client_turn_id,
                 message=message,
                 attachments=attachments,
                 work_dir=context["project"],
                 objective=runtime_objective,
+                **({"origin": "web"} if body.get("delivery") == "queue" else {}),
             )
             if body.get("client_turn_id"):
                 turn_id = str(turn["turn_id"])
@@ -858,6 +869,10 @@ class ChatRequestHandler(
             )
             return
         except RuntimeError as exc:
+            if str(exc) == "session_queue_full":
+                self._send_error("Session queue is full; the message was not accepted.", status=429,
+                                 error_code="session_queue_full", delivery_state="not_delivered", turn_replay_safe=True)
+                return
             self._send_json(
                 {
                     "ok": False,
