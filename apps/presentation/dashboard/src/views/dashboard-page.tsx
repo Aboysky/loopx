@@ -97,6 +97,7 @@ import {
   presentedAgentFamily,
 } from "../features/personal-workspace/agent-family";
 import { PersonalWorkspacePage } from "../features/personal-workspace/personal-workspace-page";
+import { modelSelectionFromReadback } from "../features/personal-workspace/chat-model-controls";
 import { MIN_SEPARATE_ANSWER_LENGTH, visibleAgentMessage } from "../features/personal-workspace/answer-text";
 import { useWorkspaceI18n, type WorkspaceTranslate } from "../features/personal-workspace/i18n";
 import {
@@ -1562,12 +1563,11 @@ function PersonalGoalHome({
   function recordSessionAdmission(targetContextId: string, session: ChatSessionSummary) {
     const key = agentModelSelectionKey(targetContextId, session.agent_id);
     setAgentModelReadbacks(current => ({...current, [key]: session}));
-    const currentModel = session.agent_model_id ?? "";
-    setSelectedAgentModels((current) => (requestedAgentModels.current[key] && requestedAgentModels.current[key] !== currentModel) || current[key] === currentModel
-      ? current : { ...current, [key]: currentModel });
-    const effort = session.agent_reasoning_effort ?? "";
-    setSelectedAgentEfforts((current) => (requestedAgentEfforts.current[key] && requestedAgentEfforts.current[key] !== effort) || current[key] === effort
-      ? current : { ...current, [key]: effort });
+    const selection = modelSelectionFromReadback(session, { model: requestedAgentModels.current[key], effort: requestedAgentEfforts.current[key] });
+    if (selection.model !== undefined) setSelectedAgentModels((current) => current[key] === selection.model
+      ? current : { ...current, [key]: selection.model! });
+    if (selection.effort !== undefined) setSelectedAgentEfforts((current) => current[key] === selection.effort
+      ? current : { ...current, [key]: selection.effort! });
     const queues = chatSessionQueuesFollowUps(session);
     const supportsSteering = chatSessionSupportsSteering(session);
     setSteeringSessionIds((current) => {

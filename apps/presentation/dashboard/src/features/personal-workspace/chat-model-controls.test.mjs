@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chatModelControls } from "./chat-model-controls.ts";
+import { chatModelControls, modelSelectionFromReadback } from "./chat-model-controls.ts";
 
 const discovery = { model: { selected: "catalog-default", options: [
   { value: "first", label: "First", reasoning_efforts: ["low", "high"] },
@@ -35,4 +35,23 @@ test("ACP-advertised thought level remains separate from observed Session", () =
 test("unsupported or unavailable reasoning is not replaced with invented options", () => {
   assert.deepEqual(chatModelControls(null, "first", "high").reasoningOptions, []);
   assert.deepEqual(chatModelControls({ model: { options: [{ value: "first" }] } }, "first", undefined).reasoningOptions, []);
+});
+
+test("old model readback cannot restore its effort after a different model was picked", () => {
+  const update = modelSelectionFromReadback({ agent_model_id: "first", agent_reasoning_effort: "high" }, { model: "second" });
+  assert.equal(update.model, undefined);
+  assert.equal(update.effort, undefined);
+});
+
+test("a pending effort stays selected until the same model confirms it", () => {
+  assert.deepEqual(modelSelectionFromReadback({ agent_model_id: "first", agent_reasoning_effort: "low" },
+    { model: "first", effort: "high" }), { model: "first", effort: undefined });
+  assert.deepEqual(modelSelectionFromReadback({ agent_model_id: "first", agent_reasoning_effort: "high" },
+    { model: "first", effort: "high" }), { model: "first", effort: "high" });
+});
+
+test("unselected defaults use only the actual Session response, including unknown", () => {
+  assert.deepEqual(modelSelectionFromReadback({}, {}), { model: "", effort: "" });
+  assert.deepEqual(modelSelectionFromReadback({ agent_model_id: "first", agent_reasoning_effort: "low" }, {}),
+    { model: "first", effort: "low" });
 });
