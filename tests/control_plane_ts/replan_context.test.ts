@@ -131,6 +131,36 @@ function subsequent(position: number): JsonObject {
 
 const strideRequest = {...request, stride_strategy: "evidence_conditioned_v1"};
 
+test("unconsumed result survives later reviews and citations alone; recorded work closes only its source relation", () => {
+  const first = reviewed(1);
+  (first._source_facts as JsonObject).planned_todo_ids = ["todo-a"];
+  const result = {...subsequent(2), progress_observation: null};
+  const ref = (projectReplanContext({...request, rows: [result]}).evidence as JsonObject[])[0].evidence_ref;
+  const next = reviewed(3);
+  (next._source_facts as JsonObject).planned_todo_ids = ["todo-b"];
+  const vision = (next._source_facts as JsonObject).agent_vision as JsonObject;
+  (vision.path_delta as JsonObject).evidence_refs = [ref];
+  const readUse = (rows: JsonObject[]) => (projectReplanContext({...strideRequest, rows})
+    .decision_followthrough as JsonObject).work_result_use as JsonObject;
+  const proposed = readUse([first, result, next]);
+  assert.equal(proposed.unresolved_count, 1);
+  assert.equal((proposed.unresolved as JsonObject[])[0].evidence_ref, ref);
+  assert.deepEqual(proposed.recorded_followthrough, []);
+  const actual = {...subsequent(4), todo_id: "todo-b", progress_observation: null};
+  const adopted = readUse([first, result, next, actual]);
+  assert.equal(adopted.unresolved_count, 1, "the next result remains available for the next decision");
+  assert.notEqual((adopted.unresolved as JsonObject[])[0].evidence_ref, ref);
+  const links = adopted.recorded_followthrough as JsonObject[];
+  assert.equal(links.length, 1); assert.equal(links[0].result_evidence_ref, ref);
+  assert.equal(links[0].work_todo_id, "todo-b");
+  assert.deepEqual(readUse([first, result, next, actual, actual]), adopted, "replay cannot consume or duplicate twice");
+  const replayedResult = {...result, _source_facts: {...result._source_facts as JsonObject, history_position: 5}};
+  assert.deepEqual(readUse([first, result, next, actual, replayedResult]), adopted, "a lost-response replay cannot resurrect consumed evidence");
+  const omitted = reviewed(3);
+  (omitted._source_facts as JsonObject).planned_todo_ids = ["todo-b"];
+  assert.equal(readUse([first, result, omitted]).unresolved_count, 1, "another review cannot silently drop an uncited result");
+});
+
 type OrdinaryFollowthrough = {
   recorded_progress_count: number; execution_and_goal_gain: string; observations: JsonObject[];
   previous_decision: JsonObject;

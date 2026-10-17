@@ -303,6 +303,17 @@ reviewing the outcome. Ordinary evidence has no `coverage_ref`, does not increas
 the legacy packet shape, not a claim that no work happened. Feature-off output,
 historical identities and full-source writeback qualification are unchanged.
 
+`decision_followthrough.work_result_use` also reconstructs unresolved declared-work
+evidence across reviews from the existing append order. Another review or a bare
+citation cannot consume it: a recorded decision must cite its immutable history
+reference, declare subsequent Todo work, and be followed by a material writeback
+on that Todo. `recorded_followthrough` exposes that source relation, not certified
+execution, candidate applicability or utility. Complete/omitted counts accompany
+the six-row windows; replay does not resurrect consumed evidence. A replaced
+plan invalidates its unexecuted proposal, not the unresolved source. This is a
+read model, not a pending-duty ledger, new write gate or forced continuation.
+The Agent still checks the provider's exact candidate/input/result revision.
+
 启用 `evidence_conditioned_v1` 且历史中已有被接受、绑定证据的 Vision 路线时，replan context 返回上次决定与之后的
 进度引用，按合格来源的顺序关联，而非根据时间戳或文案猜测因果。完整本地索引提供
 追加位置；已知最新在前的紧凑载体与 `newest_first_runs` 入口转换位置，保留普通
@@ -319,6 +330,13 @@ historical identities and full-source writeback qualification are unchanged.
 原文后再评估结果；普通证据不伪造 `coverage_ref`，不增加 typed-progress 计数，
 也不证明执行或收益。没有普通证据时保留旧包形状，不据此断言没有工作。off 输出、
 历史身份和完整来源的写回资格不变。
+
+`work_result_use` 从既有追加历史重建跨复盘尚待跟进的声明工作证据。又做一次复盘
+或只引用一次都不会消耗结果：决定须引用其不可变 history 身份、声明后续 Todo，
+并出现该 Todo 的实际材料回写，才返回 `recorded_followthrough` 关联。它不认证执行、
+候选适用性或收益；Agent 仍应核对提供方的候选/输入/结果版本。两个六项窗口保留
+完整/省略计数，重放不复活已关联证据，替换未执行计划不删除原结果。它不是新待办
+账本、写入门槛或强制续跑规则。
 
 ### Replan planning guidance
 
