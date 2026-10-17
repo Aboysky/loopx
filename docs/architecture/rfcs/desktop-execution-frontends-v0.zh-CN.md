@@ -248,6 +248,18 @@ Agent 分类或转发消息。绑定不硬编码到 Codex：该 Agent 的执行�
 `loopx_collaboration_status_v0` 可以提供有用的只读卡片，但它不是核心抽象。
 核心对象是 Agent 级的前端连接和收敛后的工作会话。
 
+托管 Goal Chat 的可观察性切片将执行器身份、已解析模型与显式模型选择分开。
+用户请求及确认视图保留 canonical Agent 作者；历史缺失作者保持未知。
+仅呈现宿主明确公开的推理摘要，隐藏历史原始推理。这是现有 Chat 路径的有界
+修正，不证明 attached 宿主或 Lark 交互已完整对等。默认行为与来源契约见
+[投影边界](../../integrations/session-runtime-control-plane-adapter.md#projection-boundary)。
+
+挂接 Codex 记录也让对话优先于连续工具事件。自然滚动在有界源窗口内向前/向后
+分页，保留阅读锚点，仅在末尾回到缓冲的实时观察。工具详情、来源缺口和已观察
+失败仍可访问。此处改变呈现，不改变原会话输入/审批权限，也不替代尚未完成的
+provider 与安装宿主资格验证。
+
+
 ## Agent 级外部连接器模型
 
 Lark 群入口和 Lark 文档评论是一个 provider-neutral 连接器边界的两个实例。

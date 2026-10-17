@@ -96,6 +96,49 @@ LoopX says a goal is still blocked, the projection must explain the
 reconcile rule: missing gate, missing validation, failed outcome, stale
 artifact, or human decision not yet recorded.
 
+For managed Codex conversations, `agent_model_id` reports the model resolved
+by the bound app-server Session. The executor name and model catalog order do
+not establish that identity. A missing readback stays explicitly unavailable;
+the catalog's first model is never shown as current. The private Session keeps
+the requested model separately, so observing a default does not pin it on
+restart. An explicit model change still creates a distinct Session and preserves
+the old conversation.
+
+Open **Settings → Conversations and models** (or the Goal header's settings
+button) to configure machine defaults for ordinary Codex Goal conversations.
+The `codex_chat` namespace separately stores an existing native profile alias,
+model, reasoning effort and service tier. For example `codex-gpt`,
+`gpt-6.1-sol`, `high`, `fast` are four settings, not a composite model name.
+The form uses the existing machine preview/apply/readback/rollback transaction;
+the same namespace is available through `loopx machine-config`. Clear the fields
+or remove this namespace to restore service defaults. Credentials and global
+Codex configuration remain with their original native owner. Missing or
+ambiguous profiles and unsupported native settings fail visibly.
+
+Changed defaults create a distinct ordinary Session at the next idle open;
+existing history stays addressable. Active Turns, exact Session resumes,
+attached Agents, task workers and an already started Agent Loop retain their
+original identity. The header distinguishes a pending **Next model** pick from
+the current readback. Effort and tier appear only when the native host reports
+them; Fast may be returned as `priority`. Model selection does not enable a
+LoopX Agent Loop: its separate settings own coordinator identity, token
+allowance and member bindings, and its start control remains explicit.
+
+Managed Chat now displays only explicit public reasoning summaries, labelled
+**Reasoning summary**, inside the work-step disclosure. Raw `reasoning/textDelta`
+and completed reasoning content are excluded from presentation; the primary
+status remains **Working**. This changes the former raw-content fallback.
+Historical SSE replay also withholds unqualified reasoning text without
+rewriting the saved events. Commands, tools, public answers and step timing
+remain available. A provider's readable summary is not its hidden reasoning.
+
+User request cards and their confirmation show canonical `created_by` as the
+requesting Agent, separately from `bound_agent` / `blocks_agent` as the reply
+recipient. Missing author provenance is stated explicitly; the recipient never
+stands in for the author or gains authority from this display. Full request
+content is used when drafting a reply or asking for an explanation, preserving
+trailing conditions and URLs that compact card labels may omit.
+
 ## Experimental owner-local Codex App conversations
 
 This is a follow-up path for an owner already reviewing a Goal: read a specific
@@ -145,7 +188,15 @@ establishes task acceptance. Native record positions order and deduplicate pages
 bursts larger than a page between observations and incomplete appends. Older and
 newer pages remain reachable when the visible window reaches 300 records.
 Looking back pauses automatic insertion; new activity is disclosed without
-moving the reader. Source and content fingerprints reject stale detail reads;
+moving the reader. Scrolling up loads older history; scrolling down through the
+current window loads newer history and resumes live updates at the tail. No
+history paging buttons are required. The reader anchors the visible source
+record while extending or trimming its bounded window. Consecutive tool and
+activity records share a collapsed work-activity disclosure, while user and
+Agent messages remain primary. Expanding it retains original order, complete
+record access and explicit interruption/error or unavailable-record notices;
+record counts do not imply tool success or task completion.
+Source and content fingerprints reject stale detail reads;
 history replacement resets the visible window instead of mixing conversations.
 An interrupted or timed-out history read keeps the records already displayed
 and explains that updates resume automatically when the connection recovers.
@@ -173,7 +224,11 @@ Pages contain at most 100 records and scan approximately 2 MiB, allowing a whole
 larger record at a boundary. The reader skips up to eight metadata-only windows
 per read gesture or observation; it stops on visible work, the source boundary,
 a changed source or navigation away. Exhausting that bounded burst leaves the
-history controls available; it never scans the full rollout without a bound. Detail responses carry up to 24,000 characters.
+next scroll able to continue; it never scans the full rollout in one unbounded
+request. Short pages fill automatically from earlier history within the
+300-record window, without treating that automatic fill as a reader pause.
+Detail responses
+carry up to 24,000 characters.
 Records above the 8 MiB reader limit, malformed records and unsupported response
 types retain an explicit unavailable position. Non-text attachments are disclosed
 as unavailable. These limits remain coverage gaps, not a claim of complete native
@@ -185,7 +240,7 @@ saved records is **not token streaming**. When the original host is connected an
 not observed idle, the Agent page also subscribes to that exact owner's live
 state. Unfinished visible assistant text and supported tool work update in place;
 they are labelled as live observations. Looking back freezes insertion until
-**Back to latest**. Completion removes the transient row; saved history remains
+the reader scrolls back to the latest records. Completion removes the transient row; saved history remains
 the durable reader and the place to continue long output. Neither observed work
 nor its completion establishes Goal acceptance or a delivery receipt.
 
@@ -436,3 +491,14 @@ The integration is valuable if it improves:
 - time from "task is blocked" to "the right owner sees the blocker".
 
 These metrics are goal-control metrics, not model-quality scores.
+
+### Conversation presentation example
+
+The packaged Goal Chat separates executor, observed model, speed and reasoning;
+approval cards name the requesting Agent. This synthetic example illustrates
+presentation only: no model Turn or real approval is executed. Attached history
+keeps conversation primary and groups tool records without discarding errors.
+
+![Goal Chat model and request provenance](../development/assets/chat-observability/first-screen.png)
+
+![Attached conversation and folded work activity](../development/assets/chat-observability/attached-history.png)

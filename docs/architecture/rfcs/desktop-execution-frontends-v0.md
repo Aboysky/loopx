@@ -306,6 +306,22 @@ attach, detach, channel selection, freshness, and reconnect actions.
 not the core abstraction. The core objects are the Agent-scoped frontend
 connection and the converged working session.
 
+Managed Goal Chat's observability slice keeps executor identity, resolved model
+and explicit model choice separate. User requests retain their canonical Agent
+author in the request and confirmation views; legacy authors remain unknown.
+Only explicitly public reasoning summaries are presented, with historical raw
+reasoning withheld. These are bounded corrections to the existing Chat path,
+not evidence of complete attached-host or Lark interaction parity. See the
+[projection boundary](../../integrations/session-runtime-control-plane-adapter.md#projection-boundary)
+for the changed defaults and provenance contract.
+
+The attached Codex reader also gives dialogue priority over consecutive tool
+events. Natural scrolling pages its bounded source window in both directions,
+preserves the reading anchor and returns to buffered live observations only at
+the tail. Tool details, source gaps and observed failures remain accessible.
+This changes presentation, not the original-session input/approval authority or
+the outstanding provider and installed-host qualification.
+
 ## Agent-scoped external Connector model
 
 Lark group ingress and Lark document comments are two instances of one
