@@ -35,6 +35,11 @@ fn assert_stopped(endpoints: ServiceEndpoints) {
 #[test]
 #[ignore = "requires a disposable Core install and empty isolated registry; see Desktop README"]
 fn real_private_runtime_serves_and_rejects_stale_identity() {
+    assert_eq!(
+        env::var("LOOPX_USAGE_PING").as_deref(),
+        Ok("0"),
+        "synthetic Core qualification requires LOOPX_USAGE_PING=0"
+    );
     let root = PathBuf::from(env::var("LOOPX_TEST_PRIVATE_RUNTIME").unwrap());
     // A caller's empty registry can still share a runtime with bound private
     // conversations. Own a fresh data root rather than trusting that shortcut.

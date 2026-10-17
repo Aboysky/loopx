@@ -351,7 +351,7 @@ npm run build
 ```
 
 To qualify the native supervisor against an actual installed Core, first build
-the runtime bundle as above, then run from `src-tauri`:
+the runtime bundle as above with `LOOPX_USAGE_PING=0`, then run from `src-tauri`:
 
 ```sh
 qa_root="$(mktemp -d)"
@@ -359,6 +359,7 @@ mkdir "$qa_root/state"
 printf '%s\n' '{"goals":[]}' > "$qa_root/state/registry.global.json"
 (
   set -e
+  export LOOPX_USAGE_PING=0
   export LOOPX_REGISTRY="$qa_root/state/registry.global.json"
   export LOOPX_RUNTIME_ROOT="$qa_root/state"
   export LOOPX_TEST_PRIVATE_RUNTIME="$qa_root/runtime"
@@ -367,6 +368,11 @@ printf '%s\n' '{"goals":[]}' > "$qa_root/state/registry.global.json"
   cargo test --lib real_private_runtime_serves_and_rejects_stale_identity -- --ignored --nocapture
 )
 ```
+
+Both opt-in tests require the telemetry opt-out before invoking Core. A
+disposable registry does not isolate machine-wide usage reporting; this
+synthetic run must not contribute adoption or installation telemetry. The
+opt-out applies only to this test invocation and leaves user consent unchanged.
 
 This installs only in the disposable root. The second test uses an explicit
 local launch pin to route the production supervisor's two services to its own
