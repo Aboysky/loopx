@@ -1203,6 +1203,15 @@ fixture scale and later growth checks remain in force. Recognizing the complete
 frozen or current owner-provided instruction is an observation, not proof that
 arbitrary prose changes preserve semantics or that a model will adopt them.
 
+When the base already includes the original complete guidance, the expanded
+research-followthrough instruction is a separate observed upgrade, not another
+absence. The same 96-row workload measures standalone bootstrap growth of 481
+JSON characters and 801 Markdown characters plus three Markdown lines. Only
+those bootstrap carriers receive a one-time 512/832 character-and-byte allowance
+for the observed old-to-expanded transition. Absolute ceilings, other carriers,
+missing observations and later growth keep their existing checks. The extra
+probe flag is diagnostic evidence, not a runtime quality or permission rule.
+
 首次交付指引原先在普通/详情 JSON 中重复四/六次；既有 96 行对照保留原始
 2340/3496 JSON、578 Markdown 字符增长记录。结构化计划现引用同一 planner
 完整字段，独立消息就地展开全文，普通/详情 JSON 分别保留一/两份完整指引。
@@ -1210,6 +1219,11 @@ arbitrary prose changes preserve semantics or that a model will adopt them.
 四个载体的首次引入保留 JSON 2400/3600、Markdown 1400 字符及字节、最多四行
 的有界额度。绝对上限、负载规模、后续增长检查不变，不删除义务，也不据此声称
 模型采用、实验增益、语义等价或额外执行权限。
+
+基线已含原完整指引时，扩展研究复盘指引属于另一次明确升级，不再视为首次引入。
+同一 96 行负载的独立 bootstrap 消息实测增加 JSON 481、Markdown 801 字符及三行，
+仅对该明确升级给予 512/832 字符及字节额度。绝对上限、其他载体、缺失观测和后续
+增长仍受原检查约束；新增探针标记不是运行时质量或权限规则。
 
 The latest qualification pins true main `e47e4507a` and merged candidate
 `3955d1c8b` on the same public fixture, with explicit per-probe source imports.

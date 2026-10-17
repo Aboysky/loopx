@@ -771,6 +771,20 @@ def _authoring_input_migration(
         limits = {"chars": chars, "utf8_bytes": chars, "lines": 4,
                   "compact_payload_chars": chars if base.get("format") == "json" else 0}
         reason = "complete initial-delivery quality guidance added"
+    elif (surface in {"bootstrap_command_pack", "bootstrap_command_pack_message_only"}
+            and before.get("first_delivery_guidance") is True
+            and after.get("first_delivery_guidance") is True
+            and before.get("expanded_first_delivery_guidance") is False
+            and after.get("expanded_first_delivery_guidance") is True):
+        # Main already carries the original complete instruction. The same
+        # 96-row workload measures +481 JSON chars, +801 Markdown chars and
+        # three Markdown lines for the expanded guidance and standalone label.
+        # Qualify that upgrade separately; absence and future growth are not it.
+        chars = 512 if base.get("format") == "json" else 832
+        limits = {"chars": chars, "utf8_bytes": chars,
+                  "lines": 0 if base.get("format") == "json" else 3,
+                  "compact_payload_chars": chars if base.get("format") == "json" else 0}
+        reason = "complete initial-delivery guidance upgraded with research followthrough"
     return limits, [reason + "; bounded one-time growth"] if limits else []
 
 
