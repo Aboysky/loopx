@@ -138,11 +138,38 @@ ambiguous profiles and unsupported native settings fail visibly.
 Changed defaults create a distinct ordinary Session at the next idle open;
 existing history stays addressable. Active Turns, exact Session resumes,
 attached Agents, task workers and an already started Agent Loop retain their
-original identity. The header distinguishes a pending **Next model** pick from
-the current readback. Effort and tier appear only when the native host reports
+original identity. The header separates **New conversation model/reasoning**
+choices from the current Session readback. Effort and tier appear only when the native host reports
 them; Fast may be returned as `priority`. Model selection does not enable a
 LoopX Agent Loop: its separate settings own coordinator identity, token
 allowance and member bindings, and its start control remains explicit.
+
+Ordinary Goal/project conversations can choose an advertised reasoning effort
+alongside the model. Codex choices come from the selected account's model
+catalog, separately for each model. ACP choices use the host's
+[`thought_level` configuration category](https://agentclientprotocol.com/protocol/v1/session-config-options),
+and model selection is applied before reading its dependent options. An absent
+option is unavailable, never a guessed list of levels. Status-only answers are
+a separate read mode, not an executor or a model choice. Unknown actual models
+remain status text outside the model menu; catalog failure has a retry and
+does not claim to refresh the current model.
+
+An explicit pick applies when opening the next distinct ordinary conversation;
+it does not rewrite, interrupt or merge the previous conversation. The existing
+steward configuration editor remains its configuration owner. Clients can pass
+optional `agent_reasoning_effort` to `POST /api/chat/sessions` alongside
+`agent_model_id`; omitting it keeps existing defaults. The private Session
+retains the requested effort separately from the observed value, including
+after restart. Native start/resume and the subsequent prompt must retain the
+choice. Unsupported or unconfirmed explicit settings fail before a prompt is
+dispatched or a new LoopX Session is published. Attached hosts and running
+Agent Loops keep their own settings; a conflicting resume request is refused.
+Changing a choice neither runs a model prompt nor changes global native config.
+
+This reasoning-selector increment has isolated HTTP/File-store and native
+stdio qualification. Packaged visual/interaction, installed provider adoption
+and the shared original Lark conversation retain their separate acceptance;
+source transport tests do not certify those journeys.
 
 Managed Chat now displays only explicit public reasoning summaries, labelled
 **Reasoning summary**, inside the work-step disclosure. Raw `reasoning/textDelta`
