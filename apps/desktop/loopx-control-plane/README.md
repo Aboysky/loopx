@@ -37,6 +37,14 @@ unknown; this is maintenance of the App's own installation, not proof that one
 source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
 artifact's identity before the workspace opens.
 
+If anonymous GitHub ancestry lookup is unavailable, the App can reuse an
+existing GitHub CLI login for the same fixed public-repository GET. It never
+starts login or requests account permissions. Each tool has a three-second
+process deadline; missing, failed or unauthenticated `gh` leaves ancestry
+unknown. A successful non-ordering answer is not retried under another account.
+Core still owns wheel qualification; this read neither changes its identity
+rules nor grants Goal or account authority.
+
 The bundled runtime carries its Core package version from the archived wheel
 metadata. Native validation and ordering use Python's [PEP 440 version format](https://packaging.python.org/en/latest/specifications/version-specifiers/),
 including alpha, beta, release candidate, development, post-release and local
@@ -212,6 +220,11 @@ For native qualification, use a separately identified packaged App with the
 real backend: select a local Goal and Agent page, quit normally, reopen, and
 check the same selection on the new port. Also check window-close, an explicit
 return to Manager and a corrupt preference in that disposable App profile.
+Bind the disposable registry and its `common_runtime_root` at the QA launch
+entrypoint, and set `LOOPX_USAGE_PING=0` for all synthetic Core invocations:
+a caller-only environment can be lost when a window tool or the
+system relaunches the bundle. Verify the reopened process's data route before
+observing or operating it; never use the installed App as a fault fixture.
 Retain Session IDs and active-Turn readbacks before and after; navigation is
 not evidence that work was resumed or accepted. Cross-platform and sustained
 use require their own qualification.
@@ -338,6 +351,22 @@ npm run dev
 ```
 
 ## Validation
+
+For the ancestry fallback, use that isolated packaged App and a qualified Core
+fixture. A QA-only invalid `CURL_CA_BUNDLE` can deny curl's public read while the
+existing `gh` still reads the real relation. Compare the old and candidate
+native binaries with the same corrupt preference and immutable Core fixture;
+read both service identities and the saved selection after the window opens.
+Also check that unavailable public transports retain a qualified runtime and
+that normal reopening preserves the disposable Session. Remove faults from the
+QA launcher afterwards; never change the system proxy or certificate store.
+
+The viewport below is a separately packaged macOS QA shell with an empty
+synthetic Goal registry. It records a successful workspace opening, not model
+execution, model-selection qualification or an installed-product upgrade. The
+ancestry change adds no new UI control or configuration step.
+
+![Packaged QA workspace with zero Goals](docs/assets/native-ancestry-qa.jpg)
 
 ```bash
 cd apps/desktop/loopx-control-plane/src-tauri
