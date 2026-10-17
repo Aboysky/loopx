@@ -18,6 +18,7 @@ import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-l
 import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
 import { ContentReferenceWorkbench } from "./content-reference-workbench";
+import { DecisionContextWorkbench } from "./decision-context-workbench";
 import { rewardMemoryBindingStatus, rewardMemoryScopeDraft, rewardMemoryWriteValue } from "./reward-memory-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoalNotification } from "./personal-workspace-model";
 
@@ -304,9 +305,9 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
       />
 
       <article aria-label={localizedSelected.display_name} className="personal-capability-detail" tabIndex={0}>
-        {localizedSelected.capability_id === "content_ops" ? <h2>{localizedSelected.display_name}</h2> : <CapabilityDetailHeader capability={selected} locale={locale}
+        {["content_ops", "decision_context"].includes(localizedSelected.capability_id) ? <h2>{localizedSelected.display_name}</h2> : <CapabilityDetailHeader capability={selected} locale={locale}
           source={localizedSelected.effective_configuration?.source} />}
-        {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
+        {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : localizedSelected.capability_id === "decision_context" ? <DecisionContextWorkbench key={goalId} goalId={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
           description={readOnlyReason} />}
 
         {selected.capability_id === "progress_review" && selected.observation ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
@@ -424,7 +425,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
             </button>
           </footer>
         ) : null}
-        {localizedSelected.capability_id !== "content_ops" ? <CapabilityConfigurationSummary key={selected.capability_id} values={[
+        {!["content_ops", "decision_context"].includes(localizedSelected.capability_id) ? <CapabilityConfigurationSummary key={selected.capability_id} values={[
           { label: t("capabilities.goalValue"), value: localizedSelected.current },
           { label: t(localizedSelected.machine_current ? "capabilities.machineValue" : "capabilities.defaultValue"), value: localizedSelected.machine_current ?? localizedSelected.default },
         ]} t={t} /> : null}

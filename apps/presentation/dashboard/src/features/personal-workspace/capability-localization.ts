@@ -12,6 +12,7 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string; 
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
+    decision_context: {displayName: "Decision evidence recall", description: "Recall advisory evidence through an existing private profile. This page does not save profiles or enable automatic hooks."},
     content_ops: {displayName: "Reference styles", description: "Retrieve source styles from an existing private catalog and prepare attributed outlines. No source or material-store writes."},
     goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
@@ -79,6 +80,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
   },
   "zh-CN": {
+    decision_context: {displayName: "决策证据召回", description: "通过现有私有 profile 召回参考证据。本页不保存 profile，也不启用自动 hook。"},
     content_ops: {displayName: "素材与风格", description: "从原有私有目录检索表达结构，准备带来源署名的提纲；不执行来源或素材库写入。"},
     goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
     manager_runtime: {
