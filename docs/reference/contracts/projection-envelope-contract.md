@@ -23,6 +23,7 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 | `loopx global-gates` | `global_gates` | `global` |
 | `loopx global-todos` | `global_todos` | `global` |
 | `loopx global-risks` | `global_risks` | `global` |
+| `loopx quota should-run` | `quota_should_run` | `goal` |
 | Delegation operations (CLI, MCP, Goal Chat) | `delegation_inventory` | `requester_page` |
 | Goal task map in delivery review | `goal_task_map` | `goal_task_map` |
 | `GET /api/chat/delivery-review` | `delivery_review` | `selected_goal_delivery` |
@@ -46,6 +47,13 @@ refresh operation. Older responses without the envelope show unknown coverage.
 
 Other read models adopt the envelope in the order listed in the RFC; until
 then they carry no freshness guarantee and consumer rule 1 below applies.
+
+`quota_should_run` inherits the status envelope. It also records each live
+source that the decision reads, including automation cadence, an applicable
+App scheduler state, the selected delivery workspace, the operator inbox, and
+replan exploration. A missing persisted App scheduler state is a successful
+empty read. `owner_read_failed` makes automation cadence unreadable, while
+`runtime_root_unavailable` means that source was not read.
 
 ## Shape
 
