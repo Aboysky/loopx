@@ -7,9 +7,16 @@ persists its checkpoint-refresh attempt record as UTF-8 JSON. Both go through
 host locale codec from rewriting them.
 
 Each case drives one real owner in a child interpreter whose default encoding is
-ASCII, with a workspace whose path carries a non-ASCII component: the refresh
+not UTF-8 (the host ANSI code page on Windows, `ascii` under `LC_ALL=C` on
+POSIX), with a workspace whose path carries a non-ASCII component: the refresh
 record keeps the observed stdout path and the binding's checkpoint root, so that
 workspace shape is the ordinary case rather than a synthetic one.
+
+The child also proves the case is not vacuous: it decodes the exact bytes the
+CLI writes with its resolved default codec and reports whether they are
+rejected. A single-byte codec such as `latin-1` or `cp1251` accepts those bytes,
+so on such a host the read succeeds with mojibake instead of raising and this
+regression cannot be shown; the case skips there rather than claim coverage.
 """
 
 from __future__ import annotations
@@ -20,6 +27,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 WORKSPACE_COMPONENT = "项目"
@@ -29,9 +38,29 @@ import json, locale, sys
 from pathlib import Path
 from types import SimpleNamespace
 
+
+def events_bytes(identity):
+    # The Codex CLI writes its event stream as UTF-8 whatever the host codec is.
+    return b"".join([
+        json.dumps({"type": "item.completed", "text": "任务已完成"},
+                   ensure_ascii=False).encode("utf-8") + b"\n",
+        json.dumps({"type": "thread.started", "thread_id": identity}).encode("utf-8") + b"\n",
+    ])
+
+
 locale.setlocale(locale.LC_CTYPE, "C")
+_codec = locale.getpreferredencoding(False)
 assert sys.flags.utf8_mode == 0
-assert locale.getpreferredencoding(False).lower().replace("-", "") != "utf8"
+assert _codec.lower().replace("-", "") != "utf8"
+try:
+    events_bytes("locale-probe").decode(_codec)
+except UnicodeDecodeError:
+    locale_hazard = True
+else:
+    # A single-byte codec decodes the sample without raising, so the defective
+    # default-codec read would return mojibake instead of failing. Say so
+    # instead of letting the case pass for the wrong reason.
+    locale_hazard = False
 
 from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
 from loopx.control_plane.turn_driver.codex_sessions import (
@@ -61,12 +90,7 @@ def session(root):
 
 
 def events(path, identity):
-    # The Codex CLI writes its event stream as UTF-8 whatever the host codec is.
-    path.write_bytes(b"".join([
-        json.dumps({"type": "item.completed", "text": "任务已完成"},
-                   ensure_ascii=False).encode("utf-8") + b"\n",
-        json.dumps({"type": "thread.started", "thread_id": identity}).encode("utf-8") + b"\n",
-    ]))
+    path.write_bytes(events_bytes(identity))
 
 
 root = base / mode / "checkout"
@@ -90,7 +114,8 @@ else:
                "attempt_stdout": json.loads(attempt.read_bytes())["stdout"],
                "retry_launched": retry.exists()}
 
-print(json.dumps({"encoding": locale.getpreferredencoding(False), **payload}, ensure_ascii=True))
+print(json.dumps({"encoding": _codec, "locale_hazard": locale_hazard, **payload},
+                 ensure_ascii=True))
 '''
 
 
@@ -115,12 +140,27 @@ def _payload(base: Path, mode: str) -> dict:
     result = _drive(base, mode)
     assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
     payload = json.loads(result.stdout.decode("utf-8"))
-    # A vacuous pass would hide the codec this test exists to exercise.
+    # A vacuous pass would hide the codec this test exists to exercise. The host
+    # default must not be UTF-8, and it must reject the exact bytes the CLI
+    # writes; a permissive single-byte codec decodes them without raising, so the
+    # defective read would return mojibake and the assertions below would hold
+    # with the fix reverted.
     assert payload["encoding"].lower().replace("-", "") != "utf8"
+    if not payload["locale_hazard"]:
+        pytest.skip(
+            f"host default codec {payload['encoding']} decodes the UTF-8 event bytes; "
+            "the default-codec read hazard cannot be reproduced on this host"
+        )
     return payload
 
 
 def test_codex_events_are_read_back_with_a_locale_codec(tmp_path: Path) -> None:
+    """The CLI's UTF-8 event stream survives a non-UTF-8 default codec.
+
+    Covers the `CodexAgentSession.observe` read only: reverting its codec pin
+    makes this case fail with the reproduced `UnicodeDecodeError`.
+    """
+
     base = tmp_path / WORKSPACE_COMPONENT
     payload = _payload(base, "observe")
 
@@ -128,6 +168,16 @@ def test_codex_events_are_read_back_with_a_locale_codec(tmp_path: Path) -> None:
 
 
 def test_checkpoint_refresh_attempt_record_is_readable_again(tmp_path: Path) -> None:
+    """The recovery wake re-reads its original output and its attempt record.
+
+    Covers the recovery path's reads — `prepare_checkpoint_refresh` re-runs the
+    `observe` read on the recorded stdout path, and the record itself is re-read
+    as UTF-8 bytes. It does not cover the two `os.fdopen` write pins: their
+    payload is ASCII today because `json.dump` escapes non-ASCII by default, so
+    reverting those pins leaves this case green. The gate rule in
+    `tests/test_loopx_text_io_utf8.py` is what protects them.
+    """
+
     base = tmp_path / WORKSPACE_COMPONENT
     payload = _payload(base, "recover")
 
