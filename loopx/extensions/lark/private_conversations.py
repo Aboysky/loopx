@@ -190,6 +190,8 @@ class LarkPrivateConversations:
             # Resolve has just verified this App for this invocation. Reuse
             # that observation for mention checks, never across verifications.
             observation = selected.get("observation")
+            if sender_identity is not None and observation is not None:
+                sender_identity["bot_display_name"] = str(observation.get("bot_display_name") or "")
             stop_root: Mapping[str, Any] | None = None
             completed_stop = False
             if group:
@@ -315,7 +317,6 @@ class LarkPrivateConversations:
                 if sender_identity is not None:
                     if observation is None:
                         return None
-                    sender_identity["bot_display_name"] = str(observation.get("bot_display_name") or "")
                 return message
         except (KeyError, ValueError, OSError):
             pass
@@ -324,15 +325,15 @@ class LarkPrivateConversations:
     def _source_verified(self, record: dict[str, Any], *, sender_identity: dict[str, str] | None = None) -> bool:
         return self._source_message(record, render_content=False, sender_identity=sender_identity) is not None
 
-    def _source_authority(self, record: dict[str, Any], profile: str, chat_id: str, message_id: str) -> str | None:
+    def _source_authority(self, record: dict[str, Any], profile: str, chat_id: str,
+                          message_id: str) -> tuple[str | None, bool]:
         """Verify one exact outbound operation; retain no identity or grant."""
         if (profile != record["profile"] or chat_id != record["event"]["chat_id"]
                 or message_id != record["event"]["message_id"]):
-            return None
+            return None, False
         identity: dict[str, str] = {}
-        if not self._source_verified(record, sender_identity=identity):
-            return None
-        return identity.get("bot_display_name")
+        verified = self._source_verified(record, sender_identity=identity)
+        return identity.get("bot_display_name"), verified
 
     @staticmethod
     def _group_text_command_input(message: Mapping[str, Any], observation: Mapping[str, Any]) -> str | None:

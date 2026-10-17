@@ -33,10 +33,10 @@ from .outbound import (
 )
 
 CommandRunner = Callable[[Sequence[str]], Mapping[str, Any]]
-# Internal transport callback: verify the current Core App/grant and exact
-# profile/chat/source, returning that fresh App's display name only on success.
-# This is not a caller-supplied boolean or a reusable identity observation.
-SourceAuthorityVerifier = Callable[[str, str, str], str | None]
+# Internal transport callback: return the freshly Core-verified App name and
+# exact source verdict separately. A changed source is not an identity mismatch.
+# Neither observation is reused by a later operation.
+SourceAuthorityVerifier = Callable[[str, str, str], tuple[str | None, bool]]
 BOT_IDENTITY_VERIFY_ATTEMPTS = 3
 
 
@@ -240,9 +240,12 @@ def _verified_sender_and_source(
     if source_authority_verifier is not None:
         if source_membership_verifier is not None or not message_id:
             raise ValueError("one source-bound verification owner is required")
-        name = source_authority_verifier(profile, chat_id, message_id)
+        observation = source_authority_verifier(profile, chat_id, message_id)
+        if not isinstance(observation, tuple) or len(observation) != 2:
+            return False, False
+        name, source_verified = observation
         verified = isinstance(name, str) and bool(name)
-        return verified and name == expected_name, verified
+        return verified and name == expected_name, source_verified is True
     identity = _bot_identity_verified(runner=runner, base=base, expected_name=expected_name)
     if not identity:
         return False, False
@@ -787,7 +790,8 @@ def reply_lark_event_inbox(
 
     Native Core callers may supply ``source_authority_verifier`` instead of
     the legacy membership callback. It must freshly verify the exact supplied
-    profile/chat/message and Core grants, returning the observed Bot name.
+    profile/chat/message and Core grants, returning the observed Bot name and
+    source verification result separately.
     The sender consumes that result once; retries invoke the callback again.
     Ordinary/legacy callers retain independent identity and membership checks.
     """

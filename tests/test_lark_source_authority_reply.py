@@ -88,6 +88,10 @@ def test_current_source_denial_never_becomes_a_send_or_receipt_intent(completed_
     assert not _deliver(transport, record)
     assert not provider.writes and not provider.reaction_creates
     assert not record["deliveries"]["admission"].get("started")
+    if change in {"root", "sender", "chat", "parent", "thread"}:
+        # A verified App with a changed source is not an App-name mismatch.
+        # Keeping that distinction also avoids an unrelated metadata refresh.
+        assert record["deliveries"]["admission"]["blocker"] == "lark_inbox_reply_sender_not_in_configured_chat"
 
 
 def test_ordinary_source_read_must_join_before_late_revocation_can_authorize_a_send(ordinary, monkeypatch):  # noqa: F811
@@ -131,7 +135,7 @@ def test_a_foreign_inbox_route_cannot_borrow_the_original_source_proof(completed
     args = ["notes-app", event["chat_id"], event["message_id"]]
     args[["profile", "chat", "message"].index(field)] = "foreign"
     provider.calls.clear()
-    assert transport._source_authority(record, *args) is None
+    assert transport._source_authority(record, *args) == (None, False)
     assert not provider.calls and not provider.writes
 
 
