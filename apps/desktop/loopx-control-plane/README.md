@@ -37,6 +37,14 @@ unknown; this is maintenance of the App's own installation, not proof that one
 source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
 artifact's identity before the workspace opens.
 
+If anonymous GitHub ancestry lookup is unavailable, the App can reuse an
+existing GitHub CLI login for the same fixed public-repository GET. It never
+starts login or requests account permissions. Each tool has a three-second
+process deadline; missing, failed or unauthenticated `gh` leaves ancestry
+unknown. A successful non-ordering answer is not retried under another account.
+Core still owns wheel qualification; this read neither changes its identity
+rules nor grants Goal or account authority.
+
 The bundled runtime carries its Core package version from the archived wheel
 metadata. Native validation and ordering use Python's [PEP 440 version format](https://packaging.python.org/en/latest/specifications/version-specifiers/),
 including alpha, beta, release candidate, development, post-release and local
@@ -212,6 +220,10 @@ For native qualification, use a separately identified packaged App with the
 real backend: select a local Goal and Agent page, quit normally, reopen, and
 check the same selection on the new port. Also check window-close, an explicit
 return to Manager and a corrupt preference in that disposable App profile.
+Bind the disposable registry and its declared runtime root at the QA launch
+entrypoint: a caller-only environment can be lost when a window tool or the
+system relaunches the bundle. Verify the reopened process's data route before
+observing or operating it; never use the installed App as a fault fixture.
 Retain Session IDs and active-Turn readbacks before and after; navigation is
 not evidence that work was resumed or accepted. Cross-platform and sustained
 use require their own qualification.
