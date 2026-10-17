@@ -72,6 +72,11 @@ without private bindings do not add provider authentication; configured aliases
 reuse one request-scoped verified identity observation. Lark HTTP composition
 resides in the extension, while the typed binding owner remains provider-neutral.
 
+Binding resolution rereads the exact grant after provider identity observation.
+Revoking or replacing that binding during the observation rejects the request;
+an unrelated binding edit does not invalidate it. The typed owner still checks
+the current context, with no identity cache shared across verification calls.
+
 The same Settings read model includes Core bindings for locally installed
 conversation transports. Listener status comes from the exact host-composed
 provider's optional `health_snapshot()` returning a content-free `status`, or
@@ -112,12 +117,29 @@ target that topic. Admission feedback, streamed posts, terminal edits and receip
 recovery use the existing delivery path with `source_thread` placement. A revoked
 binding or unreadable source prevents later result delivery.
 
+A completed, target-frozen stop on a locally enabled group binding reads its two
+original provider messages while Core freshly resolves the binding and App
+identity. Both readonly observations must finish successfully before source,
+ancestry and root-mention validation can authorize delivery. Only that invocation
+reuses the verified identity; no observation is persisted or reused by a later
+verification. Changed bindings discard the buffered message observation; ordinary
+input, private conversations and unknown stop scope keep their existing paths.
+
 When an ordinary Codex topic has no active Turn, `/stop` also covers background
 commands left by completed Turns in that same canonical Session, even after a
 later answer. Core freezes the original Session and canonical candidate Turn
 identities in the existing request journal **before** native inventory or
 transport resume can fail. Native observation may only narrow that frozen set;
 a retry cannot add later completed/active Turns or switch to a newer Session.
+The existing Lark listener returns after this durable freeze; its existing reply
+workers recover the prepared request to observe and cancel native background
+commands. Prepared recovery uses admission's fresh authority check inside both
+the request and source-route fences, without a duplicate provider probe before
+waiting for those fences. Revocation while waiting prevents control and delivery.
+Slow or unavailable native control therefore does not hold inbound
+admission. This is scheduling only: it introduces no queue or completion state,
+does not defer an active Turn's exact interrupt, and sends no successful stop
+reply until native control and the original delivery checks have succeeded.
 A recovered legacy request without a recorded target has unknown original scope;
 Core rejects retargeting and preserves it unconfirmed. A fresh stop is a separate
 user request, never an automatic replacement for the unknown one.
