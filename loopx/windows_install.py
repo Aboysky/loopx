@@ -382,11 +382,35 @@ def _snapshot_paths(
     return snapshots
 
 
-def _restore_paths(snapshots: Sequence[tuple[Path, Path | None]]) -> None:
-    for path, backup in reversed(snapshots):
-        _remove_path(path)
-        if backup is not None:
-            _copy_path(backup, path)
+def _restore_paths(snapshots: Sequence[tuple[Path, Path | None]]) -> list[Path]:
+    retained: list[Path] = []
+    try:
+        for path, backup in reversed(snapshots):
+            if path.is_dir() or path.is_symlink():
+                # A failed installation may have left user edits in a skill.
+                # Keep that state outside the temporary snapshot cleanup; its
+                # contents cannot be distinguished from installer writes here.
+                recovery_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=f".{path.name}.install-recovery.",
+                        dir=path.parent,
+                    )
+                )
+                recovery = recovery_dir / path.name
+                path.replace(recovery)
+                retained.append(recovery)
+            else:
+                _remove_path(path)
+            if backup is not None:
+                _copy_path(backup, path)
+    except Exception as exc:
+        if retained:
+            raise RuntimeError(
+                f"{exc}; interrupted skill state retained at: "
+                + ", ".join(str(path) for path in retained)
+            ) from exc
+        raise
+    return retained
 
 
 def _install_skills(release_root: Path, skills_dir: Path, installed_at: str) -> list[str]:
@@ -510,8 +534,9 @@ def install_windows(
                 _atomic_json(launcher_pointer, pointer_payload)
             except Exception as exc:
                 rollback_error: Exception | None = None
+                retained: list[Path] = []
                 try:
-                    _restore_paths(snapshots)
+                    retained = _restore_paths(snapshots)
                 except Exception as restore_exc:  # pragma: no cover - filesystem failure
                     rollback_error = restore_exc
                 # Keep the candidate: physical data may already have upgraded.
@@ -520,6 +545,12 @@ def install_windows(
                     raise RuntimeError(
                         "Windows installation failed and rollback was incomplete: "
                         f"{rollback_error}"
+                    ) from exc
+                if retained:
+                    raise RuntimeError(
+                        f"{exc}; filesystem snapshots restored. "
+                        "Interrupted skill state retained at: "
+                        + ", ".join(str(path) for path in retained)
                     ) from exc
                 raise
 

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import venv
 from pathlib import Path
 from typing import Any
@@ -303,6 +304,118 @@ def test_authority_upgrade_failure_reports_stderr(
             python=Path(sys.executable),
             skills_dir=tmp_path / "codex" / "skills",
         )
+
+
+@pytest.mark.parametrize("previously_installed", [False, True])
+def test_skill_rollback_keeps_interrupted_directory_after_snapshot_cleanup(
+    tmp_path: Path, previously_installed: bool
+) -> None:
+    skill = tmp_path / "skills" / "browser-skill"
+    skill.parent.mkdir()
+    if previously_installed:
+        skill.mkdir()
+        (skill / "note.txt").write_text("Previous installed version\n")
+    with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
+        snapshots = windows_install._snapshot_paths([skill], Path(temporary))
+        skill.mkdir(exist_ok=True)
+        (skill / "note.txt").write_text("Customization made during installation\n")
+        retained = windows_install._restore_paths(snapshots)
+
+    if previously_installed:
+        assert (skill / "note.txt").read_text() == "Previous installed version\n"
+    else:
+        assert not skill.exists()
+    assert any(
+        path.read_text() == "Customization made during installation\n"
+        for path in tmp_path.rglob("note.txt")
+    ), "Rolling back must not delete the only copy of a concurrent customization"
+    assert len(retained) == 1
+    assert retained[0].parent.parent == skill.parent
+    assert (
+        retained[0] / "note.txt"
+    ).read_text() == "Customization made during installation\n"
+
+
+@pytest.mark.parametrize("relative_link", [False, True])
+def test_skill_rollback_keeps_replacement_symlink_without_mutating_its_target(
+    tmp_path: Path,
+    relative_link: bool,
+) -> None:
+    previous = tmp_path / "previous"
+    custom = tmp_path / "custom"
+    for target in (previous, custom):
+        target.mkdir()
+        (target / "note.txt").write_text(target.name)
+    skill = tmp_path / "browser-skill"
+    try:
+        skill.symlink_to(
+            previous.name if relative_link else previous, target_is_directory=True
+        )
+    except OSError:
+        pytest.skip("The host does not permit directory symlinks")
+    with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
+        snapshots = windows_install._snapshot_paths([skill], Path(temporary))
+        skill.unlink()
+        skill.symlink_to(
+            custom.name if relative_link else custom, target_is_directory=True
+        )
+        interrupted_target = os.readlink(skill)
+        retained = windows_install._restore_paths(snapshots)
+
+    assert skill.is_symlink() and skill.resolve() == previous
+    assert any(
+        path.is_symlink() and os.readlink(path) == interrupted_target
+        for path in tmp_path.rglob("*")
+    ), "The replacement link must remain recoverable after rollback"
+    assert len(retained) == 1 and retained[0].is_symlink()
+    assert os.readlink(retained[0]) == interrupted_target
+    # Archived relative links retain their literal target; returning the link
+    # to its original location restores that target's meaning without editing it.
+    skill.unlink()
+    retained[0].replace(skill)
+    assert skill.resolve() == custom
+    assert (previous / "note.txt").read_text() == "previous"
+    assert (custom / "note.txt").read_text() == "custom"
+
+
+def test_failed_rollback_keeps_interrupted_skill_outside_temporary_snapshots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = tmp_path / "browser-skill"
+    skill.mkdir()
+    (skill / "note.txt").write_text("Previous installed version\n")
+    with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
+        snapshots = windows_install._snapshot_paths([skill], Path(temporary))
+        (skill / "note.txt").write_text("Customization made during installation\n")
+
+        def fail_copy(source: Path, target: Path) -> None:
+            raise OSError("Injected restore failure")
+
+        monkeypatch.setattr(windows_install, "_copy_path", fail_copy)
+        with pytest.raises(Exception, match="Injected restore failure") as caught:
+            windows_install._restore_paths(snapshots)
+
+    retained = [
+        path
+        for path in tmp_path.rglob("note.txt")
+        if path.read_text() == "Customization made during installation\n"
+    ]
+    assert len(retained) == 1, "A restore failure must retain the interrupted skill"
+    assert str(retained[0].parent) in str(caught.value)
+
+
+def test_regular_file_rollback_retains_existing_launcher_behavior(
+    tmp_path: Path,
+) -> None:
+    launcher = tmp_path / "loopx.ps1"
+    launcher.write_text("Previous launcher\n")
+    with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
+        snapshots = windows_install._snapshot_paths([launcher], Path(temporary))
+        launcher.write_text("Interrupted candidate launcher\n")
+        windows_install._restore_paths(snapshots)
+    assert launcher.read_text() == "Previous launcher\n"
+    assert sorted(tmp_path.iterdir()) == [launcher]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")
