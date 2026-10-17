@@ -558,6 +558,54 @@ def test_independent_invocations_against_one_target_append_twice(
         assert persisted["quota_event"]["voided_run_generated_at"] == TARGET_AT
 
 
+def test_stale_preview_rejects_an_intervening_index_write(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    index_path, _target_path = _write_spend_target(runtime_root)
+    status = {"runtime_root": str(runtime_root)}
+    preview = build_quota_slot_void_preview_for_decision(
+        status,
+        goal_id=GOAL_ID,
+        voided_run_generated_at=TARGET_AT,
+        before=_decision(2),
+    )
+    with index_path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "generated_at": "2026-08-31T09:02:00+08:00",
+                    "goal_id": GOAL_ID,
+                    "classification": "state_refreshed",
+                }
+            )
+            + "\n"
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="compare-and-swap precondition failed",
+    ):
+        record_quota_slot_void_from_preview(
+            preview,
+            status,
+            goal_id=GOAL_ID,
+            render_markdown=render_quota_slot_preview_markdown,
+            execute=True,
+            source="heartbeat",
+            reason_summary=REASON,
+        )
+
+    rows = [
+        json.loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["classification"] for row in rows] == [
+        "quota_slot_spent",
+        "state_refreshed",
+    ]
+
+
 def test_each_python_facade_uses_one_typed_runtime_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
