@@ -751,12 +751,12 @@ files remain historical: current authority uses a fresh external registry/runtim
 and the old Goal cannot be admitted through it. Only the model
 response stream and grading/backend fixtures are synthetic; the native CLI,
 canonical SQLite authority, worker, supervisor and capsule transport are real.
-The fresh-context variant now keeps the controller and its bank outside every
-guest mount. It performs and settles actual candidate work, reaches a genuinely
+The retained-history recapture variant keeps the controller and its bank outside
+every guest mount. It performs and settles actual candidate work, reaches a genuinely
 new due replan, and captures research, new native history, code, incumbent,
 opportunity and the original phase through the real controller barrier. Another
 isolated receiver restores that newly sealed point and performs actual work.
-`fresh.log` and `grandreceiver.log` retain those assertions. The synthetic service
+`recapture.log` and `grandreceiver.log` retain those assertions. The synthetic service
 uses host networking only for this controller-backed variant; its public worker
 registration enters the guest, while the controller configuration and bank do not.
 
@@ -805,6 +805,20 @@ Supply the original physical integer deadline from the admitted source Host,
 through an authorized controller read route. The destination file must be new,
 outside the artifact and native bank, and installed at the Host's existing
 phase-file route before starting its ordinary entry command.
+
+Planning input no longer projects the Host's deadline, remaining time or
+execution reserve to the model. The original task-planning packet is preserved;
+no replacement Host runtime guidance is added to planning or execution wakes.
+The Host still enforces its finite budget and retains clocks in runtime state
+and receipts. Task-defined time constraints and evaluation cooldowns are unchanged.
+
+This is a planning prompt default change. Execution inputs, scoring, acceptance,
+TurnEnvelope and terminal authority are unchanged. Old session archives may still
+contain historical deadline messages: this change does not rewrite or neutralize
+those messages. An authorized continuation must address stale context at its
+restore boundary, and a terminal Goal still requires explicit resume. This PR
+prevents new planning-clock injection; it does not qualify old-archive recovery
+or claim improved model behavior or scores.
 
 The sealed deadline and native capture timestamp determine the remainder; the
 receiver recomputes it. A point with two hours remaining keeps that duration
@@ -874,6 +888,9 @@ runtime receipt 绑定摘要；programmatic adapter 也可指定已放入 guest 
 失败后，修复声明不得把后来的状态补记成同一原点。评测参与者使用上文明确的
 公开 SForge fork/pin 和 Python 3.12；普通 upstream 安装缺少该 seam 时明确
 拒绝。Codex 原生会话的真实分页/compaction 与隔离 fork 须单独验证。
+中途原生捕获将实际 TurnEnvelope 开关绑定到封存的 interrupted guard；
+关闭开关的普通 guard 可以捕获，恢复时模式不匹配仍拒绝。旧产物缺少该字段
+时保留其原有开启语义；这只是历史校验兼容，不会为当前运行启用 TurnEnvelope。
 评测机会及 incumbent 参与者也分配未占用的 ID，并在封存的
 `point_metadata.evaluation_opportunity` 中记录实际映射；无 incumbent 时对应值为 null。
 文件 witness 校验按该映射定位，不会把同名调用者文件误当原生候选。
@@ -942,8 +959,14 @@ All six inputs are required together. Keep the existing native
 `RestoredRegistration`; an older provider fails instead of cold-registering.
 
 This adapter composes existing artifact, Codex session, Todo-continuation and
-native-judge owners. It preserves the captured workspace and effective Codex
-configuration, admits a distinct native session and fresh Goal/Agent, and adopts
+native-judge owners. A captured parent directory may contain the native task
+workspace: the receiver resolves exactly one physical task subtree from the
+verified component and restores only that subtree. Captured siblings remain
+inert unless separately selected as research data; absent, ambiguous or
+noncanonical roots reject before the receiver workspace changes.
+
+It preserves the captured workspace and effective Codex configuration, admits
+a distinct native session and fresh Goal/Agent, and adopts
 retained research as evidence on a current preparation Todo. Historical registry,
 claims, leases and settlement records are not installed as current authority.
 If the sealed context contains Explore events, adoption also seeds the fresh
@@ -963,7 +986,23 @@ Warm verification hashes the complete checkpoint with a read window of up to
 60 seconds, capped by the original execution deadline. It rejects a read that
 finishes after that deadline. The launcher reuses this verified metadata before
 native registration; subsequent participant checks still verify the retained
-bytes. This read window grants no extra execution time.
+bytes. Workspace restoration uses the same bounded full-artifact read allowance.
+Native conversation admission and fresh-replan revalidation allow up to 90 seconds
+per read, capped by the original phase deadline, while preserving full-history,
+cursor and identity checks. Core research-context adoption also gives complete
+artifact and native-history reads up to 90 seconds each (previously the generic
+10-second artifact RPC and 30-second native read defaults). Warm preparation
+passes its original phase deadline through adoption; expiration rejects the next
+write, and uncertain prior writes must replay their original operation. Ordinary
+Core callers remain lease-governed and may supply an absolute adoption deadline.
+These allowances grant no extra execution time and
+do not establish sustained performance for growing checkpoints.
+
+Concurrent receivers importing the same native point serialize bank publication
+with a bounded per-point lock. Each receiver still obtains its own native run and
+credentials; an existing bank member must match the sealed bytes. Conflicting or
+partial members fail closed. A lock timeout leaves the attempt for inspection;
+it does not authorize reusing a failed trial directory.
 
 Both comparison arms first settle actual preparation at cadence one and consume
 the retained decision through a current semantic replan. The existing joint
@@ -972,49 +1011,39 @@ returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
 
-An independently authorized context ablation can add
-`--restore-fresh-after-replan`. After the initial accepted, settled destination
-replan, the next work wake starts one new native conversation; later wakes resume
-that conversation. It retains the original
-checkpoint digest, source conversation and completed current decision in the
-existing session binding; the first input includes that decision as evidence.
-Research files, current Todo/Explore state, code, incumbent, cumulative deadline,
-consumed submissions and cooldown retain their owners. This deliberately drops
-earlier native messages from the new conversation input; archived source bytes
-are retained. This is a separate treatment from ordinary retained-history
-continuation. Omission preserves the default. Disable it on a new attempt;
-do not change a frozen trial. It grants neither new work nor extra evaluation.
-Unknown launches recover only from the original captured native output; missing
-or ambiguous identities stop that route instead of creating another conversation.
-The joined qualification described above exercises original-output recovery,
-actual two-candidate work and settlement, then a new due review with full
-controller-backed capture and useful work in another isolated receiver. Scripted
-model and grader responses qualify this declared mechanical chain, not research
-benefit or sustained growing-point reliability.
+To test a new decision from the same pre-replan state, use
+`--restore-fresh-replan`. The point must contain a verified pending replan packet.
+The first destination model call starts a fresh native conversation, before
+preparation and the first current-Goal replan. It reads the original task,
+retained research evidence, code and incumbent; no post-checkpoint decision or
+old native message prefix is supplied. Preparation remains charged work, and
+capture remains closed until the ordinary current review/settlement gate passes.
+Omit the flag for retained-history continuation. Change treatments only in a new attempt; the
+same checkpoint budget, opportunities and cooldown remain binding.
+
+同一个决策前 checkpoint 的重新决策实验使用 `--restore-fresh-replan`：首次模型调用
+就在 fresh 原生会话中准备并完成当前目标的 replan，读取原任务、研究证据、代码和最佳
+候选，不预置 checkpoint 之后的决定或旧原生消息前缀。准备成本仍计入原预算，后续捕获
+仍须通过当前复盘和结算校验。省略该选项保持历史接续。
+必须用新 attempt 改变处理方式，不能重置预算、机会或冷却。
+
+Warm continuation preserves the admitted native conversation across the current
+replan and subsequent work. The post-replan context-reset option
+`--restore-fresh-after-replan` has been removed; supplying it is a CLI error
+before trial creation or native registration. The joined qualification retains full controller-backed
+recapture and actual work in another isolated receiver, using the complete
+retained native history. Controller configuration and bank stay outside guest
+mounts. Scripted model and grader responses qualify the mechanical chain;
+research benefit and sustained growing-point reliability remain unproven.
 This is a benchmark operator transport; the generic packaged restore UI remains
 an open acceptance boundary.
 
-资格脚本的 fresh 分支还要求：当前真实工作结算后产生新的 due replan，经 controller
-完整封存研究、新原生历史、代码、incumbent、机会与原 phase，再由另一隔离 receiver
-实际接续。controller 配置/bank 不进入 guest 挂载。可向上述资格命令同时增加
-`--reuse-point /private/sealed-point --captured-config /private/captured-config.toml`
-复用合成源点，逐项核验原字节和配置摘要；原 source 测试不计通过，所有 receiver
-仍真实执行。显式上下文重置使用空原生前缀时，仍须绑定原点/已完成复盘/新会话，
-并观察新完成 Turn；空前缀不等于缺声明，更不授予捕获或执行权。科研效用、持续容量
-及真实新 cell 的版本/准入验收仍独立保留。
-
-独立获授权的上下文消融可增加 `--restore-fresh-after-replan`：当前目标的 replan
-首次受理并结算后，下一工作唤醒才新建一次原生会话，后续唤醒恢复该会话。
-既有会话绑定保留原 checkpoint
-摘要、源会话及本次已完成决策，首次输入把决策作为证据交付；研究文件、当前
-Todo/Explore、代码、incumbent、累计时限、已用评测和冷却仍由原 owner 管理。
-新会话输入不包含此前原生消息，源归档字节仍保留；这是独立实验因素。
-省略即保持默认，关闭须使用新 attempt，
-不热改冻结运行，也不增加执行或评测权限。未知启动只能读取原始原生输出来恢复，
-缺失或歧义身份会阻塞该路径，不能另建会话。上述联合资格覆盖原输出恢复、实际
-双候选工作与结算，再经新的 due review 完整捕获，并由另一隔离接收端继续工作。
-脚本模型与 grader 只验证上述机械链路，不证明研究收益或 checkpoint 持续增大时
-的可靠性。该入口属于 benchmark 操作者传输，通用打包 restore UI 仍须另验收。
+暖恢复在当前 replan 及后续工作中保留已准入的原生会话。复盘后清空上下文的选项
+已删除；旧参数会在创建 trial 或原生注册前作为未知参数拒绝。联合资格仍覆盖
+controller 完整再捕获及另一隔离接收端的实际工作，并使用完整保留的原生历史。
+controller 配置和 bank 不进入 guest 挂载。脚本模型与 grader 只验证机械链路，
+研究收益及 checkpoint 持续增大时的可靠性仍未证明。该入口属于 benchmark
+操作者传输，通用打包 restore UI 仍须另验收。
 
 Research files outside the task workspace need explicit capture **and** explicit
 receiver selection. Add each required directory or file to the source checkpoint
