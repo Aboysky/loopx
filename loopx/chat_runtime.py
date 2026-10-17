@@ -61,6 +61,7 @@ from .chat_store import (
     utc_now,
 )
 from .chat_providers import ClaudeCodeAdapter, codex_model_options, direct_model_from_environment
+from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort
 from .attached_session import (
     enqueue_attached_agent_turn,
     require_current_attached_session,
@@ -288,7 +289,8 @@ class ChatRuntimeController:
         )
         return [*builtins, *(endpoint.public_summary() for endpoint in self.endpoint_registry.list())]
 
-    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path, goal_id: str | None = None) -> dict[str, Any]:
+    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path, goal_id: str | None = None,
+                                    agent_model_id: str | None = None) -> dict[str, Any]:
         """Read model choices from one selected, available ACP endpoint.
 
         This is intentionally not a PATH scan: the controller launches only an
@@ -301,7 +303,11 @@ class ChatRuntimeController:
         if agent_id == "codex":
             defaults = load_codex_chat_defaults(self.coordination_runtime_root) if goal_id else {}
             home = codex_profile_home(self.codex_home, defaults)
-            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin, codex_home=home), "supported": True}
+            models = codex_model_options(self.codex_bin, codex_home=home)
+            if models is None:
+                raise CodexChatAgentError("The selected Codex account did not return model choices. Check Chat account settings, then retry; existing conversations are unchanged.",
+                                          error_code="provider_unavailable", gate=None)
+            return {"agent_id": agent_id, "model": models, "supported": True}
         if agent_id == "claude-code":
             return {
                 "agent_id": agent_id,
@@ -322,11 +328,27 @@ class ChatRuntimeController:
             work_dir=work_dir,
             goal_id=None,
             objective="",
+            agent_config={"model": agent_model_id} if agent_model_id else None,
         )
         try:
-            return {"agent_id": agent_id, "model": adapter.model_options(), "supported": True}
+            return {"agent_id": agent_id, "model": adapter.model_options(),
+                    "reasoning_effort": adapter.reasoning_options(), "supported": True}
         finally:
             adapter.close_session()
+
+    @staticmethod
+    def _observed_model_settings(adapter: ChatRuntimeAdapter, requested_effort: str | None = None,
+                                 requested_model: str | None = None) -> dict[str, Any]:
+        settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else {}
+        if requested_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) and adapter.current_model_id != requested_model:
+            raise CodexChatAgentError("The Agent did not confirm the requested model; no message was sent.",
+                                      error_code="unsupported_configuration", gate=None)
+        if requested_effort and settings.get("agent_reasoning_effort") != requested_effort:
+            raise CodexChatAgentError(
+                "The Agent did not confirm the requested reasoning effort; no message was sent.",
+                error_code="unsupported_configuration", gate=None,
+            )
+        return settings
 
     @staticmethod
     def _managed_upstream_mode(session: dict[str, Any]) -> str:
@@ -544,10 +566,19 @@ class ChatRuntimeController:
         conversation_binding_id: str | None = None,
         source_context: dict[str, Any] | None = None,
         agent_model_id: str | None = None,
+        agent_reasoning_effort: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         if agent_model_id:
             agent_model_id = normalize_agent_model_id(agent_model_id)
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
+        if agent_model_id and agent_id not in {"codex", "claude-code"} and (capability or {}).get("adapter_kind") != "acp":
+            raise CodexChatAgentError("This Agent does not offer model selection.",
+                                      error_code="unsupported_configuration", gate=None)
+        if agent_reasoning_effort is not None:
+            agent_reasoning_effort = normalize_agent_reasoning_effort(agent_reasoning_effort)
+            if agent_id != "codex" and (capability or {}).get("adapter_kind") != "acp":
+                raise CodexChatAgentError("This Agent does not offer reasoning choices.",
+                                          error_code="unsupported_configuration", gate=None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
         selected_channel = channel_id or f"goal.{goal_id}"
@@ -612,6 +643,10 @@ class ChatRuntimeController:
                 )
                 if strict_profile:
                     if mode == "resume_latest" and exact_attached is not None:
+                        if ((agent_reasoning_effort and exact_attached.get("agent_reasoning_effort") != agent_reasoning_effort)
+                            or (agent_model_id and exact_attached.get("agent_model_id") != agent_model_id)):
+                            raise CodexChatAgentError("Change attached conversation settings in its original host.",
+                                                      error_code="unsupported_configuration", gate=None)
                         return exact_attached, True
                     raise CodexChatAgentError(
                         "Managed Chat execution is not qualified for the "
@@ -631,10 +666,17 @@ class ChatRuntimeController:
                     latest = None
                 if latest is not None and goal_instance_id is not None and latest.get("goal_instance_id") != goal_instance_id:
                     latest = None
+                if latest is not None and (latest.get("active_turn_id") or latest.get("upstream_mode") == CODEX_GOAL_CHAT_MODE or latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED):
+                    if ((agent_reasoning_effort and latest.get("agent_reasoning_effort") != agent_reasoning_effort)
+                        or (agent_model_id and latest.get("agent_model_id") != agent_model_id)):
+                        raise CodexChatAgentError("The existing execution keeps its settings. Change the next conversation after it finishes, or use its original host.",
+                                                  error_code="unsupported_configuration", gate=None)
                 if latest is not None and agent_model_id and latest.get("agent_model_id") != agent_model_id:
                     # A model is a session binding for ACP.  Never silently
                     # retarget an existing conversation when the user chose a
                     # different one; a new session makes that boundary visible.
+                    latest = None
+                if latest is not None and agent_reasoning_effort and latest.get("agent_reasoning_effort") != agent_reasoning_effort:
                     latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
@@ -671,10 +713,12 @@ class ChatRuntimeController:
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
                 agent_config={**{key: value for key, value in codex_defaults.items() if value is not None},
-                              **({"model": agent_model_id} if agent_model_id else {})} or None,
+                              **({"model": agent_model_id} if agent_model_id else {}),
+                              **({"reasoning_effort": agent_reasoning_effort} if agent_reasoning_effort else {})} or None,
                 codex_home_override=selected_codex_home,
             )
             try:
+                observed_settings = self._observed_model_settings(adapter, agent_reasoning_effort, agent_model_id)
                 persisted = self.store.create_session(
                     goal_id=goal_id,
                     goal_instance_id=goal_instance_id,
@@ -687,10 +731,11 @@ class ChatRuntimeController:
                     codex_home=str(codex_context.home_for_project(selected_codex_home, project_context)) if agent_id == "codex" else None,
                     project_context=project_context,
                     steward_context=steward_context,
-                    agent_model_id=adapter.current_model_id if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else agent_model_id,
+                    agent_model_id=adapter.current_model_id if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else None,
                     requested_agent_model_id=agent_model_id,
+                    requested_agent_reasoning_effort=agent_reasoning_effort,
                     codex_chat_configuration=codex_defaults or None,
-                    **(adapter.model_settings if isinstance(adapter, CodexAppServerAdapter) else {}),
+                    **observed_settings,
                 )
             except Exception:
                 adapter.close_session()
@@ -929,9 +974,16 @@ class ChatRuntimeController:
                 agent_config={**(session.get("codex_chat_configuration") or {}), **({"model": requested_model} if (requested_model := (
                     session.get("requested_agent_model_id", session.get("agent_model_id"))
                     if session.get("agent_id") == "codex" else session.get("agent_model_id")
-                )) else {})} or None,
+                )) else {}), **({"reasoning_effort": session["requested_agent_reasoning_effort"]}
+                               if session.get("requested_agent_reasoning_effort") else {})} or None,
                 codex_home_override=codex_profile_home(self.codex_home, session.get("codex_chat_configuration") or {}),
             )
+            try:
+                observed_settings = self._observed_model_settings(adapter, session.get("requested_agent_reasoning_effort"),
+                                                                  session.get("requested_agent_model_id"))
+            except Exception:
+                adapter.close_session()
+                raise
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                 try:
                     if not isinstance(adapter, CodexAppServerAdapter):
@@ -958,7 +1010,7 @@ class ChatRuntimeController:
         try:
             if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)):
                 self.store.update_session(session_id, agent_model_id=adapter.current_model_id,
-                    **(adapter.model_settings if isinstance(adapter, CodexAppServerAdapter) else {}))
+                    **observed_settings)
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
@@ -1577,7 +1629,8 @@ class ChatRuntimeController:
                     upstream_turn_id=payload["upstream_turn_id"],
                 )
             if kind == "agent.model_config":
-                self.store.update_session(session_id, agent_model_id=payload.get("model_id"))
+                self.store.update_session(session_id, agent_model_id=payload.get("model_id"),
+                    **({"agent_reasoning_effort": payload["agent_reasoning_effort"]} if "agent_reasoning_effort" in payload else {}))
                 return
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:

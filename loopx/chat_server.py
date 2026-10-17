@@ -52,6 +52,7 @@ from .chat_manager import (
 from .chat_session_open import open_chat_session
 from .chat_ssh_source_api import SshSourceRequestMixin
 from .chat_store import ChatSessionStore, normalize_agent_model_id
+from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
@@ -626,7 +627,7 @@ class ChatRequestHandler(
     def _create_session(self) -> None:
         try:
             body = self._read_json()
-            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "mode", "context_kind", "project_ref"}
+            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "agent_reasoning_effort", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
             goal_id = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
@@ -637,6 +638,8 @@ class ChatRequestHandler(
             requested_endpoint = _compact_text(body.get("agent_id"), limit=80)
             model_value = body.get("agent_model_id")
             requested_model = normalize_agent_model_id(model_value) if model_value not in (None, "") else None
+            requested_effort = (normalize_agent_reasoning_effort(body["agent_reasoning_effort"])
+                                if body.get("agent_reasoning_effort") is not None else None)
             mode = _compact_text(body.get("mode"), limit=40) or "resume_latest"
             context_kind = _compact_text(body.get("context_kind"), limit=40) or "goal"
             if context_kind not in {"goal", "manager", "project"}:
@@ -677,6 +680,7 @@ class ChatRequestHandler(
                 mode=mode,
                 requested_endpoint=requested_endpoint,
                 agent_model_id=requested_model,
+                **({"agent_reasoning_effort": requested_effort} if requested_effort is not None else {}),
                 **({"project_ref": project_ref} if context_kind == "project" else {}),
             )
         except CodexChatAgentError as exc:
@@ -704,7 +708,7 @@ class ChatRequestHandler(
     def _agent_model_options(self) -> None:
         try:
             body = self._read_json()
-            if "agent_id" not in body or set(body) - {"agent_id", "goal_id"}:
+            if "agent_id" not in body or set(body) - {"agent_id", "goal_id", "agent_model_id"}:
                 raise ValueError("agent_id is required")
             agent_id = _compact_text(body.get("agent_id"), limit=80)
             if not agent_id:
@@ -712,11 +716,13 @@ class ChatRequestHandler(
             goal_id = _compact_text(body.get("goal_id"), limit=160) or None
             if goal_id:
                 self._registry_and_goal(goal_id)
+            requested_model = normalize_agent_model_id(body["agent_model_id"]) if body.get("agent_model_id") is not None else None
             # Discovery is deliberately bounded to a selected, known endpoint.
             # It opens no persisted LoopX Chat session and exposes no command or
             # local workspace data to the browser.
             result = self.server.runtime_controller.inspect_agent_model_options(
-                agent_id, work_dir=Path.cwd(), **({"goal_id": goal_id} if goal_id else {})
+                agent_id, work_dir=Path.cwd(), **({"goal_id": goal_id} if goal_id else {}),
+                **({"agent_model_id": requested_model} if requested_model else {}),
             )
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, gate=exc.gate, error_code=exc.error_code)

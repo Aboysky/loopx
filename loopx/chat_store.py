@@ -22,7 +22,9 @@ from .chat import (
 from .capabilities.steward_executor.allocation import (
     normalize_manager_executor_allocation,
 )
-from .capabilities.native_chat.model_settings import normalize_agent_model_id
+from .capabilities.native_chat.model_settings import (
+    MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id, normalize_session_model_settings,
+)
 from .chat_event_cache import ChatEventCache
 from .chat_ingress import ChatIngressStore
 from .control_plane.chat_turn_acceptance import (
@@ -49,7 +51,6 @@ SESSION_QUEUE_MAX_PENDING = 20
 SESSION_QUEUE_TTL_SECONDS = 3600
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
-_MODEL_SELECTION_UNSET = object()
 
 
 def utc_now() -> str:
@@ -260,6 +261,7 @@ class ChatSessionStore(ChatIngressStore):
         steward_context: dict[str, Any] | None = None,
         agent_model_id: str | None = None,
         requested_agent_model_id: str | None | object = _MODEL_SELECTION_UNSET,
+        requested_agent_reasoning_effort: str | None | object = _MODEL_SELECTION_UNSET,
         codex_chat_configuration: dict[str, Any] | None = None,
         agent_reasoning_effort: str | None = None,
         agent_service_tier: str | None = None,
@@ -310,7 +312,10 @@ class ChatSessionStore(ChatIngressStore):
             field="executor_endpoint_id",
         )
         normalized_adapter_kind = _opaque_id(adapter_kind, field="adapter_kind")
-        normalized_agent_model_id = normalize_agent_model_id(agent_model_id) if agent_model_id else None
+        model_settings = normalize_session_model_settings(
+            model=agent_model_id, effort=agent_reasoning_effort, tier=agent_service_tier,
+            requested_model=requested_agent_model_id, requested_effort=requested_agent_reasoning_effort,
+        )
         if codex_chat_configuration is not None:
             from .capabilities.native_chat.machine_defaults import normalize_codex_chat_defaults
             if agent_id != "codex" or normalized_mode != CHAT_SESSION_MODE_MANAGED:
@@ -342,13 +347,8 @@ class ChatSessionStore(ChatIngressStore):
                 else {}
             ),
             "agent_id": normalized_agent_id,
-            "agent_model_id": normalized_agent_model_id,
-            "agent_reasoning_effort": normalize_agent_model_id(agent_reasoning_effort) if agent_reasoning_effort else None,
-            "agent_service_tier": normalize_agent_model_id(agent_service_tier) if agent_service_tier else None,
+            **model_settings,
             **({"codex_chat_configuration": codex_chat_configuration} if codex_chat_configuration is not None else {}),
-            # Observing a runtime default must not turn it into a user pin on resume.
-            **({"requested_agent_model_id": normalize_agent_model_id(requested_agent_model_id) if requested_agent_model_id else None}
-               if requested_agent_model_id is not _MODEL_SELECTION_UNSET else {}),
             "executor_endpoint_id": normalized_executor_endpoint_id,
             "adapter_kind": normalized_adapter_kind,
             "upstream_thread_id": normalized_upstream_thread_id,

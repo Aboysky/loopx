@@ -41,7 +41,13 @@ def codex_model_options(codex_bin: str, *, codex_home: Path | None = None) -> di
     if not isinstance(rows, list):
         return None
     options = [
-        {"value": slug, "label": " ".join(str(row.get("display_name") or slug).split())[:100]}
+        {"value": slug, "label": " ".join(str(row.get("display_name") or slug).split())[:100],
+         **({"reasoning_efforts": efforts} if (efforts := [
+             entry["effort"] for entry in (row["supported_reasoning_levels"] if isinstance(row.get("supported_reasoning_levels"), list) else [])
+             if isinstance(entry, dict) and isinstance(entry.get("effort"), str)
+             and entry["effort"].strip() and len(entry["effort"]) <= 160
+             and not any(ord(character) < 32 for character in entry["effort"])
+         ]) else {})}
         for row in rows
         if isinstance(row, dict)
         and isinstance((slug := str(row.get("slug") or "").strip()), str)
