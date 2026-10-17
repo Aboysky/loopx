@@ -794,6 +794,10 @@ native 读取进程，执行两次完整读取，并保持到产物封存或 con
 使自身校验基准失效。这只调整读取进程的生命周期，保持分页历史、cursor/profile
 新鲜度、字节 witness、显式开启及原捕获/phase deadline。预检成本下降尚不证明
 增长历史下的持续捕获可靠性，也不等于后继点 receiver 验收。
+Benchmark 交接先读取有界请求，再校验捕获根目录的物理路径。目录缺失或存在
+别名时关闭该连接，使同一来源能纠正路径并继续，不重放或捕获被拒 packet。
+真实 socket/进程用例覆盖目录存在、缺失和符号链接；这不认证完整研究检查点，
+也不延长原截止时间。
 
 显式 source-checkout controller 现可通过既有 registry/
 session owner 准备已验证 fork，要求不同且已注册的 Goal/Agent 身份与匹配的

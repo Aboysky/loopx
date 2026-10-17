@@ -852,6 +852,11 @@ after-wake hook alone cannot implement this ordering. The replan and Host owners
 must provide that handoff without an extra model call or work settlement. If the
 boundary cannot be qualified, record the missed point and continue under the
 existing execution contract; do not substitute a later state for that node.
+The benchmark handoff consumes the bounded request before validating the physical
+capture root. A missing or aliased root closes that connection, allowing the same
+source to correct its path and continue without replaying or capturing the refused
+packet. Real socket/process cases cover present, missing and symlinked roots;
+they do not qualify a complete research checkpoint or extend the original deadline.
 Measure capture time and storage per node before choosing compression, shared
 immutable members or retention limits. Retention must preserve declared study
 points and their branches rather than silently selecting favorable outcomes.
