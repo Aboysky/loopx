@@ -436,8 +436,6 @@ def held_quota_decision(listener, capture_root: Path, *, goal_id: str, agent_id:
     Without native_process this is output ordering only; a slow capture can
     outlive the native tool's yield interval and does not stop inference.
     """
-    if not capture_root.is_absolute() or capture_root.resolve(strict=True) != capture_root:
-        raise ValueError("decision capture root must be a physical absolute directory")
     def remaining():
         limit = 120 if deadline is None else min(120, deadline - time.monotonic())
         if limit <= 0:
@@ -449,6 +447,11 @@ def held_quota_decision(listener, capture_root: Path, *, goal_id: str, agent_id:
         channel.settimeout(remaining())
         with channel.makefile("rb") as stream:
             line = stream.readline(4097)
+        # Consume the bounded request before checking Host prerequisites. A
+        # refused root must close this channel so the same source can recover;
+        # leaving it queued would keep the caller's listener always readable.
+        if not capture_root.is_absolute() or capture_root.resolve(strict=True) != capture_root:
+            raise ValueError("decision capture root must be a physical absolute directory")
         message = json.loads(line)
         if (not isinstance(message, dict) or set(message) != {"path", "sha256"} or
                 not isinstance(message["path"], str) or not isinstance(message["sha256"], str)):

@@ -485,7 +485,8 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
-def test_refused_handoff_keeps_original_wake_running(tmp_path, monkeypatch):
+@pytest.mark.parametrize("capture_root_state", ["present", "missing", "symlink"])
+def test_refused_handoff_keeps_original_wake_running(tmp_path, monkeypatch, capture_root_state):
     """A resumed session reusing an earlier wake's capture root is refused, not fatal.
 
     The refused packet is neither released nor captured; the same source keeps
@@ -503,14 +504,20 @@ def test_refused_handoff_keeps_original_wake_running(tmp_path, monkeypatch):
     wakes = tmp_path / "wakes"
     current = wakes / "wake-current" / "decisions"
     earlier = wakes / "wake-earlier" / "decisions" / "decision-earlier"
-    current.mkdir(parents=True, mode=0o700)
+    current.parent.mkdir(parents=True)
+    if capture_root_state == "present":
+        current.mkdir(mode=0o700)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    if capture_root_state == "symlink":
+        current.symlink_to(foreign, target_is_directory=True)
     earlier.mkdir(parents=True)
     released = current / "decision-current"
-    released.mkdir()
     packets = {}
     for name, directory in (("earlier", earlier), ("current", released)):
         raw = json.dumps({"ok": False, "goal_id": "source", "error_code": "fixture"}).encode()
-        (directory / "decision.json").write_bytes(raw)
+        if name == "earlier":
+            (directory / "decision.json").write_bytes(raw)
         packets[name] = {"path": str(directory / "decision.json"), "sha256": hashlib.sha256(raw).hexdigest()}
     project = tmp_path / "project"
     project.mkdir()
@@ -525,22 +532,28 @@ def test_refused_handoff_keeps_original_wake_running(tmp_path, monkeypatch):
             f"        s.connect({address!r}); s.sendall(json.dumps(message).encode()+b'\\n')\n"
             "        return s.makefile('rb').readline()\n"
             f"assert call({packets['earlier']!r}) == b''\n"
+            f"current = Path({str(current)!r})\n"
+            "if current.is_symlink(): current.unlink()\n"
+            f"Path({str(released)!r}).mkdir(parents=True)\n"
+            f"Path({packets['current']['path']!r}).write_bytes({raw!r})\n"
             f"assert json.loads(call({packets['current']!r}))['released'] is True\n"
             "Path('continued').write_text('source continued')\n")
         monkeypatch.setattr(worker, "native_command", lambda *args: [sys.executable, "-c", code])
         wake = CheckpointWake(env, {"turn_id": "wake-current", "mode": "heartbeat", "stage": "execute"})
-        wake.capture_root = current.resolve()
+        wake.capture_root = current
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(address)
             listener.listen(1)
             wake.listener = listener
             with (tmp_path / "stdout").open("w") as stdout, (tmp_path / "stderr").open("w") as stderr:
-                assert wake.run(SimpleNamespace(), "body", tmp_path, None, stdout, stderr, 30) == 0
+                assert wake.run(SimpleNamespace(), "body", tmp_path, None, stdout, stderr, 2) == 0
     assert (project / "continued").read_text() == "source continued"
     [event] = wake.receipt["checkpoint_handoffs"]
     assert event["captured"] is False and event["released"] is False
-    assert event["error_kind"] == "ValueError" and "capture root" in event["error"]
-    assert (earlier / "decision.json").read_bytes()  # Earlier evidence is untouched.
+    expected = "FileNotFoundError" if capture_root_state == "missing" else "ValueError"
+    assert event["error_kind"] == expected
+    assert (earlier / "decision.json").read_bytes() == raw
+    assert not list(foreign.iterdir())  # Refusal cannot write through a foreign root.
 
 
 def test_wake_receipt_error_tail_is_bounded_message():
