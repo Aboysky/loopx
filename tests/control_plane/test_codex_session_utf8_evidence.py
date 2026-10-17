@@ -8,9 +8,18 @@ host locale codec from rewriting them.
 
 Each case drives one real owner in a child interpreter whose default encoding is
 not UTF-8 (the host ANSI code page on Windows, `ascii` under `LC_ALL=C` on
-POSIX), with a workspace whose path carries a non-ASCII component: the refresh
-record keeps the observed stdout path and the binding's checkpoint root, so that
-workspace shape is the ordinary case rather than a synthetic one.
+POSIX). The child's workspace stays ASCII: the forced filesystem encoding must be
+able to decode the `str` paths the owner hands to file I/O, so a non-ASCII
+workspace path would fail on the surrogate escape first and hide the codec
+hazard this suite exists to reproduce. The non-ASCII payload is the CLI's own
+UTF-8 event bytes and the attempt record, which is what the codecs under test
+decode.
+
+The program travels on stdin rather than as a `-c` argument: `-c` text is
+decoded with the filesystem encoding, so under `LC_ALL=C` CPython rejects the
+program before it imports LoopX ("Unable to decode the command from the command
+line"), while source read from stdin is decoded as UTF-8. `-` keeps the working
+directory on `sys.path` the way `-c` does.
 
 The child also proves the case is not vacuous: it decodes the exact bytes the
 CLI writes with its resolved default codec and reports whether they are
@@ -30,8 +39,6 @@ import sys
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-WORKSPACE_COMPONENT = "项目"
 
 _CHILD = r'''
 import json, locale, sys
@@ -128,9 +135,14 @@ def _drive(base: Path, mode: str) -> subprocess.CompletedProcess[bytes]:
         "PYTHONUTF8": "0",
     }
     return subprocess.run(
-        [sys.executable, "-X", "utf8=0", "-c", _CHILD, str(base), mode],
+        [sys.executable, "-X", "utf8=0", "-", str(base), mode],
         cwd=REPO_ROOT,
         env=environment,
+        # `-c` arguments are decoded with the ASCII filesystem encoding this
+        # environment forces, which rejects a non-ASCII program before LoopX is
+        # imported; stdin source is decoded as UTF-8 and keeps the working
+        # directory on `sys.path`, as `-c` would.
+        input=_CHILD.encode("utf-8"),
         capture_output=True,
         timeout=180,
     )
@@ -161,7 +173,7 @@ def test_codex_events_are_read_back_with_a_locale_codec(tmp_path: Path) -> None:
     makes this case fail with the reproduced `UnicodeDecodeError`.
     """
 
-    base = tmp_path / WORKSPACE_COMPONENT
+    base = tmp_path
     payload = _payload(base, "observe")
 
     assert payload["session_id"] == "fresh"
@@ -178,7 +190,7 @@ def test_checkpoint_refresh_attempt_record_is_readable_again(tmp_path: Path) -> 
     `tests/test_loopx_text_io_utf8.py` is what protects them.
     """
 
-    base = tmp_path / WORKSPACE_COMPONENT
+    base = tmp_path
     payload = _payload(base, "recover")
 
     assert payload["session_id"] == "resumed"
