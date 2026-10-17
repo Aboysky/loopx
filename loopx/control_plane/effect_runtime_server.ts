@@ -1,6 +1,6 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
-import { type FileHandle } from "node:fs/promises";
+import { realpath, type FileHandle } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
 import {
@@ -109,6 +109,7 @@ function parseIdleMs(raw: string | undefined): number {
 }
 
 const infoPath = parseArg("--info");
+let publishedInfoPath: string | undefined;
 const fingerprint = parseArg("--fingerprint");
 const token = requiredString(process.env.LOOPX_EFFECT_RUNTIME_TOKEN, "runtime token");
 const idleMs = parseIdleMs(process.env.LOOPX_EFFECT_RUNTIME_IDLE_MS);
@@ -120,6 +121,7 @@ let resolvePublication: () => void;
 const publicationReady = new Promise<void>((resolve) => { resolvePublication = resolve; });
 const handlers = createEffectRuntimeHandlers({
   fingerprint,
+  get infoPath() { return publishedInfoPath; },
   requestShutdown: () => {
     shutdownRequested = true;
   },
@@ -304,6 +306,10 @@ server.listen(0, "127.0.0.1", async () => {
         // serving a goal is not necessarily the one the caller resolves from PATH.
         runtime_identity: sqliteRuntimeIdentity(),
       });
+      // Freeze the native publication namespace while it exists. Test cleanup
+      // may observe it after the fixture directory was removed; a copied
+      // locator's contents cannot rewrite this authenticated boot observation.
+      publishedInfoPath = await realpath(infoPath);
     });
     publicationComplete = true;
     resolvePublication();
