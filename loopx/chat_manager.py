@@ -889,6 +889,7 @@ def open_manager_session(
     provider: str = "",
     audience: str = "",
     agent_model_id: str | None = None,
+    agent_reasoning_effort: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Open the steward channel's Session through its own endpoint owner.
 
@@ -928,6 +929,7 @@ def open_manager_session(
         agent_goal_id=MANAGER_AGENT_GOAL_ID,
         manager_executor_allocation=allocation,
         agent_model_id=agent_model_id,
+        **({"agent_reasoning_effort": agent_reasoning_effort} if agent_reasoning_effort is not None else {}),
     )
 
 
