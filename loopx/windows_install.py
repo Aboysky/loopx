@@ -391,7 +391,10 @@ def _restore_paths(
     retained: list[Path] = []
     try:
         for path, backup in reversed(snapshots):
-            if path in skill_entries or path.is_dir() or path.is_symlink():
+            # A skill may be absent after deletion but before its copy starts.
+            if path.is_symlink() or path.is_dir() or (
+                path in skill_entries and path.exists()
+            ):
                 # A failed installation may have left user edits in a skill.
                 # Keep that state outside the temporary snapshot cleanup; its
                 # contents cannot be distinguished from installer writes here.
