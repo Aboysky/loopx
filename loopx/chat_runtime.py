@@ -571,12 +571,12 @@ class ChatRuntimeController:
         if agent_model_id:
             agent_model_id = normalize_agent_model_id(agent_model_id)
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
-        if agent_model_id and agent_id not in {"codex", "claude-code"} and (capability or {}).get("adapter_kind") != "acp":
+        if capability and capability.get("available") and agent_model_id and agent_id not in {"codex", "claude-code"} and capability.get("adapter_kind") != "acp":
             raise CodexChatAgentError("This Agent does not offer model selection.",
                                       error_code="unsupported_configuration", gate=None)
         if agent_reasoning_effort is not None:
             agent_reasoning_effort = normalize_agent_reasoning_effort(agent_reasoning_effort)
-            if agent_id != "codex" and (capability or {}).get("adapter_kind") != "acp":
+            if capability and capability.get("available") and agent_id != "codex" and capability.get("adapter_kind") != "acp":
                 raise CodexChatAgentError("This Agent does not offer reasoning choices.",
                                           error_code="unsupported_configuration", gate=None)
         if mode not in {"resume_latest", "new"}:

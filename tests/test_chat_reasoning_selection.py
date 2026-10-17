@@ -228,3 +228,18 @@ def test_unsupported_executor_settings_fail_before_native_start(tmp_path, monkey
         assert not store.list_sessions()
     finally:
         runtime.close()
+
+
+def test_setting_validation_preserves_the_real_endpoint_readiness_error(tmp_path, monkeypatch):
+    runtime = ChatRuntimeController(store=ChatSessionStore(tmp_path / "runtime"), codex_bin="unavailable-fixture-codex")
+    monkeypatch.setattr(runtime, "capabilities", lambda: [{"agent_id": "fixture-direct", "adapter_kind": "direct",
+                                                         "available": False, "unavailable_reason": "api_key_not_set"}])
+    try:
+        with pytest.raises(CodexChatAgentError) as error:
+            runtime.open_session(goal_id="fixture", agent_id="fixture-direct", work_dir=tmp_path,
+                objective="Inspect.", mode="new", agent_model_id="fixture-model", agent_reasoning_effort="high")
+        assert error.value.error_code == "agent_endpoint_unavailable"
+        assert "api_key_not_set" in str(error.value)
+        assert not runtime.store.list_sessions()
+    finally:
+        runtime.close()
