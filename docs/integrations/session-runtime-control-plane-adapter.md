@@ -565,8 +565,21 @@ attachments for an uncertain receipt. The existing Session queue owns ordering
 and duplicate suppression; acceptance is not execution or completion. Omitting
 `delivery` preserves direct submission and its busy rejection. Full queues and
 pre-admission context failures report non-delivery so the original draft can be
-edited safely. This does not widen project grants or authorize another Session.
+edited safely. A refused browser-storage write leaves the draft editable in the
+composer, without recording an uncertain delivery for an attempt that was never
+dispatched. A genuinely uncertain request still retries its exact durable identity.
+This does not widen project grants or authorize another Session.
 
 ![Goal Chat model and request provenance](../development/assets/chat-observability/first-screen.png)
 
 ![Attached conversation and folded work activity](../development/assets/chat-observability/attached-history.png)
+
+The shared steward header also retains readable title and runtime diagnostics
+when the actual model is unknown. These packaged synthetic views exercise both
+390px states; the optional Goal model menu stays within the viewport.
+
+| Model unavailable | Native observation available |
+| --- | --- |
+| ![Steward with unknown model](../development/assets/chat-observability/manager-unknown-phone.png) | ![Steward with known model](../development/assets/chat-observability/manager-known-phone.png) |
+
+![Optional model choices on a phone](../development/assets/chat-observability/goal-model-menu-phone.png)

@@ -68,7 +68,13 @@ export function retainSteeringRequest(key: string, request: SteeringRequest): bo
     && durable.text === request.text
     && durable.id === request.id && durable.delivery === request.delivery
     && JSON.stringify(durable.attachments) === JSON.stringify(request.attachments);
-  if (!verified && previous) requestCache().set(key, previous);
+  if (!verified) {
+    // No dispatch follows a failed qualification. The composer already owns
+    // its editable draft; caching this attempt would falsely block an edit as
+    // an uncertain delivery after storage recovers.
+    if (previous) requestCache().set(key, previous);
+    else requestCache().delete(key);
+  }
   return verified;
 }
 

@@ -1532,6 +1532,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
      the steward, and an unavailable selection must not become invisible. */
   .personal-channel-title p.personal-manager-execution { display: flex; }
   .personal-channel-actions { min-width: 0; }
+  .personal-chat-model-menu { position: static; }
+  .personal-chat-model-panel { left: 14px; right: 14px; width: auto; }
   /* Executor/model readback earns its own bounded row, including unknown facts.
      It must not consume the title and runtime diagnostics' reading width. */
   .personal-channel-header[data-goal-selected="false"] { grid-template-columns: 36px minmax(0, 1fr); }
