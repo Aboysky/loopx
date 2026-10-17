@@ -1,6 +1,7 @@
 """Complete checkpoint witnesses cross the existing private Effect transport."""
 import hashlib
 import json
+import time
 
 import pytest
 
@@ -14,7 +15,14 @@ from loopx.control_plane.effect_runtime import (
 )
 
 
-def test_large_member_inventory_survives_capture_cli_verify_and_materialize(tmp_path, capsys):
+# This is a complete-transport functional check, not a storage latency SLO.
+# A complete inventory performs durable per-file copy/flush work; keep its
+# finite RPC allowance separate from artifact deadlines
+# or the benchmark's separate live-capture/sealing clocks.
+LARGE_ARTIFACT_RPC_SECONDS = 240
+
+
+def test_large_member_transport_with_explicit_rpc_budget_preserves_inventory(tmp_path, capsys):
     source = tmp_path / "research"
     source.mkdir(mode=0o700)
     content = b"retained negative evidence\n"
@@ -33,15 +41,15 @@ def test_large_member_inventory_survives_capture_cli_verify_and_materialize(tmp_
     components = [{"id": "research", "source_path": str(source)}]
     request = {"action": "probe", "components": components}
     with pytest.raises(EffectRuntimeResponseAmbiguous):
-        effect_runtime_result("runtime.checkpoint_artifacts", request, timeout=90)
+        effect_runtime_result("runtime.checkpoint_artifacts", request, timeout=LARGE_ARTIFACT_RPC_SECONDS)
     observed = effect_runtime_result("runtime.checkpoint_artifacts", request,
-                                     timeout=90, large_local_snapshot=True)
+                                     timeout=LARGE_ARTIFACT_RPC_SECONDS, large_local_snapshot=True)
     assert observed["source_witness"] == witness
     unit = tmp_path / "point"
     captured = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "capture", "components": components, "destination": str(unit),
         "point_metadata": {}, "expected_source_sha256": observed["source_sha256"],
-    }, timeout=90, retry_safe=False, large_local_snapshot=True)
+    }, timeout=LARGE_ARTIFACT_RPC_SECONDS, retry_safe=False, large_local_snapshot=True)
     manifest = json.loads((unit / "checkpoint.json").read_bytes())
     assert manifest["source_witness"] == witness and manifest["artifact_witness"] == witness
     assert captured["source_stability_verified"] and not captured["execution_authority_granted"]
@@ -53,7 +61,7 @@ def test_large_member_inventory_survives_capture_cli_verify_and_materialize(tmp_
     restored = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "materialize", "root": str(unit), "expected_sha256": captured["sha256"],
         "destination": str(destination),
-    }, timeout=90, retry_safe=False, large_local_snapshot=True)
+    }, timeout=LARGE_ARTIFACT_RPC_SECONDS, retry_safe=False, large_local_snapshot=True)
     assert restored["materialized"] and not restored["activation_performed"]
     assert (destination / "checkpoint.json").read_bytes() == (unit / "checkpoint.json").read_bytes()
     assert sorted(p.name for p in (destination / "components/research").iterdir()) == [
@@ -63,7 +71,7 @@ def test_large_member_inventory_survives_capture_cli_verify_and_materialize(tmp_
     member.unlink()
     with pytest.raises(EffectRuntimeRemoteError):
         effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(destination),
-            "expected_sha256": captured["sha256"]}, timeout=90, large_local_snapshot=True)
+            "expected_sha256": captured["sha256"]}, timeout=LARGE_ARTIFACT_RPC_SECONDS, large_local_snapshot=True)
 
 
 def test_large_checkpoint_metadata_uses_private_request_and_response(tmp_path):
@@ -82,3 +90,28 @@ def test_large_checkpoint_metadata_uses_private_request_and_response(tmp_path):
         timeout=30, large_local_snapshot=True)
     assert basis["point_metadata"] == request["point_metadata"]
     assert result["source_stability_verified"] and not result["execution_authority_granted"]
+
+
+def test_large_rpc_allowance_cannot_extend_artifact_capture_deadline(tmp_path):
+    source = tmp_path / "candidate"
+    source.write_bytes(b"retained evidence")
+    components = [{"id": "code", "source_path": str(source)}]
+    observed = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "probe", "components": components}, large_local_snapshot=True)
+    # The same valid request succeeds with a future artifact deadline. Do not
+    # infer the rejection cause from internal error prose hidden by the bridge.
+    live = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "capture", "components": components,
+        "destination": str(tmp_path / "live"), "point_metadata": {},
+        "expected_source_sha256": observed["source_sha256"],
+        "deadline_epoch_ms": (time.time() + LARGE_ARTIFACT_RPC_SECONDS) * 1000,
+    }, timeout=LARGE_ARTIFACT_RPC_SECONDS, retry_safe=False, large_local_snapshot=True)
+    assert live["source_stability_verified"]
+    unit = tmp_path / "expired"
+    with pytest.raises(EffectRuntimeRemoteError):
+        effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "capture", "components": components,
+            "destination": str(unit), "point_metadata": {},
+            "expected_source_sha256": observed["source_sha256"], "deadline_epoch_ms": 0,
+        }, timeout=LARGE_ARTIFACT_RPC_SECONDS, retry_safe=False, large_local_snapshot=True)
+    assert not unit.exists()
