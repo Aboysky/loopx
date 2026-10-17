@@ -22,6 +22,7 @@ from .chat import (
 from .capabilities.steward_executor.allocation import (
     normalize_manager_executor_allocation,
 )
+from .capabilities.native_chat.model_settings import normalize_agent_model_id
 from .chat_event_cache import ChatEventCache
 from .chat_ingress import ChatIngressStore
 from .control_plane.chat_turn_acceptance import (
@@ -48,7 +49,6 @@ SESSION_QUEUE_MAX_PENDING = 20
 SESSION_QUEUE_TTL_SECONDS = 3600
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
-_AGENT_MODEL_ID_MAX_LENGTH = 160
 _MODEL_SELECTION_UNSET = object()
 
 
@@ -67,19 +67,6 @@ def _opaque_id(value: Any, *, field: str) -> str:
     token = str(value or "").strip()
     if not _OPAQUE_ID.fullmatch(token):
         raise ValueError(f"{field} must be a compact opaque id")
-    return token
-
-
-def normalize_agent_model_id(value: Any) -> str:
-    """Keep a provider model value without applying file-name rules.
-
-    ACP option values are protocol strings rather than LoopX entity IDs. They
-    are persisted in JSON only, so retain a bounded printable value while
-    rejecting controls that would make logs or projections unsafe.
-    """
-    token = str(value or "")
-    if not token.strip() or len(token) > _AGENT_MODEL_ID_MAX_LENGTH or any(ord(character) < 32 for character in token):
-        raise ValueError("agent_model_id must be a bounded model value")
     return token
 
 

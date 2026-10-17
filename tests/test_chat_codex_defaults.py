@@ -5,14 +5,14 @@ import pytest
 
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
 from loopx.capabilities.machine_configuration.store import configure_machine_configuration
-from loopx.capabilities.native_chat.machine_defaults import SCHEMA, normalize_codex_chat_defaults
+from loopx.capabilities.native_chat.machine_defaults import CODEX_CHAT_DEFAULTS_SCHEMA_VERSION, normalize_codex_chat_defaults
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_store import ChatSessionStore
 
 
 def configure(root, **fields):
     kwargs = dict(runtime_root=root, configuration={"schema_version": "loopx_machine_configuration_v0",
-        "namespaces": {"codex_chat": {"schema_version": SCHEMA, **fields}}},
+        "namespaces": {"codex_chat": {"schema_version": CODEX_CHAT_DEFAULTS_SCHEMA_VERSION, **fields}}},
         registry=build_builtin_machine_configuration_registry())
     preview = configure_machine_configuration(**kwargs)
     return configure_machine_configuration(**kwargs, execute=True, expected_plan_revision=preview["plan_revision"])
@@ -133,4 +133,4 @@ def test_missing_profile_is_actionable_for_a_new_ordinary_conversation(tmp_path,
 ])
 def test_invalid_profiles_or_hidden_settings_fail_before_native_start(fields):
     with pytest.raises(ValueError):
-        normalize_codex_chat_defaults({"schema_version": SCHEMA, **fields})
+        normalize_codex_chat_defaults({"schema_version": CODEX_CHAT_DEFAULTS_SCHEMA_VERSION, **fields})

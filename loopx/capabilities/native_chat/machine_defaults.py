@@ -15,14 +15,14 @@ from ...reasoning_effort import REASONING_EFFORTS
 from ..machine_configuration.contract import MachineConfigurationNamespace
 
 NAMESPACE = "codex_chat"
-SCHEMA = "codex_chat_machine_defaults_v0"
+CODEX_CHAT_DEFAULTS_SCHEMA_VERSION = "codex_chat_machine_defaults_v0"
 _FIELDS = ("codex_profile", "model", "reasoning_effort", "service_tier")
 
 
 def normalize_codex_chat_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
-    if raw.get("schema_version") != SCHEMA or set(raw) - {"schema_version", *_FIELDS}:
+    if raw.get("schema_version") != CODEX_CHAT_DEFAULTS_SCHEMA_VERSION or set(raw) - {"schema_version", *_FIELDS}:
         raise ValueError("Codex Chat defaults contain an unsupported schema or field")
-    result: dict[str, Any] = {"schema_version": SCHEMA}
+    result: dict[str, Any] = {"schema_version": CODEX_CHAT_DEFAULTS_SCHEMA_VERSION}
     for key in _FIELDS:
         value = raw.get(key)
         if value is not None and (not isinstance(value, str) or len(value) > 160
@@ -72,7 +72,7 @@ def load_codex_chat_defaults(runtime_root: Path) -> dict[str, Any]:
 
 def codex_chat_machine_configuration_namespace() -> MachineConfigurationNamespace:
     return MachineConfigurationNamespace(
-        namespace=NAMESPACE, schema_versions=frozenset({SCHEMA}),
+        namespace=NAMESPACE, schema_versions=frozenset({CODEX_CHAT_DEFAULTS_SCHEMA_VERSION}),
         normalize=normalize_codex_chat_defaults,
         project_public=lambda value: dict(value),
         apply_public_update=lambda _current, update: dict(update),
@@ -81,5 +81,5 @@ def codex_chat_machine_configuration_namespace() -> MachineConfigurationNamespac
                      "Existing conversations keep their original identity and history. This does not configure the steward, "
                      "an attached Agent, or a LoopX Agent Loop; it grants no permissions and stores no credentials."),
         documentation={"path": "docs/integrations/session-runtime-control-plane-adapter.md#projection-boundary"},
-        default_configuration={"schema_version": SCHEMA, **dict.fromkeys(_FIELDS)},
+        default_configuration={"schema_version": CODEX_CHAT_DEFAULTS_SCHEMA_VERSION, **dict.fromkeys(_FIELDS)},
     )
