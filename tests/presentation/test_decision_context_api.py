@@ -34,7 +34,10 @@ def api(tmp_path):
         "automation": {"automatic_capture": False, "fail_open": True},
     }
     registry = tmp_path / "registry.json"
-    registry.write_text(json.dumps({"profile_id": "source_session_v1", "goals": [{"id": GOAL}]}))
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(tmp_path / "runtime"),
+        "goals": [{"id": GOAL, "repo": str(tmp_path)}],
+    }))
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path, server.runtime_root = registry, tmp_path / "runtime"
     server.selected_goal_id, server.verbose = GOAL, False
@@ -167,5 +170,24 @@ def test_origin_query_and_registered_goal_are_enforced_before_recall(api):
     assert call(action="recall", origin="https://foreign.example")[0] == 403
     assert call(suffix="?query=must-not-log-private-queries")[0] == 400
     assert call(override={"query": "inspection-must-not-recall"})[0] == 400
-    server.registry_path.write_text(json.dumps({"profile_id": "source_session_v1", "goals": []}))
+    registry = json.loads(server.registry_path.read_text())
+    registry["goals"] = []
+    server.registry_path.write_text(json.dumps(registry))
     assert call()[0] == 400
+
+
+@pytest.mark.parametrize("action", ["inspect", "recall"])
+def test_lifecycle_only_registry_is_refused_before_provider_construction(api, monkeypatch, action):
+    from loopx.capabilities.decision_context import runtime
+    call, _, _, server = api
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("lifecycle-only registries must not reach provider construction")
+
+    monkeypatch.setattr(runtime, "_build_advisory_context_provider", forbidden)
+    server.registry_path.write_text(json.dumps({
+        "profile_id": "source_session_v1", "goals": [{"id": GOAL}],
+    }))
+    code, refused = call(action=action)
+    assert code == 400 and not refused["ok"]
+    assert "Decision Context request unavailable" in json.dumps(refused)

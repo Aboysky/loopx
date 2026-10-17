@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from ..capabilities.decision_context.profile import resolve_inline_decision_context_activation
 from ..capabilities.decision_context.runtime import recall_inline_decision_context
-from ..control_plane.projects.registry_codec import load_project_registry
+from ..control_plane.projects.registry_codec import load_registry
 from ..feedback import validate_goal_id
 from ..registry import find_registry_goal
 from .goal_source_routing import source_registry_for_goal
@@ -41,7 +41,7 @@ class DecisionContextRequestMixin:
             if selected and selected != goal_id:
                 raise ValueError("Goal is outside this workspace")
             source = source_registry_for_goal(self.server.registry_path, goal_id)
-            if find_registry_goal(load_project_registry(source), goal_id) is None:
+            if find_registry_goal(load_registry(source), goal_id) is None:
                 raise ValueError("Goal is not registered")
             profile = body["profile"]
             if profile is not None and not isinstance(profile, dict):
