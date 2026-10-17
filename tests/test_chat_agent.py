@@ -1375,6 +1375,37 @@ def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkey
     assert ("For bounded workspace edits" in prompt) is execution_mode
     assert ("Do not edit files" in prompt) is not execution_mode
     assert "protected_action" in prompt and "gate" in prompt
+    for competing_route in (
+        "For a Todo proposal include goal_id",
+        "emit context_handoff={goal_id,agent_id,brief}",
+        "include goal_draft={objective,completion_criteria",
+    ):
+        assert (competing_route in prompt) is not execution_mode
+    if execution_mode:
+        assert chat_agent.WORK_RESULT_VERIFICATION_INSTRUCTION in prompt
+        assert "Never claim the change has been written without a verified control-plane receipt" not in prompt
+        assert "keep proposals=[], goal_draft=null and context_handoff=null" in prompt
+        assert "protected_action must be null" in prompt
+
+
+@pytest.mark.parametrize("mode", [
+    {}, {"runtime_profile": "trusted_owner"}, {"project_work": True}, {"execution_mode": True},
+])
+def test_turn_guidance_scopes_gates_without_cutting_requested_results(mode):
+    prompt = chat_agent._turn_prompt(
+        "Inspect the seven requested files; publishing still needs owner authorization.", **mode
+    )
+    assert "stop only actions that depend on the missing authority or tool" in prompt
+    assert "Continue independent authorized work" in prompt
+    assert "End the request only when no independent authorized work remains" in prompt
+    assert "describe the unresolved gate in gate" in prompt
+    assert "Preserve all requested results" in prompt
+    assert "more than five actionable items" not in prompt
+    # Scoped continuation cannot grant execution through the protected route.
+    if mode.get("execution_mode"):
+        assert "protected_action must be null" in prompt
+    else:
+        assert "never authority to execute" in prompt
 
 
 @pytest.mark.parametrize("config", [[], {"model": 42}, {"model_reasoning_effort": {"invalid": "high"}}])

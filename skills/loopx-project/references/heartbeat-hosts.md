@@ -135,8 +135,8 @@ deciding on a quiet no-op:
 execution gate. If
 `execution_obligation.must_attempt_work=true`, attempt one bounded progress
 batch or segment even when `notify=DONT_NOTIFY`; a quiet no-op requires
-`execution_obligation.must_attempt_work=false` and no
-`notify_user_on_open_todo=true` blocker-push notification. New connected read-only goals
+`execution_obligation.must_attempt_work=false` and the current
+`interaction_contract.user_channel.notify=DONT_NOTIFY`. New connected read-only goals
 should follow `recommended_mode=run_first_read_only_map`: run one real
 `loopx read-only-map --goal-id <STABLE_GOAL_ID>`, validate the saved
 `read_only_project_map`, then follow the current settlement plan and read back
@@ -173,12 +173,17 @@ within existing user authority and repository rules after validation and a clean
 public/private boundary scan. Do not reintroduce a user gate for public-safe
 publication itself. An old trust setting, context or command does not grant new
 authority; merge and production retain their separate authorization.
-It also respects `notify_user_on_open_todo=true`: open user todos in
-focus-wait, waiting, or external-evidence lanes should become a compact
-blocker-push `NOTIFY` with at most three items, while skipping delivery work
-and quota spend for that blocker-push turn. If the payload includes
-`open_todo_notification_policy=repeat_until_resolved`, repeat that `NOTIFY`
-until the todo is done, deferred, or replaced. When
+For `notify_user_on_open_todo=true`, follow the current
+`interaction_contract.user_channel` for the concrete notice and cooldown.
+This notification flag does not decide delivery or accounting:
+`interaction_contract.agent_channel` owns admitted work, and
+`interaction_contract.cli_channel` owns its settlement. A pure
+`user_todo_blocker_push` lane with no admitted work does no delivery or spend;
+`bounded_delivery_with_user_notice` or an admitted safe bypass still requires
+its work and current settlement. If
+`open_todo_notification_policy=repeat_until_resolved`, repeat the concrete
+notice only while the current user channel returns `NOTIFY`, until the todo is
+done, deferred, or replaced. When
 the user confirms that an existing review or action already happened, write
 back that exact todo immediately: complete only with an explicit typed decision,
 otherwise supersede the stale gate without granting authority; then refresh
