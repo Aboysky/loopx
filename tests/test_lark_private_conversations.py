@@ -158,7 +158,12 @@ def connect_group(fixture):
     fake.write_text(fake.read_text().replace('"thread": {"id": "durable-thread"},',
         '"thread": {"id": "durable-thread"}, '
         '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
-        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],'))
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],').replace(
+            '        if "wait for interrupt" in json.dumps(request.get("params") or {}) or "wait for steer" in json.dumps(request.get("params") or {}):',
+            # The synthetic host's wait trigger belongs to the current input,
+            # not a preceding message quoted as context.
+            '        current = json.dumps(request.get("params") or {}).rsplit("Current user message:", 1)[-1]\n'
+            '        if "wait for interrupt" in current or "wait for steer" in current:'))
     binding = transport.bindings.read()["bindings"][0]
     refs = [identity_ref(binding["provider_ref"], chat) for chat in ["oc_community", "oc_second"]]
     transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
@@ -167,7 +172,8 @@ def connect_group(fixture):
 
 
 def finish_group_turn(runtime, transport, *, message):
-    row = next(row for row in transport.core.pending() if row["message"] == message)
+    row = next(row for row in transport.core.pending() if row["message"] == message
+               or row["message"].endswith(f"\n\nCurrent user message:\n{message}"))
     assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
     transport.reconcile()
     return row
@@ -648,7 +654,7 @@ def test_group_mention_text_does_not_invent_a_control(ordinary, raw_text, identi
             mentions=[{"key": key, "name": "notes-app", "id": identity}])
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = finish_group_turn(runtime, transport, message=rendered)
-        assert row["message"] == rendered
+        assert row["message"].endswith(f"\n\nCurrent user message:\n{rendered}")
     finally:
         runtime.close()
 
@@ -1390,7 +1396,7 @@ def test_completed_stop_source_verification_reuses_one_current_observation_only_
 def test_completed_stop_preselected_without_observation_joins_a_fresh_identity(completed_group_stop, monkeypatch, identity_fails):
     _, provider, transport, _, _, record = completed_group_stop
     started, observed, release = threading.Event(), threading.Event(), threading.Event()
-    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
     observations = []
 
     def sources(*args):
@@ -1407,7 +1413,7 @@ def test_completed_stop_preselected_without_observation_joins_a_fresh_identity(c
                 raise ValueError("fresh App observation unavailable")
         return original_observe(*args, **kwargs)
 
-    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
     selected = transport.bindings.resolve(binding_id=record["binding_id"], **record["source"])
     with ThreadPoolExecutor(max_workers=1) as caller:
@@ -1428,7 +1434,7 @@ def test_completed_stop_default_overlaps_readonly_observations_but_joins_and_rec
 ):
     _, provider, transport, _, _, record = completed_group_stop
     source_started, identity_started, release = threading.Event(), threading.Event(), threading.Event()
-    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
 
     def sources(*args):
         source_started.set()
@@ -1443,7 +1449,7 @@ def test_completed_stop_default_overlaps_readonly_observations_but_joins_and_rec
             raise ValueError("current App observation unavailable")
         return observation
 
-    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
     with ThreadPoolExecutor(max_workers=1) as caller:
         pending = caller.submit(transport._source_verified, record)
@@ -1468,7 +1474,7 @@ def test_completed_stop_reply_worker_waits_for_both_reads_and_does_not_send_afte
         threading.Event() for _ in range(4)
     )
     original_verify = transport._source_verified
-    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
 
     def verify(value, **kwargs):
         checking_source.set()
@@ -1487,7 +1493,7 @@ def test_completed_stop_reply_worker_waits_for_both_reads_and_does_not_send_afte
         return observation
 
     monkeypatch.setattr(transport, "_source_verified", verify)
-    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
     path = transport.root / f"{record['request_ref']}.json"
     with ThreadPoolExecutor(max_workers=1) as caller:
@@ -1586,7 +1592,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
             return original_observe(*args, **kwargs)
 
         def overlap(args, cwd=None, timeout=None):
-            if ("+messages-mget" in args or
+            if (("+messages-mget" in args and args[args.index("--message-ids") + 1] == event["message_id"]) or
                     ("GET" in args and args[args.index("GET") + 1].endswith(event["message_id"]))):
                 started.wait(timeout=2)
             return provider(args, cwd, timeout)
@@ -1596,7 +1602,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
         monkeypatch.setattr(transport.bindings, "observe", observe)
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = transport.core.pending()[0]
-        assert row["message"] == event["content"]
+        assert row["message"].endswith(f"\n\nCurrent user message:\n{event['content']}")
         assert row["source"]["topic_ref"] == lark_private_source(
             provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
         assert not provider.writes

@@ -389,6 +389,14 @@ it differs from the live server before dispatching expensive work. Stop only
 that isolated runtime after its requests settle, retaining the same temporary
 environment for shutdown; never restart a live server as test cleanup.
 
+Automatic test cleanup must verify namespace ownership as well as PID/token
+identity. An ordinary copy of a valid locator inside a test directory is not
+permission to stop its original server. The private authenticated `runtime.ping`
+reports the physical locator path frozen at publication; compare it with the
+exact disposable locator before requesting shutdown, including when pytest has
+already removed the fixture directory. Missing provenance remains unknown and
+cannot authorize cleanup. This observation is not a Goal or execution grant.
+
 Process isolation still shares machine resources. Run matched timing arms
 sequentially without overlapping builds or recovery work. If interference is
 discovered, retain failures and durable-receipt evidence, mark latency samples
@@ -699,9 +707,18 @@ pull requests. It intentionally excludes provider-backed evaluation and the
 full smoke catalog, so ordinary iteration does not depend on credentials,
 network latency, provider availability, or a two-hour matrix.
 
+The existing `kernel-static-checks` job first checks the Stage 2C dependency
+lock and top-level module budget. A failed invariant makes the existing
+`checks` preflight fail, so PR long-test shards do not enter their shared queue.
+These tests also remain in the complete six-shard collection.
+
 `.github/workflows/python-tests.yml` 会在相关 Python PR 上运行这条快速通道。
 它刻意不包含真实模型调用和 full smoke catalog，因此普通迭代不依赖凭证、网络
 时延、模型服务可用性或两小时级测试矩阵。
+
+既有 `kernel-static-checks` 作业先检查 Stage 2C 依赖锁和顶层模块预算。不变量失败
+会使既有 `checks` 前置门失败，阻止 PR 的长测试分片进入共享队列。这些测试仍保留
+在六分片的完整 collection 中。
 
 The Linux suite uses six hosted runners with two xdist workers each.
 `pytest-split` partitions the complete collection using `least_duration`;

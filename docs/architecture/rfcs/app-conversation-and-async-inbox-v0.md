@@ -141,6 +141,21 @@ target that topic. Admission feedback, streamed posts, terminal edits and receip
 recovery use the existing delivery path with `source_thread` placement. A revoked
 binding or unreadable source prevents later result delivery.
 
+For `/status`, `/help`, `/new` and `/stop` in a locally admitted topic, the
+transport batches the canonical incoming message and root in one raw provider
+read. The accepted root journal only selects those two read IDs; it grants no
+authority. After that IO, Core freshly resolves the exact binding and App inside
+both existing request/source fences. An in-process source verifier checks the
+envelopes against that selection, including sender, ancestry, root mention and
+the still-current binding, before journal creation or exact replay. A changed
+App or grant, incomplete pair or source mismatch rejects the command. An event
+control hint whose canonical body is ordinary text returns to ordinary rendering
+before any Core write. Unknown topics and legacy rendered journals retain their
+original route. No identity survives the transaction; outbound verification,
+typed admission decisions and stop recovery retain their existing owners.
+File/Core tests qualify the transaction and its rejection/replay boundaries;
+real provider read timings alone do not qualify the full stop reply or Web SLA.
+
 A completed, target-frozen stop on a locally enabled group binding reads its two
 original provider messages while Core freshly resolves the binding and App
 identity. Both readonly observations must finish successfully before source,
@@ -155,6 +170,11 @@ later answer. Core freezes the original Session and canonical candidate Turn
 identities in the existing request journal **before** native inventory or
 transport resume can fail. Native observation may only narrow that frozen set;
 a retry cannot add later completed/active Turns or switch to a newer Session.
+Completed-command discovery reads the exact native thread's complete paginated
+item inventory once, retaining only command ownership for the frozen candidates.
+This avoids a separate inventory round trip for each historical Turn. Missing or
+conflicting item ownership and incomplete pagination remain unconfirmed; the
+existing exact-Turn cancellation and independent terminal readback still run.
 The existing Lark listener returns after this durable freeze; its existing reply
 workers recover the prepared request to observe and cancel native background
 commands. Prepared recovery uses admission's fresh authority check inside both
