@@ -20,7 +20,7 @@ def capture_disposable_effect_runtimes(root: Path) -> list[tuple[Path, str]]:
             continue
         try:
             captured.append((locator, locator.read_text(encoding="utf-8")))
-        except OSError:
+        except (OSError, UnicodeError):
             continue
     return captured
 

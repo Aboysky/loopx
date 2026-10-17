@@ -117,6 +117,9 @@ def test_cleanup_preserves_foreign_namespace_and_rejects_wrong_pid(tmp_path, mon
             assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] == info["pid"]
             forged.write_text("not JSON", encoding="utf-8")
             stop_disposable_effect_runtimes(owned)
+            forged.write_bytes(b"\xff")
+            stop_disposable_effect_runtimes(owned)
+            assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] == info["pid"]
         finally:
             assert effect_runtime.restart_effect_runtime(wait_for_exit=True)["stopped"]
 
