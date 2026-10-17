@@ -921,6 +921,7 @@ export function PersonalWorkspacePage({
   selectedAgentId: controlledAgentId,
   selectedAgentModelId,
   selectedAgentModelReadback,
+  selectedAgentReasoningEffort,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
   serviceNotice,
@@ -951,6 +952,7 @@ export function PersonalWorkspacePage({
   selectedAgentId?: string;
   selectedAgentModelId?: string;
   selectedAgentModelReadback?: import("../../data/chat").ChatSessionSummary;
+  selectedAgentReasoningEffort?: string;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
   serviceNotice?: ReactNode;
@@ -2700,6 +2702,7 @@ export function PersonalWorkspacePage({
             }}
             onSelectAgent={selectAgent}
             onSelectAgentModel={(modelId) => callbacks.onSelectAgentModel?.(selectedAgentId, modelId)}
+            onSelectAgentReasoningEffort={(effort) => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort)}
             onReturnManagerHome={() => {
               if (selectedWorkspaceRef) workspaceConversations?.onSelect(null);
               setSelectedGoalTab("overview");
@@ -2709,6 +2712,7 @@ export function PersonalWorkspacePage({
             selectedAgentId={selectedAgentId}
             selectedAgentModelId={selectedAgentModelId}
             selectedAgentModelReadback={selectedAgentModelReadback}
+            selectedAgentReasoningEffort={selectedAgentReasoningEffort}
             refreshState={refreshState}
             readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={selectedGoal}

@@ -602,6 +602,7 @@ export type PersonalWorkspaceCallbacks = {
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
   onSelectAgentModel?: (agentId: string, modelId: string) => void;
+  onSelectAgentReasoningEffort?: (agentId: string, effort: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;

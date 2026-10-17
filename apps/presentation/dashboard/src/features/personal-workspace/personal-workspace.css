@@ -270,6 +270,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-execution-rule-note { overflow: hidden; color: var(--pw-faint); font-size: var(--text-caption); line-height: var(--leading-caption); text-overflow: ellipsis; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-execution-chip { border-color: #141414; border-radius: 4px; }
 .personal-channel-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; }
+.personal-model-discovery { min-width: 0; overflow-wrap: anywhere; }
 .personal-icon-button.personal-mobile-menu { display: none; }
 .personal-select { position: relative; min-width: 0; }
 .personal-select-trigger { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; width: 100%; min-height: 36px; padding: 0 9px; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; color: var(--pw-text); cursor: pointer; font-size: var(--text-body); font-weight: 500; line-height: var(--leading-body); text-align: left; }
@@ -1529,6 +1530,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-channel-header[data-goal-selected="false"] .personal-runtime-details > summary { white-space: nowrap; }
   .personal-agent-select { max-width: 132px; min-width: 0; }
   .personal-channel-actions > .personal-icon-button { display: none; }
+  .personal-channel-actions > .personal-status-mode { display: inline-flex; }
   /* Scope and executor pickers cannot share the title row on a phone. */
   .personal-channel-header:has(.personal-scope-select) .personal-channel-actions { grid-row: auto; grid-column: 1 / -1; order: 3; }
   .personal-channel-header:has(.personal-scope-select) .personal-agent-select { flex: 1 1 0; max-width: none; }
@@ -2044,7 +2046,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-goal-navigation { gap: 8px; flex-wrap: wrap; justify-content: flex-start; }
   .personal-goal-navigation > .personal-goal-tabs { flex-basis: 100%; }
   .personal-goal-navigation .personal-agent-select { flex: 1 1 110px; max-width: none; width: auto; }
-  .personal-goal-navigation > .personal-model-discovery { order: 1; flex: 1 0 100%; white-space: nowrap; }
+  .personal-goal-navigation > .personal-model-discovery { order: 1; flex: 1 0 100%; white-space: normal; }
   .personal-goal-navigation .personal-select-value > small { display: none; }
   .personal-channel-header[data-goal-selected="true"] .personal-goal-tabs { gap: 8px; }
   .personal-goal-navigation .personal-goal-tabs button { min-width: 44px; padding-inline: 0; }
