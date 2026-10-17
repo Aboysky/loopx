@@ -1082,6 +1082,16 @@ integration against selecting the original conversation in Codex App, including
 target discovery, correction and result readback; transport success alone does
 not establish a shorter task path, independent acceptance or G1 completion.
 
+The ordinary managed conversation has one shared composer for new messages and
+exact-turn instructions. “Adjust turn” focuses it in both the timeline and the
+overview receipt, without opening a second editor. Drafts remain scoped to their
+conversation; legacy inline drafts migrate without changing Session, Turn or
+ingress identity. Unknown delivery retries its original Turn after reload or
+completion, while confirmed non-delivery can obtain a new ingress. Browser
+storage failure retains the draft and refuses an unqualified dispatch. Unsupported
+executors expose interruption without advertising steering. This presentation
+change does not add busy-turn input to the attached Desktop provider above.
+
 ### Slice C: managed reference vertical
 
 1. a provider-neutral managed-runtime and managed-provider interface;

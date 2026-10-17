@@ -443,7 +443,7 @@ export const chatRecoveryScenario = {
       if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
         throw new Error("The recovery added a second pending reply instead of adopting the handoff reply");
       }
-      await page.getByRole("button", { name: "调整本轮" }).waitFor({ state: "visible" });
+      if (await page.getByRole("button", { name: "调整本轮" }).count()) throw new Error("An executor without steering advertised an adjustment input");
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept");
       if (!(await sendButton.isDisabled())) throw new Error("Send stayed enabled after the service reported a running Turn");
       await sendButton.click({ force: true });
@@ -507,6 +507,11 @@ export const chatRecoveryScenario = {
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
       await composerInput.fill("");
       pass("composer-running-turn-409-read-failure", "A failed Session read after a 409 keeps Send closed with the Turn controls, is retried, adopts the Turn and reopens only once it completes");
+      // Switch back to an observed steering-capable executor before exercising
+      // the exact-turn handoff. The unsupported path above exposes interruption only.
+      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), adapter_kind: "codex_app_server" });
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       // The pending reply shows Adjust/Interrupt from the 409 on, so before any
       // Session read returns, both must act on the exact reported Turn.
       const controlledTurnId = `turn-foreign-controls-${Date.now()}`;
@@ -538,9 +543,9 @@ export const chatRecoveryScenario = {
       if (!heldControlReads.length) throw new Error("The 409 did not make the page re-read the Session");
       const handoffReply = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await handoffReply.getByRole("button", { name: "调整本轮", exact: true }).click();
-      await handoffReply.getByLabel("追加给本轮的指令").fill("交接期间先核对依赖。");
-      await handoffReply.getByRole("button", { name: "发送调整", exact: true }).click();
-      await handoffReply.getByText("执行器已接收本轮追加指令。", { exact: true }).waitFor({ timeout: 5_000 });
+      await composerInput.fill("交接期间先核对依赖。");
+      await sendButton.click();
+      await page.locator(".personal-action-feedback").filter({hasText: "执行器已接收本轮追加指令。"}).waitFor({ timeout: 5_000 });
       if (steers.length !== 1 || steers[0].sessionId !== busySessionId || steers[0].turnId !== controlledTurnId) {
         throw new Error(`Adjust during the handoff did not reach the reported Turn: ${JSON.stringify(steers)}`);
       }
@@ -553,8 +558,10 @@ export const chatRecoveryScenario = {
       }
       await page.locator(".personal-message").filter({ hasText: "已中断。你可以在当前会话继续发送消息。" }).last().waitFor({ timeout: 5_000 });
       await turnRunningHint.waitFor({ state: "hidden", timeout: 5_000 });
-      if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the handed-off Turn was interrupted");
-      if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept through the handoff controls");
+      if (await composerInput.inputValue() !== "") throw new Error("The accepted shared-composer adjustment did not clear");
+      await composerInput.fill("中断后的后续消息草稿");
+      if (await sendButton.isDisabled()) throw new Error("A new follow-up draft stayed blocked after interruption");
+      if (await composerInput.inputValue() !== "中断后的后续消息草稿") throw new Error("The new follow-up draft was not kept after interruption");
       for (const route of heldControlReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
       await page.waitForTimeout(500);

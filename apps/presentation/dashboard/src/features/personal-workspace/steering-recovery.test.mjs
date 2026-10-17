@@ -61,3 +61,53 @@ test("a durable request retries independently of another conversation's unsaved 
   globalThis.window.sessionStorage.getItem = () => {throw new Error("read unavailable");};
   assert.equal(recovery.retainSteeringRequest(key, request), false, "page cache is not persistent evidence");
 });
+
+test("legacy recovery moves one exact Session/Turn identity into the composer", async () => {
+  const peer = {...request, sessionId: "peer", id: "peer-request"};
+  const peerKey = JSON.stringify(["inline", "peer", "turn"]);
+  let stored = JSON.stringify([[key, request], [peerKey, peer]]);
+  globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {stored = value;}}};
+  const recovery = await import("./steering-recovery.ts?legacy");
+  assert.deepEqual(recovery.legacySteeringRequests("session"), [[key, request]]);
+  assert.equal(recovery.restoreLegacySteeringRequest("composer", peerKey, "session"), undefined);
+  assert.deepEqual(recovery.restoreLegacySteeringRequest("composer", key, "session"), request);
+  assert.equal(recovery.readSteeringRequest(key), undefined);
+  assert.deepEqual(recovery.readSteeringRequest("composer"), request);
+  assert.deepEqual(recovery.readSteeringRequest(peerKey), peer);
+  const reloaded = await import("./steering-recovery.ts?legacy-reload");
+  assert.deepEqual(reloaded.readSteeringRequest("composer"), request);
+  assert.equal(reloaded.legacySteeringRequests("session").length, 0);
+});
+
+test("failed legacy migration retains recovery and cannot overwrite a composer retry", async () => {
+  let stored = JSON.stringify([[key, request]]), writable = false;
+  globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {
+    if (!writable) throw new Error("QuotaExceededError");
+    stored = value;
+  }}};
+  const recovery = await import("./steering-recovery.ts?legacy-failed");
+  assert.deepEqual(recovery.restoreLegacySteeringRequest("composer", key, "session"), request);
+  assert.deepEqual(recovery.readSteeringRequest(key), request, "The durable old location survives a failed copy");
+  assert.deepEqual(recovery.restoreLegacySteeringRequest("composer", key, "session"), request, "The same identity remains restorable after clearing the input");
+  assert.equal(recovery.retainSteeringRequest("other-composer", {...request, id: "other-ingress"}), false);
+  assert.equal(recovery.restoreLegacySteeringRequest("other-composer", key, "session"), undefined, "A different retry is never replaced");
+  assert.equal(recovery.retainSteeringRequest("composer", request), false, "Memory alone cannot qualify dispatch");
+  writable = true;
+  assert.equal(recovery.retainSteeringRequest("composer", request), true);
+  recovery.retireSteeringRequest("composer", request.id);
+  assert.deepEqual(JSON.parse(stored), [["other-composer", {...request, id: "other-ingress"}]], "Acknowledgement retires only its legacy alias, preserving the other composer");
+});
+
+test("an unsaved edit cannot replace the original uncertain retry identity", async () => {
+  let stored = null, writable = true;
+  globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {
+    if (!writable) throw new Error("QuotaExceededError");
+    stored = value;
+  }}};
+  const recovery = await import("./steering-recovery.ts?failed-edit");
+  assert.equal(recovery.retainSteeringRequest("composer", request), true);
+  writable = false;
+  assert.equal(recovery.retainSteeringRequest("composer", {...request, id: "new-request", text: "new draft"}), false);
+  assert.deepEqual(recovery.readSteeringRequest("composer"), request);
+  assert.equal(recovery.retainSteeringRequest("composer", request), true);
+});

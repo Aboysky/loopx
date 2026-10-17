@@ -2,7 +2,7 @@ import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
 import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request";
 import { todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
-import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
+import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, legacySteeringRequests, restoreLegacySteeringRequest } from "./steering-recovery";
 import { useConversationInputState } from "./use-conversation-input-state";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
@@ -386,7 +386,7 @@ function ManagerConversationTray({
   onSuggestReply,
   onOpenConversation,
   onInterruptTurn,
-  onSteerTurn,
+  onAdjustTurn,
   onCancelPreparation,
   title,
 }: {
@@ -398,7 +398,7 @@ function ManagerConversationTray({
   onSuggestReply?: (text: string) => void;
   onOpenConversation: () => void;
   onInterruptTurn?: (turnId: string) => Promise<void>;
-  onSteerTurn?: (turnId: string, text: string, ingressId: string) => Promise<void>;
+  onAdjustTurn?: (turnId: string) => void;
   onCancelPreparation?: () => void;
   title?: string;
 }) {
@@ -457,7 +457,7 @@ function ManagerConversationTray({
             <strong>{message.role === "user" ? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
             <div className="personal-manager-conversation-bubble">
               {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
-              {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn} onCancelPreparation={onCancelPreparation} /> : null}
+              {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn} onCancelPreparation={onCancelPreparation} /> : null}
               {message.role === "assistant" && !message.pending && message.goalDraft ? <GoalDraftCard draftId={`${message.sourceSessionId ?? ""}:${message.id}`} draft={message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
               <CollaborationCard request={message.collaboration} />
               <ReturnDeliveryStatus delivery={message.returnDelivery} />
@@ -1268,11 +1268,34 @@ export function PersonalWorkspacePage({
   const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
   const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
     && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
-  const composerBlocked = steering || (!steeringTurnId && (sending || conversationTurnRunning));
+  const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId) : [];
+  function restoreLegacyDraft(key: string) {
+    if (composer.trim() || !conversationSessionId) return;
+    const restored = restoreLegacySteeringRequest(composerDraftKey, key, conversationSessionId);
+    if (restored) setComposer(restored.text);
+  }
+  useEffect(() => {
+    if (composer || !conversationSessionId) return;
+    const recovered = readSteeringRequest(composerDraftKey);
+    if (recovered?.sessionId === conversationSessionId) setComposer(recovered.text);
+    else if (legacyDrafts[0]) restoreLegacyDraft(legacyDrafts[0][0]);
+    // Recover only on conversation entry; clearing a draft must stay cleared.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerDraftKey, conversationSessionId]);
+  const retainedSteering = readSteeringRequest(composerDraftKey);
+  const retryingSteering = retainedSteering && retainedSteering.sessionId === conversationSessionId
+    && retainedSteering.text.trim() === composer.trim() ? retainedSteering : undefined;
+  const composerBlocked = steering || (!(retryingSteering || steeringTurnId) && (sending || conversationTurnRunning));
   const quickPromptBlocked = steering || sending || conversationTurnRunning;
   // The Goal overview is for reading; its composer folds to one line until asked for.
   const [overviewComposerOpen, setOverviewComposerOpen] = useState(false);
   useEffect(() => setOverviewComposerOpen(false), [selectedGoalId, selectedGoalTab]);
+  function focusTurnComposer(turnId: string) {
+    if (turnId !== steeringTurnId) return;
+    setOverviewComposerOpen(true);
+    composerRef.current?.focus();
+    composerRef.current?.scrollIntoView({ block: "nearest" });
+  }
   const composerCollapsed = Boolean(selectedGoal) && selectedGoalTab === "overview" && !overviewComposerOpen
     && !composer.trim() && !actionDraft && !imageAttachments.length && !imageAttachmentError && !sending && !conversationTurnRunning;
   const managerChatItems = useMemo(
@@ -2240,7 +2263,7 @@ export function PersonalWorkspacePage({
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
     if (!message || composerBlocked || conversationHistoryState?.sendBlocked) return;
     const previousSteering = readSteeringRequest(composerDraftKey);
-    const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text === message
+    const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text.trim() === message
       ? previousSteering : undefined;
     if ((retry || steeringTurnId) && conversationSessionId && callbacks.onSteerConversationTurn) {
       if (pendingImages.length) {
@@ -2721,9 +2744,7 @@ export function PersonalWorkspacePage({
                       />
                     ) : null}
                     <ChannelTimeline onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
-                      onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
-                        ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId)
-                        : undefined}
+                      onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                       onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
                         ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
                       onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
@@ -2741,9 +2762,7 @@ export function PersonalWorkspacePage({
               <ChannelTimeline emptyState={workspaceTitle ? { title: workspaceTitle, description: t("workspace.empty") } : undefined} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
                 items={selectedWorkspaceRef ? managerChatItems.filter((item) => item.kind === "message") : managerChatItems}
                 onSelect={setSelection} selectedGoal={null} showManagerTeamResults={!selectedWorkspaceRef}
-                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
-                  ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(conversationKey, turnId, text, ingressId)
-                  : undefined}
+                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                 onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
                   ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
@@ -2779,7 +2798,7 @@ export function PersonalWorkspacePage({
               <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
                 onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId) : undefined}
-                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!("manager", turnId, text, ingressId) : undefined}
+                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                 messages={managerMessages}
                 onClose={() => setManagerConversationReceiptVisible(false)}
                 onOpenConversation={() => {
@@ -2792,7 +2811,7 @@ export function PersonalWorkspacePage({
                 agentLabel={selectedAgentLabel}
                 onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId) : undefined}
-                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId) : undefined}
+                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                 messages={goalMessages}
                 onClose={() => setGoalConversationReceiptVisible(false)}
                 onDraftTask={selectedGoalTab === "tasks" ? (reply) => {
@@ -2845,7 +2864,20 @@ export function PersonalWorkspacePage({
                 <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
               </p>
             ) : null}
-            {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
+            {legacyDrafts.length ? <details className="personal-legacy-steering-drafts">
+            <summary>{locale === "zh-CN" ? `旧版保留的调整草稿 · ${legacyDrafts.length}` : `Retained drafts · ${legacyDrafts.length}`}</summary>
+            {legacyDrafts.map(([key, request]) => <div key={key}><p>{request.text}</p>
+              <button type="button" disabled={Boolean(composer.trim()) || Boolean(retainedSteering && retainedSteering.id !== request.id)} onClick={() => restoreLegacyDraft(key)}>
+                {locale === "zh-CN" ? "恢复到输入框" : "Restore to composer"}
+              </button></div>)}
+            <small>{locale === "zh-CN" ? "先处理待确认指令并清空输入框后恢复；重试仍发往原回合。" : "Resolve pending instructions and clear the composer to restore. Retries keep their original turn."}</small>
+          </details> : null}
+          {retainedSteering && retainedSteering.sessionId === conversationSessionId && !retryingSteering && !composer.trim() ? <button type="button"
+            onClick={() => setComposer(retainedSteering.text)}>{locale === "zh-CN" ? "恢复未确认的追加指令" : "Restore unconfirmed instructions"}</button> : null}
+          {retryingSteering && retryingSteering.turnId !== steeringTurnId ? <p className="personal-composer-status" role="status">{locale === "zh-CN"
+            ? "上次追加指令尚未确认，发送将重试原回合。修改正文可作为新消息发送。"
+            : "The previous instructions are unconfirmed. Send retries their original turn; edit the text to send a new message."}</p> : null}
+          {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
               ? (locale === "zh-CN" ? "本轮进行中 · 发消息可调整当前工作" : "Turn in progress · send instructions to adjust this work")
               : t("composer.turnRunning")}</p> : null}
             <div
@@ -2874,6 +2906,7 @@ export function PersonalWorkspacePage({
               </button>
               <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={sending || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
               <textarea
+                id="personal-conversation-composer"
                 aria-label={t("composer.sendMessage")}
                 onChange={(event) => setComposer(event.target.value)}
                 onKeyDown={(event) => {
@@ -2883,7 +2916,7 @@ export function PersonalWorkspacePage({
                   }
                 }}
                 onPaste={handleComposerPaste}
-                placeholder={sending ? (locale === "zh-CN" ? "可以先写下后续问题…" : "Draft your next message…") : selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : workspaceTitle ? t("workspace.placeholder", { workspace: workspaceTitle }) : t("composer.managerPlaceholder")}
+                placeholder={steeringTurnId ? (locale === "zh-CN" ? "追加本轮指令…" : "Add instructions to this turn…") : sending ? (locale === "zh-CN" ? "可以先写下后续问题…" : "Draft your next message…") : selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : workspaceTitle ? t("workspace.placeholder", { workspace: workspaceTitle }) : t("composer.managerPlaceholder")}
                 ref={composerRef}
                 autoFocus={overviewComposerOpen && selectedGoalTab === "overview"}
                 rows={1}
@@ -2894,7 +2927,7 @@ export function PersonalWorkspacePage({
             {conversationOpen ? <div className="personal-composer-hint">{steering
               ? (locale === "zh-CN" ? "正在发送本轮追加指令…" : "Sending instructions for this turn…")
               : sending && !steeringTurnId
-              ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")
+              ? (locale === "zh-CN" ? "正在回复 · 可以先保留后续消息草稿" : "Reply in progress · you can draft a follow-up message")
               : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </> : null}
             </>}
