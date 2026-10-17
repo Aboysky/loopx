@@ -202,3 +202,28 @@ Use this checklist to delete, defer, or right-size code as actively as you add
 it. A PR that removes an unused abstraction, narrows a smoke to the real
 contract, or moves a rule into the right bounded context is often more valuable
 than one that adds a larger framework around the same behavior.
+
+## Agent Instruction Loading And Maintenance
+
+The repository shares one policy entry: `AGENTS.md` for Codex and the explicit
+`@AGENTS.md` import in `CLAUDE.md` for Claude Code. Keep the import single-source;
+a prose request to read the file does not ensure startup loading. Do not eagerly
+import the detailed procedures: read their linked owner when its task applies.
+
+Codex's default `project_doc_max_bytes` is 32 KiB across discovered instructions.
+The root regression checks that this file fits, but ancestor instructions, nested
+files and user overrides still require a host-specific loading check. Claude's
+import/discovery settings have different semantics; 32 KiB is not a universal
+Claude limit. Inspect actual startup context after changing the entry or its
+alias, and distinguish assembled text from model compliance and live effects.
+Existing sessions may retain an older copy.
+
+Run `uv run --extra test python -m pytest -q tests/test_repository_instruction_delivery.py`
+for root size, shared import, local routes and existing inbound anchors. Review
+a moved obligation clause by clause: owner, modality, scope, order, exceptions,
+evidence provenance, continuation and stop conditions. A link test or shorter
+file does not establish equivalence. Keep operational rules in their existing
+owners rather than adding another parallel policy collection.
+
+Design sources and the disposition of the earlier proposal are recorded in
+[the instruction/skill/prompt study](../research/2026-10-17-agent-instruction-skill-prompt-guidance.md).

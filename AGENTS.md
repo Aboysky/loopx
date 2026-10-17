@@ -1,9 +1,37 @@
 # Agent Instructions
 
+## What LoopX Does
+
+LoopX is a local-first, runtime-neutral control plane for long-horizon agents
+and personal agent teams. The Agent host supplies models and tools; LoopX keeps
+goals, decisions, work ownership and evidence durable across sessions and hosts.
+核心目标：让 Agent 围绕长期目标持续推进，协作、恢复，并交付可验证的结果。
+
+- **Goals and work:** durable Goals, Todos, dependencies, acceptance and recovery.
+- **Governed continuation:** heartbeat, scheduling, quota and explicit stop/wait
+  conditions decide when authorized work can continue.
+- **Peer collaboration:** claims, leases, scoped handoffs, dependent artifacts,
+  receiver adoption and result return; a coordinator gains no implicit authority.
+- **Personal Workspace:** App/frontend, Lark and CLI expose conversations,
+  settings, work, decisions, artifacts and readback over the same typed owners.
+- **Capabilities and extensions:** reusable engineering, research, knowledge,
+  content and office workflows with explicit provider and permission boundaries.
+
+Start with [README](README.md), the [overall roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md),
+the [capability catalog](loopx/capabilities/README.md) and [stable protocols](docs/reference/protocols/README.md).
+The roadmap distinguishes shipped boundaries from acceptance still to qualify.
+Core rules live in `loopx/control_plane/`; capability contracts in
+`loopx/capabilities/`; extension lifecycle in `loopx/extensions/`; optional
+distributions in `packages/`; product surfaces in `apps/`.
+
+Codex loads this file; `CLAUDE.md` imports the same policy for Claude Code.
 These are standing repository constraints. Read a linked procedure when its
 trigger applies to the current task; do not load every reference for every turn.
 Keep current work, evidence and monitor targets in their canonical task/state,
-not in this file or a frozen prompt.
+not in this file or a frozen prompt. Keep the root within the default 32 KiB
+Codex discovery budget, and do not eagerly import linked detail documents.
+See [loading and maintenance](docs/development/README.md#agent-instruction-loading-and-maintenance)
+for host-specific checks; delivery does not prove model compliance.
 
 ## Goal-Oriented Development
 

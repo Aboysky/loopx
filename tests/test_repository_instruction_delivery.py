@@ -80,3 +80,8 @@ def test_existing_consumers_can_follow_root_instruction_anchors(consumer: str) -
     assert anchors, f"{consumer} must retain its repository-policy route."
     for anchor in anchors:
         assert anchor in _heading_anchors(INSTRUCTIONS), f"Broken root-policy anchor: {anchor}"
+
+
+def test_claude_imports_one_shared_policy_without_eager_detail_imports() -> None:
+    assert (ROOT / "CLAUDE.md").read_text(encoding="utf-8").strip() == "@AGENTS.md"
+    assert not re.search(r"^\s*@\S+", INSTRUCTIONS.read_text(encoding="utf-8"), re.MULTILINE)
