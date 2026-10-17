@@ -778,6 +778,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         : proposal.summary;
   return {
     actionKind: proposal.action_kind,
+    todoId: typeof proposal.normalized_parameters.todo_id === "string" ? proposal.normalized_parameters.todo_id : undefined,
     reviewPlan,
     fields: proposal.action_kind === "operation.execute"
       ? operationProposalFields(proposal, reviewPlan, t)
@@ -917,6 +918,7 @@ export function PersonalWorkspacePage({
   typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
   selectedAgentModelId,
+  selectedAgentModelReadback,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
   serviceNotice,
@@ -946,6 +948,7 @@ export function PersonalWorkspacePage({
   typedActionsRevision?: number;
   selectedAgentId?: string;
   selectedAgentModelId?: string;
+  selectedAgentModelReadback?: import("../../data/chat").ChatSessionSummary;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
   serviceNotice?: ReactNode;
@@ -1104,13 +1107,15 @@ export function PersonalWorkspacePage({
     suggestReply(composerPrefill.text);
   }, [composerPrefill, selectedGoalId]);
   function draftAttentionMessage(attention: WorkspaceAttention, intent: "reply" | "explain") {
-    const task = attention.text.length > 120 ? `${attention.text.slice(0, 119)}…` : attention.text;
+    // A display summary is not a usable reply context: it may cut through a URL.
+    const task = attention.details?.requestText ?? attention.text;
     const key = intent === "reply" ? "drawer.attentionReplyPrefill"
       : attention.details?.interaction === "decision" ? "drawer.decisionExplainPrefill" : "drawer.attentionExplainPrefill";
     if (attention.goalId !== selectedGoalId) selectGoal(attention.goalId, "chat");
     openGoalConversation();
     setSelection(null);
-    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) });
+    const reference = attention.details?.todoIdentified ? `\n\nTodo: ${attention.todoId}` : "";
+    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) + reference });
   }
   // The steward prompt set is owned by the client model; the quick-prompt row
   // reuses it so one affordance answers "what now / what blocks / what is proven".
@@ -2583,6 +2588,7 @@ export function PersonalWorkspacePage({
             onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
+            onOpenConversationSettings={!readOnly ? () => openSettings({kind: "settings", tab: "conversation"}) : undefined}
             onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
@@ -2603,6 +2609,7 @@ export function PersonalWorkspacePage({
             }}
             selectedAgentId={selectedAgentId}
             selectedAgentModelId={selectedAgentModelId}
+            selectedAgentModelReadback={selectedAgentModelReadback}
             refreshState={refreshState}
             readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={selectedGoal}

@@ -632,7 +632,10 @@ class CodexChatAgentSession:
     permissions_profile: str | None = None
     project_context: dict[str, str] | None = None
     model: str | None = None
+    resolved_model: str | None = None
     reasoning_effort: str | None = None
+    resolved_reasoning_effort: str | None = None
+    service_tier: str | None = None
     response_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
     hard_timeout_sec: float | None = 900.0
@@ -978,7 +981,16 @@ class CodexChatAgentSession:
                     "Codex did not apply the requested conversation reasoning effort."
                 )
             session.model = thread_result.get("model") or model
+            session.resolved_model = thread_result.get("model")
             session.reasoning_effort = thread_result.get("reasoningEffort") or reasoning_effort
+            session.resolved_reasoning_effort = thread_result.get("reasoningEffort")
+            session.service_tier = thread_result.get("serviceTier")
+            requested_tier = (host_config or {}).get("service_tier")
+            # Native Fast mode may report its equivalent API tier, priority.
+            if requested_tier and session.service_tier not in {None, requested_tier} and not (
+                requested_tier == "fast" and session.service_tier == "priority"
+            ):
+                raise session._runtime_error(f"Codex did not apply the requested conversation service tier (reported {session.service_tier}).")
             session.thread_id = _extract_id(thread_result, "thread", "threadId")
             if permissions_profile:
                 active = thread_result.get("activePermissionProfile")

@@ -23,6 +23,7 @@ export function ChannelHeader({
   allWorkOpen,
   onOpenManagerChat,
   onOpenManagerSettings,
+  onOpenConversationSettings,
   onOpenWorkspace,
   onRefresh,
   onRequestGoalLifecycle,
@@ -36,6 +37,7 @@ export function ChannelHeader({
   resumeReviewed,
   selectedAgentId,
   selectedAgentModelId,
+  selectedAgentModelReadback,
   selectedGoal,
   selectedGoalTab,
   workspaceGrantLabel,
@@ -57,6 +59,7 @@ export function ChannelHeader({
   allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
+  onOpenConversationSettings?: () => void;
   onOpenWorkspace?: () => void;
   onRefresh?: () => void;
   /** Absent when the selected source does not authorize Goal lifecycle changes. */
@@ -72,6 +75,7 @@ export function ChannelHeader({
   resumeReviewed?: boolean;
   selectedAgentId: string;
   selectedAgentModelId?: string;
+  selectedAgentModelReadback?: import("../../data/chat").ChatSessionSummary;
   selectedGoal: WorkspaceGoal | null;
   selectedGoalTab: WorkspaceGoalTab;
 }) {
@@ -83,28 +87,33 @@ export function ChannelHeader({
     const controller = new AbortController();
     setModelDiscovery(null);
     setModelDiscoveryState("loading");
-    void discoverAgentModelOptions(selectedAgentId, controller.signal)
+    void discoverAgentModelOptions(selectedAgentId, controller.signal, selectedGoal?.goalId)
       .then((result) => { if (!controller.signal.aborted) { setModelDiscovery(result); setModelDiscoveryState("idle"); } })
       .catch(() => { if (!controller.signal.aborted) setModelDiscoveryState("error"); });
     return () => controller.abort();
-  }, [readOnlySourceLabel, selectedAgentId, agentWorkActive]);
+  }, [readOnlySourceLabel, selectedAgentId, selectedGoal?.goalId, agentWorkActive]);
   const model = modelDiscovery?.model;
-  const selectedModel = selectedAgentModelId === undefined ? model?.selected || model?.options[0]?.value || "" : selectedAgentModelId;
+  const selectedModel = selectedAgentModelId ?? "";
+  const pendingModel = Boolean(selectedAgentModelReadback?.agent_model_id && selectedModel
+    && selectedAgentModelReadback.agent_model_id !== selectedModel);
   const modelControl = model && model.options.length ? (
     <WorkspaceSelect
       ariaLabel={locale === "zh-CN" ? "选择模型" : "Select model"}
       className="personal-agent-select personal-model-select"
       onChange={(value) => onSelectAgentModel?.(value)}
       options={[
-        ...(!selectedModel ? [{ disabled: true, label: locale === "zh-CN" ? "当前模型未知" : "Current model unknown", value: "" }] : []),
+        ...(!selectedModel ? [{ disabled: true, label: selectedAgentModelId === undefined
+          ? (locale === "zh-CN" ? "正在读取当前模型…" : "Reading current model…")
+          : (locale === "zh-CN" ? "运行时尚未回传模型" : "Runtime has not reported a model"), value: "" }] : []),
         ...(selectedModel && !model.options.some((option) => option.value === selectedModel)
           ? [{ disabled: true, label: `${locale === "zh-CN" ? "当前模型" : "Current model"}: ${selectedModel}`, value: selectedModel }] : []),
-        ...model.options.map((option) => ({ label: option.label, value: option.value })),
+        ...model.options.map((option) => ({ label: option.value === selectedModel ? option.value : option.label, value: option.value })),
       ]}
-      prefixLabel={locale === "zh-CN" ? "模型" : "Model"}
+      prefixLabel={pendingModel ? (locale === "zh-CN" ? "下次模型" : "Next model") : (locale === "zh-CN" ? "当前模型" : "Current model")}
       value={selectedModel}
     />
-  ) : selectedAgentModelId === "" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "当前模型未知" : "Current model unknown"}</small>
+  ) : selectedModel ? <small className="personal-model-discovery">{selectedModel}</small>
+    : selectedAgentModelId === "" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "运行时尚未回传模型" : "Runtime has not reported a model"}</small>
     : modelDiscoveryState === "loading" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "正在读取模型…" : "Reading models…"}</small>
     : modelDiscoveryState === "error" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "无法读取模型" : "Models unavailable"}</small> : null;
   // The chip reports the selected executor, whose credential pays for it, and
@@ -189,10 +198,19 @@ export function ChannelHeader({
               label: `${agent.label}${agent.available ? "" : ` · ${t("header.agentUnavailable")}`}`,
               value: agent.agentId,
             }))}
-            prefixLabel={t("header.chatRuntime")}
+            prefixLabel={selectedGoal ? (locale === "zh-CN" ? "执行器" : "Executor") : t("header.chatRuntime")}
             value={selectedAgentId}
     />
     {modelControl}
+    {pendingModel ? <small className="personal-model-discovery">{locale === "zh-CN" ? "当前" : "Current"}: {selectedAgentModelReadback?.agent_model_id}</small> : null}
+    {selectedAgentModelReadback?.agent_model_id === selectedModel && selectedModel
+      && (selectedAgentModelReadback.agent_service_tier || selectedAgentModelReadback.agent_reasoning_effort)
+      ? <small className="personal-model-discovery" title={`${locale === "zh-CN" ? "运行时回传" : "Runtime readback"}: service_tier=${selectedAgentModelReadback.agent_service_tier ?? "—"}; reasoning_effort=${selectedAgentModelReadback.agent_reasoning_effort ?? "—"}`}>
+        {[selectedAgentModelReadback.agent_service_tier ? `${locale === "zh-CN" ? "速度" : "Speed"} ${["priority", "fast"].includes(selectedAgentModelReadback.agent_service_tier) ? "Fast" : selectedAgentModelReadback.agent_service_tier}` : null,
+          selectedAgentModelReadback.agent_reasoning_effort ? `${locale === "zh-CN" ? "推理" : "Reasoning"} ${selectedAgentModelReadback.agent_reasoning_effort}` : null].filter(Boolean).join(" · ")}
+      </small> : null}
+    {selectedGoal && onOpenConversationSettings ? <button className="personal-icon-button" onClick={onOpenConversationSettings}
+      aria-label={locale === "zh-CN" ? "对话与模型设置" : "Conversation and model settings"} type="button"><SlidersHorizontal size={16}/></button> : null}
   </>;
 
   const executionChipClass = managerExecutionUnavailable

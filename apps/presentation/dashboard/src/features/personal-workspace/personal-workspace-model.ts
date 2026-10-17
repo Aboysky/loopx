@@ -317,6 +317,8 @@ export type WorkspaceSchedule = {
 };
 
 export type WorkspaceActionPreview = {
+  /** Exact Todo target from the stored action, used only for display joins. */
+  todoId?: string;
   reviewPlan?: ActionReviewPlan;
   actionKind:
     | "goal.create"
@@ -507,7 +509,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "settings"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "steward" }
+  | { goalId?: string; kind: "settings"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "steward" | "conversation" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";

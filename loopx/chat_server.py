@@ -702,16 +702,19 @@ class ChatRequestHandler(
     def _agent_model_options(self) -> None:
         try:
             body = self._read_json()
-            if set(body) != {"agent_id"}:
+            if "agent_id" not in body or set(body) - {"agent_id", "goal_id"}:
                 raise ValueError("agent_id is required")
             agent_id = _compact_text(body.get("agent_id"), limit=80)
             if not agent_id:
                 raise ValueError("agent_id is required")
+            goal_id = _compact_text(body.get("goal_id"), limit=160) or None
+            if goal_id:
+                self._registry_and_goal(goal_id)
             # Discovery is deliberately bounded to a selected, known endpoint.
             # It opens no persisted LoopX Chat session and exposes no command or
             # local workspace data to the browser.
             result = self.server.runtime_controller.inspect_agent_model_options(
-                agent_id, work_dir=Path.cwd()
+                agent_id, work_dir=Path.cwd(), **({"goal_id": goal_id} if goal_id else {})
             )
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, gate=exc.gate, error_code=exc.error_code)
@@ -906,6 +909,8 @@ class ChatRequestHandler(
         )
 
     def _turn_events(self, session_id: str, turn_id: str) -> None:
+        from .presentation.codex_activity import public_activity_event
+
         if self.server.chat_store.load_turn(session_id, turn_id) is None:
             self._send_error("chat turn was not found", status=404)
             return
@@ -935,6 +940,7 @@ class ChatRequestHandler(
                 events = self.server.chat_store.events_after(session_id, turn_id, cursor)
                 for event in events:
                     cursor = str(event["event_id"])
+                    event = public_activity_event(event)
                     data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                     self.wfile.write(
                         f"id: {cursor}\nevent: {event['kind']}\ndata: {data}\n\n".encode("utf-8")

@@ -1405,6 +1405,9 @@ function PersonalGoalHome({
     targetContextId === "manager" ? stewardExecutorAgentId ?? defaultAgentId : defaultAgentId;
   const [selectedAgents, setSelectedAgents] = useState<Record<string, string>>(readPersonalAgentSelections);
   const [selectedAgentModels, setSelectedAgentModels] = useState<Record<string, string>>({});
+  const [agentModelReadbacks, setAgentModelReadbacks] = useState<Record<string, ChatSessionSummary>>({});
+  // Runtime readback drives the label; only an owner pick drives a new binding.
+  const requestedAgentModels = useRef<Record<string, string>>({});
   const selectedAgentId = selectedAgents[contextId] ?? agentDefaultForContext(contextId);
   const selectedAgent = selectChatAgent(agentOptions, selectedAgentId, defaultAgentId);
   const [messagesByContext, setMessagesByContext] = useState<Record<string, PersonalManagerMessage[]>>({});
@@ -1555,6 +1558,7 @@ function PersonalGoalHome({
 
   function recordSessionAdmission(targetContextId: string, session: ChatSessionSummary) {
     const key = agentModelSelectionKey(targetContextId, session.agent_id);
+    setAgentModelReadbacks(current => ({...current, [key]: session}));
     const currentModel = session.agent_model_id ?? "";
     setSelectedAgentModels((current) => current[key] === currentModel
       ? current : { ...current, [key]: currentModel });
@@ -1701,7 +1705,7 @@ function PersonalGoalHome({
         const sessionEndpoint =
           targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedAgent.agentId;
         const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest", undefined,
-          latest?.agent_model_id ?? selectedAgentModels[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedAgent.agentId)]);
+          requestedAgentModels.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedAgent.agentId)]);
         if (cancelled) return;
         if (targetContext.kind === "manager" && created.session.manager_runtime) {
           setManagerRuntime(created.session.manager_runtime);
@@ -2156,7 +2160,7 @@ function PersonalGoalHome({
     const key = `${goalId}:${agentId}`;
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
-    const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal, selectedAgentModels[key]);
+    const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal, requestedAgentModels.current[key]);
     recordSessionAdmission(goalId, session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
@@ -2249,7 +2253,7 @@ function PersonalGoalHome({
         const sessionEndpoint =
           targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedRoute.agentId;
         const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal,
-          selectedAgentModels[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedRoute.agentId)]);
+          requestedAgentModels.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedRoute.agentId)]);
         if (targetContextId === "manager" && session.session.manager_runtime) {
           setManagerRuntime(session.session.manager_runtime);
         }
@@ -2580,6 +2584,7 @@ function PersonalGoalHome({
   function chooseAgentModel(agentId: string, modelId: string) {
     const selectionKey = agentModelSelectionKey(contextId, agentId);
     if (selectedAgentModels[selectionKey] === modelId) return;
+    requestedAgentModels.current[selectionKey] = modelId;
     setSelectedAgentModels((current) => current[selectionKey] === modelId ? current : { ...current, [selectionKey]: modelId });
     const key = `${contextId}:${agentId}`;
     sessionIds.current.delete(key);
@@ -3047,6 +3052,7 @@ function PersonalGoalHome({
         readOnly={readOnly}
         selectedAgentId={selectedAgent.agentId}
         selectedAgentModelId={selectedAgentModels[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
+        selectedAgentModelReadback={agentModelReadbacks[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
         selectedGoalId={selectedGoal?.goalId ?? null}
         serviceNotice={executionDiscoveryError
           ? <p className="personal-service-notice" role="status">{t(executionDiscoveryError === "partial" ? "runs.discoveryPartial" : "runs.discoveryOffline")}</p>

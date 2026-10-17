@@ -749,9 +749,9 @@ export type AgentModelDiscovery = {
   model: { id: string; label: string; selected: string; options: AgentModelOption[] } | null;
 };
 
-export function discoverAgentModelOptions(agentId: string, signal?: AbortSignal) {
+export function discoverAgentModelOptions(agentId: string, signal?: AbortSignal, goalId?: string) {
   return requestJson<AgentModelDiscovery>("/api/chat/agent-model-options", {
-    method: "POST", signal, body: JSON.stringify({agent_id: agentId}),
+    method: "POST", signal, body: JSON.stringify({agent_id: agentId, ...(goalId ? {goal_id: goalId} : {})}),
   });
 }
 
@@ -769,6 +769,8 @@ export type ChatSessionSummary = {
   project_ref?: string | null;
   agent_id: string;
   agent_model_id?: string | null;
+  agent_reasoning_effort?: string | null;
+  agent_service_tier?: string | null;
   adapter_kind: string;
   channel_id?: string;
   status: string;

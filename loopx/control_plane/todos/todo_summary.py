@@ -395,6 +395,9 @@ def structured_todo_item(
     )
     if decision_scope_outcomes:
         normalized["decision_scope_outcomes"] = decision_scope_outcomes
+    created_by = normalize_todo_claimed_by(item.get("created_by"))
+    if created_by:
+        normalized["created_by"] = created_by
     claimed_by = normalize_todo_claimed_by(item.get("claimed_by"))
     if claimed_by:
         normalized["claimed_by"] = claimed_by

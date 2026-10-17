@@ -22,6 +22,7 @@ from .chat_manager import (
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
+from .capabilities.native_chat.machine_defaults import codex_profile_home, load_codex_chat_defaults
 from .control_plane.collaboration import conversation_scope
 from .capabilities.manager_runtime import (
     load_bound_manager_runtime_profile, manager_runtime_session_fields,
@@ -112,6 +113,15 @@ class CodexAppServerAdapter:
     goal_driver: CodexGoalDriver | None = None
 
     @property
+    def current_model_id(self) -> str | None:
+        return getattr(self.session, "resolved_model", None)
+
+    @property
+    def model_settings(self) -> dict[str, str | None]:
+        return {"agent_reasoning_effort": getattr(self.session, "resolved_reasoning_effort", None),
+                "agent_service_tier": getattr(self.session, "service_tier", None)}
+
+    @property
     def upstream_thread_id(self) -> str:
         return self.session.thread_id
 
@@ -134,6 +144,7 @@ class CodexAppServerAdapter:
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        service_tier: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
     ) -> "CodexAppServerAdapter":
         retry_timeout = bool(resume_thread_id)
@@ -156,6 +167,7 @@ class CodexAppServerAdapter:
                         codex_home=codex_home,
                         model=model,
                         reasoning_effort=reasoning_effort,
+                        host_config={"service_tier": service_tier} if service_tier else None,
                         dynamic_tools=dynamic_tools,
                     )
                 )
@@ -391,7 +403,7 @@ class ChatRuntimeController:
         )
         return [*builtins, *(endpoint.public_summary() for endpoint in self.endpoint_registry.list())]
 
-    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path) -> dict[str, Any]:
+    def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path, goal_id: str | None = None) -> dict[str, Any]:
         """Read model choices from one selected, available ACP endpoint.
 
         This is intentionally not a PATH scan: the controller launches only an
@@ -402,7 +414,9 @@ class ChatRuntimeController:
         if capability is None or not capability.get("available"):
             raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
         if agent_id == "codex":
-            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin), "supported": True}
+            defaults = load_codex_chat_defaults(self.coordination_runtime_root) if goal_id else {}
+            home = codex_profile_home(self.codex_home, defaults)
+            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin, codex_home=home), "supported": True}
         if agent_id == "claude-code":
             return {
                 "agent_id": agent_id,
@@ -477,6 +491,7 @@ class ChatRuntimeController:
         executor_model: Mapping[str, str | None] | None = None,
         project_context: dict[str, str] | None = None,
         agent_config: dict[str, str] | None = None,
+        codex_home_override: Path | None = None,
     ) -> ChatRuntimeAdapter:
         if project_context is not None:
             project_context_policy.validate_project_native_executor(agent_id, project_context)
@@ -521,9 +536,11 @@ class ChatRuntimeController:
             )
             if agent_config and agent_config.get("model"):
                 model_config = {**model_config, "model": agent_config["model"]}
+            if agent_config:
+                model_config = {**model_config, **{key: agent_config[key] for key in ("reasoning_effort", "service_tier") if agent_config.get(key)}}
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
-                codex_home=self.codex_home,
+                codex_home=codex_home_override or self.codex_home,
                 work_dir=work_dir,
                 goal_id=goal_id,
                 objective=self._session_objective(
@@ -548,6 +565,7 @@ class ChatRuntimeController:
                 project_context=project_context,
                 model=model_config.get("model"),
                 reasoning_effort=model_config.get("reasoning_effort"),
+                service_tier=model_config.get("service_tier"),
                 dynamic_tools=(
                     [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
                     else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]
@@ -735,6 +753,18 @@ class ChatRuntimeController:
                     latest = None
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
+            codex_defaults = {}
+            selected_codex_home = self.codex_home
+            if (agent_id == "codex" and goal_id != MANAGER_AGENT_GOAL_ID
+                and conversation_scope({"channel_id": selected_channel, "goal_id": goal_id})["kind"] == "owner_goal"
+                and not (latest and (latest.get("active_turn_id") or latest.get("upstream_mode") == CODEX_GOAL_CHAT_MODE))):
+                codex_defaults = load_codex_chat_defaults(self.coordination_runtime_root)
+                selected_codex_home = codex_profile_home(self.codex_home, codex_defaults)
+                if latest is not None and (latest.get("codex_chat_configuration") or {}) != codex_defaults:
+                    # New defaults get a new ordinary Session. Resolve them only
+                    # after attached, active and Agent Loop bindings are preserved;
+                    # even an unavailable new profile cannot interrupt that work.
+                    latest = None
             if capability is None:
                 raise agent_endpoint_error(agent_id)
             if not capability["available"]:
@@ -755,7 +785,9 @@ class ChatRuntimeController:
                 manager_runtime=manager_runtime,
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
-                agent_config={"model": agent_model_id} if agent_model_id else None,
+                agent_config={**{key: value for key, value in codex_defaults.items() if value is not None},
+                              **({"model": agent_model_id} if agent_model_id else {})} or None,
+                codex_home_override=selected_codex_home,
             )
             try:
                 persisted = self.store.create_session(
@@ -767,10 +799,13 @@ class ChatRuntimeController:
                     upstream_thread_id=adapter.upstream_thread_id,
                     upstream_mode="chat" if agent_id == "codex" else "default",
                     channel_id=selected_channel,
-                    codex_home=str(codex_context.home_for_project(self.codex_home, project_context)) if agent_id == "codex" else None,
+                    codex_home=str(codex_context.home_for_project(selected_codex_home, project_context)) if agent_id == "codex" else None,
                     project_context=project_context,
                     steward_context=steward_context,
-                    agent_model_id=adapter.current_model_id if isinstance(adapter, ACPStdioAdapter) else agent_model_id,
+                    agent_model_id=adapter.current_model_id if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else agent_model_id,
+                    requested_agent_model_id=agent_model_id,
+                    codex_chat_configuration=codex_defaults or None,
+                    **(adapter.model_settings if isinstance(adapter, CodexAppServerAdapter) else {}),
                 )
             except Exception:
                 adapter.close_session()
@@ -798,7 +833,7 @@ class ChatRuntimeController:
     def _check_codex_home(self, session: dict[str, Any]) -> None:
         if session.get("agent_id") != "codex" or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             return
-        codex_context.require_session_home(self.codex_home, session)
+        codex_context.require_session_home(codex_profile_home(self.codex_home, session.get("codex_chat_configuration") or {}), session)
 
     def _ensure_adapter(
         self,
@@ -1006,7 +1041,11 @@ class ChatRuntimeController:
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
                 project_context=session.get("project_context"),
-                agent_config={"model": str(session["agent_model_id"])} if session.get("agent_model_id") else None,
+                agent_config={**(session.get("codex_chat_configuration") or {}), **({"model": requested_model} if (requested_model := (
+                    session.get("requested_agent_model_id", session.get("agent_model_id"))
+                    if session.get("agent_id") == "codex" else session.get("agent_model_id")
+                )) else {})} or None,
+                codex_home_override=codex_profile_home(self.codex_home, session.get("codex_chat_configuration") or {}),
             )
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                 try:
@@ -1032,8 +1071,9 @@ class ChatRuntimeController:
         with self.lock:
             self.adapters[session_id] = adapter
         try:
-            if isinstance(adapter, ACPStdioAdapter):
-                self.store.update_session(session_id, agent_model_id=adapter.current_model_id)
+            if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)):
+                self.store.update_session(session_id, agent_model_id=adapter.current_model_id,
+                    **(adapter.model_settings if isinstance(adapter, CodexAppServerAdapter) else {}))
             if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                 # A legacy session is bound only after successful upstream resume,
                 # not when a service happens to start in a new environment.
