@@ -228,7 +228,13 @@ def test_planning_input_is_clock_independent_but_preserves_task_time_constraints
         assert render_planning_prompt(packet, env) == body
         assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
     assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
-    assert body == "$loopx\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False)
+    assert body.startswith("$loopx\n\nBenchmark research planning guidance:\n")
+    assert "declared interface, units, scale" in body
+    assert "preserve that reference while testing a replacement" in body
+    assert "negative experiment can complete its own Todo" in body
+    assert "neither creates a new acceptance document or permission requirement" in body
+    assert "Host deadline" not in body and "remaining" not in body
+    assert packet == {"input_digest": "unchanged", "text": "Task constraint: inference under 30 seconds."}
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1", "not-a-clock"])

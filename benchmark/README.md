@@ -632,6 +632,17 @@ staging directory instead of ambient temporary storage. If that filesystem fills
 capture still fails and runs its existing reader/barrier cleanup without publishing an
 outer artifact; it does not retry on another volume or substitute a later point.
 
+The controller checks its original shared deadline during download progress, tar
+header and file reads, safety filtering and permission restoration, including
+standalone SQLite companions, the held request and the phase file. It retains
+HTTP read timeouts instead of using Docker's process-stream reader, which disables
+them. These checks are cooperative between IO operations, not preemption of a
+blocked filesystem call or a new allowance per member. On expiry the daemon reader
+closes before this operation's writer cleanup; no native point or outer artifact
+is published from the expired export. Safe extraction still rejects the complete
+invalid inventory before writing member payloads, uses Python's data filter and
+restores ordinary source modes without owners or special permission bits.
+
 The container must initially be running and unpaused. Cancellation, failed file
 reads, rejected native capture and a lost pause response attempt to release only
 this operation's barrier. Failure to resume the worker is reported and publishes
@@ -827,6 +838,21 @@ those messages. An authorized continuation must address stale context at its
 restore boundary, and a terminal Goal still requires explicit resume. This PR
 prevents new planning-clock injection; it does not qualify old-archive recovery
 or claim improved model behavior or scores.
+
+Only the explicit `loopx-planned` benchmark worker adds research-planning
+guidance around the unchanged product planning packet: check decision-critical
+assumptions, compare with and retain the strongest available reference, and keep
+an informative negative experiment separate from Goal completion. This is a
+provider planning treatment, not new default Core/CLI guidance or a checkpoint
+requirement. Ordinary Goal entry, seeded work and official native workers do not
+use this wrapper. Pin this provider revision when comparing runs; the guidance
+does not establish model adoption, initial-quality parity or long-horizon gain.
+
+仅显式 `loopx-planned` benchmark worker 在未修改的产品规划 packet 外附加研究
+指引：核对关键假设、对照并保留最强起点、区分有信息量的负实验与 Goal 完成。
+这是 provider 规划处理，不是 Core/CLI 默认指引或 checkpoint 要求。普通 Goal、
+预置任务和 official 原生 worker 不使用此包装；对比运行须固定 provider revision。
+这些指引不证明模型采用、首次质量持平或长程收益。
 
 The sealed deadline and native capture timestamp determine the remainder; the
 receiver recomputes it. A point with two hours remaining keeps that duration

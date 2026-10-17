@@ -436,3 +436,20 @@ def test_native_prompt_upload_is_readable_regardless_of_launcher_umask(tmp_path,
         os.umask(previous)
     assert modes == [0o644]
     assert remote.read_text() == prompt
+
+
+@pytest.mark.parametrize("source,covered", [
+    ("/task", True), ("/home/workspace", True),
+    ("/home/workspace/task/solver.py", False), ("/home/workspace/task-other", False),
+])
+def test_checkpoint_guidance_distinguishes_directory_from_file_coverage(source, covered):
+    from benchmark.edgebench.prompts import checkpoint_research_instructions
+    workspace = "/task" if source == "/task" else "/home/workspace/task"
+    text = checkpoint_research_instructions(
+        {"components": [{"id": "code", "source_path": source}]}, workspace)
+    assert ("includes this task workspace" in text) is covered
+    assert ("does not cover the whole task workspace" in text) is not covered
+    assert "negative results" in text and "workspace-relative references" in text
+    assert "external file does not preserve its bytes" in text
+    assert "does not change submitted files" in text
+    assert source not in text  # Do not echo arbitrary private capture roots.

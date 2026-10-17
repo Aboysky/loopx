@@ -812,6 +812,13 @@ qualification covers a decision, selected successor execution, negative evidence
 next-review readback and rejection/recovery of a claim citing only old evidence;
 model adoption and score or cost benefits remain unqualified.
 
+The benchmark's explicit `loopx-planned` provider adds assumption checks and
+incumbent/negative-experiment guidance around the unchanged planning packet.
+Generic Goal/CLI first-delivery guidance remains the mainline contract; these
+benchmark-specific additions are not installed as Core defaults or checkpoint
+requirements. This provider treatment must be revision-pinned in comparisons;
+it does not establish initial-quality parity or long-horizon research gain.
+
 The activation vocabulary and existing Goal/device editor stay unchanged; no
 second selectable strategy or policy database is added. Off retains ordinary
 projection/review semantics. Both historical v1 decision shapes retain read
