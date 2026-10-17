@@ -290,6 +290,19 @@ execution, candidate adoption, scientific improvement or Goal completion. A
 missing, rejected or malformed basis adds no followthrough projection. No
 selection, trigger, quota, acceptance, lease or scheduler rule changes.
 
+When declared Todo work has later ordinary writebacks without the optional
+typed-progress attachment, followthrough also returns `ordinary_work`: up to six
+immutable `evidence` references with their `generated_at` and `todo_id`, plus
+`recorded_count` and `omitted_count`. Each displayed Todo's
+`ordinary_evidence_refs` links only its own delivered records. Accounting-only,
+earlier, foreign-lane and retired-instance rows are excluded; append order also
+retains delayed corrections without treating their clock as causal order.
+Resolve the references through the existing scoped history read before
+reviewing the outcome. Ordinary evidence has no `coverage_ref`, does not increase
+`recorded_progress_count`, and certifies no execution or gain. Its absence retains
+the legacy packet shape, not a claim that no work happened. Feature-off output,
+historical identities and full-source writeback qualification are unchanged.
+
 启用 `evidence_conditioned_v1` 且历史中已有被接受、绑定证据的 Vision 路线时，replan context 返回上次决定与之后的
 进度引用，按合格来源的顺序关联，而非根据时间戳或文案猜测因果。完整本地索引提供
 追加位置；已知最新在前的紧凑载体与 `newest_first_runs` 入口转换位置，保留普通
@@ -298,6 +311,14 @@ selection, trigger, quota, acceptance, lease or scheduler rule changes.
 正常 history 入口可读取引用，私有 transport facts 不公开。这些是记录中的观测，
 不等于有效结算 Turn、独立试验或执行/收益证明；后者明确保持 unknown。缺失、
 拒绝或损坏的依据不产生投影；选择、触发、结算及权限规则不变。
+
+已声明 Todo 的后续普通回写即使没有可选 typed-progress，也经 `ordinary_work`
+返回最多六条不可变引用、时间和 Todo 身份，并保留总数与省略数。各 Todo 的
+`ordinary_evidence_refs` 只指向自己的已投递记录；排除记账、决定前、其他 Agent
+及旧 Goal 实例的记录，迟到纠正仍按来源追加顺序保留。通过既有 history 入口读取
+原文后再评估结果；普通证据不伪造 `coverage_ref`，不增加 typed-progress 计数，
+也不证明执行或收益。没有普通证据时保留旧包形状，不据此断言没有工作。off 输出、
+历史身份和完整来源的写回资格不变。
 
 ### Replan planning guidance
 
