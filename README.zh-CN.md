@@ -13,8 +13,8 @@
 
 [开始使用](#试用-loopx) · [个人工作区](#认识个人-agent-工作区) · [LHTB 结果](#lhtb-results) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
-<a href="docs/assets/personal-workspace/loopx-research-workbench.mp4"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 研发工作台：真实本机工作区中记录的问题、结论与显式转向，沿时间线保留研究过程" width="960"></a><br>
-<sub>本机真实工作区实录，单独标注概念动画与来源数据图 · <a href="docs/assets/personal-workspace/loopx-research-workbench.mp4">观看 44 秒研发工作台影片</a></sub>
+<a href="https://github.com/user-attachments/assets/88d74b25-7edd-49c5-8bda-66a1e0bc5348"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 研发工作台：真实本机工作区中记录的问题、结论与显式转向，沿时间线保留研究过程" width="960"></a><br>
+<sub>本机真实工作区实录，单独标注概念动画与来源数据图 · <a href="https://github.com/user-attachments/assets/88d74b25-7edd-49c5-8bda-66a1e0bc5348">观看 44 秒研发工作台影片</a></sub>
 
 **两步在 Codex App 里用上 LoopX。** 先安装一次：
 

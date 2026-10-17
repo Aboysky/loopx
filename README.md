@@ -13,8 +13,8 @@ The open, local-first control plane for long-horizon agents and personal agent t
 
 [Get started](#try-loopx) · [Workspace](#meet-the-personal-agent-workspace) · [LHTB results](#lhtb-results) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
-<a href="docs/assets/personal-workspace/loopx-research-workbench.mp4"><img src="docs/assets/personal-workspace/research-workbench-hero.webp" alt="LoopX research workbench: recorded questions, findings and explicit plan changes in a real local workspace" width="960"></a><br>
-<sub>Recorded local workspace, with labelled concept animation and source-data graphics · <a href="docs/assets/personal-workspace/loopx-research-workbench.mp4">watch the 44-second research workbench film</a></sub>
+<a href="https://github.com/user-attachments/assets/88d74b25-7edd-49c5-8bda-66a1e0bc5348"><img src="docs/assets/personal-workspace/research-workbench-hero.webp" alt="LoopX research workbench: recorded questions, findings and explicit plan changes in a real local workspace" width="960"></a><br>
+<sub>Recorded local workspace, with labelled concept animation and source-data graphics · <a href="https://github.com/user-attachments/assets/88d74b25-7edd-49c5-8bda-66a1e0bc5348">watch the 44-second research workbench film</a></sub>
 
 **Start in Codex App in two steps.** Install once:
 
