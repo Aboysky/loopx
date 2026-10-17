@@ -406,14 +406,18 @@ def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_
         assert params["expected_source_sha256"] == "witness"
         return {"sha256": "sealed"}
     monkeypatch.setattr("benchmark.runtime.checkpoint_wake.effect_runtime_result", artifact)
+    # Bind one monotonic phase before deriving its wall-clock upper bound.
+    # Starting a second five-second phase at the call can add scheduler delay
+    # and incorrectly look like the implementation extended the original one.
+    capture_deadline = time.monotonic() + 5
     phase_deadline = time.time() + 5
     if fault:
         with pytest.raises(ValueError, match="failure|cursor moved|source changed"):
-            hook._capture(held, time.monotonic() + 5)
+            hook._capture(held, capture_deadline)
         assert events[-1] == "closed"
         assert ("capture" in events) is (fault == "capture")
     else:
-        assert hook._capture(held, time.monotonic() + 5)["sha256"] == "sealed"
+        assert hook._capture(held, capture_deadline)["sha256"] == "sealed"
         assert events == ["open", "read", "probe", "read", "capture", "closed"]
 
 
