@@ -575,6 +575,9 @@ answers and steering instructions reconcile their canonical message identities
 and timestamps as well as long answers; an admission/history race cannot add
 a second copy. Before readback, a terminal work row uses its observed completion
 rather than its preparation time. Refresh preserves the same conversation order.
+If a confirmed instruction's history refresh fails, the existing history notice
+offers a read-only retry, including cached Sessions that may contain new records.
+Delivery remains confirmed; retrying history never resubmits the instruction.
 
 ![Goal Chat model and request provenance](../development/assets/chat-observability/first-screen.png)
 

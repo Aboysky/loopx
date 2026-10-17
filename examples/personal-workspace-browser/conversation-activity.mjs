@@ -60,6 +60,17 @@ export const conversationActivityScenario = {
       await page.clock.resume();
       const adjustments = [];
       let legacyMigrationAttempts = 0;
+      let rejectHistoryRead = false;
+      let rejectedHistoryReads = 0;
+      await page.route("**/api/chat/sessions?*", route => {
+        const target = new URL(route.request().url());
+        if (rejectHistoryRead && target.searchParams.get("channel_id") === "manager") {
+          rejectHistoryRead = false;
+          rejectedHistoryReads += 1;
+          return route.fulfill({ status: 503, json: { error: "History temporarily unavailable" } });
+        }
+        return route.fallback();
+      });
       await page.route("**/steer", async route => {
         const body = route.request().postDataJSON();
         const [sessionId, turnId] = new URL(route.request().url()).pathname.match(/sessions\/([^/]+)\/turns\/([^/]+)\/steer/).slice(1);
@@ -68,6 +79,15 @@ export const conversationActivityScenario = {
           return route.fulfill({ status: 409, json: { ok: false, error: "原回合指令未确认" } });
         if (adjustments.length === 1) return route.fulfill({ status: 409, json: { ok: false, error: "执行器暂时未确认接收，草稿已保留。" } });
         if (adjustments.length === 3) return route.fulfill({ status: 409, json: { ok: false, error: "执行器暂时不可用。", error_code: "live_steering_session_not_attached", delivery_state: "not_delivered" } });
+        if (adjustments.length !== 2) {
+          const rows = page.__loopxRuntime.messages.get(sessionId);
+          const messageId = `instruction:${body.client_ingress_id}`;
+          if (!rows.some(row => row.message_id === messageId)) rows.push({
+            message_id: messageId, turn_id: turnId, role: "user", text: body.message,
+            created_at: await page.evaluate(() => new Date().toISOString()),
+          });
+          if (adjustments.length === 4) rejectHistoryRead = true;
+        }
         return route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: adjustments.length === 2 ? "wrong-turn" : turnId, client_ingress_id: body.client_ingress_id, status: "delivered", created: true } });
       });
       const composer = page.getByLabel("向 LoopX 发送消息");
@@ -109,6 +129,11 @@ export const conversationActivityScenario = {
       await composer.press("Meta+Enter");
       await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
       assert.equal(await composer.inputValue(), "", "Only the accepted draft clears");
+      await page.getByRole("button", { name: "重试读取", exact: true }).waitFor({ timeout: 5000 });
+      assert.equal(rejectedHistoryReads, 1, "Confirmed delivery can outlive a failed history read");
+      await page.getByRole("button", { name: "重试读取", exact: true }).click();
+      await page.locator(".personal-message.is-user").filter({ hasText: "先核对依赖" }).waitFor();
+      assert.equal(adjustments.length, 4, "History recovery reads the stored instruction without sending it again");
       assert.equal(new Set(adjustments.slice(0, 3).map(row => row.client_ingress_id)).size, 1, "Uncertain retries retain ingress identity");
       assert.notEqual(adjustments[3].client_ingress_id, adjustments[0].client_ingress_id, "Confirmed rejection starts a safe new ingress");
       assert.equal(api.turnRequests.length, 1, "steering never starts another turn");
