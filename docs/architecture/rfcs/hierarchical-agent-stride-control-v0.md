@@ -771,6 +771,28 @@ The same bounded followthrough is included in `stride_control` so compact Host
 envelopes expose it without requiring another full-context read. Historical
 decision identities and off-mode output remain unchanged.
 
+The next-review input also exposes causally later ordinary writebacks for the
+declared work in `ordinary_work`, with per-Todo `ordinary_evidence_refs`. Its
+six-record detail window retains total/omitted counts and stable history reads;
+it does not fabricate a typed-progress fingerprint or increase progress counts.
+This closes a source-readback gap where legal evidence could qualify a writeback
+but was absent from the decision-followthrough input. Real File/SQLite CLI
+coverage uses the returned reference to read a worse candidate result, retain
+the incumbent, and author the next comparison through the existing Todo/replan
+owners. Late corrections, replay, scope and negative outcomes remain separate
+from model judgment. This is not complete M3 provider/product qualification or
+evidence of research utility; the §11 actual-provider/adoption journey remains.
+
+The same source now retains unresolved declared-work evidence across later
+reviews. A citation becomes a recorded followthrough relation only after its
+decision's declared Todo has a subsequent material writeback; citations or Todo
+creation alone do not consume the result. Replay and replaced unexecuted plans
+preserve the original evidence without a second ledger. Real File/SQLite CLI
+coverage executes isolated candidate/probe processes, reads their artifacts,
+authors the next comparison, and reads that relation at another review. The
+consumer is scripted: native Host/model adoption, candidate applicability and
+scientific utility remain independent, unqualified parts of §11.
+
 Outcome claims require at least one subsequent observation; earlier evidence
 can still be cited for comparison. Writeback replays up to three cited references
 against the complete scoped history through the existing typed replan owner.

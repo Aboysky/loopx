@@ -2,6 +2,8 @@
 
 import json
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -312,7 +314,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     data = json.loads(registry.read_text())
-    data["goals"][0]["quota"]["allowed_slots"] = 8
+    data["goals"][0]["quota"]["allowed_slots"] = 12
     registry.write_text(json.dumps(data))
     rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
@@ -455,26 +457,38 @@ def test_due_stride_review_survives_successor_transition_until_decision(
              "--scan-path", str(project))
         # Synthetic candidate work under the real selected Todo. A worse
         # result is still evidence; it must not be rewritten into goal gain.
-        (project / f"candidate-result-{index}.json").write_text(json.dumps({
-            "reference_error": sum(value * value for value in (1, 1)),
-            "candidate_error": sum(value * value for value in (1, 2)),
-        }))
+        subprocess.run([sys.executable, "-c",
+            "import json,sys; from pathlib import Path; "
+            "Path(sys.argv[1]).write_text(json.dumps({'reference_error':sum(x*x for x in (1,1)),"
+            "'candidate_error':sum(x*x for x in (1,2))}))",
+            str(project / f"candidate-result-{index}.json")], check=True)
         work = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
              "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
              "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
              "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+             "--recommended-action", "The candidate regressed (error 5 versus reference 2); retain the reference and compare another source.",
              *(["--progress-result-class", "unchanged", "--progress-evidence-id", f"fixture:negative-result-{index}"]
                if index == 0 else []),
              "--no-global-sync", "--suppress-external-sinks")
         call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
              "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
              "--slots", "1", "--source", "heartbeat", "--execute")
+    call("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+         "--todo-id", successor["todo_id"])
     next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID,
         "--turn-instance-id", "stride-next-review", "--scan-path", str(project))
     next_obligation = next_guard["autonomous_replan_obligation"]
+    delivered_result = next_obligation["replan_context"]["decision_followthrough"]["ordinary_work"]["evidence"][0]
+    observed_result = call("history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                          "--evidence-ref", delivered_result["evidence_ref"])["evidence"]
+    assert "regressed (error 5 versus reference 2)" in observed_result["recommended_action"]
+    # The actor can now discover the actual ordinary result from the review,
+    # retain the reference, and choose a successor through the existing owner.
+    measurement = json.loads((project / "candidate-result-1.json").read_text())
+    next_task = "Compare another source while retaining the reference" if measurement["candidate_error"] > measurement["reference_error"] else "Adopt the candidate"
     next_successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
-        "--claimed-by", AGENT_ID, "--text", "Resolve the remaining source uncertainty",
+        "--claimed-by", AGENT_ID, "--text", next_task,
         "--task-class", "advancement_task", "--action-kind", "validate",
         "--target-key", "source-uncertainty", "--replan-obligation-id", next_obligation["obligation_id"])
     next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -494,12 +508,20 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     planned = follow["planned_work"]
     assert len(planned) == 1 and planned[0]["todo_id"] == successor["todo_id"]
     assert planned[0]["current"]["claimed_by"] == AGENT_ID
+    assert planned[0]["current"]["status"] == "done", "A negative experiment can end while the Goal continues"
     assert len(planned[0]["observation_refs"]) == 1
     assert follow["unresolved_planned_work_count"] == 1
     last_work = json.loads(Path(work["json_path"]).read_text())
     assert "progress_observation" not in last_work
-    ordinary_ref = next(row["evidence_ref"] for row in next_obligation["replan_context"]["evidence"]
-        if row["generated_at"] == last_work["generated_at"])
+    ordinary_ref = delivered_result["evidence_ref"]
+    # The optional typed-progress attachment is not required for the Agent to
+    # discover a declared experiment's ordinary result in its next review.
+    assert follow["ordinary_work"]["recorded_count"] == 1
+    assert follow["ordinary_work"]["evidence"] == [{
+        "evidence_ref": ordinary_ref, "generated_at": last_work["generated_at"],
+        "todo_id": successor["todo_id"],
+    }]
+    assert planned[0]["ordinary_evidence_refs"] == [ordinary_ref]
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
     envelope = build_turn_envelope(next_guard)
     assert envelope["replan_action_packet"]["stride_control"]["decision_followthrough"] == follow
@@ -507,7 +529,8 @@ def test_due_stride_review_survives_successor_transition_until_decision(
                     "--evidence-ref", previous["evidence_ref"])
     assert resolved["evidence"]["stride_decision"] == decision
     next_decision = {**decision, "reference_context_id": next_control["reference_context_id"],
-                     "reference_obligation_id": next_obligation["obligation_id"]}
+                     "reference_obligation_id": next_obligation["obligation_id"], "action": "switch"}
+    vision_packet = {**vision_packet, "todo_delta": [f"create:{next_successor['todo_id']}"]}
     refresh_args = ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", next_obligation["obligation_id"], "--turn-instance-id", "stride-next-review",
         "--agent-vision-json", str(decision_path), "--classification", "bounded_replan_progress",
@@ -531,6 +554,38 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert next_accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
     replay = call(*refresh_args)
     assert replay.get("appended") is not True
+    # A review/citation alone leaves this result pending. Actual subsequent
+    # work under the declared next Todo supplies the recorded association.
+    call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+         "--replan-obligation-id", next_obligation["obligation_id"], "--turn-instance-id", "stride-next-review",
+         "--slots", "1", "--source", "heartbeat", "--execute")
+    for index in range(2):
+        turn = f"adopted-probe-{index}"
+        guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
+            "--scan-path", str(project))
+        assert guard["selected_todo"]["todo_id"] == next_successor["todo_id"]
+        subprocess.run([sys.executable, "-c",
+            "import json,sys; from pathlib import Path; "
+            "old=json.loads(Path(sys.argv[1]).read_text()); "
+            "Path(sys.argv[2]).write_text(json.dumps({'retained_error':old['reference_error'],'alternative_error':1}))",
+            str(project / "candidate-result-1.json"), str(project / f"adopted-probe-{index}.json")], check=True)
+        call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
+            "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
+            "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+            "--recommended-action", "The alternate probe has an attributable artifact; validate transfer before replacing the incumbent.",
+            "--no-global-sync", "--suppress-external-sinks")
+        call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
+            "--slots", "1", "--source", "heartbeat", "--execute")
+    final = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "review-adopted-probe", "--scan-path", str(project))
+    use = final["autonomous_replan_obligation"]["replan_context"]["decision_followthrough"]["work_result_use"]
+    assert any(row["result_evidence_ref"] == ordinary_ref and row["work_todo_id"] == next_successor["todo_id"]
+               for row in use["recorded_followthrough"])
+    assert final["autonomous_replan_obligation"]["replan_context"]["decision_followthrough"]["execution_and_goal_gain"] == "unknown"
+    assert json.loads((project / "adopted-probe-1.json").read_text())["retained_error"] == 2
 
 
 @pytest.mark.parametrize("invalid", [0, 7, True, 2.5, "2"])

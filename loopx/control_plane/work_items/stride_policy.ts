@@ -266,13 +266,17 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
   if (!previous && review) return "A previous decision review cannot claim an undelivered decision.";
   if (previous && review) {
     const rows = (value: unknown): JsonObject[] => Array.isArray(value) ? value as JsonObject[] : [];
-    const allowed = new Set<unknown>([...rows(context.evidence), ...rows(follow?.observations)]
+    const ordinary = rows((follow?.ordinary_work as JsonObject | undefined)?.evidence);
+    const allowed = new Set<unknown>([...rows(context.evidence), ...rows(follow?.observations), ...ordinary]
       .map(row => row.evidence_ref));
     for (const row of rows(context.coverage_ledger)) for (const ref of Array.isArray(row.evidence_ids) ? row.evidence_ids : []) allowed.add(ref);
     const cited = review.evidence_refs as string[];
-    const subsequent = new Set(rows(follow?.observations).map(row => row.evidence_ref));
+    const subsequent = new Set([...rows(follow?.observations), ...ordinary].map(row => row.evidence_ref));
     const planned = rows(follow?.planned_work);
-    const linked = new Set(planned.flatMap(work => Array.isArray(work.observation_refs) ? work.observation_refs : []));
+    const linked = new Set(planned.flatMap(work => [
+      ...(Array.isArray(work.observation_refs) ? work.observation_refs : []),
+      ...(Array.isArray(work.ordinary_evidence_refs) ? work.ordinary_evidence_refs : []),
+    ]));
     let hasDeclaredWork = planned.length > 0;
     if (sourceReview !== undefined) {
       const source = requireJsonObject(sourceReview, "stride review evidence");
