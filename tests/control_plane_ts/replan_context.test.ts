@@ -131,6 +131,89 @@ function subsequent(position: number): JsonObject {
 
 const strideRequest = {...request, stride_strategy: "evidence_conditioned_v1"};
 
+type OrdinaryFollowthrough = {
+  recorded_progress_count: number; execution_and_goal_gain: string; observations: JsonObject[];
+  previous_decision: JsonObject;
+  ordinary_work: {recorded_count: number; omitted_count: number; evidence: JsonObject[]};
+  planned_work: {ordinary_evidence_refs: string[]; observation_refs: string[]}[];
+};
+
+test("ordinary declared-work evidence reaches followthrough without becoming typed progress", () => {
+  const decision = reviewed(1);
+  (decision._source_facts as JsonObject).planned_todo_ids = ["todo-a"];
+  const actual: JsonObject = {...subsequent(2), progress_observation: null,
+    health_check: "The alternate implementation regressed; retain the reference."};
+  const ref = (projectReplanContext({...request, rows: [actual]}).evidence as JsonObject[])[0].evidence_ref;
+  const before = {...subsequent(0), progress_observation: null};
+  const other = {...subsequent(3), todo_id: "todo-other", progress_observation: null};
+  const accounting = {...actual, generated_at: row(10).generated_at,
+    _source_facts: {...actual._source_facts as JsonObject, history_position: 10,
+      quota_spend_commit: {schema_version: "quota_spend_commit_receipt_v0", effect_id: "spent"}}};
+  const context = projectReplanContext({...strideRequest, rows: [before, decision, actual, actual, other, accounting]});
+  const follow = context.decision_followthrough as OrdinaryFollowthrough;
+  assert.equal(follow.recorded_progress_count, 0);
+  assert.deepEqual(follow.observations, []);
+  assert.equal(follow.execution_and_goal_gain, "unknown");
+  assert.equal(follow.previous_decision.evidence_ref,
+    (projectReplanContext({...strideRequest, rows: [decision]}).decision_followthrough as OrdinaryFollowthrough).previous_decision.evidence_ref);
+  assert.deepEqual(follow.ordinary_work, {recorded_count: 1, omitted_count: 0,
+    evidence: [{evidence_ref: ref, generated_at: actual.generated_at, todo_id: "todo-a"}]});
+  assert.deepEqual(follow.planned_work[0].ordinary_evidence_refs, [ref]);
+  assert.deepEqual(follow.planned_work[0].observation_refs, []);
+  assert.equal(validateReplanContext(context), context);
+  const review = {previous_review: {reference_decision_ref: follow.previous_decision.evidence_ref,
+    adoption: "executed", information_gain: "new_evidence", goal_gain: "regressed",
+    evidence_refs: [ref], lesson: "Reject the alternate implementation, not the experiment evidence."}};
+  assert.equal(strideReviewMismatch(review, context), null);
+  assert.equal((projectReplanContext({...request, operation: "resolve", rows: [actual], evidence_ref: ref})
+    .evidence as JsonObject).health_check, actual.health_check);
+  for (const patch of [
+    {ordinary_work: {...follow.ordinary_work, recorded_count: 0}},
+    {ordinary_work: {...follow.ordinary_work, omitted_count: -1}},
+    {ordinary_work: {...follow.ordinary_work, evidence: [...follow.ordinary_work.evidence, ...follow.ordinary_work.evidence]}},
+    {ordinary_work: {...follow.ordinary_work, evidence: [{...follow.ordinary_work.evidence[0], coverage_ref: "invented-progress"}]}},
+    {planned_work: [{...follow.planned_work[0], ordinary_evidence_refs: ["evidence:invented"]}]},
+  ]) {
+    assert.throws(() => validateReplanContext({...context,
+      decision_followthrough: {...follow, ...patch}}), /ordinary work/);
+  }
+  assert.equal(projectReplanContext({...request, rows: [decision, actual]}).decision_followthrough, undefined);
+});
+
+test("ordinary followthrough retains corrections and bounded coverage under source scope", () => {
+  const decision = reviewed(1);
+  const current = {goal_id: "goal-a", goal_instance_id: "instance-current"};
+  decision._source_facts = {...decision._source_facts as JsonObject, planned_todo_ids: ["todo-a"], goal_ref: current};
+  const actual: JsonObject = {...subsequent(2), progress_observation: null, health_check: "The candidate initially appeared useful."};
+  actual._source_facts = {...actual._source_facts as JsonObject, goal_ref: current};
+  const correction: JsonObject = {...subsequent(3), progress_observation: null,
+    health_check: "The delayed result belongs to the earlier candidate; retain the incumbent.",
+    generated_at: row(0).generated_at};
+  correction._source_facts = {...correction._source_facts as JsonObject, goal_ref: current};
+  const rows = [decision, actual, correction,
+    {...actual, goal_id: "foreign-goal"}, {...actual, agent_id: "foreign-agent"},
+    {...actual, _source_facts: {...actual._source_facts as JsonObject, goal_ref: {...current, goal_instance_id: "retired"}}},
+    {...actual, _source_facts: {...actual._source_facts as JsonObject, history_position: undefined}}];
+  const input = {...strideRequest, goal_facts: {goal_ref: current}, rows};
+  const follow = projectReplanContext(input).decision_followthrough as OrdinaryFollowthrough;
+  assert.equal(follow.ordinary_work.recorded_count, 2);
+  assert.equal(follow.ordinary_work.evidence[0].generated_at, correction.generated_at,
+    "source order, not the corrected record's older clock, decides subsequent evidence");
+  assert.equal(follow.execution_and_goal_gain, "unknown");
+  const ref = follow.ordinary_work.evidence[0].evidence_ref;
+  assert.equal((projectReplanContext({...input, operation: "resolve", evidence_ref: ref}).evidence as JsonObject).health_check,
+    correction.health_check);
+  const more = Array.from({length: 8}, (_, i) => {
+    const value: JsonObject = {...subsequent(i + 4), progress_observation: null};
+    return {...value, _source_facts: {...value._source_facts as JsonObject, goal_ref: current}};
+  });
+  const bounded = projectReplanContext({...input, rows: [...rows, ...more]}).decision_followthrough as OrdinaryFollowthrough;
+  assert.equal(bounded.ordinary_work.evidence.length, 6);
+  assert.equal(bounded.ordinary_work.recorded_count, 10);
+  assert.equal(bounded.ordinary_work.omitted_count, 4);
+  assert.equal(bounded.recorded_progress_count, 0);
+});
+
 test("cited outcome evidence replays full history beyond display caps and optional progress records", () => {
   const decision = reviewed(1);
   decision._source_facts.planned_todo_ids = ["todo-a"];
