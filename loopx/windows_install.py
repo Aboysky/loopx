@@ -382,11 +382,16 @@ def _snapshot_paths(
     return snapshots
 
 
-def _restore_paths(snapshots: Sequence[tuple[Path, Path | None]]) -> list[Path]:
+def _restore_paths(
+    snapshots: Sequence[tuple[Path, Path | None]],
+    *,
+    skill_paths: Sequence[Path] = (),
+) -> list[Path]:
+    skill_entries = set(skill_paths)
     retained: list[Path] = []
     try:
         for path, backup in reversed(snapshots):
-            if path.is_dir() or path.is_symlink():
+            if path in skill_entries or path.is_dir() or path.is_symlink():
                 # A failed installation may have left user edits in a skill.
                 # Keep that state outside the temporary snapshot cleanup; its
                 # contents cannot be distinguished from installer writes here.
@@ -413,7 +418,9 @@ def _restore_paths(snapshots: Sequence[tuple[Path, Path | None]]) -> list[Path]:
     return retained
 
 
-def _install_skills(release_root: Path, skills_dir: Path, installed_at: str) -> list[str]:
+def _install_skills(
+    release_root: Path, skills_dir: Path, installed_at: str
+) -> list[str]:
     skills_dir.mkdir(parents=True, exist_ok=True)
     installed_ids: list[str] = []
     for skill_id in PACKAGED_HOST_SKILL_IDS:
@@ -514,8 +521,8 @@ def install_windows(
             "installed_at": installed_at,
         }
         mutation_paths = [launcher, pointer, launcher_pointer]
-        if install_skills:
-            mutation_paths.extend(_skill_mutation_paths(skills_dir))
+        skill_paths = _skill_mutation_paths(skills_dir) if install_skills else []
+        mutation_paths.extend(skill_paths)
         with tempfile.TemporaryDirectory(
             prefix=".install-rollback.", dir=install_root
         ) as rollback_dir:
@@ -536,7 +543,7 @@ def install_windows(
                 rollback_error: Exception | None = None
                 retained: list[Path] = []
                 try:
-                    retained = _restore_paths(snapshots)
+                    retained = _restore_paths(snapshots, skill_paths=skill_paths)
                 except Exception as restore_exc:  # pragma: no cover - filesystem failure
                     rollback_error = restore_exc
                 # Keep the candidate: physical data may already have upgraded.

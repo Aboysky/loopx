@@ -405,6 +405,34 @@ def test_failed_rollback_keeps_interrupted_skill_outside_temporary_snapshots(
     assert str(retained[0].parent) in str(caught.value)
 
 
+@pytest.mark.parametrize("previously_installed", [False, True])
+def test_declared_skill_path_keeps_regular_file_replacement(
+    tmp_path: Path,
+    previously_installed: bool,
+) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    skill = skills / PACKAGED_HOST_SKILL_IDS[0]
+    skill_paths = windows_install._skill_mutation_paths(skills)
+    assert skill in skill_paths
+    if previously_installed:
+        skill.mkdir()
+        (skill / "SKILL.md").write_text("Previous installed version\n")
+    with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
+        snapshots = windows_install._snapshot_paths([skill], Path(temporary))
+        if skill.exists():
+            shutil.rmtree(skill)
+        skill.write_text("Concurrent replacement file\n")
+        retained = windows_install._restore_paths(snapshots, skill_paths=skill_paths)
+
+    if previously_installed:
+        assert (skill / "SKILL.md").read_text() == "Previous installed version\n"
+    else:
+        assert not skill.exists()
+    assert len(retained) == 1
+    assert retained[0].read_text() == "Concurrent replacement file\n"
+
+
 def test_regular_file_rollback_retains_existing_launcher_behavior(
     tmp_path: Path,
 ) -> None:
