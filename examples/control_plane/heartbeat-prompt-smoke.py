@@ -23,7 +23,6 @@ from heartbeat_prompt_fixtures import (  # noqa: E402
     REPO_ROOT,
     assert_interface_budget_payload,
     assert_no_project_specific_prompt_leaks,
-    assert_ordered,
     assert_prompt_budget,
     normalized,
 )
@@ -339,7 +338,6 @@ def main() -> int:
         task_body = str(prompt_payload["task_body"])
         progress_refresh = str(prompt_payload["progress_refresh_state_command"])
         quota_spend = str(prompt_payload["quota_spend_command"])
-        state_only_refresh = str(prompt_payload["refresh_state_command"])
         assert progress_refresh not in task_body, prompt_label
         assert quota_spend not in task_body, prompt_label
         assert "settlement_plan.ordered_steps" in task_body, prompt_label
@@ -669,7 +667,7 @@ def main() -> int:
         "preserve exact identities/effect ids",
         "Never reconstruct static refresh/spend",
         "Finish Goal only on terminal no-follow-up",
-        "Do not spend for quiet skips, preflight failures, blocker-push questions",
+        "Do not spend for quiet skips, preflight failures, blocker-only turns",
         "No learning queue unless asked.",
         "Reuse existing authorization for the current action",
     ):
@@ -847,7 +845,12 @@ def main() -> int:
     assert "Do not reintroduce a user gate for public-safe publication itself" in normalized(heartbeat_skill), heartbeat_skill
     assert "notify_user_on_open_todo=true" in heartbeat_skill, heartbeat_skill
     assert "open_todo_notification_policy=repeat_until_resolved" in heartbeat_skill, heartbeat_skill
-    assert "blocker-push `NOTIFY`" in heartbeat_skill, heartbeat_skill
+    for phrase in (
+        "`user_todo_blocker_push` lane with no admitted work does no delivery or spend",
+        "`bounded_delivery_with_user_notice` or an admitted safe bypass still requires "
+        "its work and current settlement.",
+    ):
+        assert phrase in normalized(heartbeat_skill), phrase
     assert "sibling-goal todos" in autonomous_skill, autonomous_skill
     assert "must not consume the whole eligible turn" in autonomous_skill, autonomous_skill
     assert "heartbeat_recommendation" in heartbeat_skill, heartbeat_skill
