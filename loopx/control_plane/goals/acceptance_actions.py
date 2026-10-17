@@ -38,6 +38,20 @@ def _review_basis(fingerprint: str) -> dict[str, str]:
     return value
 
 
+def _saved_check(store: ChatActionStore, parameters: dict[str, Any],
+                 operation_id: str) -> dict[str, Any] | None:
+    """Recover a journaled intent, never refresh its basis or lifecycle."""
+    for proposal in store.list(goal_id=parameters["goal_id"], context_kind="goal"):
+        if proposal["idempotency_key"] != operation_id:
+            continue
+        if (proposal["action_kind"] != "goal.acceptance.check"
+                or proposal["context"] != {"kind": "goal", "goal_id": parameters["goal_id"]}
+                or proposal["normalized_parameters"] != parameters):
+            raise ActionConflictError("The operation belongs to another check request")
+        return proposal
+    return None
+
+
 def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
                              goal_id: str, agent_id: str | None,
                              document: dict[str, Any], operation_id: str,
@@ -59,10 +73,26 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
                                 registry_path=registry_path)
     parameters = service._normalize("goal.acceptance.check", {
         "goal_id": goal_id, "document": document, "prepared_by": agent_id})
-    proposal = service.preview({"action_kind": "goal.acceptance.check",
-        "summary": str(document.get("objective") or "Check the delivery"),
-        "idempotency_key": operation_id, "context": {"kind": "goal", "goal_id": goal_id},
-        "normalized_parameters": parameters})
+    proposal = _saved_check(service.store, parameters, operation_id)
+    recovered = proposal is not None
+    if proposal is None:
+        try:
+            proposal = service.preview({"action_kind": "goal.acceptance.check",
+                "summary": str(document.get("objective") or "Check the delivery"),
+                "idempotency_key": operation_id, "context": {"kind": "goal", "goal_id": goal_id},
+                "normalized_parameters": parameters})
+        except ActionConflictError:
+            # Another caller may have persisted this intent while the current
+            # caller read a newer basis. Keep the winner's immutable preview.
+            proposal = _saved_check(service.store, parameters, operation_id)
+            if proposal is None:
+                raise
+            recovered = True
+    if recovered:
+        # A historical proposal cannot stand in for an unavailable or retired
+        # canonical Goal. Reading current authority does not refresh its basis.
+        inspect_goal_acceptance(registry_path=registry_path, runtime_root=str(root),
+                                goal_id=goal_id, agent_id=agent_id)
     return {"ok": True, "goal_id": goal_id, "prepared": True, "executed": False,
             "proposal": proposal}
 
