@@ -33,6 +33,10 @@ from .outbound import (
 )
 
 CommandRunner = Callable[[Sequence[str]], Mapping[str, Any]]
+# Internal transport callback: verify the current Core App/grant and exact
+# profile/chat/source, returning that fresh App's display name only on success.
+# This is not a caller-supplied boolean or a reusable identity observation.
+SourceAuthorityVerifier = Callable[[str, str, str], str | None]
 BOT_IDENTITY_VERIFY_ATTEMPTS = 3
 
 
@@ -227,6 +231,27 @@ def _bot_identity_verified(
     return False
 
 
+def _verified_sender_and_source(
+    *, runner: CommandRunner, base: Sequence[str], profile: str, chat_id: str,
+    message_id: str, expected_name: str,
+    source_membership_verifier: Callable[[], bool] | None,
+    source_authority_verifier: SourceAuthorityVerifier | None,
+) -> tuple[bool, bool]:
+    if source_authority_verifier is not None:
+        if source_membership_verifier is not None or not message_id:
+            raise ValueError("one source-bound verification owner is required")
+        name = source_authority_verifier(profile, chat_id, message_id)
+        verified = isinstance(name, str) and bool(name)
+        return verified and name == expected_name, verified
+    identity = _bot_identity_verified(runner=runner, base=base, expected_name=expected_name)
+    if not identity:
+        return False, False
+    membership = ({"returncode": 0 if source_membership_verifier() else 1}
+                  if source_membership_verifier is not None else _call(runner,
+                      [*base, "im", "chats", "get", "--chat-id", chat_id, "--as", "bot", "--format", "json"]))
+    return True, membership.get("returncode") == 0
+
+
 def _result(
     *,
     status: str,
@@ -285,6 +310,7 @@ def _deliver_lark_inbox_outbound(
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
+    source_authority_verifier: SourceAuthorityVerifier | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -394,10 +420,11 @@ def _deliver_lark_inbox_outbound(
         )
 
     base = ["lark-cli", "--profile", profile]
-    identity_verified = _bot_identity_verified(
-        runner=runner,
-        base=base,
-        expected_name=str(reply_config["bot_display_name"]),
+    identity_verified, membership_verified = _verified_sender_and_source(
+        runner=runner, base=base, profile=profile, chat_id=chat_id,
+        message_id=source_message_id, expected_name=str(reply_config["bot_display_name"]),
+        source_membership_verifier=source_membership_verifier,
+        source_authority_verifier=source_authority_verifier,
     )
     if not identity_verified:
         return _result(
@@ -409,25 +436,7 @@ def _deliver_lark_inbox_outbound(
             format_preflight_passed=True,
         )
 
-    if source_membership_verifier is not None:
-        membership = {"returncode": 0 if source_membership_verifier() else 1}
-    else:
-        membership = _call(
-            runner,
-            base
-            + [
-                "im",
-                "chats",
-                "get",
-                "--chat-id",
-                chat_id,
-                "--as",
-                "bot",
-                "--format",
-                "json",
-            ],
-        )
-    if membership.get("returncode") != 0:
+    if not membership_verified:
         return _result(
             status="gate_required",
             ok=False,
@@ -759,6 +768,7 @@ def reply_lark_event_inbox(
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
+    source_authority_verifier: SourceAuthorityVerifier | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -774,6 +784,12 @@ def reply_lark_event_inbox(
 
     Intermediate admission/progress replies pass ``finalize_reactions=False``;
     their verified delivery does not settle the source's processing lifecycle.
+
+    Native Core callers may supply ``source_authority_verifier`` instead of
+    the legacy membership callback. It must freshly verify the exact supplied
+    profile/chat/message and Core grants, returning the observed Bot name.
+    The sender consumes that result once; retries invoke the callback again.
+    Ordinary/legacy callers retain independent identity and membership checks.
     """
 
     result = _deliver_lark_inbox_outbound(
@@ -786,6 +802,7 @@ def reply_lark_event_inbox(
         provider_preflight=provider_preflight,
         runner=runner,
         source_membership_verifier=source_membership_verifier,
+        source_authority_verifier=source_authority_verifier,
         before_send=before_send,
         delivery_attempt_recorder=delivery_attempt_recorder,
         short_message_limit=short_message_limit,
@@ -808,6 +825,7 @@ def verify_lark_inbox_reply(
     attempt: Mapping[str, Any],
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
+    source_authority_verifier: SourceAuthorityVerifier | None = None,
     finalize_reactions: bool = True,
     attachment_keys: tuple[str, ...] = (),
     attachment_names: tuple[str, ...] = (),
@@ -864,36 +882,13 @@ def verify_lark_inbox_reply(
             "blocker": "provider_delivery_intent_conflict",
         }
     base = ["lark-cli", "--profile", profile]
-    if not _bot_identity_verified(
-        runner=runner,
-        base=base,
+    identity, membership = _verified_sender_and_source(
+        runner=runner, base=base, profile=profile, chat_id=chat_id, message_id=message_id,
         expected_name=str(reply_config.get("bot_display_name") or ""),
-    ):
-        return {
-            "ok": False,
-            "verification_performed": False,
-            "reply_verified": False,
-            "blocker": "provider_verification_unavailable",
-        }
-    if source_membership_verifier is not None:
-        membership = {"returncode": 0 if source_membership_verifier() else 1}
-    else:
-        membership = _call(
-            runner,
-            [
-                *base,
-                "im",
-                "chats",
-                "get",
-                "--chat-id",
-                chat_id,
-                "--as",
-                "bot",
-                "--format",
-                "json",
-            ],
-        )
-    if membership.get("returncode") != 0:
+        source_membership_verifier=source_membership_verifier,
+        source_authority_verifier=source_authority_verifier,
+    )
+    if not identity or not membership:
         return {
             "ok": False,
             "verification_performed": False,
@@ -987,7 +982,8 @@ def update_lark_inbox_reply(
     *, project: str | Path, config_path: str | Path, message_id: str,
     text: str, previous_text: str, attempt: Mapping[str, Any],
     runner: CommandRunner = _default_runner,
-    source_membership_verifier: Callable[[], bool],
+    source_membership_verifier: Callable[[], bool] | None = None,
+    source_authority_verifier: SourceAuthorityVerifier | None = None,
     before_send: Callable[[str], Any],
     delivery_attempt_recorder: Callable[[Any], None],
     finalize_reactions: bool = False,
@@ -1026,7 +1022,16 @@ def update_lark_inbox_reply(
     body = {"msg_type": "post", "content": content}
     if len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > LARK_POST_REQUEST_MAX_BYTES:
         return {"ok": False, "reply_verified": False, "blocker": "provider_update_too_large"}
-    if not source_membership_verifier():
+    if source_authority_verifier is not None:
+        identity, membership = _verified_sender_and_source(
+            runner=runner, base=base, profile=profile, chat_id=chat_id, message_id=message_id,
+            expected_name=str(reply.get("bot_display_name") or ""),
+            source_membership_verifier=source_membership_verifier,
+            source_authority_verifier=source_authority_verifier)
+        source_verified = identity and membership
+    else:
+        source_verified = source_membership_verifier is not None and source_membership_verifier()
+    if not source_verified:
         return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
     ref = str(attempt["message_ref"])
     read_args = [*base, "im", "+messages-mget", "--message-ids", ref, "--as", "bot", "--no-reactions", "--format", "json"]
