@@ -4,6 +4,9 @@ export type SteeringRequest = {
   turnId: string;
   text: string;
   id: string;
+  /** Missing on retained legacy instructions; queue never retargets a Turn. */
+  delivery?: "queue";
+  attachments?: import("./personal-workspace-model").WorkspaceImageAttachment[];
 };
 
 const storageKey = "loopx-pw-composer-steering";
@@ -20,8 +23,11 @@ function restoreRequests(): Map<string, SteeringRequest> {
       const request = entry[1];
       if (!request || typeof request !== "object" || Array.isArray(request)
         || ![request.sessionId, request.turnId, request.text, request.id]
-          .every(value => typeof value === "string" && value.length > 0)) return [];
-      return [[entry[0], { sessionId: request.sessionId, turnId: request.turnId, text: request.text, id: request.id }]];
+          .every(value => typeof value === "string" && value.length > 0)
+        || (request.delivery !== undefined && request.delivery !== "queue")
+        || (request.attachments !== undefined && !Array.isArray(request.attachments))) return [];
+      return [[entry[0], { sessionId: request.sessionId, turnId: request.turnId, text: request.text, id: request.id,
+        ...(request.delivery === "queue" ? { delivery: "queue" as const, attachments: request.attachments } : {}) }]];
     }));
   } catch {
     return new Map();
@@ -60,7 +66,8 @@ export function retainSteeringRequest(key: string, request: SteeringRequest): bo
   const verified = durable?.sessionId === request.sessionId
     && durable.turnId === request.turnId
     && durable.text === request.text
-    && durable.id === request.id;
+    && durable.id === request.id && durable.delivery === request.delivery
+    && JSON.stringify(durable.attachments) === JSON.stringify(request.attachments);
   if (!verified && previous) requestCache().set(key, previous);
   return verified;
 }

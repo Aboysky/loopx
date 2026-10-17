@@ -943,10 +943,12 @@ export async function acceptChatTurn(
   clientTurnId: string,
   attachments: ChatImageAttachmentInput[] = [],
   signal?: AbortSignal,
+  delivery?: "queue",
 ) {
   const body = JSON.stringify({
     message,
     client_turn_id: clientTurnId,
+    ...(delivery ? { delivery } : {}),
     ...(attachments.length ? { attachments: attachments.map((attachment) => ({
       data_url: attachment.dataUrl,
       id: attachment.id,

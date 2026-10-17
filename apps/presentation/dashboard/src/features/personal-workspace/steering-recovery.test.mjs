@@ -111,3 +111,28 @@ test("an unsaved edit cannot replace the original uncertain retry identity", asy
   assert.deepEqual(recovery.readSteeringRequest("composer"), request);
   assert.equal(recovery.retainSteeringRequest("composer", request), true);
 });
+
+test("an uncertain queued message keeps its delivery and exact images through reload", async () => {
+  let stored = null, writable = true;
+  globalThis.window = {sessionStorage: {getItem: () => stored, setItem: (_, value) => {
+    if (!writable) throw new Error("QuotaExceededError");
+    stored = value;
+  }}};
+  const queued = {...request, delivery: "queue", attachments: [{id: "image", dataUrl: "data:image/png;base64,AQ==", mimeType: "image/png", name: "source.png", size: 1}]};
+  const recovery = await import("./steering-recovery.ts?queue-write");
+  assert.equal(recovery.retainSteeringRequest("composer", queued), true);
+  const reloaded = await import("./steering-recovery.ts?queue-reload");
+  assert.deepEqual(reloaded.readSteeringRequest("composer"), queued);
+  writable = false;
+  assert.equal(reloaded.retainSteeringRequest("composer", {...queued, delivery: undefined}), false, "An unknown queue acknowledgement cannot turn into current-Turn steering");
+  assert.equal(reloaded.retainSteeringRequest("composer", {...queued, attachments: []}), false, "Images belong to the same immutable request");
+  assert.equal(reloaded.retainSteeringRequest("composer", queued), true);
+  reloaded.retireSteeringRequest("composer", "late-unrelated-ack");
+  assert.deepEqual(reloaded.readSteeringRequest("composer"), queued);
+});
+
+test("unrecognized delivery state is never restored as legacy steering", async () => {
+  globalThis.window = {sessionStorage: {getItem: () => JSON.stringify([["composer", {...request, delivery: "future-mode"}]]), setItem() {}}};
+  const recovery = await import("./steering-recovery.ts?unknown-mode");
+  assert.equal(recovery.readSteeringRequest("composer"), undefined);
+});
