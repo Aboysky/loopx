@@ -214,7 +214,7 @@ with (
                                         "type": "custom_tool_call_output",
                                         "output": [
                                             {
-                                                "type": "text",
+                                                "type": "input_text",
                                                 "text": json.dumps(
                                                     {
                                                         "output": "Readable shell result\nSecond line",

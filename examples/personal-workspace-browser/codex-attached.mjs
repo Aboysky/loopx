@@ -449,6 +449,10 @@ async function runConversation(browser, uncertain) {
     await page.request.post(new URL('/fixture/metadata-gap',url).href);
     await page.request.post(new URL('/fixture/tool-envelope',url).href);
     const envelope = direct.locator('article[data-role="tool"]').filter({hasText:'退出码 1'});
+    const foldedWarning = direct.locator('.attached-record-group > summary').filter({hasText:'1 条结果含非零退出码'});
+    await foldedWarning.waitFor();
+    assert.equal(await foldedWarning.locator('..').evaluate(node => node.open),false,
+      'A saved nonzero exit code remains visible before opening routine activity');
     await expandActivity(envelope);
     await envelope.locator('summary').first().focus();
     await page.keyboard.press('Enter');
