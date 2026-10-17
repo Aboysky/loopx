@@ -319,6 +319,11 @@ The attached Codex reader also gives dialogue priority over consecutive tool
 events. Natural scrolling pages its bounded source window in both directions,
 preserves the reading anchor and returns to buffered live observations only at
 the tail. Tool details, source gaps and observed failures remain accessible.
+Known native text blocks are readable before content pagination, including
+long Unicode results. Folded activity names recorded nonzero shell exit codes
+even when the result body is paged; it never infers task failure or acceptance
+from an exit code or prose. Unknown block metadata remains available as source
+JSON and credential-shaped content remains withheld.
 This changes presentation, not the original-session input/approval authority or
 the outstanding provider and installed-host qualification.
 
