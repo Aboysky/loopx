@@ -315,6 +315,13 @@ not evidence of complete attached-host or Lark interaction parity. See the
 [projection boundary](../../integrations/session-runtime-control-plane-adapter.md#projection-boundary)
 for the changed defaults and provenance contract.
 
+The shared steward header keeps both known and unknown model observations
+readable at 390px. Optional model choices open within the viewport and do not
+start catalog discovery on entry. A browser-storage refusal keeps the composer
+draft editable; an attempt that was never dispatched cannot become an uncertain
+delivery. Qualified retries still preserve their original Session, Turn and ingress.
+These packaged and isolated-native checks do not qualify installed-host adoption.
+
 The attached Codex reader also gives dialogue priority over consecutive tool
 events. Natural scrolling pages its bounded source window in both directions,
 preserves the reading anchor and returns to buffered live observations only at
