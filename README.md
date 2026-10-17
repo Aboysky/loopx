@@ -13,8 +13,8 @@ The open, local-first control plane for long-horizon agents and personal agent t
 
 [Get started](#try-loopx) · [Workspace](#meet-the-personal-agent-workspace) · [LHTB results](#lhtb-results) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
-<a href="https://github.com/user-attachments/assets/2293aa7e-fac0-48cb-adf7-bdf959fddd33"><img src="docs/assets/personal-workspace/research-workbench-hero.webp" alt="LoopX research workbench: recorded questions, findings and explicit plan changes in a real local workspace" width="960"></a><br>
-<sub>Recorded research and task ownership, workspace scenario replay, and labelled mechanisms and source data · <a href="https://github.com/user-attachments/assets/2293aa7e-fac0-48cb-adf7-bdf959fddd33">watch the 44-second research workbench film</a></sub>
+<a href="https://github.com/user-attachments/assets/435f9ffb-71fb-4fca-af06-ec74f84ea8a0"><img src="docs/assets/personal-workspace/research-workbench-hero.webp" alt="LoopX research workbench: recorded questions, findings and explicit plan changes in a real local workspace" width="960"></a><br>
+<sub>Start with scoped delegation, corrections and result return, then Kanban and recorded research; illustrations are labelled · <a href="https://github.com/user-attachments/assets/435f9ffb-71fb-4fca-af06-ec74f84ea8a0">watch the 44-second research workbench film</a></sub>
 
 **Start in Codex App in two steps.** Install once:
 
