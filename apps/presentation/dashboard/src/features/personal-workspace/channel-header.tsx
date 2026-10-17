@@ -5,9 +5,7 @@ import { useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
-import { discoverAgentModelOptions, type AgentModelDiscovery } from "../../data/chat";
-import { useEffect, useState } from "react";
-import { chatModelControls } from "./chat-model-controls";
+import { ChatModelMenu } from "./chat-model-menu";
 
 export function ChannelHeader({
   agents,
@@ -85,52 +83,8 @@ export function ChannelHeader({
   selectedGoalTab: WorkspaceGoalTab;
 }) {
   const { locale, t } = useWorkspaceI18n();
-  const [modelDiscovery, setModelDiscovery] = useState<AgentModelDiscovery | null>(null);
-  const [modelDiscoveryState, setModelDiscoveryState] = useState<"idle" | "loading" | "error">("idle");
-  const [discoveryRetry, setDiscoveryRetry] = useState(0);
-  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
-  const selectedModel = selectedAgentModelId ?? "";
   const statusOnly = selectedAgentId === "status-only";
   const ordinaryConversation = Boolean(selectedGoal || workspaceGrantLabel);
-  useEffect(() => {
-    if (readOnlySourceLabel || agentWorkActive || statusOnly || !ordinaryConversation) return;
-    const controller = new AbortController();
-    setModelDiscovery(null);
-    setModelDiscoveryState("loading");
-    setDiscoveryError(null);
-    void discoverAgentModelOptions(selectedAgentId, controller.signal, selectedGoal?.goalId, selectedModel)
-      .then((result) => { if (!controller.signal.aborted) { setModelDiscovery(result); setModelDiscoveryState("idle"); } })
-      .catch((error) => { if (!controller.signal.aborted) {
-        setModelDiscoveryState("error"); setDiscoveryError(error instanceof Error ? error.message : null);
-      } });
-    return () => controller.abort();
-  }, [readOnlySourceLabel, selectedAgentId, selectedGoal?.goalId, agentWorkActive, statusOnly, selectedModel, discoveryRetry, ordinaryConversation]);
-  const controls = chatModelControls(modelDiscovery, selectedModel, selectedAgentReasoningEffort, selectedAgentModelReadback);
-  const modelControl = ordinaryConversation && !statusOnly && controls.modelOptions.length ? (
-    <WorkspaceSelect
-      ariaLabel={locale === "zh-CN" ? "选择模型" : "Select model"}
-      className="personal-agent-select personal-model-select"
-      onChange={(value) => onSelectAgentModel?.(value)}
-      options={[
-        ...(!selectedModel ? [{ disabled: true, label: locale === "zh-CN" ? "选择模型" : "Choose model", value: "" }] : []),
-        ...(selectedModel && !controls.modelOptions.some((option) => option.value === selectedModel)
-          ? [{ disabled: true, label: `${selectedModel} · ${locale === "zh-CN" ? "未列入可选模型" : "Not in catalog"}`, value: selectedModel }] : []),
-        ...controls.modelOptions.map((option) => ({ label: option.value === selectedModel ? option.value : option.label, value: option.value })),
-      ]}
-      prefixLabel={locale === "zh-CN" ? "新对话模型" : "New conversation model"}
-      value={selectedModel}
-    />
-  ) : null;
-  const reasoningControl = ordinaryConversation && !statusOnly && controls.reasoningOptions.length && onSelectAgentReasoningEffort ? (
-    <WorkspaceSelect ariaLabel={locale === "zh-CN" ? "选择思考深度" : "Select reasoning effort"}
-      className="personal-agent-select personal-model-select" onChange={onSelectAgentReasoningEffort}
-      options={[
-        { value: "", label: locale === "zh-CN" ? "沿用默认" : "Use default" },
-        ...(controls.effort && !controls.reasoningOptions.some((option) => option.value === controls.effort)
-          ? [{ value: controls.effort, label: `${controls.effort} · ${locale === "zh-CN" ? "当前不可用" : "Unavailable"}`, disabled: true }] : []),
-        ...controls.reasoningOptions,
-      ]} prefixLabel={locale === "zh-CN" ? "新对话推理" : "New conversation reasoning"} value={controls.effort} />
-  ) : null;
   // The chip reports the selected executor, whose credential pays for it, and
   // the resolved model, so an executor and a model that disagree are visible
   // instead of arriving as one silent configuration.
@@ -223,24 +177,10 @@ export function ChannelHeader({
       onClick={() => statusOnly ? onSelectAgent(agents.find((agent) => agent.agentId !== "status-only" && agent.available)?.agentId ?? "status-only") : onSelectAgent("status-only")}>
       <Eye size={16} />{statusOnly ? t("header.statusOnlyAgent") : null}
     </button> : null}
-    {modelControl}
-    {reasoningControl}
-    {ordinaryConversation && !statusOnly && modelDiscovery && controls.modelOptions.length > 0 && !controls.reasoningOptions.length && selectedModel
-      ? <small className="personal-model-discovery">{locale === "zh-CN" ? "运行时未提供思考深度选项" : "Runtime provides no reasoning choices"}</small> : null}
-    {ordinaryConversation && !statusOnly && modelDiscovery?.supported === false
-      ? <small className="personal-model-discovery">{locale === "zh-CN" ? "执行器未提供可选模型与思考深度" : "Executor provides no model or reasoning choices"}</small> : null}
-    {!statusOnly ? <small className="personal-model-discovery" title={locale === "zh-CN" ? "原会话运行时回传；选项用于下次新对话，原历史和活动回合保留" : "Original Session readback; choices apply to a new conversation and preserve existing history and work"}>
-      {controls.observedModel
-        ? [locale === "zh-CN" ? `当前 ${controls.observedModel}` : `Current ${controls.observedModel}`,
-          controls.observedEffort ? `${locale === "zh-CN" ? "推理" : "Reasoning"} ${controls.observedEffort}` : null,
-          controls.observedTier ? `${locale === "zh-CN" ? "速度" : "Speed"} ${["priority", "fast"].includes(controls.observedTier) ? "Fast" : controls.observedTier}` : null].filter(Boolean).join(" · ")
-        : (locale === "zh-CN" ? "运行时尚未回传实际模型" : "Runtime has not reported the actual model")}
-    </small> : null}
-    {ordinaryConversation && !statusOnly && modelDiscoveryState === "loading" ? <small className="personal-model-discovery" role="status">{locale === "zh-CN" ? "正在读取可选配置…" : "Reading available settings…"}</small> : null}
-    {ordinaryConversation && !statusOnly && modelDiscoveryState === "error" && discoveryError ? <small className="personal-model-discovery" role="alert">{discoveryError}</small> : null}
-    {ordinaryConversation && !statusOnly && modelDiscoveryState === "error" ? <button className="personal-action-button" type="button" onClick={() => setDiscoveryRetry((retry) => retry + 1)}>
-      {locale === "zh-CN" ? "配置读取失败，重试" : "Settings unavailable · Retry"}
-    </button> : null}
+    {!statusOnly ? <ChatModelMenu key={`${selectedGoal?.goalId ?? workspaceGrantLabel ?? "steward"}:${selectedAgentId}`}
+      agentId={selectedAgentId} goalId={selectedGoal?.goalId} ordinary={ordinaryConversation}
+      model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
+      onModel={onSelectAgentModel} onEffort={onSelectAgentReasoningEffort}/> : null}
     {selectedGoal && onOpenConversationSettings ? <button className="personal-icon-button" onClick={onOpenConversationSettings}
       aria-label={locale === "zh-CN" ? "对话与模型设置" : "Conversation and model settings"} type="button"><SlidersHorizontal size={16}/></button> : null}
   </>;
