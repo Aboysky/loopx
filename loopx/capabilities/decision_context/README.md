@@ -211,16 +211,23 @@ retains only the query summary, provider-safe summaries, scores, and hashed
 references. Each recalled item is marked `untrusted_advisory` and must never be
 treated as an instruction.
 
-The Goal workspace also exposes **Capability Center → Decision evidence
-recall**. Import an existing private profile JSON, use its enabled Agent and
+The Goal workspace groups the existing capabilities under **Capability Center
+→ Memory & sources**. **Find evidence** uses a temporary profile for a question;
+**Learn from outcomes** retains saved Agent bindings and a separate legacy shared
+binding; **Reference styles** reads attributed writing material. OpenViking and
+BM25 are retrieval implementations, not extra memory switches. Explicit Agent
+preferences retain their complete current-view lifecycle, separately from ranked
+advisory results.
+
+Choose **Find evidence**, import an existing private profile JSON, use its enabled Agent and
 provider scope, then enter a question and select **Recall evidence**. Import
 only inspects the native activation rules; it does not access the provider.
 The profile is sent to the local Chat service in a bounded POST body, without
 writing a temporary profile or adding a persistent Goal configuration. The
 query reaches the selected provider only when recall is requested.
 
-The enable control changes the page's copy only. **Clear page profile and
-results**, leaving the capability, or reloading removes that copy and its hits;
+The enable control changes the page's copy only. **Clear temporary profile and
+results**, leaving Memory & sources, changing the Goal target, or reloading removes that copy and its hits;
 the original profile remains unchanged. Goal and Agent activation, request
 bounds, provider selection and ranking use the same owners as the CLI. Disabled,
 invalid or mismatched profiles cannot call a provider. A failed recall clears
@@ -228,10 +235,20 @@ old hits and shows the native status; restore the provider or corpus and retry.
 Use the optional retrieval controls for a one-off scope or result limit. Native
 scores apply only within that provider, not across providers or as confidence.
 The page does not enable automatic capture, host hooks, Reward Memory bindings,
-evidence settlement or execution authority. Its recalled text remains private
+evidence settlement or execution authority. Switching between memory purposes
+preserves the temporary profile, question and completed hits; an in-flight recall
+is cancelled when its pane is deactivated. Its recalled text remains private
 and untrusted; it is not a public artifact or a validated decision.
 
 ![Packaged workspace recall with synthetic BM25 evidence](assets/workspace-recall.en.png?raw=true)
+
+In **Learn from outcomes**, choose a registered Agent before previewing a saved
+binding. The selection survives configuration reload and apply; changing the
+Goal resets it. The legacy shared binding has its own explicit choice. The
+readback distinguishes configured automatic recall/writeback from verified
+execution of those paths.
+
+![Agent-scoped experience settings with synthetic disabled bindings](assets/workspace-experience.zh.png?raw=true)
 
 Source-built workspace with synthetic local evidence; this illustrates the
 interaction, not production adoption or retrieval-quality results.
