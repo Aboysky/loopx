@@ -13,16 +13,20 @@ export function conversationOrder(items: WorkspaceTimelineItem[]): WorkspaceTime
     && item.message.sourceSessionId && item.message.sourceTurnId
     ? JSON.stringify([item.message.sourceSessionId, item.message.sourceTurnId]) : undefined;
   const requestTimes = new Map<string, number>();
+  const latestRequestTimes = new Map<string, number>();
   for (const item of items) {
     const key = turnKey(item);
     if (key && item.kind === "message" && item.message.role === "user" && Number.isFinite(time(item))) {
       requestTimes.set(key, Math.min(requestTimes.get(key) ?? Infinity, time(item)));
+      latestRequestTimes.set(key, Math.max(latestRequestTimes.get(key) ?? -Infinity, time(item)));
     }
   }
-  // Admission precedes the durable user message. The optimistic work row has
-  // a client timestamp, so its clock alone cannot put it ahead of its request.
-  const pendingRequest = (item: WorkspaceTimelineItem) => item.kind === "message" && item.message.pending
-    ? requestTimes.get(turnKey(item) ?? "") : undefined;
+  // Optimistic timestamps never outrank same-Turn request order. While working,
+  // follow the initial request; before terminal readback, follow its last input.
+  // Stored commentary retains its actual timestamp, including before steering.
+  const pendingRequest = (item: WorkspaceTimelineItem) => item.kind === "message"
+    && item.message.role !== "user" && !item.message.sourceMessageId
+    ? (item.message.pending ? requestTimes : latestRequestTimes).get(turnKey(item) ?? "") : undefined;
   const orderedTime = (item: WorkspaceTimelineItem) => {
     const requestTime = pendingRequest(item);
     return requestTime === undefined ? time(item) : Math.max(time(item), requestTime);

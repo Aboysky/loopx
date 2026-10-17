@@ -98,7 +98,7 @@ import {
 } from "../features/personal-workspace/agent-family";
 import { PersonalWorkspacePage } from "../features/personal-workspace/personal-workspace-page";
 import { modelSelectionFromReadback } from "../features/personal-workspace/chat-model-controls";
-import { MIN_SEPARATE_ANSWER_LENGTH, visibleAgentMessage } from "../features/personal-workspace/answer-text";
+import { visibleAgentMessage } from "../features/personal-workspace/answer-text";
 import { useWorkspaceI18n, type WorkspaceTranslate } from "../features/personal-workspace/i18n";
 import {
   agentStatusSentence,
@@ -2393,14 +2393,14 @@ function PersonalGoalHome({
         if (sessionIds.current.get(key) === sessionId && !newSessionRequired.current.has(key)) {
           recordSessionAdmission(targetContextId, stored.session);
         }
-        if ((response.message || streamedText).length >= MIN_SEPARATE_ANSWER_LENGTH) {
-          const answer = stored.messages.find((item) =>
-            item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
-          if (answer) updateConversationMessage(targetContextId, completedMessageId, {
-            sourceMessageId: answer.message_id, sourceSessionId: sessionId,
-            collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
-          });
-        }
+        const answer = stored.messages.find((item) =>
+          item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
+        if (answer) updateConversationMessage(targetContextId, completedMessageId, {
+          sourceMessageId: answer.message_id, sourceSessionId: sessionId,
+          sourceCreatedAt: answer.created_at,
+          collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
+        });
+        if (targetContextId === contextId) void conversationHistory.refresh().catch(() => {});
       }).catch(() => { /* The original conversation remains readable. */ });
       const todoProposals = response.proposals.filter(isTodoProposal);
       // A scoped manager Todo can use the existing typed action card. Legacy
@@ -2961,23 +2961,11 @@ function PersonalGoalHome({
             if (!binding?.sessionId) throw new Error("当前会话不可用，追加指令未发送，草稿已保留。");
             // The service owns exact-turn admission and durable retry. A delivered
             // ingress may be read back after completion; never retarget it locally.
-            const receipt = await steerChatTurn(binding.sessionId, turnId, message, ingressId);
-            if (receipt.created === false) {
-              // A replay reads an existing delivery; its message belongs to the
-              // stored transcript, not a second optimistic user bubble.
-              if (targetContextId === contextId) await conversationHistory.refresh();
-              return;
-            }
-            const id = managerMessageId.current++;
-            setMessagesByContext(current => {
-              const messages = current[targetContextId] ?? [];
-              if (messages.some(item => item.sourceMessageId === `steer:${ingressId}`)) return current;
-              return { ...current, [targetContextId]: [...messages, {
-                id, sourceMessageId: `steer:${ingressId}`, sourceTurnId: turnId,
-                sourceSessionId: binding.sessionId, sourceCreatedAt: new Date().toISOString(),
-                lines: [], role: "user", text: message,
-              }] };
-            });
+            await steerChatTurn(binding.sessionId, turnId, message, ingressId);
+            // Both first delivery and replay read the canonical message id.
+            // A fabricated optimistic id would duplicate it on history recovery.
+            // Read failure cannot turn confirmed delivery into a failed send.
+            if (targetContextId === contextId) void conversationHistory.refresh().catch(() => {});
           },
           onOpenRunSession: async (run) => {
             if (!run.sessionId) return;
