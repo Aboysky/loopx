@@ -570,6 +570,12 @@ composer, without recording an uncertain delivery for an attempt that was never
 dispatched. A genuinely uncertain request still retries its exact durable identity.
 This does not widen project grants or authorize another Session.
 
+Queued acknowledgements do not show execution duration or completion. Short
+answers and steering instructions reconcile their canonical message identities
+and timestamps as well as long answers; an admission/history race cannot add
+a second copy. Before readback, a terminal work row uses its observed completion
+rather than its preparation time. Refresh preserves the same conversation order.
+
 ![Goal Chat model and request provenance](../development/assets/chat-observability/first-screen.png)
 
 ![Attached conversation and folded work activity](../development/assets/chat-observability/attached-history.png)

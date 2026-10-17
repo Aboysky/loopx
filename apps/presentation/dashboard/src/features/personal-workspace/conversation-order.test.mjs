@@ -40,3 +40,6 @@ assert.deepEqual(conversationOrder([completedBeforeReadback, correction, request
 const storedCommentary = {...completedBeforeReadback, message: {...completedBeforeReadback.message, sourceMessageId: "stored-commentary", createdAt: "2026-10-01T02:00:00.100Z"}};
 assert.deepEqual(conversationOrder([storedCommentary, correction, request]).map(i=>i.id),
   ["request", "working", "correction"], "Stored commentary keeps its actual order rather than moving behind later instructions");
+
+const queuedReply = {id: "queued-reply", kind: "message", message: {id:"queued-reply", role:"assistant", pending:false, sourceSessionId:"one", sourceTurnId:"queued-turn", createdAt:"2026-10-01T02:00:00.500Z", endedAt:Date.parse("2026-10-01T02:00:02Z"), text:"done"}};
+assert.deepEqual(conversationOrder([queuedReply, correction]).map(i=>i.id), ["correction", "queued-reply"], "Before stored readback, a completed queued reply uses its observed end rather than preparation time");

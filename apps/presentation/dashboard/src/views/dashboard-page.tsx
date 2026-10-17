@@ -2156,9 +2156,10 @@ function PersonalGoalHome({
         // the live row when its exact persisted identity becomes known.
         message.id === messageId || !update.sourceMessageId || !update.sourceSessionId
           || message.sourceMessageId !== update.sourceMessageId || message.sourceSessionId !== update.sourceSessionId
-      ).map((message) => message.id === messageId ? { ...message, ...update,
+      ).map((message) => message.id === messageId ? { ...message,
           ...(update.text !== undefined || update.activity !== undefined ? { updatedAt: Date.now() } : {}),
           ...(message.pending && update.pending === false ? { preparing: false, endedAt: Date.now() } : {}),
+          ...update,
         } : message),
     }));
   }
@@ -2315,6 +2316,7 @@ function PersonalGoalHome({
         onPhase: (phase: string, turnId: string) => {
           if (submittedTurnId !== turnId) updateConversationMessage(targetContextId, userMessageId, {
             sourceTurnId: turnId, sourceSessionId: sessionId,
+            ...(route?.queue ? {sourceMessageId: undefined} : {}),
           });
           submittedTurnId = turnId;
           updateConversationMessage(targetContextId, streamingMessageId, {
@@ -2324,7 +2326,7 @@ function PersonalGoalHome({
           if (route?.queue) {
             if (phase === "turn.queued") {
               updateConversationMessage(targetContextId, streamingMessageId, {
-                pending: false, preparing: false,
+                pending: false, preparing: false, endedAt: undefined,
                 text: locale === "zh-CN" ? "已排队，等待当前回合结束。" : "Queued for the next turn.", activity: [],
               });
               return;
@@ -2332,7 +2334,7 @@ function PersonalGoalHome({
             // Queued is a durable receipt, not observed execution. Only the
             // original worker's start/stream may take the active controls.
             if (phase === "turn.started") {
-              updateConversationMessage(targetContextId, streamingMessageId, { pending: true, text: "" });
+              updateConversationMessage(targetContextId, streamingMessageId, { pending: true, startedAt: Date.now(), endedAt: undefined, text: "" });
               const previousActive = activeTurnIds.current.get(targetContextId);
               // Replaying an acknowledged queued Turn can include a historical
               // start. Its original Session, not that replay, owns live controls.

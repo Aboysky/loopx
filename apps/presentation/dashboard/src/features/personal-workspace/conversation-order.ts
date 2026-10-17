@@ -6,9 +6,15 @@ export function conversationOrder(items: WorkspaceTimelineItem[]): WorkspaceTime
     const time = value ? Date.parse(value) : NaN;
     return Number.isFinite(time) ? time : -Infinity;
   };
-  const time = (item: WorkspaceTimelineItem) => item.kind === "proposal"
-    ? dated(item.proposal.createdAt)
-    : item.kind === "message" ? dated(item.message.createdAt) : -Infinity;
+  const time = (item: WorkspaceTimelineItem) => {
+    if (item.kind === "proposal") return dated(item.proposal.createdAt);
+    if (item.kind !== "message") return -Infinity;
+    const stored = dated(item.message.createdAt);
+    // Until the immutable message arrives, a terminal reply belongs at its
+    // observed completion, not at the time we prepared or queued the request.
+    return !item.message.sourceMessageId && !item.message.pending && item.message.endedAt !== undefined
+      ? Math.max(stored, item.message.endedAt) : stored;
+  };
   const turnKey = (item: WorkspaceTimelineItem) => item.kind === "message"
     && item.message.sourceSessionId && item.message.sourceTurnId
     ? JSON.stringify([item.message.sourceSessionId, item.message.sourceTurnId]) : undefined;
