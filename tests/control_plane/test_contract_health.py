@@ -12,6 +12,9 @@ from loopx.control_plane.goals.contract_health import (
     project_contract_health_for_goal,
 )
 from loopx.control_plane.quota.decision_summary import goal_status_health_ok
+from loopx.control_plane.quota.should_run import (
+    _apply_missing_state_health_guidance,
+)
 from loopx.quota import build_quota_should_run
 
 
@@ -456,3 +459,98 @@ def test_quota_does_not_authorize_a_goal_whose_declared_state_is_missing() -> No
         f"preview `loopx retire-global-goal --goal-id {GOAL_A}`"
     )
     assert decision["interaction_contract"]["agent_channel"]["must_attempt"] is False
+
+
+def _missing_state_status():
+    return {
+        "global_registry": {
+            "ok": True,
+            "findings": [
+                {
+                    "kind": "state_file_missing",
+                    "severity": "action",
+                    "goal_id": GOAL_A,
+                    "message": f"`{GOAL_A}` active state file is missing",
+                    "recommended_action": (
+                        f"preview `loopx retire-global-goal --goal-id {GOAL_A}`"
+                    ),
+                }
+            ],
+        }
+    }
+
+
+def test_missing_state_guidance_rewrites_only_the_eligible_health_skip() -> None:
+    payload = {
+        "should_run": False,
+        "status_health_ok": False,
+        "effective_action": "quota_skip",
+        "state": "eligible",
+        "safe_bypass_allowed": False,
+        "reason": "status or contract health is not ok; skip automatic compute",
+        "recommended_action": "run the first read-only adapter tick",
+        "interaction_contract": {"mode": "skip"},
+    }
+
+    _apply_missing_state_health_guidance(
+        payload,
+        _missing_state_status(),
+        goal_id=GOAL_A,
+    )
+
+    assert payload["state"] == "blocked_health"
+    assert payload["status"] == "state_file_missing"
+    assert payload["source"] == "global_registry"
+    assert payload["reason"] == (
+        f"preview `loopx retire-global-goal --goal-id {GOAL_A}`"
+    )
+    assert payload["recommended_action"] == payload["reason"]
+    assert payload["effective_action"] == "quota_skip"
+    assert payload["interaction_contract"] == {"mode": "skip"}
+
+
+def test_missing_state_guidance_keeps_other_skip_routes_unchanged() -> None:
+    payloads = [
+        {
+            "should_run": False,
+            "status_health_ok": True,
+            "effective_action": "operator_gate_notify",
+            "state": "operator_gate",
+            "user_channel": {"notify": "NOTIFY", "action_required": True},
+        },
+        {
+            "should_run": False,
+            "status_health_ok": False,
+            "effective_action": "terminal_no_followup",
+            "state": "terminal_no_followup",
+            "interaction_contract": {"mode": "terminal_no_followup"},
+        },
+        {
+            "should_run": False,
+            "status_health_ok": False,
+            "effective_action": "monitor_quiet_skip",
+            "state": "monitor_quiet_skip",
+        },
+        {
+            "should_run": False,
+            "status_health_ok": False,
+            "effective_action": "quota_skip",
+            "state": "eligible",
+            "safe_bypass_allowed": True,
+        },
+        {
+            "should_run": True,
+            "status_health_ok": False,
+            "effective_action": "normal_run",
+            "state": "eligible",
+        },
+    ]
+
+    for payload in payloads:
+        before = json.loads(json.dumps(payload))
+        _apply_missing_state_health_guidance(
+            payload,
+            _missing_state_status(),
+            goal_id=GOAL_A,
+        )
+        assert payload == before

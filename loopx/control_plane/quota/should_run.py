@@ -483,11 +483,21 @@ def _apply_missing_state_health_guidance(
 
     The live quota lane can still carry the generic "run the first adapter
     tick" action while status has already reported the Goal's active state file
-    as missing. Replace that guidance on a skip so the packet points at the
-    same reconnect/retire repair as the status finding.
+    as missing. Replace that guidance on the eligible health skip so the packet
+    points at the same reconnect/retire repair as the status finding. Other
+    skip routes (operator gate, terminal closure, monitor quiet, automation
+    upgrade) keep their own channel and interaction contract.
     """
 
     if payload.get("should_run") is True:
+        return
+    if payload.get("status_health_ok") is not False:
+        return
+    if payload.get("effective_action") != EffectiveAction.QUOTA_SKIP.value:
+        return
+    if payload.get("state") != "eligible":
+        return
+    if payload.get("safe_bypass_allowed") is True:
         return
     blocker = _goal_missing_state_blocker(status_payload, goal_id=goal_id)
     if blocker is None:
