@@ -13,8 +13,8 @@
 
 [开始使用](#试用-loopx) · [个人工作区](#认识个人-agent-工作区) · [LHTB 结果](#lhtb-results) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
-<a href="https://github.com/user-attachments/assets/435f9ffb-71fb-4fca-af06-ec74f84ea8a0"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 研发工作台：真实本机工作区中记录的问题、结论与显式转向，沿时间线保留研究过程" width="960"></a><br>
-<sub>从委派、纠正和结果回传开始，接入看板与真实研究记录；示意部分单独标注 · <a href="https://github.com/user-attachments/assets/435f9ffb-71fb-4fca-af06-ec74f84ea8a0">观看 44 秒研发工作台影片</a></sub>
+<a href="https://github.com/user-attachments/assets/8315c5d1-857f-4527-b254-68f6a06baa29"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 研发工作台：真实本机工作区中记录的问题、结论与显式转向，沿时间线保留研究过程" width="960"></a><br>
+<sub>从目标开场，进入委派、纠正与原路回传，再看 Kanban 和真实研究记录；示意部分单独标注 · <a href="https://github.com/user-attachments/assets/8315c5d1-857f-4527-b254-68f6a06baa29">观看 44 秒研发工作台影片</a></sub>
 
 **两步在 Codex App 里用上 LoopX。** 先安装一次：
 
