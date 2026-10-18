@@ -785,6 +785,7 @@ class ChatRequestHandler(
         )
 
     def _session_turn(self, session_id: str) -> None:
+        self.server.runtime_controller.recover_exited_turn(session_id)
         session = self.server.chat_store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             self._send_error(
@@ -908,6 +909,7 @@ class ChatRequestHandler(
 
     def _session_snapshot(self, session_id: str) -> None:
         try:
+            self.server.runtime_controller.recover_exited_turn(session_id)
             self._send_json(project_chat_session_snapshot(
                 self.server.runtime_root, self.server.chat_store, session_id,
                 registry=self.server.registry_path))
@@ -934,6 +936,7 @@ class ChatRequestHandler(
     def _turn_events(self, session_id: str, turn_id: str) -> None:
         from .presentation.codex_activity import public_activity_event
 
+        self.server.runtime_controller.recover_exited_turn(session_id, turn_id)
         if self.server.chat_store.load_turn(session_id, turn_id) is None:
             self._send_error("chat turn was not found", status=404)
             return
@@ -1764,7 +1767,7 @@ def serve_chat(
             if isinstance(session.get("steward_context"), dict) else authorized_manager_goal_ids(
             build_lark_goal_topic_runtime_snapshot(
                 registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
-            ), session, runtime_root=runtime_root,
+            ), session, runtime_root=runtime_root, registry_path=resolved_registry_path,
         )),
         codex_bin=codex_bin,
         claude_bin=claude_bin,

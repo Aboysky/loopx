@@ -1044,8 +1044,12 @@ export async function streamChatTurn(
   const stallTimeoutMs = options.stallTimeoutMs ?? CHAT_STREAM_STALL_TIMEOUT_MS;
   let cursor = "";
   let attempts = 0;
+  let stalls = 0;
   let terminal = false;
-  while (!terminal && attempts < 4) {
+  // An owned desktop service can need several seconds to restart. Read-only
+  // reconnects cover that window (7.75s backoff), without resubmitting a Turn.
+  // Keep the existing four-watchdog limit for genuinely silent connections.
+  while (!terminal && attempts < 6) {
     signal?.throwIfAborted();
     const origin = typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
     const url = new URL(chatApiUrl(eventsUrl), origin);
@@ -1094,20 +1098,20 @@ export async function streamChatTurn(
         }
         if (done || terminal) break;
       }
-      attempts = terminal ? attempts : attempts + 1;
+      if (!terminal) throw new ChatApiError("Agent 事件流连接已断开。", {});
     } catch (error) {
       if (signal?.aborted) throw error;
       attempts += 1;
-      if (attempts >= 4) {
-        // A stalled connection is a transport failure, not a caller abort, so
-        // it ends with the same typed error as any other exhausted reconnect.
-        if (stalled) {
-          throw new ChatApiError("Agent 事件流连接已断开。", {
-            reconnect_attempts: attempts,
-            stall_timeout_ms: stallTimeoutMs,
-          });
-        }
-        throw error;
+      if (stalled) stalls += 1;
+      if (attempts >= 6 || stalls >= 4) {
+        // Fetch refusals (including WebKit's raw "Load failed") and clean EOF
+        // are transport failures too. Preserve the Session/Turn recovery route
+        // through the receive wrapper instead of presenting them as an outcome.
+        throw new ChatApiError("Agent 事件流连接已断开。", {
+          ...(error instanceof ChatApiError ? error.payload : {}),
+          reconnect_attempts: attempts,
+          ...(stalled ? { stall_timeout_ms: stallTimeoutMs } : {}),
+        });
       }
       // A local phase keeps the pending reply honest while the reader resumes
       // from its cursor. It carries no event id, so the cursor is unchanged.
@@ -2302,6 +2306,7 @@ export async function fetchLarkGroupChats(appRef: string, query?: string) {
 export type LarkGoalConnection = {
   conversation_kind?: "goal" | "manager";
   turn_trigger?: "addressed" | "human_messages";
+  read_goal_scope?: "all_registered" | "selected" | null;
   agent_id: string | null;
   connection_id: string;
   app_label: string;
@@ -2334,6 +2339,7 @@ const larkConnectionsSchema = z.object({
   connections: z.array(z.object({
     conversation_kind: z.enum(["goal", "manager"]).default("goal"),
     turn_trigger: z.enum(["addressed", "human_messages"]).default("addressed"),
+    read_goal_scope: z.enum(["all_registered", "selected"]).nullable().default("selected"),
     agent_id: z.string().nullable().default(null),
     connection_id: z.string(),
     app_label: z.string(),
@@ -2381,6 +2387,7 @@ export async function fetchLarkConnections() {
 export async function connectLarkGoalTopic(options: {
   conversationKind?: "goal" | "manager";
   turnTrigger?: "addressed" | "human_messages";
+  readGoalScope?: "all_registered" | "selected";
   agentBindings?: Array<{ agentId: string; appRef: string }>;
   agentId?: string;
   appRef?: string;
@@ -2409,6 +2416,7 @@ export async function connectLarkGoalTopic(options: {
         ...(options.connectionId ? { connection_id: options.connectionId } : {}),
         conversation_kind: options.conversationKind ?? "goal",
         ...(options.turnTrigger ? { turn_trigger: options.turnTrigger } : {}),
+        ...(options.readGoalScope ? { read_goal_scope: options.readGoalScope } : {}),
         capture_scope: options.captureScope,
         chat_id: options.chatId,
         chat_name: options.chatName,
@@ -2511,6 +2519,9 @@ const privateConversationSchema = z.object({
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
   audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
   pending_count: z.number().int(), recovery_count: z.number().int(),
+  ingress: z.object({status: z.enum(["unobserved", "verified", "gap", "unavailable"]),
+    last_checked_at: z.number().nullable(), last_complete_at: z.number().nullable(),
+    source_gap_count: z.number().int().nonnegative(), without_reply_count: z.number().int().nonnegative()}).optional(),
   owner_attention: z.discriminatedUnion("available", [
     z.object({available: z.literal(true), enabled: z.boolean(), revision: z.number().int(),
       last_checked_at: z.number().nullable(), error_code: z.string().nullable(),
