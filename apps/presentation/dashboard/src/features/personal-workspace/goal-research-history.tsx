@@ -5,6 +5,7 @@ import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, R
 import {buildExploreTimeline, parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
+import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
@@ -107,7 +108,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         let cursor = "";
         do {
           const query = new URLSearchParams({goal_id: goalId, view: "history", ...(cursor ? {cursor} : {})});
-          const page = parseExploreHistoryPage(await requestJson<unknown>(readSourceUrl ? new URL(`/api/chat/explore-results?${query}`, readSourceUrl).toString() : `/api/chat/explore-results?${query}`, {signal: controller.signal}), goalId);
+          const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), goalId);
           if (total !== -1 && total !== page.total) throw new Error("Explore history snapshot changed");
           total = page.total; events.push(...page.items);
           if (events.length > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
