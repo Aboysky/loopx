@@ -44,8 +44,13 @@ def _script(config: reader.ReaderConfig, url: str, max_posts: int) -> str:
         "if(!match)continue;const source='https://x.com/'+match[1]+'/status/'+match[2];"
         "if(seen.has(source))continue;seen.add(source);"
         "const text=article.querySelector('[data-testid=\"tweetText\"]')?.innerText||'';"
+        # Keep the UTF-16 budget without leaving a surrogate pair half-written;
+        # an unpaired surrogate cannot survive the MCP response's UTF-8 encoding.
+        f"let end=Math.min(text.length,{MAX_POST_CHARS});"
+        "if(end<text.length&&text.charCodeAt(end-1)>=0xD800&&text.charCodeAt(end-1)<=0xDBFF"
+        "&&text.charCodeAt(end)>=0xDC00&&text.charCodeAt(end)<=0xDFFF)end--;"
         "posts.push({url:source,author_handle:match[1],published_at:time.getAttribute('datetime'),"
-        f"excerpt:text.slice(0,{MAX_POST_CHARS}),excerpt_truncated:text.length>{MAX_POST_CHARS},"
+        "excerpt:text.slice(0,end),excerpt_truncated:end<text.length,"
         "media_present:!!article.querySelector('video,[data-testid=\"tweetPhoto\"]')});}"
         "const empty=Array.from(document.querySelectorAll('[data-testid=\"emptyState\"]'))"
         ".some(n=>n.getClientRects().length);"

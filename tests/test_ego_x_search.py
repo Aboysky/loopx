@@ -12,32 +12,7 @@ from loopx.extensions import ego_source_reader as reader
 from loopx.extensions import ego_x_search as search
 
 
-@pytest.fixture
-def configured(monkeypatch, tmp_path):
-    executable = tmp_path / "ego-browser"
-    executable.write_text("installed fixture")
-    monkeypatch.setenv("LOOPX_EGO_READ_BIN", str(executable))
-    monkeypatch.setenv("LOOPX_EGO_READ_TASK_SPACE", "7")
-    monkeypatch.setenv("LOOPX_EGO_READ_PAGE", "p2")
-    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "https://x.com")
-
-
-def browser(monkeypatch, posts, *, empty=False, ownership="agent", redirect=None):
-    """Run the actual extraction in Node against independent source fixtures.
-
-    Shared URL/readiness mechanics are covered by test_ego_source_reader; this
-    harness executes the X-specific readiness predicate and DOM extraction.
-    """
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node required for generated browser extraction")
-    observations = []
-    real_run = subprocess.run
-
-    def run(_executable, script, **_kwargs):
-        inputs = json.dumps({"posts": posts, "empty": empty, "ownership": ownership,
-                            "redirect": redirect, "script": script})
-        harness = r"""
+_BROWSER_HARNESS = r"""
 const input=INPUT;
 let href='',pageAccess=0,domReads=0,waits=0;
 const articles=input.posts.map(post=>({
@@ -68,7 +43,35 @@ async function taskSpace(){pageAccess++;return {page(){return p;}};}
 (async()=>{await eval('(async()=>{'+input.script+'})()');})()
  .catch(e=>{console.error(e.message);process.exitCode=1;})
  .finally(()=>console.log('OBS:'+JSON.stringify({pageAccess,domReads})));
-""".replace("INPUT", inputs, 1)
+"""
+
+
+@pytest.fixture
+def configured(monkeypatch, tmp_path):
+    executable = tmp_path / "ego-browser"
+    executable.write_text("installed fixture")
+    monkeypatch.setenv("LOOPX_EGO_READ_BIN", str(executable))
+    monkeypatch.setenv("LOOPX_EGO_READ_TASK_SPACE", "7")
+    monkeypatch.setenv("LOOPX_EGO_READ_PAGE", "p2")
+    monkeypatch.setenv("LOOPX_EGO_READ_ORIGINS", "https://x.com")
+
+
+def browser(monkeypatch, posts, *, empty=False, ownership="agent", redirect=None):
+    """Run the actual extraction in Node against independent source fixtures.
+
+    Shared URL/readiness mechanics are covered by test_ego_source_reader; this
+    harness executes the X-specific readiness predicate and DOM extraction.
+    """
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node required for generated browser extraction")
+    observations = []
+    real_run = subprocess.run
+
+    def run(_executable, script, **_kwargs):
+        inputs = json.dumps({"posts": posts, "empty": empty, "ownership": ownership,
+                            "redirect": redirect, "script": script})
+        harness = _BROWSER_HARNESS.replace("INPUT", inputs, 1)
         result = real_run([node, "-e", harness], capture_output=True, text=True, timeout=10)
         observations.append(json.loads(next(line[4:] for line in result.stdout.splitlines()
                                             if line.startswith("OBS:"))))
@@ -166,8 +169,18 @@ def test_malformed_provider_payload_is_not_a_valid_search(monkeypatch, posts):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Integration fixture emulates a POSIX Ego executable")
-def test_stdio_tools_share_auto_space_and_shutdown_owner(tmp_path):
-    """Actual MCP entrypoint, synthetic browser: two tools, one lifecycle owner."""
+@pytest.mark.parametrize("text,excerpt,truncated", [
+    ("x" * 3998 + "🙂", "x" * 3998 + "🙂", False),
+    ("x" * 3998 + "🙂tail", "x" * 3998 + "🙂", True),
+    ("x" * 3999 + "🙂tail", "x" * 3999, True),
+    ("x" * 4000 + "🙂tail", "x" * 4000, True),
+    ("🙂" * 2001, "🙂" * 2000, True),
+], ids=["fits", "pair-before-limit", "pair-crosses-limit", "pair-after-limit", "all-emoji"])
+def test_stdio_tools_share_auto_space_and_shutdown_owner(tmp_path, text, excerpt, truncated):
+    """Execute extraction and real MCP serialization; retain one lifecycle owner."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node required for generated browser extraction")
     import asyncio
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -175,7 +188,7 @@ def test_stdio_tools_share_auto_space_and_shutdown_owner(tmp_path):
     events = tmp_path / "events.jsonl"
     executable = tmp_path / "ego-browser"
     executable.write_text(f"#!{sys.executable}\n" + r'''
-import json, re, sys
+import json, re, subprocess, sys
 from pathlib import Path
 events=Path(EVENTS)
 script=sys.argv[-1]
@@ -186,18 +199,27 @@ if kind=='create':
 elif kind=='read':
     url=json.loads(re.search(r'const requestedUrl=("(?:[^"\\]|\\.)*");',script)[1])
     search='const posts=[]' in script
-    text=json.dumps({'posts':[{'url':'https://x.com/maker/status/123','author_handle':'maker',
-      'published_at':None,'excerpt':'source','excerpt_truncated':False,'media_present':False}],
-      'empty_state_observed':False,'more_loaded_posts':False}) if search else 'source'
+    if search:
+        inputs=json.dumps({'posts':[{'url':'https://x.com/maker/status/123','text':POST_TEXT}],
+          'empty':False,'ownership':'agent','redirect':None,'script':script})
+        harness=BROWSER_HARNESS.replace('INPUT', inputs, 1)
+        result=subprocess.run([NODE, '-e', harness], capture_output=True, text=True,
+          encoding='utf-8', timeout=10)
+        print(result.stdout, end='')
+        print(result.stderr, end='', file=sys.stderr)
+        sys.exit(result.returncode)
     print('LOOPX_PUBLIC_SOURCE:'+json.dumps({'url':url,'canonical_url':url,'requested_url':url,
-      'title':'Source','text':text,'truncated':False,'image_count':0,'images':[]}))
-'''.replace("EVENTS", repr(str(events))))
+      'title':'Source','text':'source','truncated':False,'image_count':0,'images':[]}))
+'''.replace("EVENTS", repr(str(events)))
+       .replace("POST_TEXT", repr(text))
+       .replace("BROWSER_HARNESS", repr(_BROWSER_HARNESS))
+       .replace("NODE", repr(node)))
     executable.chmod(0o700)
 
     async def exercise():
         params = StdioServerParameters(command=sys.executable,
             args=["-m", "loopx.extensions.ego_source_reader"], env={
-                **os.environ, "LOOPX_EGO_READ_BIN": str(executable),
+                **os.environ, "LOOPX_USAGE_PING": "0", "LOOPX_EGO_READ_BIN": str(executable),
                 "LOOPX_EGO_READ_TASK_SPACE": "auto", "LOOPX_EGO_READ_PAGE": "p1",
                 "LOOPX_EGO_READ_ORIGINS": "https://x.com"})
         async with stdio_client(params) as (read, write):
@@ -205,10 +227,21 @@ elif kind=='read':
                 await session.initialize()
                 tools = {t.name: t for t in (await session.list_tools()).tools}
                 assert tools["search_x"].annotations.readOnlyHint
-                for name, args in [("search_x", {"query": "topic"}),
+                for name, args in [("search_x", {"query": "topic", "max_posts": 1}),
                                    ("read_public_url", {"url": "https://x.com/maker/status/123"})]:
                     result = await session.call_tool(name, args)
-                    assert json.loads(result.content[0].text)["ok"]
+                    assert not result.isError, result.content
+                    payload = json.loads(result.content[0].text)
+                    assert payload["ok"]
+                    if name == "search_x":
+                        assert payload["post_count"] == 1
+                        post = payload["posts"][0]
+                        assert post["url"] == "https://x.com/maker/status/123"
+                        assert post["excerpt"] == excerpt
+                        assert post["excerpt_truncated"] is truncated
+                        assert len(post["excerpt"].encode("utf-16-le")) <= 8000
+                    else:
+                        assert payload["text"] == "source"
 
     asyncio.run(exercise())
     kinds = [json.loads(line)["kind"] for line in events.read_text().splitlines()]
