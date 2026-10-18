@@ -1,4 +1,4 @@
-"""Owner-only read transport from pinned containers to the existing Goal UI.
+"""Existing Goal UI over prepared, read-only Goal source access.
 
 The source's native CLI owns status; the Explore owner validates its log. This
 adapter never connects, creates or copies an execution Goal/registry. Each
@@ -9,98 +9,18 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
-from pathlib import Path, PurePosixPath
-import re
+from pathlib import Path
 import subprocess
-from threading import Lock, Thread
-from time import monotonic
+from threading import Thread
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from ..capabilities.explore.result_log import validate_explore_result_event
-from ..chat_completed_todos import CompletedTodoPages
+from ..capabilities.explore.result_log import explore_history_rows
+from ..control_plane.status.goal_source import GoalSource, GoalSourceReader, SourceScopeError
 from ..status_server import cors_response_headers, is_loopback_host, is_loopback_origin
 from .chat_bundle import validate_bundle
-from .explore_results_api import explore_history_rows
-
-
-# Only this specific log is read, using stdlib in the source's Python. Paths
-# come from an owner-prepared manifest, never an HTTP query or browser script.
-_READ_LOG = """
-import pathlib, sys
-root = pathlib.Path(sys.argv[1]).resolve()
-path = (root / 'goals' / sys.argv[2] / 'explore-result-log.jsonl').resolve()
-path.relative_to(root)
-if path.exists():
-    with path.open('rb') as f:
-        data = f.read(16 * 1024 * 1024 + 1)
-    if len(data) > 16 * 1024 * 1024: raise ValueError('log too large')
-    sys.stdout.buffer.write(data)
-"""
-
-
-@dataclass(frozen=True)
-class ContainerSource:
-    id: str
-    label: str
-    container_id: str
-    goal_id: str
-    registry: str
-    runtime_root: str
-    cli: str
-    python: str
-    path: str
-
-    @classmethod
-    def parse(cls, raw):
-        source = cls(**raw)
-        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}", source.id):
-            raise ValueError("Invalid source id")
-        if not re.fullmatch(r"[0-9a-f]{64}", source.container_id):
-            raise ValueError("A full pinned container id is required")
-        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}", source.goal_id):
-            raise ValueError("Invalid source Goal id")
-        if not source.label.strip() or len(source.label) > 48:
-            raise ValueError("Source label must contain 1–48 characters")
-        if any(not PurePosixPath(value).is_absolute() for value in
-               (source.registry, source.runtime_root, source.cli, source.python)):
-            raise ValueError("Source paths must be absolute")
-        if not source.path or "\x00" in source.path:
-            raise ValueError("Source PATH is required")
-        return source
-
-    def read(self):
-        prefix = ["docker", "exec", "-e", "LOOPX_USAGE_PING=0", "-e", f"PATH={self.path}", self.container_id]
-        status = json.loads(_run(prefix + [self.cli, "--registry", self.registry,
-            "--runtime-root", self.runtime_root, "--format", "json", "status", "--goal-id", self.goal_id]))
-        if not isinstance(status, dict) or not isinstance(status.get("run_history"), dict):
-            raise ValueError("Invalid native status")
-        goals = status.get("run_history", {}).get("goals", [])
-        if (status.get("ok") is not True or not isinstance(goals, list) or len(goals) != 1
-                or not isinstance(goals[0], dict) or goals[0].get("id") != self.goal_id):
-            raise ValueError("The source no longer exposes the selected Goal")
-        log = _run(prefix + [self.python, "-c", _READ_LOG, self.runtime_root, self.goal_id])
-        events = []
-        for line in log.splitlines():
-            if not line.strip():
-                continue
-            event = json.loads(line)
-            if not isinstance(event, dict):
-                raise ValueError("Invalid native Explore record")
-            events.append(validate_explore_result_event(event, expected_goal_id=self.goal_id))
-        return status, explore_history_rows(events)
-
-
-def _run(argv):
-    # The timeout bounds dead/disconnected sources. Never return stderr, which
-    # may contain native private paths or command diagnostics, over HTTP.
-    result = subprocess.run(argv, capture_output=True, check=True, timeout=25)
-    if len(result.stdout) > 16 * 1024 * 1024:
-        raise ValueError("Source read exceeds the display limit")
-    return result.stdout.decode("utf-8")
 
 
 class RuntimeWorkspaceServer(ThreadingHTTPServer):
@@ -109,25 +29,13 @@ class RuntimeWorkspaceServer(ThreadingHTTPServer):
     def __init__(self, source, assets_dir, *, port=0):
         super().__init__(("127.0.0.1", port), RuntimeWorkspaceHandler)
         self.source = source
+        self.reader = GoalSourceReader(source, history_projector=explore_history_rows)
         self.assets_dir = Path(assets_dir).resolve()
-        self.pages = CompletedTodoPages()
         self.catalog = []
-        self._lock = Lock()
-        self._snapshot = None
-        self._read_at = 0.0
 
     @property
     def status_url(self):
-        return f"http://127.0.0.1:{self.server_port}/status.json"
-
-    def snapshot(self):
-        with self._lock:
-            if self._snapshot is None or monotonic() - self._read_at >= 2:
-                # A failed new read must never fall back to the older snapshot.
-                self._snapshot = None
-                self._snapshot = self.source.read()
-                self._read_at = monotonic()
-            return self._snapshot
+        return f"http://127.0.0.1:{self.server_port}/status.json?source_namespace={self.source.namespace}"
 
 
 class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
@@ -171,22 +79,39 @@ class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
         if not self._allowed():
             return
         parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = parse_qs(parsed.query, keep_blank_values=True)
         if parsed.path.startswith("/chat/") or parsed.path in {"/chat", "/"}:
             self._asset(parsed.path)
             return
-        goal_id = query.get("goal_id", [self.server.source.goal_id])[0]
-        if goal_id != self.server.source.goal_id:
-            self._json({"ok": False, "error": "Goal is not in this source."}, 404)
+        if any(len(query.get(key, [])) > 1 for key in ("goal_id", "source_namespace", "cursor", "view")):
+            self._json({"ok": False, "error": "Source selectors must have one value."}, 400)
             return
+        if "source_namespace" in query and query["source_namespace"] != [self.server.source.namespace]:
+            self._json({"ok": False, "error": "Source identity changed; keep the original source and retry."}, 409)
+            return
+        goal_id = query.get("goal_id", [self.server.source.goal_id])[0]
         if parsed.path == "/status.json" and query.get("view") == ["workspace-directory"]:
-            # One pinned Goal needs no fan-out. Reuse the existing full-status
-            # compatibility path, preserving its native metadata and read APIs.
+            # Native status already supplies the scoped Goal list. The UI's
+            # existing full-status fallback preserves its metadata/read APIs.
             self._json({"ok": False, "error": "Use the scoped native status read."}, 404)
             return
         try:
-            if parsed.path == "/status.json":
-                status, _events = self.server.snapshot()
+            if parsed.path == "/api/goal-source":
+                self._json(self.server.reader.describe())
+            elif parsed.path.startswith("/api/goal-source/"):
+                if query.get("source_namespace") != [self.server.source.namespace]:
+                    self._json({"ok": False, "error": "Source identity changed; read its description again."}, 409)
+                elif parsed.path == "/api/goal-source/goals":
+                    self._json(self.server.reader.goals(goal_id))
+                elif parsed.path == "/api/goal-source/status":
+                    self._json({"ok": True, "source": self.server.source.describe(),
+                                "status": self.server.reader.status(goal_id)})
+                elif parsed.path == "/api/goal-source/history":
+                    self._json(self.server.reader.history(goal_id, query.get("cursor", [""])[0]))
+                else:
+                    self._json({"ok": False, "error": "Read endpoint is not available for this source."}, 404)
+            elif parsed.path == "/status.json":
+                status = self.server.reader.status(goal_id)
                 status = deepcopy(status)
                 status["local_dashboard_api"] = {"source": "runtime-workspace",
                     "status_url": self.server.status_url, "read_only_sources": self.server.catalog,
@@ -194,13 +119,14 @@ class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
                 self._json(status)
             elif parsed.path == "/api/chat/explore-results" and query.get("view") == ["history"]:
                 cursor = query.get("cursor", [""])[0]
-                page = self.server.pages.page(scope=(self.server.source.id, goal_id), cursor=cursor,
-                    load=lambda: self.server.snapshot()[1])
-                self._json({**page, "goal_id": goal_id})
+                self._json(self.server.reader.history(goal_id, cursor))
             elif parsed.path == "/api/chat/research-analysis":
+                self.server.source.check_access(goal_id)
                 self._json({"ok": False, "error": "此运行来源尚未绑定分析包。"}, 503)
             else:
                 self._json({"ok": False, "error": "Read endpoint is not available for this source."}, 404)
+        except SourceScopeError:
+            self._json({"ok": False, "error": "Goal or connection is not available in this source."}, 404)
         except ValueError as exc:
             expired = str(exc) == "history_cursor_expired"
             self._json({"ok": False, "error": "history_cursor_expired" if expired else
@@ -226,7 +152,7 @@ class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sources", type=Path, required=True, help="Owner-prepared container source manifest")
+    parser.add_argument("--sources", type=Path, required=True, help="Owner-prepared Goal source manifest")
     parser.add_argument("--assets-dir", type=Path, help="Explicit custom/prototype assets, as in loopx chat")
     parser.add_argument("--port", type=int, default=0, help="First loopback port; default allocates temporary ports")
     args = parser.parse_args()
@@ -241,7 +167,10 @@ def main():
     raw = json.loads(args.sources.read_text())
     if not isinstance(raw, list) or not 1 <= len(raw) <= 12:
         parser.error("Supply 1–12 scoped sources")
-    sources = [ContainerSource.parse(item) for item in raw]
+    try:
+        sources = [GoalSource.parse(item) for item in raw]
+    except (ValueError, TypeError) as exc:
+        parser.error(str(exc))
     if args.port != 0 and not 1024 <= args.port <= 65535 - len(sources) + 1:
         parser.error("Choose unprivileged ports for all readers")
     if len({s.id for s in sources}) != len(sources):
@@ -256,8 +185,11 @@ def main():
         thread.start()
         threads.append(thread)
     print(json.dumps({"ok": True, "read_only": True, "sources": [{**item,
-        "url": item["status_url"].replace("/status.json", "/chat/?") + urlencode({
-            "goalId": server.source.goal_id, "statusUrl": item["status_url"], "view": "overview"})}
+        "namespace": server.source.namespace,
+        "access_url": f"http://127.0.0.1:{server.server_port}/api/goal-source",
+        "url": f"http://127.0.0.1:{server.server_port}/chat/?" + urlencode({
+            **({"goalId": server.source.goal_id} if server.source.goal_id else {}),
+            "statusUrl": item["status_url"], "view": "overview"})}
         for item, server in zip(catalog, servers)]}), flush=True)
     try:
         threads[0].join()

@@ -15,24 +15,27 @@ const failFile = resolve(temporary, "unavailable");
 const backend = spawn(resolveTestPython(), ["-u", "-c", `
 import json, pathlib, sys, threading
 from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
+from loopx.control_plane.status.goal_source import GoalSource
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_edge_event
-class Source:
-    goal_id = 'same-goal'
-    def __init__(self, name): self.id = self.label = name
-    def read(self):
+class Source(GoalSource):
+    def __init__(self, name):
+        super().__init__(name,name,'/registry','/runtime','/cli','/python','/bin','local','host','same-goal')
+    def read_status(self, goal_id=None):
+        self.check_access(goal_id)
         if pathlib.Path(sys.argv[1]).exists() and self.id == 'Fresh': raise OSError('unavailable fixture')
-        status = dict(ok=True, registry='', runtime_root='', goal_count=1, run_count=0,
+        return dict(ok=True, registry='', runtime_root='', goal_count=1, run_count=0,
             contract=dict(ok=True, summary=dict(errors=0,warnings=0,checks=0), errors=[],warnings=[]),
             attention_queue=dict(available=True,item_count=0,needs_user_or_controller=0,needs_codex=0,watching_external_evidence=0,items=[]),
             run_history=dict(available=True,goal_count=1,run_count=0,recent_runs=[],goals=[dict(
                 id=self.goal_id, display_name=self.id+' research',goal_objective='Compare two candidate routes against recorded evidence.',
                 registry_member=True,activation_state='active')]))
+    def read_events(self, goal_id):
+        self.check_access(goal_id)
         events = [build_explore_node_event(goal_id=self.goal_id,node_id='route'+str(i%9),
             title=self.id+' route '+str(i%9),node_kind='question',status='exploring',
             summary='Recorded comparison; native benefit is unknown.',recorded_at='2026-01-01T%02d:%02d:00Z'%(i//4,i%4*15)) for i in range(90)]
         events += [build_explore_edge_event(goal_id=self.goal_id,from_node='route'+str(i),to_node='route'+str(i+1),edge_type='depends_on',recorded_at='2026-01-01T23:%02d:00Z'%(i*30)) for i in range(2)]
-        from loopx.presentation.explore_results_api import explore_history_rows
-        return status, explore_history_rows(events)
+        return events
 assets=pathlib.Path(sys.argv[2])
 servers=[RuntimeWorkspaceServer(Source(n),assets) for n in ('Retained','Fresh')]
 catalog=[dict(id=s.source.id,label=s.source.label,status_url=s.status_url) for s in servers]
@@ -52,7 +55,7 @@ try {
   });
   await mkdir(output, { recursive: true });
   browser = await launchBrowser(loadPlaywright().chromium);
-  const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 1512, height: 982 } });
+  const page = await browser.newPage({ locale: "zh-CN", reducedMotion: "reduce", viewport: { width: 1512, height: 982 } });
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   const url = new URL("/chat/", catalog[0].status_url);
@@ -63,6 +66,7 @@ try {
     await page.screenshot({path:resolve(output,"before-desktop.png")});
   } else {
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
+    assert.equal(new URL(new URL(page.url()).searchParams.get("statusUrl")).searchParams.get("source_namespace"),new URL(catalog[0].status_url).searchParams.get("source_namespace"),"the initial relative entry binds its physical source before subsequent navigation");
     assert.equal(await page.getByText("运行来源 · 只读", {exact:true}).count(), 1);
     assert.equal(await page.getByRole("button", {name:"添加 SSH 隧道来源"}).count(),0);
     assert.equal(await page.locator(".personal-goal-order-error").count(),0);
@@ -86,17 +90,32 @@ try {
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     await page.reload();
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
+    await page.goBack();
+    await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
     await writeFile(failFile, "unavailable");
     for (let attempt=0;attempt<40;attempt++) {
       if ((await fetch(catalog[1].status_url)).status === 503) break;
       await new Promise(resolve=>setTimeout(resolve,100));
     }
-    await page.getByRole("button",{name:"刷新状态",exact:true}).click();
-    await page.locator(".personal-status-source-error").waitFor();
+    await page.getByLabel("选择控制面来源",{exact:true}).click();
+    await page.getByRole("option",{name:"Fresh",exact:true}).click();
+    await page.locator(".personal-runtime-source-error").waitFor();
+    assert.equal(await page.locator(".research-history-node").count(),0,"a failed selected source must not keep another source's graph visible");
     assert.match(await page.getByLabel("选择控制面来源",{exact:true}).innerText(),/Fresh/);
     assert.equal(await page.getByRole("heading",{name:"Retained research",exact:true}).count(),0);
+    await page.setViewportSize({width:390,height:844});
+    assert.match(await page.getByRole("alert").innerText(),/Fresh/);
+    await page.getByRole("button",{name:"重试",exact:true}).waitFor({state:"visible"});
+    await page.screenshot({path:resolve(output,"unavailable-phone.png")});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    const failedRetry=page.waitForResponse(response=>new URL(response.url()).origin===new URL(catalog[1].status_url).origin && response.status()===503);
+    await page.getByRole("button",{name:"重试",exact:true}).click();
+    await failedRetry;
+    await page.locator(".personal-runtime-source-error > button:enabled").waitFor();
+    assert.match(await page.getByRole("alert").innerText(),/Fresh/);
+    assert.equal(await page.getByRole("heading",{name:"Retained research",exact:true}).count(),0,"retry cannot fall back to the previously loaded source");
     await rm(failFile);
-    await page.getByRole("button",{name:"刷新状态",exact:true}).click();
+    await page.getByRole("button",{name:"重试",exact:true}).click();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     await page.setViewportSize({width:390,height:844});
