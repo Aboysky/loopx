@@ -507,6 +507,35 @@ def _with_auxiliary_gate_scope(
     return {**work_lane, "auxiliary_monitor_poll": {**auxiliary, "gate_scope": selected_scope}}
 
 
+def _pending_receipt_resume_is_ready(
+    pending: bool, goal_health_ok: bool, state: str,
+    summary: dict[str, Any] | None, identity: dict[str, Any] | None,
+    todo_id: str | None,
+) -> bool:
+    # The receipt is a resume duty, not authority to release a new/future wait.
+    return pending and goal_health_ok and state == "eligible" and any(
+        normalize_todo_id(candidate.get("todo_id")) == todo_id
+        for candidate in _agent_scope_deferred_resume_candidates(
+            summary,
+            agent_id=normalize_todo_claimed_by((identity or {}).get("agent_id")),
+        )
+    )
+
+
+def _receipt_delivery_continuity(
+    payload: dict[str, Any], goal_id: str, agent_id: str | None,
+    todos: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    anchor = (
+        _latest_accountable_agent_delivery(payload, goal_id=goal_id, agent_id=agent_id)
+        if agent_id else None
+    )
+    todo_id = normalize_todo_id((anchor or {}).get("todo_id"))
+    todo = next((candidate for candidate in todos
+                 if normalize_todo_id(candidate.get("todo_id")) == todo_id), None)
+    return anchor, todo
+
+
 def _prepare_quota_should_run_item(
     status_payload: dict[str, Any],
     *,
@@ -623,25 +652,8 @@ def _prepare_quota_should_run_item(
         recovery_allowed = False
         reason = str(quota["reason"])
     boundary_agent_id = normalize_todo_claimed_by((agent_identity or {}).get("agent_id"))
-    delivery_continuity_anchor = (
-        _latest_accountable_agent_delivery(
-            status_payload,
-            goal_id=safe_goal_id,
-            agent_id=boundary_agent_id,
-        )
-        if boundary_agent_id
-        else None
-    )
-    continuity_todo_id = normalize_todo_id(
-        (delivery_continuity_anchor or {}).get("todo_id")
-    )
-    delivery_continuity_todo = next(
-        (
-            candidate
-            for candidate in agent_todo_source_items
-            if normalize_todo_id(candidate.get("todo_id")) == continuity_todo_id
-        ),
-        None,
+    delivery_continuity_anchor, delivery_continuity_todo = _receipt_delivery_continuity(
+        status_payload, safe_goal_id, boundary_agent_id, agent_todo_source_items,
     )
     reward_memory_experiment_status = _resolve_reward_memory_experiment_from_status(
         status_payload,
@@ -752,15 +764,9 @@ def _prepare_quota_should_run_item(
     )
     inbox_priority_due = inbox_reply_due or inbox_material_review_due
     receipt_bound_agent_next_action = None
-    # A resume replan is distinct from work which became deferred after
-    # admission. Recheck the same canonical, claim-scoped ready candidate;
-    # the historical receipt alone cannot release a new/future wait.
-    receipt_bound_successor_replan = receipt_bound_successor_replan and goal_health_ok and state == "eligible" and any(
-        normalize_todo_id(candidate.get("todo_id")) == receipt_bound_todo_id
-        for candidate in _agent_scope_deferred_resume_candidates(
-            agent_todo_summary,
-            agent_id=normalize_todo_claimed_by((agent_identity or {}).get("agent_id")),
-        )
+    receipt_bound_successor_replan = _pending_receipt_resume_is_ready(
+        receipt_bound_successor_replan, goal_health_ok, state,
+        agent_todo_summary, agent_identity, receipt_bound_todo_id,
     )
     if (
         receipt_bound_todo_id
