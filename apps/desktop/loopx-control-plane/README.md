@@ -33,6 +33,10 @@ readback. A permission-restricted prepared installation stays on the verified
 current App; use the existing explicit update action for native authorization.
 The disposable cache is not an update authority: its signed bytes, channel,
 version order and sealed bundle version are checked again before replacement.
+Rejected cached signatures and verified-safe replacement failures keep local
+startup moving, with the failure retained in diagnostics. They do not display
+a stopped-startup state while services are connecting. An incomplete target,
+failed journal retirement or unknown installation failure still requires recovery.
 
 ## Updates And Recovery
 

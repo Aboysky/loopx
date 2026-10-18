@@ -193,7 +193,27 @@ impl Maintenance {
         .await;
         // A queued explicit action must become the final snapshot writer.
         if let Err(error) = &result {
-            self.publish_failure(error, channel);
+            let details = self.failure_details(error, channel);
+            // A rejected prepared archive has not replaced the running App.
+            // app_install_failed additionally certifies the previous target,
+            // qualified runtime and retired journal. Keep its diagnostics,
+            // but do not tell the boot page startup has stopped while local
+            // service startup is about to continue. Unknown/incomplete and
+            // explicit-operation failures retain their recovery boundary.
+            if self.prepared_update_checked.load(Ordering::Acquire)
+                && matches!(
+                    error.as_str(),
+                    "update_download_or_signature_failed" | "app_install_failed"
+                )
+                && !self.incomplete_app_installation.load(Ordering::Acquire)
+                && !self.manual_failure_pending.load(Ordering::Acquire)
+                && !self.busy.load(Ordering::Acquire)
+            {
+                *self.last_failure.lock().unwrap() = json!({"phase":"error","details":details});
+                self.publish("connecting", json!({}));
+            } else {
+                self.publish("error", details);
+            }
         }
         result.map(Some)
     }
@@ -502,6 +522,10 @@ impl Maintenance {
     // App-install failures discard the stale continuation journal (see
     // perform); surface that in the failure diagnostics exactly once.
     fn publish_failure(&self, code: &str, channel: &str) -> Value {
+        self.publish("error", self.failure_details(code, channel))
+    }
+
+    fn failure_details(&self, code: &str, channel: &str) -> Value {
         let mut details = json!({"code": code, "channel": channel});
         if code == "app_install_failed" {
             details["journal_discarded"] = self
@@ -509,7 +533,7 @@ impl Maintenance {
                 .swap(false, Ordering::AcqRel)
                 .into();
         }
-        self.publish("error", details)
+        details
     }
 }
 // Bounded reinstall of this App's bundled snapshot. Persist the qualified
@@ -1496,6 +1520,67 @@ mod tests {
             state.snapshot.lock().unwrap()["details"]["code"],
             "update_check_failed"
         );
+    }
+
+    #[test]
+    fn rejected_prepared_update_keeps_diagnostics_without_false_boot_stop() {
+        for (usable, discard_ok, prepared) in [
+            (true, true, true),
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            let state = Maintenance::default();
+            state
+                .prepared_update_checked
+                .store(prepared, Ordering::Release);
+            let code = finalize_install_failure(&state, usable, || {
+                if discard_ok {
+                    Ok(true)
+                } else {
+                    Err("update_state_unavailable".into())
+                }
+            });
+            let result = tauri::async_runtime::block_on(state.run_automatic_update(
+                "stable",
+                async { Err::<Option<()>, String>(code.into()) },
+                |_| async { panic!("rejected update cannot apply") },
+                || panic!("rejected update cannot restart"),
+            ));
+            assert_eq!(result.unwrap_err(), code);
+            assert_eq!(state.last_failure.lock().unwrap()["details"]["code"], code);
+            if usable && discard_ok && prepared {
+                assert_eq!(state.status_snapshot()["phase"], "connecting");
+                assert_eq!(
+                    state.last_failure.lock().unwrap()["details"]["journal_discarded"],
+                    true
+                );
+                assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
+            } else {
+                assert_eq!(state.status_snapshot()["phase"], "error");
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_signature_rejection_is_optional_but_unknown_failures_are_not() {
+        for (code, phase) in [
+            ("update_download_or_signature_failed", "connecting"),
+            ("backup_failed", "error"),
+        ] {
+            let state = Maintenance::default();
+            state.prepared_update_checked.store(true, Ordering::Release);
+            let error = tauri::async_runtime::block_on(state.run_automatic_update(
+                "stable",
+                async { Err::<Option<()>, String>(code.into()) },
+                |_| async { panic!("rejected cache cannot install") },
+                || panic!("rejected cache cannot restart"),
+            ))
+            .unwrap_err();
+            assert_eq!(error, code);
+            assert_eq!(state.status_snapshot()["phase"], phase);
+            assert_eq!(state.last_failure.lock().unwrap()["details"]["code"], code);
+        }
     }
 
     #[test]
