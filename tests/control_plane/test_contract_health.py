@@ -338,3 +338,111 @@ def test_quota_uses_selected_goal_health_in_an_all_goal_status() -> None:
     assert decision["status_health_ok"] is True
     assert decision["normal_delivery_allowed"] is True
     assert decision["should_run"] is True
+
+
+def test_missing_active_state_finding_blocks_only_its_goal() -> None:
+    status = {
+        "contract": {"ok": True},
+        "global_registry": {
+            "ok": True,
+            "findings": [
+                {
+                    "kind": "state_file_missing",
+                    "severity": "action",
+                    "goal_id": GOAL_A,
+                },
+                {
+                    "kind": "stale_source_registry",
+                    "severity": "action",
+                    "goal_id": GOAL_A_LONG,
+                },
+            ],
+        },
+    }
+
+    assert goal_status_health_ok(status, goal_id=GOAL_A, fallback=True) is False
+    assert (
+        goal_status_health_ok(status, goal_id=GOAL_A_LONG, fallback=True) is True
+    )
+    assert goal_status_health_ok(status, goal_id="goal-other", fallback=True) is True
+
+
+def test_quota_does_not_authorize_a_goal_whose_declared_state_is_missing() -> None:
+    quota = {
+        "compute": 1.0,
+        "window_hours": 24,
+        "slot_minutes": 1,
+        "allowed_slots": 10,
+        "spent_slots": 0,
+        "state": "eligible",
+        "reason": "eligible fixture",
+    }
+    agent_todos = {
+        "schema_version": "todo_summary_v0",
+        "total_count": 1,
+        "open_count": 1,
+        "done_count": 0,
+        "first_open_items": [
+            {
+                "todo_id": "todo_goal_a",
+                "index": 1,
+                "text": "[P1] Advance goal A.",
+                "role": "agent",
+                "status": "open",
+                "task_class": "advancement_task",
+            }
+        ],
+    }
+    status = {
+        "ok": True,
+        "contract": {
+            "ok": True,
+            "summary": {"errors": 0, "warnings": 0, "checks": 1},
+        },
+        "global_registry": {
+            "ok": True,
+            "findings": [
+                {
+                    "kind": "state_file_missing",
+                    "severity": "action",
+                    "goal_id": GOAL_A,
+                    "recommended_action": (
+                        f"preview `loopx retire-global-goal --goal-id {GOAL_A}`"
+                    ),
+                }
+            ],
+        },
+        "attention_queue": {
+            "items": [
+                {
+                    "goal_id": GOAL_A,
+                    "status": "connected_without_run",
+                    "waiting_on": "codex",
+                    "severity": "action",
+                    "source": "run_history",
+                    "recommended_action": "Run the first adapter tick.",
+                    "quota": quota,
+                    "project_asset": {
+                        "next_action": "Advance goal A.",
+                        "agent_todos": agent_todos,
+                    },
+                }
+            ]
+        },
+        "run_history": {
+            "goals": [
+                {
+                    "id": GOAL_A,
+                    "registry_member": True,
+                    "status": "active",
+                    "quota": quota,
+                }
+            ]
+        },
+    }
+
+    decision = build_quota_should_run(status, goal_id=GOAL_A)
+
+    assert decision["status_health_ok"] is False
+    assert decision["should_run"] is False
+    assert decision["normal_delivery_allowed"] is False

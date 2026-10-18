@@ -77,6 +77,34 @@ def quota_decision_agent_id(decision: dict[str, Any]) -> str | None:
     return normalize_todo_claimed_by(agent_identity.get("agent_id"))
 
 
+# A Goal whose declared active state file is gone cannot be advanced by an
+# automatic turn: there is no Goal intent, acceptance or stop condition to read.
+# `loopx status` already reports the per-goal `state_file_missing` finding with
+# its reconnect/retire repair, so the quota gate must not keep authorizing
+# compute for it. Source-registry provenance findings are deliberately shadowed
+# by the status projection and stay out of this guard.
+_GOAL_STATE_UNAVAILABLE_FINDINGS = frozenset({"state_file_missing"})
+
+
+def _goal_active_state_missing(
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+) -> bool:
+    global_registry = status_payload.get("global_registry")
+    if not isinstance(global_registry, dict):
+        return False
+    findings = global_registry.get("findings")
+    if not isinstance(findings, list):
+        return False
+    return any(
+        isinstance(finding, dict)
+        and str(finding.get("goal_id") or "") == goal_id
+        and finding.get("kind") in _GOAL_STATE_UNAVAILABLE_FINDINGS
+        for finding in findings
+    )
+
+
 def goal_status_health_ok(
     status_payload: dict[str, Any],
     *,
@@ -85,6 +113,8 @@ def goal_status_health_ok(
 ) -> bool:
     """Keep global guards fail-closed without importing unrelated goal errors."""
 
+    if _goal_active_state_missing(status_payload, goal_id=goal_id):
+        return False
     contract = (
         status_payload.get("contract")
         if isinstance(status_payload.get("contract"), dict)
