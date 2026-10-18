@@ -190,6 +190,7 @@ import {
   activeStatusSourceForUrl,
   removeStatusSource,
   runtimeStatusSourceCatalog,
+  statusSourceForUrl,
   saveStatusSourceCatalog,
   type StatusSource,
 } from "../data/status-source-catalog";
@@ -3356,6 +3357,11 @@ export function DashboardPage() {
       setPayload((current) => mergeScopedStatusProjections(current, nextPayload));
       return true;
     }
+    const prepared = runtimeStatusSourceCatalog(nextPayload.local_dashboard_api?.read_only_sources,
+      url, window.location.href);
+    const bound = prepared ? statusSourceForUrl(prepared, url, window.location.href) : null;
+    const bindingInitialIdentity = bound?.kind === "runtime" && bound.statusUrl !== url;
+    if (bindingInitialIdentity) url = bound.statusUrl;
     const nextSource: DataSource = { kind: "url", label: url };
     statusRequestFenceRef.current.loadedUrl = url;
     setPayload(nextPayload);
@@ -3365,6 +3371,7 @@ export function DashboardPage() {
     // entry: Back should return to the user's previous workspace view.
     if (search.statusUrl !== url) {
       await navigate({
+        replace: bindingInitialIdentity,
         search: (current) => {
           const runtimeSourceChanged = Boolean(nextPayload.local_dashboard_api?.read_only_sources?.length
             && "statusUrl" in current && current.statusUrl && current.statusUrl !== url);
@@ -3701,7 +3708,7 @@ export function DashboardPage() {
       onRetryGoalArchive={retryGoalArchive}
       onRefresh={async (readScope = "all") => {
         try {
-          await loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { readScope, rejectOnError: true });
+          await loadFromUrl(activeStatusRequestUrl || (source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl)), { readScope, rejectOnError: true });
           return { ok: true } as const;
         } catch (error) {
           return { ok: false, error: formatStatusError(error) } as const;
