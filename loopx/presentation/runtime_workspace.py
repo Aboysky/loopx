@@ -238,7 +238,7 @@ def main():
             parser.error(str(exc))
     if not (assets / "index.html").is_file():
         parser.error("Build the packaged Chat assets first or supply --assets-dir")
-    raw = json.loads(args.sources.read_text())
+    raw = json.loads(args.sources.read_text(encoding="utf-8"))
     if not isinstance(raw, list) or not 1 <= len(raw) <= 12:
         parser.error("Supply 1–12 scoped sources")
     sources = [ContainerSource.parse(item) for item in raw]
