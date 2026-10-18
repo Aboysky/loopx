@@ -525,6 +525,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /尚无完整用量捕获|No complete usage/);
       assert.equal(await analysis.count(), 0, "Changing a factual scope preserves the closed analysis panel");
       assert.match(await progress.innerText(), /不适用|N\/A/);
+      assert.match(await effects.locator('[data-metric="benefit_test"] > summary').innerText(), /不适用 1/,
+        'A wholly ineligible metric preserves its explicitly excluded sample count');
+      assert.doesNotMatch(await effects.locator('[data-metric="discrimination"] > summary').innerText(), /不适用/,
+        'An all-unknown but eligible metric has no declared exclusion');
       assert.doesNotMatch(await progress.innerText(), /0%/);
       assert.equal(await nativeResults.count(), 0, 'A missing native capture cannot borrow the previous scope');
       assert.match(await progress.innerText(), /原生测量.*未采集/);

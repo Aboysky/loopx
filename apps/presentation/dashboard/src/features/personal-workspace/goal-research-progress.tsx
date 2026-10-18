@@ -88,14 +88,15 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
             const label = metricCopy[metric], row = result.metrics.find(item => item.metric === metric);
             const assessments = result.assessments.filter(item => item.metric === metric);
             // Format declared eligibility only when the complete episode list
-            // is present. A count gap or missing assessment proves no exclusion.
+            // is present. Counts or missing assessments cannot establish exclusion.
             const excluded = row && p.episodes?.length === p.episode_count
               ? p.episodes.filter(episode => !episode.eligible_metrics.includes(metric)) : [];
+            const notes = [row?.no ? `${zh ? "否" : "No"} ${number(row.no)}` : "", row?.unknown ? `${zh ? "未知" : "Unknown"} ${number(row.unknown)}` : "", excluded.length ? `${zh ? "不适用" : "Ineligible"} ${number(excluded.length)}` : ""].filter(Boolean);
             return <details className="research-effect-metric" data-metric={metric} key={metric}>
               <summary><span className="research-effect-title">{label[zh ? 0 : 1]}<ChevronDown size={13} aria-hidden/></span>
                 <strong className="research-effect-number">{row?.eligible ? `${number(row.yes)} / ${number(row.eligible)}` : "—"}</strong>
                 <span className="research-effect-verdict">{!row ? (zh ? "没有此指标记录" : "No metric record") : !row.eligible ? (zh ? "不适用" : "N/A") : assessments.length === 1 ? verdictLabel(metric, assessments[0].verdict, zh) : (zh ? "是 / 适用片段" : "Yes / eligible episodes")}</span>
-                {row?.eligible && (row.no || row.unknown || excluded.length) ? <small>{[row.no ? `${zh ? "否" : "No"} ${number(row.no)}` : "", row.unknown ? `${zh ? "未知" : "Unknown"} ${number(row.unknown)}` : "", excluded.length ? `${zh ? "不适用" : "Ineligible"} ${number(excluded.length)}` : ""].filter(Boolean).join(" · ")}</small> : null}
+                {notes.length ? <small>{notes.join(" · ")}</small> : null}
               </summary>
               <div className="research-effect-evidence"><p>{label[zh ? 2 : 3]}</p>
                 {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
