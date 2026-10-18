@@ -344,7 +344,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const effects = progress.locator('.research-effect-metrics');
       await effects.waitFor();
       assert.equal(await effects.locator('details').count(), 6, 'All six analyzer metrics are primary without opening analysis or cost details');
-      assert.equal(await progress.locator('.research-usage').evaluate(e => e.open), false, 'Cost is secondary by default');
+      assert.equal(await progress.locator('.research-progress-basis').evaluate(e => e.open), false, 'Sources and cost share one secondary disclosure by default');
       // Optional methodology must be reachable without crowding the results,
       // changing counts or invoking analysis. Exercise the same disclosure with
       // pointer, keyboard and touch-sized layout, including Escape in a panel.
@@ -376,7 +376,25 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.setViewportSize({width: 1280, height: 900});
       const benefitMetric = effects.locator('[data-metric="benefit_test"]');
       assert.match(await benefitMetric.innerText(), /0 \/ 1/);
-      assert.match(await benefitMetric.innerText(), /尚未检验收益/);
+      await page.setViewportSize({width: 1440, height: 1000});
+      await progress.evaluate(element => element.scrollIntoView({block: 'start'}));
+      await page.screenshot({path: resolve(outputDir, 'research-effect-viewport.png'), animations: 'disabled'});
+      const metricGeometry = await effects.locator('details > summary').evaluateAll(elements => elements.map(element => ({
+        top: Math.round(element.getBoundingClientRect().top),
+        labelSize: parseFloat(getComputedStyle(element.querySelector('.research-effect-title')).fontSize),
+        numberSize: parseFloat(getComputedStyle(element.querySelector('.research-effect-number')).fontSize),
+      })));
+      assert.equal(new Set(metricGeometry.map(item => item.top)).size, 1,
+        'A wide viewport gives the six primary effects one compact band, leaving room for the history');
+      assert(metricGeometry.every(item => item.labelSize >= 14 && item.numberSize >= 24),
+        'Primary metric labels and values use readable body/title typography, not metadata type');
+      assert.doesNotMatch(await effects.innerText(), /否 0|未知 0/,
+        'Routine zero-valued qualifiers do not repeat beneath every metric');
+      await page.setViewportSize({width: 390, height: 844});
+      await progress.evaluate(element => element.scrollIntoView({block: 'start'}));
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: resolve(outputDir, 'research-effect-mobile-viewport.png'), animations: 'disabled'});
+      await page.setViewportSize({width: 1280, height: 900});
       await page.screenshot({path: resolve(outputDir, 'research-eligibility-desktop.png'), animations: 'disabled'});
       assert.match(await benefitMetric.locator('summary').innerText(), /不适用 1/,
         'The sample includes a second episode explicitly excluded from this metric');
@@ -400,12 +418,12 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await citedOriginal.innerText(), /Diagnostic measurements do not test native utility/);
       await citedOriginal.press('Escape');
       await history.getByRole('button', {name: '关闭分析', exact: true}).click();
-      await progress.locator('.research-usage > summary').click();
+      await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.getByText("100", {exact: true}).count(), 1, "Uncached input is shown without charging cache twice");
       assert.match(await progress.innerText(), /1,?100.*1,?000/s);
       assert.match(await progress.innerText(), /30.*4.*tokens/s, "Analysis attempt cost is distinct from solver usage");
       assert.match(await progress.innerText(), /更早失败.*恢复.*评测/s);
-      await progress.locator('.research-usage > summary').click();
+      await progress.locator('.research-progress-basis > summary').click();
       for (const limit of [1, 0]) {
         episodeMetadataLimit = limit;
         await page.reload({waitUntil: 'networkidle'});
@@ -522,7 +540,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.getByRole("combobox").focus();
       await progress.getByRole("combobox").selectOption("c".repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
+      assert.match(await progress.locator('.research-progress-basis > summary').innerText(), /完整成本未知/);
+      await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /尚无完整用量捕获|No complete usage/);
+      await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await analysis.count(), 0, "Changing a factual scope preserves the closed analysis panel");
       assert.match(await progress.innerText(), /不适用|N\/A/);
       assert.match(await effects.locator('[data-metric="benefit_test"] > summary').innerText(), /不适用 1/,
