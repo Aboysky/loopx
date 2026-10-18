@@ -446,3 +446,13 @@ def test_quota_does_not_authorize_a_goal_whose_declared_state_is_missing() -> No
     assert decision["status_health_ok"] is False
     assert decision["should_run"] is False
     assert decision["normal_delivery_allowed"] is False
+    assert decision["state"] == "blocked_health"
+    assert decision["status"] == "state_file_missing"
+    assert decision["source"] == "global_registry"
+    assert decision["reason"] == (
+        f"preview `loopx retire-global-goal --goal-id {GOAL_A}`"
+    )
+    assert decision["recommended_action"] == (
+        f"preview `loopx retire-global-goal --goal-id {GOAL_A}`"
+    )
+    assert decision["interaction_contract"]["agent_channel"]["must_attempt"] is False

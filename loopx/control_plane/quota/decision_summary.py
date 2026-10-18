@@ -83,26 +83,33 @@ def quota_decision_agent_id(decision: dict[str, Any]) -> str | None:
 # its reconnect/retire repair, so the quota gate must not keep authorizing
 # compute for it. Source-registry provenance findings are deliberately shadowed
 # by the status projection and stay out of this guard.
-_GOAL_STATE_UNAVAILABLE_FINDINGS = frozenset({"state_file_missing"})
+_GOAL_MISSING_STATE_FINDING = "state_file_missing"
 
 
-def _goal_active_state_missing(
+def goal_missing_state_blocker(
     status_payload: dict[str, Any],
     *,
     goal_id: str,
-) -> bool:
+) -> dict[str, Any] | None:
+    """Return the status finding that says this Goal's active state is gone."""
+
     global_registry = status_payload.get("global_registry")
     if not isinstance(global_registry, dict):
-        return False
+        return None
     findings = global_registry.get("findings")
     if not isinstance(findings, list):
-        return False
-    return any(
-        isinstance(finding, dict)
-        and str(finding.get("goal_id") or "") == goal_id
-        and finding.get("kind") in _GOAL_STATE_UNAVAILABLE_FINDINGS
-        for finding in findings
-    )
+        return None
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        kind = finding.get("kind")
+        if (
+            isinstance(kind, str)
+            and kind == _GOAL_MISSING_STATE_FINDING
+            and str(finding.get("goal_id") or "") == goal_id
+        ):
+            return dict(finding)
+    return None
 
 
 def goal_status_health_ok(
@@ -113,7 +120,7 @@ def goal_status_health_ok(
 ) -> bool:
     """Keep global guards fail-closed without importing unrelated goal errors."""
 
-    if _goal_active_state_missing(status_payload, goal_id=goal_id):
+    if goal_missing_state_blocker(status_payload, goal_id=goal_id) is not None:
         return False
     contract = (
         status_payload.get("contract")
