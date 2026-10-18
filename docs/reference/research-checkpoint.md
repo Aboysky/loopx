@@ -132,15 +132,26 @@ admission and inspect the next accepted replan. A useful readback cites retained
 evidence, explains the next complete experiment and later checks its outcome.
 Restoring files or accepting a structured review alone proves no research gain.
 
-## Opt-in local retention
+## Default bank rotation
 
-Capture retains every point unless an operator explicitly enables retention.
+**Default change:** new controller-enabled benchmark checkpoint banks rotate
+automatically after a successful capture reply, keeping only the newest complete
+publication and explicitly pinned points. Capture itself still requires its
+existing explicit enablement. Use `--no-checkpoint-retention` to retain every
+point, or `--checkpoint-retention-policy RETENTION_POLICY` to supply a custom
+policy. The default policy is saved in the bank's private
+`.checkpoint-retention/policy.json`; it can be inspected and edited for pins.
+An explicit policy file remains the active configuration when supplied.
+
+Ordinary single-point capture accepts an arbitrary destination and does not
+implicitly sweep its parent. Select a bank explicitly through `rotate` or the
+storage watcher below. Existing running processes are not hot-patched.
 Retention is local storage maintenance through the same artifact owner; it does
 not select scientific results, qualify a point, change feedback opportunities,
 or delete the native evaluator's separate bank. It remains part of this CLI/Host
 stage; a packaged frontend retention editor is not delivered here.
 
-Use one bank per source lineage and declare a policy in a private JSON file:
+Use one bank per source lineage. The typed default is:
 
 ```json
 {
@@ -173,16 +184,24 @@ Before cleanup, put every selected study point, source still needed by a
 receiver, and referenced dependency in `pins` as an exact
 `{"id":"POINT_DIRECTORY_NAME","sha256":"CAPTURE_DIGEST"}`. References in
 arbitrary plans, sessions or conversations are not automatically discovered.
+For example, a source used by two continuation arms remains pinned until both
+arms no longer need it. The ID is the immediate point directory name and the
+digest is the `sha256` field in that point's `checkpoint.json`. Remove the entry
+to make an older point eligible on the next rotation. Stop the watcher or
+quiesce the capture supervisor before changing pins, preview the new policy,
+then resume maintenance; editing a policy does not recover already deleted data.
 `protect_since` optionally preserves every publication at or after a Unix epoch,
 useful while a chronological selection is unresolved. This is filesystem seal
 time, not scientific elapsed age or source qualification. A missing/changed pin
 holds cleanup, including pending quarantine recovery.
 
-Preview the complete retained/deletion lists, logical byte totals and plan digest:
+Preview the complete retained/deletion lists, logical byte totals and plan digest.
+Without `--request-file`, the CLI reads the bank's policy file when present,
+otherwise the typed latest-only default. Supplying the file explicitly overrides
+that selection for this operation; it does not rewrite another worker's configuration:
 
 ```sh
-loopx --format json research-checkpoint rotate --root CHECKPOINT_BANK \
-  --request-file RETENTION_POLICY
+loopx --format json research-checkpoint rotate --root CHECKPOINT_BANK
 loopx --format json research-checkpoint rotate --root CHECKPOINT_BANK \
   --request-file RETENTION_POLICY --expected-plan-sha256 PLAN_DIGEST --execute
 ```
@@ -222,8 +241,10 @@ loopx --format json research-checkpoint rotate --root CHECKPOINT_BANK \
 
 It reacts to changed local publication/policy generations and due grace expiry. It makes no
 model or Goal calls. Errors stop the watcher with a failure result for operator
-reconciliation. Stop this process to disable automatic rotation. Remove any
-new-run benchmark retention option as well. Previously deleted bytes are not
+reconciliation. Stop this process to disable automatic rotation. For a new
+controller-enabled benchmark run, pass `--no-checkpoint-retention`; removing a
+custom policy option selects the default and does not disable rotation.
+Previously deleted bytes are not
 restored by disabling; recover them only from an independently retained copy.
 
 ## Disable and qualification

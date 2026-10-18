@@ -10,6 +10,16 @@ const policy = {strategy: "tiered", keep_latest: 2, keep_first: true, minimum_ag
 const plan = (overrides = {}, rows = points) => checkpointRetentionPlan({policy: {...policy, ...overrides}, points: rows, now: 3000});
 const ids = (rows: unknown) => (rows as {id: string}[]).map(p => p.id);
 
+test("default retention keeps only the latest complete publication without origin or sampled history", () => {
+  const result = checkpointRetentionPlan({policy: null, points, now: 3000});
+  assert.deepEqual(ids(result.retained), ["p20"]);
+  assert.equal((result.removed as unknown[]).length, 20);
+  assert.deepEqual(result.policy, {strategy: "uniform", keep_latest: 1, keep_first: false,
+    minimum_age_seconds: 0, history_slots: 0, protect_since: null, pins: []});
+  assert.equal(result.execution_authority_granted, false);
+  assert.deepEqual(checkpointRetentionPlan({policy: null, points: [], now: 3000}).removed, []);
+});
+
 test("tiered retention preserves latest, origin and newest representative per exponentially wider age band", () => {
   const result = plan();
   assert.deepEqual(ids(result.retained), ["p00", "p04", "p12", "p16", "p18", "p19", "p20"]);

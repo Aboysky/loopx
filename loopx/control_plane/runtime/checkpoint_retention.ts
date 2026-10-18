@@ -28,7 +28,11 @@ function identity(raw: unknown): {id: string; sha256: string} {
 export function checkpointRetentionPlan(raw: unknown): JsonObject {
   const input = requireJsonObject(raw, "retention input");
   if (!hasExactAuthorityKeys(input, ["policy", "points", "now"])) throw new Error("invalid retention input fields");
-  const policy = requireJsonObject(input.policy, "retention policy");
+  // The one default owner. Capture enablement and local execution remain with
+  // their callers; selecting this policy grants neither.
+  const policy = input.policy === null ? {strategy: "uniform", keep_latest: 1, keep_first: false,
+    minimum_age_seconds: 0, history_slots: 0, protect_since: null, pins: []} :
+    requireJsonObject(input.policy, "retention policy");
   const common = ["strategy", "keep_latest", "keep_first", "minimum_age_seconds", "pins", "protect_since"];
   const strategy = policy.strategy;
   const extra = strategy === "tiered" ? "bucket_seconds" : strategy === "uniform" ? "history_slots" : null;

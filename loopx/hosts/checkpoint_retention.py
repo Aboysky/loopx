@@ -88,7 +88,17 @@ def _inventory(bank: Path) -> dict:
         "action": "retention_inventory", "bank": str(bank)}, large_local_snapshot=True)
 
 
-def retention_plan(bank: Path, policy: dict, *, now: float | None = None) -> dict:
+def retention_policy_bytes(bank: Path, request_file: Path | None = None) -> bytes:
+    """Read explicit/default bank configuration without creating preview state."""
+    path = request_file or _physical(bank) / _STATE / "policy.json"
+    if request_file is not None or path.exists() or path.is_symlink():
+        return _physical(path).read_bytes()
+    return b"null"  # The typed artifact owner supplies the default.
+
+
+def retention_plan(bank: Path, policy: dict | None, *, now: float | None = None) -> dict:
+    if policy is None:
+        policy = json.loads(retention_policy_bytes(bank))
     inventory = _inventory(_physical(bank))
     plan = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "retention_plan", "input": {"policy": policy, "points": inventory["points"],
@@ -151,7 +161,7 @@ def _recover_trash(bank: Path, state: Path) -> list[dict]:
     return recovered
 
 
-def rotate_bank(bank: Path, policy: dict, *, execute: bool = False,
+def rotate_bank(bank: Path, policy: dict | None = None, *, execute: bool = False,
                 expected_plan_sha256: str | None = None) -> dict:
     """Plan, then recheck and quarantine exact unprotected points under a lock.
 
@@ -168,11 +178,12 @@ def rotate_bank(bank: Path, policy: dict, *, execute: bool = False,
         return _rotate_locked(bank, state, policy, expected_plan_sha256)
 
 
-def _rotate_locked(bank: Path, state: Path, policy: dict, expected_plan_sha256: str | None) -> dict:
+def _rotate_locked(bank: Path, state: Path, policy: dict | None, expected_plan_sha256: str | None) -> dict:
     # One inode, never unlink the lock; existing reader/rotator waiters agree.
     with exclusive_file_lock(state / "bank", operation="checkpoint-rotate", timeout_seconds=1):
         # A newly declared missing/changed pin holds even recovery of an older
         # quarantine. Never finish unlinking before validating current pins.
+        configured = retention_policy_bytes(bank) if policy is None else None
         plan = retention_plan(bank, policy)
         if expected_plan_sha256 is not None and plan["plan_sha256"] != expected_plan_sha256:
             raise ValueError("Checkpoint retention plan changed; review a fresh plan")
@@ -190,6 +201,8 @@ def _rotate_locked(bank: Path, state: Path, policy: dict, expected_plan_sha256: 
         current = sorted(_inventory(bank)["points"], key=lambda p: (p["sealed_at"], p["id"]))
         if current != plan["points"]:
             raise ValueError("Checkpoint bank moved before retention; retry with a fresh plan")
+        if configured is not None and retention_policy_bytes(bank) != configured:
+            raise ValueError("Checkpoint bank policy moved before retention; review a fresh plan")
         deleted = []
         for point in plan["removed"]:
             source = _physical(bank / point["id"])

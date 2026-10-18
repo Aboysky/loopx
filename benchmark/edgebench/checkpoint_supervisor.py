@@ -16,20 +16,25 @@ from .checkpoint_worker import _archive, capture_worker
 
 
 class CheckpointSupervisor:
-    def __init__(self, controller_file: Path, destination: Path, retention_policy: Path | None = None):
+    def __init__(self, controller_file: Path, destination: Path, retention_policy: Path | None = None,
+                 *, retention_enabled: bool = True):
         _controller(controller_file)  # Fail before native registration.
+        if not retention_enabled and retention_policy is not None:
+            raise ValueError("A retention policy cannot be combined with disabled retention")
         self.controller_file, self.destination = controller_file, destination
         self.token = None
         self.stop = threading.Event()
         self.thread = None
         self.failure = None
+        self.retention_enabled = retention_enabled
         self.retention_policy = retention_policy
         self.maintenance = None
         self.maintenance_due = threading.Event()
-        if retention_policy is not None:
+        if retention_enabled:
             from loopx.control_plane.effect_runtime import effect_runtime_result
-            effect_runtime_result("runtime.checkpoint_artifacts", {"action": "retention_plan", "input": {
-                "policy": json.loads(retention_policy.read_bytes()), "points": [], "now": time.time()}})
+            self.initial_retention_policy = effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "retention_plan", "input": {"policy": json.loads(retention_policy.read_bytes())
+                    if retention_policy is not None else None, "points": [], "now": time.time()}})["policy"]
 
     def bind(self, environment):
         if self.token is not None or not (environment or {}).get("SFORGE_TOKEN"):
@@ -40,9 +45,14 @@ class CheckpointSupervisor:
         if self.thread is not None or self.token is None:
             raise ValueError("Checkpoint supervisor requires one bound worker execution")
         self.destination.mkdir(mode=0o700, parents=True, exist_ok=False)
-        if self.retention_policy is not None:
+        if self.retention_enabled:
             from loopx.hosts.checkpoint_retention import _state
-            _state(self.destination.resolve())
+            state = _state(self.destination.resolve())
+            if self.retention_policy is None:
+                from loopx.file_lock import write_json_atomic
+                self.retention_policy = state / "policy.json"
+                write_json_atomic(self.retention_policy, self.initial_retention_policy,
+                                  mode=0o600, fsync_directory=True)
             self.maintenance = threading.Thread(target=self._maintain, daemon=True)
             self.maintenance.start()
         self.container = container
@@ -163,7 +173,7 @@ class CheckpointSupervisor:
                         diagnostic.chmod(0o600)
                     (self.destination / (nonce + ".json")).write_text(json.dumps(response))
                     self._reply(container, mailbox, nonce, response)
-                    if response["ok"] and self.retention_policy is not None:
+                    if response["ok"] and self.retention_enabled:
                         self.maintenance_due.set()
         except Exception as error:
             self.failure = error

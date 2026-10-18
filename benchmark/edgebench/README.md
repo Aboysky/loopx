@@ -429,19 +429,23 @@ resume continuity, capability use, evaluator completion and integrity need
 runtime/post-run qualification before any score is countable. Raw trial outputs
 and credentials belong outside the public repository.
 
-## Optional research checkpoint retention
+## Default research checkpoint retention
 
-New controller-enabled native runs can pass
-`--checkpoint-retention-policy PRIVATE_POLICY_JSON`. After publishing a
-successful capture reply, a separate storage worker applies the explicit local policy.
-Omitting this option retains every point and leaves the old capture path
-unchanged. A storage-maintenance failure is reported separately in
+**Default change:** new controller-enabled native runs automatically keep only
+the newest complete point plus explicit pins. After publishing a successful
+capture reply, a separate storage worker applies the policy saved at
+`checkpoints/.checkpoint-retention/policy.json`. Pass
+`--checkpoint-retention-policy PRIVATE_POLICY_JSON` to override that policy, or
+`--no-checkpoint-retention` to keep every point without starting storage
+maintenance. These options are mutually exclusive. Capture itself remains
+explicitly enabled through its existing declaration and controller; runs without
+that path do not start retention. A storage-maintenance failure is reported separately in
 `checkpoints/retention-error.json`; it does not turn a successful capture into
 a failure or cancel source research. Inspect that error before assuming space
 was reclaimed. Successful maintenance writes `retention-last.json` and the
 bank's durable deletion receipts.
 
-Use the [checkpoint retention policy and preview](../../docs/reference/research-checkpoint.md#opt-in-local-retention)
+Use the [checkpoint retention policy and preview](../../docs/reference/research-checkpoint.md#default-bank-rotation)
 to choose uniform or tiered history, protect recent publications and pin every
 selected continuation/dependency. The policy controls the outer inert artifact
 bank only; native submissions, archives, counters and cooldown keep their owners.
@@ -449,8 +453,9 @@ Use separate policy files for separate lineages. Do not import a donor's pins
 into a different receiver's new bank.
 
 For frozen running donors, use the documented standalone storage watcher rather
-than editing or restarting the research runtime. Remove the launch option and
-stop any watcher to disable automatic rotation. The existing CLI/Host
+than editing or restarting the research runtime. Stop that watcher to disable
+its rotation; use `--no-checkpoint-retention` for new runs. Removing the custom
+policy option reselects the default. The existing CLI/Host
 qualification remains separate from frontend delivery and scientific utility.
 
 ## Default replan cadence

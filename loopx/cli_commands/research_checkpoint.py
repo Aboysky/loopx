@@ -52,14 +52,17 @@ def handle_research_checkpoint(args: argparse.Namespace, *, registry_path: Path,
         if args.expected_plan_sha256 and args.operation != "rotate":
             raise ValueError("--expected-plan-sha256 requires rotate")
         if args.operation == "rotate":
-            required("root", "request_file")
+            required("root")
             if not 10 <= args.interval_seconds <= 86400:
                 raise ValueError("Retention interval must be between 10 and 86400 seconds")
-            from ..hosts.checkpoint_retention import bank_generation, rotate_bank
+            from ..hosts.checkpoint_retention import bank_generation, retention_policy_bytes, rotate_bank
             previous = None
             next_due = None
             while True:
-                raw = args.request_file.read_bytes()
+                # A supervisor bank publishes its editable default policy.
+                # An unmanaged, explicitly selected bank uses the typed default
+                # without creating any state during preview.
+                raw = retention_policy_bytes(args.root, args.request_file)
                 generation = bank_generation(args.root, raw)
                 if generation != previous or (next_due is not None and time.time() >= next_due):
                     result = rotate_bank(args.root, json.loads(raw), execute=args.execute,

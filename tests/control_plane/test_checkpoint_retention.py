@@ -181,6 +181,29 @@ def test_real_cli_preview_execute_and_newest_restore(bank, policy, tmp_path, cap
     assert "requires rotate" in json.loads(capsys.readouterr().out)["error"]
 
 
+def test_cli_default_is_latest_only_and_managed_bank_policy_adds_explicit_pins(bank, capsys):
+    args = ["--format", "json", "research-checkpoint", "rotate", "--root", str(bank)]
+    assert main(args) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert [p["id"] for p in plan["retained"]] == ["p7"]
+    assert not (bank / ".checkpoint-retention").exists()
+    state = transport._state(bank)
+    pin = json.loads((bank / "p2/checkpoint.json").read_bytes())["sha256"]
+    selected = {**plan["policy"], "pins": [dict(id="p2", sha256=pin)]}
+    (state / "policy.json").write_text(json.dumps(selected))
+    assert main(args) == 0
+    pinned = json.loads(capsys.readouterr().out)
+    assert {p["id"] for p in pinned["retained"]} == {"p2", "p7"}
+    assert {p["id"] for p in transport.rotate_bank(bank)["retained"]} == {"p2", "p7"}
+    assert main([*args, "--execute", "--expected-plan-sha256", pinned["plan_sha256"]]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert len(applied["deleted"]) == 6 and (bank / "p2/checkpoint.json").exists()
+    (state / "policy.json").write_text("{}")
+    assert main([*args, "--execute"]) == 1
+    assert not json.loads(capsys.readouterr().out)["ok"]
+    assert (bank / "p2/checkpoint.json").exists()
+
+
 def test_cli_watcher_rotates_new_publication_and_silences_unchanged_generation(bank, policy, tmp_path, capsys, monkeypatch):
     from loopx.cli_commands import research_checkpoint as cli
     policy.update(keep_first=False, keep_latest=1, history_slots=0)
