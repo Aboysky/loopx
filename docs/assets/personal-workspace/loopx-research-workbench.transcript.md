@@ -1,110 +1,86 @@
-# Research workbench film: transcript
+# LoopX 2.0 · Research film · baseline
+The workbench for long-horizon research. For enterprise teams, research organizations, and independent builders.
+2.0 development preview. This is a production baseline, not a release declaration.
 
-[Watch the 58-second film](https://github.com/user-attachments/assets/09883f57-7950-4bfa-bcfd-d80e836fb8ea) ·
-English subtitles: [VTT](loopx-research-workbench.en.vtt) / [SRT](loopx-research-workbench.en.srt) ·
-[简体中文](loopx-research-workbench.transcript.zh-CN.md)
+[Video / 视频](loopx-research-workbench.mp4) · [EN VTT](loopx-research-workbench.en.vtt) / [SRT](loopx-research-workbench.en.srt) · [中文字幕](loopx-research-workbench.zh-CN.vtt) / [SRT](loopx-research-workbench.zh-CN.srt)
+[English](loopx-research-workbench.transcript.md) · [简体中文](loopx-research-workbench.transcript.zh-CN.md)
 
-The English narration is reproduced below, with context for the on-screen
-examples. Load a subtitle file alongside the [video](loopx-research-workbench.mp4)
-in a player that supports external subtitles. The Chinese subtitle files
-translate the narration; the film also contains Chinese on-screen labels.
 
-## 00:00–00:02.5 · Keep the work connected
+## 00:00:00.000–00:00:07.000 · The workbench for long-horizon research.
+2.0 DEVELOPMENT PREVIEW
 
-“One goal. Keep the work connected.”
+Loop X two point zero. A workbench for long-horizon research.
 
-LoopX keeps goals, work, evidence and decisions durable. The Agent host provides
-the model and tools.
+## 00:00:07.000–00:00:25.000 · Delegate the goal. Keep its context.
+ILLUSTRATED HANDOFF + CODE-PROJECTED 3D + SEPARATE RECORDED RETURN
 
-## 00:02.5–00:13.5 · Delegate with context
+Carry the goal, constraints, and return route.
+Let the existing owner adopt the work.
+Keep corrections on the task. Return the evidence.
+Peers accept separate scopes. The build uses the research artifact.
 
-“Delegate with context. Keep corrections on the same task. Let the owner adopt,
-then return the artifact for review.”
+## 00:00:25.000–00:00:29.500 · Make research work visible.
+AUTHORED WORKSPACE SCENARIO
 
-The illustrated brief carries the goal, constraints, correction, acceptance
-criteria and return route. It finds an existing owner, who decides whether to
-adopt the work. Nonconfidential App excerpts show the engineering handoff and
-result return. Returning an artifact does not establish independent review,
-merge or installed adoption.
+See work, waiting decisions, and schedules.
 
-## 00:13.5–00:17 · See what needs you
+## 00:00:29.500–00:00:33.500 · Make the next action explicit.
+AUTHORED WORKSPACE SCENARIO
 
-“Goals, decisions, work and schedules.”
+Separate the next task from a pending approval.
 
-The Kanban view uses an authored workspace scenario to show work and attention
-in one place.
+## 00:00:33.500–00:00:37.000 · Keep responsibility visible.
+RECORDED WORKSPACE · ORIGINAL STATUSES RETAINED
 
-## 00:17–00:20.5 · Make the next action explicit
+Keep owners and waiting work visible.
 
-“Decisions, next actions, ongoing observation.”
+## 00:00:37.000–00:00:42.500 · Trace the research across sessions.
+RECORDED WORKSPACE · SEPARATE RESEARCH HISTORY
 
-The task view distinguishes work that can proceed, decisions that need a person
-and observations that continue over time.
+Keep questions, findings, and changes of direction.
 
-## 00:20.5–00:23.5 · Keep responsibility visible
+## 00:00:42.500–00:00:52.000 · Inspect the process. Check the source.
+PACKAGED UI FIXTURE · SYNTHETIC DATA + ILLUSTRATED SOURCE PATH
 
-“Owners and waiting work, visible.”
+Read six process judgments. Keep unknowns visible.
+Trace claims to their source. Measure results and costs separately.
 
-Recorded task ownership shows who is responsible and which work is waiting.
+## 00:00:52.000–00:01:00.400 · Read the result in its scope.
+ONE HISTORICAL SOLVER RECORD · TWO CPU THREADS
 
-## 00:23.5–00:28 · Trace how a plan changed
+One generated-graph probe improved from forty one point two to eighty five percent.
+That result applies to the duplication condition shown.
 
-“Trace questions, findings and plan changes.”
+## 00:01:00.400–00:01:07.600 · Count the cost. Preserve the counterexample.
+SAME HISTORICAL RECORD · NO INDEPENDENT RERUN
 
-The recorded research history retains questions, findings and explicit changes
-of direction, with the earlier state available for inspection.
+The independent control kept its accuracy. Time rose thirty two percent.
+Native score gain remains unproven.
 
-## 00:28–00:36.5 · Inspect the research
+## 00:01:07.600–00:01:13.100 · Carry the evidence into the next step.
+ILLUSTRATED WORKFLOW · NO NEW TEST EXECUTION
 
-“Inspect six process judgments. Trace claims to the evidence. Read measured
-results and costs separately.”
+Keep failed paths and their reasons. Choose the next test.
 
-The packaged-UI example uses **synthetic data**. It shows six process judgments:
-goal alignment, benefit testing, discrimination, information gain, evidence
-adoption and avoidable repetition. Yes, no and unknown remain distinct. The
-source-return path is an illustration of the reader's existing interaction.
-These judgments are uncalibrated; they are separate from measured native
-results and costs, and are not a total performance score.
+## 00:01:13.100–00:01:16.700 · Control when research continues.
+AUTHORED SCENARIO · UNCONFIGURED AND STOPPED STATES
 
-See the [trajectory assessment contract](../../reference/trajectory-assessment.md)
-for definitions, eligibility and evidence requirements.
+Check continuation, hosts, and channels.
 
-## 00:36.5–00:42 · Read the scope and count the cost
+## 00:01:16.700–00:01:20.700 · Bring your models and tools.
+MECHANISM + REUSED WATERMARKED SEEDANCE 2.5 CONCEPT
 
-“One solver record: accuracy rose on duplicate graphs. Control time rose too.”
+Your runtime brings the models and tools.
 
-The [historical solver record](https://github.com/loopx-project/loopx/blob/c9c3adf63f9771ef95f1fcca12b11ed7de1f69eb/apps/presentation/site/public/lab/time-machine/data/graph.json)
-used two CPU threads and generated full-size joint-neighborhood graphs at 30%
-partial duplication. Its recorded accuracy
-rose from 41.2% to 85.0%. On the independent-edge control, accuracy stayed
-unchanged while time increased by 32%. This is one historical record, not an
-independent rerun or evidence of a causal LoopX-versus-baseline gain.
+## 00:01:20.700–00:01:26.200 · Research that can continue.
+OPEN SOURCE · LOCAL FIRST · 2.0 DEVELOPMENT LINE
 
-## 00:42–00:47.5 · Use evidence in the next decision
+Loop X. Keep the research, evidence, and next decision together.
 
-“Keep failed paths and their reasons. Use that evidence to choose the next step.”
+## Sources and limits
+Historical record: generated full-size joint-neighborhood graphs, 30% partial-duplication probe, two CPU threads; accuracy 41.2% → 85.0%. Independent-edge accuracy unchanged, time +32%. Native score gain unproven. No independent rerun or LoopX-versus-baseline comparison.
+The six process judgments are goal alignment, benefit testing, discrimination, information gain, evidence adoption and avoidable repetition. They use synthetic packaged-UI data; uncalibrated, with separate eligibility and no total score. See the [assessment contract](../../reference/trajectory-assessment.md). Citation paths and teaching choices are illustrated. Recorded workspace and engineering return are separate source cases.
+English narration uses a generic local synthetic voice. Chinese subtitles translate each spoken cue. A labelled watermarked Seedance 2.5 concept insert is reused; no new remote generation, analysis or benchmark job was launched. The proposed next native test has not been run for this film.
+Historical [source record](https://github.com/loopx-project/loopx/blob/c9c3adf63f9771ef95f1fcca12b11ed7de1f69eb/apps/presentation/site/public/lab/time-machine/data/graph.json).
 
-An illustrated workflow connects a failed path and its reason to the next
-decision. This segment does not record live Agent activity.
-
-## 00:47.5–00:50.5 · Control continuation
-
-“Check continuation, hosts and channels.”
-
-The authored scenario shows continuation settings, execution hosts and
-notification channels, including unconfigured and stopped states.
-
-## 00:50.5–00:54.5 · Bring your runtime
-
-“Your models and tools. Durable work state with Loop X.”
-
-The runtime supplies models and tools. LoopX retains work state across sessions.
-This segment combines a mechanism illustration with a labelled Seedance 2.5
-concept animation.
-
-## 00:54.5–00:58 · LoopX
-
-“Loop X. Goals, work, evidence and decisions.”
-
-[Explore the workspace](../../../README.md#meet-the-personal-agent-workspace) ·
-[Get started](../../../README.md#try-loopx)
+The 18–25s insert reuses a code-projected 3D illustration of separate peer scopes and an artifact dependency. It is not Blender, a physics simulation or the recorded App case. This is the single current film, led by the earlier A product-flow edit. It freezes an artifact for later creative comparisons; future research can change the story, style, duration and tools. No comprehension or causal communication benefit has been established.
