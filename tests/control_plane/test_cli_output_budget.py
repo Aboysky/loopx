@@ -1749,12 +1749,18 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # A reproducible 128-character absolute root, independent of pytest's
     # ever-growing temp/worker prefix. Keep full routes and this workload;
     # presentation-budget changes require matched base/head cost evidence.
-    # Reuse the other budget fixtures' short namespace. A canary's nested
-    # TMPDIR can already exceed 128 characters before we create this root.
-    parent = Path("/tmp").resolve()
+    # Use an existing native temp namespace on Windows; a drive-root /tmp
+    # need not exist. POSIX keeps the short namespace used by socket fixtures.
+    parent = Path(tempfile.gettempdir() if os.name == "nt" else "/tmp").resolve()
+    prefix = "loopx-brief-"
+    # A nested runner temp can exceed the workload itself. Use its nearest
+    # existing ancestor that leaves room for our owned, random child.
+    while len(str(parent / prefix)) + 8 > 128:
+        assert parent != parent.parent, "No temporary ancestor fits the 128-character workload"
+        parent = parent.parent
     # tempfile contributes an eight-character random suffix. Hold input size
-    # constant across Linux /tmp and macOS's longer temporary-directory root.
-    prefix = "loopx-brief-".ljust(128 - len(str(parent)) - 1 - 8, "p")
+    # constant even when the selected parent is a drive or share root.
+    prefix += "p" * (128 - len(str(parent / prefix)) - 8)
     with tempfile.TemporaryDirectory(prefix=prefix, dir=parent) as directory:
         root = Path(directory).resolve()
         assert len(str(root)) == 128
@@ -1764,11 +1770,38 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
 def test_long_path_budget_is_independent_of_runner_temp_prefix(
     tmp_path: Path, monkeypatch
 ) -> None:
-    parent = tmp_path / ("nested-canary-" + "p" * 128)
+    # Remain longer than the workload without adding 141 characters to an
+    # arbitrary runner prefix and crossing Windows directory limits.
+    prefix = "nested-canary-".ljust(160 - len(str(tmp_path.resolve())) - 1, "p")
+    parent = tmp_path / prefix
     parent.mkdir()
     assert len(str(parent.resolve())) > 128
     monkeypatch.setattr(tempfile, "tempdir", str(parent))
     test_brief_budget_retains_full_commands_on_real_long_paths()
+
+
+@pytest.mark.parametrize("nested_temp", [False, True])
+def test_long_path_budget_uses_native_temp_without_a_drive_root_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nested_temp: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    # Model a Windows drive with no /tmp while keeping real filesystem and
+    # CLI reads. Do not change the host's pathlib or product platform checks.
+    missing_drive_tmp = tmp_path / "missing-drive-tmp"
+    path_type = Path
+
+    def native_path(value):
+        return missing_drive_tmp if value == "/tmp" else path_type(value)
+
+    monkeypatch.setitem(globals(), "Path", native_path)
+    monkeypatch.setitem(globals(), "os", SimpleNamespace(name="nt", environ=os.environ))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    if nested_temp:
+        test_long_path_budget_is_independent_of_runner_temp_prefix(tmp_path, monkeypatch)
+    else:
+        test_brief_budget_retains_full_commands_on_real_long_paths()
+    assert not missing_drive_tmp.exists()
 
 
 def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
