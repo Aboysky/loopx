@@ -3,6 +3,7 @@ import {ArrowUpRight, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryEpisode} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
 import {requestJson} from "../../data/chat";
+import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import "./goal-research-analysis.css";
 
@@ -24,7 +25,7 @@ const locationFor = (goal: string) => {
 };
 
 export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean, readSourceUrl?: string) {
-  const endpoint = readSourceUrl ? new URL("/api/chat/research-analysis", readSourceUrl).toString() : "/api/chat/research-analysis";
+  const endpoint = "/api/chat/research-analysis";
   const [citation, setCitation] = useState<Citation | null>(null);
   const [citationError, setCitationError] = useState("");
   const [citationBusy, setCitationBusy] = useState(false);
@@ -49,7 +50,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     const current = generation.current, sequence = ++readSequence.current;
     const query = new URLSearchParams({goal_id: goalId, ...(packId ? {pack_id: packId} : {})});
     let value: Snapshot;
-    try {value = await requestJson<Snapshot>(`${endpoint}?${query}`, {signal});}
+    try {value = await requestJson<Snapshot>(sourceReadApiUrl(readSourceUrl, `${endpoint}?${query}`), {signal});}
     catch (e) {if (current === generation.current && sequence === readSequence.current && !signal?.aborted) setReadError(errorText(e)); throw e;}
     if (!value?.ok || !Array.isArray(value.catalog?.packs) || (value.pack && value.pack.pack_id !== (packId ?? value.catalog.default_pack_id))) {
       const failure = new Error(zh ? "分析来源读回不一致。" : "Analysis source readback does not match.");
@@ -58,7 +59,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     }
     if (current === generation.current && sequence === readSequence.current && scope.current.goalId === goalId && scope.current.packId === packId && !signal?.aborted) {setSnapshot(value); setReadError(""); if (value.pack?.job?.status === "succeeded" || value.pack?.job?.status === "cancelled") setError("");}
     return value;
-  }, [goalId, location.packId, zh, endpoint]);
+  }, [goalId, location.packId, zh, readSourceUrl]);
   const applyLocation = useCallback((next: typeof location) => {
     // Selection and browser history share one source transition. Invalidate
     // pending reads/actions before a new scope can display the old snapshot.
@@ -77,7 +78,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     const pop = () => applyLocation(locationFor(goalId));
     window.addEventListener("popstate", pop);
     return () => {generation.current++; citeGeneration.current++; window.removeEventListener("popstate", pop);};
-  }, [goalId, applyLocation]);
+  }, [goalId, applyLocation, readSourceUrl]);
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController(); setLoading(true);
@@ -85,7 +86,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     return () => controller.abort();
   }, [active, read, location.packId]);
   const pack = snapshot?.pack ?? null;
-  useEffect(() => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}, [goalId, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
+  useEffect(() => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
 
   // A pending request is observed here. A persisted running receipt alone is
   // not proof that the model is currently executing; old receipts stop polling.
@@ -144,7 +145,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     show();
     const current = ++citeGeneration.current; setCitationBusy(true); setCitationError("");
     const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key, source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)});
-    try {const value = await requestJson<Citation>(`${endpoint}/citation?${query}`); if (current === citeGeneration.current) {setCitation(value); requestAnimationFrame(() => {sourcePanel.current?.focus({preventScroll: true}); sourcePanel.current?.scrollIntoView({block: "nearest"});});}}
+    try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/citation?${query}`)); if (current === citeGeneration.current) {setCitation(value); requestAnimationFrame(() => {sourcePanel.current?.focus({preventScroll: true}); sourcePanel.current?.scrollIntoView({block: "nearest"});});}}
     catch (e) {if (current === citeGeneration.current) setCitationError(errorText(e));}
     finally {if (current === citeGeneration.current) setCitationBusy(false);}
   };
