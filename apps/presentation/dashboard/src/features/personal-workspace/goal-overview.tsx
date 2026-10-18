@@ -80,7 +80,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
           <h2>{copy.direction}</h2>
           <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
         </header>
-        <p className="goal-overview-objective" data-testid="goal-declared-objective">{digest.objective ?? copy.objectiveUnavailable}</p>
+        <p className={`goal-overview-objective${digest.objective ? "" : " is-unavailable"}`} data-testid="goal-declared-objective">{digest.objective ?? copy.objectiveUnavailable}</p>
         <details className="goal-overview-agent-note"><summary>{copy.current}</summary>
           <p className="goal-overview-note">{goal.nextSentence}</p>
           {goal.agentSentence && goal.agentSentence !== goal.nextSentence ? <details className="goal-overview-agent-note"><summary>{copy.agentSummary}</summary><p className="goal-overview-note">{goal.agentSentence}</p></details> : null}
