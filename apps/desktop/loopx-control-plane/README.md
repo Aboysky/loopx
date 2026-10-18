@@ -44,8 +44,8 @@ to the App. A private request receipt contains versions, source revisions,
 update phase and the qualified service runtime identity; it contains no Goal
 content or credentials. An update check failure remains a failed terminal
 upgrade even when the workspace can still open. Normal launches without that
-request retain their existing three-second optional startup check; an explicit
-terminal upgrade uses the existing thirty-second interactive check budget.
+request perform their network check after local services are ready; an explicit
+terminal upgrade retains its thirty-second interactive check budget.
 The existing update panel shows the same native maintenance phases and recovery
 actions. Main is the latest complete signed build, which can lag Git HEAD.
 
@@ -292,10 +292,10 @@ secret. Updater signing does not provide Apple notarization. It also does not
 change Goal authority, grant capabilities, or stop running agents on behalf of
 the user. Services may briefly disconnect during reconciliation.
 
-The optional startup feed check has a three-second deadline so an unavailable
-update server cannot hold workspace startup indefinitely. A manual **Check for updates**
-allows 45 seconds for the same official feed, including redirects; the panel
-keeps showing its checking state while the existing workspace remains readable.
+The background feed check has a thirty-second deadline and is outside local
+workspace startup. A manual **Check for updates** allows 45 seconds for the same
+official feed, including redirects; the panel keeps showing its checking state
+while the existing workspace remains readable.
 A timeout remains an explicit retryable error, never a claim that the App is
 current. The separate 30-second download/signature-verification deadline and
 installation/recovery boundaries are unchanged.
@@ -401,6 +401,16 @@ updates through the actual App, then terminate its exact owned Chat and Status
 children separately. Read back both HTTP identities, unchanged peer PID, exact
 registry, retained Session and update failure, then normal quit/reopen cleanup.
 Never substitute an installed App, real Goal or shared listener as a fixture.
+Bind isolation at the QA bundle's executable entrypoint, so a window tool or OS
+relaunch cannot drop a caller-only environment. The native services request
+`--global-registry`; `LOOPX_REGISTRY` only changes the project default and does
+not override that explicit selection. A QA-only CLI launcher must route through
+Core's explicit `--registry` and `--runtime-root` arguments instead of that flag.
+Fail closed when its fixture binding is absent. Before any UI operation or
+public capture, read both service identities, the actual registry/runtime route
+and the empty Goal set. A source mismatch invalidates the sample; retain it
+privately and stop rather than operating on or publishing the real workspace.
+Do not change the user's default registry or `HOME` to obtain isolation.
 This qualifies child-exit recovery, not an interrupted model Turn, an
 unresponsive process, a signed update installation or cross-OS operation.
 
