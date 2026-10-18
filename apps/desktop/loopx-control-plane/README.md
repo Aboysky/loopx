@@ -12,13 +12,27 @@ desktop release workflow succeeds:
 - macOS: `.dmg` plus a zipped `.app` bundle;
 - Windows: `.msi` plus an NSIS `.exe` installer.
 
-On Apple Silicon macOS, the App checks its current official channel on launch,
-verifies a newer App's updater signature, installs it and restarts automatically.
+On Apple Silicon macOS, the App opens its qualified local runtime first, then
+checks its current official channel and downloads a newer App in the background.
+It verifies the updater signature and prepares the archive locally. The next
+normal open verifies that archive again and installs it before starting services;
+ordinary background preparation never replaces or restarts an active workspace.
 An offline or failed check keeps the installed App usable; it does not certify
 that the App is current. Main points to the latest complete signed build,
 not arbitrary Git HEAD. Builds without the updater need a one-time replacement.
 Windows preview retains manual CLI installation; browser/PWA users continue
 with `loopx update`.
+
+Background network requests do not hold service supervision. A slow or failed
+check/download cannot prevent local startup or recovery of an owned child.
+The existing update panel reports background progress or a prepared update;
+manual actions cancel/supersede background work and retain their original
+installation, restart, backup and rollback controls. A CLI-requested App upgrade
+remains an explicit transaction with its original channel and service-ready
+readback. A permission-restricted prepared installation stays on the verified
+current App; use the existing explicit update action for native authorization.
+The disposable cache is not an update authority: its signed bytes, channel,
+version order and sealed bundle version are checked again before replacement.
 
 ## Updates And Recovery
 
