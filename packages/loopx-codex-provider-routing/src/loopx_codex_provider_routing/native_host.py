@@ -27,6 +27,17 @@ class HostError(Exception):
         super().__init__(code)
 
 
+# Address one inspected process, not an App bundle id shared by other routes.
+# terminate() requests the normal AppKit quit lifecycle and can be refused.
+QUIT = '''ObjC.import("AppKit");
+function run(argv) {
+  var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
+  if (!app || app.isTerminated) return;
+  if (ObjC.unwrap(app.executableURL.path) !== argv[1]) throw Error("Client executable changed");
+  if (!app.terminate) throw Error("Client refused normal quit");
+}'''
+
+
 def trusted_file(path: Path) -> Path:
     path = path.resolve(strict=True)
     info = path.stat()
@@ -61,8 +72,11 @@ class NativeHost:
         self.home = user_home or Path.home()
         self.spec = self.apps.route(self.home, "gpt")
         self.expected = None
+        self.not_after = None
 
         def idle():
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
             try:
                 self.apps.account_idle(self.home, self.spec)
             except (ValueError, OSError, subprocess.SubprocessError):
@@ -84,19 +98,88 @@ class NativeHost:
     def status(self) -> dict:
         self.apps.check_provider(self.spec, "gpt")
         value = self.manager.status()
-        return {key: value[key] for key in (
+        result = {key: value[key] for key in (
             "slots", "active_slot", "current_login_matches", "recovery_required"
         )} | {"selection_revision": self.revision()}
+        if sys.platform == "darwin":
+            exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
+            result["client_running"] = self.apps.running(exe, self.spec) is not None
+        return result
 
-    def switch(self, slot: str, expected: str, *, reopen: bool) -> dict:
+    def close_client(self, expected: str, *, timeout: float = 25) -> bool:
+        exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
+        pid = self.apps.running(exe, self.spec)
+        if self.revision() != expected:
+            raise HostError("selection_changed")
+        if pid is None:
+            return False
+        # Recheck exact ownership immediately before requesting a normal quit.
+        if self.apps.running(exe, self.spec) != pid:
+            raise HostError("client_changed")
+        try:
+            subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)],
+                           input=QUIT, text=True, check=True, capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            raise HostError("client_quit_refused") from None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            current = self.apps.running(exe, self.spec)
+            if current is None:
+                return True
+            if current != pid:
+                raise HostError("client_changed")
+            time.sleep(0.1)
+        raise HostError("client_quit_timeout")
+
+    def reopen(self, expected: str) -> dict:
+        value = self.status()
+        if value["selection_revision"] != expected or value["recovery_required"] or value["current_login_matches"] is not True:
+            raise HostError("selection_changed")
+        self.apps.open_app(self.home, "gpt", [])
+        return self.status()
+
+    def switch(self, slot: str, expected: str, *, reopen: bool, restart_clients: bool = False,
+               not_after: float | None = None) -> dict:
         if sys.platform != "darwin":
             raise HostError("platform_unavailable")
         self.expected = expected
-        self.status()
+        self.not_after = not_after
+        before = self.status()
+        if before["selection_revision"] != expected or before["recovery_required"] or before["current_login_matches"] is not True:
+            raise HostError("selection_changed")
         # idle() is rechecked by the native owner under launch/account locks,
         # and immediately before its first mutation. This is the CAS fence,
         # including against manual selections outside LoopX.
-        result = self.manager.switch(slot)
+        try:
+            if restart_clients:
+                if not_after is not None and time.time() >= not_after:
+                    raise HostError("quota_stale")
+                self.close_client(expected)
+                # Children may flush and exit just after their App root. An
+                # unrelated CLI/file owner remains a hold, never a kill target.
+                deadline = time.monotonic() + 10
+                while True:
+                    try:
+                        self.manager.idle()
+                        break
+                    except HostError as error:
+                        if error.code != "waiting_for_idle":
+                            raise
+                        if time.monotonic() >= deadline:
+                            raise HostError("other_clients_busy") from None
+                        time.sleep(0.2)
+            result = self.manager.switch(slot)
+        except Exception as error:
+            # A refused/failed transaction must not unnecessarily leave a
+            # normally closed source App down. Native preflight blocks opening
+            # an incomplete credential journal; a later manual choice wins.
+            if restart_clients and before.get("client_running") and getattr(error, "code", None) != "client_changed":
+                try:
+                    if self.status().get("client_running") is False:
+                        self.reopen(expected)
+                except (HostError, OSError, ValueError, subprocess.SubprocessError):
+                    pass
+            raise
         value = self.status()
         if value["active_slot"] != slot or value["current_login_matches"] is not True:
             raise HostError("readback_failed")
@@ -106,6 +189,10 @@ class NativeHost:
                 self.apps.open_app(self.home, "gpt", [])
             except (OSError, ValueError, subprocess.SubprocessError):
                 launch_failed = True
+        after = self.status()
+        if after["selection_revision"] != value["selection_revision"]:
+            raise HostError("selection_changed")
+        value = after
         return value | {"history_untouched": result["history_untouched"], "launch_failed": launch_failed}
 
     def recover(self, rollback: bool, expected: str) -> dict:
@@ -294,6 +381,10 @@ def app_server_usage(binary: str, env: dict) -> dict:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--result-file":
+        from .native import SCHEMA, atomic
+        atomic(Path(sys.argv[2]).with_suffix(".pid.json"),
+               {"schema_version": SCHEMA, "pid": os.getpid()})
     try:
         request = json.load(sys.stdin)
         host = NativeHost(request["adapter"])
@@ -303,16 +394,25 @@ def main() -> int:
         elif operation == "observe":
             value = host.observe(request["slots"], request["expected_revision"], request.get("auth_failures"))
         elif operation == "switch":
-            value = host.switch(request["slot"], request["expected_revision"], reopen=request["reopen"])
+            value = host.switch(request["slot"], request["expected_revision"], reopen=request["reopen"],
+                                restart_clients=request.get("restart_clients", False), not_after=request.get("not_after"))
+        elif operation == "reopen":
+            value = host.reopen(request["expected_revision"])
         elif operation in ("recover", "rollback"):
             value = host.recover(operation == "rollback", request["expected_revision"])
         else:
             raise HostError("unsupported_operation")
-        print(json.dumps({"ok": True, "result": value}))
-        return 0
+        packet = {"ok": True, "result": value}
     except Exception as error:  # Native diagnostics can contain paths/identities.
-        print(json.dumps({"ok": False, "code": error.code if isinstance(error, HostError) else "native_unavailable"}))
-        return 1
+        packet = {"ok": False, "code": error.code if isinstance(error, HostError) else "native_unavailable"}
+    if len(sys.argv) == 3 and sys.argv[1] == "--result-file":
+        # A detached worker completes even if its calling Codex App goes away.
+        # The private receipt lets a restarted observer reconcile, not replay.
+        from .native import SCHEMA, atomic
+        atomic(Path(sys.argv[2]), {"schema_version": SCHEMA, **packet})
+    else:
+        print(json.dumps(packet))
+    return 0 if packet["ok"] else 1
 
 
 if __name__ == "__main__":

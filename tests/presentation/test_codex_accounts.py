@@ -7,7 +7,10 @@ import importlib
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -74,6 +77,9 @@ class NativeTransport:
             assert parameters["expected_revision"] == self.revision
             self.pending = False
             return self(adapter, "status")
+        if operation == "reopen":
+            assert parameters["expected_revision"] == self.revision
+            return self(adapter, "status") | {"client_running": True}
         raise AssertionError(operation)
 
 
@@ -275,3 +281,238 @@ def test_http_adapter_rejects_secret_and_arbitrary_command_fields(native, tmp_pa
     handler._codex_accounts_write()
     assert handler.code == 409 and handler.sent["code"] == "invalid_request"
     assert "synthetic-only" not in json.dumps(handler.sent)
+
+
+def test_client_restart_requires_explicit_opt_in_and_old_policy_stays_off(native, tmp_path):
+    provider, transport, _ = configured(native, tmp_path)
+    assert provider.tick()["action"] == "selected"
+    first = next(args for op, args in transport.calls if op == "switch")
+    assert first["restart_clients"] is False and "handoff_receipt" not in first
+    assert first["not_after"] == 1120
+    # Older saved policies without this new permission remain wait-only.
+    state = provider._load()
+    state["policy"].pop("restart_clients")
+    native.atomic(provider.path, state)
+    assert provider.configure(expected_revision=1, enabled=True, slots=["a", "b"])["policy"]["restart_clients"] is False
+    with pytest.raises(Exception, match="invalid_policy"):
+        provider.configure(expected_revision=2, enabled=True, slots=["a", "b"], restart_clients="yes")
+
+
+def test_opted_in_handoff_has_private_receipt_and_no_replayed_switch(native, tmp_path):
+    provider, transport, clock = configured(native, tmp_path)
+    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"], restart_clients=True)
+    original = transport.__call__
+    effect = {}
+
+    def pending(adapter, operation, **parameters):
+        if operation == "switch":
+            effect.update(parameters)
+            raise native.HostError("handoff_pending")
+        return original(adapter, operation, **parameters)
+
+    provider.transport = pending
+    assert provider.tick()["action"] == "handoff_pending"
+    assert effect["restart_clients"] is True
+    assert Path(effect["handoff_receipt"]).parent.stat().st_mode & 0o077 == 0
+    clock.now += 61
+    assert provider.tick()["action"] == "restarting"
+    # Only the completed worker receipt can reconcile the pending operation.
+    transport.active, transport.revision = "b", "selected"
+    native.atomic(Path(effect["handoff_receipt"]), {"schema_version": native.SCHEMA,
+                  "ok": True, "result": {"launch_failed": True}})
+    result = provider.tick(refresh=True)
+    assert result["action"] == "selected" and result["launch_failed"]
+    before = len(transport.calls)
+    provider.transport = transport
+    assert provider.reopen(expected_selection="selected")["launch_failed"] is False
+    assert [op for op, _ in transport.calls[before:]] == ["reopen", "status"]
+
+
+def test_unresolved_worker_never_replays_or_reconfigures_an_enabled_handoff(native, tmp_path):
+    provider, transport, clock = configured(native, tmp_path)
+    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"], restart_clients=True)
+    original = transport.__call__
+    switches = []
+
+    def pending(adapter, operation, **parameters):
+        if operation == "switch":
+            switches.append(parameters)
+            raise native.HostError("handoff_pending")
+        return original(adapter, operation, **parameters)
+
+    provider.transport = pending
+    provider.tick()
+    clock.now += 181
+    assert provider.tick(refresh=True)["recovery_required"]
+    assert len(switches) == 1
+    with pytest.raises(Exception, match="handoff_pending"):
+        provider.configure(expected_revision=2, enabled=True, slots=["a", "b"], reconnect=True)
+    # Disabling cannot discard a worker that may be committing native state.
+    provider.configure(expected_revision=2, enabled=False, slots=["a", "b"])
+    assert provider._load()["intent"]["handoff_receipt"] == switches[0]["handoff_receipt"]
+    assert provider.tick(refresh=True)["action"] == "handoff_interrupted"
+    with pytest.raises(Exception, match="handoff_pending"):
+        provider.recover(rollback=False, expected_revision=3, expected_selection="initial")
+    # Recovery can retire a proven exited worker without inventing a native
+    # credential rollback when the worker never began a credential journal.
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(timeout=5)
+    marker = Path(switches[0]["handoff_receipt"]).with_suffix(".pid.json")
+    native.atomic(marker, {"schema_version": native.SCHEMA, "pid": child.pid})
+    result = provider.recover(rollback=False, expected_revision=3, expected_selection="initial")
+    assert result["policy"]["enabled"] is False and provider._load()["intent"] is None
+
+
+def test_refused_client_is_not_repeatedly_closed_in_the_background(native, tmp_path):
+    provider, transport, clock = configured(native, tmp_path)
+    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"], restart_clients=True)
+    calls = []
+
+    def refused(adapter, operation, **parameters):
+        if operation == "switch":
+            calls.append(parameters)
+            raise native.HostError("client_quit_refused")
+        return transport(adapter, operation, **parameters)
+
+    provider.transport = refused
+    assert provider.tick()["action"] == "client_quit_refused"
+    clock.now += 1000
+    provider.tick()
+    assert len(calls) == 1 and transport.active == "a"
+    provider.tick(refresh=True)
+    assert len(calls) == 2  # A deliberate check authorizes one new attempt.
+
+
+def test_disable_waits_for_owned_transaction_then_persists_off(native, tmp_path):
+    provider, transport, _ = configured(native, tmp_path)
+    transport.entered, transport.release = threading.Event(), threading.Event()
+    active = threading.Thread(target=provider.tick)
+    active.start()
+    assert transport.entered.wait(5)
+    result, errors = [], []
+
+    def disable():
+        try:
+            result.append(provider.configure(expected_revision=1, enabled=False, slots=["a", "b"]))
+        except Exception as error:
+            errors.append(error)
+
+    request = threading.Thread(target=disable)
+    request.start()
+    assert request.is_alive()
+    transport.release.set()
+    active.join(10)
+    request.join(10)
+    assert not errors and result[0]["policy"]["enabled"] is False
+    before = len(transport.calls)
+    assert provider.tick()["action"] == "disabled" and len(transport.calls) == before
+
+
+def client_host(native, monkeypatch):
+    from loopx_codex_provider_routing import native_host as module
+
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    adapter = module.NativeHost.__new__(module.NativeHost)
+    state = {"pid": 11, "active": "a", "revision": "initial", "quit": [], "switch": 0, "open": 0}
+    adapter.home, adapter.spec = Path("/synthetic"), {}
+    adapter.revision = lambda: state["revision"]
+    adapter.status = lambda: {"active_slot": state["active"], "selection_revision": state["revision"],
+                              "current_login_matches": True, "recovery_required": False,
+                              "client_running": state["pid"] is not None}
+
+    def idle():
+        if state["pid"] is not None:
+            raise module.HostError("waiting_for_idle")
+        if adapter.revision() != adapter.expected:
+            raise module.HostError("selection_changed")
+
+    def switch(slot):
+        idle()
+        state.update(active=slot, revision="selected", switch=state["switch"] + 1)
+        return {"history_untouched": True}
+
+    def reopen(*_):
+        state.update(pid=22, open=state["open"] + 1)
+
+    def quit(command, **parameters):
+        state["quit"].append(command)
+        assert "app.terminate" in parameters["input"] and "forceTerminate" not in parameters["input"]
+        assert command[-2:] == ["11", "/synthetic/GPT.app/Contents/MacOS/GPT"]
+        state["pid"] = None
+
+    adapter.manager = SimpleNamespace(switch=switch, idle=idle)
+    adapter.apps = SimpleNamespace(executable=lambda _: Path("/synthetic/GPT.app/Contents/MacOS/GPT"),
+                                   app_bundle=lambda *_: None, running=lambda *_: state["pid"], open_app=reopen)
+    monkeypatch.setattr(module.subprocess, "run", quit)
+    return adapter, state, module
+
+
+def test_normal_quit_precedes_native_idle_transaction_and_same_route_reopen(native, monkeypatch):
+    adapter, state, _ = client_host(native, monkeypatch)
+    result = adapter.switch("b", "initial", reopen=True, restart_clients=True)
+    assert state["quit"] and state["switch"] == 1 and state["open"] == 1
+    assert result["active_slot"] == "b" and result["client_running"] is True
+
+
+def test_wait_only_mode_does_not_quit_a_client(native, monkeypatch):
+    adapter, state, _ = client_host(native, monkeypatch)
+    with pytest.raises(Exception, match="waiting_for_idle"):
+        adapter.switch("b", "initial", reopen=True)
+    assert not state["quit"] and state["active"] == "a"
+
+
+def test_quit_refusal_and_timeout_do_not_mutate_credentials(native, monkeypatch):
+    adapter, state, module = client_host(native, monkeypatch)
+
+    def refuse(*_, **__):
+        raise module.subprocess.CalledProcessError(1, "synthetic")
+
+    monkeypatch.setattr(module.subprocess, "run", refuse)
+    with pytest.raises(Exception, match="client_quit_refused"):
+        adapter.switch("b", "initial", reopen=True, restart_clients=True)
+    assert state["switch"] == 0 and state["open"] == 0
+    monkeypatch.setattr(module.subprocess, "run", lambda *_, **__: None)
+    with pytest.raises(Exception, match="client_quit_timeout"):
+        adapter.close_client("initial", timeout=0)
+    assert state["active"] == "a"
+
+
+def test_manual_selection_and_new_client_prevent_closing_the_wrong_process(native, monkeypatch):
+    adapter, state, _ = client_host(native, monkeypatch)
+    with pytest.raises(Exception, match="selection_changed"):
+        adapter.switch("b", "stale", reopen=True, restart_clients=True)
+    assert not state["quit"]
+    owners = iter([11, 33])
+    adapter.apps.running = lambda *_: next(owners)
+    with pytest.raises(Exception, match="client_changed"):
+        adapter.switch("b", "initial", reopen=True, restart_clients=True)
+    assert not state["quit"] and state["switch"] == 0 and state["open"] == 0
+
+
+def test_native_switch_failure_reopens_source_without_replaying_account_selection(native, monkeypatch):
+    adapter, state, module = client_host(native, monkeypatch)
+    adapter.manager.switch = lambda _: (_ for _ in ()).throw(module.HostError("readback_failed"))
+    with pytest.raises(Exception, match="readback_failed"):
+        adapter.switch("b", "initial", reopen=True, restart_clients=True)
+    assert state["active"] == "a" and state["open"] == 1
+
+
+def test_manual_selection_during_quit_wins_before_any_credential_write(native, monkeypatch):
+    adapter, state, module = client_host(native, monkeypatch)
+    quit = module.subprocess.run
+
+    def manual_choice(*args, **kwargs):
+        quit(*args, **kwargs)
+        state.update(active="c", revision="manual")
+
+    monkeypatch.setattr(module.subprocess, "run", manual_choice)
+    with pytest.raises(Exception, match="selection_changed"):
+        adapter.switch("b", "initial", reopen=True, restart_clients=True)
+    assert state["active"] == "c" and state["switch"] == 0 and state["open"] == 0
+
+
+def test_expired_automatic_evidence_does_not_even_quit_the_client(native, monkeypatch):
+    adapter, state, _ = client_host(native, monkeypatch)
+    with pytest.raises(Exception, match="quota_stale"):
+        adapter.switch("b", "initial", reopen=True, restart_clients=True, not_after=time.time() - 1)
+    assert not state["quit"] and not state["switch"]

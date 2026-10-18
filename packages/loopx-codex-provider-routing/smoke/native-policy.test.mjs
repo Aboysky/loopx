@@ -48,3 +48,14 @@ test("allowlist, manual fence, cooldown and all-unavailable wait precede effects
   assert.equal(unavailable.retry_at, 1300);
   assert.equal(decide(input({ observations: [sample("a", 100), { ...sample("b"), observed_at: 0 }] })).target, null);
 });
+
+test("normal client restart needs its own permission and the quota proof expires before effects", () => {
+  const allowed = { enabled: true, slots: ["a", "b"], cooldown_seconds: 300, restart_clients: true };
+  const result = decide(input({ policy: allowed, observations: [sample("a", 100), { ...sample("b"), observed_at: 950 }] }));
+  assert.equal(result.restart_clients, true);
+  assert.equal(result.valid_until, 1070);
+  assert.equal(decide(input({})).restart_clients, false, "Existing policies do not gain client shutdown authority");
+  assert.equal(decide(input({ policy: allowed, observations: [sample("a"), sample("b")] })).restart_clients, false);
+  assert.equal(decide(input({ policy: allowed, manual_slot: "b" })).valid_until, null,
+    "An explicit sign-in choice is not an automatic quota decision");
+});

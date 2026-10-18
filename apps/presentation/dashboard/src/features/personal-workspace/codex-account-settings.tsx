@@ -8,7 +8,7 @@ type AccountStatus = {
   ok: boolean; available: boolean; code?: string | null; revision?: number;
   active_slot?: string | null; selection_revision?: string; action?: string;
   target?: string | null; recovery_required?: boolean; launch_failed?: boolean;
-  policy?: { enabled: boolean; slots: string[]; cooldown_seconds: number };
+  policy?: { enabled: boolean; slots: string[]; cooldown_seconds: number; restart_clients?: boolean };
   slots?: string[]; last_checked_at?: number | null; last_switch_at?: number | null;
   accounts?: Array<{ slot: string; availability: string; observed_at: number;
     primary_used: number | null; secondary_used: number | null; reset_at: number | null;
@@ -19,7 +19,13 @@ const copy = {
   "zh-CN": {
     title: "Codex 原生账号", enabled: "自动接续已启用", disabled: "自动接续已关闭",
     enable: "额度耗尽后自动切换", refresh: "检查额度", retry: "重新连接",
-    effect: "仅使用下方已登记账号。额度耗尽后等待 Codex 客户端关闭，保存登录态并切换，再打开原来的 GPT 界面。",
+    effect: "仅使用下方已登记账号。额度耗尽后正常退出 GPT 专用客户端，保存登录态并切换，再重新打开原来的界面。",
+    effectWait: "仅使用下方已登记账号。额度耗尽后等待客户端关闭，再保存登录态、切换账号并重新打开。",
+    restart: "允许自动退出并重开 GPT 客户端", restarting: "正在退出 GPT、切换账号并重新打开",
+    reopen: "重新打开 GPT", other_clients_busy: "还有其他进程占用 GPT 登录；关闭占用后检查额度重试",
+    client_quit_refused: "GPT 未接受正常退出；本次未换号，自动尝试已暂停", client_quit_timeout: "GPT 尚未退出；本次未换号，自动尝试已暂停",
+    client_changed: "GPT 进程已变化；已暂停本次切换", handoff_pending: "独立切换进程正在完成接续，请稍候",
+    handoff_interrupted: "接续进程中断；请检查并恢复本次切换", quota_stale: "额度记录已过期，正在重新检查",
     current: "当前", next: "下一账号", slot: "账号", primary: "短周期剩余", secondary: "长周期剩余", unread: "未读取",
     select: "切换到此账号", checking: "正在检查额度", ready: "当前账号可用", selected: "账号已切换",
     waiting_for_idle: "已选好候选账号，等待 Codex 客户端关闭", selection_changed: "账号选择已变化，已暂停本次切换",
@@ -28,7 +34,7 @@ const copy = {
     recovery_required: "上次切换未完成，需要恢复", unavailable: "原生账号暂不可用", adapter_changed: "槽位管理器已更新，请重新连接",
     recover: "恢复未完成的切换", rollback: "撤销最近一次切换", available: "可用", exhausted: "额度已用完",
     unknown: "额度未知", credits: "另有可用额度", help: "运行与恢复说明", last: "上次检查",
-    detail: "检测不会调用模型、购买额度或使用重置券。401 登录失效先由原生客户端刷新；其他账号可通过官方 CLI 单独刷新。查询失败不会被判为额度耗尽。切换保留模型设置和会话历史，不重放已提交工作。自动观察随 LoopX 服务运行；原生客户端占用时不会强退。",
+    detail: "检测不会调用模型、购买额度或使用重置券。401 登录失效先由原生客户端刷新；其他账号可通过官方 CLI 单独刷新。查询失败不会被判为额度耗尽。自动退出仅针对 GPT 专用实例，拒绝退出或其他 CLI/文件占用会暂停尝试，不强杀进程。独立进程完成切换和重开，即使发起切换的 Codex 已退出。切换保留模型设置和会话历史，不重放已提交工作。自动观察随 LoopX 服务运行。",
     extension_uninstalled: "尚未安装 Codex 账号扩展。安装 loopx-codex-provider-routing 后重新启动 LoopX 服务。",
     adapter_unavailable: "未发现已安装的 Personal Apps 槽位管理器和 Codex CLI。",
     native_unavailable: "无法连接原生槽位管理器，请检查本机安装后重试。",
@@ -38,7 +44,13 @@ const copy = {
   en: {
     title: "Native Codex accounts", enabled: "Automatic handoff enabled", disabled: "Automatic handoff off",
     enable: "Switch automatically when quota runs out", refresh: "Check quota", retry: "Reconnect",
-    effect: "Use only the registered accounts below. After exhaustion, wait for Codex clients to close, save the login, switch accounts, then reopen the same GPT interface.",
+    effect: "Use only the registered accounts below. After exhaustion, quit the dedicated GPT client normally, save the login, switch accounts, then reopen the same interface.",
+    effectWait: "Use only the registered accounts below. After exhaustion, wait for clients to close, save the login, switch accounts, then reopen the same interface.",
+    restart: "Allow automatic GPT client quit and restart", restarting: "Quitting GPT, switching accounts and reopening",
+    reopen: "Reopen GPT", other_clients_busy: "Another process still owns the GPT login; close it and check quota to retry",
+    client_quit_refused: "GPT refused normal quit; no account changed and automatic retries are paused", client_quit_timeout: "GPT has not exited; no account changed and automatic retries are paused",
+    client_changed: "The GPT process changed; this switch was paused", handoff_pending: "The independent handoff is still finishing; please wait",
+    handoff_interrupted: "The handoff process stopped; inspect and recover this switch", quota_stale: "Quota observations expired; checking again",
     current: "Current", next: "Next account", slot: "Account", primary: "Short window left", secondary: "Long window left", unread: "Not read",
     select: "Switch to this account", checking: "Checking quota", ready: "Current account is available", selected: "Account switched",
     waiting_for_idle: "Candidate selected; waiting for Codex clients to close", selection_changed: "Account selection changed; this switch was paused",
@@ -47,7 +59,7 @@ const copy = {
     recovery_required: "An interrupted switch needs recovery", unavailable: "Native accounts unavailable", adapter_changed: "The slot manager changed; reconnect to it",
     recover: "Recover interrupted switch", rollback: "Undo last switch", available: "Available", exhausted: "Quota exhausted",
     unknown: "Quota unknown", credits: "Additional allowance available", help: "Operation and recovery", last: "Last checked",
-    detail: "Checks do not call a model, buy credits or use reset coupons. Native Codex refreshes an expired active login; other accounts can refresh separately through the official CLI. A failed check never means exhausted quota. Switching preserves model settings and history and never replays submitted work. Observation runs with the LoopX service and never force-quits an occupied client.",
+    detail: "Checks do not call a model, buy credits or use reset coupons. Native Codex refreshes an expired active login; other accounts can refresh separately through the official CLI. A failed check never means exhausted quota. Normal quit targets only the dedicated GPT instance. A refused quit or another CLI/file owner pauses attempts; processes are never force-killed. An independent process completes switching and reopening even when the calling Codex exits. Model settings and history stay intact; submitted work is never replayed. Observation runs with the LoopX service.",
     extension_uninstalled: "Install the optional loopx-codex-provider-routing package, then restart the LoopX service.",
     adapter_unavailable: "The installed Personal Apps slot manager and Codex CLI were not found.",
     native_unavailable: "Cannot connect to the native slot manager. Check the local installation and retry.",
@@ -88,16 +100,20 @@ export function CodexAccountSettings() {
     finally { setBusy(false); }
   }
   const enabled = status?.policy?.enabled === true;
+  const restartClients = status?.policy?.restart_clients === true;
   const problem = status?.code || (status?.ok === false ? "native_unavailable" : null);
   return <section className="personal-codex-accounts" data-testid="codex-account-settings" aria-busy={busy}>
     <header><h2>{c.title}</h2><span>{status?.active_slot ? `${c.current} ${status.active_slot.toUpperCase()} · ` : ""}{enabled ? c.enabled : c.disabled}</span></header>
     {!status ? <p role="status">{c.checking}</p> : null}
     {(problem && problem !== status?.action) || status?.available === false ? <p role="alert">{label(problem)}</p> : null}
     {status?.available && status.slots?.length ? <>
-      <p className="codex-account-effect">{c.effect}</p>
+      <p className="codex-account-effect">{restartClients ? c.effect : c.effectWait}</p>
       <label className="codex-account-enable"><input type="checkbox" checked={enabled} disabled={busy}
         onChange={event => void act("configure", { expected_revision: status.revision, enabled: event.target.checked,
           slots: status.slots })} /><span>{c.enable}</span></label>
+      <label className="codex-account-enable"><input type="checkbox" checked={restartClients} disabled={busy}
+        onChange={event => void act("configure", { expected_revision: status.revision, enabled,
+          restart_clients: event.target.checked, slots: status.slots })} /><span>{c.restart}</span></label>
       <div className="codex-account-state" role="status" aria-live="polite">
         {status.action === "ready" || status.action === "selected" ? <CheckCircle2 size={17} aria-hidden />
           : <Circle size={17} aria-hidden />}
@@ -123,7 +139,8 @@ export function CodexAccountSettings() {
           </article>;
         })}
       </div>
-      {status.launch_failed ? <p role="alert">{c.launchFailed}</p> : null}
+      {status.launch_failed ? <><p role="alert">{c.launchFailed}</p><button type="button" disabled={busy}
+        onClick={() => void act("reopen", { expected_selection: status.selection_revision })}>{c.reopen}</button></> : null}
       <div className="codex-account-actions"><button type="button" disabled={busy}
         onClick={() => void act("refresh")}><RefreshCw aria-hidden size={16} />{c.refresh}</button>
         {status.last_checked_at ? <span>{c.last} {new Date(status.last_checked_at * 1000).toLocaleTimeString(locale)}</span> : null}
@@ -138,6 +155,7 @@ export function CodexAccountSettings() {
     {error ? <p role="alert"><AlertCircle aria-hidden size={16} />{c.failure}</p> : null}
     {status?.code === "adapter_changed" || error ? <button type="button" disabled={busy} onClick={() => void act("configure", {
       expected_revision: status?.revision, enabled, slots: status?.slots ?? status?.policy?.slots ?? [], reconnect: true,
+      restart_clients: restartClients,
     })}>{c.retry}</button> : null}
   </section>;
 }

@@ -67,9 +67,27 @@ def policy(request: dict) -> dict:
 
 
 def host(adapter: dict, operation: str, **parameters) -> dict:
-    result = subprocess.run([sys.executable, "-m", "loopx_codex_provider_routing.native_host"],
-                            input=json.dumps({"adapter": adapter, "operation": operation, **parameters}),
-                            capture_output=True, text=True, timeout=150)
+    receipt = parameters.pop("handoff_receipt", None)
+    command = [sys.executable, "-m", "loopx_codex_provider_routing.native_host"]
+    request = json.dumps({"adapter": adapter, "operation": operation, **parameters})
+    if receipt:
+        # Closing the calling native App must not close this continuation or
+        # its result channel. All native sub-operations have bounded waits.
+        process = subprocess.Popen([*command, "--result-file", receipt], stdin=subprocess.PIPE,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   text=True, start_new_session=True)
+        try:
+            process.communicate(request, timeout=150)
+        except subprocess.TimeoutExpired:
+            # Do not kill a credential transaction. A separate reaper owns only
+            # this child; the receipt fences retries even if its caller exits.
+            threading.Thread(target=process.communicate, daemon=True).start()
+            raise HostError("handoff_pending") from None
+        packet = private_read(Path(receipt))
+        if packet.get("ok") is not True:
+            raise HostError(packet.get("code", "native_unavailable"))
+        return packet["result"]
+    result = subprocess.run(command, input=request, capture_output=True, text=True, timeout=150)
     if len(result.stdout) > 131072:
         raise HostError("native_unavailable")
     try:
@@ -92,11 +110,11 @@ class NativeAccounts:
         if self.path.exists():
             return private_read(self.path)
         return {"schema_version": SCHEMA, "revision": 0,
-                "policy": {"enabled": False, "slots": [], "cooldown_seconds": 300},
+                "policy": {"enabled": False, "slots": [], "cooldown_seconds": 300, "restart_clients": False},
                 "observations": [], "last_switch_at": None, "action": "disabled"}
 
     @contextmanager
-    def _lock(self):
+    def _lock(self, *, wait_seconds: float = 0):
         if os.name != "posix":
             raise HostError("platform_unavailable")
         import fcntl
@@ -110,7 +128,15 @@ class NativeAccounts:
         if path.is_symlink():
             raise HostError("state_untrusted")
         with open(path, "a", opener=lambda p, flags: os.open(p, flags, 0o600)) as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            deadline = time.monotonic() + wait_seconds
+            while True:
+                try:
+                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
             yield
 
     def _projection(self, state: dict, native: dict | None = None) -> dict:
@@ -120,11 +146,13 @@ class NativeAccounts:
                 "active_slot": native.get("active_slot"),
                 "selection_revision": native.get("selection_revision"),
                 "login_matches": native.get("current_login_matches"),
-                "recovery_required": native.get("recovery_required", False),
+                "recovery_required": native.get("recovery_required", False) or state.get("action") == "handoff_interrupted",
                 "action": state.get("action", "disabled"), "target": state.get("target"),
                 "retry_at": state.get("retry_at"), "last_checked_at": state.get("last_checked_at"),
                 "last_switch_at": state.get("last_switch_at"), "accounts": state.get("accounts", []),
-                "code": state.get("code"), "launch_failed": state.get("launch_failed", False),
+                "code": state.get("code"),
+                "launch_failed": state.get("launch_failed", False) and native.get("client_running") is not True,
+                "client_running": native.get("client_running"),
                 "automatic_hot_swap": False}
 
     def status(self) -> dict:
@@ -133,13 +161,22 @@ class NativeAccounts:
         native = self.transport(adapter, "status")
         return self._projection(state, native)
 
-    def configure(self, *, expected_revision: int, enabled: bool, slots: list[str], reconnect: bool = False) -> dict:
+    def configure(self, *, expected_revision: int, enabled: bool, slots: list[str], reconnect: bool = False,
+                  restart_clients: bool | None = None) -> dict:
         if type(enabled) is not bool or not isinstance(slots, list) or len(slots) > 16 or len(slots) != len(set(slots)):
             raise HostError("invalid_policy")
-        with self._lock():
+        if restart_clients is not None and type(restart_clients) is not bool:
+            raise HostError("invalid_policy")
+        # Stop requests fence new effects at the Watcher first, then persist
+        # after an already dispatched atomic switch finishes. Other mutations
+        # retain their immediate conflict behavior.
+        with self._lock(wait_seconds=155 if not enabled else 0):
             state = self._load()
             if state["revision"] != expected_revision:
                 raise HostError("configuration_changed")
+            pending = state.get("intent") or {}
+            if pending.get("handoff_receipt") and enabled:
+                raise HostError("handoff_pending")
             # Disabling works offline and never needs credentials or a client.
             if enabled or reconnect:
                 adapter = discover() if reconnect or "adapter" not in state else state["adapter"]
@@ -149,8 +186,11 @@ class NativeAccounts:
                 if not slots or not set(slots) <= set(native["slots"]):
                     raise HostError("invalid_slots")
                 state.update(adapter=adapter, native=native)
-            state.update(policy={"enabled": enabled, "slots": slots, "cooldown_seconds": 300},
-                         revision=state["revision"] + 1, retry_at=None, code=None, intent=None,
+            state.update(policy={"enabled": enabled, "slots": slots, "cooldown_seconds": 300,
+                                 "restart_clients": restart_clients if restart_clients is not None
+                                 else state["policy"].get("restart_clients", False)},
+                         revision=state["revision"] + 1, retry_at=None, code=None,
+                         intent=pending if pending.get("handoff_receipt") else None,
                          action="checking" if enabled else "disabled", failure_count=0)
             atomic(self.path, state)
             return self._projection(state)
@@ -164,7 +204,7 @@ class NativeAccounts:
             if operation_id and operation_id == state.get("last_operation_id"):
                 return self._projection(state)
             now = self.clock()
-            if not state["policy"]["enabled"] and not refresh and not manual_slot:
+            if not state["policy"]["enabled"] and not refresh and not manual_slot and not state.get("intent"):
                 return self._projection(state)
             if not refresh and not manual_slot and now < (state.get("retry_at") or 0):
                 return self._projection(state)
@@ -183,11 +223,29 @@ class NativeAccounts:
                     raise HostError("selection_changed")
                 previous = state.get("native", {}).get("selection_revision")
                 intent = state.get("intent")
+                receipt = None
+                if intent and intent.get("handoff_receipt"):
+                    path = Path(intent["handoff_receipt"])
+                    if path.exists():
+                        receipt = private_read(path)
+                    else:
+                        # A detached switch may still be exiting/reopening the
+                        # native client. Never launch a second switch on retry.
+                        interrupted = self.clock() - intent["started_at"] > 180
+                        state.update(native=native, action="handoff_interrupted" if interrupted else "restarting",
+                                     retry_at=self.clock() + 5, code="handoff_interrupted" if interrupted else None)
+                        atomic(self.path, state)
+                        return self._projection(state)
+                    if receipt.get("ok") is not True:
+                        state["intent"] = None
+                        raise HostError(receipt.get("code", "native_unavailable"))
                 if intent and native["active_slot"] == intent["target"] and not native["recovery_required"] and native["current_login_matches"] is True:
                     # An interrupted caller may have lost the successful reply.
                     # Read back selection; never replay a switch or a model turn.
                     state.update(native=native, intent=None, last_switch_at=now, action="selected", target=None,
-                                 retry_at=now + 300, code=None, failure_count=0)
+                                 retry_at=now + 300, code=None, failure_count=0,
+                                 launch_failed=receipt["result"].get("launch_failed", False) if receipt
+                                 else native.get("client_running") is False)
                     atomic(self.path, state)
                     return self._projection(state)
                 state["native"] = native
@@ -230,20 +288,39 @@ class NativeAccounts:
                     # Native owner rechecks the same fence inside its transaction.
                     state["intent"] = {"id": operation_id or uuid.uuid4().hex,
                                        "source_revision": native["selection_revision"], "target": decision["target"]}
+                    effects = {"restart_clients": decision["restart_clients"], "not_after": decision["valid_until"]}
+                    if decision["restart_clients"]:
+                        directory = self.root / "handoffs"
+                        if directory.is_symlink():
+                            raise HostError("state_untrusted")
+                        directory.mkdir(mode=0o700, exist_ok=True)
+                        receipt_path = directory / (uuid.uuid4().hex + ".json")
+                        state["intent"].update(handoff_receipt=str(receipt_path), started_at=self.clock())
+                        state["action"] = "restarting"
+                        effects["handoff_receipt"] = str(receipt_path)
                     atomic(self.path, state)
-                    result = self.transport(state["adapter"], "switch", slot=decision["target"],
-                                            expected_revision=native["selection_revision"], reopen=True)
+                    try:
+                        result = self.transport(state["adapter"], "switch", slot=decision["target"],
+                                                expected_revision=native["selection_revision"], reopen=True, **effects)
+                    except Exception as error:
+                        if getattr(error, "code", None) != "handoff_pending":
+                            # A returned failure means this worker has stopped.
+                            # A lost caller instead leaves its durable receipt.
+                            state["intent"] = None if decision["restart_clients"] else state["intent"]
+                        raise
                     state.update(native=result, intent=None, last_switch_at=self.clock(), action="selected",
                                  target=None, retry_at=self.clock() + 300, launch_failed=result["launch_failed"], failure_count=0)
                 if operation_id:
                     state["last_operation_id"] = operation_id
             except (HostError, OSError, ValueError, subprocess.SubprocessError) as error:
                 code = error.code if isinstance(error, HostError) else "native_unavailable"
-                # Busy is a normal safe-boundary wait; no process is terminated.
+                # Unrelated/remaining owners still require a safe-boundary wait.
                 # Other repeated failures stop automatic attempts until Refresh.
-                failures = state.get("failure_count", 0) + (code != "waiting_for_idle")
-                state.update(action=code if code in ("waiting_for_idle", "selection_changed", "adapter_changed") else "unavailable",
-                             code=code, retry_at=self.clock() + min(300, 60 * 2 ** min(failures, 3)), failure_count=failures)
+                failures = state.get("failure_count", 0) + (code not in ("waiting_for_idle", "handoff_pending"))
+                if code in ("other_clients_busy", "client_quit_refused", "client_quit_timeout", "client_changed"):
+                    failures = 3  # Do not repeatedly close/reopen a refused client.
+                state.update(action=code if code in ("waiting_for_idle", "selection_changed", "adapter_changed", "client_quit_refused", "client_quit_timeout", "client_changed", "handoff_pending") else "unavailable",
+                             code=code, retry_at=self.clock() + (5 if code == "handoff_pending" else min(300, 60 * 2 ** min(failures, 3))), failure_count=failures)
                 if manual_slot:
                     state["last_operation_id"] = operation_id
             atomic(self.path, state)
@@ -254,9 +331,36 @@ class NativeAccounts:
             state = self._load()
             if state["revision"] != expected_revision or "adapter" not in state:
                 raise HostError("configuration_changed")
-            native = self.transport(state["adapter"], "rollback" if rollback else "recover", expected_revision=expected_selection)
+            native = self.transport(state["adapter"], "status")
+            intent = state.get("intent") or {}
+            if intent.get("handoff_receipt") and not native["recovery_required"] and not rollback:
+                if native["selection_revision"] != expected_selection:
+                    raise HostError("selection_changed")
+                path = Path(intent["handoff_receipt"])
+                if not path.exists():
+                    marker = path.with_suffix(".pid.json")
+                    if not marker.exists():
+                        raise HostError("handoff_pending")
+                    try:
+                        os.kill(private_read(marker)["pid"], 0)
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        raise HostError("handoff_pending")
+            else:
+                native = self.transport(state["adapter"], "rollback" if rollback else "recover", expected_revision=expected_selection)
             state.update(native=native, intent=None, action="disabled", retry_at=None, code=None,
                          policy={**state["policy"], "enabled": False}, revision=state["revision"] + 1, failure_count=0)
+            atomic(self.path, state)
+            return self._projection(state)
+
+    def reopen(self, *, expected_selection: str) -> dict:
+        with self._lock():
+            state = self._load()
+            if "adapter" not in state or state.get("intent"):
+                raise HostError("handoff_pending")
+            native = self.transport(state["adapter"], "reopen", expected_revision=expected_selection)
+            state.update(native=native, launch_failed=False, code=None)
             atomic(self.path, state)
             return self._projection(state)
 
@@ -294,7 +398,7 @@ class Watcher:
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="loopx-codex-accounts")
-    parser.add_argument("operation", choices=("status", "configure", "refresh", "switch", "recover", "rollback", "watch"))
+    parser.add_argument("operation", choices=("status", "configure", "refresh", "switch", "recover", "rollback", "reopen", "watch"))
     parser.add_argument("--runtime-root", type=Path, default=Path.home() / ".loopx")
     args = parser.parse_args()
     provider = NativeAccounts(args.runtime_root)
@@ -313,6 +417,8 @@ def main() -> int:
             result = provider.configure(**request)
         elif args.operation in ("refresh", "switch"):
             result = provider.tick(refresh=True, **request)
+        elif args.operation == "reopen":
+            result = provider.reopen(**request)
         else:
             result = provider.recover(rollback=args.operation == "rollback", **request)
         print(json.dumps({"ok": True, **result}))

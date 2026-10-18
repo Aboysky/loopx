@@ -60,6 +60,8 @@ class CodexAccountService:
                 value = self.provider.tick(refresh=True, **parameters)
             elif operation in ("recover", "rollback"):
                 value = self.provider.recover(rollback=operation == "rollback", **parameters)
+            elif operation == "reopen":
+                value = self.provider.reopen(**parameters)
             else:
                 raise ValueError("Unsupported operation")
             return {"ok": True, **value}
@@ -97,9 +99,10 @@ class CodexAccountsRequestMixin:
             if set(body) != {"operation", "parameters"} or not isinstance(body["parameters"], dict):
                 raise ValueError("Invalid account operation")
             operation, parameters = body["operation"], body["parameters"]
-            fields = {"configure": {"expected_revision", "enabled", "slots", "reconnect"},
+            fields = {"configure": {"expected_revision", "enabled", "slots", "reconnect", "restart_clients"},
                       "switch": {"manual_slot", "expected_selection", "operation_id"},
-                      "recover": {"expected_revision", "expected_selection"}, "rollback": {"expected_revision", "expected_selection"}, "refresh": set()}
+                      "recover": {"expected_revision", "expected_selection"}, "rollback": {"expected_revision", "expected_selection"},
+                      "reopen": {"expected_selection"}, "refresh": set()}
             if operation not in fields or set(parameters) - fields[operation]:
                 raise ValueError("Invalid account parameters")
             result = self.server.codex_account_service.call(operation, parameters)
