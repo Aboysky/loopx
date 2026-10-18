@@ -54,7 +54,7 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     assert "NEEDS_JSON: ${{ toJSON(needs) }}" in aggregate
     assert "scripts/ci/review_gate.py verify-core" in aggregate
     assert (
-        "needs: [changes, kernel-static-checks, typescript-coverage, "
+        "needs: [changes, kernel-static-checks, kernel-contracts, typescript-coverage, "
         "dashboard-acceptance, chat-bundle-browser]"
     ) in aggregate
 
@@ -79,6 +79,7 @@ def test_checks_aggregate_requires_every_planned_parallel_lane(
             "stage2c_tests": str(backend).lower(), "presentation_tests": str(not backend).lower(),
         }},
         "kernel-static-checks": {"result": kernel},
+        "kernel-contracts": {"result": kernel},
         "typescript-coverage": {"result": typescript},
         "dashboard-acceptance": {"result": dashboard},
         "chat-bundle-browser": {"result": browser},
@@ -233,12 +234,12 @@ def test_merge_gate_runs_on_all_prs_and_checks_every_core_aggregate() -> None:
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         if name == "checks":
             assert (
-                "needs: [changes, kernel-static-checks, typescript-coverage, "
+                "needs: [changes, kernel-static-checks, kernel-contracts, typescript-coverage, "
                 "dashboard-acceptance, chat-bundle-browser]"
             ) in job
             assert "if: always() && needs.changes.outputs.core_tests == 'true'" in job
         elif name == "test-shard":
-            assert "needs: [changes, chat-bundle, checks]" in job
+            assert "needs: [changes, chat-bundle]" in job
             assert f"needs.changes.outputs.{output} == 'true'" in job
         else:
             assert "needs: [changes, chat-bundle]" in job
@@ -265,7 +266,7 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
         < browser.index("npm run smoke:chat-upgrade")
     )
     assert "continue-on-error" not in browser
-    for name in ("kernel-static-checks", "typescript-core", "typescript-coverage", "node-minimum-compatibility"):
+    for name in ("kernel-static-checks", "kernel-contracts", "typescript-core", "typescript-coverage", "node-minimum-compatibility"):
         header = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         assert "if: needs.changes.outputs.backend_tests == 'true'" in header
     dashboard = WORKFLOW.split("  dashboard-acceptance:\n", 1)[1].split("    steps:", 1)[0]
@@ -467,10 +468,9 @@ def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:
     assert "needs.changes.outputs.core_tests == 'true'" in producer
     aggregate = WORKFLOW.split("  checks:\n", 1)[1].split("    steps:", 1)[0]
     assert "chat-bundle-browser" in aggregate
-    for name in ("chat-bundle-browser", "kernel-static-checks", "typescript-core", "dashboard-browser", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
+    for name in ("chat-bundle-browser", "kernel-contracts", "typescript-core", "dashboard-browser", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("      - uses: actions/setup-", 1)[0]
-        dependencies = "[changes, chat-bundle, checks]" if name == "test-shard" else "[changes, chat-bundle]"
-        assert f"needs: {dependencies}" in job
+        assert "needs: [changes, chat-bundle]" in job
         assert "name: chat-bundle-${{ github.sha }}" in job
 
 
