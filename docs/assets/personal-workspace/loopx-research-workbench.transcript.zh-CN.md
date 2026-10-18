@@ -61,7 +61,7 @@ Kanban 使用编写的工作区示例，把工作和待关注事项放在一起�
 “一条求解记录：在重复图上，准确率上升。对照组的耗时也上升了。”
 
 这条[历史求解记录](https://github.com/loopx-project/loopx/blob/c9c3adf63f9771ef95f1fcca12b11ed7de1f69eb/apps/presentation/site/public/lab/time-machine/data/graph.json)
-使用两条 CPU 线程，生成图中有 30% 重复图；记录的准确率从 41.2% 上升到 85.0%。
+使用两个 CPU 线程，在完整尺寸的生成联合邻域图、30% 局部重复条件下，记录的准确率从 41.2% 上升到 85.0%。
 在独立边对照中，准确率未变，耗时增加 32%。这是一条历史记录，未经独立重跑，
 不能据此得出 LoopX 相对基线的因果收益。
 

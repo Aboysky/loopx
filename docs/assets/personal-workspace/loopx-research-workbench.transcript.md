@@ -74,7 +74,8 @@ for definitions, eligibility and evidence requirements.
 “One solver record: accuracy rose on duplicate graphs. Control time rose too.”
 
 The [historical solver record](https://github.com/loopx-project/loopx/blob/c9c3adf63f9771ef95f1fcca12b11ed7de1f69eb/apps/presentation/site/public/lab/time-machine/data/graph.json)
-used two CPU threads and 30% duplicate generated graphs. Its recorded accuracy
+used two CPU threads and generated full-size joint-neighborhood graphs at 30%
+partial duplication. Its recorded accuracy
 rose from 41.2% to 85.0%. On the independent-edge control, accuracy stayed
 unchanged while time increased by 32%. This is one historical record, not an
 independent rerun or evidence of a causal LoopX-versus-baseline gain.

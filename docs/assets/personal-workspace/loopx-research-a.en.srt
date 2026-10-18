@@ -1,0 +1,83 @@
+1
+00:00:00,300 --> 00:00:04,089
+Loop X two point zero. A workbench for
+long-horizon research.
+
+2
+00:00:07,300 --> 00:00:10,189
+Carry the goal, constraints, and return
+route.
+
+3
+00:00:10,369 --> 00:00:12,440
+Let the existing owner adopt the work.
+
+4
+00:00:12,620 --> 00:00:15,602
+Keep corrections on the task. Return the
+evidence.
+
+5
+00:00:18,300 --> 00:00:21,287
+See work, waiting decisions, and schedules.
+
+6
+00:00:22,800 --> 00:00:25,171
+Separate the next task from a pending
+approval.
+
+7
+00:00:26,800 --> 00:00:28,667
+Keep owners and waiting work visible.
+
+8
+00:00:30,300 --> 00:00:33,723
+Keep questions, findings, and changes of
+direction.
+
+9
+00:00:35,800 --> 00:00:39,046
+Read six process judgments. Keep unknowns
+visible.
+
+10
+00:00:39,226 --> 00:00:42,872
+Trace claims to their source. Measure
+results and costs separately.
+
+11
+00:00:45,300 --> 00:00:49,877
+One generated-graph probe improved from
+forty one point two to eighty five percent.
+
+12
+00:00:50,057 --> 00:00:53,062
+That result applies to the duplication
+condition shown.
+
+13
+00:00:53,700 --> 00:00:58,099
+The independent control kept its accuracy.
+Time rose thirty two percent.
+
+14
+00:00:58,279 --> 00:01:00,236
+Native score gain remains unproven.
+
+15
+00:01:00,900 --> 00:01:04,091
+Keep failed paths and their reasons. Choose
+the next test.
+
+16
+00:01:06,400 --> 00:01:09,359
+Check continuation, hosts, and channels.
+
+17
+00:01:10,000 --> 00:01:12,163
+Your runtime brings the models and tools.
+
+18
+00:01:14,000 --> 00:01:18,033
+Loop X. Keep the research, evidence, and
+next decision together.

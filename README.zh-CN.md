@@ -1,11 +1,12 @@
 <div align="center">
 
-<h1 align="center">LoopX</h1>
+<h1 align="center">LoopX 2.0</h1>
 
-**给 Agent 一个目标，让工作持续向前。**
+**长程研究工作台**
 
-面向长程 Agent 与个人 Agent 团队的开源、本地优先控制面。<br>
-<sub>跨会话保留目标、决策与证据，连接 Codex、Claude Code、DeepSeek Harness 等已有运行时。</sub>
+面向企业、研究机构与超级个体。<br>
+<sub>围绕复杂研究目标，协调多个 Agent 持续推进，跨会话保留研究过程、决策与证据，检查结果和成本，并将发现用于下一步工作。开源、本地优先，连接 Codex、Claude Code、DeepSeek Harness 等已有运行时。</sub><br>
+<sub>2.0 开发预览 · 下方安装命令仍跟随最新稳定版。</sub>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/releases-GitHub-181717)](https://github.com/loopx-project/loopx/releases/latest) [![GitHub 贡献者](https://img.shields.io/badge/contributors-GitHub-181717)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
 
@@ -13,8 +14,8 @@
 
 [开始使用](#试用-loopx) · [个人工作区](#认识个人-agent-工作区) · [LHTB 结果](#lhtb-results) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
-<a href="https://github.com/user-attachments/assets/09883f57-7950-4bfa-bcfd-d80e836fb8ea"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 研发工作台：真实本机工作区中记录的问题、结论与显式转向，沿时间线保留研究过程" width="960"></a><br>
-<sub>从目标、复杂委派与回传，到 Kanban、真实研究和轨迹分析；示例数据与示意部分单独标注 · <a href="https://github.com/user-attachments/assets/09883f57-7950-4bfa-bcfd-d80e836fb8ea">观看 58 秒研发工作台影片</a> · <a href="docs/assets/personal-workspace/loopx-research-workbench.transcript.zh-CN.md">文字稿与旁白字幕</a></sub>
+<a href="https://github.com/user-attachments/assets/3b375d83-f275-41a1-bca1-94fc877efca4"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 2.0，面向企业、研究机构与超级个体的长程研究工作台；应用画框内保留真实研究历史与来源范围" width="960"></a><br>
+<sub>三版候选：<a href="https://github.com/user-attachments/assets/3b375d83-f275-41a1-bca1-94fc877efca4">A · 产品流程 · 79 秒</a> · <a href="https://github.com/user-attachments/assets/7e012d01-580e-40d0-9d94-c338f70c57d3">B · 研究故事 · 83 秒</a> · <a href="https://github.com/user-attachments/assets/0eb29457-4244-4ee4-9a34-ce562074d46c">C · 机制推演 · 87 秒</a> · <a href="docs/assets/personal-workspace/loopx-research-films.zh-CN.md">文字稿、字幕与来源</a>。真实 App、合成示例与机制示意分别标注。</sub>
 
 **两步在 Codex App 里用上 LoopX。** 先安装一次：
 
