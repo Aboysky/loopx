@@ -132,10 +132,104 @@ admission and inspect the next accepted replan. A useful readback cites retained
 evidence, explains the next complete experiment and later checks its outcome.
 Restoring files or accepting a structured review alone proves no research gain.
 
+## Opt-in local retention
+
+Capture retains every point unless an operator explicitly enables retention.
+Retention is local storage maintenance through the same artifact owner; it does
+not select scientific results, qualify a point, change feedback opportunities,
+or delete the native evaluator's separate bank. It remains part of this CLI/Host
+stage; a packaged frontend retention editor is not delivered here.
+
+Use one bank per source lineage and declare a policy in a private JSON file:
+
+```json
+{
+  "strategy": "uniform",
+  "keep_latest": 1,
+  "keep_first": false,
+  "minimum_age_seconds": 0,
+  "history_slots": 0,
+  "protect_since": null,
+  "pins": []
+}
+```
+
+This compact policy retains only the newest complete publication plus explicit
+pins. It has no origin anchor, sampled history or age grace. To preserve more
+history, enable `keep_first`, increase `keep_latest`, set
+`minimum_age_seconds`, or set positive `history_slots` for equal-time history.
+For nonuniform history, replace `strategy` with `tiered` and `history_slots`
+with `bucket_seconds` (for example, `14400`). That retains the newest
+representative in each age band measured from the newest publication: under
+4 hours, 4–8 hours, 8–16 hours, and so on. Idle time alone does not shift bands.
+Uniform slots include the historical end;
+repeating a policy on an unchanged bank does not progressively thin it.
+Uniform history requires `keep_first=true` to preserve its time anchors.
+`keep_latest` must be at least one. Protection is additive, so pinned or recent
+points can exceed the sampling count. There is no hard byte cap that overrides
+these protections.
+
+Before cleanup, put every selected study point, source still needed by a
+receiver, and referenced dependency in `pins` as an exact
+`{"id":"POINT_DIRECTORY_NAME","sha256":"CAPTURE_DIGEST"}`. References in
+arbitrary plans, sessions or conversations are not automatically discovered.
+`protect_since` optionally preserves every publication at or after a Unix epoch,
+useful while a chronological selection is unresolved. This is filesystem seal
+time, not scientific elapsed age or source qualification. A missing/changed pin
+holds cleanup, including pending quarantine recovery.
+
+Preview the complete retained/deletion lists, logical byte totals and plan digest:
+
+```sh
+loopx --format json research-checkpoint rotate --root CHECKPOINT_BANK \
+  --request-file RETENTION_POLICY
+loopx --format json research-checkpoint rotate --root CHECKPOINT_BANK \
+  --request-file RETENTION_POLICY --expected-plan-sha256 PLAN_DIGEST --execute
+```
+
+Execution requires a private, operator-owned bank on the qualified POSIX
+transport. Preview does not change it. Before any deletion or quarantine recovery,
+the complete retained points must pass member-integrity verification. A corrupt
+newest point holds pruning of older recovery points. This storage RPC allowance
+does not extend a research capture, native deadline or continuation budget.
+Execution excludes supported readers, rechecks the inventory and atomically
+moves only the selected whole point directories into a private quarantine.
+It preserves response/error sidecars, unknown paths, incomplete captures and
+staging directories. Unlinking runs outside the reader lock, with a separate
+single-flight lock preventing concurrent recovery. Compact digest-bound records
+under `.checkpoint-retention/receipts/` distinguish planned, quarantined and
+deleted points. A failed unlink resumes from its original quarantine on the next
+explicit rotation; it never recaptures newer state into an old identity.
+Missing/ambiguous files or lock failures hold the affected operation.
+
+The shipped verify/admit/adopt CLI and native benchmark restore/upload adapters
+use the bank's shared read lock once retention has been activated, so same-point
+arms can read concurrently while rotation waits. Older readers and
+direct Effect clients must use an explicitly pinned point or quiesce before
+cleanup. At first activation also quiesce or pin any reads that already began
+before the marker existed. New supervisor-enabled banks install the marker before
+capture starts. Pinning is still required for references that outlive one read.
+Preview inventory is metadata-only. The execution-time member check still does
+not qualify scientific dependencies, session adoption or research admission.
+
+For an existing donor, run an independently managed storage watcher without
+editing its frozen runtime:
+
+```sh
+loopx --format json research-checkpoint rotate --root CHECKPOINT_BANK \
+  --request-file RETENTION_POLICY --execute --watch --interval-seconds 300
+```
+
+It reacts to changed local publication/policy generations and due grace expiry. It makes no
+model or Goal calls. Errors stop the watcher with a failure result for operator
+reconciliation. Stop this process to disable automatic rotation. Remove any
+new-run benchmark retention option as well. Previously deleted bytes are not
+restored by disabling; recover them only from an independently retained copy.
+
 ## Disable and qualification
 
-Omit `--execute` or stop issuing the explicit operations to disable this entry;
-there is no automatic activation switch. Published points stay inert. Change
+Omit `--execute` or stop issuing the explicit operations to disable capture and
+adoption; stop a retention watcher separately. Published points stay inert. Change
 adopted Todo notes through their normal owner; dispose of an isolated receiver
 through its normal lifecycle. Do not delete or rewrite source history to roll
 back a continuation.
