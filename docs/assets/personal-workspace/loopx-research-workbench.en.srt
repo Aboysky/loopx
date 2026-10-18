@@ -1,0 +1,87 @@
+1
+00:00:00,080 --> 00:00:02,149
+One goal. Keep the work connected.
+
+2
+00:00:02,580 --> 00:00:04,080
+Delegate with context.
+
+3
+00:00:04,080 --> 00:00:06,185
+Keep corrections on the same task.
+
+4
+00:00:06,185 --> 00:00:07,580
+Let the owner adopt,
+
+5
+00:00:07,580 --> 00:00:09,587
+then return the artifact for review.
+
+6
+00:00:13,580 --> 00:00:16,221
+Goals, decisions, work and schedules.
+
+7
+00:00:17,080 --> 00:00:20,383
+Decisions, next actions, ongoing
+observation.
+
+8
+00:00:20,580 --> 00:00:22,524
+Owners and waiting work, visible.
+
+9
+00:00:23,580 --> 00:00:26,436
+Trace questions, findings and plan
+changes.
+
+10
+00:00:28,080 --> 00:00:30,120
+Inspect six process judgments.
+
+11
+00:00:30,120 --> 00:00:31,975
+Trace claims to the evidence.
+
+12
+00:00:31,975 --> 00:00:34,300
+Read measured results and costs
+separately.
+
+13
+00:00:36,580 --> 00:00:37,930
+One solver record:
+
+14
+00:00:37,930 --> 00:00:40,270
+accuracy rose on duplicate graphs.
+
+15
+00:00:40,270 --> 00:00:41,749
+Control time rose too.
+
+16
+00:00:42,080 --> 00:00:43,920
+Keep failed paths and their reasons.
+
+17
+00:00:43,920 --> 00:00:46,246
+Use that evidence to choose the next step.
+
+18
+00:00:47,580 --> 00:00:50,097
+Check continuation, hosts and channels.
+
+19
+00:00:50,580 --> 00:00:51,890
+Your models and tools.
+
+20
+00:00:51,890 --> 00:00:53,823
+Durable work state with Loop X.
+
+21
+00:00:54,580 --> 00:00:57,580
+Loop X. Goals, work, evidence and
+decisions.
