@@ -513,7 +513,7 @@ def test_missing_state_guidance_keeps_other_skip_routes_unchanged() -> None:
     payloads = [
         {
             "should_run": False,
-            "status_health_ok": True,
+            "status_health_ok": False,
             "effective_action": "operator_gate_notify",
             "state": "operator_gate",
             "user_channel": {"notify": "NOTIFY", "action_required": True},
