@@ -15,9 +15,12 @@ from loopx.control_plane import effect_runtime
 
 
 @pytest.fixture
-def nested_pytest_environment():
+def nested_pytest_environment(tmp_path):
     repository = Path(__file__).resolve().parents[1]
-    return {**os.environ, "PYTHONPATH": os.pathsep.join([
+    # The nested session's import-time leak census must not claim caller writes.
+    home = tmp_path / "nested-home"
+    home.mkdir()
+    return {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "PYTHONPATH": os.pathsep.join([
         str(repository / "tests"), str(repository),
     ])}
 
