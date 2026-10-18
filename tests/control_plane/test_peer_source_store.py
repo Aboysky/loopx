@@ -423,3 +423,136 @@ def test_context_revocation_orders_inbox_publication(tmp_path, monkeypatch, prov
         publish()
     assert records() == committed
     assert not (root / "chat").exists()
+
+
+def native_source_request(tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.capabilities.manager_context import deliver
+
+    root, registry, store, _, _, legacy = source_request(tmp_path, monkeypatch, provider=provider)
+    workspace = tmp_path / "native-workspace"
+    workspace.mkdir()
+    other = tmp_path / "other-workspace"
+    other.mkdir()
+    contexts = ChatProjectContexts([workspace, other])
+    observation = {"verified": True, "transport_ref": "fixture-app",
+                   "provider_ref": "b" * 24, "operator_ref": "c" * 24}
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=lambda _: observation)
+    bindings.controller = SimpleNamespace(store=store, registry_path=registry, coordination_runtime_root=root)
+    binding = bindings.configure(transport_ref="fixture-app", project_ref=contexts.available()[0]["project_ref"],
+                                 executor_endpoint_id="codex", context_kind="steward")
+    selected = bindings.resolve(binding_id=binding["binding_id"], source_ref="d" * 24,
+                                sender_ref=binding["operator_ref"], private_human_message=True)
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="synthetic-host", channel_id=selected["channel_id"], steward_context=selected["context"])
+    turn, _ = store.create_turn(session["session_id"], client_turn_id="native-source",
+                               message="Review the original evidence.", origin="lark")
+    bindings.ensure_delivery_scope(selected)
+    register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+        channel=session["channel_id"], sender_id=binding["operator_ref"], message=turn["message"],
+        source_id="lark:native-source")
+    receipt = deliver(root, registry, session=session, turn=turn,
+                      request={"goal_id": "goal-a", "agent_id": "agent-a"}, source_store=store)
+    store.update_turn(session["session_id"], turn["turn_id"], status="completing",
+                      response={"context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    return SimpleNamespace(root=root, registry=registry, store=store, bindings=bindings,
+                           selected=selected, session=session, turn=turn, receipt=receipt, legacy=legacy)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["disconnect", "replace"])
+def test_native_binding_revokes_inherited_context_without_resurrection(tmp_path, monkeypatch, provider, change):
+    value = native_source_request(tmp_path, monkeypatch, provider)
+    bindings, selected = value.bindings, value.selected
+    before = forward(value.root, value.registry, value.receipt, operation="before-revocation")
+    policy_path = _root(value.root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    # Exact sibling sources and legacy connections must survive. These are
+    # policy fixtures, not source identities that authorize this request.
+    unrelated = "manager.external.native." + "e" * 24 + "." + "d" * 24
+    policy["sources"][unrelated] = dict(policy["sources"][selected["channel_id"]])
+    _write(policy_path, policy)
+    historical = route_path(value.root, value.receipt).read_bytes()
+    if change == "disconnect":
+        bindings.disconnect(selected["binding"]["binding_id"], expected_revision=bindings.read()["revision"])
+    else:
+        ref = next(row["project_ref"] for row in bindings.projects.available()
+                   if row["project_ref"] != selected["binding"]["project_ref"])
+        bindings.configure(transport_ref="fixture-app", project_ref=ref,
+                           executor_endpoint_id="codex", context_kind="steward")
+    assert value.store.load_session(value.session["session_id"])["status"] != "closed"
+    for operation in ("after-revocation", "before-revocation"):
+        with pytest.raises(ValueError, match="source authorization unavailable"):
+            forward(value.root, value.registry, value.receipt, operation=operation)
+    with pytest.raises(ValueError, match="no longer authorized"):
+        bindings.ensure_delivery_scope(selected)
+    retained = json.loads(policy_path.read_text())
+    retired = {**policy["sources"][selected["channel_id"]], "sender_ids": [],
+               "evidence_goal_scope": "selected", "evidence_goal_ids": []}
+    assert retained == {**policy, "sources": {**policy["sources"], selected["channel_id"]: retired}}
+    from loopx.capabilities.manager_context import evidence_scope_readback
+    assert evidence_scope_readback(value.root, selected["channel_id"], registry_path=value.registry)["goal_ids"] == []
+    assert route_path(value.root, value.receipt).read_bytes() == historical
+    items = read_inbox(value.root, value.registry, "goal-a", "reviewer")["items"]
+    assert [row["request_id"] for row in items] == [before["request_id"]]
+    assert forward(value.root, value.registry, value.legacy, operation="unrelated")["status"] == "delivered"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stage", ["policy", "binding"])
+def test_native_binding_source_revocation_retries_policy_failure(tmp_path, monkeypatch, provider, stage):
+    from loopx.capabilities import manager_context
+    from loopx.capabilities.native_chat import conversation_bindings
+
+    value = native_source_request(tmp_path, monkeypatch, provider)
+    bindings = value.bindings
+    current = bindings.read()
+    owner, method = (manager_context, "_write") if stage == "policy" else (conversation_bindings, "_atomic_write_json")
+    write = getattr(owner, method)
+
+    def failed_write(path, row):
+        raise OSError("synthetic revocation IO failure")
+
+    monkeypatch.setattr(owner, method, failed_write)
+    with pytest.raises(OSError, match="synthetic revocation"):
+        bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=current["revision"])
+    assert bindings.read() == current, "failed retirement must not advertise a completed disconnect"
+    if stage == "binding":
+        with pytest.raises(ValueError, match="source authorization unavailable"):
+            forward(value.root, value.registry, value.receipt, operation="partial-retirement")
+    monkeypatch.setattr(owner, method, write)
+    result = bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=current["revision"])
+    assert not result["bindings"]
+    assert bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=result["revision"]) == result
+    with pytest.raises(ValueError, match="source authorization unavailable"):
+        forward(value.root, value.registry, value.receipt)
+
+
+@pytest.mark.parametrize("with_transport", [False, True])
+def test_composed_binding_reuses_host_and_retires_source(tmp_path, monkeypatch, with_transport):
+    from loopx.capabilities.native_chat.transports import install_conversation_transports
+
+    value = native_source_request(tmp_path, monkeypatch, "file")
+    controller = value.bindings.controller
+    controller.project_contexts = value.bindings.projects
+    server = SimpleNamespace(runtime_controller=controller, chat_store=value.store)
+    observe = value.bindings._observe_owner
+    transport = SimpleNamespace(transport_ref="fixture-app", observe=lambda: observe("fixture-app"))
+    install_conversation_transports(server, observe_default=observe,
+                                   factories=[lambda _: transport] if with_transport else [])
+    bindings = controller.project_contexts.conversation_bindings
+    assert bindings.controller is controller
+    assert bindings.session_context(value.session["steward_context"])["channel_id"] == value.session["channel_id"]
+    bindings.disconnect(value.selected["binding"]["binding_id"], expected_revision=bindings.read()["revision"])
+    with pytest.raises(ValueError, match="source authorization unavailable"):
+        forward(value.root, value.registry, value.receipt)
+
+
+def test_source_retirement_without_policy_does_not_initialize_storage(tmp_path):
+    from loopx.capabilities.manager_context import revoke_conversation_sources
+
+    root = tmp_path / "unused-runtime"
+    revoke_conversation_sources(root, "a" * 24)
+    assert not root.exists()
