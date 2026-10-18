@@ -24,6 +24,7 @@ from ..agents.agent_lane_recommendation import (
     scope_status_item_to_agent_lane as _scope_status_item_to_agent_lane,
 )
 from ..agents.agent_scope import (
+    _agent_scope_deferred_resume_candidates,
     _agent_scoped_user_todo_override,
     _scoped_user_gate_fallback,
 )
@@ -139,6 +140,7 @@ class _QuotaDecisionPreparation:
     effective_available_capabilities: Any
     runtime_available_capabilities: Any
     receipt_bound_todo_id: str | None
+    receipt_bound_successor_replan: bool
     requested_action_todo_id: str | None
     requested_action_candidate: dict[str, Any] | None
     action_selection_qualification: dict[str, Any] | None
@@ -198,7 +200,7 @@ def _preserve_receipt_bound_replan_obligation(
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
     )
-    if not preserved_replan_id:
+    if not preserved_replan_id and not guard_scoped:
         return dict(replan_obligation) if replan_obligation is not None else None
     try:
         result = project_replan_semantics({
@@ -215,6 +217,8 @@ def _preserve_receipt_bound_replan_obligation(
             raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
         raise
     obligation = result.get("obligation") if isinstance(result, Mapping) else None
+    if obligation is None and preserved_replan_id is None and guard_scoped:
+        return None
     if not isinstance(obligation, Mapping) or obligation.get("obligation_id") != preserved_replan_id:
         raise RuntimeError("TypeScript receipt-bound replan obligation shape mismatch")
     return dict(obligation)
@@ -525,6 +529,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_replan_obligation_id: str | None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_successor_replan: bool = False,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
@@ -747,6 +752,16 @@ def _prepare_quota_should_run_item(
     )
     inbox_priority_due = inbox_reply_due or inbox_material_review_due
     receipt_bound_agent_next_action = None
+    # A resume replan is distinct from work which became deferred after
+    # admission. Recheck the same canonical, claim-scoped ready candidate;
+    # the historical receipt alone cannot release a new/future wait.
+    receipt_bound_successor_replan = receipt_bound_successor_replan and goal_health_ok and state == "eligible" and any(
+        normalize_todo_id(candidate.get("todo_id")) == receipt_bound_todo_id
+        for candidate in _agent_scope_deferred_resume_candidates(
+            agent_todo_summary,
+            agent_id=normalize_todo_claimed_by((agent_identity or {}).get("agent_id")),
+        )
+    )
     if (
         receipt_bound_todo_id
         and not inbox_priority_due
@@ -800,7 +815,7 @@ def _prepare_quota_should_run_item(
                 )
                 or work_lane_contract
             )
-        else:
+        elif not receipt_bound_successor_replan:
             # The old Turn still owns its committed settlement identity, but a
             # deferred Todo is not an executable candidate.  A successor may be
             # selected only by a fresh Turn; do not leak it through work-lane
@@ -920,6 +935,7 @@ def _prepare_quota_should_run_item(
         effective_available_capabilities=effective_available_capabilities,
         runtime_available_capabilities=availability["runtime_available"],
         receipt_bound_todo_id=receipt_bound_todo_id,
+        receipt_bound_successor_replan=receipt_bound_successor_replan,
         requested_action_todo_id=requested_action_todo_id,
         requested_action_candidate=requested_action_candidate,
         action_selection_qualification=None,
