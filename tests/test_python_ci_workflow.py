@@ -312,6 +312,17 @@ def test_windows_lifecycle_suite_references_existing_tests() -> None:
     assert [
         path for path in test_paths if not (WORKFLOW_ROOT / path).is_file()
     ] == []
+    fixture_step = next(
+        step for step in yaml.safe_load(WORKFLOW)["jobs"]["windows-powershell"]["steps"]
+        if step.get("name") == "Qualify native CLI output fixture and diagnostic boundaries"
+    )
+    args = shlex.split(fixture_step["run"])
+    assert "tests/control_plane/test_cli_output_budget.py" in args
+    assert "tests/control_plane/test_cli_output_differential.py" in args
+    assert set(args[args.index("-k") + 1].split(" or ")) == {
+        "stable_budget_fixture", "long_path_budget",
+        "probe_process_failure_preserves_utf8_diagnostics",
+    }
 
 
 def test_six_shards_execute_each_test_once_and_merge_portable_coverage(

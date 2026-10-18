@@ -846,7 +846,7 @@ jobs:
           python -m pytest -q
           tests/control_plane/test_cli_output_budget.py
           tests/control_plane/test_cli_output_differential.py
-          -k "stable_budget_fixture or probe_process_failure_preserves_utf8_diagnostics"
+          -k "stable_budget_fixture or long_path_budget or probe_process_failure_preserves_utf8_diagnostics"
 
       - name: Qualify the native Windows CLI output differential
         timeout-minutes: 12
