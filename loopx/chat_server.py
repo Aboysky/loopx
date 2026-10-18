@@ -11,11 +11,13 @@ from collections.abc import Callable, Mapping
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
 
 from .presentation import configuration_api as config_api
 from .presentation.codex_accounts_api import CodexAccountService
+if TYPE_CHECKING:
+    from .capabilities.native_chat.transports import ChatConversationTransports
 from .attached_session_api import AttachedSessionRequestMixin
 from .zcode_goal_mode.api import ZCodeGoalRequestMixin
 from .chat import (
@@ -463,7 +465,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
     lark_private_conversations: LarkPrivateConversations
     ssh_config_path: Path | None
     goal_subagent_configuration_enabled: bool
-    conversation_transports: Any
+    conversation_transports: ChatConversationTransports
     delegation_wake_service: DelegationWakeService
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -545,7 +547,7 @@ class ChatRequestHandler(
         turn_replay_safe: bool = False,
         todo_receipt: dict[str, Any] | None = None,
         delivery_state: Literal["not_delivered", "unresolved"] | None = None,
-        **unsupported: Any,
+        **unsupported: object,
     ) -> None:
         # Legacy mixins expose **kwargs; keep unknown options rejected at the
         # concrete boundary instead of silently widening the HTTP contract.
@@ -831,18 +833,18 @@ class ChatRequestHandler(
             self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
             return
         try:
-            submit = (self.server.runtime_controller.enqueue_turn if body.get("delivery") == "queue"
-                      else self.server.runtime_controller.submit_turn)
-            origin_options: dict[str, Any] = {"origin": "web"} if body.get("delivery") == "queue" else {}
-            turn, created = submit(
-                session_id=session_id,
-                client_turn_id=client_turn_id,
-                message=message,
-                attachments=attachments,
-                work_dir=cast(Path, context["project"]),
-                objective=runtime_objective,
-                **origin_options,
-            )
+            if body.get("delivery") == "queue":
+                turn, created = self.server.runtime_controller.enqueue_turn(
+                    session_id=session_id, client_turn_id=client_turn_id,
+                    message=message, attachments=attachments,
+                    work_dir=cast(Path, context["project"]), objective=runtime_objective, origin="web",
+                )
+            else:
+                turn, created = self.server.runtime_controller.submit_turn(
+                    session_id=session_id, client_turn_id=client_turn_id,
+                    message=message, attachments=attachments,
+                    work_dir=cast(Path, context["project"]), objective=runtime_objective,
+                )
             if body.get("client_turn_id"):
                 turn_id = str(turn["turn_id"])
                 self._send_json(
@@ -923,7 +925,7 @@ class ChatRequestHandler(
     def _session_snapshot(self, session_id: str) -> None:
         try:
             self.server.runtime_controller.recover_exited_turn(session_id)
-            snapshot = cast(Callable[..., dict[str, Any]], project_chat_session_snapshot)
+            snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
             self._send_json(snapshot(
                 self.server.runtime_root, self.server.chat_store, session_id,
                 registry=self.server.registry_path))
@@ -958,13 +960,12 @@ class ChatRequestHandler(
         query = parse_qs(urlparse(self.path).query)
         if not last_event_id:
             last_event_id = (query.get("after") or [""])[0] or None
-        turn: dict[str, Any] | None
         if str(last_event_id or "0") != "0":
-            turn = self.server.chat_store.load_turn(session_id, turn_id) or {}
+            prior_turn = self.server.chat_store.load_turn(session_id, turn_id) or {}
             self.server.chat_store.update_turn(
                 session_id,
                 turn_id,
-                sse_reconnect_count=int(turn.get("sse_reconnect_count") or 0) + 1,
+                sse_reconnect_count=int(prior_turn.get("sse_reconnect_count") or 0) + 1,
             )
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1418,7 +1419,7 @@ class ChatRequestHandler(
         )
 
     def _action_apply(self, proposal_id: str) -> None:
-        proposal: dict[str, Any] | None
+        proposal: dict[str, object] | None
         try:
             body = self._read_json()
             if body:
@@ -1774,12 +1775,12 @@ def serve_chat(
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
-    def manager_scope(session: dict[str, Any]) -> Any:
+    def manager_scope(session: dict[str, object]) -> list[str] | None:
         if isinstance(session.get("steward_context"), dict):
             bindings = server.runtime_controller.project_contexts.conversation_bindings
             if bindings is None:
                 raise ValueError("Steward conversation bindings are unavailable")
-            return bindings.steward_scope(session)
+            return cast(list[str] | None, bindings.steward_scope(session))
         return authorized_manager_goal_ids(
             build_lark_goal_topic_runtime_snapshot(
                 registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
@@ -1811,7 +1812,7 @@ def serve_chat(
 
     server.lark_private_conversations = private_transport
 
-    def _lark_snapshot() -> dict[str, Any]:
+    def _lark_snapshot() -> dict[str, object]:
         snapshot = build_lark_goal_topic_runtime_snapshot(registry_path=server.registry_path,
             runtime_root_override=server.runtime_root_override)
         snapshot["private_profiles"] = private_transport.profiles()
@@ -1852,7 +1853,7 @@ def serve_chat(
         server, server.runtime_controller.coordination_runtime_root, start_service=False
     )
 
-    def _wake_goal_context(session: dict[str, Any]) -> dict[str, Any]:
+    def _wake_goal_context(session: dict[str, object]) -> dict[str, object]:
         registry = load_registry(server.registry_path)
         goal = next(
             (item for item in registry_goals(registry) if str(item.get("id") or "") == str(session["goal_id"])),
