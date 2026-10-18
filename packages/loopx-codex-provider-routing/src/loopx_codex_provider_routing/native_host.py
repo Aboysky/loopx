@@ -31,8 +31,17 @@ class HostError(Exception):
 # terminate() requests the normal AppKit quit lifecycle and can be refused.
 QUIT = '''ObjC.import("AppKit");
 function run(argv) {
-  var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
-  if (!app || app.isTerminated) return;
+  var app;
+  // Process discovery can precede Launch Services registration. Do not read
+  // executableURL.path until registration supplies the inspected executable.
+  var deadline = Date.now() + 5000;
+  do {
+    app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
+    if (app && app.isTerminated) return;
+    if (app && app.executableURL && app.isFinishedLaunching) break;
+    delay(0.05);
+  } while (Date.now() < deadline);
+  if (!app || !app.executableURL || !app.isFinishedLaunching) throw Error("Client startup is still incomplete");
   if (ObjC.unwrap(app.executableURL.path) !== argv[1]) throw Error("Client executable changed");
   if (!app.terminate) throw Error("Client refused normal quit");
 }'''

@@ -6,6 +6,8 @@ transaction qualification is a separate opt-in drill, never a live-account test.
 import importlib
 import json
 import os
+import plistlib
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +18,45 @@ from types import SimpleNamespace
 import pytest
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Native slot effects use the POSIX account owner")
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or shutil.which("swiftc") is None,
+                    reason="Actual AppKit registration requires macOS and Swift")
+def test_normal_quit_waits_for_owned_cold_app_registration(native, tmp_path):
+    """A PID can exist before NSRunningApplication supplies executableURL."""
+    bundle = tmp_path / "ColdFixture.app"
+    executable = bundle / "Contents/MacOS/ColdFixture"
+    executable.parent.mkdir(parents=True)
+    (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleExecutable": "ColdFixture", "CFBundleIdentifier": "dev.loopx.cold-fixture",
+        "CFBundleName": "ColdFixture", "CFBundlePackageType": "APPL",
+    }))
+    source = tmp_path / "fixture.swift"
+    source.write_text('''import Cocoa
+Thread.sleep(forTimeInterval: 1.0)
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+app.run()
+''')
+    subprocess.run(["swiftc", str(source), "-framework", "Cocoa", "-o", str(executable)],
+                   check=True, capture_output=True, timeout=30)
+    host_type = importlib.import_module("loopx_codex_provider_routing.native_host").NativeHost
+    host = object.__new__(host_type)
+    host.home, host.spec = tmp_path, {}
+    host.revision = lambda: "fixture-selection"
+    host.apps = SimpleNamespace(
+        app_bundle=lambda *_: bundle, executable=lambda _: executable,
+        running=lambda *_: process.pid if process.poll() is None else None,
+    )
+    process = subprocess.Popen([str(executable)], start_new_session=True)
+    try:
+        assert host.close_client("fixture-selection", timeout=10) is True
+        assert process.wait(timeout=5) == 0
+    finally:
+        # Only this test's Popen child may be cleaned up after a failed oracle.
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
 
 
 @pytest.fixture
