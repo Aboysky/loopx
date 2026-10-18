@@ -126,6 +126,10 @@ source, method and limitation paragraphs before adding another note.
 - Preserve actual unknowns, denominators, negative results and evidence links.
   Reduce explanatory noise without replacing missing evidence with a reassuring
   summary. Keep chart keys that are necessary to decode the marks visible.
+- When a metric applies to fewer items than the displayed sample, identify
+  explicitly ineligible items in its existing detail and show their count beside
+  the metric. Unknown eligible judgments stay in the denominator. Missing item
+  metadata or an arithmetic count gap cannot establish ineligibility.
 
 For example, research metrics can show “19 episodes · purposive sample ·
 uncalibrated” once, with a nearby explanation of yes/eligible counts and unknowns.
