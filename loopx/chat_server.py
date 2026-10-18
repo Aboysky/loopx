@@ -15,6 +15,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 from .presentation import configuration_api as config_api
+from .presentation.codex_accounts_api import CodexAccountService
 from .attached_session_api import AttachedSessionRequestMixin
 from .zcode_goal_mode.api import ZCodeGoalRequestMixin
 from .chat import (
@@ -442,6 +443,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
 
     registry_path: Path
     runtime_root_override: str | None
+    codex_account_service: CodexAccountService
     scan_roots: list[Path]
     limit: int
     selected_goal_id: str | None
@@ -469,6 +471,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
         self.completed_todo_pages = CompletedTodoPages()
 
     def server_close(self) -> None:
+        if hasattr(self, "codex_account_service"):
+            self.codex_account_service.close()
         if hasattr(self, "lark_app_setup_manager"):
             self.lark_app_setup_manager.close()
         if hasattr(self, "manager_return_service"):
@@ -1729,6 +1733,7 @@ def serve_chat(
     server = ChatHTTPServer((host, port), ChatRequestHandler)
     server.registry_path = resolved_registry_path
     server.runtime_root = runtime_root
+    server.codex_account_service = CodexAccountService(runtime_root)
     server.runtime_root_override = resolved_runtime_root_override
     server.scan_roots = resolved_scan_roots
     server.limit = limit
