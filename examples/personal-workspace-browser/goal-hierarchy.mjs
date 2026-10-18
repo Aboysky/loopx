@@ -11,6 +11,7 @@ export const goalHierarchyScenario = {
   async run({browser, collectCoverage, url}) {
     const root = await mkdtemp(join(tmpdir(), "loopx-goal-tree-"));
     let owner, context, denied = false;
+    const statusReads = [];
     const captures = [
       ["research", "Research · synthetic"],
       ["portfolio", "Portfolio", "research"],
@@ -36,6 +37,8 @@ export const goalHierarchyScenario = {
       for (const [key, value] of Object.entries(researchFocus)) entry.searchParams.set(key, value);
       context = await openWorkspacePage(browser, entry.href, {collectCoverage, beforeGoto: async (_api, page) => {
         await page.route(target => target.pathname === "/status.json", async route => {
+          const selected = new URL(route.request().url()).searchParams.get("goal_id");
+          if (selected) statusReads.push(selected);
           if (denied && new URL(route.request().url()).searchParams.get("goal_id") === "graph") {
             return route.fulfill({status: 403, json: {ok: false, error_code: "workspace_status_access_denied"}});
           }
@@ -64,18 +67,26 @@ export const goalHierarchyScenario = {
       assert.equal(await row("portfolio").count(), 0, "Children start folded on the ordinary workspace");
       for (const id of ["daily", "orphan", "cycle-a", "cycle-b"]) await row(id).waitFor();
       await page.screenshot({path: resolve(outputDir, "goal-hierarchy-overview.png"), animations: "disabled"});
+      await page.waitForLoadState("networkidle");
+      statusReads.length = 0;
       await row("research").locator(".personal-goal-link").click();
       await page.getByRole("button", {name: "只看此 Goal 及子 Goal", exact: true}).click();
       await page.waitForURL(target => target.searchParams.get("rootGoalId") === "research");
       assertResearchFocus();
       await row("portfolio").waitFor();
+      await page.waitForLoadState("networkidle");
+      assert(statusReads.every(id => ["calibration", "graph", "portfolio", "research"].includes(id)),
+        "reusing loaded subtree snapshots must not open unrelated Goal state");
       for (const id of ["daily", "orphan", "cycle-a", "cycle-b"]) assert.equal(await row(id).count(), 0);
       assert.equal(await page.locator(".personal-manager-link").count(), 0);
       await row("portfolio").getByRole("button", {name: "展开子 Goal：Portfolio", exact: true}).focus();
       await page.keyboard.press("Enter");
       await row("calibration").locator(".personal-goal-link").click();
+      statusReads.length = 0;
       await page.reload({waitUntil: "networkidle"});
       await row("calibration").locator('[aria-current="page"]').waitFor();
+      assert.deepEqual([...new Set(statusReads)].sort(), ["calibration", "graph", "portfolio", "research"],
+        "opening a scoped workspace reads its recursive subtree without opening unrelated Goal state");
       assert.equal(new URL(page.url()).searchParams.get("rootGoalId"), "research");
       assertResearchFocus();
       await assertTreeLayout();
@@ -111,9 +122,11 @@ export const goalHierarchyScenario = {
       const unavailable = new URL(page.url());
       unavailable.searchParams.set("rootGoalId", "missing");
       unavailable.searchParams.set("goalId", "daily");
+      statusReads.length = 0;
       await page.goto(unavailable.href, {waitUntil: "networkidle"});
       await page.getByRole("alert").filter({hasText: "当前来源中此 Goal 范围不可用"}).waitFor();
       assert.equal(await page.locator(".personal-goal-row").count(), 0);
+      assert.equal(statusReads.length, 0, "an absent root never fans out to unrelated Goal state");
       assert.equal(await page.getByTestId("personal-first-goal").count(), 0);
       assert.equal(await page.locator(".personal-manager-greeting, .personal-composer-wrap").count(), 0,
         "An unavailable research root must not open an unrelated steward conversation");
