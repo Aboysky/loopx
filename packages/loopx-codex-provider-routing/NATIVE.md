@@ -134,3 +134,15 @@ recovery with synthetic credentials. Browser evidence must use the packaged
 page with the owning backend and a recovery case. Installed native file/process
 qualification uses a disposable home. Read-only live status certifies neither
 an actual account swap nor installed adoption or uninterrupted hot switching.
+
+## Packaged example
+
+The packaged settings page below uses synthetic account aliases and allowance,
+with the actual native file/transaction owner in a disposable home. Usage/OAuth
+responses are simulated; App reopening and a real-account cutover are not
+qualified by these images. Desktop and narrow views keep the selected account
+visible even when the account list continues below the viewport.
+
+![Packaged desktop account settings](docs/assets/native-accounts-desktop.png)
+
+[Narrow account settings](docs/assets/native-accounts-phone.png)
