@@ -90,7 +90,7 @@ export function CodexAccountSettings() {
   const enabled = status?.policy?.enabled === true;
   const problem = status?.code || (status?.ok === false ? "native_unavailable" : null);
   return <section className="personal-codex-accounts" data-testid="codex-account-settings" aria-busy={busy}>
-    <header><h2>{c.title}</h2><span>{enabled ? c.enabled : c.disabled}</span></header>
+    <header><h2>{c.title}</h2><span>{status?.active_slot ? `${c.current} ${status.active_slot.toUpperCase()} · ` : ""}{enabled ? c.enabled : c.disabled}</span></header>
     {!status ? <p role="status">{c.checking}</p> : null}
     {(problem && problem !== status?.action) || status?.available === false ? <p role="alert">{label(problem)}</p> : null}
     {status?.available && status.slots?.length ? <>
