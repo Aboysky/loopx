@@ -246,7 +246,7 @@ MANAGER_ENDPOINT_KINDS = {
 }
 
 MANAGER_MODEL_ENV_VAR = "LOOPX_MANAGER_MODEL"
-MANAGER_MODEL_DEFAULT = "gpt-6-astra"
+MANAGER_MODEL_DEFAULT = "gpt-6.1-sol"
 MANAGER_MODEL_SOURCE_ENV_OVERRIDE = "env_override"
 MANAGER_MODEL_SOURCE_VENDOR_DEFAULT = "vendor_default"
 # The machine configuration can name the model too, so an operator can select
@@ -257,7 +257,7 @@ MANAGER_MODEL_SOURCE_MACHINE_CONFIGURATION = "machine_configuration"
 # two different managed models.
 MANAGER_MODEL_SOURCE_MANAGED_PROFILE = "managed_execution_profile"
 MANAGER_REASONING_EFFORT_ENV_VAR = "LOOPX_MANAGER_REASONING_EFFORT"
-MANAGER_REASONING_EFFORT_DEFAULT = "high"
+MANAGER_REASONING_EFFORT_DEFAULT = "xhigh"
 MANAGER_REASONING_EFFORTS = REASONING_EFFORTS
 
 def steward_machine_defaults(controller: Any) -> Mapping[str, Any] | None:

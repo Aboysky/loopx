@@ -36,9 +36,9 @@ try {
     const defaultsLabel = locale === "zh-CN" ? "默认对话配置" : "Conversation defaults";
     assert.match(render({ onOpenDefaults() {} }), new RegExp(defaultsLabel), "Defaults remain discoverable inside the relevant settings disclosure");
     assert.doesNotMatch(render({ ordinary: false, onOpenDefaults() {} }), new RegExp(defaultsLabel), "Ordinary defaults are not offered for the steward binding");
-    const header = refreshState => renderToStaticMarkup(createElement(WorkspaceI18nProvider, null,
+    const header = (refreshState, overrides = {}) => renderToStaticMarkup(createElement(WorkspaceI18nProvider, null,
       createElement(ChannelHeader, { agents: [], selectedGoal: null, selectedAgentId: "status-only",
-        selectedGoalTab: "chat", onSelectGoalTab() {}, onSelectAgent() {}, onRefresh() {}, refreshState })));
+        selectedGoalTab: "chat", onSelectGoalTab() {}, onSelectAgent() {}, onRefresh() {}, refreshState, ...overrides })));
     const loadingText = locale === "zh-CN" ? "刷新中" : "Refreshing";
     const doneText = locale === "zh-CN" ? "刚刚更新" : "Updated just now";
     const failedText = locale === "zh-CN" ? "刷新失败" : "Refresh failed";
@@ -49,7 +49,25 @@ try {
     assert.doesNotMatch(header("done"), new RegExp(`<small>${doneText}</small>`), "Success does not add a second visible header label");
     assert.match(header("error"), new RegExp(`<small>${failedText}</small>`), "A failure remains visibly actionable");
     assert.doesNotMatch(header("error"), /<button[^>]*disabled=""/, "A failed refresh can be retried");
-    assertions += 22;
+    const stewardProps = {
+      agents: [{ agentId: "codex", label: "Codex", available: true }], selectedAgentId: "codex",
+      selectedAgentModelReadback: { agent_model_id: "goal-only-model", agent_reasoning_effort: "high", agent_service_tier: "priority" },
+      managerChannelBinding: { executor_endpoint: "codex", executor_kind: "individual", model: "gpt-6.1-sol", reasoning_effort: "xhigh", selection_policy: "preferred", allocation_reason: "product_default" },
+      managerRuntime: { runtime_profile: "trusted_owner", sandbox: "danger-full-access", status: "ready" },
+      onOpenManagerSettings() {},
+    };
+    const steward = header("idle", stewardProps);
+    assert.match(steward, /gpt-6\.1-sol/);
+    assert.match(steward, /xhigh/);
+    assert.match(steward, /本机工具|Local tools/);
+    assert.doesNotMatch(steward, /goal-only-model|Fast|personal-agent-select/, "The steward has one model owner, without Goal runtime/default controls");
+    const restricted = header("idle", { ...stewardProps, managerRuntime: { runtime_profile: "restricted", sandbox: "read-only", status: "ready" } });
+    assert.match(restricted, /只读|Read-only/);
+    const goal = header("idle", { ...stewardProps, selectedGoal: { goalId: "public-case", title: "Public Goal", agentLanes: [] } });
+    assert.match(goal, /goal-only-model/);
+    assert.match(goal, /Fast/);
+    assert.doesNotMatch(goal, /gpt-6\.1-sol/, "Goal readback does not inherit the steward model");
+    assertions += 30;
   }
   console.log(`Chat model/header: ${assertions} bilingual model, defaults and accessible refresh assertions passed (SSR only)`);
 } finally { globalThis.window = originalWindow; }

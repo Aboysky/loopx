@@ -14,7 +14,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
     codex_chat: {displayName: "Codex Goal conversation defaults", description: "Choose the native Codex profile, model, speed tier and reasoning effort for new Goal conversations. Existing conversations keep their original history. This does not start or reconfigure an active Agent Loop, worker or steward."},
     decision_context: {displayName: "Find evidence", description: "Find advisory evidence with a temporary private profile. OpenViking and BM25 are retrieval implementations; this page does not save a binding or enable automatic memory."},
-    content_ops: {displayName: "Reference styles", description: "Retrieve source styles from an existing private catalog and prepare attributed outlines. No source or material-store writes."},
+    content_ops: {displayName: "Content production", description: "Prepare source-backed outlines and local videos. Review the result before sharing; rendering uses an optional local extension."},
     goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
       displayName: "Runtime",
@@ -83,7 +83,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   "zh-CN": {
     codex_chat: {displayName: "Codex Goal 对话默认值", description: "分别选择 Codex 配置来源、模型、速度档和推理强度，作用于本机的新 Goal 对话。已有对话保留原历史；不会启动或重配正在运行的 Agent Loop、工作 Agent 或管家。"},
     decision_context: {displayName: "资料召回", description: "通过临时私有配置查找参考证据。OpenViking、BM25 是检索实现；本页不保存绑定，也不启用自动记忆。"},
-    content_ops: {displayName: "素材与风格", description: "从原有私有目录检索表达结构，准备带来源署名的提纲；不执行来源或素材库写入。"},
+    content_ops: {displayName: "内容制作", description: "准备有来源的提纲与本机视频，检查作品后再分享；视频制作使用可选本机扩展。"},
     goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
     manager_runtime: {
       displayName: "运行环境",
@@ -156,7 +156,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     new_goal_provider: { label: "New Goal storage provider", description: "File or SQLite; frozen at creation, independently of execution policy." },
     canonical_creation: { label: "Create canonical authority", description: "Required for new Goals in 2.0. An older disabled setting remains visible until you enable it; existing Goals require import." },
     new_goal_handoff_mode: { label: "New Goal execution policy", description: "soft_claim or hard_lease, used with canonical creation. Agents inherit the Goal policy; tool authority is unchanged." },
-    runtime_profile: { label: "Runtime profile", description: "Restricted keeps scoped LoopX reads only. Trusted owner enables normal host tools while protected operations retain separate checks." },
+    runtime_profile: { label: "Runtime profile", description: "Use local host tools by default, or restrict the steward to LoopX reads. Protected operations retain their own checks.", options: { trusted_owner: "Local tools", restricted: "Read-only" } },
     selection_policy: { label: "Selection policy", description: "Preferred allows an explicit user choice; pinned rejects another executor; flexible permits fallback only inside the eligible pool." },
     executor_endpoint: { label: "Primary steward executor", description: "The preferred or pinned executor for this machine. In a flexible pool it is tried first when available." },
     eligible_endpoints: { label: "Flexible eligible executors", description: "One authorized executor per line. Use only with flexible selection and include the primary executor." },
@@ -192,7 +192,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     new_goal_provider: { label: "新 Goal 的存储 provider", description: "选择 File 或 SQLite；创建时固定，与执行策略分别选择。" },
     canonical_creation: { label: "建立 canonical 权威存储", description: "2.0 新建 Goal 必须启用。旧的关闭设置会保留显示，需自行启用；已有 Goal 需导入。" },
     new_goal_handoff_mode: { label: "新 Goal 的执行策略", description: "canonical 创建使用 soft_claim 或 hard_lease。Agent 继承 Goal 策略；不授予工具权限。" },
-    runtime_profile: { label: "运行模式", description: "restricted 仅使用受限 LoopX 读取；trusted_owner 开放常规宿主工具，但受保护操作仍单独校验。" },
+    runtime_profile: { label: "运行模式", description: "默认使用本机工具，也可限制为只读 LoopX 状态；受保护操作仍单独校验。", options: { trusted_owner: "本机工具", restricted: "只读" } },
     selection_policy: { label: "选择策略", description: "preferred 允许用户显式改选；pinned 拒绝其他执行器；flexible 只在已授权资源池内回退。" },
     executor_endpoint: { label: "首选管家执行器", description: "本机首选或锁定的执行器；灵活池模式下优先尝试它。" },
     eligible_endpoints: { label: "灵活池可用执行器", description: "每行一个已授权执行器，仅用于 flexible；必须包含首选执行器。" },
