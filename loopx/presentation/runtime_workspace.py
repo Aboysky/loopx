@@ -103,15 +103,13 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
             raise ValueError("Invalid analysis request size")
         return parse_strict_json_object(self.rfile.read(length))
 
-    def _research_analysis_scope(self, goal_id):
+    def _research_analysis_scope(self, goal_id, *, cancel=False):
         # Check current access and actual registered membership before local
         # pack reads or provider effects. No host registry entry is created.
         try:
             # Display reads may share their short cache. A provider operation
             # must check the original source again before admitting any work.
-            goals = self.server.reader.goals(goal_id, fresh=self.command == "POST")["items"]
-            if not any(goal["id"] == goal_id and goal.get("registry_member") is True for goal in goals):
-                raise SourceScopeError("Analysis requires a registered source Goal")
+            self.server.reader.registered_status(goal_id, fresh=self.command == "POST")
         except SourceScopeError:
             self._send_error("Goal or connection is not available in this source.", status=404)
             return None
