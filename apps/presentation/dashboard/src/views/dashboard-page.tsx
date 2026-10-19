@@ -599,6 +599,9 @@ function readPersonalAgentSelections() {
     return Object.fromEntries(
       Object.entries(value).filter((entry): entry is [string, string] =>
         typeof entry[0] === "string" && typeof entry[1] === "string"
+          // The steward executor is machine-owned; only its status-only view
+          // remains a browser preference. Goal/workspace picks stay local.
+          && (entry[0] !== "manager" || entry[1] === "status-only")
       ),
     );
   } catch {
@@ -1423,8 +1426,8 @@ function PersonalGoalHome({
     ?? discoveredAgents.find((agent) => agent.available)?.agentId
     ?? "status-only";
   // The manager channel answers on the executor this machine declares for the
-  // steward, and the client is expected to send no endpoint until the operator
-  // picks one. The picker therefore has to show that same resolution: an
+  // steward, and the client sends no endpoint override. The header therefore
+  // has to show that same resolution: an
   // executor merely discovered on this machine is not a reason to present
   // itself as the steward's runtime, or the header chip, the composer and the
   // answer would tell three different stories.
@@ -1735,10 +1738,9 @@ function PersonalGoalHome({
           });
           return;
         }
-        // The steward channel owns its executor default; only a pick the owner
-        // actually made for this context is sent.
+        // The steward channel owns its executor; Goal/workspace picks stay local.
         const sessionEndpoint =
-          targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedAgent.agentId;
+          targetContext.kind === "manager" ? undefined : selectedAgent.agentId;
         const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest", undefined,
           requestedAgentModels.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedAgent.agentId)],
           requestedAgentEfforts.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedAgent.agentId)]);
@@ -2296,7 +2298,7 @@ function PersonalGoalHome({
       if (!sessionId) {
         const mode = newSessionRequired.current.has(sessionKey) ? "new" : "resume_latest";
         const sessionEndpoint =
-          targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedRoute.agentId;
+          targetContext.kind === "manager" ? undefined : selectedRoute.agentId;
         const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal,
           requestedAgentModels.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedRoute.agentId)],
           requestedAgentEfforts.current[agentModelSelectionKey(targetContextId, sessionEndpoint ?? selectedRoute.agentId)]);
@@ -2670,7 +2672,12 @@ function PersonalGoalHome({
     if (!agentOptions.some((agent) => agent.agentId === agentId && agent.available)) {
       return;
     }
-    setSelectedAgents((current) => ({ ...current, [contextId]: agentId }));
+    setSelectedAgents((current) => {
+      const next = { ...current };
+      if (contextId === "manager" && agentId !== "status-only") delete next[contextId];
+      else next[contextId] = agentId;
+      return next;
+    });
   }
 
   function chooseAgentModel(agentId: string, modelId: string) {

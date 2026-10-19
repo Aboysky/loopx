@@ -16,15 +16,21 @@ export const stewardModelSettingsScenario = {
     let capabilityReads = 0;
     const context = await openWorkspacePage(browser, url, {
       apiOptions: { managerChannelBinding: binding }, collectCoverage,
-      beforeGoto: async (_api, page) => page.on("request", request => {
-        if (new URL(request.url()).pathname === "/api/chat/capabilities") capabilityReads += 1;
-      }),
+      beforeGoto: async (_api, page) => {
+        await page.addInitScript(() => localStorage.setItem("loopx.personal-agent-selection.v1", JSON.stringify({ manager: "retired-endpoint" })));
+        page.on("request", request => {
+          if (new URL(request.url()).pathname === "/api/chat/capabilities") capabilityReads += 1;
+        });
+      },
     });
     const { api, page } = context;
     try {
       const modelControl = page.getByRole("button", { name: "调整管家模型与思考深度", exact: true });
       await modelControl.waitFor();
       if (!(await modelControl.innerText()).includes("xhigh")) throw new Error("Current binding effort is missing");
+      if (await page.getByRole("combobox", { name: "选择聊天 Runtime" }).count()) throw new Error("Steward exposed a second executor owner");
+      const savedAgent = await page.evaluate(() => JSON.parse(localStorage.getItem("loopx.personal-agent-selection.v1") ?? "{}").manager);
+      if (savedAgent) throw new Error("Legacy browser executor preference survived machine-owned settings");
       await page.screenshot({ path: resolve(outputDir, "steward-model-entry.png"), animations: "disabled" });
       await modelControl.focus();
       await page.keyboard.press("Enter");
