@@ -2,6 +2,7 @@
  * These render states are local to a composition, never publication approvals.
  */
 import {createHash} from "node:crypto";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import layouts from "../../capabilities/content_ops/templates/layout-catalog-v0.json" with {type: "json"};
 
@@ -52,7 +53,7 @@ export function validateMediaPlan(input: unknown) {
     fields(asset, ["id", "path", "sha256", "kind", "source_ref", "visibility"]);
     const path = text(asset.path, 400);
     if (path.startsWith("/") || path.includes("\\") || path.split("/").some(part => part === ".." || !part || part === ".")) fail("Assets must be relative files inside the explicit source directory");
-    if (typeof asset.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(asset.sha256)) fail("Each source requires its exact SHA256");
+    if (typeof asset.sha256 !== "string" || !BARE_SHA256_PATTERN.test(asset.sha256)) fail("Each source requires its exact SHA256");
     if (typeof asset.kind !== "string" || !["image", "video", "audio"].includes(asset.kind)) fail("Unsupported asset kind");
     if (typeof asset.visibility !== "string" || !["local_private", "public_safe"].includes(asset.visibility)) fail("Each source requires its visibility boundary");
     return {id: token(asset.id), path, sha256: asset.sha256, kind: asset.kind as string,
@@ -124,7 +125,7 @@ export function validateMediaResult(input: unknown) {
   for (const [name, raw] of Object.entries(entries)) {
     if (!allowed.includes(name)) fail("Unexpected renderer file");
     const entry = object(raw);
-    if (typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) fail("Invalid renderer digest");
+    if (typeof entry.sha256 !== "string" || !BARE_SHA256_PATTERN.test(entry.sha256)) fail("Invalid renderer digest");
     files[name] = {sha256: entry.sha256, bytes: number(entry.bytes, 0, 128 * 1024 * 1024, true)};
   }
   if (["video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt"].some(name => !files[name])) fail("Renderer output incomplete");

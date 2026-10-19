@@ -1082,7 +1082,7 @@ export const typedActionsScenario = {
       const expectedGoalCapabilities = [
         "变更质量验证", "Goal 复盘与步幅", "探索图谱", "探索 Harness", "飞书事件收件箱",
         "飞书看板心跳同步", "已退役的 Authority 观测", "自适应子 Agent 容量",
-        "已注册 Peer 任务协调", "周期报告", "记忆与资料",
+        "已注册 Peer 任务协调", "周期报告", "记忆与资料", "内容制作",
       ];
       if (JSON.stringify([...goalCapabilityOrder].sort()) !== JSON.stringify(expectedGoalCapabilities.sort())) {
         throw new Error(`Goal capability workbench did not render the complete catalog: ${JSON.stringify(goalCapabilityOrder)}`);
