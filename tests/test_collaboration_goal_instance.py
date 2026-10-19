@@ -1372,7 +1372,7 @@ def test_native_return_process_exit_recovers_the_original_attempt(tmp_path):
                   + ("process.exit(17);" if crash else "process.stdout.write(JSON.stringify(result));"))
         child = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module",
                                 "-e", script, json.dumps({**command, **payload, "phase": phase})],
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, encoding="utf-8", timeout=10)
         assert child.returncode == (17 if crash else 0), child.stderr
         return None if crash else json.loads(child.stdout)
 
