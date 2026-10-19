@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -277,6 +278,34 @@ def test_caller_relative_registry_and_runtime_reach_the_detached_observer(tmp_pa
     assert {row["measurement"] for row in preview["counters"]} == {"quota_cycle", "codex_turn"}
     assert all(row["host"] == "codex_app" for row in preview["counters"])
     usage_ping.control("disable")
+
+
+@pytest.mark.parametrize("package_kind", ["namespace", "regular"])
+def test_detached_cycle_ignores_packages_in_its_temporary_working_directory(
+    tmp_path, monkeypatch, usage_transport, package_kind,
+):
+    from loopx.cli_commands.opencode2_goal_worker import _materialized_worker_path
+
+    temporary = tmp_path / "detached-cwd"
+    temporary.mkdir()
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(name, str(temporary))
+    monkeypatch.setattr(tempfile, "tempdir", str(temporary))
+    # Qualify the installed child entry point without a source-path override or
+    # an ambient safe-path setting masking the historical startup failure.
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.delenv("PYTHONSAFEPATH", raising=False)
+    worker = _materialized_worker_path()
+    assert worker.parent.parent == temporary / "loopx"
+    if package_kind == "regular":
+        (temporary / "loopx" / "__init__.py").write_text(
+            "raise AssertionError('temporary package must not be imported')\n",
+            encoding="utf-8",
+        )
+
+    preview, _, _, _ = _bound_cycle_through_detached_ts(tmp_path, monkeypatch, usage_transport)
+    assert {row["measurement"] for row in preview["counters"]} == {"quota_cycle", "codex_turn"}
+    assert all(row["host"] == "codex_app" for row in preview["counters"])
 
 
 def test_provider_numeric_timing_reaches_real_detached_installation_aggregator(tmp_path, monkeypatch, usage_transport):

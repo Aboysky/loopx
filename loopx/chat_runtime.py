@@ -372,24 +372,11 @@ class ChatRuntimeController:
         *,
         goal_id: str | None,
         objective: str,
-        history: list[dict[str, Any]] | None,
         project_coordination: bool = False,
     ) -> str:
-        """Compose the objective every adapter receives, history included."""
+        """Compose stable guidance; each provider restores history separately."""
 
-        history_context = ""
-        if history:
-            # This history is supplied when native continuity cannot be reused.
-            # Dropping early messages discards user constraints in a fresh
-            # thread. Ordinary native resume supplies no replayed history.
-            history_lines = [
-                f"{item.get('role', 'user')}: {str(item.get('content') or '').strip()}"
-                for item in history
-                if str(item.get("content") or "").strip()
-            ]
-            if history_lines:
-                history_context = "\nPrevious visible Chat messages:\n" + "\n".join(history_lines)
-        return f"{objective}{history_context}" + ("\n" + PROJECT_COORDINATION_GUIDANCE if project_coordination else "") + (
+        return objective + ("\n" + PROJECT_COORDINATION_GUIDANCE if project_coordination else "") + (
             "\n" + manager_skill_text() if goal_id == MANAGER_AGENT_GOAL_ID else ""
         )
 
@@ -462,9 +449,10 @@ class ChatRuntimeController:
                 work_dir=work_dir,
                 goal_id=goal_id,
                 objective=self._session_objective(
-                    goal_id=goal_id, objective=objective, history=history,
+                    goal_id=goal_id, objective=objective,
                     project_coordination=project_coordination and not execution_mode,
                 ),
+                history=history,
                 resume_thread_id=resume_thread_id,
                 startup_timeout_sec=self.startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
@@ -515,7 +503,7 @@ class ChatRuntimeController:
                 model, reasoning_effort = str(manager_config["model"]), str(manager_config["reasoning_effort"])
             return DshChatAdapter(
                 objective=self._session_objective(
-                    goal_id=goal_id, objective=objective, history=None,
+                    goal_id=goal_id, objective=objective,
                     project_coordination=project_coordination and not execution_mode,
                 ),
                 work_dir=work_dir,
@@ -939,6 +927,7 @@ class ChatRuntimeController:
             ]
             legacy_manager_context = (
                 is_manager_channel(session.get("channel_id"))
+                and session.get("upstream_mode") != CODEX_GOAL_CHAT_MODE
                 and (
                     session.get("manager_context_version") != MANAGER_CONTEXT_VERSION
                     or manager_profile_changed
@@ -1034,6 +1023,18 @@ class ChatRuntimeController:
                         **manager_runtime_session_fields(manager_runtime),
                         **alloc.manager_executor_session_fields(model_allocation),
                     }
+                    if legacy_manager_context and adapter.upstream_thread_id != session.get("upstream_thread_id"):
+                        # Preserve provenance for read-only checks of failed
+                        # native requests after this history migration. Publish
+                        # the native binding and representation version together;
+                        # neither a crash nor a later resume may mark the old
+                        # overfull thread as having adopted the new format.
+                        changes["upstream_context_history"] = [
+                            *(session.get("upstream_context_history") or []),
+                            {"thread_id": session["upstream_thread_id"],
+                             "manager_context_version": session.get("manager_context_version")},
+                        ]
+                        changes["upstream_thread_id"] = adapter.upstream_thread_id
                     if session["channel_id"] == "manager":
                         changes["goal_id"] = MANAGER_AGENT_GOAL_ID
                     self.store.update_session(session_id, **changes)

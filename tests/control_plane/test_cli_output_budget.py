@@ -1746,29 +1746,120 @@ def _assert_mode_variant_budgets(root: Path, *, only: str | None = None) -> None
 
 
 def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
-    # A reproducible 128-character absolute root, independent of pytest's
-    # ever-growing temp/worker prefix. Keep full routes and this workload;
+    # A reproducible 128-character absolute root; directory depth can still
+    # change JSON escaping cost. Keep full routes and this workload;
     # presentation-budget changes require matched base/head cost evidence.
-    # Reuse the other budget fixtures' short namespace. A canary's nested
-    # TMPDIR can already exceed 128 characters before we create this root.
-    parent = Path("/tmp").resolve()
+    # Use an existing native temp namespace on Windows; a drive-root /tmp
+    # need not exist. POSIX keeps the short namespace used by socket fixtures.
+    parent = Path(tempfile.gettempdir() if os.name == "nt" else "/tmp").resolve()
+    prefix = "loopx-brief-"
+    # A nested runner temp can exceed the workload itself. Use its nearest
+    # existing ancestor that leaves room for our owned, random child.
+    while len(str(parent / prefix)) + 8 > 128:
+        assert parent != parent.parent, "No temporary ancestor fits the 128-character workload"
+        parent = parent.parent
     # tempfile contributes an eight-character random suffix. Hold input size
-    # constant across Linux /tmp and macOS's longer temporary-directory root.
-    prefix = "loopx-brief-".ljust(128 - len(str(parent)) - 1 - 8, "p")
+    # constant even when the selected parent is a drive or share root.
+    prefix += "p" * (128 - len(str(parent / prefix)) - 8)
     with tempfile.TemporaryDirectory(prefix=prefix, dir=parent) as directory:
         root = Path(directory).resolve()
         assert len(str(root)) == 128
         _assert_mode_variant_budgets(root, only="heartbeat_prompt_brief")
 
 
+def test_brief_long_path_budget_retains_semantics_across_parent_depths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    # Use the native namespace on every host, without changing pathlib or the
+    # product's platform checks. Keep raw output measurements for enforcement.
+    monkeypatch.setitem(globals(), "os", SimpleNamespace(name="nt", environ=os.environ))
+    invoke = _invoke_cli
+    assert_budgets = _assert_mode_variant_budgets
+    roots: list[Path] = []
+    outputs: list[dict[str, object]] = []
+
+    def capture_root(root: Path, *, only: str | None = None) -> None:
+        roots.append(root)
+        assert len(str(root)) == 128
+        assert_budgets(root, only=only)
+
+    def capture_output(command):
+        exit_code, text = invoke(command)
+        output_format = command[command.index("--format") + 1]
+        root = str(roots[-1])
+        if output_format == "json":
+            canonical = json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True)
+            normalized = json.loads(canonical.replace(
+                json.dumps(root, ensure_ascii=False)[1:-1], "<OWNED_ROOT>"
+            ))
+            oversized = text + " " * max(0, 10_801 - len(text))
+            with pytest.raises(AssertionError, match="variant ceiling"):
+                assert_cli_output_mode_variant(
+                    CLI_OUTPUT_MODE_VARIANT_BY_ID["heartbeat_prompt_brief"],
+                    output_format="json", text=oversized,
+                    measurement=measure_cli_output(oversized, output_format="json"),
+                )
+        else:
+            assert len(text.splitlines()) == 94
+            normalized = text.replace(root, "<OWNED_ROOT>")
+        outputs.append({"format": output_format, "normalized": normalized})
+        return exit_code, text
+
+    monkeypatch.setitem(globals(), "_assert_mode_variant_budgets", capture_root)
+    monkeypatch.setitem(globals(), "_invoke_cli", capture_output)
+    with tempfile.TemporaryDirectory(prefix="loopx-depth-") as directory:
+        base = Path(directory).resolve()
+        # Do not silently climb to an unqualified writable ancestor to fit.
+        if len(str(base.joinpath(*("d" for _ in range(12))) / "loopx-brief-")) + 8 > 128:
+            pytest.skip("Native temp namespace cannot fit the qualified depth-12 layout")
+        for depth in (0, 6, 12):
+            parent = base.joinpath(*("d" for _ in range(depth)))
+            parent.mkdir(parents=True, exist_ok=True)
+            monkeypatch.setattr(tempfile, "tempdir", str(parent))
+            test_brief_budget_retains_full_commands_on_real_long_paths()
+    assert [len(root.parts) for root in roots] == [
+        len(roots[0].parts) + depth for depth in (0, 6, 12)
+    ]
+    assert outputs[:2] == outputs[2:4] == outputs[4:6]
+
+
 def test_long_path_budget_is_independent_of_runner_temp_prefix(
     tmp_path: Path, monkeypatch
 ) -> None:
-    parent = tmp_path / ("nested-canary-" + "p" * 128)
+    # Remain longer than the workload without adding 141 characters to an
+    # arbitrary runner prefix and crossing Windows directory limits.
+    prefix = "nested-canary-".ljust(160 - len(str(tmp_path.resolve())) - 1, "p")
+    parent = tmp_path / prefix
     parent.mkdir()
     assert len(str(parent.resolve())) > 128
     monkeypatch.setattr(tempfile, "tempdir", str(parent))
     test_brief_budget_retains_full_commands_on_real_long_paths()
+
+
+@pytest.mark.parametrize("nested_temp", [False, True])
+def test_long_path_budget_uses_native_temp_without_a_drive_root_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nested_temp: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    # Model a Windows drive with no /tmp while keeping real filesystem and
+    # CLI reads. Do not change the host's pathlib or product platform checks.
+    missing_drive_tmp = tmp_path / "missing-drive-tmp"
+    path_type = Path
+
+    def native_path(value):
+        return missing_drive_tmp if value == "/tmp" else path_type(value)
+
+    monkeypatch.setitem(globals(), "Path", native_path)
+    monkeypatch.setitem(globals(), "os", SimpleNamespace(name="nt", environ=os.environ))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    if nested_temp:
+        test_long_path_budget_is_independent_of_runner_temp_prefix(tmp_path, monkeypatch)
+    else:
+        test_brief_budget_retains_full_commands_on_real_long_paths()
+    assert not missing_drive_tmp.exists()
 
 
 def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(

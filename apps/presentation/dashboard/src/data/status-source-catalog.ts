@@ -20,6 +20,16 @@ export type StatusSourceCatalog = {
 
 export type StatusSourceStorage = Pick<Storage, "getItem" | "setItem">;
 
+function matchesRuntimeUrl(candidate: string, requested: string, baseHref: string): boolean {
+  const expected = new URL(candidate, baseHref), actual = new URL(requested, baseHref);
+  if (expected.toString() === actual.toString()) return true;
+  // An unbound entry may adopt this origin's first identity. A previously
+  // pinned identity must never be replaced, even on the same port.
+  if (actual.searchParams.has("source_namespace")) return false;
+  expected.searchParams.delete("source_namespace");
+  return expected.toString() === actual.toString();
+}
+
 /** Runtime choices describe physical readers, not new execution Goals. */
 export function runtimeStatusSourceCatalog(
   entries: {id: string; label: string; status_url: string}[] | undefined,
@@ -35,7 +45,7 @@ export function runtimeStatusSourceCatalog(
   }
   const current = new URL(currentUrl, baseHref).toString();
   // A source cannot replace the selected origin with an unrelated catalog.
-  return sources.some((s) => s.statusUrl === current) ? {schemaVersion: 1, sources} : null;
+  return sources.some((s) => matchesRuntimeUrl(s.statusUrl, current, baseHref)) ? {schemaVersion: 1, sources} : null;
 }
 
 export const localStatusSource: StatusSource = {
@@ -191,10 +201,10 @@ export function statusSourceForUrl(catalog: StatusSourceCatalog, statusUrl: stri
   } catch {
     return null;
   }
-  if (resolved.source?.isRelative) {
-    return catalog.sources.find((source) => source.kind === "runtime" && source.statusUrl === normalized)
-      ?? localStatusSource;
-  }
+  const runtime = catalog.sources.find((source) => source.kind === "runtime"
+    && matchesRuntimeUrl(source.statusUrl, normalized, baseHref));
+  if (runtime) return runtime;
+  if (resolved.source?.isRelative) return localStatusSource;
   return catalog.sources.find((source) => source.statusUrl === normalized) ?? null;
 }
 

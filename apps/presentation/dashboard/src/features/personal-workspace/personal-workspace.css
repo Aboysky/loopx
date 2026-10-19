@@ -82,6 +82,13 @@
 .personal-status-source-meta small { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .personal-status-source-meta button { margin-left: auto; width: 22px; height: 22px; color: var(--pw-faint); }
 .personal-status-source-error { margin: 0 3px; color: var(--pw-red); font-size: var(--text-caption); line-height: var(--leading-caption); overflow-wrap: anywhere; }
+.personal-runtime-source-error { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px clamp(14px, 3vw, 32px); border-bottom: 1px solid var(--pw-line); color: var(--pw-red); font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-runtime-source-error > div { min-width: 0; }
+.personal-runtime-source-error strong { font-weight: 600; }
+.personal-runtime-source-error details { margin-top: 8px; color: var(--pw-muted); overflow-wrap: anywhere; }
+.personal-runtime-source-error summary { cursor: pointer; }
+.personal-runtime-source-error p { margin: 8px 0 0; }
+.personal-runtime-source-error > button { flex-shrink: 0; min-height: 44px; padding: 0 16px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; }
 .personal-status-source-form { position: absolute; z-index: 12; top: calc(100% - 4px); left: 12px; right: 12px; display: grid; gap: 10px; padding: 13px; border: 1px solid var(--pw-line-strong); border-radius: 12px; background: #fff; box-shadow: 0 12px 32px rgb(30 28 20 / 14%); }
 .personal-status-source-form > header { display: flex; align-items: center; justify-content: space-between; font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-status-source-form label { display: grid; gap: 5px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
@@ -782,6 +789,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-lark-loading, .personal-lark-empty { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 130px; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-lark-apps { max-width: 1180px; margin: 0 auto; }
 .personal-lark-app-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-lark-app-actions { display: flex; align-items: center; gap: 8px; }
 .personal-lark-app-toolbar .personal-primary-action { width: auto; min-height: 40px; margin: 0; padding: 0 16px; }
 .personal-lark-app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 .personal-lark-app-card { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 18px; border: 1px solid var(--pw-line); border-radius: 15px; background: var(--pw-card); }
@@ -1538,6 +1546,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
      stays: it is the only place the operator reads which executor answers for
      the steward, and an unavailable selection must not become invisible. */
   .personal-channel-title p.personal-manager-execution { display: flex; }
+  .personal-channel-title .personal-runtime-details[open] > p { display: block; white-space: normal; overflow-wrap: anywhere; }
   .personal-channel-actions { min-width: 0; }
   .personal-chat-model-menu { position: static; }
   .personal-chat-model-panel { left: 14px; right: 14px; width: auto; }

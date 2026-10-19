@@ -246,7 +246,7 @@ MANAGER_ENDPOINT_KINDS = {
 }
 
 MANAGER_MODEL_ENV_VAR = "LOOPX_MANAGER_MODEL"
-MANAGER_MODEL_DEFAULT = "gpt-6-astra"
+MANAGER_MODEL_DEFAULT = "gpt-6.1-sol"
 MANAGER_MODEL_SOURCE_ENV_OVERRIDE = "env_override"
 MANAGER_MODEL_SOURCE_VENDOR_DEFAULT = "vendor_default"
 # The machine configuration can name the model too, so an operator can select
@@ -257,7 +257,7 @@ MANAGER_MODEL_SOURCE_MACHINE_CONFIGURATION = "machine_configuration"
 # two different managed models.
 MANAGER_MODEL_SOURCE_MANAGED_PROFILE = "managed_execution_profile"
 MANAGER_REASONING_EFFORT_ENV_VAR = "LOOPX_MANAGER_REASONING_EFFORT"
-MANAGER_REASONING_EFFORT_DEFAULT = "high"
+MANAGER_REASONING_EFFORT_DEFAULT = "xhigh"
 MANAGER_REASONING_EFFORTS = REASONING_EFFORTS
 
 def steward_machine_defaults(controller: Any) -> Mapping[str, Any] | None:
@@ -1002,7 +1002,10 @@ def manager_session_model_allocation(
 # 18: resolve intent and current evidence before deciding whether work remains.
 # 19: default local attention evidence and semantic synthesis, independent of external channels.
 # 20: carry delivery amendments through question-form feedback; honor handoff-before-repair ordering.
-MANAGER_CONTEXT_VERSION = 20
+# 21: migrate the former transcript-in-objective representation to persisted
+#     native history. Merely removing it from new prompts leaves old upstream
+#     conversations overfull and unable to compact before their next request.
+MANAGER_CONTEXT_VERSION = 21
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any

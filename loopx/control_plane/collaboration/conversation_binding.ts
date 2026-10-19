@@ -334,13 +334,27 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
       : JSON.stringify(saved) === JSON.stringify(context);
     if (!matches) throw new EffectRuntimeRequestError("bound Session context changed");
   }
+  const channel = row.context_kind === "steward"
+    ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`;
+  if (params.session !== undefined) {
+    const session = requireJsonObject(params.session, "canonical bound Session");
+    const steward = row.context_kind === "steward";
+    sessionIdentity(session.session_id, "bound Session identity");
+    if (session.status === "closed" || session.channel_id !== channel
+        || session.goal_id !== (steward ? "loopx-manager" : null)
+        || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
+        || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null
+        || params.session_context === undefined
+        || JSON.stringify(steward ? session.steward_context : session.project_context) !== JSON.stringify(params.session_context)) {
+      throw new EffectRuntimeRequestError("canonical bound Session identity changed");
+    }
+  }
   // This is an audience proof, not a host-tool grant. Only the independently
   // verified owner in this private source may inherit an explicit machine
   // owner grant. Portfolio scope and project write grants do not imply it.
   return {binding: row, context, owner_manager_audience: row.context_kind === "steward"
       && project.filesystem_scope !== "workspace_only",
-    channel_id: row.context_kind === "steward"
-    ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`};
+    channel_id: channel};
 }
 
 /** Discover existing private targets from canonical metadata. This is a read
@@ -363,13 +377,9 @@ export function listLocalBoundSessions(params: JsonObject): JsonObject {
         && (value as JsonObject).binding_id === id) || session.status === "closed") continue;
     const steward = row.context_kind === "steward";
     const saved = requireJsonObject(steward ? session.steward_context : session.project_context, "bound Session context");
-    const selected = resolveBoundConversation({...params, source_ref: saved.source_ref,
+    resolveBoundConversation({...params, source_ref: saved.source_ref,
+      session,
       sender_ref: row.operator_ref, private_human_message: false, origin: "web", session_context: saved});
-    if (session.channel_id !== selected.channel_id || session.goal_id !== (steward ? "loopx-manager" : null)
-        || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
-        || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null) {
-      throw new EffectRuntimeRequestError("canonical bound Session identity changed");
-    }
     ids.push(sessionIdentity(session.session_id, "bound Session identity"));
   }
   if (new Set(ids).size !== ids.length) throw new EffectRuntimeRequestError("canonical bound Session identity is ambiguous");
@@ -391,6 +401,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
   const current = params.current_session === null ? null : requireJsonObject(params.current_session, "current Session");
+  if (params.context_recovery !== undefined) {
+    return planContextRecovery(params, row, current);
+  }
   const target = row.target_recorded === true ? row : current;
   const session = target?.session_id ?? null;
   const turn = row.target_recorded === true ? row.turn_id ?? null : current?.active_turn_id ?? null;
@@ -448,6 +461,66 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       response_code: command === "new" ? "new_session" : turn || background.length ? "stop_requested" : "no_active_turn"};
   }
   return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
+}
+
+/** A new, correlated continuation after an observed pre-execution failure.
+ * A delivered failure notice is not a completed business request. This bounded
+ * migration path never reopens the failed Turn or retries unknown effects.
+ */
+function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonObject | null): JsonObject {
+  const recovery = requireJsonObject(params.context_recovery, "context recovery observation");
+  const version = requireInteger(recovery.version, "context representation version");
+  if (version < 1) throw new EffectRuntimeRequestError("invalid context representation version");
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true
+      || row.agent_target != null || current.session_id !== row.session_id || current.agent_id !== "codex"
+      || current.upstream_mode !== "chat" || current.status === "closed"
+      || current.session_mode === "attached_host") return no;
+  const selected = binding(params.binding);
+  if (selected.context_kind !== "steward" || selected.audience === "group") return no;
+  const saved = normalizeStewardContext(current.steward_context);
+  const source = requireJsonObject(row.source, "original conversation source");
+  if (row.binding_id !== selected.binding_id || saved.binding_id !== selected.binding_id
+      || saved.source_ref !== source.source_ref || saved.provider_ref !== selected.provider_ref
+      || saved.operator_ref !== selected.operator_ref || source.sender_ref !== selected.operator_ref
+      || source.private_human_message !== true
+      || current.channel_id !== `manager.external.native.${selected.binding_id}.${saved.source_ref}`) return no;
+  const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
+      || recovery.steering_observed !== false
+      || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded"].includes(String(failed.error_code))
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
+  if (previous && (previous.version !== version || previous.failed_turn_id !== row.turn_id
+      || previous.client_turn_id !== client)) return no;
+  const history = current.upstream_context_history ?? [];
+  if (!Array.isArray(history)) throw new EffectRuntimeRequestError("invalid native context provenance");
+  const oldThreads = history.map(value => requireJsonObject(value, "native context provenance"))
+    .filter(item => Number.isSafeInteger(item.manager_context_version) && Number(item.manager_context_version) < version)
+    .map(item => sessionIdentity(item.thread_id, "original native thread"));
+  if (Number.isSafeInteger(current.manager_context_version) && Number(current.manager_context_version) < version) {
+    oldThreads.push(sessionIdentity(current.upstream_thread_id, "original native thread"));
+  }
+  if (!oldThreads.length) return no;
+  const candidate = {...no, recovery_candidate: true, client_turn_id: client,
+    session_id: current.session_id, failed_turn_id: failed.turn_id, native_thread_ids: [...new Set(oldThreads)]};
+  if (recovery.native_observation == null) return candidate;
+  const observed = requireJsonObject(recovery.native_observation, "native failure readback");
+  if (!oldThreads.includes(String(observed.thread_id)) || observed.turn_id !== failed.upstream_turn_id
+      || observed.only_original_user_item !== true || recovery.source_verified !== true) return candidate;
+  const info = observed.codex_error_info;
+  let transient = ["contextWindowExceeded", "serverOverloaded", "internalServerError"].includes(String(info));
+  if (info && typeof info === "object" && !Array.isArray(info)) {
+    const entries = Object.entries(info);
+    if (entries.length === 1 && ["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(entries[0][0])) {
+      const detail = requireJsonObject(entries[0][1], "native connection readback");
+      transient = Object.hasOwn(detail, "httpStatusCode") && (detail.httpStatusCode === null
+        || Number.isSafeInteger(detail.httpStatusCode) && Number(detail.httpStatusCode) >= 500 && Number(detail.httpStatusCode) <= 599);
+    }
+  }
+  return {...candidate, recovery_eligible: transient};
 }
 
 /** A labelled observation of the same authorized context and canonical queue.

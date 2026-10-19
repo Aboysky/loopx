@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 import re
 import shlex
 
 from ...file_lock import exclusive_file_lock
+from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.source_grant_observation import (
     POLICY_SCHEMA as POLICY_SCHEMA,
     registered_context_recipients,
@@ -114,7 +116,13 @@ def deliver(
 ) -> dict:
     request = normalize_request(request)
     target = {key: request[key] for key in ("goal_id", "agent_id")}
-    with collaboration_goal_scope(
+    # Share the configuration writer's fence through inbox/route publication.
+    # Order: source policy -> Goal lifetime -> request; local owner stays independent.
+    scope = conversation_scope(session, origin=turn.get("origin", "unknown"))
+    with (
+        exclusive_file_lock((_root(runtime_root) / "policy.json").with_suffix(".lock"))
+        if scope["kind"] == "external_audience" else nullcontext()
+    ), collaboration_goal_scope(
         registry_path,
         goal_id=request["goal_id"],
         agents=(request["agent_id"],),
@@ -230,22 +238,20 @@ def turn_start_hook(
     def produce():
         nonlocal snapshot
         try:
-            from ...control_plane.collaboration.turn_context_observation import read_delegation_turn_context
+            from ...control_plane.collaboration.inbox import read_inbox_transaction
+            from ...control_plane.collaboration.inbox import _pending_result
 
-            snapshot = read_delegation_turn_context(runtime_root, registry_path, goal_id, agent_id,
-                read_command=command)
-            agenda = snapshot["unfinished_delegations"]
             with collaboration_goal_scope(
-                registry_path,
-                goal_id=goal_id,
-                agents=(agent_id,),
+                registry_path, goal_id=goal_id, agents=(agent_id,),
             ) as goal_scope:
-                inbox = pending(
-                    runtime_root,
-                    goal_id,
-                    agent_id,
-                    scope=goal_scope,
-                )
+                observed = read_inbox_transaction(runtime_root, {
+                    "operation": "turn_start", "goal_id": goal_id, "agent_id": agent_id,
+                    "read_command": command,
+                }, scope=goal_scope)
+                observed.update(goal_id=goal_id, agent_id=agent_id)
+                inbox = _pending_result(runtime_root, observed, goal_scope, None)
+            snapshot = observed["context"]
+            agenda = snapshot["unfinished_delegations"]
             count = (
                 max(len(inbox["items"]), agenda["incoming_count"])
                 + max(len(inbox.get("peer_returns", {}).get("items", [])), agenda["outgoing_count"])
@@ -339,6 +345,30 @@ def _require_external_channel(channel: str) -> None:
     # one exact audience. Never accept a prefix or a partially specified binding.
     if not re.fullmatch(r"manager\.external\.(?:[a-f0-9]{24}|native\.[a-f0-9]{24}\.[a-f0-9]{24})", channel):
         raise ValueError("an exact external manager channel is required")
+
+
+def revoke_conversation_sources(runtime_root: Path, binding_id: str) -> None:
+    """Persist the typed binding revocation under the existing source fence."""
+    path = _root(runtime_root) / "policy.json"
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return
+    with exclusive_file_lock(path.with_suffix(".lock")):
+        try:
+            policy = _read(path)
+        except FileNotFoundError:
+            return
+        try:
+            planned = effect_runtime_result("collaboration.source.revoke_conversation", {
+                "policy": policy, "binding_id": binding_id,
+            })
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if planned["would_change"]:
+            _write(path, planned["policy"])
+            if _read(path) != planned["policy"]:
+                raise OSError("conversation source revocation did not verify")
 
 
 def configure_evidence_scope(runtime_root: Path, registry_path: Path, *, channel: str,

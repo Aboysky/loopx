@@ -113,6 +113,30 @@ messages are excluded. Listening is neither a delivery receipt nor task
 acceptance. Native binding/composition/HTTP regressions qualify the source read
 model, while each provider's installed liveness and result return remain separate.
 
+### Continue an original private conversation on the local App
+
+Settings → Lark offers **Continue original conversation** on an existing
+owner-private connection. Discovery uses Core's verified binding selector and
+requires its echoed identity; the URL then freezes that binding and exact
+existing Session. Missing, malformed, revoked, closed or unsupported targets
+remain unavailable. There is no fallback to ordinary steward/project history,
+Session creation, executor change or model reconfiguration on this entry.
+Group audiences retain their existing boundary.
+
+The App reuses its conversation history, single composer, stream recovery and
+queued-input owners. Quiet source refresh reads the verified compact index;
+only changed snapshots are read. Messages arriving from the original source
+become visible without navigation, and Web sends retain Web origin through the
+existing Core queue and fresh source admission. The connection list loads
+independently of App/credential catalogs, so a failed catalog does not hide an
+existing conversation or label it disconnected.
+
+Real Chat HTTP/SQLite/Core with a synthetic provider and model qualifies source
+selection, both input origins, denial/recovery and no replacement Session.
+Packaged browser evidence qualifies the local UI path separately. Live Lark
+return delivery, installed service adoption, split-root composition and
+Goal-less project peer handoff remain open; this checkpoint does not close them.
+
 Synthetic product previews: [desktop](../../assets/personal-workspace/private-project-conversations.png),
 [narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
 [revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
@@ -1279,6 +1303,31 @@ host media and file delivery remain separate gaps. Regression covers model-wire
 image input, unchanged Session, replay, durable restart and download-time
 revocation; live provider/model acceptance is reported separately. No new
 Session authority, queue, worker or feature toggle is introduced.
+
+### Native history migration and unfinished-request continuation
+
+A delivered failure notice is not a completed business request. The existing
+private reply scanner now discovers eligible unfinished ordinary Codex steward
+requests after the legacy manager-context migration. Context version 21 restores
+the complete visible user/assistant history once in native persisted history;
+the old upstream identity remains recorded, and native Goal/attached executions
+are not replaced by this migration.
+
+Core may admit one correlated continuation per request for this migration only
+after current App/owner/grant and unchanged source verification, an exact failed
+native Turn readback, and a complete inventory containing only its original user
+item. Policy/usage denials, corrections, tools, unknown effects, closed Sessions,
+group/attached routes and unreadable evidence remain holds. The original failed
+Turn and its verified failure notice remain unchanged; the existing same-Session
+queue owns continuation, and a distinct frozen delivery phase owns the eventual
+original-source result. A restart resumes the deterministic reservation rather
+than dispatching it twice. Existing provider replies accompany recovery as data
+so completed work can be retained without repeating its effects.
+
+Qualification covers the actual background scanner, source/grant counterexamples,
+native inventory reads and crashes before admission, after enqueue and before
+transport synchronization. Synthetic model/provider journeys and read-only native
+observations do not certify live model completion or the wider conversation SLA.
 
 ### Lark progress-edit budget and final-result recovery
 

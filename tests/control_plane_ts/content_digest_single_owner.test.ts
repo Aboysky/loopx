@@ -92,6 +92,7 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
 const CANONICAL_CONSUMERS = [
   "control_plane/agents/supervisor_event_append.ts",
   "control_plane/capabilities/change_quality_validation.ts",
+  "control_plane/capabilities/content_media.ts",
   "control_plane/capabilities/explore_result_page.ts",
   "control_plane/capabilities/external_evidence.ts",
   "control_plane/capabilities/goal_capability_organization.ts",
@@ -100,6 +101,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/collaboration/delegation.ts",
   "control_plane/collaboration/delegation_result_use.ts",
   "control_plane/collaboration/goal_instance_lifecycle.ts",
+  "control_plane/collaboration/inbox_read.ts",
   "control_plane/collaboration/inbox_receipts.ts",
   "control_plane/collaboration/request_control.ts",
   "control_plane/collaboration/result_publication.ts",
