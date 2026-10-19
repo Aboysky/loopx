@@ -146,6 +146,12 @@ interface ReturnCommand {
   facts: JsonObject;
 }
 
+function returnAddress(value: unknown): {request_id: string; result_key: string} {
+  const row = requireJsonObject(value, "return candidate");
+  return {request_id: matchingString(row.request_id, "request_id", BARE_SHA256_PATTERN),
+    result_key: matchingString(row.result_key, "result_key", RESULT_KEY)};
+}
+
 function returnCommand(value: unknown): ReturnCommand {
   const request = requireJsonObject(value, "return delivery transaction");
   if (request.schema_version !== RETURN_DELIVERY_TRANSACTION) {
@@ -153,8 +159,7 @@ function returnCommand(value: unknown): ReturnCommand {
   }
   const root = requireNonEmptyString(request.runtime_root, "runtime_root");
   if (!isAbsolute(root)) throw new EffectRuntimeRequestError("return runtime root must be absolute");
-  const id = matchingString(request.request_id, "request_id", BARE_SHA256_PATTERN);
-  const key = matchingString(request.result_key, "result_key", RESULT_KEY);
+  const {request_id: id, result_key: key} = returnAddress(request);
   const now = requireNonEmptyString(request.now, "now");
   if (now.length > 64 || parseTodoTimestampMicros(now) === null) throw new EffectRuntimeRequestError("invalid return clock");
   requireStringLiteral(request.phase, ["prepare", "attempt", "settle"], "return delivery phase");
@@ -224,11 +229,19 @@ async function scanReturns(request: JsonObject): Promise<JsonObject> {
   if (!Array.isArray(request.candidates) || request.candidates.length > 128) {
     throw new EffectRuntimeRequestError("return scan requires at most 128 candidates");
   }
-  const commands = request.candidates.map(candidate => returnCommand({ ...request,
-    ...requireJsonObject(candidate, "return candidate"), phase: "prepare", facts: {} }));
   const candidates = [];
   let unavailable = 0;
-  for (const command of commands) {
+  for (const candidate of request.candidates) {
+    let address: ReturnType<typeof returnAddress>;
+    try { address = returnAddress(candidate); }
+    catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError)) throw error;
+      unavailable += 1;
+      continue;
+    }
+    // A damaged address is local to that item; an invalid transaction envelope
+    // still rejects the scan. Candidate fields cannot replace its root or scope.
+    const command = returnCommand({...request, ...address, phase: "prepare", facts: {}});
     try {
       const state = deliveryState(await readReturnRecord(command.path, {}));
       if (pendingDelivery(command, state)) candidates.push({ request_id: command.request.request_id, result_key: command.key });
@@ -348,6 +361,9 @@ async function sourceFailure(command: ReturnCommand, state: JsonObject, blocker:
 }
 
 function returnAuthorityBlocker(command: ReturnCommand): string | null {
+  // Null is the Host's completed lookup of a missing original record. IO errors
+  // arrive separately in facts.error and retain their retryable classification.
+  if (command.facts.session === null || command.facts.turn === null) return "original_route_unavailable";
   const session = requireJsonObject(command.facts.session, "source session");
   requireJsonObject(command.facts.turn, "source turn");
   const route = requireJsonObject(command.facts.route, "source route");
@@ -463,7 +479,8 @@ function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject 
     return { ...retryState(state, command, "provider_verification_unavailable"), status: "verification_required" };
   }
   return retryState(command.exact ? state : { attempts: state.attempts ?? 0 }, command, outcome.kind === "sender_unavailable"
-    ? "return_transport_unavailable" : "original_route_or_return_delivery_unavailable");
+    ? "return_transport_unavailable" : outcome.kind === "verification_error"
+      ? "provider_verification_unavailable" : "original_route_or_return_delivery_unavailable");
 }
 
 async function finishReturn(command: ReturnCommand, state: JsonObject): Promise<JsonObject> {

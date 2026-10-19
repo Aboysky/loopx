@@ -464,6 +464,69 @@ def test_ambiguous_provider_write_is_not_blindly_resent(flow):
     }
 
 
+def test_return_scan_isolates_invalid_address_from_valid_result(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "The original request is complete.")
+    orphan = _root(root) / "replies" / "!orphan" / "conclusion.json"
+    _write(orphan, {"text": "An unrelated damaged address."})
+    original = orphan.read_bytes()
+
+    assert drain(root, registry, store, None) == 1
+    assert drain(root, registry, ChatSessionStore(root), None) == 0
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    returned = [row for row in store.messages(session["session_id"])
+                if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert orphan.read_bytes() == original
+    assert not orphan.with_name("conclusion.delivery.json").exists()
+
+
+@pytest.mark.parametrize("missing", ["session", "turn"])
+def test_accepted_return_with_missing_original_route_terminates_without_resend(flow, missing):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "The original request is complete.")
+    attempt = {
+        "schema_version": "manager_return_delivery_attempt_v0", "provider": "lark",
+        "message_ref": "om_recorded_result", "intent_digest": "sha256:" + "a" * 64,
+        "provider_receipt": "sha256:" + "b" * 64,
+    }
+
+    class Transport:
+        sends = 0
+
+        def send_with_attempt(self, route, session, turn, text, record_attempt):
+            self.sends += 1
+            record_attempt(attempt)
+            return {"external_write_performed": True, "reply_verified": False}
+
+        def verify(self, *_):
+            pytest.fail("a missing original route cannot authorize verification")
+
+    sender = Transport()
+    drain(root, registry, store, sender)
+    path = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    assert json.loads(path.read_text())["status"] == "verification_required"
+    directory = store.root / "sessions" / session["session_id"]
+    (directory / "session.json" if missing == "session" else
+     directory / "turns" / (turn["turn_id"] + ".json")).unlink()
+
+    assert drain(root, registry, ChatSessionStore(root), sender) == 1
+    state = json.loads(path.read_text())
+    assert state["status"] == "explicit_unverified"
+    assert state["error"] == "original_route_unavailable"
+    assert state["attempt"] == attempt
+    saved = path.read_bytes()
+    assert drain(root, registry, ChatSessionStore(root), sender,
+                 now=datetime.now(timezone.utc) + timedelta(days=1)) == 0
+    assert sender.sends == 1 and path.read_bytes() == saved
+
+
 def test_known_provider_locator_is_verified_after_restart_without_resend(flow):
     root, registry, store, create = flow
     session, _, receipt = create(True)

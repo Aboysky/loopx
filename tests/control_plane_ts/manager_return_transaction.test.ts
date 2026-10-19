@@ -188,6 +188,52 @@ test("provider exception after a locatorless checkpoint cannot become a retry", 
   } finally { await f.close(); }
 });
 
+test("scan isolates malformed addresses while retaining transaction envelope validation", async () => {
+  const f = await fixture(false);
+  try {
+    const result = await f.run("scan", {candidates: [
+      {request_id: "!orphan", result_key: "conclusion"}, null,
+      {request_id: id, result_key: "../escape"}, {request_id: id, result_key: "conclusion"},
+    ]});
+    assert.deepEqual(result.candidates, [{request_id: id, result_key: "conclusion"}]);
+    assert.equal(result.unavailable_count, 3);
+    await assert.rejects(f.run("scan", {runtime_root: "relative", candidates: [
+      {request_id: id, result_key: "conclusion"},
+    ]}), /absolute/);
+    await assert.rejects(readFile(f.statePath));
+  } finally { await f.close(); }
+});
+
+for (const missing of ["session", "turn"]) {
+  test(`accepted legacy attempt terminates when the original ${missing} is absent`, async () => {
+    const f = await fixture(false, true);
+    try {
+      await f.put(f.statePath, {status: "verification_required", attempt});
+      const facts = {...f.facts, [missing]: null};
+      assert.equal((await f.run("prepare", {facts})).action, "skip");
+      assert.equal((await f.state()).status, "explicit_unverified");
+      assert.equal((await f.state()).error, "original_route_unavailable");
+      assert.deepEqual((await f.state()).attempt, attempt);
+      assert.equal((await f.run("prepare", {facts})).processed, 0);
+    } finally { await f.close(); }
+  });
+}
+
+test("exact verifier failure retains its provider diagnostic and accepted attempt", async () => {
+  const f = await fixture(true, true);
+  try {
+    const plan = await f.run("prepare");
+    await f.run("attempt", {...plan, attempt});
+    const resumed = await f.run("prepare", {now: "2026-01-02T03:06:05.123456+00:00"});
+    await f.run("settle", {...resumed, now: "2026-01-02T03:06:05.123456+00:00",
+      outcome: {kind: "verification_error", blocker: null}});
+    assert.equal((await f.state()).status, "retry_pending");
+    assert.equal((await f.state()).error, "provider_verification_unavailable");
+    assert.deepEqual((await f.state()).attempt, attempt);
+    assert.equal((await f.run("prepare", {now: "2026-01-02T03:08:05.123456+00:00"})).action, "verify");
+  } finally { await f.close(); }
+});
+
 test("invalid UTF-8 and unexpected BOMs cannot become a repaired receipt or delivery instruction", async () => {
   const f = await fixture(false);
   try {
