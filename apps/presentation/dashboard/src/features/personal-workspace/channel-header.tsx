@@ -161,11 +161,7 @@ export function ChannelHeader({
 
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
-  ) : originalConversationTitle ? <>
-    <span className="personal-read-only-source"><Bot size={15} />{selectedAgentId}</span>
-    <ChatModelMenu agentId={selectedAgentId} ordinary={false} readback={selectedAgentModelReadback}
-      model={selectedAgentModelId} effort={selectedAgentReasoningEffort} />
-  </> : <>
+  ) : <>
     <WorkspaceSelect
             ariaLabel={t("header.selectChatRuntime")}
             className="personal-agent-select"
@@ -218,6 +214,14 @@ export function ChannelHeader({
       value={conversationScope.value}
     />
   ) : null;
+  // Source continuation reports its immutable executor; ordinary conversation
+  // configuration remains with its own controls.
+  const sourceRuntimeControl = !originalConversationTitle || scopeUnavailable || agentWorkActive || readOnlySourceLabel
+    ? runtimeControl : <>
+      <span className="personal-read-only-source"><Bot size={15} />{selectedAgentId}</span>
+      <ChatModelMenu agentId={selectedAgentId} ordinary={false} readback={selectedAgentModelReadback}
+        model={selectedAgentModelId} effort={selectedAgentReasoningEffort} />
+    </>;
 
   return (
     <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)} data-workspace-scope={workspaceGrantLabel ? "true" : undefined}>
@@ -293,7 +297,7 @@ export function ChannelHeader({
           <button aria-label={t("header.goalSettings")} title={t("header.goalSettingsDescription")} className="personal-icon-button personal-goal-settings-action" onClick={onOpenGoalCapabilities} type="button"><SlidersHorizontal aria-hidden size={17} /></button>
         ) : null}
         {scopeControl}
-        {!selectedGoal ? runtimeControl : null}
+        {!selectedGoal ? sourceRuntimeControl : null}
         {onRefresh ? (
           <span className={`personal-refresh-control is-${refreshState ?? "idle"}`}>
             {refreshState === "loading" ? <small>{t("header.refreshing")}</small> : refreshState === "error" ? <small>{t("header.refreshFailed")}</small> : null}
