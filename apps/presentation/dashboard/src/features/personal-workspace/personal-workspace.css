@@ -1545,6 +1545,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
      stays: it is the only place the operator reads which executor answers for
      the steward, and an unavailable selection must not become invisible. */
   .personal-channel-title p.personal-manager-execution { display: flex; }
+  .personal-channel-title .personal-runtime-details[open] > p { display: block; white-space: normal; overflow-wrap: anywhere; }
   .personal-channel-actions { min-width: 0; }
   .personal-chat-model-menu { position: static; }
   .personal-chat-model-panel { left: 14px; right: 14px; width: auto; }
