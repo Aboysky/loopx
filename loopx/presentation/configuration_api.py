@@ -15,6 +15,7 @@ from .. import chat_usage_statistics_api as usage_api
 from .. import chat_goal_configuration_api as goal_api
 from . import goal_direction_api as direction_api
 from . import decision_context_api as context_api
+from . import content_media_api as media_api
 from .. import chat_machine_configuration_api as machine_api
 from .. import chat_operator_provider_api as operator_api
 from .. import chat_automation_cadence_api as cadence_api
@@ -33,6 +34,7 @@ class ChatConfigurationRequestMixin(
     goal_api.GoalConfigurationRequestMixin,
     direction_api.GoalDirectionRequestMixin,
     context_api.DecisionContextRequestMixin,
+    media_api.ContentMediaRequestMixin,
     machine_api.MachineConfigurationRequestMixin,
     operator_api.OperatorProviderRequestMixin,
     backup_api.ConfigurationBackupRequestMixin,
@@ -42,6 +44,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            f"{media_api.CONTENT_MEDIA_PATH}/file": self._content_media_file,
             accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_read,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_read,
             attached_api.CODEX_ATTACHED_LIVE_PATH: self._codex_attached_live,
@@ -62,6 +65,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            media_api.CONTENT_MEDIA_PATH: self._content_media_request,
             accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_write,
             context_api.DECISION_CONTEXT_PATH: self._decision_context_request,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_send,
