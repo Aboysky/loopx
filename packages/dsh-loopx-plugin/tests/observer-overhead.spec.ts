@@ -54,6 +54,17 @@ describe('observer overhead trials', () => {
     const trial = await runObserverTrial({ inputEvents: 60, bufferBound: 256 })
     expect(trial.workloadEvents).toBe(60)
     expect(trial.observedEvents).toBe(62)
+    expect(trial.expectedObservedEvents).toBe(62)
+    expect(trial.envelopeKinds).toEqual({
+      session_started: 1,
+      session_disposed: 1,
+      turn_started: 10,
+      step_started: 10,
+      tool_called: 10,
+      tool_completed: 10,
+      step_ended: 10,
+      turn_ended: 10,
+    })
     expect(trial.observedEvents).toBe(
       trial.acceptedEvents + trial.rejectedEvents + trial.droppedEvents,
     )
@@ -123,6 +134,8 @@ describe('observer overhead trials', () => {
     expect(report.integrity.no_event_loss).toBe(true)
     expect(report.integrity.persisted_equals_accepted).toBe(true)
     expect(report.integrity.all_trials_usable).toBe(true)
+    expect(report.integrity.observed_matches_plan).toBe(true)
+    expect(report.integrity.envelope_kind_mix_complete).toBe(true)
     expect(report.integrity.count_conservation).toBe(true)
     expect(report.integrity.outbound_endpoints_empty).toBe(true)
     expect(report.integrity.worker_context_influence_absent).toBe(true)
@@ -203,6 +216,46 @@ describe('observer overhead trials', () => {
     expect(report.integrity.no_event_loss).toBe(false)
     expect(report.warnings.length).toBeGreaterThan(0)
     expect(renderMarkdown(report)).toContain('Status: **NOT USABLE**')
+  })
+
+  it('marks a trial unusable when the planned record mix is not consumed', async () => {
+    const trial = await runObserverTrial({ inputEvents: 60, bufferBound: 256 })
+    expect(isUsableTrial(trial)).toBe(true)
+    // A compactor that silently skips one planned kind (retirement or rename)
+    // must not read as a usable overhead sample.
+    const skippedKind = {
+      ...trial,
+      observedEvents: trial.observedEvents - 10,
+      acceptedEvents: trial.acceptedEvents - 10,
+      persistedEvents: trial.persistedEvents - 10,
+      envelopeKinds: { ...trial.envelopeKinds, turn_started: 0 },
+    }
+    expect(isUsableTrial(skippedKind)).toBe(false)
+    // A planned kind that no longer maps to a known kind still counts as an
+    // observed record, so only the kind histogram can catch it.
+    const substituted = {
+      ...trial,
+      envelopeKinds: { ...trial.envelopeKinds, turn_started: 0, unsupported: 10 },
+    }
+    expect(isUsableTrial(substituted)).toBe(false)
+    const report = buildOverheadReport({
+      config: { events: 60, repeat: 2, buffer_bound: 256, event_mix: 'turn-cycle-v1' },
+      baseline: [runBaselineTrial({ inputEvents: 60, bufferBound: 256 })],
+      observer: [skippedKind, substituted],
+      environment,
+      generatedAt: '2026-10-19T00:00:00.000Z',
+    })
+    expect(report.usable).toBe(false)
+    expect(report.integrity.observed_matches_plan).toBe(false)
+    expect(report.integrity.envelope_kind_mix_complete).toBe(false)
+    expect(report.event_accounting.unconsumed_events_total).toBe(10)
+    expect(report.event_accounting.unsupported_envelopes_total).toBe(10)
+    expect(report.arms.observer.summary.usable_trials).toBe(0)
+    const markdown = renderMarkdown(report)
+    expect(markdown).toContain('Status: **NOT USABLE**')
+    expect(markdown).toContain('Observed matches plan: failed')
+    expect(markdown).toContain('Planned envelope mix complete: failed')
+    expect(markdown).toContain('## Warnings')
   })
 })
 

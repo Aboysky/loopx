@@ -39,6 +39,7 @@ export interface TrialOptions {
 export interface TrialMeasurement {
   readonly workloadEvents: number
   readonly observedEvents: number
+  readonly expectedObservedEvents: number
   readonly acceptedEvents: number
   readonly persistedEvents: number
   readonly droppedEvents: number
@@ -59,6 +60,8 @@ export interface TrialMeasurement {
   readonly clockUncertaintyMaxMs: number
   readonly harnessTimeEvents: number
   readonly wallClockEvents: number
+  readonly envelopeKinds: Readonly<Record<string, number>>
+  readonly expectedEnvelopeKinds: Readonly<Record<string, number>>
   readonly appendLatenciesMs: readonly number[]
   readonly outboundEndpoints: number
   readonly workerContextInfluence: boolean
@@ -67,6 +70,26 @@ export interface TrialMeasurement {
 
 export function normalizeEventCount(inputEvents: number): number {
   return Math.max(EVENT_CYCLE, Math.floor(inputEvents / EVENT_CYCLE) * EVENT_CYCLE)
+}
+
+/**
+ * The record mix one trial must produce for its timings to be comparable: one
+ * lifecycle record per session and one record per planned event kind per turn
+ * cycle. Each trial carries this histogram so a silently retired event kind or
+ * an unknown-kind substitution can never read as a clean measurement.
+ */
+export function plannedEnvelopeKinds(workloadEvents: number): Readonly<Record<string, number>> {
+  const cycles = Math.floor(workloadEvents / EVENT_CYCLE)
+  return {
+    session_started: 1,
+    session_disposed: 1,
+    turn_started: cycles,
+    step_started: cycles,
+    tool_called: cycles,
+    tool_completed: cycles,
+    step_ended: cycles,
+    turn_ended: cycles,
+  }
 }
 
 function sessionEvent(type: string, seq: number, data: unknown): SessionEvent {
@@ -168,6 +191,7 @@ export function runBaselineTrial(options: TrialOptions): TrialMeasurement {
   return {
     workloadEvents,
     observedEvents: plan.length,
+    expectedObservedEvents: plan.length,
     cpuUserMs: cpu.userMs,
     cpuSystemMs: cpu.systemMs,
     cpuTotalMs: cpu.totalMs,
@@ -188,6 +212,9 @@ export function runBaselineTrial(options: TrialOptions): TrialMeasurement {
     clockUncertaintyMaxMs: 0,
     harnessTimeEvents: 0,
     wallClockEvents: 0,
+    // The baseline driver runs no observer and persists no envelopes.
+    envelopeKinds: {},
+    expectedEnvelopeKinds: {},
     appendLatenciesMs: [],
     outboundEndpoints: 0,
     workerContextInfluence: false,
@@ -254,6 +281,7 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
     let clockUncertaintyMaxMs = 0
     let harnessTimeEvents = 0
     let wallClockEvents = 0
+    let envelopeKinds: Record<string, number> = {}
     try {
       const text = await readFile(observer.path, 'utf8')
       for (const line of text.split('\n')) {
@@ -267,7 +295,8 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
         envelopeBytes += lineBytes
         try {
           const record = JSON.parse(line) as {
-            clock?: { source?: string, uncertainty_ms?: number }
+            clock?: { source?: string, uncertainty_ms?: number },
+            event_kind?: string,
           }
           const source = record.clock?.source
           if (source === 'harness_event_time') harnessTimeEvents += 1
@@ -276,6 +305,8 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
           if (typeof uncertainty === 'number' && Number.isFinite(uncertainty)) {
             clockUncertaintyMaxMs = Math.max(clockUncertaintyMaxMs, uncertainty)
           }
+          const kind = record.event_kind
+          if (typeof kind === 'string') envelopeKinds[kind] = (envelopeKinds[kind] ?? 0) + 1
         } catch {
           // A malformed line still counts as persisted; integrity reports it.
         }
@@ -286,10 +317,12 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
       statsBytes = 0
       harnessTimeEvents = 0
       wallClockEvents = 0
+      envelopeKinds = {}
     }
     return {
       workloadEvents,
       observedEvents: stats.observed_event_count,
+      expectedObservedEvents: plan.length,
       cpuUserMs: cpu.userMs,
       cpuSystemMs: cpu.systemMs,
       cpuTotalMs: cpu.totalMs,
@@ -310,6 +343,8 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
       clockUncertaintyMaxMs,
       harnessTimeEvents,
       wallClockEvents,
+      envelopeKinds,
+      expectedEnvelopeKinds: plannedEnvelopeKinds(workloadEvents),
       appendLatenciesMs,
       outboundEndpoints: stats.outbound_endpoints.length,
       workerContextInfluence: stats.observation_entered_worker_context,

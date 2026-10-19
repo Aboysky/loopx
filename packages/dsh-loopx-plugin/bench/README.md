@@ -18,15 +18,16 @@ DSH host, model, or C1 qualification.
   `observed = accepted + rejected + dropped`.
 - **Clock**: the harness-time vs wall-clock envelope mix and the maximum
   declared uncertainty.
-- **Integrity**: no event loss, persisted envelopes equal accepted envelopes, no
-  outbound endpoints, no worker-context influence, and no scheduler-input
-  influence.
+- **Integrity**: no event loss, persisted envelopes equal accepted envelopes,
+  every planned record observed with the planned envelope-kind mix, no outbound
+  endpoints, no worker-context influence, and no scheduler-input influence.
 
-A trial that drops or rejects events, fails an append, or persists fewer
-envelopes than it accepted is excluded from the arm summaries. The report is
-then marked `NOT USABLE`, prints the per-trial loss and peaks, and lists
-warnings. Do not use such a run as an overhead sample: rerun with a larger
-`--buffer-bound` or fewer `--events`.
+A trial that drops or rejects events, fails an append, persists fewer envelopes
+than it accepted, or does not consume the planned record and envelope-kind mix
+is excluded from the arm summaries. The report is then marked `NOT USABLE`,
+prints the per-trial loss and peaks, and lists warnings. Do not use such a run
+as an overhead sample: rerun with a larger `--buffer-bound` or fewer `--events`
+(or fix the bench mix or observer when planned kinds stop being consumed).
 
 The report is public-safe: it contains aggregate numbers, the Node/platform
 version, and limits. It does not contain goal ids, session ids, ledger paths, or
@@ -67,24 +68,28 @@ machine-specific and are not a qualification):
 
 | Metric | Baseline | Observer | Delta |
 | --- | ---: | ---: | ---: |
-| CPU total, median (ms) | 0.00 | 1640.00 | 1640.00 |
-| CPU, median (ms / 1k events) | 0.00 | 164.07 | 164.07 |
-| RSS delta, median | 100.0 KiB | 12.2 MiB | 12.1 MiB |
-| Ledger append p50 (ms) | n/a | 2.56 | n/a |
-| Ledger append p95 (ms) | n/a | 3.84 | n/a |
+| CPU total, median (ms) | 0.00 | 906.00 | 906.00 |
+| CPU, median (ms / 1k events) | 0.00 | 90.64 | 90.64 |
+| RSS delta, median | 448.0 KiB | 13.1 MiB | 12.7 MiB |
+| Ledger append p50 (ms) | n/a | 1.49 | n/a |
+| Ledger append p95 (ms) | n/a | 2.09 | n/a |
 | Ledger bytes / envelope | n/a | 490.38 | n/a |
-| Ledger stats bytes / flush | n/a | 1326.31 | n/a |
+| Ledger stats bytes / flush | n/a | 1326.25 | n/a |
 | Persisted envelopes, median | n/a | 9,998 | n/a |
 | Clock source, median (harness / wall-clock) | n/a | 9,996 / 2 | n/a |
 | Clock uncertainty max, median (ms) | n/a | 50.00 | n/a |
 
 | Observed | Accepted | Persisted | Dropped (total) | Dropped (max) | Rejected | Flush attempts | Peak buffer (max) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 9,998 | 9,998 | 9,998 | 0 | 0 | 0 | 251 | 78 |
+| 9,998 | 9,998 | 9,998 | 0 | 0 | 0 | 218 | 84 |
 
+- Planned records not observed: 0
+- Unsupported envelopes: 0
 - No event loss: passed
 - Persisted equals accepted: passed
 - All trials usable: passed
+- Observed matches plan: passed
+- Planned envelope mix complete: passed
 ```
 
 The clock row shows the split: workload events carry a harness timestamp, and
@@ -111,5 +116,5 @@ pnpm test -- observer-overhead
 ```
 
 The test covers the event-plan shape, percentile boundaries, the shipped-writer
-append path and byte split, loss and append-failure marking, CLI parsing, and
-public-safe report rendering.
+append path and byte split, loss, append-failure, and planned-record-mix
+marking, CLI parsing, and public-safe report rendering.

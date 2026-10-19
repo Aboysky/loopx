@@ -182,9 +182,10 @@ live 部署验收。操作 regular file 前会验证 provider 目录与 CLI 的 
 `packages/dsh-loopx-plugin/bench/observer-overhead.ts` 在确定性的 synthetic DSH 事件流上
 测量 observer 组件开销：observer 关闭/开启两臂、CPU（user+system）、RSS、经 shipped writer
 的 ledger append 延迟、每条 envelope 的 ledger 字节与每次 flush 的 stats 字节、逐试验的
-event loss 与 buffer 峰值，以及 clock source 构成和完整分母。丢弃或拒绝事件、append 失败、
-或 persisted 少于 accepted 的试验会从计时汇总中排除；报告标记为不可用并列出警告，因此有丢失
-的运行不会被读成干净结果。输出 public-safe 的 JSON + Markdown 报告，并声明限制；不测量真实
+event loss 与 buffer 峰值，以及 clock source 构成和完整分母；并校验计划记录与 envelope kind
+构成是否被完整消费。丢弃或拒绝事件、append 失败、persisted 少于 accepted、或未覆盖计划记录构成
+的试验会从计时汇总中排除；报告标记为不可用并列出警告，因此有丢失或未完整消费的运行不会被读成
+干净结果。输出 public-safe 的 JSON + Markdown 报告，并声明限制；不测量真实
 DSH host、模型、网络或 Cordis dispatch，也不构成 C1 资格。见
 [bench README](../../../packages/dsh-loopx-plugin/bench/README.md)。
 

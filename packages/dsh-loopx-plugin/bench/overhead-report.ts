@@ -36,6 +36,8 @@ export interface OverheadIntegrity {
   readonly no_event_loss: boolean
   readonly persisted_equals_accepted: boolean
   readonly all_trials_usable: boolean
+  readonly observed_matches_plan: boolean
+  readonly envelope_kind_mix_complete: boolean
   readonly outbound_endpoints_empty: boolean
   readonly worker_context_influence_absent: boolean
   readonly scheduler_input_influence_absent: boolean
@@ -59,6 +61,8 @@ export interface OverheadEventAccounting {
   readonly trials_with_loss: number
   readonly usable_trials: number
   readonly excluded_trials: number
+  readonly unconsumed_events_total: number
+  readonly unsupported_envelopes_total: number
 }
 
 export interface OverheadDelta {
@@ -94,10 +98,11 @@ export interface OverheadReportInput {
 const REPORT_LIMITS = [
   'Synthetic event stream only; this is not a live DSH host, model, or network measurement.',
   'Measures observer component cost (event compaction, envelope construction, JSON serialization, and ledger append) through the shipped ledger writer; excludes Cordis hook dispatch, DSH scheduling, model, and network.',
+  'Verifies that every planned record was observed and that the persisted envelope-kind mix matches the plan, so a retired or renamed planned event kind cannot read as a clean sample.',
   'The synthetic stream requests a flush at every turn end, but appends coalesce while one is in flight. The append-batch count, peak buffer, and per-event cost therefore depend on I/O latency; the report prints the actual counts and is not a workload forecast.',
   'Baseline is an empty synthetic driver; the delta is the observer component cost, not a claim about a real worker throughput.',
   'RSS is process-level and may move with GC; use repeats and medians, not a single sample.',
-  'A trial that drops or rejects events, fails appends, or loses persisted envelopes is excluded from the arm summaries; the report is marked not usable and prints warnings.',
+  'A trial that drops or rejects events, fails appends, loses persisted envelopes, or misses the planned record mix is excluded from the arm summaries; the report is marked not usable and prints warnings.',
   'A C1 eligibility or P0-exit claim requires a separately authorized live run and maintainer acceptance.',
 ] as const
 
@@ -117,15 +122,43 @@ function maximum(values: readonly number[]): number {
   return values.length === 0 ? 0 : Math.max(...values)
 }
 
+interface EnvelopeKindDiff {
+  readonly missing: readonly string[]
+  readonly unexpected: readonly string[]
+}
+
+/** Kinds whose persisted count is below the plan, and kinds the plan lacks. */
+export function envelopeKindDiff(trial: TrialMeasurement): EnvelopeKindDiff {
+  const missing: string[] = []
+  const unexpected: string[] = []
+  for (const [kind, expected] of Object.entries(trial.expectedEnvelopeKinds)) {
+    if ((trial.envelopeKinds[kind] ?? 0) < expected) missing.push(kind)
+  }
+  for (const [kind, actual] of Object.entries(trial.envelopeKinds)) {
+    if (actual > (trial.expectedEnvelopeKinds[kind] ?? 0)) unexpected.push(kind)
+  }
+  return { missing, unexpected }
+}
+
+export function envelopeKindMixComplete(trial: TrialMeasurement): boolean {
+  const diff = envelopeKindDiff(trial)
+  return diff.missing.length === 0 && diff.unexpected.length === 0
+}
+
 /**
  * A trial whose timings can be compared with another trial: it lost no events,
- * rejected none, failed no append, and persisted every accepted envelope.
+ * rejected none, failed no append, persisted every accepted envelope, and
+ * consumed the planned record mix. A trial that silently skips a planned event
+ * kind (or turns it into an unknown kind) is not comparable either; the
+ * baseline arm plans no envelopes, so those checks hold trivially for it.
  */
 export function isUsableTrial(trial: TrialMeasurement): boolean {
   return trial.droppedEvents === 0
     && trial.rejectedEvents === 0
     && trial.observerFailures === 0
     && trial.persistedEvents === trial.acceptedEvents
+    && trial.observedEvents === trial.expectedObservedEvents
+    && envelopeKindMixComplete(trial)
 }
 
 export function summarizeTrials(trials: readonly TrialMeasurement[]): ArmSummary {
@@ -186,6 +219,29 @@ function buildWarnings(observer: readonly TrialMeasurement[]): readonly string[]
       + 'a write may have been lost.',
     )
   }
+  const unconsumed = observer.reduce(
+    (sum, trial) => sum + Math.max(0, trial.expectedObservedEvents - trial.observedEvents), 0,
+  )
+  if (unconsumed > 0) {
+    const affected = observer.filter(trial => trial.observedEvents !== trial.expectedObservedEvents).length
+    warnings.push(
+      `${affected} of ${observer.length} observer trial(s) did not observe every planned record `
+      + `(${unconsumed} record(s) missing); a planned event kind may no longer be consumed. `
+      + 'Update the bench event mix or the observer before treating this as an overhead sample.',
+    )
+  }
+  const mixMismatches = observer.filter(trial => !envelopeKindMixComplete(trial))
+  const firstMismatch = mixMismatches[0]
+  if (firstMismatch !== undefined) {
+    const diff = envelopeKindDiff(firstMismatch)
+    warnings.push(
+      `The persisted envelope kind mix does not match the plan in ${mixMismatches.length} of `
+      + `${observer.length} observer trial(s); first mismatch is missing: `
+      + `${diff.missing.length > 0 ? diff.missing.join(', ') : 'none'}, unexpected: `
+      + `${diff.unexpected.length > 0 ? diff.unexpected.join(', ') : 'none'}. `
+      + 'Such trials are excluded from the arm summaries.',
+    )
+  }
   return warnings
 }
 
@@ -217,6 +273,8 @@ export function buildOverheadReport(input: OverheadReportInput): OverheadReport 
       no_event_loss: input.observer.every(trial => trial.droppedEvents === 0),
       persisted_equals_accepted: input.observer.every(trial => trial.persistedEvents === trial.acceptedEvents),
       all_trials_usable: usable,
+      observed_matches_plan: input.observer.every(trial => trial.observedEvents === trial.expectedObservedEvents),
+      envelope_kind_mix_complete: input.observer.every(envelopeKindMixComplete),
       outbound_endpoints_empty: input.observer.every(trial => trial.outboundEndpoints === 0),
       worker_context_influence_absent: input.observer.every(trial => !trial.workerContextInfluence),
       scheduler_input_influence_absent: input.observer.every(trial => !trial.schedulerInputInfluence),
@@ -239,6 +297,12 @@ export function buildOverheadReport(input: OverheadReportInput): OverheadReport 
       trials_with_loss: input.observer.filter(trial => trial.droppedEvents > 0).length,
       usable_trials: observerSummary.usable_trials,
       excluded_trials: observerSummary.excluded_trials,
+      unconsumed_events_total: input.observer.reduce(
+        (sum, trial) => sum + Math.max(0, trial.expectedObservedEvents - trial.observedEvents), 0,
+      ),
+      unsupported_envelopes_total: input.observer.reduce(
+        (sum, trial) => sum + (trial.envelopeKinds.unsupported ?? 0), 0,
+      ),
     },
     limits: REPORT_LIMITS,
   }
@@ -320,12 +384,16 @@ export function renderMarkdown(report: OverheadReport): string {
 
 - Trials with loss: ${formatInteger(report.event_accounting.trials_with_loss)} of ${formatInteger(observer.trials)}
 - Trials used for timing: ${formatInteger(report.event_accounting.usable_trials)} of ${formatInteger(observer.trials)} (${formatInteger(report.event_accounting.excluded_trials)} excluded)
+- Planned records not observed: ${formatInteger(report.event_accounting.unconsumed_events_total)}
+- Unsupported envelopes: ${formatInteger(report.event_accounting.unsupported_envelopes_total)}
 
 ## Integrity
 
 - No event loss: ${status(report.integrity.no_event_loss)}
 - Persisted equals accepted: ${status(report.integrity.persisted_equals_accepted)}
 - All trials usable: ${status(report.integrity.all_trials_usable)}
+- Observed matches plan: ${status(report.integrity.observed_matches_plan)}
+- Planned envelope mix complete: ${status(report.integrity.envelope_kind_mix_complete)}
 - Count conservation: ${status(report.integrity.count_conservation)}
 - Outbound endpoints empty: ${status(report.integrity.outbound_endpoints_empty)}
 - Worker-context influence absent: ${status(report.integrity.worker_context_influence_absent)}

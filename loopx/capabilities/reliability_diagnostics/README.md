@@ -215,10 +215,12 @@ deletion. Upgrade CLI and plugin together with writers frozen.
 component cost on a deterministic synthetic DSH event stream: observer off/on
 arms, CPU (user+system), RSS, ledger append through the shipped writer, ledger
 bytes per envelope and stats bytes per flush, per-trial event loss and buffer
-peaks, and the clock-source mix with full denominators. A trial that drops or
-rejects events, fails an append, or persists fewer envelopes than it accepted is
-excluded from the timing summary; the report is marked not usable and lists
-warnings, so a lossy run cannot read as a clean result. It writes a public-safe
+peaks, and the clock-source mix with full denominators. It also checks that
+every planned record is observed with the planned envelope-kind mix. A trial
+that drops or rejects events, fails an append, persists fewer envelopes than it
+accepted, or misses that record mix is excluded from the timing summary; the
+report is marked not usable and lists warnings, so a lossy or incompletely
+consumed run cannot read as a clean result. It writes a public-safe
 JSON + Markdown report and states its limits. It does not measure a live DSH
 host, model, network, or Cordis dispatch, and it does not qualify C1. See the
 [bench README](../../../packages/dsh-loopx-plugin/bench/README.md).
