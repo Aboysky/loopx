@@ -1,6 +1,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray } from "../runtime_decode.ts";
+import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
 import { normalizeStewardGoalScope, resolveConversationScope } from "./conversation_scope.ts";
 
 type Recipient = { goal_id: string; agent_id?: string };
@@ -99,6 +100,47 @@ export function resolveSourceRecipients(params: JsonObject): JsonObject {
   const unique = new Map(selected.map(row => [JSON.stringify([row.goal_id, row.agent_id]), row]));
   return { targets: [...unique.values()].sort((a, b) =>
     a.goal_id.localeCompare(b.goal_id) || a.agent_id!.localeCompare(b.agent_id!)) };
+}
+
+/** Combine the canonical conversation scope with observed recipient grants.
+ * Python supplies registry/policy IO and the original source identity. Neither a
+ * project workspace grant nor an unverified source becomes delivery authority.
+ */
+export function resolveSourceContextAuthority(params: JsonObject): JsonObject {
+  const conversation = requireJsonObject(params.conversation, "source conversation");
+  const scope = resolveConversationScope(conversation);
+  if (!Array.isArray(params.available)) throw new EffectRuntimeRequestError("registered recipients unavailable");
+  let selected: Required<Recipient>[];
+  let sourceId = params.source_id;
+  if (scope.private_conversation && conversation.origin === "web") {
+    // Match the registry observation's historical treatment of unreadable rows.
+    const available = params.available.filter((raw): raw is JsonObject & Required<Recipient> =>
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+      && typeof raw.goal_id === "string" && typeof raw.agent_id === "string");
+    selected = available.filter(row => scope.goal_ids === null
+      || scope.goal_ids.some(goal => goal === row.goal_id));
+  } else {
+    if (scope.kind !== "external_audience" || params.source === null) {
+      return {mode: "unavailable", targets: []};
+    }
+    try {
+      validateSourceIngress({session: conversation, turn: params.turn, ingress: params.ingress});
+      const ingress = requireJsonObject(params.ingress, "source ingress");
+      selected = resolveSourceRecipients({source: params.source,
+        sender_id: ingress.sender_id, available: params.available}).targets as Required<Recipient>[];
+      sourceId = ingress.source_id;
+    } catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError)) throw error;
+      return {mode: "unavailable", targets: []};
+    }
+  }
+  const targets = new Map(selected.map(row => [JSON.stringify([row.goal_id, row.agent_id]),
+    {goal_id: row.goal_id, agent_id: row.agent_id}]));
+  // The combined authority catalog has always used code-point ordering, even
+  // though the underlying source-policy view uses locale ordering.
+  return {mode: "context_only", source_id: requireNonEmptyString(sourceId, "original source identity"),
+    targets: [...targets.values()].sort((a, b) => authorityUnicodeCompare(a.goal_id, b.goal_id)
+      || authorityUnicodeCompare(a.agent_id, b.agent_id))};
 }
 
 /** Verify the host's immutable ingress against its canonical Session/Turn.
