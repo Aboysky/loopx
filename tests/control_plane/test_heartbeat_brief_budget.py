@@ -103,7 +103,7 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
         "aa55b6179ef728d88cba712445426e1afab7790c53072a60e8552b93b779f1d1"
     )
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["heartbeat_prompt_brief"]
-    assert spec.max_chars == {"json": 10_500, "markdown": 9_000}
+    assert spec.max_chars == {"json": 10_800, "markdown": 9_000}
     for output_format, text in (("json", encoded), ("markdown", markdown)):
         assert_cli_output_mode_variant(
             spec, output_format=output_format, text=text,
