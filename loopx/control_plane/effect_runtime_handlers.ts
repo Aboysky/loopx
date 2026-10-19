@@ -684,6 +684,8 @@ export function createEffectRuntimeHandlers(
     ["content_media.plan", lazyHandler(() => import("./capabilities/content_media.ts"), ({validateMediaPlan}) => validateMediaPlan)],
     ["content_media.transition", lazyHandler(() => import("./capabilities/content_media.ts"), ({transitionMediaRender}) => transitionMediaRender)],
     ["content_media.result", lazyHandler(() => import("./capabilities/content_media.ts"), ({validateMediaResult}) => validateMediaResult)],
+    ["content_media.generation_plan", lazyHandler(() => import("./capabilities/content_media_generation.ts"), ({validateGenerationPlan}) => validateGenerationPlan)],
+    ["content_media.generation_transition", lazyHandler(() => import("./capabilities/content_media_generation.ts"), ({transitionGeneration}) => transitionGeneration)],
     ["reward_memory.decision.plan", lazyHandler(() => import("./capabilities/reward_memory_decision.ts"), ({planRewardMemoryDecision}) => planRewardMemoryDecision)],
     ["reward_memory.decision.project", lazyHandler(() => import("./capabilities/reward_memory_decision.ts"), ({projectRewardMemoryDecision}) => projectRewardMemoryDecision)],
     ["reward_memory.read_authority.surface_checkpoints", lazyHandler(() => import("./capabilities/reward_memory_decision.ts"), ({buildRewardMemorySurfaceReadCheckpoints}) => buildRewardMemorySurfaceReadCheckpoints)],

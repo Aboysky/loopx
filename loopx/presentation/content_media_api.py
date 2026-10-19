@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ..capabilities.content_ops.media import MediaWorkspace
+from ..capabilities.content_ops.generation import GenerationWorkspace
 from ..feedback import validate_goal_id
 from .goal_source_routing import source_registry_for_goal
 
@@ -37,11 +38,18 @@ class ContentMediaRequestMixin:
             if urlparse(self.path).query:
                 raise ValueError("Use the request body")
             body = self._read_json(max_bytes=4096)
-            if set(body) - {"goal_id", "action", "composition_id", "expected_revision"}:
+            if set(body) - {"goal_id", "action", "composition_id", "generation_id", "expected_revision"}:
                 raise ValueError("Unsupported fields")
             workspace = self._media_workspace(body["goal_id"])
             action = body["action"]
-            if action == "list" and set(body) == {"goal_id", "action"}:
+            if action == "generation_list" and set(body) == {"goal_id", "action"}:
+                result = GenerationWorkspace(workspace).list()
+            elif action in {"generation_submit", "generation_check", "generation_cancel", "generation_collect"} and set(body) == {"goal_id", "action", "generation_id", "expected_revision"}:
+                revision = body["expected_revision"]
+                if isinstance(revision, bool) or not isinstance(revision, int):
+                    raise ValueError("Read the current revision")
+                result = GenerationWorkspace(workspace).operate(body["generation_id"], action.removeprefix("generation_"), expected_revision=revision)
+            elif action == "list" and set(body) == {"goal_id", "action"}:
                 result = workspace.list()
             elif action == "inspect" and set(body) == {
                 "goal_id",
@@ -76,13 +84,13 @@ class ContentMediaRequestMixin:
     def _content_media_file(self) -> None:
         try:
             query = parse_qs(urlparse(self.path).query, strict_parsing=True)
-            if set(query) != {"goal_id", "composition_id", "file"} or any(
+            if set(query) not in ({"goal_id", "composition_id", "file"}, {"goal_id", "generation_id", "file"}) or any(
                 len(v) != 1 for v in query.values()
             ):
                 raise ValueError("Invalid file request")
             workspace = self._media_workspace(query["goal_id"][0])
             name = query["file"][0]
-            path = workspace.file(query["composition_id"][0], name)
+            path = GenerationWorkspace(workspace).file(query["generation_id"][0], name) if "generation_id" in query else workspace.file(query["composition_id"][0], name)
             fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             with os.fdopen(fd, "rb") as source:
                 size = os.fstat(source.fileno()).st_size

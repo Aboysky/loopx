@@ -93,6 +93,34 @@ class MediaWorkspace:
     def _record(self, composition_id: str) -> dict:
         return _read(_safe_path(self._bundle(composition_id), "record.json"))
 
+    def snapshot_sources(self, bundle: Path, assets: list[dict], source_directory: Path, *, key: str = "id", max_each: int = MAX_ASSET_BYTES) -> dict:
+        """Immutable bytes shared by local composition and explicit cloud frames."""
+        source_root = source_directory.expanduser().resolve(strict=True)
+        if not source_root.is_dir():
+            raise ValueError("Choose an explicit source directory")
+        snapshots, total = {}, 0
+        inputs = _safe_path(bundle, "sources")
+        inputs.mkdir(mode=0o700, exist_ok=True)
+        for asset in assets:
+            original = _safe_path(source_root, asset["path"])
+            descriptor = os.open(original, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(descriptor, "rb") as source:
+                info = os.fstat(source.fileno())
+                total += info.st_size
+                if not stat.S_ISREG(info.st_mode) or info.st_size > max_each or total > 128 * 1024 * 1024:
+                    raise ValueError("Sources exceed the local composition budget")
+                content = source.read(max_each + 1)
+                if len(content) != info.st_size or hashlib.sha256(content).hexdigest() != asset["sha256"]:
+                    raise ValueError("Source bytes changed; check the source digest before preparing")
+            path = _safe_path(inputs, asset["sha256"])
+            if path.exists():
+                if _sha(path) != asset["sha256"]: raise ValueError("Source snapshot is damaged")
+            else:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as output: output.write(content)
+            snapshots[asset[key]] = str(path)
+        return snapshots
+
     def prepare(self, plan: dict, *, source_directory: Path, composition_id: str | None = None, expected_revision: int | None = None) -> dict:
         validated = _owner("plan", {"plan": plan})
         composition_id = composition_id or f"media_{uuid4().hex[:24]}"
@@ -104,30 +132,7 @@ class MediaWorkspace:
                 raise ValueError("Inspect the current revision before changing this composition")
             if previous and previous["plan_digest"] == validated["plan_digest"]:
                 return self.inspect(composition_id)
-            source_root = source_directory.expanduser().resolve(strict=True)
-            if not source_root.is_dir():
-                raise ValueError("Choose an explicit source directory")
-            snapshots, total = {}, 0
-            inputs = _safe_path(bundle, "sources")
-            inputs.mkdir(mode=0o700, exist_ok=True)
-            for asset in validated["plan"]["assets"]:
-                original = _safe_path(source_root, asset["path"])
-                descriptor = os.open(original, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                with os.fdopen(descriptor, "rb") as source:
-                    info = os.fstat(source.fileno())
-                    total += info.st_size
-                    if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_ASSET_BYTES or total > 128 * 1024 * 1024:
-                        raise ValueError("Sources exceed the local composition budget")
-                    content = source.read(MAX_ASSET_BYTES + 1)
-                    if len(content) != info.st_size or hashlib.sha256(content).hexdigest() != asset["sha256"]:
-                        raise ValueError("Source bytes changed; check the source digest before preparing")
-                path = _safe_path(inputs, asset["sha256"])
-                if path.exists():
-                    if _sha(path) != asset["sha256"]: raise ValueError("Source snapshot is damaged")
-                else:
-                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                    with os.fdopen(fd, "wb") as output: output.write(content)
-                snapshots[asset["id"]] = str(path)
+            snapshots = self.snapshot_sources(bundle, validated["plan"]["assets"], source_directory)
             item = previous["item"] if previous else build_content_ops_item(
                 item_id=composition_id, item_kind="post", channel="local-media", content_digest=validated["plan_digest"],
                 content_ref=f"content-media:{composition_id}", source_refs=[f"source:{a['sha256']}" for a in validated["plan"]["assets"]], created_at=now())

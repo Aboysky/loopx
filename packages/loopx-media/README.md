@@ -1,9 +1,10 @@
-# Local video renderer
+# Content-ops media provider
 
 `loopx-media` is an optional distribution for the existing **content-ops**
-capability. It renders an admitted composition; it does not choose sources,
-run commands from a brief, use an account, call a model, or publish a movie.
-Shared TypeScript admission and render transitions remain in LoopX core.
+capability. It renders an admitted composition and can execute explicitly submitted,
+bounded cloud video intents. It does not choose sources, run commands from
+a brief or publish a movie. Shared TypeScript admission and transitions
+remain in LoopX core.
 Pillow, FontTools, FFmpeg and platform speech are specialized local computation.
 
 From a source checkout, install the executable and register its manifest:
@@ -17,7 +18,9 @@ loopx extension doctor loopx-media --execute
 The LoopX process must have `loopx-media` on its PATH. Installation explicitly
 enables the local extension. No renderer is installed, enabled or downloaded
 by `content-ops media prepare`, page loading or a missing-provider read.
-The manifest requests `content_media_write` for private composition output.
+The manifest requests `content_media_write` for private composition output
+and the separate `content_media_generate` permission for cloud generation.
+Ordinary render requests do not use credentials or call the network.
 Use the existing extension state owner; there is no second media setting.
 An isolated environment is also supported if its executable is on that PATH.
 
@@ -37,7 +40,8 @@ decode. Images retain their orientation; video excerpts retain aspect ratio.
 Installed fonts must cover the visible text, with CJK line breaking supported.
 RTL shaping and arbitrary font discovery are not qualified. macOS speech is
 optional; other platforms require supplied audio or explicit silence.
-No cloud voice, generative image/video or game engine is bundled here.
+No cloud voice, image-generation or game engine is bundled here. The bounded
+Ark video route below is explicit and optional; it is never a render fallback.
 
 Excerpt and Blender layouts display the title and source boundary; nonempty
 `body` text is explicitly refused. Preserve a needed qualifier in those visible
@@ -186,3 +190,96 @@ The opt-in test uses the real extension and HTTP route, inspects the ZIP,
 opens the blend in an independent bpy process and checks stored scene state.
 It performs no cloud/model calls or public uploads. Report the actual bpy
 version and platform; this command is not a claim of cross-platform delivery.
+
+## Optional generated footage
+
+An Agent can prepare a **content-ops generation** plan, then submit one bounded
+Seedance 2.5 video task and collect it as a hash-bound source for the existing
+composition. This provider supports 4–10 whole seconds at 480p/720p, text-only
+or a first frame and optional last frame. Reference images must be explicitly
+public-safe PNG/JPEG, 16:9, 300–1920 pixels wide, 300–1080 pixels high
+and at most 2 MiB each. Alpha is
+composited on white and encoded as RGB PNG; original and transmitted hashes
+remain in the private submission journal. This does not open another model or
+reuse unrelated account credentials.
+
+Load `ARK_API_KEY` only into the authorized LoopX host process environment.
+`ARK_BASE_URL`, if supplied, must be the standard
+`https://ark.cn-beijing.volces.com/api/v3` endpoint. Do not place a key in the
+plan, command arguments, extension manifest, browser or repository. A missing
+credential preserves the prepared intent without submitting it. Upgrade through
+the existing extension lifecycle after installing this package; do not edit a
+saved binding by hand. Existing 0.2 providers still render local compositions;
+they are unavailable for the new generation permission.
+
+```sh
+loopx content-ops generation prepare --goal-id GOAL \
+  --plan-json footage.json --source-directory ./authorized-frames
+# Read generation_id and revision from prepare. This next command submits one
+# paid provider task; prior scoped authorization and a current price are needed.
+loopx content-ops generation submit --goal-id GOAL \
+  --generation-id GENERATION_ID --expected-revision 1
+loopx content-ops generation check --goal-id GOAL \
+  --generation-id GENERATION_ID --expected-revision 1
+loopx content-ops generation collect --goal-id GOAL \
+  --generation-id GENERATION_ID --expected-revision 1
+```
+
+The Agent prepares the immutable prompt, reference SHA256s, audio/watermark/
+last-frame choices and a dated official price quote in
+`content_ops_generation_plan_v0`. The quote contains `cny_per_million_tokens`,
+`checked_at`, `source_url` and `max_estimated_cny`; submission refuses a quote
+older than 24 hours or a nominal estimate above that declared bound. This is
+an estimate check, **not a guaranteed billing cap, invoice or authorization**.
+Token usage returned by the service is shown separately. Read actual account
+charges when a complete financial total is required. Parameters belong in the
+structured plan; Ark's weak prompt parameter suffixes are refused.
+
+![Generated footage in the content-ops workbench](docs/footage-after-desktop.png)
+
+Packaged author fixture with synthetic source frames and generated footage.
+The [390px view](docs/footage-after-phone.png) retains the same controls;
+[downloads remain available after scrolling the detail](docs/footage-phone-download.png).
+
+In **Settings → Capabilities → a Goal → Content production**, the same workbench
+shows the prepared footage, external-upload/usage consequence, submit button,
+original-task checks, missing-provider/key state, saved video and last-frame
+download. It does not ask the owner to copy filesystem paths or re-enter the
+Agent's complete brief. Automatic status checks are limited to five minutes
+and can stop locally; opening the page or reading local drafts never submits
+or polls the cloud. Local inspect/list retain private source locations and
+cloud result URLs internally; the workbench projection has neither.
+
+Each submit/check/collect is a short operation, within the existing 120-second
+extension boundary. Generation continues remotely across host restarts. A
+successful POST's task id is fsynced in a provider journal before stdout returns.
+The parent saves its intent before the effect. Duplicate clicks never POST
+again; after a lost response, check the journal-backed original task. If no task
+id was recovered, the status stays `submission_unknown` with an explicit
+reconciliation requirement. There is no automatic paid retry. A genuinely new
+shot requires a new prepared intent after reviewing the original outcome.
+
+Ark's DELETE both cancels queued work and erases finished task records, without
+a documented atomic queued-only precondition. The provider therefore retains
+the task and reports `atomic_cancellation_unavailable`; it does not race a GET
+against a destructive DELETE. Stopping local checks does not cancel the task
+or its charges. A failed/expired task stays failed/expired, and remote success
+is separate from verified local collection. A fresh GET obtains expiring asset
+URLs; downloads have origin, byte and time bounds, followed by full video
+decode, measured duration, hashes, poster and optional last-frame validation.
+The original task is never deleted during collection or retry.
+
+Use collected `generated.mp4` as an ordinary SHA256-bound excerpt source in
+`content-ops media prepare`; retain `generation:<id>` as provenance and add
+precise text/diagrams/captions locally. Generated footage is illustrative;
+encoding does not prove continuity, visible watermark, creative quality,
+audience understanding or publication approval. Inspect those separately.
+Disable or roll back through `loopx extension disable/rollback`; preserve the
+private source/intent/artifact files. No global credential configuration or
+publication state changes as a side effect.
+
+Primary provider contracts:
+[create](https://ark.volcengine.com/region:cn-beijing/docs/create-video-generation-task-api),
+[query](https://ark.volcengine.com/region:cn-beijing/docs/get-video-generation-task-api),
+[cancel/delete](https://ark.volcengine.com/region:cn-beijing/docs/cancel-or-delete-video-generation-tasks-api).
+No paid requests run in the default test suite.

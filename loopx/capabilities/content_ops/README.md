@@ -38,6 +38,16 @@ while keeping heavy image/audio/video computation in the optional distribution.
 See the [composition contract](../../../docs/reference/protocols/content-ops-media-v0.md)
 and [renderer installation and recovery](../../../packages/loopx-media/README.md).
 
+`loopx content-ops generation` prepares immutable, priced cloud-footage intents
+and explicitly submits/checks/collects a bounded Seedance 2.5 video through the
+same optional provider, with a separate cloud-generation permission. The
+**Generated footage** view shows drafts, upload/usage consequences, original
+task readback and verified local files. It never repeats an ambiguous paid
+submission or equates stopping observation with remote cancellation. Use the
+saved movie as a source-bound excerpt in a local composition; precise text and
+diagrams remain local. See the same provider guide for credentials, cost
+estimates, unavailable states and recovery. Image generation is not qualified.
+
 `loopx content-ops reference` reads an existing private source/style catalog,
 prepares version-checked capture/correction artifacts, retrieves topic/structure
 references, and prepares outlines with original credit and reuse conditions.

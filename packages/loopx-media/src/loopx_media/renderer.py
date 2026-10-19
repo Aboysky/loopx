@@ -1,8 +1,8 @@
 """Bounded local rendering. Stdin is an admitted private composition envelope.
 
-No account, network, arbitrary command, source-directory discovery or publication.
-The content-ops caller provides immutable source snapshots and an exclusive attempt
-directory. This renderer implements the protocol; it does not admit that effect.
+Ordinary render requests have no network or account effects. The separately
+permissioned generation operations use the provider's bounded cloud transport.
+The content-ops caller admits both effects; neither grants publication.
 """
 from __future__ import annotations
 
@@ -310,7 +310,12 @@ def main() -> int:
             return 0
         raw = sys.stdin.buffer.read(1024 * 1024 + 1)
         if len(raw) > 1024 * 1024: raise ValueError("Render request exceeds the protocol limit")
-        result = render(json.loads(raw))
+        request = json.loads(raw)
+        if str(request.get("operation", "")).startswith("generation."):
+            from .generation import operate
+            result = operate(request)
+        else:
+            result = render(request)
     except RenderCancelled:
         result = {"ok": False, "error_code": "cancelled"}
     except (OSError, ValueError, KeyError, TypeError, TimeoutError, subprocess.SubprocessError):

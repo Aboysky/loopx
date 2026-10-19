@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 import {useWorkspaceI18n} from "./i18n";
 import "./content-media-workbench.css";
+import {ContentGeneratedFootage} from "./content-generated-footage";
 
 type Provider = {status: string; enabled: boolean | null; next_action: string | null};
 type Composition = {
@@ -15,8 +16,10 @@ const ENDPOINT = "/api/chat/content-media";
 export function ContentMediaWorkbench({goalId}: {goalId: string}) {
   const {locale} = useWorkspaceI18n();
   const copy = (cn: string, en: string) => locale === "zh-CN" ? cn : en;
+  const seconds = (value: number) => `${Number(value.toFixed(2))}s`;
   const [library, setLibrary] = useState<Library | null>(null), [selectedId, setSelectedId] = useState("");
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const [view, setView] = useState<"composition" | "footage">("composition");
   const pending = useRef(false), generation = useRef(0), readSequence = useRef(0);
   const selected = library?.compositions.find(item => item.composition_id === selectedId) ?? library?.compositions[0];
   async function request(action: string, item?: Composition) {
@@ -63,7 +66,10 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
   };
   const providerReady = library?.provider.status === "ready";
   const hasBlender = selected?.shots.some(shot => shot.kind === "blender");
-  return <section className="content-media" aria-label={copy("视频制作", "Video production")}>
+  return <><div className="content-media-tabs" role="group" aria-label={copy("制作方式", "Production view")}>
+    <button type="button" aria-pressed={view === "composition"} onClick={() => {setView("composition"); void reload();}}>{copy("视频成片", "Compositions")}</button>
+    <button type="button" aria-pressed={view === "footage"} onClick={() => setView("footage")}>{copy("生成镜头", "Generated footage")}</button>
+  </div>{view === "composition" ? <section className="content-media" aria-label={copy("视频制作", "Video production")}>
     <div className="content-media-heading"><div><h3>{copy("制作视频", "Produce a video")}</h3>
       <p>{copy("让 Agent 准备脚本、来源和时间线，在这里制作并查看作品。", "Have your Agent prepare the story, sources and timeline. Render and review the result here.")}</p></div>
       <button type="button" onClick={() => void reload()} disabled={busy}>{copy("重新读取", "Recheck")}</button></div>
@@ -73,8 +79,8 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
     {library && !selected ? <p className="content-media-empty">{copy("还没有准备好的作品。把想讲的内容交给 Agent，它会通过 Content-Ops 保存可制作的脚本。", "No prepared compositions yet. Tell your Agent what to explain; it can save a renderable brief through Content-Ops.")}</p> : null}
     {selected ? <div className="content-media-workspace">
       <nav aria-label={copy("选择作品", "Choose a composition")}>{library!.compositions.map(item => <button key={item.composition_id} type="button" aria-pressed={item.composition_id === selected.composition_id}
-        onClick={() => setSelectedId(item.composition_id)}><span>{item.title}</span><small>{item.duration_seconds}s · {status[item.status] ?? item.status}</small></button>)}</nav>
-      <div className="content-media-result"><div className="content-media-title"><div><h4>{selected.title}</h4><p role="status">{status[selected.status] ?? selected.status} · {selected.duration_seconds}s · {copy("修订", "Revision")} {selected.revision}</p></div>
+        onClick={() => setSelectedId(item.composition_id)}><span>{item.title}</span><small>{seconds(item.duration_seconds)} · {status[item.status] ?? item.status}</small></button>)}</nav>
+      <div className="content-media-result"><div className="content-media-title"><div><h4>{selected.title}</h4><p role="status">{status[selected.status] ?? selected.status} · {seconds(selected.duration_seconds)} · {copy("修订", "Revision")} {selected.revision}</p></div>
         {selected.status === "rendering" ? <button type="button" disabled={busy} onClick={() => void operate("cancel")}>{copy("取消制作", "Cancel render")}</button>
           : <button type="button" disabled={busy || !providerReady || selected.status === "ready"} onClick={() => void operate("render")}>{copy("制作视频", "Render video")}</button>}</div>
         {hasBlender && selected.status !== "ready" ? <p>{copy("包含 Blender 三维场景。制作需要已安装的本机 Blender 扩展依赖；作品会保留可编辑工程与颜色、深度画面。", "Includes Blender scenes. Rendering needs the local Blender extra; the editable project, color and depth frames are retained.")}</p> : null}
@@ -84,10 +90,10 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
             {selected.result.files["blender-project.zip"] ? <a href={file("blender-project.zip")} download="blender-project.zip">{copy("Blender 工程与画面", "Blender project and passes")}</a> : null}</div>
           <p>{copy("完整解码通过", "Full decode passed")} · {selected.result.qa.frames} {copy("帧", "frames")} · {copy("渲染耗时", "Render time")} {selected.result.cost.render_wall_seconds}s</p>
           {selected.result.qa.blender_scenes?.length ? <p>{copy("三维工程已重新打开并检查，颜色与深度帧完整。", "The 3D project was reopened and checked; color and depth frames are complete.")}</p> : null}
-        </> : <ol className="content-media-timeline">{selected.shots.map((shot, i) => <li key={i}><span>{shot.title}</span><small>{shot.seconds}s · {shot.boundary}</small></li>)}</ol>}
+        </> : <ol className="content-media-timeline">{selected.shots.map((shot, i) => <li key={i}><span>{shot.title}</span><small>{seconds(shot.seconds)} · {shot.boundary}</small></li>)}</ol>}
         {["failed", "damaged"].includes(selected.status) ? <p>{hasBlender ? copy("请让 Agent 检查 Blender 依赖、场景范围与制作时限。修复本机依赖后可重试；修改场景需保存新修订。", "Ask your Agent to check the Blender extra, scene bounds and render time. Retry after dependency repair; save a new revision for scene changes.") : copy("请让 Agent 检查素材、字体和配音时长；修改脚本后保存新修订，或修复本机依赖后重试。", "Ask your Agent to check sources, fonts and narration timing. Save a new revision for story changes, or repair the local dependencies and retry.")}</p> : null}
         <details><summary>{copy("来源与检查", "Sources and checks")}</summary><ul>{selected.shots.map((shot, i) => <li key={i}>{shot.title} — {shot.boundary}<br /><small>{shot.source_ref}</small></li>)}</ul>
           <p>{copy("本机私有作品。编码通过不代表创意质量、理解效果或发布许可；请观看并试听。", "Private local work. Encoding does not establish creative quality, audience understanding or publication approval. Watch and listen before sharing.")}</p></details>
       </div></div> : null}
-  </section>;
+  </section> : <ContentGeneratedFootage key={goalId} goalId={goalId} />}</>;
 }

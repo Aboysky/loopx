@@ -129,9 +129,9 @@ or repair the existing extension and retry. No failure creates publication
 authority, fills missing footage, infers a creative pass or changes a Goal.
 
 Mechanical rendering, creative quality, audience understanding and operations
-impact have separate evidence. Future generated media and interactive
-learning providers should reuse the nearest content owner and comparison
-method; they are not silently activated by this protocol.
+impact have separate evidence. The optional generated-footage path below
+shares this owner; interactive learning and other providers are not silently
+activated by this protocol.
 
 ## Blender shot and project readback
 
@@ -169,3 +169,58 @@ missing bpy does not disable ordinary 2D work. A failed 3D attempt retains its
 prepared input and supports retry after dependency repair. No fallback replaces
 3D with a code projection. Mechanical readiness still does not establish
 creative quality, audience understanding or publication approval.
+
+## Optional cloud-footage intents
+
+`content-ops generation prepare/submit/check/collect/inspect/list/cancel` uses
+the existing Goal-scoped media workspace and optional `loopx-media` provider.
+The shared `content_media_generation` TypeScript owner validates immutable
+`content_ops_generation_plan_v0` drafts, quote freshness/nominal bounds,
+reference roles and source scope, task identity, observations and collection.
+Python adapts file snapshots and one provider effect; it does not choose work,
+infer publication approval or start a scheduling loop.
+
+The existing runtime protocol accepts additive `generation.*` operations only
+through the separately declared `content_media_generate` permission. A normal
+render request is unchanged and has no network/account effects. The bounded
+provider supports Seedance 2.5 video only; image generation, other models and
+unopened account access remain unavailable. Setup, process-local credentials,
+supported frames, prices and recovery are in the
+[provider guide](../../../packages/loopx-media/README.md#optional-generated-footage).
+
+The parent commits `submitting` before POST. A successful response is only
+`submitted`, not an observed queued/running worker. A provider-side fsynced
+journal binds the returned task id to the plan digest before stdout returns.
+An explicit `check` can recover that id after a stopped parent. If the response
+was lost before an id could be saved, the intent stays `submission_unknown`;
+neither reload nor repeated submit creates a new paid task. Reconciliation of
+an unknown external effect precedes any new generation decision.
+
+Cloud `succeeded` means collection is possible, not local artifact readiness.
+Collection obtains a current expiring URL, downloads within origin/time/byte
+bounds, fully decodes the movie, measures duration and hashes the fixed
+`generated.mp4`, `poster.png` and optional `last-frame.jpg` outputs. The core
+checks those bytes before projecting `ready`. Download URLs, API credentials,
+private paths and raw provider responses never enter browser projections.
+Reference alpha preprocessing retains original and transmitted hashes. The
+returned token count, caller-supplied rate estimate and unknown invoice remain
+distinct; the nominal estimate bound is not a guaranteed maximum bill.
+
+The existing `/api/chat/content-media` accepts `generation_list` and
+revision-bound `generation_submit/check/collect/cancel` actions. Its file route
+accepts exactly one generation or composition id, serves only verified fixed
+artifacts and retains selected-Goal, origin, byte-range and no-store rules.
+The shipped workbench shows draft/consequence, submission, bounded optional
+status checking, errors and saved files through this backend. Pure list/inspect
+reads never call the cloud. Automatic browser checks stop after five minutes,
+on a terminal observation or when the owner stops them; they never POST a job.
+
+Ark DELETE has no documented atomic queued-only precondition and can erase a
+task that finishes between GET and DELETE. `cancel` therefore reads the
+original task and reports `atomic_cancellation_unavailable`, without deleting
+it or claiming that local observation stopped remote usage. The same limitation
+is visible in the workbench. Failed/expired/cancelled states, unavailable
+observation, unknown submission and damaged local artifacts remain separate.
+Creative quality, continuity, visible watermark, audience comprehension and
+actual billed cost require their own evidence; no generated clip changes
+content publication state.
