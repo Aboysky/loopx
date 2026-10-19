@@ -1,9 +1,9 @@
-import { appendFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { ShadowObserver } from '../src/observer.ts'
+import { appendLedgerLines, ShadowObserver } from '../src/observer.ts'
 import type { ObserverRunIdentity, ShadowObserverConfig } from '../src/observer.ts'
 
 const GOAL_ID = 'goal-observer-overhead-fixture'
@@ -54,7 +54,11 @@ export interface TrialMeasurement {
   readonly rssDeltaBytes: number
   readonly wallMs: number
   readonly ledgerBytes: number
+  readonly envelopeBytes: number
+  readonly statsBytes: number
   readonly clockUncertaintyMaxMs: number
+  readonly harnessTimeEvents: number
+  readonly wallClockEvents: number
   readonly appendLatenciesMs: readonly number[]
   readonly outboundEndpoints: number
   readonly workerContextInfluence: boolean
@@ -179,7 +183,11 @@ export function runBaselineTrial(options: TrialOptions): TrialMeasurement {
     peakBufferedEvents: 0,
     observerFailures: 0,
     ledgerBytes: 0,
+    envelopeBytes: 0,
+    statsBytes: 0,
     clockUncertaintyMaxMs: 0,
+    harnessTimeEvents: 0,
+    wallClockEvents: 0,
     appendLatenciesMs: [],
     outboundEndpoints: 0,
     workerContextInfluence: false,
@@ -191,7 +199,6 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
   const plan = buildEventPlan(options.inputEvents)
   const workloadEvents = normalizeEventCount(options.inputEvents)
   const ledgerDir = await mkdtemp(join(tmpdir(), 'loopx-observer-overhead-'))
-  let ledgerBytes = 0
   const appendLatenciesMs: number[] = []
   try {
     const config: ShadowObserverConfig = {
@@ -205,15 +212,15 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
       config,
       now: () => EVENT_TIME_BASE,
       observerId: OBSERVER_ID,
-      appendLines: async (path, lines) => {
+      // Delegate to the shipped writer so the measured append path (including
+      // the legacy-ledger refusal and directory creation) cannot drift from
+      // what the observer actually does in production. Only the timing wraps it.
+      appendLines: async (_path, lines) => {
         if (options.failAppend === true) {
           throw new Error('synthetic ledger append failure')
         }
         const start = performance.now()
-        const text = `${lines.join('\n')}\n`
-        await mkdir(dirname(path), { recursive: true })
-        await appendFile(path, text, 'utf8')
-        ledgerBytes += Buffer.byteLength(text, 'utf8')
+        await appendLedgerLines(config, lines)
         appendLatenciesMs.push(performance.now() - start)
       },
     })
@@ -227,8 +234,9 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
       if (planned.kind === 'event') {
         observer.observeSessionEvent(SESSION, planned.event)
         if (planned.event.type === 'turn/end') {
-          // Let the observer's asynchronous flush drain between turns, as a
-          // real harness event loop would.
+          // One macrotask tick lets a completed append resolve. An append still
+          // in flight coalesces with this turn's flush request instead of being
+          // awaited; the report prints the actual flush attempts.
           await yieldToEventLoop()
         }
       } else {
@@ -241,14 +249,29 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
     const rssAfterBytes = process.memoryUsage().rss
     const stats = observer.stats()
     let persistedEvents = 0
+    let envelopeBytes = 0
+    let statsBytes = 0
     let clockUncertaintyMaxMs = 0
+    let harnessTimeEvents = 0
+    let wallClockEvents = 0
     try {
       const text = await readFile(observer.path, 'utf8')
       for (const line of text.split('\n')) {
-        if (!line.includes('reliability_observer_envelope_v0')) continue
+        if (line === '') continue
+        const lineBytes = Buffer.byteLength(line, 'utf8') + 1
+        if (!line.includes('reliability_observer_envelope_v0')) {
+          statsBytes += lineBytes
+          continue
+        }
         persistedEvents += 1
+        envelopeBytes += lineBytes
         try {
-          const record = JSON.parse(line) as { clock?: { uncertainty_ms?: number } }
+          const record = JSON.parse(line) as {
+            clock?: { source?: string, uncertainty_ms?: number }
+          }
+          const source = record.clock?.source
+          if (source === 'harness_event_time') harnessTimeEvents += 1
+          else if (typeof source === 'string') wallClockEvents += 1
           const uncertainty = record.clock?.uncertainty_ms
           if (typeof uncertainty === 'number' && Number.isFinite(uncertainty)) {
             clockUncertaintyMaxMs = Math.max(clockUncertaintyMaxMs, uncertainty)
@@ -259,6 +282,10 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
       }
     } catch {
       persistedEvents = 0
+      envelopeBytes = 0
+      statsBytes = 0
+      harnessTimeEvents = 0
+      wallClockEvents = 0
     }
     return {
       workloadEvents,
@@ -277,8 +304,12 @@ export async function runObserverTrial(options: TrialOptions): Promise<TrialMeas
       flushAttempts: stats.flush_attempt_count,
       peakBufferedEvents: stats.peak_buffered_event_count,
       observerFailures: stats.observer_failure_count,
-      ledgerBytes,
+      ledgerBytes: envelopeBytes + statsBytes,
+      envelopeBytes,
+      statsBytes,
       clockUncertaintyMaxMs,
+      harnessTimeEvents,
+      wallClockEvents,
       appendLatenciesMs,
       outboundEndpoints: stats.outbound_endpoints.length,
       workerContextInfluence: stats.observation_entered_worker_context,

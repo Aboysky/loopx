@@ -180,16 +180,23 @@ live 部署验收。操作 regular file 前会验证 provider 目录与 CLI 的 
 ## 测量 observer 开销
 
 `packages/dsh-loopx-plugin/bench/observer-overhead.ts` 在确定性的 synthetic DSH 事件流上
-测量 observer 组件开销：observer 关闭/开启两臂、CPU（user+system）、RSS、ledger append
-延迟、ledger 字节数、event loss 与 clock uncertainty，并给出完整分母。输出 public-safe
-的 JSON + Markdown 报告，并声明限制；不测量真实 DSH host、模型、网络或 Cordis dispatch，
-也不构成 C1 资格。见 [bench README](../../../packages/dsh-loopx-plugin/bench/README.md)。
+测量 observer 组件开销：observer 关闭/开启两臂、CPU（user+system）、RSS、经 shipped writer
+的 ledger append 延迟、每条 envelope 的 ledger 字节与每次 flush 的 stats 字节、逐试验的
+event loss 与 buffer 峰值，以及 clock source 构成和完整分母。丢弃或拒绝事件、append 失败、
+或 persisted 少于 accepted 的试验会从计时汇总中排除；报告标记为不可用并列出警告，因此有丢失
+的运行不会被读成干净结果。输出 public-safe 的 JSON + Markdown 报告，并声明限制；不测量真实
+DSH host、模型、网络或 Cordis dispatch，也不构成 C1 资格。见
+[bench README](../../../packages/dsh-loopx-plugin/bench/README.md)。
 
 在 `packages/dsh-loopx-plugin` 下运行：
 
 ```bash
-node --experimental-strip-types bench/observer-overhead.ts --events 10000 --repeat 5
+node --experimental-strip-types bench/observer-overhead.ts --events 10000
 ```
+
+`--events` 会向下归一化为 6 事件 turn cycle 的整数倍（5,000 → 4,998；10,000 → 9,996），
+报告同时给出请求值与归一化值。bench 对 synthetic 突发使用 4,096 buffer bound；传
+`--buffer-bound 256` 可对齐 observer 的产品默认值。
 
 ## 验证
 

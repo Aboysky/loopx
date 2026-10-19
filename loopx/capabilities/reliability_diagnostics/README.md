@@ -213,17 +213,26 @@ deletion. Upgrade CLI and plugin together with writers frozen.
 
 `packages/dsh-loopx-plugin/bench/observer-overhead.ts` measures the observer
 component cost on a deterministic synthetic DSH event stream: observer off/on
-arms, CPU (user+system), RSS, ledger append latency, ledger bytes, event loss,
-and clock uncertainty with full denominators. It writes a public-safe JSON +
-Markdown report and states its limits. It does not measure a live DSH host,
-model, network, or Cordis dispatch, and it does not qualify C1. See the
+arms, CPU (user+system), RSS, ledger append through the shipped writer, ledger
+bytes per envelope and stats bytes per flush, per-trial event loss and buffer
+peaks, and the clock-source mix with full denominators. A trial that drops or
+rejects events, fails an append, or persists fewer envelopes than it accepted is
+excluded from the timing summary; the report is marked not usable and lists
+warnings, so a lossy run cannot read as a clean result. It writes a public-safe
+JSON + Markdown report and states its limits. It does not measure a live DSH
+host, model, network, or Cordis dispatch, and it does not qualify C1. See the
 [bench README](../../../packages/dsh-loopx-plugin/bench/README.md).
 
 Run it from `packages/dsh-loopx-plugin`:
 
 ```bash
-node --experimental-strip-types bench/observer-overhead.ts --events 10000 --repeat 5
+node --experimental-strip-types bench/observer-overhead.ts --events 10000
 ```
+
+`--events` is normalized down to a whole six-event turn cycle (5,000 → 4,998;
+10,000 → 9,996); the report states both counts. The bench uses a 4,096 buffer
+bound for the synthetic burst; pass `--buffer-bound 256` to mirror the observer's
+product default.
 
 ## Validation
 
