@@ -39,6 +39,13 @@ export const stewardModelSettingsScenario = {
       if (await stewardTab.getAttribute("aria-current") !== "page") {
         throw new Error("Steward must be the primary settings destination");
       }
+      const scopeNote = page.locator(".personal-capability-scope-note");
+      await scopeNote.getByText("本机管家设置", { exact: true }).click();
+      const scopeText = await scopeNote.innerText();
+      for (const meaning of ["当前设备的管家", "Goal 对话和 Agent Loop 保留各自配置", "正在执行的回合沿用当前分配"]) {
+        if (!scopeText.includes(meaning)) throw new Error(`Steward settings lost their scope or adoption boundary: ${scopeText}`);
+      }
+      await scopeNote.getByText("本机管家设置", { exact: true }).click();
       const capabilityList = page.locator(".personal-capability-list");
       await capabilityList.getByRole("button", { name: "运行环境" }).waitFor();
       if (await capabilityList.getByRole("button").count() !== 2) {
