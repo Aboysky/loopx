@@ -439,9 +439,7 @@ def _bound_project(fixture):
 
 
 @pytest.mark.parametrize("entrypoint", ["http", "runtime_context"])
-def test_bound_session_identity_is_checked_before_input_or_runtime_resolution(
-    ordinary, monkeypatch, entrypoint,
-):  # noqa: F811
+def test_bound_session_identity_is_checked_before_input_or_runtime_resolution(ordinary, monkeypatch, entrypoint):  # noqa: F811
     from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
 
     store, runtime, contexts, request, capture, _, workspace = ordinary
