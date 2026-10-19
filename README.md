@@ -807,7 +807,7 @@ traces, credentials, private logs, or operator artifacts.
 
 ## Current Status
 
-LoopX 1.0 is a usable local control plane for long-running agent work and is
+LoopX is a usable local control plane for long-running agent work and is
 entering broader adoption. It is not a full agent platform, an agent runtime, or
 an autonomous production controller.
 
