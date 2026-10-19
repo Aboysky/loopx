@@ -1,4 +1,5 @@
 """Composition admission, optional effects and real loopback file boundaries."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -22,10 +23,33 @@ from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 
 
 def brief():
-    return {"schema_version": "content_ops_media_plan_v0", "title": "Return the result", "width": 640, "height": 360, "fps": 12,
-            "shots": [{"id": "flow", "kind": "diagram", "seconds": 3, "title": "A complete handoff", "nodes": ["Intent", "Owner", "Evidence"],
-                       "source_ref": "synthetic:handoff", "boundary": "Mechanism illustration"}],
-            "captions": [{"start": 0, "end": 3, "text": "Return evidence to the requester.", "language": "en"}], "narration": {"mode": "silent"}}
+    return {
+        "schema_version": "content_ops_media_plan_v0",
+        "title": "Return the result",
+        "width": 640,
+        "height": 360,
+        "fps": 12,
+        "shots": [
+            {
+                "id": "flow",
+                "kind": "diagram",
+                "seconds": 3,
+                "title": "A complete handoff",
+                "nodes": ["Intent", "Owner", "Evidence"],
+                "source_ref": "synthetic:handoff",
+                "boundary": "Mechanism illustration",
+            }
+        ],
+        "captions": [
+            {
+                "start": 0,
+                "end": 3,
+                "text": "Return evidence to the requester.",
+                "language": "en",
+            }
+        ],
+        "narration": {"mode": "silent"},
+    }
 
 
 @pytest.fixture
@@ -34,28 +58,74 @@ def workspace(tmp_path):
     project.mkdir()
     runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
-    registry.write_text(json.dumps({"schema_version": "0.1", "common_runtime_root": str(runtime),
-        "goals": [{"id": "media-demo", "repo": str(project), "status": "active"}]}))
-    return media.MediaWorkspace(registry_path=registry, goal_id="media-demo", runtime_root=runtime), registry
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "common_runtime_root": str(runtime),
+                "goals": [
+                    {"id": "media-demo", "repo": str(project), "status": "active"}
+                ],
+            }
+        )
+    )
+    return media.MediaWorkspace(
+        registry_path=registry, goal_id="media-demo", runtime_root=runtime
+    ), registry
 
 
 def test_prepare_is_replayable_and_revision_invalidates_publication_approval(workspace):
     work, _ = workspace
     first = work.prepare(brief(), source_directory=work.project)
-    same = work.prepare(brief(), source_directory=work.project, composition_id=first["composition_id"], expected_revision=1)
+    same = work.prepare(
+        brief(),
+        source_directory=work.project,
+        composition_id=first["composition_id"],
+        expected_revision=1,
+    )
     assert same["revision"] == 1
     assert first["provider"]["status"] != "ready"
     record = work._record(first["composition_id"])
     item = record["item"]
-    for action, payload in [("submit_review", {}), ("approve", {"approval_ref": "decision:owner", "content_digest": item["content_digest"], "revision": item["revision"], "effect_kind": "publish"})]:
-        item = apply_content_ops_item_event(item, {"event_id": action, "action": action, "payload": payload,
-            "expected_state": item["state"], "expected_revision": item["revision"], "occurred_at": media.now()})["item"]
+    for action, payload in [
+        ("submit_review", {}),
+        (
+            "approve",
+            {
+                "approval_ref": "decision:owner",
+                "content_digest": item["content_digest"],
+                "revision": item["revision"],
+                "effect_kind": "publish",
+            },
+        ),
+    ]:
+        item = apply_content_ops_item_event(
+            item,
+            {
+                "event_id": action,
+                "action": action,
+                "payload": payload,
+                "expected_state": item["state"],
+                "expected_revision": item["revision"],
+                "occurred_at": media.now(),
+            },
+        )["item"]
     record["item"] = item
     media._save(work._bundle(first["composition_id"]) / "record.json", record)
     changed = {**brief(), "title": "Revised claim"}
     with pytest.raises(ValueError, match="revision"):
-        work.prepare(changed, source_directory=work.project, composition_id=first["composition_id"], expected_revision=0)
-    revised = work.prepare(changed, source_directory=work.project, composition_id=first["composition_id"], expected_revision=1)
+        work.prepare(
+            changed,
+            source_directory=work.project,
+            composition_id=first["composition_id"],
+            expected_revision=0,
+        )
+    revised = work.prepare(
+        changed,
+        source_directory=work.project,
+        composition_id=first["composition_id"],
+        expected_revision=1,
+    )
     assert revised["revision"] == 2 and revised["item_state"] == "draft"
     assert work._record(first["composition_id"])["item"]["approval"] is None
     assert revised["publish_authorized"] is False
@@ -65,8 +135,14 @@ def test_assets_are_immutable_hash_bound_and_cannot_escape_scope(workspace):
     work, _ = workspace
     source = work.project / "source.bin"
     source.write_bytes(b"synthetic source")
-    asset = {"id": "source", "path": source.name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-             "kind": "image", "source_ref": "synthetic:source", "visibility": "local_private"}
+    asset = {
+        "id": "source",
+        "path": source.name,
+        "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "kind": "image",
+        "source_ref": "synthetic:source",
+        "visibility": "local_private",
+    }
     plan = {**brief(), "assets": [asset]}
     prepared = work.prepare(plan, source_directory=work.project)
     snapshot = Path(work._record(prepared["composition_id"])["sources"]["source"])
@@ -77,12 +153,17 @@ def test_assets_are_immutable_hash_bound_and_cannot_escape_scope(workspace):
     (work.project / "link").symlink_to(source)
     for path in ("../outside", "link"):
         with pytest.raises((ValueError, EffectRuntimeRejected)):
-            work.prepare({**plan, "assets": [{**asset, "path": path}]}, source_directory=work.project)
+            work.prepare(
+                {**plan, "assets": [{**asset, "path": path}]},
+                source_directory=work.project,
+            )
     with pytest.raises(ValueError, match="composition reference"):
         work.inspect("../../outside")
 
 
-def test_missing_provider_preserves_prepared_work_without_starting_an_attempt(workspace):
+def test_missing_provider_preserves_prepared_work_without_starting_an_attempt(
+    workspace,
+):
     work, _ = workspace
     first = work.prepare(brief(), source_directory=work.project)
     before = work._record(first["composition_id"])
@@ -92,21 +173,29 @@ def test_missing_provider_preserves_prepared_work_without_starting_an_attempt(wo
     assert work.list()["compositions"][0]["status"] == "prepared"
 
 
-def test_concurrent_retry_cancel_and_interruption_preserve_one_effect(workspace, monkeypatch):
+def test_concurrent_retry_cancel_and_interruption_preserve_one_effect(
+    workspace, monkeypatch
+):
     work, _ = workspace
+
     # This controlled effect tests the store race. The real renderer is exercised
     # separately; the stub does not certify any video output.
     class Binding:
         binding = object()
-        def public_readiness(self): return {"status": "ready"}
+
+        def public_readiness(self):
+            return {"status": "ready"}
+
     monkeypatch.setattr(work, "binding", Binding)
     started, release = threading.Event(), threading.Event()
     calls = []
+
     def effect(binding, *, request):
         calls.append(request["attempt_directory"])
         started.set()
         assert release.wait(5)
         raise ValueError("synthetic failure")
+
     monkeypatch.setattr(media, "execute_extension_runtime_binding", effect)
     first = work.prepare(brief(), source_directory=work.project)
     ident = first["composition_id"]
@@ -114,17 +203,25 @@ def test_concurrent_retry_cancel_and_interruption_preserve_one_effect(workspace,
     assert started.wait(5)
     assert work.render(ident, expected_revision=1)["status"] == "rendering"
     assert work.cancel(ident, expected_revision=1)["status"] == "cancellation_requested"
-    assert work.inspect(ident)["status"] == "rendering", "cancellation is a request, not premature completion"
+    assert work.inspect(ident)["status"] == "rendering", (
+        "cancellation is a request, not premature completion"
+    )
     release.set()
     for _ in range(100):
-        if work.inspect(ident)["status"] != "rendering": break
-        time.sleep(.02)
+        if work.inspect(ident)["status"] != "rendering":
+            break
+        time.sleep(0.02)
     assert work.inspect(ident)["status"] == "cancelled" and len(calls) == 1
     record = work._record(ident)
-    record.update(status="rendering", updated_at=(datetime.now(timezone.utc) - timedelta(minutes=4)).isoformat())
+    record.update(
+        status="rendering",
+        updated_at=(datetime.now(timezone.utc) - timedelta(minutes=4)).isoformat(),
+    )
     media._save(work._bundle(ident) / "record.json", record)
     assert work.inspect(ident)["status"] == "interrupted"
-    assert work._record(ident)["status"] == "rendering", "inspection must not restart or mutate a render"
+    assert work._record(ident)["status"] == "rendering", (
+        "inspection must not restart or mutate a render"
+    )
     assert work.render(ident, expected_revision=1)["status"] == "failed"
     assert len(calls) == 2
 
@@ -137,44 +234,106 @@ def http_workspace(workspace):
     server.selected_goal_id, server.verbose = "media-demo", False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
     def exchange(method, path, body=None, headers=None):
         connection = http.client.HTTPConnection(*server.server_address, timeout=10)
-        connection.request(method, path, json.dumps(body).encode() if body is not None else None,
-            headers={"Origin": f"http://127.0.0.1:{server.server_address[1]}", "Content-Type": "application/json", **(headers or {})})
+        connection.request(
+            method,
+            path,
+            json.dumps(body).encode() if body is not None else None,
+            headers={
+                "Origin": f"http://127.0.0.1:{server.server_address[1]}",
+                "Content-Type": "application/json",
+                **(headers or {}),
+            },
+        )
         response = connection.getresponse()
         result = response.status, dict(response.getheaders()), response.read()
         connection.close()
         return result
+
     yield work, exchange
-    server.shutdown(); server.server_close(); thread.join(2)
+    server.shutdown()
+    server.server_close()
+    thread.join(2)
 
 
-def test_real_http_admission_rejects_foreign_goal_origin_and_path_injection(http_workspace):
+def test_real_http_admission_rejects_foreign_goal_origin_and_path_injection(
+    http_workspace,
+):
     work, exchange = http_workspace
     first = work.prepare(brief(), source_directory=work.project)
     endpoint = "/api/chat/content-media"
-    status, _, body = exchange("POST", endpoint, {"goal_id": "media-demo", "action": "list"})
-    assert status == 200 and json.loads(body)["compositions"][0]["composition_id"] == first["composition_id"]
-    assert exchange("POST", endpoint, {"goal_id": "another-goal", "action": "list"})[0] == 400
-    assert exchange("POST", endpoint, {"goal_id": "media-demo", "action": "list", "source_directory": "outside"})[0] == 400
-    assert exchange("POST", endpoint, {"goal_id": "media-demo", "action": "list"}, {"Origin": "https://unrelated.example"})[0] == 403
-    assert exchange("GET", endpoint + "/file?goal_id=media-demo&composition_id=..&file=video.mp4")[0] == 404
+    status, _, body = exchange(
+        "POST", endpoint, {"goal_id": "media-demo", "action": "list"}
+    )
+    assert (
+        status == 200
+        and json.loads(body)["compositions"][0]["composition_id"]
+        == first["composition_id"]
+    )
+    assert (
+        exchange("POST", endpoint, {"goal_id": "another-goal", "action": "list"})[0]
+        == 400
+    )
+    assert (
+        exchange(
+            "POST",
+            endpoint,
+            {"goal_id": "media-demo", "action": "list", "source_directory": "outside"},
+        )[0]
+        == 400
+    )
+    assert (
+        exchange(
+            "POST",
+            endpoint,
+            {"goal_id": "media-demo", "action": "list"},
+            {"Origin": "https://unrelated.example"},
+        )[0]
+        == 403
+    )
+    assert (
+        exchange(
+            "GET",
+            endpoint + "/file?goal_id=media-demo&composition_id=..&file=video.mp4",
+        )[0]
+        == 404
+    )
     assert b"source_directory" not in body and str(work.project).encode() not in body
 
 
-@pytest.mark.skipif(os.environ.get("LOOPX_MEDIA_RENDERER_TEST") != "1", reason="explicit optional local renderer qualification")
+@pytest.mark.skipif(
+    os.environ.get("LOOPX_MEDIA_RENDERER_TEST") != "1",
+    reason="explicit optional local renderer qualification",
+)
 def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
     """No model calls: use the actual extension, encoder, store and HTTP route."""
     import subprocess
     import sys
     from urllib.parse import urlencode
+
     work, exchange = http_workspace
     executable = shutil.which("loopx-media")
-    assert executable, "Install packages/loopx-media in an isolated environment and put its executable on PATH"
+    assert executable, (
+        "Install packages/loopx-media in an isolated environment and put its executable on PATH"
+    )
     root = Path(__file__).resolve().parents[1]
     command = [sys.executable, "-m", "loopx.cli", "--format", "json", "extension"]
     state = work.runtime_root / "extensions/state.json"
-    installed = subprocess.run([*command, "install", "--manifest", str(root / "packages/loopx-media/extension.toml"), "--state-file", str(state), "--execute"], capture_output=True, text=True)
+    installed = subprocess.run(
+        [
+            *command,
+            "install",
+            "--manifest",
+            str(root / "packages/loopx-media/extension.toml"),
+            "--state-file",
+            str(state),
+            "--execute",
+        ],
+        capture_output=True,
+        text=True,
+    )
     assert installed.returncode == 0, installed.stdout + installed.stderr
     first = work.prepare(brief(), source_directory=work.project)
     ident = first["composition_id"]
@@ -186,33 +345,94 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
     assert work.render(ident, expected_revision=1)["status"] == "ready"
     assert work._record(ident)["attempt"] == before
     movie = work.file(ident, "video.mp4")
-    query = urlencode({"goal_id": "media-demo", "composition_id": ident, "file": "video.mp4"})
-    status, headers, data = exchange("GET", "/api/chat/content-media/file?" + query, headers={"Range": "bytes=0-31"})
-    assert status == 206 and data == movie.read_bytes()[:32] and headers["Cache-Control"] == "no-store"
+    query = urlencode(
+        {"goal_id": "media-demo", "composition_id": ident, "file": "video.mp4"}
+    )
+    status, headers, data = exchange(
+        "GET", "/api/chat/content-media/file?" + query, headers={"Range": "bytes=0-31"}
+    )
+    assert (
+        status == 206
+        and data == movie.read_bytes()[:32]
+        and headers["Cache-Control"] == "no-store"
+    )
     assert headers["Content-Disposition"] == 'inline; filename="video.mp4"'
     # A second brief reuses the installed provider with a real video source and
     # supplied, explicitly synthetic audio rather than a new rendering script.
     shutil.copyfile(movie, work.project / "source.mp4")
     with wave.open(str(work.project / "voice.wav"), "wb") as wav:
-        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(44100); wav.writeframes(b"\0\0" * 44100 * 3)
-    assets = [{"id": ident, "path": name, "kind": kind, "sha256": hashlib.sha256((work.project / name).read_bytes()).hexdigest(), "source_ref": "synthetic:" + ident, "visibility": "local_private"}
-              for ident, name, kind in [("movie", "source.mp4", "video"), ("voice", "voice.wav", "audio")]]
-    second = {**brief(), "title": "Review another brief", "assets": assets, "narration": {"mode": "supplied", "asset_id": "voice"},
-              "shots": [{"id": "view", "kind": "excerpt", "seconds": 3, "title": "Earlier synthetic render", "asset_id": "movie", "source_ref": "synthetic:movie", "boundary": "Synthetic excerpt; no live product run"}]}
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        wav.writeframes(b"\0\0" * 44100 * 3)
+    assets = [
+        {
+            "id": ident,
+            "path": name,
+            "kind": kind,
+            "sha256": hashlib.sha256((work.project / name).read_bytes()).hexdigest(),
+            "source_ref": "synthetic:" + ident,
+            "visibility": "local_private",
+        }
+        for ident, name, kind in [
+            ("movie", "source.mp4", "video"),
+            ("voice", "voice.wav", "audio"),
+        ]
+    ]
+    second = {
+        **brief(),
+        "title": "Review another brief",
+        "assets": assets,
+        "narration": {"mode": "supplied", "asset_id": "voice"},
+        "shots": [
+            {
+                "id": "view",
+                "kind": "excerpt",
+                "seconds": 3,
+                "title": "Earlier synthetic render",
+                "asset_id": "movie",
+                "source_ref": "synthetic:movie",
+                "boundary": "Synthetic excerpt; no live product run",
+            }
+        ],
+    }
     prepared = work.prepare(second, source_directory=work.project)
     rendered = work.render(prepared["composition_id"], expected_revision=1)
-    assert rendered["status"] == "ready" and rendered["result"]["qa"]["narration"]["mode"] == "supplied"
+    assert (
+        rendered["status"] == "ready"
+        and rendered["result"]["qa"]["narration"]["mode"] == "supplied"
+    )
     assert rendered["result"]["qa"]["narration"]["peak_dbfs"] is None
     # Failed decode never produces a ready movie; a repaired revision recovers.
-    broken = deepcopy(second); broken["shots"][0]["start_seconds"] = 60
-    revised = work.prepare(broken, source_directory=work.project, composition_id=prepared["composition_id"], expected_revision=1)
-    assert work.render(revised["composition_id"], expected_revision=2)["status"] == "failed"
-    fixed = work.prepare(second, source_directory=work.project, composition_id=revised["composition_id"], expected_revision=2)
-    assert work.render(fixed["composition_id"], expected_revision=3)["status"] == "ready"
+    broken = deepcopy(second)
+    broken["shots"][0]["start_seconds"] = 60
+    revised = work.prepare(
+        broken,
+        source_directory=work.project,
+        composition_id=prepared["composition_id"],
+        expected_revision=1,
+    )
+    assert (
+        work.render(revised["composition_id"], expected_revision=2)["status"]
+        == "failed"
+    )
+    fixed = work.prepare(
+        second,
+        source_directory=work.project,
+        composition_id=revised["composition_id"],
+        expected_revision=2,
+    )
+    assert (
+        work.render(fixed["composition_id"], expected_revision=3)["status"] == "ready"
+    )
     # A damaged artifact cannot be downloaded or silently treated as ready.
     movie.write_bytes(b"damaged")
     assert work.inspect(ident)["status"] == "damaged"
     assert exchange("GET", "/api/chat/content-media/file?" + query)[0] == 404
-    disabled = subprocess.run([*command, "disable", "loopx-media", "--state-file", str(state), "--execute"], capture_output=True, text=True)
+    disabled = subprocess.run(
+        [*command, "disable", "loopx-media", "--state-file", str(state), "--execute"],
+        capture_output=True,
+        text=True,
+    )
     assert disabled.returncode == 0
     assert work.render(ident, expected_revision=1)["status"] == "provider_unavailable"

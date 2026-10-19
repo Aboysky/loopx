@@ -77,9 +77,18 @@ does not delete them. There is no automatic cleanup of source evidence.
 
 ## Focused validation
 
-Core tests do not need this distribution. To exercise the actual optional
-extension, encoder, source reuse, recovery and HTTP byte serving after installing
-the executable in an isolated environment:
+Core tests do not need this distribution. For source changes, first run the
+repository-invariant and lint commands used by CI:
+
+```sh
+uv run --extra test python -m pytest -q --no-cov \
+  tests/test_stage2c_dependency_lock.py tests/architecture/test_top_level_module_budget.py
+uv run --extra test python -m ruff check \
+  tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
+```
+
+Then exercise the actual optional extension, encoder, source reuse, recovery
+and HTTP byte serving after installing the executable in an isolated environment:
 
 ```sh
 LOOPX_MEDIA_RENDERER_TEST=1 uv run --extra test pytest -q tests/test_content_media.py
