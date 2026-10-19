@@ -91,6 +91,8 @@ export function validateMediaPlan(input: unknown) {
     if (!/^[a-z]{2}(?:-[A-Z]{2})?$/.test(language)) fail("Invalid caption language");
     const content = text(cue.text, 220);
     if (content.includes("-->")) fail("Invalid caption delimiter");
+    if (/\n[\t ]*\n/.test(content)) fail("Caption blank lines are unsupported; use single line breaks or separate timed cues");
+    if (/[<>]|&(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);/.test(content)) fail("Caption markup and entity syntax are unsupported; write spoken plain text instead");
     end = stop;
     return {start, end: stop, text: content, language};
   });

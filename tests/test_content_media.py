@@ -161,6 +161,22 @@ def test_assets_are_immutable_hash_bound_and_cannot_escape_scope(workspace):
         work.inspect("../../outside")
 
 
+def test_unsupported_caption_refusal_does_not_create_a_prepared_composition(workspace):
+    work, _ = workspace
+    for text in (
+        "FIRST LINE\n\nSECOND LINE",
+        "FIRST LINE\n \t\nSECOND LINE",
+        "x < y",
+        "<b>literal</b>",
+        "&lt;literal&gt;",
+    ):
+        plan = brief()
+        plan["captions"][0]["text"] = text
+        with pytest.raises(EffectRuntimeRejected, match="Caption"):
+            work.prepare(plan, source_directory=work.project)
+    assert work.list()["compositions"] == []
+
+
 def test_missing_provider_preserves_prepared_work_without_starting_an_attempt(
     workspace,
 ):
@@ -313,12 +329,22 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
     import sys
     from urllib.parse import urlencode
 
+    import imageio_ffmpeg
+    import loopx_media.renderer as renderer
+
     work, exchange = http_workspace
     executable = shutil.which("loopx-media")
     assert executable, (
         "Install packages/loopx-media in an isolated environment and put its executable on PATH"
     )
     root = Path(__file__).resolve().parents[1]
+    assert (
+        Path(renderer.__file__).resolve()
+        == root / "packages/loopx-media/src/loopx_media/renderer.py"
+    ), "Run source qualification with --with-editable ./packages/loopx-media"
+    assert Path(executable).parent == Path(sys.executable).parent, (
+        "Use the optional provider from the qualification interpreter's environment"
+    )
     command = [sys.executable, "-m", "loopx.cli", "--format", "json", "extension"]
     state = work.runtime_root / "extensions/state.json"
     installed = subprocess.run(
@@ -335,7 +361,10 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
         text=True,
     )
     assert installed.returncode == 0, installed.stdout + installed.stderr
-    first = work.prepare(brief(), source_directory=work.project)
+    first_plan = brief()
+    caption_text = 'FIRST & SECOND "quoted"\nReturn evidence; preserve both lines.'
+    first_plan["captions"][0]["text"] = caption_text
+    first = work.prepare(first_plan, source_directory=work.project)
     ident = first["composition_id"]
     ready = work.render(ident, expected_revision=1)
     assert ready["status"] == "ready", ready
@@ -357,6 +386,31 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
         and headers["Cache-Control"] == "no-store"
     )
     assert headers["Content-Disposition"] == 'inline; filename="video.mp4"'
+    # Decode both actual subtitle containers through FFmpeg, independently of
+    # the writer. ASS represents the visible newline as \N; ordinary ampersands
+    # and quotes must round-trip without becoming escaped display text.
+    for name in ("captions.vtt", "captions.srt"):
+        decoded = subprocess.run(
+            [
+                imageio_ffmpeg.get_ffmpeg_exe(),
+                "-v",
+                "error",
+                "-i",
+                str(work.file(ident, name)),
+                "-f",
+                "ass",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payloads = [
+            line.split(",", 9)[9]
+            for line in decoded.stdout.splitlines()
+            if line.startswith("Dialogue:")
+        ]
+        assert payloads == [caption_text.replace("\n", r"\N")]
     # A second brief reuses the installed provider with a real video source and
     # supplied, explicitly synthetic audio rather than a new rendering script.
     shutil.copyfile(movie, work.project / "source.mp4")

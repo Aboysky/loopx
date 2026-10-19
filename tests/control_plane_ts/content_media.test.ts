@@ -69,3 +69,15 @@ test("render transitions are revision-bound and separate from publication", () =
   assert.throws(() => transition({state, expected_revision: 2, action: "success", observed_at: "now"}), /unavailable/);
   assert.throws(() => transition({state: running, expected_revision: 2, action: "publish", observed_at: "now"}));
 });
+
+test("caption admission preserves plain text and refuses structural paragraph separators", () => {
+  const caption = (text: string) => ({...brief(), captions: [{start: 0, end: 6, text, language: "en"}]});
+  const plain = "x & y\nQuoted \"literal\" text";
+  assert.equal(plan({plan: caption(plain)}).plan.captions[0]?.text, plain);
+  for (const text of ["FIRST LINE\n\nSECOND LINE", "FIRST LINE\n \t\nSECOND LINE"]) {
+    assert.throws(() => plan({plan: caption(text)}), /blank lines/);
+  }
+  for (const text of ["x < y", "x > y", "<b>literal</b>", "&lt;literal&gt;", "&#60;", "&#x3c;"]) {
+    assert.throws(() => plan({plan: caption(text)}), /markup and entity/);
+  }
+});

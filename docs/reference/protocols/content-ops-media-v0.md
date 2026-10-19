@@ -27,6 +27,15 @@ request to an Agent but does not gain an independent renderer or upload action.
 | `captions` | Ordered nonoverlapping `start`, `end`, `text`, `language` cues inside the composition. One sequential caption track is emitted. |
 | `narration` | Explicit `silent`, `supplied` with audio `asset_id`, or `system_speech` with installed `voice` and optional words-per-minute. |
 
+Caption text is plain text. Single line breaks are supported; an internal
+blank line is refused before preparation because it terminates a subtitle
+cue. Use single line breaks or separate timed cues instead. Angle brackets
+and entity syntax (such as `&lt;` or `&#60;`) are also refused: literal markup
+and entity preservation is not qualified for this SubRip export. Write spoken plain text instead. The
+renderer repeats these format checks, escapes ordinary ampersands in VTT,
+and preserves plain text in SRT and the transcript. This bounded subset is
+qualified with the native browser track and real FFmpeg subtitle decoding.
+
 Shots are `title`, `diagram` (two to five `nodes`) or `excerpt` (image/video
 `asset_id` and optional `start_seconds`). These are composition-local rendering
 choices. They do not extend Goal/Todo state. Likewise prepared/rendering/ready/

@@ -7,6 +7,7 @@ directory. This renderer implements the protocol; it does not admit that effect.
 from __future__ import annotations
 
 import hashlib
+from html import escape
 import json
 import os
 from pathlib import Path
@@ -64,7 +65,12 @@ def stamp(seconds: float, *, srt: bool = False) -> str:
 def captions(plan: dict, out: Path) -> None:
     vtt, srt, transcript = ["WEBVTT\n"], [], [plan["title"]]
     for i, cue in enumerate(plan["captions"], 1):
-        vtt.append(f"{i}\n{stamp(cue['start'])} --> {stamp(cue['end'])}\n{cue['text']}\n")
+        if re.search(r"\n[\t ]*\n", cue["text"]):
+            raise ValueError("Caption blank lines cannot be serialized as one cue")
+        if re.search(r"[<>]|&(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);", cue["text"]):
+            raise ValueError("Caption markup has no unambiguous plain SubRip representation")
+        payload = escape(cue["text"], quote=False)
+        vtt.append(f"{i}\n{stamp(cue['start'])} --> {stamp(cue['end'])}\n{payload}\n")
         srt.append(f"{i}\n{stamp(cue['start'], srt=True)} --> {stamp(cue['end'], srt=True)}\n{cue['text']}\n")
         transcript.append(f"{cue['start']:g}–{cue['end']:g}s · {cue['text']}")
     for filename, lines in (("captions.vtt", vtt), ("captions.srt", srt), ("transcript.txt", transcript)):

@@ -48,6 +48,13 @@ in place and read back after the worker stops; a host interruption is recovered
 by an explicit retry. An intact completed result is reused without encoding
 again. Damaged result bytes cannot be downloaded as verified output.
 
+Captions use a bounded plain-text subset. Single line breaks, ordinary
+ampersands and quotes work. Internal blank lines delimit subtitle cues;
+angle brackets and entity syntax are not supported by this SubRip export.
+These inputs are refused before preparation and by the renderer. Use separate
+timed cues for paragraphs and spell out markup or comparisons rather than
+producing a subtitle file that silently loses or reinterprets accepted text.
+
 ## Bounds and review
 
 Plans are limited to 90 seconds, 30 shots, 20 local assets and 80 ordered
@@ -91,9 +98,14 @@ Then exercise the actual optional extension, encoder, source reuse, recovery
 and HTTP byte serving after installing the executable in an isolated environment:
 
 ```sh
-LOOPX_MEDIA_RENDERER_TEST=1 uv run --extra test pytest -q tests/test_content_media.py
+LOOPX_MEDIA_RENDERER_TEST=1 uv run --extra test --with-editable ./packages/loopx-media \
+  python -m pytest -q tests/test_content_media.py
 node --test tests/control_plane_ts/content_media.test.ts
 ```
 
 The opt-in test uses synthetic local sources and no model or cloud service.
+Its optional package dependency supplies the real FFmpeg subtitle consumer;
+decoded VTT/SRT text must preserve accepted line breaks, ampersands and quotes.
+The source qualification checks the editable module and executable environment
+so a cached wheel cannot silently stand in for the source under review.
 It is integration evidence, not a subjective or comparative creative study.
