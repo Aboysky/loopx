@@ -2217,9 +2217,10 @@ const larkAppsSchema = z.object({
   })),
 });
 
-export async function fetchLarkApps() {
+export async function fetchLarkApps(options?: {verify: boolean; appRef?: string; signal?: AbortSignal}) {
+  const query = options ? new URLSearchParams({verify: String(options.verify), ...(options.appRef ? {app_ref: options.appRef} : {})}) : null;
   return larkAppsSchema.parse(
-    await requestJson<unknown>("/api/chat/lark/apps"),
+    await requestJson<unknown>(`/api/chat/lark/apps${query ? `?${query}` : ""}`, {signal: options?.signal}),
   ).apps;
 }
 
@@ -2378,9 +2379,9 @@ const larkConnectionsSchema = z.object({
   })),
 });
 
-export async function fetchLarkConnections() {
+export async function fetchLarkConnections(signal?: AbortSignal) {
   return larkConnectionsSchema.parse(
-    await requestJson<unknown>("/api/chat/lark/connections"),
+    await requestJson<unknown>("/api/chat/lark/connections", {signal}),
   ).connections;
 }
 

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler
+from urllib.error import HTTPError
+from urllib.request import urlopen
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +29,123 @@ from loopx.chat_lark_api import LarkChatRequestMixin
 from loopx.extensions.lark.cli_resolution import LarkCliResolution
 from loopx.extensions.lark.goal_channel_contracts import write_goal_channel_binding
 from loopx.extensions.lark.goal_channel_targets import add_lark_goal_channel_target
+
+
+def test_lark_catalog_and_bounded_health_use_real_http_without_provider_writes() -> (
+    None
+):
+    calls: list[tuple[list[str], float]] = []
+    broken = False
+    slow = False
+
+    def runner(args: list[str], _cwd: Any, timeout: float) -> dict[str, Any]:
+        calls.append((args, timeout))
+        if args[-2:] == ["profile", "list"]:
+            return {
+                "returncode": 0,
+                "stdout": "{}"
+                if broken
+                else json.dumps(
+                    [
+                        {
+                            "name": "demo",
+                            "appId": "cli_demo",
+                            "brand": "feishu",
+                            "active": True,
+                        },
+                        {
+                            "name": "other",
+                            "appId": "cli_other",
+                            "brand": "feishu",
+                            "active": False,
+                        },
+                    ]
+                ),
+            }
+        assert args[-4:] == ["auth", "status", "--verify", "--json"]
+        if slow:
+            raise subprocess.TimeoutExpired(args, timeout)
+        return {
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "appId": "cli_demo",
+                    "identities": {
+                        "bot": {"available": True, "verified": True, "appName": "Demo"}
+                    },
+                }
+            ),
+        }
+
+    class Handler(LarkChatRequestMixin, BaseHTTPRequestHandler):
+        def _require_lark_cli(self):
+            return "lark-cli"
+
+        def _lark_runner(self):
+            return runner
+
+        def do_GET(self):
+            self._lark_apps()
+
+        def log_message(self, *_args):
+            pass
+
+        def _send_json(self, payload, *, status=200):
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+
+        def _send_error(self, message, *, status, error_code):
+            self._send_json(
+                {"ok": False, "error": message, "error_code": error_code}, status=status
+            )
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(query):
+        with urlopen(
+            f"http://127.0.0.1:{server.server_port}/api/chat/lark/apps{query}",
+            timeout=10,
+        ) as response:
+            return json.load(response)
+
+    try:
+        catalog = read("?verify=false")
+        assert len(catalog["apps"]) == 2 and len(calls) == 1
+        assert all(not row["ready"] for row in catalog["apps"])
+        calls.clear()
+        health = read("?verify=true&app_ref=demo")
+        assert health["apps"][0]["ready"] is True
+        assert len(calls) == 2 and all(timeout == 5 for _, timeout in calls)
+        slow = True
+        assert (
+            read("?verify=true&app_ref=demo")["apps"][0]["health_error_code"]
+            == "lark_app_unverified"
+        )
+        for query in [
+            "?verify=unknown",
+            "?verify=false&verify=true",
+            "?app_ref=removed",
+            "?app_ref=../outside",
+        ]:
+            with pytest.raises(HTTPError) as error:
+                read(query)
+            assert error.value.code == 400
+        broken = True
+        with pytest.raises(HTTPError) as error:
+            read("?verify=false")
+        assert "private" not in error.value.read().decode()
+        broken = False
+        slow = False
+        assert len(read("?verify=false")["apps"]) == 2
+        assert all("profile" in args or "status" in args for args, _ in calls)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_lark_management_uses_dedicated_local_api_routes() -> None:

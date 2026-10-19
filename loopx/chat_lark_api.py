@@ -437,14 +437,31 @@ class LarkChatRequestMixin:
         cli_bin = self._require_lark_cli()
         if cli_bin is None:
             return
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        try:
+            if set(query) - {"verify", "app_ref"} or any(len(values) != 1 for values in query.values()):
+                raise ValueError("Invalid Lark App query")
+            verification = query.get("verify", ["true"])[0]
+            if verification not in {"true", "false"}:
+                raise ValueError("Lark App verify must be true or false")
+            app_ref = query.get("app_ref", [None])[0]
+            runner = self._lark_runner()
+            # Settings observations have a bounded probe. Mutation owners keep
+            # their existing fresh provider/identity checks and timeout policy.
+            def observation_runner(args: list[str], cwd: Path | None, timeout: float | None) -> dict[str, Any]:
+                return runner(args, cwd, min(timeout or 5, 5))
+            apps = list_lark_apps(
+                runner=observation_runner if query else runner,
+                cli_bin=cli_bin, verify=verification == "true", app_ref=app_ref,
+            )
+        except ValueError as exc:
+            self._send_error(str(exc), status=400, error_code="invalid_lark_app")
+            return
         self._send_json(
             {
                 "ok": True,
                 "schema_version": "loopx_lark_apps_v0",
-                "apps": list_lark_apps(
-                    runner=self._lark_runner(),
-                    cli_bin=cli_bin,
-                ),
+                "apps": apps,
             }
         )
 

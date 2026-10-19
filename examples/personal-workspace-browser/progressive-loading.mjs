@@ -1,4 +1,64 @@
 import { openWorkspacePage } from "./scenario-context.mjs";
+import {resolve} from "node:path";
+import {outputDir} from "./fixture.mjs";
+
+async function verifyLarkLoading(browser, url, collectCoverage) {
+  let releaseSlow;
+  const slow = new Promise(resolve => {releaseSlow = resolve;});
+  let revision = 1, catalogs = 0;
+  const probes = [];
+  const context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_api, page) => {
+    await page.route("**/api/chat/lark/apps?*", async route => {
+      const query = new URL(route.request().url()).searchParams;
+      const current = revision;
+      const refs = ["fast", "slow", "failed"];
+      if (query.get("verify") === "false") catalogs++;
+      else {
+        probes.push(query.get("app_ref"));
+        if (query.get("app_ref") === "slow" && current === 1) await slow;
+        if (query.get("app_ref") === "failed" && current === 1) {
+          await route.fulfill({status: 503, json: {ok: false, error: "Synthetic verification outage"}}); return;
+        }
+      }
+      const verifying = query.get("verify") === "false";
+      await route.fulfill({json: {ok: true, apps: refs.filter(ref => verifying || ref === query.get("app_ref")).map(ref => ({
+        app_ref: ref, active: true, brand: "feishu", label: `${ref} ${current}`,
+        ready: !verifying, reply_ready: !verifying,
+        health_error_code: verifying ? "lark_app_unverified" : null,
+      }))}});
+    });
+  }});
+  const {page} = context;
+  async function openSettings() {
+    const menu = page.locator(".personal-mobile-menu");
+    if (await menu.isVisible()) await menu.click();
+    await page.getByRole("button", {name: "设置", exact: true}).click();
+    await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
+    await page.locator(".personal-lark-tabs").getByRole("button", {name: /^Lark Apps/u}).click();
+  }
+  try {
+    await openSettings();
+    const fast = page.locator(".personal-lark-app-card").filter({hasText: "fast 1"});
+    await fast.getByText("自动回复可用", {exact: true}).waitFor();
+    await page.locator(".personal-lark-app-card").filter({hasText: "slow 1"}).getByText("正在核验…", {exact: true}).waitFor();
+    await page.locator(".personal-lark-app-card").filter({hasText: "failed 1"}).getByText("尚未核验", {exact: true}).waitFor();
+    if (catalogs !== 1 || probes.length !== 3) throw new Error("Settings panels duplicated the profile catalog or verification");
+    await page.screenshot({path: resolve(outputDir, "lark-progressive-desktop.png"), animations: "disabled"});
+    // Explicit refresh aborts the old generation; a late healthy result cannot
+    // restore an old profile after the configuration changed.
+    revision = 2;
+    await page.getByRole("button", {name: "刷新配置并重试核验", exact: true}).click();
+    await page.locator(".personal-lark-app-card").filter({hasText: "slow 2"}).getByText("自动回复可用", {exact: true}).waitFor();
+    releaseSlow();
+    await page.waitForTimeout(200);
+    if (catalogs !== 2 || probes.length !== 6 || await page.getByText("slow 1", {exact: true}).count()) throw new Error("Late verification escaped its settings generation");
+    await page.setViewportSize({width: 390, height: 844});
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("Lark configuration overflows at 390px");
+    await page.screenshot({path: resolve(outputDir, "lark-progressive-narrow.png"), animations: "disabled"});
+    if (context.errors.some(error => !error.startsWith("Failed to load resource:"))) throw new Error(context.errors.join(" | "));
+    return await context.close();
+  } catch (error) {releaseSlow(); await context.close(); throw error;}
+}
 
 // One Goal's lifecycle action must not send the rest of the workspace back to
 // the loading lane. The directory entry is the cheap signal for "this Goal did
@@ -75,6 +135,7 @@ export const progressiveLoadingScenario = {
       // dev-server resource status is not a client-side exception.
       const scriptErrors = pageErrors.filter((message) => !message.startsWith("Failed to load resource"));
       if (scriptErrors.length) throw new Error(`Progressive reconciliation raised page errors: ${scriptErrors.join(" | ")}`);
+      coverageEntries.push(...await verifyLarkLoading(browser, url, collectCoverage));
       return {
         coverageEntries,
         note: "progressive loading reads the workspace directory once and then one Goal at a time; a single Goal's pause and resume re-read no peer, never re-enters the loading lane and keeps every peer card on the board",
