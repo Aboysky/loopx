@@ -80,6 +80,83 @@ def source_request(tmp_path, monkeypatch, *, provider="file", colocated=False):
     return root, registry, store, session, turn, receipt
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
+@pytest.mark.parametrize("publication", ["transcript", "provider"])
+def test_source_revocation_fences_original_return(tmp_path, monkeypatch, provider, publication):
+    from loopx import file_lock
+    from loopx.capabilities.manager_context import configure_delivery_target
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.control_plane.collaboration.inbox import acknowledge
+
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
+    rid, goal_ref = receipt["request_id"], receipt.get("goal_ref")
+    acknowledge(root, "goal-a", "agent-a", rid, "adopt", "Read exact source",
+                registry=registry, caller_goal_ref=goal_ref)
+    report(root, "goal-a", "agent-a", rid, "conclusion", "Checked the exact original source.",
+           registry=registry, caller_goal_ref=goal_ref)
+    entered, release, attempted, revoked = [threading.Event() for _ in range(4)]
+    append = store.append_message
+    kernel_acquire = file_lock._try_acquire_kernel_lock
+    revoker, first_attempt, sent = [], [], []
+
+    def pause():
+        entered.set()
+        assert release.wait(10), "test did not release return publication"
+
+    def append_message(*args, **kwargs):
+        if publication == "transcript" and kwargs.get("origin") == "manager_followup":
+            pause()
+        return append(*args, **kwargs)
+
+    def sender(*args):
+        if publication == "provider":
+            pause()
+        sent.append(revoked.is_set())
+        return {"reply_verified": True, "verification_performed": True}
+
+    def observe_lock(handle):
+        acquired = kernel_acquire(handle)
+        if revoker == [threading.get_ident()] and not first_attempt:
+            first_attempt.append(acquired)
+            attempted.set()
+        return acquired
+
+    def revoke():
+        revoker.append(threading.get_ident())
+        result = configure_delivery_target(
+            root, registry, channel=session["channel_id"], goal_id="goal-a",
+            agent_id="agent-a", grant=False, execute=True,
+        )
+        revoked.set()
+        return result
+
+    monkeypatch.setattr(store, "append_message", append_message)
+    monkeypatch.setattr(file_lock, "_try_acquire_kernel_lock", observe_lock)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        delivery = pool.submit(drain, root, registry, store, sender)
+        try:
+            assert entered.wait(10)
+            revocation = pool.submit(revoke)
+            assert attempted.wait(10)
+            # Observe a real contended writer, not a wall-clock ordering guess.
+            assert first_attempt == [False] and not revoked.is_set()
+        finally:
+            release.set()
+        assert delivery.result(timeout=15) == 1
+        assert revocation.result(timeout=15)["readback_verified"]
+    assert sent == [False]
+    messages = store.messages(session["session_id"])
+    assert sum(m.get("origin") == "manager_followup" for m in messages) == 1
+    assert store.turn_for_client(session["session_id"], turn["client_turn_id"])["turn_id"] == turn["turn_id"]
+
+    # A later result cannot use the retired grant, even after a pump restart.
+    report(root, "goal-a", "agent-a", rid, "conclusion", "A later result.",
+           update_id="after-revocation", registry=registry, caller_goal_ref=goal_ref)
+    drain(root, registry, ChatSessionStore(store.root.parent), sender)
+    assert sent == [False]
+    assert store.messages(session["session_id"]) == messages
+
+
 def forward(root, registry, receipt, *, agent="reviewer", source="agent-a", operation="review"):
     return request(root, registry, "goal-a", source, agent, operation,
                    {"schema_version": "collaboration_brief_v0", "purpose": "Check the exact source",
