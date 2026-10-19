@@ -2,7 +2,7 @@
 
 长程研究工作台，面向企业、研究机构与超级个体。
 
-[观看影片 · 86.2秒](https://github.com/user-attachments/assets/d91cd46b-4c84-45d4-8811-1b2cb2a7a8ce) · [下载 MP4](loopx-research-workbench.mp4) · [中文文字稿](loopx-research-workbench.transcript.zh-CN.md) · [English transcript](loopx-research-workbench.transcript.md)
+[观看影片 · 86.2秒](https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601) · [下载 MP4](loopx-research-workbench.mp4) · [中文文字稿](loopx-research-workbench.transcript.zh-CN.md) · [English transcript](loopx-research-workbench.transcript.md)
 
 [中文 VTT](loopx-research-workbench.zh-CN.vtt) / [SRT](loopx-research-workbench.zh-CN.srt) · [English VTT](loopx-research-workbench.en.vtt) / [SRT](loopx-research-workbench.en.srt) · [English](loopx-research-films.md)
 
@@ -11,6 +11,8 @@
 ![开场、委派、三维产物依赖与研究分析](research-workbench-readme/film-baseline-keyframes.png)
 
 ## 来源与解释
+
+- 研究历程截图的状态条按原计数校正比例：反驳分别占2/133（1.50%）和1/62（1.61%），数字移到条外。这是公开媒体的图表注释，不改变运行中的App或底层研究状态。
 
 - 三维示意解释双方分别接手各自范围，以及研究产物与构建之间的依赖。它采用代码投影，不是 Blender 或物理模拟。实录的软件工程回传与研究历史来自不同案例，不拼接为同一次执行。
 - Kanban 和控制项来自公开工作区场景。轨迹分析使用打包 UI 的合成数据；六类过程判断未经科学校准，不产生总分。引用路径为机制示意。

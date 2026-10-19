@@ -14,8 +14,8 @@ For enterprise teams, research organizations, and independent builders.<br>
 
 [Get started](#try-loopx) · [Workspace](#meet-the-personal-agent-workspace) · [LHTB results](#lhtb-results) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
-<a href="https://github.com/user-attachments/assets/d91cd46b-4c84-45d4-8811-1b2cb2a7a8ce"><img src="docs/assets/personal-workspace/research-workbench-hero.webp" alt="LoopX 2.0, the long-horizon research workbench for enterprise teams, research organizations and independent builders; recorded research history in a labelled App frame" width="960"></a><br>
-<sub><a href="https://github.com/user-attachments/assets/d91cd46b-4c84-45d4-8811-1b2cb2a7a8ce">Watch the research-workbench film · 86s</a> · <a href="docs/assets/personal-workspace/loopx-research-films.md">transcripts, subtitles and sources</a>. Recorded App excerpts, synthetic examples and illustrations are labelled.</sub>
+<a href="https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601"><img src="docs/assets/personal-workspace/research-workbench-hero.webp" alt="LoopX 2.0, the long-horizon research workbench for enterprise teams, research organizations and independent builders; recorded research history with count ribbons redrawn to scale in a labelled App frame" width="960"></a><br>
+<sub><a href="https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601">Watch the research-workbench film · 86s</a> · <a href="docs/assets/personal-workspace/loopx-research-films.md">transcripts, subtitles and sources</a>. Recorded App excerpts, synthetic examples and illustrations are labelled.</sub>
 
 **Start in Codex App in two steps.** Install once:
 

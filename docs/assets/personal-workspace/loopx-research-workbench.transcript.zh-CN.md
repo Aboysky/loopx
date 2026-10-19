@@ -35,7 +35,7 @@ RECORDED WORKSPACE · ORIGINAL STATUSES RETAINED
 看清负责人，也保留等待中的工作。
 
 ## 00:00:37.000–00:00:42.500 · 跨会话追溯研究过程
-RECORDED WORKSPACE · SEPARATE RESEARCH HISTORY
+RECORDED HISTORY · COUNT RIBBONS REDRAWN TO SCALE
 
 保留问题、发现和研究转向。
 
@@ -84,3 +84,5 @@ LoopX，让研究、证据和下一次决策衔接起来。
 [历史固定来源](https://github.com/loopx-project/loopx/blob/c9c3adf63f9771ef95f1fcca12b11ed7de1f69eb/apps/presentation/site/public/lab/time-machine/data/graph.json)。
 
 18–25秒复用代码投影的三维示意，解释独立的委派范围与产物依赖；它不是 Blender、物理模拟或同一段 App 实录。这是以原 A 产品流程为主的唯一当前影片。固定它是为了后续创作比较，不限制之后重新设计叙事、风格、时长或工具；尚未验证观众理解或传播的因果收益。
+
+研究历程画面做了图表注释：保留原104/2/27与39/1/22计数，按比例重画状态条，反驳占比分别为2/133（1.50%）与1/62（1.61%），数字全部移到条外。此处只校正静态媒体，不表示运行中的App已变更，也不独立验证来源结论。

@@ -2,7 +2,7 @@
 
 The workbench for long-horizon research. For enterprise teams, research organizations, and independent builders.
 
-[Watch the film · 86.2s](https://github.com/user-attachments/assets/d91cd46b-4c84-45d4-8811-1b2cb2a7a8ce) · [Download MP4](loopx-research-workbench.mp4) · [English transcript](loopx-research-workbench.transcript.md) · [中文文字稿](loopx-research-workbench.transcript.zh-CN.md)
+[Watch the film · 86.2s](https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601) · [Download MP4](loopx-research-workbench.mp4) · [English transcript](loopx-research-workbench.transcript.md) · [中文文字稿](loopx-research-workbench.transcript.zh-CN.md)
 
 [English VTT](loopx-research-workbench.en.vtt) / [SRT](loopx-research-workbench.en.srt) · [中文 VTT](loopx-research-workbench.zh-CN.vtt) / [SRT](loopx-research-workbench.zh-CN.srt) · [简体中文](loopx-research-films.zh-CN.md)
 
@@ -11,6 +11,8 @@ One current film: the A product-flow story, with a 7-second 3D dependency illust
 ![Opening, delegation, 3D dependency and research analysis](research-workbench-readme/film-baseline-keyframes.png)
 
 ## Sources and interpretation
+
+- The recorded-history count ribbons are annotated and redrawn to scale: 2/133 = 1.50% and 1/62 = 1.61% refuted, with counts outside the bands. This corrects the published media, not the running App or the underlying research states.
 
 - The 3D illustration shows separately accepted peer scopes and a research-artifact dependency. It uses a code projection, not Blender or a physical simulation. The separate recorded engineering return and research history are not presented as one execution.
 - Kanban and controls use a published workspace scenario. Trajectory analysis uses synthetic packaged-UI data. Its six process judgments are uncalibrated and do not form a total score. Citation paths are illustrated.

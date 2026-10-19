@@ -14,8 +14,8 @@
 
 [开始使用](#试用-loopx) · [个人工作区](#认识个人-agent-工作区) · [LHTB 结果](#lhtb-results) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
-<a href="https://github.com/user-attachments/assets/d91cd46b-4c84-45d4-8811-1b2cb2a7a8ce"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 2.0，面向企业、研究机构与超级个体的长程研究工作台；应用画框内保留真实研究历史与来源范围" width="960"></a><br>
-<sub><a href="https://github.com/user-attachments/assets/d91cd46b-4c84-45d4-8811-1b2cb2a7a8ce">观看研究工作台影片 · 86秒</a> · <a href="docs/assets/personal-workspace/loopx-research-films.zh-CN.md">双语文字稿、字幕与来源</a>。App 实录、合成示例与机制示意分别标注。</sub>
+<a href="https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 2.0，面向企业、研究机构与超级个体的长程研究工作台；应用画框内保留真实研究历史与来源范围，状态条按原计数校正比例" width="960"></a><br>
+<sub><a href="https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601">观看研究工作台影片 · 86秒</a> · <a href="docs/assets/personal-workspace/loopx-research-films.zh-CN.md">双语文字稿、字幕与来源</a>。App 实录、合成示例与机制示意分别标注。</sub>
 
 **两步在 Codex App 里用上 LoopX。** 先安装一次：
 

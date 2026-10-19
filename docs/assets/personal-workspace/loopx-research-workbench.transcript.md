@@ -35,7 +35,7 @@ RECORDED WORKSPACE · ORIGINAL STATUSES RETAINED
 Keep owners and waiting work visible.
 
 ## 00:00:37.000–00:00:42.500 · Trace the research across sessions.
-RECORDED WORKSPACE · SEPARATE RESEARCH HISTORY
+RECORDED HISTORY · COUNT RIBBONS REDRAWN TO SCALE
 
 Keep questions, findings, and changes of direction.
 
@@ -84,3 +84,5 @@ English narration uses a generic local synthetic voice. Chinese subtitles transl
 Historical [source record](https://github.com/loopx-project/loopx/blob/c9c3adf63f9771ef95f1fcca12b11ed7de1f69eb/apps/presentation/site/public/lab/time-machine/data/graph.json).
 
 The 18–25s insert reuses a code-projected 3D illustration of separate peer scopes and an artifact dependency. It is not Blender, a physics simulation or the recorded App case. This is the single current film, led by the earlier A product-flow edit. It freezes an artifact for later creative comparisons; future research can change the story, style, duration and tools. No comprehension or causal communication benefit has been established.
+
+The history image is annotated: count ribbons are redrawn from the unchanged 104/2/27 and 39/1/22 records, so the refuted shares are 2/133 (1.50%) and 1/62 (1.61%). All counts sit outside the bars. This is a static-media correction, not a running-App change or independent validation of the recorded findings.
