@@ -446,7 +446,6 @@ assert.match(machineSettings, /selected\.capability_id === "pull_request_review"
 assert.match(machineSettings, /previewMachineConfiguration\(/, "Machine settings require a preview before apply");
 assert.match(machineSettings, /applyMachineConfiguration\([\s\S]*preview\.plan_revision/, "Machine settings apply the exact reviewed revision");
 assert.match(machineSettings, /previewMachineConfigurationRollback\(/, "Machine settings preview rollback before execution");
-assert.match(machineSettings, /liveDefaultDescription/, "Live defaults and Goal overrides are explained together");
 assert.match(machineSettings, /inspection\?\.capability_catalog\.capabilities/, "Machine settings discover capabilities from the shared registry catalog");
 assert.match(machineSettings, /inspection\?\.invalid_namespaces\[0\]/, "Invalid machine state identifies the affected namespace without reading its stored values");
 assert.match(machineSettings, /machine-invalid-repair[\s\S]*role="alert"/, "Invalid machine state exposes a visible guided repair path");

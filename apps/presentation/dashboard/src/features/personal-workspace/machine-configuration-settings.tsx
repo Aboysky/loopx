@@ -354,8 +354,8 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
       <div>
         {diagnosis}
         {section === "steward" ? <details className="personal-capability-scope-note">
-          <summary><ShieldCheck aria-hidden size={17} />{t("machine.liveDefault")}</summary>
-          <p>{t("machine.liveDefaultDescription")}</p>
+          <summary><ShieldCheck aria-hidden size={17} />{t("machine.stewardDefaults")}</summary>
+          <p>{t("machine.stewardDefaultsDescription")}</p>
         </details> : null}
         {section === "other" ? <UsageStatisticsSettings /> : null}
       </div>

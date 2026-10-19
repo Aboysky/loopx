@@ -89,7 +89,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
   // `deepseek-flash` id of DeepSeek-V4.1-Flash. Suggestions only: the field
   // stays free text so an operator can name any id their endpoint serves.
   const modelSuggestions = field.key === "executor_model"
-    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "deepseek-flash", "deepseek-v4-pro"] : [];
+    ? ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "deepseek-flash", "deepseek-v4-pro"] : [];
   return (
     <label htmlFor={id}>
       <span>{label}</span>

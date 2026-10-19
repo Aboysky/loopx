@@ -82,7 +82,7 @@ never the inventory. Normal manager questions no longer silently use a limited
 frontend projection; explicitly choosing status-only still uses that projection.
 
 The manager channel's model and reasoning effort follow its executor. On the
-interactive CLI endpoint the defaults are `gpt-6-astra` with `high` reasoning; on
+interactive CLI endpoint the defaults are `gpt-6.1-sol` with `xhigh` reasoning; on
 the managed host they are the managed execution profile
 (`deepseek-official` / `deepseek-flash` / `high`). The machine's
 `steward_executor` machine configuration decides the executor, the model and the
