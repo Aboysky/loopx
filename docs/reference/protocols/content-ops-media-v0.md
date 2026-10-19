@@ -36,12 +36,13 @@ renderer repeats these format checks, escapes ordinary ampersands in VTT,
 and preserves plain text in SRT and the transcript. This bounded subset is
 qualified with the native browser track and real FFmpeg subtitle decoding.
 
-Shots are `title`, `diagram` (two to five `nodes`) or `excerpt` (image/video
-`asset_id` and optional `start_seconds`). These are composition-local rendering
-choices. They do not extend Goal/Todo state. Likewise prepared/rendering/ready/
-failed/cancelled/interrupted describe private render attempts, never published
-content or Agent liveness. An old saved running attempt is shown as interrupted
-after its bounded execution window; a read does not restart it.
+Shots are `title`, `diagram` (two to five `nodes`), `excerpt` (image/video
+`asset_id` and optional `start_seconds`) or `blender` (declarative `scene`
+geometry). These are composition-local rendering choices. They do not extend
+Goal/Todo state. Likewise prepared/rendering/ready/failed/cancelled/interrupted
+describe private render attempts, never published content or Agent liveness. An
+old saved running attempt is shown as interrupted after its bounded execution
+window; a read does not restart it.
 
 Preparation takes an explicit local source directory. Absolute paths,
 traversal, symlinks and wrong source digests are refused. The prepared record
