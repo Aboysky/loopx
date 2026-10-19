@@ -41,6 +41,7 @@ export function DesktopUpdate() {
   const [runtimeSelection, setRuntimeSelection] = useState<RuntimeSelection>();
   const busy = useRef(false);
   const statusGeneration = useRef(0);
+  const selectedChannel = useRef<string | null>(null);
   const invoke = (window as DesktopWindow).__TAURI__?.core.invoke;
   const observing = workingPhases.includes(state.phase);
   const working = observing && state.details?.background !== true;
@@ -56,7 +57,9 @@ export function DesktopUpdate() {
 
   function commitStatus(value: UpdateStatus, generation: number, includeState = true) {
     if (generation !== statusGeneration.current) return false;
-    const stateIsCurrent = includeState && (!busy.current || !value.state?.phase || (workingPhases.includes(value.state.phase) && value.state.details?.background !== true));
+    const reportedChannel = value.state?.details?.channel;
+    const channelIsCurrent = selectedChannel.current === null || !reportedChannel || reportedChannel === selectedChannel.current;
+    const stateIsCurrent = includeState && channelIsCurrent && (!busy.current || !value.state?.phase || (workingPhases.includes(value.state.phase) && value.state.details?.background !== true));
     readStatus(value, stateIsCurrent);
     return true;
   }
@@ -76,6 +79,7 @@ export function DesktopUpdate() {
     void invoke<UpdateStatus>("desktop_update_status").then((value) => {
       if (!alive || !commitStatus(value, generation)) return;
       const selected = value.state?.details?.channel ?? (value.app_version.includes("-main.") ? "main" : "stable");
+      selectedChannel.current = selected;
       setChannel(selected);
       if (!value.state?.phase) {
         const actionGeneration = ++statusGeneration.current;
@@ -105,6 +109,7 @@ export function DesktopUpdate() {
   async function run(action: "check" | "apply" | "repair" | "restart" | "rollback" | "forget_runtime_selection") {
     if (!invoke || busy.current) return;
     busy.current = true;
+    selectedChannel.current = channel;
     statusGeneration.current++;
     setState({ phase: action === "check" ? "checking" : action === "repair" ? "installing_runtime" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : action === "forget_runtime_selection" ? "connecting" : "downloading" });
     try {
@@ -174,7 +179,12 @@ export function DesktopUpdate() {
       </div> : <p>{zh ? "请在 LoopX App 中更新；浏览器自身无需安装包。" : "Update from the LoopX App; the browser needs no installer."}</p>}
       <details><summary>{zh ? "高级选项" : "Advanced options"}</summary>
       <label>{zh ? "更新通道" : "Update channel"}
-        <select disabled={working || state.phase === "restart_required"} value={channel} onChange={(event) => { setChannel(event.target.value); setState({ phase: "idle" }); }}>
+        <select disabled={working || state.phase === "restart_required"} value={channel} onChange={(event) => {
+          statusGeneration.current++;
+          selectedChannel.current = event.target.value;
+          setChannel(event.target.value);
+          setState({ phase: "idle" });
+        }}>
           <option value="stable">{zh ? "稳定版（推荐）" : "Stable (recommended)"}</option>
           <option value="main">{zh ? "main 预览版" : "main preview"}</option>
         </select>

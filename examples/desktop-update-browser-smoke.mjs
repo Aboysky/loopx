@@ -492,9 +492,24 @@ try {
   assert.equal(await page.getByRole("button", { name: "检查更新", exact: true }).isEnabled(), true);
   await page.getByText(/当前版本可继续使用/).waitFor();
   assert.equal(calls.length, beforeBackground);
+  // A poll already in flight belongs to the old channel, even when it returns
+  // a prepared update after the user has selected another channel.
+  const delayedChannelStatus = delayNextStatus("available");
+  nativeState = { phase: "available", details: { channel: "stable", version: "0.5.5", background: true, prepared: true } };
+  await delayedChannelStatus.started.promise;
+  await page.getByText("高级选项", { exact: true }).click();
+  await page.getByRole("combobox", { name: "更新通道" }).selectOption("main");
+  delayedChannelStatus.release.resolve();
+  await delayedChannelStatus.returned.promise;
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  assert.equal(await page.getByRole("button", { name: "更新并准备重启", exact: true }).count(), 0, "an old-channel response cannot revive its install action");
+  assert.equal(await page.getByText("目标版本：0.5.5", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("combobox", { name: "更新通道" }).inputValue(), "main");
+  assert.equal(calls.length, beforeBackground, "selecting a channel never installs or checks by itself");
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
   assert.deepEqual(calls.slice(beforeBackground).map((call) => call.args?.action), ["check"]);
+  assert.equal(calls.at(-1).args.channel, "main");
   nativeState = { phase: "available", details: { channel: "stable", version: "0.5.5", background: true, prepared: true } };
   await page.reload();
   await page.getByRole("button", { name: "更新已准备" }).click();

@@ -75,6 +75,19 @@ impl Maintenance {
         }
     }
 
+    fn admit_background_update(&self) -> Option<u64> {
+        // Admission and its generation must share the cancellation lock. A
+        // starter paused before admission cannot adopt a manual action's new
+        // generation after that action has already completed.
+        let background = self.background_update.lock().unwrap();
+        if self.busy.load(Ordering::Acquire)
+            || self.automatic_update_checked.swap(true, Ordering::AcqRel)
+        {
+            return None;
+        }
+        Some(background.generation)
+    }
+
     fn cancel_background_update(&self) {
         self.automatic_update_checked.store(true, Ordering::Release);
         let mut background = self.background_update.lock().unwrap();
@@ -1087,12 +1100,12 @@ pub fn start_background_update(app: &AppHandle) {
         || !cfg!(target_os = "macos")
         || app.config().identifier != "io.loopx.control-plane"
         || state.upgrade_request.get().is_some_and(Option::is_some)
-        || state.busy.load(Ordering::Acquire)
-        || state.automatic_update_checked.swap(true, Ordering::AcqRel)
     {
         return;
     }
-    let generation = state.background_update.lock().unwrap().generation;
+    let Some(generation) = state.admit_background_update() else {
+        return;
+    };
     let handle = app.clone();
     let task = tauri::async_runtime::spawn(async move {
         let state = handle.state::<Maintenance>();
@@ -1220,6 +1233,60 @@ pub fn recover_services(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_manual_choice_prevents_a_delayed_background_start() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker_state = state.clone();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            worker_state.admit_background_update()
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        {
+            let _manual = state.acquire().unwrap();
+            state.cancel_background_update();
+            state.publish("available", json!({"channel":"main","version":"1.1.0"}));
+        }
+        release_tx.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), None);
+        assert_eq!(state.status_snapshot()["details"]["channel"], "main");
+    }
+
+    #[test]
+    fn manual_choice_invalidates_admitted_but_not_yet_started_background_io() {
+        let state = Maintenance::default();
+        let generation = state.admit_background_update().unwrap();
+        assert_eq!(state.admit_background_update(), None);
+        {
+            let _manual = state.acquire().unwrap();
+            state.cancel_background_update();
+            state.publish("available", json!({"channel":"main","version":"1.1.0"}));
+        }
+        tauri::async_runtime::block_on(state.run_background_update(
+            generation,
+            "stable",
+            async { panic!("cancelled startup must not query the feed") },
+            |_: ()| async { panic!("cancelled startup must not prepare an update") },
+        ))
+        .unwrap();
+        assert_eq!(state.status_snapshot()["details"]["channel"], "main");
+        assert!(state.background_update.lock().unwrap().snapshot.is_null());
+    }
+
+    #[test]
+    fn busy_background_admission_preserves_the_later_startup_attempt() {
+        let state = Maintenance::default();
+        {
+            let _busy = state.acquire().unwrap();
+            assert_eq!(state.admit_background_update(), None);
+        }
+        assert!(state.admit_background_update().is_some());
+        assert_eq!(state.admit_background_update(), None);
+    }
 
     #[test]
     fn blocked_background_io_cannot_hold_service_recovery_or_manual_admission() {
