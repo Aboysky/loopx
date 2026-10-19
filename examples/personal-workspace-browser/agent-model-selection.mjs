@@ -6,10 +6,18 @@ export const agentModelSelectionScenario = {
   id: "agent-model-selection",
   async run({ browser, collectCoverage, url }) {
     let createdCount = 0;
-    let managerModelKnown = false;
     const requests = [];
     let discoveryCount = 0;
+    const managerBinding = {
+      schema_version: "manager_channel_binding_v0", executor_endpoint: "codex",
+      executor_endpoint_source: "explicit_config", executor_endpoint_default_reason: "",
+      executor_kind: "individual", model: "declared-manager-model", model_source: "executor_configuration",
+      reasoning_effort: "xhigh", selection_policy: "preferred", allocation_reason: "user_explicit",
+      configured_endpoint: "codex", eligible_endpoints: [], allocation_configuration_revision: "fixture-model-selection",
+      credential_env_var: "", operator_credential_configured: false, available: true, unavailable_reason: null,
+    };
     const context = await openWorkspacePage(browser, url, {
+      apiOptions: { managerChannelBinding: managerBinding },
       collectCoverage,
       beforeGoto: async (_api, page) => {
         await page.route("**/api/chat/agent-model-options", route => { discoveryCount += 1; return route.fulfill({ json: {
@@ -29,7 +37,7 @@ export const agentModelSelectionScenario = {
             session.channel_id === channel && session.agent_id === (body.agent_id ?? "codex")) : null;
           const session = existing ?? {
             session_id: `model-session-${++createdCount}`, goal_id: body.goal_id || "loopx-manager", agent_id: body.agent_id ?? "codex",
-            agent_model_id: body.context_kind === "manager" && !managerModelKnown ? null : body.agent_model_id ?? "runtime-default", agent_reasoning_effort: body.agent_reasoning_effort ?? "high", agent_service_tier: "priority", adapter_kind: "codex_app_server", channel_id: channel,
+            agent_model_id: body.agent_model_id ?? "runtime-default", agent_reasoning_effort: body.agent_reasoning_effort ?? "high", agent_service_tier: "priority", adapter_kind: "codex_app_server", channel_id: channel,
             status: "ready", active_turn_id: null, last_error_code: null, resumable: true,
             created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z",
           };
@@ -57,15 +65,18 @@ export const agentModelSelectionScenario = {
         });
         assert.deepEqual(layout, { title: true, runtime: true, fits: true }, "The manager title and runtime label remain readable beside known or unknown model readback");
       };
-      await page.locator(".personal-model-current").filter({hasText: "模型设置"}).waitFor();
+      const managerControl = page.getByRole("button", {name: "调整管家模型与思考深度", exact: true});
+      await managerControl.filter({hasText: managerBinding.model}).waitFor();
+      assert.equal(await page.locator(".personal-chat-model-menu").count(), 0, "The steward has one machine-owned model entry");
       await page.setViewportSize({width: 390, height: 844});
       await assertReadableHeader();
-      assert.equal(discoveryCount, 0, "Unknown current facts do not start catalog discovery");
-      managerModelKnown = true;
-      await page.evaluate(() => fetch("/api/chat/sessions", { method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ context_kind: "manager", agent_id: "codex", mode: "new" }) }));
+      assert.equal(discoveryCount, 0, "The steward binding does not start optional catalog discovery");
+      await managerControl.click();
+      assert.equal(await page.locator(".personal-settings-tabs").getByRole("button", {name: "管家", exact: true}).getAttribute("aria-current"), "page");
+      await page.getByRole("button", {name: "返回工作区", exact: true}).click();
       await page.reload({waitUntil: "networkidle"});
-      await page.locator(".personal-model-current").filter({hasText: "runtime-default"}).waitFor();
+      await managerControl.filter({hasText: managerBinding.model}).waitFor();
+      assert.equal(await page.locator(".personal-chat-model-menu").count(), 0, "Refresh retains the machine-owned steward entry");
       await assertReadableHeader();
       await page.setViewportSize({width: 1512, height: 982});
       await assertReadableHeader();
