@@ -8,9 +8,9 @@ from ...control_plane.collaboration import conversation_scope
 from . import project_context as project_context_policy
 
 
-def enqueue_turn(controller, *, session_id: str, client_turn_id: str, message: str,
+def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, message: str,
                  attachments: list[dict[str, Any]] | None, work_dir: Path | None, objective: str,
-                 origin: str, external_agent_target: dict | None):
+                 origin: str, external_agent_target: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
     session = controller.store.load_session(session_id)
     if session is None or session.get("status") == "closed":
         raise KeyError("chat session was not found")
@@ -63,7 +63,8 @@ def enqueue_turn(controller, *, session_id: str, client_turn_id: str, message: s
     return turn, created
 
 
-def _enqueue_bound(controller, session, client_turn_id, message, attachments, origin):
+def _enqueue_bound(controller: Any, session: dict[str, Any], client_turn_id: str, message: str,
+                   attachments: list[dict[str, Any]] | None, origin: str) -> tuple[dict[str, Any], bool]:
     contexts = controller.project_contexts
     bindings = contexts.conversation_bindings
     if bindings is None:
@@ -92,7 +93,8 @@ def _enqueue_bound(controller, session, client_turn_id, message, attachments, or
     return turn, created
 
 
-def _record_local_ingress(runtime_root, session, client_turn_id, message):
+def _record_local_ingress(runtime_root: Path, session: dict[str, Any],
+                          client_turn_id: str, message: str) -> None:
     from ..manager_context import register_ingress
     from ...control_plane.collaboration.inbox import _hash, normalize_source_context
 

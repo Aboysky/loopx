@@ -6,16 +6,19 @@ This file stores no conversation text and creates no Goal or model thread.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import uuid
 import hashlib
 
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...file_lock import exclusive_file_lock
+
+if TYPE_CHECKING:
+    from ...chat_store import ChatSessionStore
 
 
 class ChatConversationBindings:
@@ -29,7 +32,7 @@ class ChatConversationBindings:
         self.controller: Any | None = None
 
     def observe(self, transport_ref: str, *, audience: str | None = None) -> dict[str, Any]:
-        row = next((item for item in self.read()["bindings"] if item["transport_ref"] == transport_ref), {})
+        row: dict[str, Any] = next((item for item in self.read()["bindings"] if item["transport_ref"] == transport_ref), {})
         if audience is None:
             audience = row.get("audience", "owner")
         if audience == "group" and self._observe_group is not None:
@@ -118,7 +121,7 @@ class ChatConversationBindings:
             readback = self.read()
             if readback != result["state"]:
                 raise OSError("conversation binding publication did not verify")
-            binding = next(row for row in readback["bindings"] if row["transport_ref"] == transport_ref)
+            binding: dict[str, Any] = next(row for row in readback["bindings"] if row["transport_ref"] == transport_ref)
         if previous and previous["binding_id"] != binding["binding_id"]:
             self._stop_revoked_binding(previous["binding_id"])
         return binding
@@ -206,7 +209,8 @@ class ChatConversationBindings:
         # or a substitute for the next admission/delivery owner's fresh check.
         return {**selected, "observation": observation} if include_observation else selected
 
-    def _resolve_observed(self, current, row, observation, source):
+    def _resolve_observed(self, current: dict[str, Any], row: dict[str, Any],
+                          observation: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
         return self._core("collaboration.conversation.bound_context", {
             "current": current, "binding_id": row["binding_id"], "observation": observation,
             "available_projects": self.projects.available(), **source,
@@ -214,7 +218,8 @@ class ChatConversationBindings:
         })
 
     @contextmanager
-    def input_context(self, saved: dict[str, Any], *, origin: str, session: dict[str, Any], store: Any):
+    def input_context(self, saved: dict[str, Any], *, origin: str, session: dict[str, Any],
+                      store: ChatSessionStore) -> Iterator[dict[str, Any]]:
         """Observe outside the publication fence, then retain it through enqueue.
 
         Saved fields select an identity; fresh Core checks grant it. Local Web
@@ -287,7 +292,7 @@ class ChatConversationBindings:
     def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
         if binding.get("goal_scope") != "all_registered":
             return list(binding.get("goal_ids", []))
-        from ...registry import load_registry
+        from ...control_plane.projects.registry_codec import load_registry
         if self.controller is None or self.controller.registry_path is None:
             raise ValueError("the steward registry is unavailable")
         return [goal["id"] for goal in load_registry(self.controller.registry_path).get("goals", [])]
@@ -366,7 +371,8 @@ class ChatConversationBindings:
         No host history, remote thread database or prior identity is discovered.
         """
         from ...attached_session import require_current_attached_session, _require_bound_host
-        from ...registry import find_registry_goal, load_registry
+        from ...control_plane.projects.registry_codec import load_registry
+        from ...registry import find_registry_goal
         if self.controller is None or self.controller.registry_path is None:
             raise ValueError("the attached Session registry is unavailable")
         session = require_current_attached_session(store=self.controller.store,
@@ -431,11 +437,14 @@ class ChatConversationBindings:
             result = self._core("collaboration.conversation.binding", params)
             if result["changed"]:
                 if session_id is not None:
+                    # agent_observation already requires this exact local controller.
+                    assert self.controller is not None
                     self.controller.store.update_session(session_id, external_conversation_binding_id=binding_id)
                 _atomic_write_json(self.path, result["state"])
             if self.read() != result["state"]:
                 raise OSError("Agent target grant publication did not verify")
-            return result["state"]
+            state: dict[str, Any] = result["state"]
+            return state
 
     def resolve_agent_target(self, selected: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
         return self._core("collaboration.conversation.agent_target", {"binding": selected["binding"],

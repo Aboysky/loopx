@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...presentation.answer_instruction import conversation_answer_instruction
+
+if TYPE_CHECKING:
+    from ...chat_store import ChatSessionStore
 
 
 PROJECT_CONVERSATION_OBJECTIVE = (
@@ -62,10 +65,11 @@ class ChatProjectContexts:
 
     def resolve(self, project_ref: str, *, session_context: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            return effect_runtime_result("collaboration.project.context", {
+            result: dict[str, Any] = effect_runtime_result("collaboration.project.context", {
                 "project_ref": project_ref, "available": self.available(),
                 **({"session_context": session_context} if session_context is not None else {}),
             })
+            return result
         except EffectRuntimeRejected as exc:
             raise ValueError(str(exc)) from exc
 
@@ -120,7 +124,8 @@ class ChatProjectContexts:
         return {**session, **self.runtime_context(session, selected)}
 
     @staticmethod
-    def initialize_bound_scope(store, session, *, runtime_root=None):
+    def initialize_bound_scope(store: ChatSessionStore, session: dict[str, Any], *,
+                               runtime_root: Path | None = None) -> dict[str, Any]:
         steward = session.get("steward_context")
         if not steward:
             return session
