@@ -10,7 +10,7 @@ export const goalHierarchyScenario = {
   id: "goal-hierarchy",
   async run({browser, collectCoverage, url}) {
     const root = await mkdtemp(join(tmpdir(), "loopx-goal-tree-"));
-    let owner, context, denied = false;
+    let owner, ownerB, context, denied = false;
     const statusReads = [];
     const captures = [
       ["research", "Research · synthetic"],
@@ -29,6 +29,16 @@ export const goalHierarchyScenario = {
         return path;
       }));
       owner = await startHistoryOwner(paths);
+      // A second, independent status backend with its own "research" root so a
+      // history entry can restore a source and a root scope together.
+      const remotePaths = await Promise.all([["research", "Research"], ["operations", "Operations"],
+        ["operations-child", "Operations child", "operations"]]
+        .map(async ([goal_id, display_name, parent_goal_id]) => {
+          const path = join(root, `remote-${goal_id}.json`);
+          await writeFile(path, JSON.stringify({goal_id, display_name, parent_goal_id, events: []}));
+          return path;
+        }));
+      ownerB = await startHistoryOwner(remotePaths);
       const directory = await (await fetch(`${owner.base}/status.json?view=workspace-directory`)).json();
       assert.equal(directory.goals.find(g => g.id === "portfolio").parent_goal_id, "research");
       const entry = new URL(url);
@@ -36,6 +46,22 @@ export const goalHierarchyScenario = {
         research_pack: "a".repeat(64), research_analysis_goal: "calibration"};
       for (const [key, value] of Object.entries(researchFocus)) entry.searchParams.set(key, value);
       context = await openWorkspacePage(browser, entry.href, {collectCoverage, beforeGoto: async (_api, page) => {
+        await page.addInitScript(({statusUrl}) => {
+          localStorage.setItem("loopx-status-source-catalog-v1", JSON.stringify({
+            schemaVersion: 1,
+            sources: [{hostAlias: "remote-b", kind: "ssh_tunnel", label: "Remote B", statusUrl}],
+          }));
+        }, {statusUrl: `${ownerB.base}/status.json`});
+        await page.route(new URL("/ssh-hosts", url).href, route => route.fulfill({
+          contentType: "application/json",
+          json: {ok: true, schema_version: "ssh_host_catalog_v0", hosts: [{alias: "remote-b"}]},
+          status: 200,
+        }));
+        await page.route(new URL("/api/ssh-source/ensure", url).href, route => route.fulfill({
+          contentType: "application/json",
+          json: {ok: true, remote_started: true, status_url: `${ownerB.base}/status.json`, tunnel_required: true},
+          status: 200,
+        }));
         await page.route(target => target.pathname === "/status.json", async route => {
           const selected = new URL(route.request().url()).searchParams.get("goal_id");
           if (selected) statusReads.push(selected);
@@ -44,6 +70,11 @@ export const goalHierarchyScenario = {
           }
           const response = await fetchWorkspaceBackend(route, owner.base);
           await route.fulfill({response});
+        });
+        await page.route(`${ownerB.base}/status.json*`, async route => {
+          const response = await fetch(route.request().url());
+          await route.fulfill({status: response.status, headers: {
+            "access-control-allow-origin": "*", "content-type": "application/json"}, body: await response.text()});
         });
       }});
       const {page, api} = context;
@@ -152,6 +183,48 @@ export const goalHierarchyScenario = {
         await page.getByRole("alert").filter({hasText: "当前来源中此 Goal 范围不可用"}).waitFor();
         assert.equal(await page.locator(".personal-goal-row").count(), 0, "Back preserves an explicitly invalid scope");
       }
+      // A history entry restores the source and the root scope together. The
+      // restored route must drive the read; preferring the still-loaded source
+      // would re-read Remote B with source A's root and strand the page there.
+      const scopedA = new URL(url);
+      scopedA.searchParams.set("statusUrl", "/status.json");
+      scopedA.searchParams.set("rootGoalId", "research");
+      await page.goto(scopedA.href, {waitUntil: "networkidle"});
+      await row("portfolio").waitFor();
+      const sourceSelect = page.getByRole("combobox", {name: "选择控制面来源"});
+      await sourceSelect.click();
+      await page.getByRole("listbox", {name: "选择控制面来源"})
+        .getByRole("option", {name: "Remote B", exact: true}).click();
+      await page.waitForURL(target => target.searchParams.get("statusUrl")?.includes(`:${ownerB.port}/`));
+      await page.waitForLoadState("networkidle");
+      assert.equal(new URL(page.url()).searchParams.get("rootGoalId"), "research",
+        "switching sources keeps the selected root");
+      assert.equal(await row("portfolio").count(), 0, "Remote B has no children under its own research root");
+      await page.getByRole("button", {name: "全部 Goals", exact: true}).click();
+      await row("operations").waitFor();
+      await row("operations").locator(".personal-goal-link").click();
+      await page.getByRole("button", {name: "只看此 Goal 及子 Goal", exact: true}).click();
+      await page.waitForURL(target => target.searchParams.get("rootGoalId") === "operations");
+      await page.waitForLoadState("networkidle");
+      await row("operations-child").waitFor();
+      await page.locator(".personal-status-source-meta .is-connected").waitFor();
+      await page.evaluate(() => history.go(-4));
+      await page.waitForURL(target => target.searchParams.get("statusUrl") === "/status.json"
+        && target.searchParams.get("rootGoalId") === "research").catch(async error => {
+        throw new Error(`${error.message}; url=${page.url()}; errors=${context.errors.join(" | ")}; body=${(await page.locator("body").innerText()).slice(0, 1000)}`);
+      });
+      await page.waitForLoadState("networkidle");
+      await row("portfolio").waitFor().catch(async error => {
+        throw new Error(`${error.message}; url=${page.url()}; errors=${context.errors.join(" | ")}; body=${(await page.locator("body").innerText()).slice(0, 1000)}`);
+      });
+      assert.equal(await row("operations").count(), 0,
+        "restoring the combined source and root entry returns to source A");
+      assert.equal(new URL(new URL(page.url()).searchParams.get("statusUrl"), page.url()).href,
+        new URL("/status.json", page.url()).href, "the restored route keeps source A");
+      assert.equal(new URL(page.url()).searchParams.get("rootGoalId"), "research",
+        "the restored scope still selects source A's research root");
+      assert.equal(await sourceSelect.locator(".personal-select-value").innerText(), "本机",
+        "the restored history entry selects source A again");
       assert.equal(api.turnRequests.length, 0);
       assert.equal(api.actionApplies.length, 0);
       const readback = await (await fetch(`${owner.base}/fixture/readback`)).json();
@@ -163,6 +236,7 @@ export const goalHierarchyScenario = {
     } finally {
       await context?.close();
       await owner?.close();
+      await ownerB?.close();
       await rm(root, {recursive: true, force: true});
     }
   },

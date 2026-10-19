@@ -3584,7 +3584,11 @@ export function DashboardPage() {
     if (requestedRootRef.current !== search.rootGoalId && !exampleModeRequested) {
       // Re-scope an in-flight source selection as well as a loaded source.
       // Older root responses cannot populate the newly selected subtree.
-      const target = requestedStatusUrl ?? (source.kind === "url" ? source.label : search.statusUrl);
+      // A history entry restores source and root together, so the route's
+      // restored source outranks the source that is still loaded. Only when
+      // the route names no source does the loaded source act as the fallback.
+      const target = requestedStatusUrl
+        ?? (search.statusUrl.trim() || (source.kind === "url" ? source.label : ""));
       void loadFromUrl(target || defaultGlobalStatusUrl);
       return;
     }
