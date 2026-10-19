@@ -13,7 +13,6 @@ from pathlib import Path
 import re
 import stat
 import threading
-from typing import Any
 from uuid import uuid4
 
 from ...control_plane.effect_runtime import effect_runtime_result
@@ -24,7 +23,7 @@ from ...registry import find_registry_goal
 from .item_lifecycle import apply_content_ops_item_event, build_content_ops_item
 
 PROTOCOL = "content_ops_media_renderer_v0"
-RESULT_FILES = {"video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt", "narration.wav", "manifest.json"}
+RESULT_FILES = {"video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt", "narration.wav", "manifest.json", "blender-project.zip"}
 MAX_ASSET_BYTES = 64 * 1024 * 1024
 
 
@@ -218,8 +217,11 @@ class MediaWorkspace:
                     "plan": record["plan"], "layout_style": checked["layout_style"],
                     "plan_digest": record["plan_digest"], "frame_count": record["frame_count"],
                     "sources": record["sources"], "attempt_directory": str(_safe_path(bundle, attempt)), "cancel_file": str(cancel)})
+                spatial = [{"id": shot["id"], "frames": round(shot["seconds"] * record["plan"]["fps"])}
+                           for shot in record["plan"]["shots"] if shot["kind"] == "blender"]
                 result = _owner("result", {"result": result, "plan_digest": record["plan_digest"],
                     "frame_count": record["frame_count"], "narration_mode": record["plan"]["narration"]["mode"],
+                    **({"blender_shots": spatial} if spatial else {}),
                     **{k: record["plan"][k] for k in ("width", "height", "fps")}})
                 required = {"video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt"}
                 if not required <= set(result["files"]) or set(result["files"]) - RESULT_FILES:

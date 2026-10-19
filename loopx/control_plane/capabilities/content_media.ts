@@ -39,6 +39,56 @@ function stable(value: unknown): string {
   if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(",")}}`;
   return JSON.stringify(value);
 }
+
+/** Declarative geometry only. Python/bpy computes the admitted scene, never policy. */
+function blenderScene(input: unknown, frames: number) {
+  const scene = object(input);
+  fields(scene, ["camera", "objects", "lights", "connections"]);
+  function vector(value: unknown, min = -25, max = 25): number[] {
+    const result = array(value, 3).map(part => number(part, min, max));
+    if (result.length !== 3) fail("A spatial vector requires three numbers");
+    return result;
+  }
+  const camera = object(scene.camera);
+  fields(camera, ["position", "end_position", "target", "ortho_scale"]);
+  const position = vector(camera.position), end_position = vector(camera.end_position ?? camera.position), target = vector(camera.target);
+  if ([position, end_position].some(point => point.every((part, i) => Math.abs(part - target[i]!) < .01))) fail("The camera must be outside its target");
+  const objects = array(scene.objects, 16).map(value => {
+    const item = object(value);
+    fields(item, ["id", "shape", "position", "scale", "rotation_degrees", "color", "metallic", "roughness", "keyframes"]);
+    if (item.shape !== "box" && item.shape !== "sphere") fail("Select a supported Blender primitive");
+    let previous = 0;
+    const keys = array(item.keyframes ?? [], 24).map(value => {
+      const key = object(value);
+      fields(key, ["frame", "position"]);
+      const frame = number(key.frame, previous + 1, frames, true);
+      previous = frame;
+      return {frame, position: vector(key.position)};
+    });
+    if (keys.length && (keys.length < 2 || keys[0]!.frame !== 1 || keys.at(-1)!.frame !== frames)) fail("Animation must span the first and final scene frame");
+    const location = vector(item.position);
+    if (keys.length && keys[0]!.position.some((part, i) => part !== location[i])) fail("Initial position must match the first keyframe");
+    return {id: token(item.id), shape: item.shape, position: location, scale: vector(item.scale, .05, 8),
+      rotation_degrees: vector(item.rotation_degrees ?? [0, 0, 0], -180, 180), color: vector(item.color, 0, 1),
+      metallic: number(item.metallic ?? .15, 0, 1), roughness: number(item.roughness ?? .4, .05, 1), keyframes: keys};
+  });
+  if (!objects.length || new Set(objects.map(item => item.id)).size !== objects.length) fail("Blender objects require distinct IDs");
+  const lights = array(scene.lights, 3).map(value => {
+    const light = object(value);
+    fields(light, ["position", "energy", "size"]);
+    return {position: vector(light.position), energy: number(light.energy, 50, 2000), size: number(light.size, .5, 10)};
+  });
+  if (!lights.length) fail("A Blender scene requires an explicit light");
+  const connections = array(scene.connections ?? [], 24).map(value => {
+    const link = object(value);
+    fields(link, ["from", "to", "color"]);
+    const from = token(link.from), to = token(link.to);
+    if (from === to || [from, to].some(id => !objects.some(item => item.id === id))) fail("A connection requires two existing scene objects");
+    return {from, to, color: vector(link.color, 0, 1)};
+  });
+  return {camera: {position, end_position, target, ortho_scale: number(camera.ortho_scale, 3, 30)}, objects, lights, connections};
+}
+
 export function validateMediaPlan(input: unknown) {
   const request = object(input), raw = object(request.plan);
   fields(raw, ["schema_version", "title", "width", "height", "fps", "shots", "assets", "captions", "narration", "layout_template_id"]);
@@ -62,11 +112,17 @@ export function validateMediaPlan(input: unknown) {
   if (new Set(assets.map(asset => asset.id)).size !== assets.length) fail("Duplicate source reference");
   const shots = array(raw.shots, 30).map(value => {
     const shot = object(value);
-    fields(shot, ["id", "kind", "seconds", "title", "body", "nodes", "asset_id", "start_seconds", "source_ref", "boundary"]);
+    fields(shot, ["id", "kind", "seconds", "title", "body", "nodes", "asset_id", "start_seconds", "source_ref", "boundary", "scene"]);
     const kind = shot.kind;
-    if (typeof kind !== "string" || !["title", "diagram", "excerpt"].includes(kind)) fail("Unsupported shot kind");
+    if (typeof kind !== "string" || !["title", "diagram", "excerpt", "blender"].includes(kind)) fail("Unsupported shot kind");
+    if (kind !== "blender" && shot.scene !== undefined) fail("Scene geometry requires a Blender shot");
     const base = {id: token(shot.id), kind, seconds: number(shot.seconds, 1, 30), title: text(shot.title, 100),
       body: shot.body == null || shot.body === "" ? "" : text(shot.body, 300), source_ref: text(shot.source_ref, 240), boundary: text(shot.boundary, 180)};
+    if (kind === "blender") {
+      fields(shot, ["id", "kind", "seconds", "title", "body", "source_ref", "boundary", "scene"]);
+      const frames = number(base.seconds * fps, 12, 120, true);
+      return {...base, scene: blenderScene(shot.scene, frames)};
+    }
     if (kind === "diagram") {
       const nodes = array(shot.nodes, 5).map(node => text(node, 48));
       if (nodes.length < 2) fail("A diagram requires at least two nodes");
@@ -80,6 +136,7 @@ export function validateMediaPlan(input: unknown) {
     return base;
   });
   if (!shots.length || new Set(shots.map(shot => shot.id)).size !== shots.length) fail("Shots require distinct IDs");
+  if (shots.filter(shot => shot.kind === "blender").length > 3) fail("A composition supports at most three bounded Blender scenes");
   const duration = shots.reduce((total, shot) => total + shot.seconds, 0);
   if (duration > 90 || shots.some(shot => Math.abs(shot.seconds * fps - Math.round(shot.seconds * fps)) > 1e-7)) fail("Use frame-aligned shots within a 90-second composition");
   let end = 0;
@@ -123,7 +180,7 @@ export function validateMediaResult(input: unknown) {
   if (result.ok !== true || result.protocol !== MEDIA_PROTOCOL || result.plan_digest !== request.plan_digest || result.publish_authorized !== false) fail("Renderer result is not bound to this composition");
   if (qa.full_decode !== "passed" || qa.frames !== request.frame_count || qa.width !== request.width || qa.height !== request.height || qa.fps !== request.fps || qa.source_hashes_verified !== true) fail("Renderer did not qualify the declared timeline");
   const entries = object(result.files), files: Record<string, {sha256: string; bytes: number}> = {};
-  const allowed = ["video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt", "narration.wav"];
+  const allowed = ["video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt", "narration.wav", "blender-project.zip"];
   for (const [name, raw] of Object.entries(entries)) {
     if (!allowed.includes(name)) fail("Unexpected renderer file");
     const entry = object(raw);
@@ -131,6 +188,16 @@ export function validateMediaResult(input: unknown) {
     files[name] = {sha256: entry.sha256, bytes: number(entry.bytes, 0, 128 * 1024 * 1024, true)};
   }
   if (["video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt"].some(name => !files[name])) fail("Renderer output incomplete");
+  const expectedScenes = array(request.blender_shots ?? [], 3).map(object);
+  const spatial = expectedScenes.length ? array(qa.blender_scenes, 3).map((value, i) => {
+    const scene = object(value), expected = expectedScenes[i];
+    if (!expected || scene.id !== expected.id || scene.frames !== expected.frames || scene.project_reopened !== true || scene.engine !== "CYCLES" || scene.rgba_frames !== expected.frames || scene.depth_frames !== expected.frames) fail("Blender output does not match the admitted scene and passes");
+    const version = text(scene.blender_version, 40);
+    if (!/^4\.5\.\d+(?: LTS)?$/.test(version)) fail("This Blender provider supports the qualified 4.5 LTS API");
+    return {id: scene.id, frames: scene.frames, rgba_frames: scene.rgba_frames, depth_frames: scene.depth_frames,
+      project_reopened: true, engine: "CYCLES", blender_version: version};
+  }) : [];
+  if (spatial.length !== expectedScenes.length || Boolean(files["blender-project.zip"]) !== Boolean(expectedScenes.length)) fail("Blender project output is missing or out of scope");
   const narration = object(qa.narration);
   if (!["silent", "supplied", "system_speech"].includes(String(narration.mode)) || narration.mode !== request.narration_mode) fail("Narration result differs from the admitted plan");
   if (narration.mode !== "silent" && !files["narration.wav"]) fail("Narration output is missing");
@@ -141,6 +208,7 @@ export function validateMediaResult(input: unknown) {
   return {ok: true, protocol: MEDIA_PROTOCOL, plan_digest: request.plan_digest, files,
     qa: {full_decode: "passed", frames: qa.frames, width: qa.width, height: qa.height, fps: qa.fps,
       source_hashes_verified: true, narration: {mode: narration.mode, ...audioMetrics, subjective_listening: "not_tested"},
+      ...(spatial.length ? {blender_scenes: spatial} : {}),
       audience_understanding: "not_tested", creative_review: "not_tested"},
     cost: {render_wall_seconds: number(cost.render_wall_seconds, 0, 120)}, publish_authorized: false};
 }

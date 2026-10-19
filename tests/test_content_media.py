@@ -319,20 +319,11 @@ def test_real_http_admission_rejects_foreign_goal_origin_and_path_injection(
     assert b"source_directory" not in body and str(work.project).encode() not in body
 
 
-@pytest.mark.skipif(
-    os.environ.get("LOOPX_MEDIA_RENDERER_TEST") != "1",
-    reason="explicit optional local renderer qualification",
-)
-def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
-    """No model calls: use the actual extension, encoder, store and HTTP route."""
+def _install_source_renderer(work):
     import subprocess
     import sys
-    from urllib.parse import urlencode
-
-    import imageio_ffmpeg
     import loopx_media.renderer as renderer
 
-    work, exchange = http_workspace
     executable = shutil.which("loopx-media")
     assert executable, (
         "Install packages/loopx-media in an isolated environment and put its executable on PATH"
@@ -361,6 +352,21 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
         text=True,
     )
     assert installed.returncode == 0, installed.stdout + installed.stderr
+    return root, command, state
+
+
+@pytest.mark.skipif(
+    os.environ.get("LOOPX_MEDIA_RENDERER_TEST") != "1",
+    reason="explicit optional local renderer qualification",
+)
+def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
+    """No model calls: use the actual extension, encoder, store and HTTP route."""
+    import subprocess
+    import imageio_ffmpeg
+    from urllib.parse import urlencode
+
+    work, exchange = http_workspace
+    _, command, state = _install_source_renderer(work)
     first_plan = brief()
     caption_text = 'FIRST & SECOND "quoted"\nReturn evidence; preserve both lines.'
     first_plan["captions"][0]["text"] = caption_text
@@ -490,3 +496,127 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
     )
     assert disabled.returncode == 0
     assert work.render(ident, expected_revision=1)["status"] == "provider_unavailable"
+
+
+@pytest.mark.skipif(
+    os.environ.get("LOOPX_MEDIA_BLENDER_TEST") != "1",
+    reason="explicit optional Blender source qualification",
+)
+def test_real_blender_project_passes_reopen_and_http_download(http_workspace):
+    import io
+    import subprocess
+    import sys
+    import zipfile
+    from urllib.parse import urlencode
+    from PIL import Image, ImageChops
+
+    work, exchange = http_workspace
+    root, _, _ = _install_source_renderer(work)
+    plan = json.loads(
+        (root / "packages/loopx-media/examples/blender-handoff.json").read_text()
+    )
+    prepared = work.prepare(plan, source_directory=work.project)
+    ident = prepared["composition_id"]
+    ready = work.render(ident, expected_revision=1)
+    assert ready["status"] == "ready", ready
+    result = ready["result"]
+    assert result["qa"]["frames"] == 60
+    spatial = result["qa"]["blender_scenes"][0]
+    assert spatial["id"] == "route" and spatial["frames"] == 36
+    assert spatial["rgba_frames"] == spatial["depth_frames"] == 36
+    assert spatial["project_reopened"] is True
+    query = urlencode(
+        {
+            "goal_id": "media-demo",
+            "composition_id": ident,
+            "file": "blender-project.zip",
+        }
+    )
+    status, headers, data = exchange("GET", "/api/chat/content-media/file?" + query)
+    assert status == 200 and headers["Cache-Control"] == "no-store"
+    assert headers["Content-Type"] == "application/zip"
+    assert (
+        hashlib.sha256(data).hexdigest()
+        == result["files"]["blender-project.zip"]["sha256"]
+    )
+    directory = work.project / "independent"
+    directory.mkdir()
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = archive.namelist()
+        assert all(
+            not Path(name).is_absolute() and ".." not in Path(name).parts
+            for name in names
+        )
+        assert {
+            "scene-builder.py",
+            "plan.json",
+            "route.json",
+            "route/scene.blend",
+        } <= set(names)
+        for kind in ("rgba", "depth"):
+            assert (
+                len([name for name in names if name.startswith(f"route/{kind}/")]) == 36
+            )
+        (directory / "scene.blend").write_bytes(archive.read("route/scene.blend"))
+        with Image.open(
+            io.BytesIO(archive.read("route/rgba/frame-0019.png"))
+        ) as original:
+            original.load()
+            expected = original.copy()
+            assert original.mode == "RGBA" and original.getchannel(
+                "A"
+            ).getextrema() == (0, 255)
+        with Image.open(
+            io.BytesIO(archive.read("route/depth/frame-0019.png"))
+        ) as depth:
+            assert (
+                depth.size == (640, 360)
+                and depth.getextrema()[0] < depth.getextrema()[1]
+            )
+    # Independent consumer: open only the persisted blend, inspect real bpy
+    # state and re-render the middle frame without using the provider builder.
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import bpy, json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+bpy.ops.wm.open_mainfile(filepath=str(p / 'scene.blend'), load_ui=False, use_scripts=False)
+s = bpy.context.scene
+assert s.render.engine == 'CYCLES' and s.render.fps == 12
+assert s.frame_start == 1 and s.frame_end == 36
+assert s.view_layers[0].use_pass_z and s.render.film_transparent
+assert len([o for o in s.objects if o.type == 'LIGHT']) == 2
+s.frame_set(1)
+assert abs(s.objects['artifact'].location.x + 2) < 0.0001
+camera_start = tuple(s.camera.location)
+s.frame_set(19)
+assert abs(s.objects['artifact'].location.x - 2) < 0.0001
+s.frame_set(36)
+assert abs(s.objects['artifact'].location.x + 2) < 0.0001
+assert tuple(s.camera.location) != camera_start
+s.frame_set(19)
+s.render.filepath = str(p / 'middle.png')
+for node in s.node_tree.nodes:
+    if node.type == 'OUTPUT_FILE':
+        node.base_path = str(p / 'depth')
+bpy.ops.render.render(write_still=True)
+(p / 'verified.json').write_text(json.dumps({'version': bpy.app.version_string, 'frame': s.frame_current}))
+""",
+            str(directory),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert verified.returncode == 0, verified.stderr[-2000:]
+    with Image.open(directory / "middle.png") as reopened:
+        assert ImageChops.difference(
+            expected, reopened.convert("RGBA")
+        ).getextrema() == ((0, 0), (0, 0), (0, 0), (0, 0))
+    assert json.loads((directory / "verified.json").read_text())["frame"] == 19
+    # Reuse is stateful and exact; it does not re-encode the same 3D scene.
+    attempt = work._record(ident)["attempt"]
+    assert work.render(ident, expected_revision=1)["status"] == "ready"
+    assert work._record(ident)["attempt"] == attempt

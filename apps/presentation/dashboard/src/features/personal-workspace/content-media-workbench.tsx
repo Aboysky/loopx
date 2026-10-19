@@ -6,7 +6,7 @@ type Provider = {status: string; enabled: boolean | null; next_action: string | 
 type Composition = {
   composition_id: string; revision: number; status: string; title: string; duration_seconds: number;
   shots: {title: string; seconds: number; kind: string; boundary: string; source_ref: string}[];
-  result: {files: Record<string, {sha256: string; bytes: number}>; qa: {frames: number; full_decode: string; narration: {mode: string}}; cost: {render_wall_seconds: number}} | null;
+  result: {files: Record<string, {sha256: string; bytes: number}>; qa: {frames: number; full_decode: string; narration: {mode: string}; blender_scenes?: {project_reopened: boolean}[]}; cost: {render_wall_seconds: number}} | null;
   provider: Provider;
 };
 type Library = {ok: boolean; compositions: Composition[]; provider: Provider};
@@ -62,6 +62,7 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
     interrupted: copy("上次制作中断，可重新制作", "Previous render interrupted; retry available"), damaged: copy("结果校验失败，请重新制作", "Result verification failed; render again"),
   };
   const providerReady = library?.provider.status === "ready";
+  const hasBlender = selected?.shots.some(shot => shot.kind === "blender");
   return <section className="content-media" aria-label={copy("视频制作", "Video production")}>
     <div className="content-media-heading"><div><h3>{copy("制作视频", "Produce a video")}</h3>
       <p>{copy("让 Agent 准备脚本、来源和时间线，在这里制作并查看作品。", "Have your Agent prepare the story, sources and timeline. Render and review the result here.")}</p></div>
@@ -76,12 +77,15 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
       <div className="content-media-result"><div className="content-media-title"><div><h4>{selected.title}</h4><p role="status">{status[selected.status] ?? selected.status} · {selected.duration_seconds}s · {copy("修订", "Revision")} {selected.revision}</p></div>
         {selected.status === "rendering" ? <button type="button" disabled={busy} onClick={() => void operate("cancel")}>{copy("取消制作", "Cancel render")}</button>
           : <button type="button" disabled={busy || !providerReady || selected.status === "ready"} onClick={() => void operate("render")}>{copy("制作视频", "Render video")}</button>}</div>
+        {hasBlender && selected.status !== "ready" ? <p>{copy("包含 Blender 三维场景。制作需要已安装的本机 Blender 扩展依赖；作品会保留可编辑工程与颜色、深度画面。", "Includes Blender scenes. Rendering needs the local Blender extra; the editable project, color and depth frames are retained.")}</p> : null}
         {selected.status === "ready" && selected.result ? <><video key={`${selected.composition_id}:${selected.result.files["video.mp4"].sha256}`} controls preload="metadata" poster={file("poster.png")} src={file("video.mp4")}>
           <track kind="captions" src={file("captions.vtt")} label={copy("字幕", "Captions")} default /></video>
-          <div className="content-media-downloads"><a href={file("video.mp4")} download="video.mp4">{copy("下载视频", "Download video")}</a><a href={file("captions.srt")} download="captions.srt">{copy("字幕", "Subtitles")}</a><a href={file("transcript.txt")} download="transcript.txt">{copy("文字稿", "Transcript")}</a></div>
+          <div className="content-media-downloads"><a href={file("video.mp4")} download="video.mp4">{copy("下载视频", "Download video")}</a><a href={file("captions.srt")} download="captions.srt">{copy("字幕", "Subtitles")}</a><a href={file("transcript.txt")} download="transcript.txt">{copy("文字稿", "Transcript")}</a>
+            {selected.result.files["blender-project.zip"] ? <a href={file("blender-project.zip")} download="blender-project.zip">{copy("Blender 工程与画面", "Blender project and passes")}</a> : null}</div>
           <p>{copy("完整解码通过", "Full decode passed")} · {selected.result.qa.frames} {copy("帧", "frames")} · {copy("渲染耗时", "Render time")} {selected.result.cost.render_wall_seconds}s</p>
+          {selected.result.qa.blender_scenes?.length ? <p>{copy("三维工程已重新打开并检查，颜色与深度帧完整。", "The 3D project was reopened and checked; color and depth frames are complete.")}</p> : null}
         </> : <ol className="content-media-timeline">{selected.shots.map((shot, i) => <li key={i}><span>{shot.title}</span><small>{shot.seconds}s · {shot.boundary}</small></li>)}</ol>}
-        {["failed", "damaged"].includes(selected.status) ? <p>{copy("请让 Agent 检查素材、字体和配音时长；修改脚本后保存新修订，或修复本机依赖后重试。", "Ask your Agent to check sources, fonts and narration timing. Save a new revision for story changes, or repair the local dependencies and retry.")}</p> : null}
+        {["failed", "damaged"].includes(selected.status) ? <p>{hasBlender ? copy("请让 Agent 检查 Blender 依赖、场景范围与制作时限。修复本机依赖后可重试；修改场景需保存新修订。", "Ask your Agent to check the Blender extra, scene bounds and render time. Retry after dependency repair; save a new revision for scene changes.") : copy("请让 Agent 检查素材、字体和配音时长；修改脚本后保存新修订，或修复本机依赖后重试。", "Ask your Agent to check sources, fonts and narration timing. Save a new revision for story changes, or repair the local dependencies and retry.")}</p> : null}
         <details><summary>{copy("来源与检查", "Sources and checks")}</summary><ul>{selected.shots.map((shot, i) => <li key={i}>{shot.title} — {shot.boundary}<br /><small>{shot.source_ref}</small></li>)}</ul>
           <p>{copy("本机私有作品。编码通过不代表创意质量、理解效果或发布许可；请观看并试听。", "Private local work. Encoding does not establish creative quality, audience understanding or publication approval. Watch and listen before sharing.")}</p></details>
       </div></div> : null}

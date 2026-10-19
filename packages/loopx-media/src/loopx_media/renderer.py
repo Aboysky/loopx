@@ -139,6 +139,16 @@ def render(request: dict) -> dict:
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     captions(plan, out)
     audio = soundtrack(plan, sources, out, ff, check)
+    spatial_frames, spatial_qa = {}, []
+    if any(shot["kind"] == "blender" for shot in plan["shots"]):
+        from .blender import project_archive, render_shot
+        for shot in plan["shots"]:
+            if shot["kind"] == "blender":
+                frames, qa = render_shot(shot, plan, out, check)
+                spatial_frames[shot["id"]] = frames
+                spatial_qa.append(qa)
+        project_archive(plan, out)
+    check()
     width, height, fps = plan["width"], plan["height"], plan["fps"]
     scale = width / 1280
     style = request["layout_style"]
@@ -204,8 +214,11 @@ def render(request: dict) -> dict:
                     margin = round(56 * scale)
                     draw_text(draw, (margin, round(27 * scale)), "LOOPX / CONTENT STUDIO", 16, accent)
                     draw.line((margin, round(65 * scale), width - margin, round(65 * scale)), fill=LINE)
-                    if shot["kind"] == "excerpt":
+                    if shot["kind"] in {"excerpt", "blender"}:
                         frame = source_image
+                        if shot["kind"] == "blender":
+                            with Image.open(spatial_frames[shot["id"]] / f"frame-{n+1:04}.png") as image:
+                                frame = image.convert("RGBA")
                         if decoder:
                             raw = decoder.stdout.read(width * height * 3)
                             if len(raw) != width * height * 3:
@@ -213,7 +226,7 @@ def render(request: dict) -> dict:
                             frame = Image.frombytes("RGB", (width, height), raw)
                         fitted = frame.copy()
                         fitted.thumbnail((width - 2 * margin, round(height * 0.62)))
-                        im.paste(fitted, ((width - fitted.width) // 2, round(height * 0.27)))
+                        im.paste(fitted, ((width - fitted.width) // 2, round(height * 0.27)), fitted.getchannel("A") if fitted.mode == "RGBA" else None)
                         draw_text(draw, (margin, round(88 * scale)), shot["title"], 32, ink, max_lines=2)
                     else:
                         enter = 1 - (1 - min(1, n / max(1, fps * 0.6))) ** 3
@@ -276,7 +289,8 @@ def render(request: dict) -> dict:
     files = {path.name: {"sha256": digest(path), "bytes": path.stat().st_size} for path in out.iterdir() if path.is_file()}
     result = {"ok": True, "protocol": PROTOCOL, "plan_digest": request["plan_digest"], "files": files,
               "qa": {"full_decode": "passed", "frames": frames, "width": width, "height": height, "fps": fps,
-                     "source_hashes_verified": True, "narration": audio, "audience_understanding": "not_tested", "creative_review": "not_tested"},
+                     "source_hashes_verified": True, "narration": audio, **({"blender_scenes": spatial_qa} if spatial_qa else {}),
+                     "audience_understanding": "not_tested", "creative_review": "not_tested"},
               "cost": {"render_wall_seconds": round(time.monotonic() - started, 3)}, "publish_authorized": False}
     (out / "manifest.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
@@ -286,10 +300,11 @@ def main() -> int:
     os.umask(0o077)
     try:
         if sys.argv[1:] == ["--doctor"]:
+            from .blender import available
             ff = imageio_ffmpeg.get_ffmpeg_exe()
             run([ff, "-version"], timeout=5)
             if not font_file(): raise ValueError("Install a supported local font")
-            print(json.dumps({"ok": True, "protocol": PROTOCOL, "system_speech": sys.platform == "darwin", "font": "system"}))
+            print(json.dumps({"ok": True, "protocol": PROTOCOL, "system_speech": sys.platform == "darwin", "font": "system", "blender_extra_present": available()}))
             return 0
         raw = sys.stdin.buffer.read(1024 * 1024 + 1)
         if len(raw) > 1024 * 1024: raise ValueError("Render request exceeds the protocol limit")

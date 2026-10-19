@@ -37,7 +37,59 @@ decode. Images retain their orientation; video excerpts retain aspect ratio.
 Installed fonts must cover the visible text, with CJK line breaking supported.
 RTL shaping and arbitrary font discovery are not qualified. macOS speech is
 optional; other platforms require supplied audio or explicit silence.
-No cloud voice, generative image/video, Blender or game engine is bundled here.
+No cloud voice, generative image/video or game engine is bundled here.
+
+## Optional Blender scenes
+
+For real 3D geometry, install the same provider with its optional Blender extra
+in a Python 3.11 environment, then register and doctor the current manifest:
+
+```sh
+uv tool install --python 3.11 './packages/loopx-media[blender]'
+loopx extension install --manifest packages/loopx-media/extension.toml --execute
+loopx extension doctor loopx-media --execute
+loopx content-ops media prepare --goal-id GOAL \
+  --plan-json packages/loopx-media/examples/blender-handoff.json \
+  --source-directory .
+```
+
+If this provider is already installed, use the package manager's explicit
+upgrade/reinstall operation before registering the new manifest revision with
+`loopx extension upgrade --manifest packages/loopx-media/extension.toml --execute`.
+The registered executable and its Python environment are pinned. Install the
+extra in that environment and run doctor; changing the calling process's PATH
+does not replace a registered executable. Doctor checks the pinned installation,
+not whether some other environment has Blender. A move to another environment
+needs explicit extension registration; doctor cannot rebind an active revision.
+Preparation does not install Blender. The ordinary install still supports 2D;
+a missing Blender extra fails only an attempted 3D scene. Repair that local
+dependency and retry the unchanged prepared composition through the same CLI
+or **Content production** workbench. No second provider setting is needed.
+
+An Agent selects a `blender` shot and supplies declarative objects, camera,
+lights, materials and position keyframes. The shared TypeScript owner admits
+those fields and includes them in the composition digest. The optional provider
+runs actual Blender 4.5 LTS/Cycles on CPU in a separate process. Uploaded blend
+files, arbitrary Python, add-ons and external asset discovery are unsupported.
+Blender 5.x uses a different compositor API and is not qualified by this provider.
+
+The workbench previews the composed movie and downloads **Blender project and
+passes**. The verified ZIP retains each `scene.blend`, its input, the replay
+builder, RGBA frames and a 16-bit depth pass. Depth maps Blender Z distance 0–50
+to 0–65535 and clamps values beyond 50. Scene output paths are relative; opening
+the blend with scripts disabled does not require embedded code. A second
+process reopens each saved project and checks its geometry, keyframes, camera
+and timeline before the composition can become ready. The normal renderer
+then composites the RGBA frames with the selected layout and verifies the
+complete encoded timeline. This does not establish the illustration's factual
+truth, explanatory quality or audience understanding.
+
+The versioned example is a five-second synthetic artifact round trip, not a
+recorded Agent run or a finished creative direction. Reuse a verified result
+as a digest-bound video excerpt in a larger composition instead of rerendering
+unchanged 3D footage. Keep source boundaries and the editable project.
+Reusing verified output preserves exact bytes. Re-rendering an editable scene
+is separate: CPU rendering can vary in the last color bit between processes.
 
 The renderer refuses a short excerpt, changed source, missing glyphs, text
 overflow or speech longer than its cue. It does not fill missing footage,
@@ -62,6 +114,10 @@ caption cues, with at most 1920×1080 at 30 fps. Each source is at most 64 MiB;
 all source snapshots together are at most 128 MiB. The render has a 120-second
 process budget. A complex valid plan can exceed the local machine's budget;
 that is a failed attempt, not a reason to mark a partial movie ready.
+Each Blender scene has at most 16 box/sphere objects, 3 area lights, 24 connections
+and 120 frames; a composition can include at most 3 scenes. Scene rendering,
+reopening, pass checks and composition share the existing 120-second process
+budget. Failed or cancelled attempts never substitute a diagram or frozen frame.
 
 The result records exact output digests, decoded frames, render wall time,
 PCM peak/clipping measurements when audio exists, and untested creative,
@@ -109,3 +165,18 @@ decoded VTT/SRT text must preserve accepted line breaks, ampersands and quotes.
 The source qualification checks the editable module and executable environment
 so a cached wheel cannot silently stand in for the source under review.
 It is integration evidence, not a subjective or comparative creative study.
+
+For an explicit source qualification of the optional Blender computation,
+use an isolated project environment so the normal interpreter stays intact:
+
+```sh
+UV_PROJECT_ENVIRONMENT=.local/blender-test-env \
+LOOPX_MEDIA_BLENDER_TEST=1 \
+uv run --python 3.11 --extra test --with-editable './packages/loopx-media[blender]' \
+  python -m pytest -q tests/test_content_media.py
+```
+
+The opt-in test uses the real extension and HTTP route, inspects the ZIP,
+opens the blend in an independent bpy process and checks stored scene state.
+It performs no cloud/model calls or public uploads. Report the actual bpy
+version and platform; this command is not a claim of cross-platform delivery.

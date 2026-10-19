@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {readFileSync} from "node:fs";
 import {validateMediaPlan as plan, validateMediaResult as result, transitionMediaRender as transition} from "../../loopx/control_plane/capabilities/content_media.ts";
 
 const brief = () => ({schema_version: "content_ops_media_plan_v0", title: "Return the evidence", width: 1280, height: 720, fps: 24,
@@ -80,4 +81,55 @@ test("caption admission preserves plain text and refuses structural paragraph se
   for (const text of ["x < y", "x > y", "<b>literal</b>", "&lt;literal&gt;", "&#60;", "&#x3c;"]) {
     assert.throws(() => plan({plan: caption(text)}), /markup and entity/);
   }
+});
+
+const spatialBrief = () => JSON.parse(readFileSync(new URL("../../packages/loopx-media/examples/blender-handoff.json", import.meta.url), "utf8"));
+
+test("Blender scene geometry and camera belong to the same source-bound composition", () => {
+  const raw = spatialBrief(), checked = plan({plan: raw});
+  assert.equal(checked.frame_count, 60);
+  assert.equal(checked.publish_authorized, false);
+  assert.equal(plan({plan: checked.plan}).plan_digest, checked.plan_digest);
+  for (const change of [(p: any) => p.shots[1].scene.camera.end_position[0] += 1,
+    (p: any) => p.shots[1].scene.objects[3].keyframes[2].position[2] += .2,
+    (p: any) => p.shots[1].scene.lights[0].energy += 1]) {
+    const revised = spatialBrief(); change(revised);
+    assert.notEqual(plan({plan: revised}).plan_digest, checked.plan_digest);
+  }
+  // The old scene-free plan stays scene-free; no default geometry/provider setting.
+  assert.equal("scene" in plan({plan: brief()}).plan.shots[0]!, false);
+});
+
+test("Blender refuses executable input, escaping IDs and undeclared animation", () => {
+  const changes = [(p: any) => p.shots[1].scene.script = "arbitrary Python",
+    (p: any) => p.shots[1].scene.blend_path = "outside.blend",
+    (p: any) => p.shots[1].id = "../escape",
+    (p: any) => p.shots[1].scene.objects[0].shape = "script",
+    (p: any) => p.shots[1].scene.objects[0].color = [0, 1, 2],
+    (p: any) => p.shots[1].scene.objects[3].keyframes[0].frame = 2,
+    (p: any) => p.shots[1].scene.objects[3].keyframes[2].frame = 10,
+    (p: any) => p.shots[1].scene.objects[3].keyframes.at(-1).position[0] = Infinity,
+    (p: any) => p.shots[1].scene.camera.position = p.shots[1].scene.camera.target,
+    (p: any) => p.shots[1].scene.connections[0].to = "unknown",
+    (p: any) => p.shots[1].scene.lights = [],
+    (p: any) => p.shots[1].seconds = 30];
+  for (const change of changes) {const p = spatialBrief(); change(p); assert.throws(() => plan({plan: p}));}
+});
+
+test("Blender readiness requires the admitted passes and a reopened project, not only MP4 bytes", () => {
+  const expected = {plan_digest: "sha256:" + "a".repeat(64), frame_count: 60, width: 640, height: 360, fps: 12,
+    narration_mode: "silent", blender_shots: [{id: "route", frames: 36}]};
+  const scene = {id: "route", frames: 36, rgba_frames: 36, depth_frames: 36,
+    project_reopened: true, engine: "CYCLES", blender_version: "4.5.12 LTS"};
+  const output = {ok: true, protocol: "content_ops_media_renderer_v0", plan_digest: expected.plan_digest,
+    files: Object.fromEntries(["video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt", "blender-project.zip"].map(name => [name, {sha256: "b".repeat(64), bytes: 16}])),
+    qa: {full_decode: "passed", frames: 60, width: 640, height: 360, fps: 12, source_hashes_verified: true,
+      narration: {mode: "silent"}, blender_scenes: [scene]}, cost: {render_wall_seconds: 45}, publish_authorized: false};
+  assert.equal(result({...expected, result: output}).qa.blender_scenes?.[0]?.project_reopened, true);
+  for (const changed of [{...scene, frames: 35}, {...scene, depth_frames: 35}, {...scene, id: "other"},
+    {...scene, project_reopened: false}, {...scene, blender_version: "5.0.0"}]) {
+    assert.throws(() => result({...expected, result: {...output, qa: {...output.qa, blender_scenes: [changed]}}}));
+  }
+  assert.throws(() => result({...expected, result: {...output, files: {...output.files, "blender-project.zip": undefined}}}));
+  assert.throws(() => result({...expected, blender_shots: [], result: output}), /scope/);
 });

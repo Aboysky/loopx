@@ -121,6 +121,43 @@ or repair the existing extension and retry. No failure creates publication
 authority, fills missing footage, infers a creative pass or changes a Goal.
 
 Mechanical rendering, creative quality, audience understanding and operations
-impact have separate evidence. Future Blender, generated media and interactive
+impact have separate evidence. Future generated media and interactive
 learning providers should reuse the nearest content owner and comparison
 method; they are not silently activated by this protocol.
+
+## Blender shot and project readback
+
+The optional `loopx-media` provider can compute a `blender` shot inside the same
+composition. `scene` is a bounded declarative object: an orthographic camera
+with start/end position and target, box/sphere objects with material values
+and optional position keyframes, area lights and connections between object
+IDs. The shared `content_media` TypeScript owner validates it; provider Python
+does not choose the work, sources, publication state or execution authority.
+See the runnable [synthetic example](../../../packages/loopx-media/examples/blender-handoff.json)
+and [activation/recovery guide](../../../packages/loopx-media/README.md#optional-blender-scenes).
+
+Scene IDs and geometry are bound to the plan digest. Position keys must start
+at frame 1, end at the scene's final frame and increase strictly; the first
+position must match the object's declared initial position. A scene supports
+at most 16 primitives, 3 lights, 24 connections and 120 frames. At most 3 Blender
+scenes fit inside a composition. Existing dimension/timeline/output/process
+bounds apply unchanged. Arbitrary scripts, uploaded blend files and external
+asset references are rejected. Ordinary scene-free plans retain their existing
+normalized structure and digest.
+
+Blender 4.5 LTS/Cycles/CPU produces actual RGBA and depth PNG sequences; depth is
+16-bit Z distance normalized over 0–50, with farther values clamped. A fresh
+process opens the saved blend with scripts disabled and checks its geometry,
+animation, camera and timeline. Ready results additionally require the exact
+admitted scene IDs/frame counts, both complete passes, reopen checks and the
+fixed `blender-project.zip` artifact. The archive contains relative-path blend
+projects, exact scene inputs, the replay builder and frames. It is subject to
+the same digest/readback/download scope as the movie; it cannot be attached
+to a scene-free result to bypass admission.
+
+The existing workbench renders/cancels/retries the composition and exposes the
+verified project download. Installation of the Blender extra is explicit;
+missing bpy does not disable ordinary 2D work. A failed 3D attempt retains its
+prepared input and supports retry after dependency repair. No fallback replaces
+3D with a code projection. Mechanical readiness still does not establish
+creative quality, audience understanding or publication approval.
