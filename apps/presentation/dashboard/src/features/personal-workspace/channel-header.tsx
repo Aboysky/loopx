@@ -160,7 +160,7 @@ export function ChannelHeader({
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
   ) : <>
-    <WorkspaceSelect
+    {ordinaryConversation ? <WorkspaceSelect
             ariaLabel={t("header.selectChatRuntime")}
             className="personal-agent-select"
             icon={<Bot size={16} />}
@@ -174,13 +174,16 @@ export function ChannelHeader({
             }))]}
             prefixLabel={selectedGoal ? (locale === "zh-CN" ? "执行器" : "Executor") : t("header.chatRuntime")}
             value={statusOnly ? "" : selectedAgentId}
-    />
+    /> : null}
     {agents.some((agent) => agent.agentId === "status-only") ? <button type="button" className="personal-icon-button personal-status-mode"
       aria-pressed={statusOnly} aria-label={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`} title={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`}
-      onClick={() => statusOnly ? onSelectAgent(agents.find((agent) => agent.agentId !== "status-only" && agent.available)?.agentId ?? "status-only") : onSelectAgent("status-only")}>
+      onClick={() => statusOnly ? onSelectAgent(!ordinaryConversation && managerChannelBinding
+        ? managerChannelBinding.executor_endpoint
+        : agents.find((agent) => agent.agentId !== "status-only" && agent.available)?.agentId ?? "status-only") : onSelectAgent("status-only")}>
       <Eye size={16} />{statusOnly ? t("header.statusOnlyAgent") : null}
     </button> : null}
-    {!statusOnly ? <ChatModelMenu key={`${selectedGoal?.goalId ?? workspaceGrantLabel ?? "steward"}:${selectedAgentId}`}
+    {/* The steward's machine binding owns its model; Goal defaults cannot label it. */}
+    {!statusOnly && ordinaryConversation ? <ChatModelMenu key={`${selectedGoal?.goalId ?? workspaceGrantLabel ?? "steward"}:${selectedAgentId}`}
       agentId={selectedAgentId} goalId={selectedGoal?.goalId} ordinary={ordinaryConversation}
       model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
       onModel={onSelectAgentModel} onEffort={onSelectAgentReasoningEffort}
@@ -238,10 +241,9 @@ export function ChannelHeader({
         {stewardBindingVisible && (managerRuntime || managerExecutionDefaultReason) ? <details className="personal-runtime-details" open={managerRuntime != null && managerRuntime.status !== "ready" ? true : undefined}><summary>{locale === "zh-CN" ? "运行环境" : "Execution environment"}</summary>
         {!selectedGoal && managerRuntime ? (
           <p>{managerRuntime.status === "ready"
-            ? t("header.managerRuntime", {
-              profile: managerRuntime.runtime_profile,
-              sandbox: managerRuntime.sandbox,
-            })
+            ? t(managerRuntime.runtime_profile === "trusted_owner"
+              ? "header.managerRuntimeTrusted"
+              : "header.managerRuntimeRestricted")
             : t("header.managerRuntimeFallback", {
               profile: managerRuntime.runtime_profile,
               sandbox: managerRuntime.sandbox,
