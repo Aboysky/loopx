@@ -514,6 +514,25 @@ Windows 原生路径资格检查把 brief JSON 上限调至 10,800，Markdown �
 同时保留已测 523 字符内容增量和路径转义余量。这是两项预算的组合，不能作为
 新的 Windows 原生实测；原始路径测量、行数和语义检查仍保留其各自边界。
 
+The frozen 128-character Windows-spelling fixture was also compared on main
+`b5a1a816a` and the rebased outcome candidate without changing its routes.
+The body grows from 5,556 to 6,079 characters and Markdown from 8,579 to 9,102:
+the only body change is the complete 523-character outcome paragraph. JSON
+grows from 10,522 to 11,010, including the existing 35-character saving from
+omitting absent brief metadata. It fits the already qualified 11,400 / 9,600
+ceilings; no new allowance or shortened instruction is introduced. The earlier
+test still pinned the pre-outcome hashes and old ceilings and failed on that
+transition. Its hashes now pin the complete reviewed output. This portable
+synthetic fixture does not replace native Windows qualification.
+
+同一个冻结的 128 字符 Windows 拼写 fixture，在 main `b5a1a816a` 与 rebase 后的
+成果候选上保持全部路由不变。正文从 5,556 增至 6,079，Markdown 从 8,579 增至
+9,102，正文唯一变化是完整的 523 字符成果指导。JSON 从 10,522 增至 11,010，
+其中包括既有 brief 省略空元数据所节约的 35 字符。沿用已资格化的
+11,400／9,600 上限，不新增余量或删短指令。旧测试仍固定在成果指导之前的
+hash 与旧上限，因而失败；现将 hash 绑定到完整审阅输出。该跨平台 synthetic
+fixture 不能代替原生 Windows 资格检查。
+
 Windows qualification can use the existing explicit canary time budget:
 
 ```powershell

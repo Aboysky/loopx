@@ -93,17 +93,19 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
     assert json.loads(encoded) == payload
     root, _, _, _ = _windows_routes()
     assert encoded.count(json.dumps(root)[1:-1]) == 20
-    # Matched dc9fdbb/cfbe756 baseline: 10,522 JSON chars, 8,579 Markdown.
-    # This metadata-only repair must not shorten any authored instruction or
-    # change the Markdown consumer. These hashes include the complete routes.
+    # The unchanged fixture on main b5a1a816a measures 10,522 JSON chars and
+    # 8,579 Markdown. The complete outcome paragraph adds 523 body/Markdown
+    # chars; omitting absent brief metadata saves 35 JSON chars: 11,010/9,102.
+    # These hashes retain every prior clause and route, plus that reviewed
+    # instruction transition. This is a synthetic spelling, not a Windows run.
     assert hashlib.sha256(payload["task_body"].encode()).hexdigest() == (
-        "798a53da134d60337933e0b6e147892aa874cfabd04ba2d5f8872ee21daf546a"
+        "cfc65091d2710ef298174e6a5280edf55f6cc7acdce8e5688a2ae213b5f4b4ac"
     )
     assert hashlib.sha256(markdown.encode()).hexdigest() == (
-        "aa55b6179ef728d88cba712445426e1afab7790c53072a60e8552b93b779f1d1"
+        "9a5b0d2d927744e1b52ad0598a0a3668237264f4d741fcf3cf0f647a02b90cce"
     )
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["heartbeat_prompt_brief"]
-    assert spec.max_chars == {"json": 10_800, "markdown": 9_000}
+    assert spec.max_chars == {"json": 11_400, "markdown": 9_600}
     for output_format, text in (("json", encoded), ("markdown", markdown)):
         assert_cli_output_mode_variant(
             spec, output_format=output_format, text=text,
