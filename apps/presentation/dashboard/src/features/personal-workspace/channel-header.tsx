@@ -43,6 +43,7 @@ export function ChannelHeader({
   selectedGoalTab,
   scopeUnavailable = false,
   workspaceGrantLabel,
+  originalConversationTitle,
 }: {
   agents: WorkspaceAgentOption[];
   agentWorkActive?: boolean;
@@ -51,6 +52,7 @@ export function ChannelHeader({
   goalLifecycleBusy?: boolean;
   /** Set while the steward conversation is scoped to a workspace. */
   workspaceGrantLabel?: string | null;
+  originalConversationTitle?: string;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerChatOpen?: boolean;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
@@ -159,7 +161,11 @@ export function ChannelHeader({
 
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
-  ) : <>
+  ) : originalConversationTitle ? <>
+    <span className="personal-read-only-source"><Bot size={15} />{selectedAgentId}</span>
+    <ChatModelMenu agentId={selectedAgentId} ordinary={false} readback={selectedAgentModelReadback}
+      model={selectedAgentModelId} effort={selectedAgentReasoningEffort} />
+  </> : <>
     <WorkspaceSelect
             ariaLabel={t("header.selectChatRuntime")}
             className="personal-agent-select"
@@ -200,7 +206,7 @@ export function ChannelHeader({
 
   // The steward channel binding describes the steward executor; a workspace
   // conversation runs on the selected runtime instead.
-  const stewardBindingVisible = !scopeUnavailable && !selectedGoal && !workspaceGrantLabel;
+  const stewardBindingVisible = !scopeUnavailable && !selectedGoal && !workspaceGrantLabel && !originalConversationTitle;
   const scopeControl = !scopeUnavailable && !selectedGoal && managerChatOpen && conversationScope && !readOnlySourceLabel ? (
     <WorkspaceSelect
       ariaLabel={t("header.conversationScope")}
@@ -217,7 +223,7 @@ export function ChannelHeader({
     <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)} data-workspace-scope={workspaceGrantLabel ? "true" : undefined}>
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
-        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenDetails={onOpenGoalDetails} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{t(scopeUnavailable ? "header.goalView" : "header.manager")}</h1>}
+        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenDetails={onOpenGoalDetails} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{originalConversationTitle ?? t(scopeUnavailable ? "header.goalView" : "header.manager")}</h1>}
         {workspaceGrantLabel ? <p className="personal-channel-activity">{t("workspace.conversation", { grant: workspaceGrantLabel })}</p> : null}
         <div className="personal-manager-context">
         {stewardBindingVisible && managerChannelBinding ? (
