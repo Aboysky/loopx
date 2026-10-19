@@ -74,9 +74,7 @@ opening a page or reading a result does not start a model call. Explicit analysi
 uses the configured host and account.
 
 Keep supported, refuted and unknown findings visible. Inspect why an approach
-changed or continued, then carry the evidence into the next attempt. Process
-judgments are uncalibrated observations; historical LHTB results below belong
-to LoopX 1.0.3 and do not establish a 2.0 benchmark or efficiency gain.
+changed or continued, then carry the evidence into the next attempt.
 
 ## Meet the Personal Agent Workspace
 
