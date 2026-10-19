@@ -47,10 +47,15 @@ process.stdout.write(JSON.stringify(await readCollaborationInbox(JSON.parse(inpu
             try:
                 child.stdin.write(json.dumps(payload))
                 child.stdin.close()
+                # Interrupt between request transactions. A published receipt can
+                # precede lock retirement; killing there can leave a partial claim
+                # subject to the lock owner's separate stale-claim recovery grace.
+                first_lock = owner / "request-locks" / (items[0]["request_id"] + ".ts-effect.lock")
                 deadline = time.monotonic() + 15
-                while not first.exists() and child.poll() is None and time.monotonic() < deadline:
+                while (not first.exists() or first_lock.exists()) and child.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.02)
                 assert first.exists(), child.stderr.read() if child.poll() is not None else "first read was not committed"
+                assert not first_lock.exists(), "first request transaction did not release its lock"
                 assert not second.exists()
                 committed = first.read_bytes()
             finally:
