@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 import { acceptChatTurn, conversationContextKey, conversationContextOfKey, conversationSupportsStatusProjection, createChatSession,
-  discoverBoundChatSession, fetchChatHistory, resolveBoundChatSession } from "../src/data/chat";
+  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, resolveBoundChatSession } from "../src/data/chat";
 
 // Invariant: continuation and refreshed history retain the verified original
 // Session. An absent/ignored selector, changed source or closed Session cannot
@@ -71,6 +71,16 @@ try {
   assert.equal((await next()).source_verified, true);
   assert.equal((await resolveBoundChatSession(target)).session_id, sessionId);
   const routedFetch = globalThis.fetch;
+  const projects = await fetchChatProjects();
+  assert.ok(projects.projects.length > 0, "The production workspace response is accepted");
+  for (const malformed of [{ok: true}, {ok: true, projects: null},
+    {ok: true, projects: [{project_ref: "workspace", title: "Workspace", grant: "unexpected"}]}]) {
+    globalThis.fetch = async () => new Response(JSON.stringify(malformed));
+    await assert.rejects(() => fetchChatProjects(), /workspace list could not be read/);
+  }
+  globalThis.fetch = async () => new Response(JSON.stringify({ok: true, projects: []}));
+  assert.deepEqual(await fetchChatProjects(), {ok: true, projects: []}, "An observed empty list remains valid");
+  globalThis.fetch = routedFetch;
   for (const echo of [undefined, "f".repeat(24)]) {
     globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, sessions: history.sessions, conversation_binding_id: echo }));
     await assert.rejects(() => resolveBoundChatSession(target), /cannot verify/);

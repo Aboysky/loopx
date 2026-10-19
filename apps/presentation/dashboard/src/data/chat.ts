@@ -818,8 +818,19 @@ export type ChatSessionSummary = {
 
 export type { ChatProject };
 
+const chatProjectsSchema = z.object({
+  ok: z.literal(true),
+  projects: z.array(z.object({
+    project_ref: z.string().min(1), title: z.string(),
+    grant: z.enum(["workspace_read", "workspace_write"]),
+    goal_workspace_ref: z.string().optional(),
+  })),
+});
+
 export async function fetchChatProjects(signal?: AbortSignal) {
-  return requestJson<{ok: true; projects: ChatProject[]}>("/api/chat/projects", {signal});
+  const parsed = chatProjectsSchema.safeParse(await requestJson<unknown>("/api/chat/projects", {signal}));
+  if (!parsed.success) throw new Error("The workspace list could not be read. Refresh to retry.");
+  return parsed.data;
 }
 
 /** ``chat_store`` Session modes; an omitted mode is a managed runtime Session. */
