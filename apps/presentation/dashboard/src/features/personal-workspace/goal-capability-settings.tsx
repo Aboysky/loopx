@@ -18,6 +18,7 @@ import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-l
 import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus, CapabilityConfigurationHelp } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
 import { ContentReferenceWorkbench } from "./content-reference-workbench";
+import {ContentMediaWorkbench} from "./content-media-workbench";
 import { DecisionContextWorkbench } from "./decision-context-workbench";
 import { rewardMemoryBindingStatus, rewardMemoryScopeDraft, rewardMemoryWriteValue } from "./reward-memory-settings";
 import {isMemoryCapability, memorySettingsTitle, MemorySettingsHeader} from "./memory-settings";
@@ -322,18 +323,20 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
       <article aria-label={memorySelected ? memorySettingsTitle(locale) : localizedSelected.display_name} className="personal-capability-detail" tabIndex={0}>
         {memorySelected ? <MemorySettingsHeader capabilities={orderedCapabilities} locale={locale}
           selectedId={selected.capability_id} onSelect={setSelectedCapabilityId}
-          onRefresh={() => void onApplied()} disabled={editorBusy} /> : <CapabilityDetailHeader capability={selected} locale={locale}
+          onRefresh={() => void onApplied()} disabled={editorBusy} /> : selected.capability_id === "content_ops"
+          ? <header><div><h2>{localizedSelected.display_name}</h2><p>{localizedSelected.description}</p></div></header>
+          : <CapabilityDetailHeader capability={selected} locale={locale}
           source={localizedSelected.effective_configuration?.source} />}
         {memorySelected && orderedCapabilities.some(item => item.capability_id === "decision_context") ? <section
           aria-labelledby="memory-purpose-decision_context" hidden={selected.capability_id !== "decision_context"}
           id="memory-panel-decision_context" role="tabpanel" tabIndex={0}>
           <DecisionContextWorkbench key={goalId} goalId={goalId} active={selected.capability_id === "decision_context"} />
         </section> : null}
-        <section hidden={selected.capability_id === "decision_context"}
+        <section className={selected.capability_id === "content_ops" ? "content-production-panel" : undefined} hidden={selected.capability_id === "decision_context"}
           id={memorySelected && selected.capability_id !== "decision_context" ? `memory-panel-${selected.capability_id}` : undefined}
           aria-labelledby={memorySelected && selected.capability_id !== "decision_context" ? `memory-purpose-${selected.capability_id}` : undefined}
           role={memorySelected && selected.capability_id !== "decision_context" ? "tabpanel" : undefined}>
-        {localizedSelected.capability_id === "content_ops" ? <ContentReferenceWorkbench key={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
+        {localizedSelected.capability_id === "content_ops" ? <><ContentMediaWorkbench key={goalId} goalId={goalId} /><details><summary>{locale === "zh-CN" ? "来源风格素材" : "Source style references"}</summary><ContentReferenceWorkbench key={goalId} /></details></> : <CapabilityEditorStatus available={editorAvailable} t={t}
           description={readOnlyReason} />}
 
         {selected.capability_id === "progress_review" && selected.observation ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
