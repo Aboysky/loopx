@@ -2,7 +2,7 @@
 
 `loopx-media` is an optional distribution for the existing **content-ops**
 capability. It renders an admitted composition and can execute explicitly submitted,
-bounded cloud video intents. It does not choose sources, run commands from
+bounded cloud video or image intents. It does not choose sources, run commands from
 a brief or publish a movie. Shared TypeScript admission and transitions
 remain in LoopX core.
 Pillow, FontTools, FFmpeg and platform speech are specialized local computation.
@@ -40,8 +40,8 @@ decode. Images retain their orientation; video excerpts retain aspect ratio.
 Installed fonts must cover the visible text, with CJK line breaking supported.
 RTL shaping and arbitrary font discovery are not qualified. macOS speech is
 optional; other platforms require supplied audio or explicit silence.
-No cloud voice, image-generation or game engine is bundled here. The bounded
-Ark video route below is explicit and optional; it is never a render fallback.
+No cloud voice or game engine is bundled here. The bounded Ark video and image
+routes below are explicit and optional; neither is a render fallback.
 
 Excerpt and Blender layouts display the title and source boundary; nonempty
 `body` text is explicitly refused. Preserve a needed qualifier in those visible
@@ -258,6 +258,76 @@ again; after a lost response, check the journal-backed original task. If no task
 id was recovered, the status stays `submission_unknown` with an explicit
 reconciliation requirement. There is no automatic paid retry. A genuinely new
 shot requires a new prepared intent after reviewing the original outcome.
+
+## Optional generated images
+
+Version 0.4 adds a single-image path in the same **Content production**
+workbench. Install or explicitly upgrade this distribution and register the
+current manifest using the lifecycle above. Load a separately authorized
+`ARK_IMAGE_API_KEY` into the LoopX process; optional `ARK_IMAGE_BASE_URL` must
+equal the standard Ark endpoint. The video `ARK_API_KEY` is never borrowed.
+Neither the browser nor a prepared plan stores or displays credentials.
+
+An Agent prepares `content_ops_image_plan_v0` with title, prompt, explicit
+width/height, watermark choice, `references` and a current quote. This bounded
+path pins `doubao-seedream-5-0-pro-260628`, opaque PNG, no layer decomposition
+and standard prompt optimization. It accepts text or one public-safe PNG/JPEG
+reference, at most 4 MiB, with relative path, exact SHA256 and opaque provenance.
+Reference alpha is composited on white; the private journal retains both the
+original and uploaded PNG hashes. Output dimensions are 720–2560 per side,
+with total area 921,600–4,624,220 pixels and aspect ratio 1:16–16:1.
+
+```sh
+loopx content-ops image prepare --goal-id GOAL \
+  --plan-json image.json --source-directory ./authorized-images
+# This next command performs one paid request under the current authorization.
+loopx content-ops image submit --goal-id GOAL \
+  --image-id IMAGE_ID --expected-revision 1
+loopx content-ops image inspect --goal-id GOAL --image-id IMAGE_ID
+# Recover an already saved response; this command never generates another image.
+loopx content-ops image collect --goal-id GOAL \
+  --image-id IMAGE_ID --expected-revision 1
+```
+
+The quote has `cny_per_image`, `checked_at`, official `source_url` and
+`max_estimated_cny`; it expires after 24 hours. Verify the current model and
+[price table](https://ark.volcengine.com/docs/model-pricing) for the actual
+dimensions. The nominal estimate does not grant spending authority or guarantee
+an invoice limit. The supported first reference is free under that rate basis;
+other pricing modes and multiple outputs are outside this path.
+
+The synchronous request has no cloud task ID, polling or cancellation. A
+durable submission journal precedes POST; a saved response precedes stdout.
+When received, exact HTTP response bytes and their digest are persisted before
+interpretation, so local interpretation failure can be recovered without a new
+POST. Header/request-ID observations and sanitized error classes are private
+diagnostic evidence. Loss before a complete response is saved remains unknown.
+After timeout or malformed response the status remains `submission_unknown`.
+Repeated submit does not POST again. `collect` only reads that intent's saved
+response and can repair damaged local output. If no response was saved, the
+external outcome needs reconciliation before a genuinely new intent is chosen.
+Missing provider/credential leaves the draft prepared and sends nothing.
+
+The workbench displays the brief, upload/usage consequence, status, nominal
+cost and verified `original.png` and `generated.png` downloads. Full PNG decode,
+exact dimensions and core-owned hash readback qualify local byte readiness;
+creative quality, visible watermark, source faithfulness and actual invoice
+remain separate judgments. Reuse `generated.png` as a hash-bound composition
+asset; render precise labels, diagrams and subtitles locally. A generated
+illustration must not be presented as a recorded product or benchmark trace.
+Disabling the same extension stops new image/video effects and keeps saved
+results readable. No separate image service or settings owner is introduced.
+
+![Image workbench with a synthetic saved-response fixture](docs/image-after-desktop.png)
+
+Packaged workbench with a disposable Goal and synthetic HTTP response using a
+locally rendered poster. This demonstrates saved-response collection and
+download, **not live Seedream output or creative acceptance**. The
+[390px entry view](docs/image-after-phone.png) and
+[scrolled download view](docs/image-phone-download.png) use the same backend.
+[Unavailable credentials](docs/image-unavailable-desktop.png) retain the draft;
+an [unconfirmed external request](docs/image-unknown-desktop.png) has no paid
+resubmit control.
 
 Ark's DELETE both cancels queued work and erases finished task records, without
 a documented atomic queued-only precondition. The provider therefore retains

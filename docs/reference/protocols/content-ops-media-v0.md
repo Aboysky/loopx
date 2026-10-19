@@ -183,8 +183,8 @@ infer publication approval or start a scheduling loop.
 The existing runtime protocol accepts additive `generation.*` operations only
 through the separately declared `content_media_generate` permission. A normal
 render request is unchanged and has no network/account effects. The bounded
-provider supports Seedance 2.5 video only; image generation, other models and
-unopened account access remain unavailable. Setup, process-local credentials,
+video provider supports Seedance 2.5; the separate single-image path is described below.
+Other models and unopened account access remain unavailable. Setup, process-local credentials,
 supported frames, prices and recovery are in the
 [provider guide](../../../packages/loopx-media/README.md#optional-generated-footage).
 
@@ -224,3 +224,53 @@ observation, unknown submission and damaged local artifacts remain separate.
 Creative quality, continuity, visible watermark, audience comprehension and
 actual billed cost require their own evidence; no generated clip changes
 content publication state.
+
+## Optional single-image intents
+
+`content-ops image prepare/submit/collect/inspect/list` shares this capability,
+Goal-local workspace and optional provider. The `content_media_image` TypeScript
+owner validates `content_ops_image_plan_v0`, its immutable digest, a dated
+per-image nominal quote and local transitions. Provider-specific account access
+is checked separately. This is a synchronous image request, not a video job:
+there is no task ID, cloud status polling or remote cancellation contract.
+
+The plan contains `title`, pinned `model`, `prompt`, explicit `width`/`height`,
+`watermark`, zero or one `references` entries and `quote`. A reference binds its
+relative `path`, exact `sha256`, opaque `source_ref` and explicit `public_safe`
+classification. Quote fields are `cny_per_image`, timezone-aware `checked_at`,
+official `source_url` and `max_estimated_cny`. The quote must be current within
+24 hours and fit the declared nominal bound; it is neither authorization nor
+a guaranteed maximum bill. Supported model, dimensional/upload limits,
+separate image credential and lifecycle setup are in the
+[provider guide](../../../packages/loopx-media/README.md#optional-generated-images).
+
+The parent persists `submitting` before the optional provider effect. The
+provider journals the intent before POST, then fsyncs a private response cache
+before returning. Exact received HTTP bytes, digest and request-ID observations
+are private, bounded recovery evidence; interpretation failure can be retried
+locally from that saved response. Loss before response persistence cannot be
+recovered by issuing another POST. Missing provider/key keeps `prepared`; confirmed provider
+rejection remains `rejected`; an unconfirmed effect remains
+`submission_unknown`. None of these states permits automatic paid retries.
+`collect` recovers only cached bytes, without network activity. An intact ready
+result is reused; damage can be repaired from the original response, with the
+original accepted SHA preserved. Unknown external effects without cached bytes
+require reconciliation before choosing any new intent.
+
+The result binds exactly one generated image to the request model and digest,
+full PNG decode and requested geometry. The core verifies `original.png` and
+normalized `generated.png` bytes/hashes before readiness or download. Reported
+generated-image/token counts, caller's nominal estimate and unknown invoice
+remain distinct. Watermark request, visual watermark inspection and creative
+acceptance are separate. Source metadata and returned paths are not exposed.
+
+The existing HTTP route adds `image_list` and revision-bound
+`image_submit/collect`. The fixed-file route accepts exactly one composition,
+generation or image ID and preserves selected-Goal, origin, byte-range and
+no-store boundaries. The packaged workbench can generate an Agent-prepared
+intent, display unavailable/unconfirmed states, recover saved bytes and show
+verified image/downloads. It never requests arbitrary local paths or a key.
+Reuse a resulting image as an ordinary hash-bound composition asset, retaining
+its illustration boundary and adding precise text through local rendering.
+This path does not approve or publish content, qualify learning effects or
+change long-horizon Goal state.

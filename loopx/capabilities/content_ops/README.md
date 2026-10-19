@@ -46,7 +46,16 @@ task readback and verified local files. It never repeats an ambiguous paid
 submission or equates stopping observation with remote cancellation. Use the
 saved movie as a source-bound excerpt in a local composition; precise text and
 diagrams remain local. See the same provider guide for credentials, cost
-estimates, unavailable states and recovery. Image generation is not qualified.
+estimates, unavailable states and recovery.
+
+`loopx content-ops image` prepares and submits one Seedream 5.0 Pro image with
+an optional immutable reference through the same extension. **Generated images**
+shows the draft, consequence, unavailable/unknown states and verified downloads.
+This synchronous route uses a separate image credential, has no cloud task
+polling and recovers saved responses without repeating a paid request. Compose
+the resulting hash-bound image with exact local text; creative/source acceptance
+and billing remain separate from byte readiness. See the provider guide's
+[image setup and recovery](../../../packages/loopx-media/README.md#optional-generated-images).
 
 `loopx content-ops reference` reads an existing private source/style catalog,
 prepares version-checked capture/correction artifacts, retrieves topic/structure
