@@ -1120,6 +1120,14 @@ as controller work: register the goal if it is active, or archive the runtime
 record if it is old. Watch-only legacy records remain visible in run history
 without entering the queue.
 
+`status=state_incomplete` is emitted when a legacy Markdown active state is
+readable but lacks its required `## Agent Todo` heading (or an accepted alias).
+The item carries `state_incomplete` with the missing sections and repair
+guidance. The same condition makes `loopx todo list` return `ok=false` with
+`error_code=state_incomplete`; consumers must not interpret its zero Todos as a
+goal with no open work. Canonical provider authority is unaffected because this
+check applies only to the legacy Markdown fallback.
+
 `status=state_refreshed` is emitted for registered goals when the latest compact
 run came from `loopx refresh-state`. Dashboard consumers should show it
 as Codex-ready work: the controller state changed, and the next agent turn
