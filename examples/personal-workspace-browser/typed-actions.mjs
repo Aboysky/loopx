@@ -1098,8 +1098,8 @@ export const typedActionsScenario = {
       await page.locator(".personal-capability-list").getByRole("button", {name:"记忆与资料",exact:true}).click();
       await page.getByRole("heading", {level:2,name:"记忆与资料",exact:true}).waitFor({state:"visible"});
       const memoryTabs = page.getByRole("tablist", {name:"记忆用途"});
-      if (JSON.stringify(await memoryTabs.getByRole("tab").allTextContents()) !== JSON.stringify(["资料召回", "经验学习", "素材与风格"])) {
-        throw new Error("Memory navigation must expose the registered purposes inside one entry");
+      if (JSON.stringify(await memoryTabs.getByRole("tab").allTextContents()) !== JSON.stringify(["资料召回", "经验学习"])) {
+        throw new Error("Memory navigation must retain evidence and experience purposes; reference styles belong to Content production");
       }
       await page.getByRole("tab", {name:"资料召回",exact:true}).focus();
       await page.keyboard.press("ArrowRight");
