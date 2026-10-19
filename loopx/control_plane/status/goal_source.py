@@ -23,6 +23,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from ..content_digest import BARE_SHA256_PATTERN
 from ...chat_completed_todos import CompletedTodoPages
 from ...status_server import is_loopback_host
 from .ssh_host_catalog import configured_ssh_host_aliases
@@ -85,7 +86,7 @@ class GoalSource:
         elif self.host_alias is not None:
             raise ValueError("Local connections do not have an SSH alias")
         if self.environment == "container":
-            if not isinstance(self.container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", self.container_id):
+            if not isinstance(self.container_id, str) or not BARE_SHA256_PATTERN.fullmatch(self.container_id):
                 raise ValueError("A full pinned container id is required")
         elif self.container_id is not None:
             raise ValueError("Host environments do not have a container id")
@@ -119,7 +120,7 @@ class GoalSource:
             container_id = None
         elif environment.get("kind") == "container" and set(environment) == {"kind", "container_id"}:
             container_id = environment["container_id"]
-            if not isinstance(container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", container_id):
+            if not isinstance(container_id, str) or not BARE_SHA256_PATTERN.fullmatch(container_id):
                 raise ValueError("A full pinned container id is required")
         else:
             raise ValueError("Use a host or a pinned container environment")
@@ -318,7 +319,7 @@ def read_endpoint(endpoint, operation, *, goal_id=None, cursor="", source_namesp
     description = read(base)
     source = description.get("source")
     namespace = source.get("namespace") if isinstance(source, dict) else None
-    if not isinstance(namespace, str) or not re.fullmatch(r"[0-9a-f]{64}", namespace):
+    if not isinstance(namespace, str) or not BARE_SHA256_PATTERN.fullmatch(namespace):
         raise ValueError("The reader did not expose a source identity")
     if source_namespace is not None and source_namespace != namespace:
         raise ValueError("Goal source changed; do not reuse the previous selection")

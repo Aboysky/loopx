@@ -15,12 +15,13 @@ import stat
 import time
 from time import monotonic, sleep
 
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..file_lock import exclusive_file_lock, write_json_atomic
 
 _STATE = ".checkpoint-retention"
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
-_SHA = re.compile(r"[0-9a-f]{64}\Z")
+_SHA = BARE_SHA256_PATTERN
 
 
 def _physical(path: Path) -> Path:

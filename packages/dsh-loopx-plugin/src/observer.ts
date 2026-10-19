@@ -278,7 +278,12 @@ export function ledgerPath(config: ShadowObserverConfig): string {
   return join(config.ledgerDir, 'by-goal', `${digest}.ndjson`)
 }
 
-async function appendLedgerLines(config: ShadowObserverConfig, lines: readonly string[]): Promise<void> {
+/**
+ * The shipped ledger writer. Exported so the overhead bench measures this exact
+ * path (legacy-ledger refusal, directory creation, and append) instead of a
+ * bench-local copy that would drift from the production writer.
+ */
+export async function appendLedgerLines(config: ShadowObserverConfig, lines: readonly string[]): Promise<void> {
   if (lines.length === 0) return
   const legacy = join(config.ledgerDir, `${config.goalId.replaceAll(':', '_')}.ndjson`)
   if (lstatSync(legacy, { throwIfNoEntry: false })) {
