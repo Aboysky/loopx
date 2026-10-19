@@ -349,14 +349,15 @@ function attemptLocator(attempt: unknown): string | null {
 
 async function sourceFailure(command: ReturnCommand, state: JsonObject, blocker: unknown = command.facts.error): Promise<JsonObject> {
   if (command.exact) return returnResponse({ source_unavailable: true });
+  const decision = classifyManagerReturnVerification({ verification_performed: false,
+    reply_verified: false, blocker });
   if (state.status === "verification_required" && state.attempt != null) {
-    const decision = classifyManagerReturnVerification({ verification_performed: false,
-      reply_verified: false, blocker });
     if (decision.status === "explicit_unverified" || attemptLocator(state.attempt) === null) {
       await writeDeliveryState(command, { ...state, status: "explicit_unverified",
         error: decision.status === "explicit_unverified" ? decision.error : "provider_locator_unavailable" });
     }
-  } else await writeDeliveryState(command, retryState({ attempts: state.attempts ?? 0 }, command, "original_route_or_return_delivery_unavailable"));
+  } else await writeDeliveryState(command, retryState({ attempts: state.attempts ?? 0 }, command,
+    decision.status === "explicit_unverified" ? decision.error : "original_route_or_return_delivery_unavailable"));
   return returnResponse({ processed: 1 });
 }
 
@@ -480,7 +481,10 @@ function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject 
   }
   return retryState(command.exact ? state : { attempts: state.attempts ?? 0 }, command, outcome.kind === "sender_unavailable"
     ? "return_transport_unavailable" : outcome.kind === "verification_error"
-      ? "provider_verification_unavailable" : "original_route_or_return_delivery_unavailable");
+      ? "provider_verification_unavailable" : checked.status === "explicit_unverified"
+        // A typed failure before any accepted write preserves its cause while
+        // remaining retryable. Ordinary exception text never supplies it.
+        ? checked.error : "original_route_or_return_delivery_unavailable");
 }
 
 async function finishReturn(command: ReturnCommand, state: JsonObject): Promise<JsonObject> {
