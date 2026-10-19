@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-16
+- Last revised: 2026-10-19
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -44,6 +44,18 @@ the existing `projection_envelope.ts` owner. Completeness is scoped to
 disclose remaining pages. Replay preserves the original observation time.
 Each page reuses the existing executable-revision request scope; operation
 records remain live reads, and the next page resolves the current code again.
+
+
+Manager result return now uses the existing `collaboration/return_delivery.ts`
+transaction for admission, provider-attempt checkpoints, retry/verification reduction
+and atomic delivery receipts. The two Python exact/legacy delivery coordinators
+and the private attempt-normalization RPC are retired together. Python retains
+original Chat/authority observations, Host fences and real provider IO. Bounded
+scan hints are rechecked under the write lock; an accepted provider attempt is
+persisted before verification, without a second queue or a Python decision fallback.
+Original request/result/route identities, historical codecs and public readback
+remain. This implements one R3/T1–T2 return transaction cutover, not Inbox acceptance,
+source-grant migration, installed adoption or live-provider qualification.
 
 
 <a id="current-delivery-frontier-2026-10-02"></a>
