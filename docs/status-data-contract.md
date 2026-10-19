@@ -1292,7 +1292,12 @@ the legal choice boundary separate from the displayed suggestions;
 `suggestions_exhaustive=false` makes that distinction machine-readable.
 `selection_policy.decision_owner=agent` and
 `recommendation_role=default_not_binding` make the priority order advisory at
-this boundary rather than silently binding the first Todo.
+this boundary rather than silently binding the first Todo. A ready deferred
+higher-priority successor remains planning context, but neither removes an
+otherwise eligible open alternative nor vetoes its explicit selection. Default
+successor-replan recommendations remain available; the selected deferred Todo's
+own resume condition still applies. See the
+[planning-horizon decision boundary](reference/protocols/quota-planning-horizon-v0.md#agent-decision-authority).
 
 Version 2 adds the optional `continuation_hint` field to each
 `suggested_actions[]` item so an agent can see the candidate's next execution
