@@ -50,6 +50,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "bench:observer": "node --experimental-strip-types bench/observer-overhead.ts",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "prepack": "node scripts/build.mjs",
