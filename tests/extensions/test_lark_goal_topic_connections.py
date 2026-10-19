@@ -197,7 +197,7 @@ def test_profile_catalog_never_verifies_or_infers_health() -> None:
 def test_profile_read_failure_is_not_an_empty_catalog(payload: Any, code: int) -> None:
     def runner(*_args: Any) -> dict[str, Any]:
         return {"returncode": code, "stdout": json.dumps(payload), "stderr": "private diagnostic"}
-    with pytest.raises(ValueError, match="Could not read local Lark profiles"):
+    with pytest.raises(RuntimeError, match="Could not read local Lark profiles"):
         list_lark_apps(runner=runner, verify=False)
 
 

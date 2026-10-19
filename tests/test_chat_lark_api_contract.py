@@ -137,6 +137,7 @@ def test_lark_catalog_and_bounded_health_use_real_http_without_provider_writes()
         broken = True
         with pytest.raises(HTTPError) as error:
             read("?verify=false")
+        assert error.value.code == 502
         assert "private" not in error.value.read().decode()
         broken = False
         slow = False

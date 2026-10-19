@@ -182,6 +182,7 @@ function larkErrorMessage(cause: unknown, fallback: string, t: WorkspaceTranslat
       lark_message_permissions_required: t("lark.error.messagePermissions"),
       lark_app_required: t("lark.error.appRequired"),
       invalid_lark_app: t("lark.error.invalidApp"),
+      lark_configuration_unavailable: t("lark.error.configuration"),
       lark_group_lookup_failed: t("lark.error.groupLookup"),
       provider_api_failed: t("lark.error.provider"),
     };
@@ -563,7 +564,7 @@ export function LarkSettingsPage({
 
       {tab === "apps" ? (
         <div className="personal-lark-apps">
-          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: apps.length })}</span><div className="personal-lark-row-actions"><button aria-label={t("lark.retryVerification")} disabled={appsLoading} onClick={() => void refreshApps()} type="button"><RefreshCw size={16} /></button><button className="personal-primary-action" disabled={cliUnavailable || larkCliUnavailable(appsError)} onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div></div>
+          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: apps.length })}</span><div className="personal-lark-app-actions"><button className="personal-icon-button" title={t("lark.retryVerification")} aria-label={t("lark.retryVerification")} disabled={appsLoading} onClick={() => void refreshApps()} type="button"><RefreshCw size={16} /></button><button className="personal-primary-action" disabled={cliUnavailable || larkCliUnavailable(appsError)} onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div></div>
           <div className="personal-lark-app-grid">
             {apps.map((app) => (
               <article className="personal-lark-app-card" key={app.app_ref}>

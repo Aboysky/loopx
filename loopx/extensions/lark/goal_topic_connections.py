@@ -249,7 +249,7 @@ def list_lark_apps(
     result = call(runner, [cli_bin, "profile", "list"])
     raw_profiles = _json_value(result)
     if result.get("returncode") != 0 or not isinstance(raw_profiles, list):
-        raise ValueError("Could not read local Lark profiles; retry the configuration read")
+        raise RuntimeError("Could not read local Lark profiles; retry the configuration read")
     apps: list[dict[str, Any]] = []
     for raw in raw_profiles:
         if not isinstance(raw, Mapping):

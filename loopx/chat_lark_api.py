@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
 from .control_plane.runtime.runtime_projection_route import (
@@ -330,6 +330,11 @@ def reconcile_lark_manager_route(
 
 
 class LarkChatRequestMixin:
+    if TYPE_CHECKING:
+        # Host-provided response fields used by this mixin; no runtime override.
+        def _send_error(self, message: str, *, status: int = 400,
+                        gate: dict[str, str] | None = None, error_code: str | None = None) -> None: ...
+
     """Loopback HTTP handlers for Goal repository and Lark topic connections."""
 
     server: Any
@@ -456,6 +461,9 @@ class LarkChatRequestMixin:
             )
         except ValueError as exc:
             self._send_error(str(exc), status=400, error_code="invalid_lark_app")
+            return
+        except RuntimeError as exc:
+            self._send_error(str(exc), status=502, error_code="lark_configuration_unavailable")
             return
         self._send_json(
             {
