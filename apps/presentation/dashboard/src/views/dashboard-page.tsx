@@ -3654,7 +3654,9 @@ export function DashboardPage() {
   }, [exampleModeRequested, requestedStatusUrl, search.statusUrl, search.rootGoalId, source.kind, source.label]);
 
   useEffect(() => {
-    if (isLoading && search.rootGoalId) return;
+    // A source transition can still expose the previous source's Goal rows.
+    // Reconcile only its committed URL, including during browser Back/Forward.
+    if (isLoading || (source.kind === "url" && search.statusUrl && search.statusUrl !== source.label)) return;
     if (search.statusUrl && source.kind === "example") {
       return;
     }
@@ -3662,6 +3664,7 @@ export function DashboardPage() {
     if (goalRows.length === 0) {
       if (search.goalId) {
         void navigate({
+          replace: true,
           search: (current) => ({
             ...current,
             goalId: "",
@@ -3673,13 +3676,14 @@ export function DashboardPage() {
     if (search.goalId && !goalIds.has(search.goalId)
       && goalArchiveLoadState.phase !== "loading") {
       void navigate({
+        replace: true,
         search: (current) => ({
           ...current,
           goalId: "",
         }),
       });
     }
-  }, [goalArchiveLoadState.phase, goalRows, isLoading, navigate, search.goalId, search.rootGoalId, search.statusUrl, source.kind]);
+  }, [goalArchiveLoadState.phase, goalRows, isLoading, navigate, search.goalId, search.rootGoalId, search.statusUrl, source.kind, source.label]);
 
   useEffect(() => {
     if (!progress || isLoading || !search.goalId || source.kind !== "url") return;
