@@ -74,7 +74,7 @@ class ChatProjectContexts:
         if isinstance(steward, dict):
             if self.conversation_bindings is None:
                 raise ValueError("bound steward authority is unavailable")
-            selected = self.conversation_bindings.session_context(steward)
+            selected = self.conversation_bindings.session_context(steward, session=session)
             return self.runtime_context(session, selected)
         saved = session.get("project_context")
         if not isinstance(saved, dict) or session.get("goal_id") is not None:
@@ -82,7 +82,7 @@ class ChatProjectContexts:
         if saved.get("audience") in {"bound_owner", "bound_group"}:
             if self.conversation_bindings is None:
                 raise ValueError("bound project conversation authority is unavailable")
-            selected = self.conversation_bindings.session_context(saved)
+            selected = self.conversation_bindings.session_context(saved, session=session)
         else:
             selected = self.resolve(str(saved.get("project_ref") or ""), session_context=saved)
         return self.runtime_context(session, selected)
@@ -115,7 +115,9 @@ class ChatProjectContexts:
         session = {"goal_id": "loopx-manager" if steward else None, "channel_id": selected["channel_id"],
                    "project_context": None if steward else selected["context"],
                    "steward_context": selected["context"] if steward else None}
-        return {**session, **self.session_context(session)}
+        # This is a construction plan, not a canonical Session yet. Subsequent
+        # input/recovery validates the stored identity against a fresh binding.
+        return {**session, **self.runtime_context(session, selected)}
 
     @staticmethod
     def initialize_bound_scope(store, session, *, runtime_root=None):
