@@ -1471,10 +1471,12 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       return;
     }
     if (url.pathname === "/api/chat/projects" && request.method() === "GET") {
-      await route.fulfill({json: {ok: true, projects: []}}); return;
+      await route.fulfill({json: {ok: true, projects: []}});
+      return;
     }
     if (url.pathname === "/api/chat/lark/private-conversations" && request.method() === "GET") {
-      await route.fulfill({json: {ok: true, revision: 0, connections: [], stop_recoveries: []}}); return;
+      await route.fulfill({json: {ok: true, revision: 0, connections: [], stop_recoveries: []}});
+      return;
     }
     if (url.pathname === "/api/chat/lark/apps") {
       const apps = [

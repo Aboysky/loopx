@@ -191,6 +191,7 @@ function larkErrorMessage(cause: unknown, fallback: string, t: WorkspaceTranslat
 }
 
 export function LarkSettingsPage({
+  onOpenOriginalConversation,
   embedded = false,
   focusGoalConnection = false,
   goals,
@@ -204,6 +205,7 @@ export function LarkSettingsPage({
   initialGoalId?: string | null;
   onChanged?: () => void;
   onClose: () => void;
+  onOpenOriginalConversation?: (target: import("../../data/chat").BoundConversationTarget) => void;
 }) {
   const { t } = useWorkspaceI18n();
   const [tab, setTab] = useState<Tab>("connections");
@@ -554,7 +556,7 @@ export function LarkSettingsPage({
         <button aria-current={tab === "apps" ? "page" : undefined} onClick={() => setTab("apps")} type="button">{t("lark.apps")} <span>{appsLoading ? "…" : apps.length}</span></button>
         <button aria-current={tab === "connections" ? "page" : undefined} onClick={() => setTab("connections")} type="button">{t("lark.connections")} <span>{loading ? "…" : connections.length}</span></button>
       </nav>
-      {tab === "connections" ? <PrivateConversationPanel apps={apps.filter(app => app.ready && app.app_ref !== "default")} /> : null}
+      {tab === "connections" ? <PrivateConversationPanel apps={apps.filter(app => app.ready && app.app_ref !== "default")} onOpenOriginal={onOpenOriginalConversation} /> : null}
       {error ? <p className="personal-notification-error">{error}</p> : null}
       {appsError ? <p className="personal-notification-error">{larkErrorMessage(appsError, t("lark.error.configuration"), t)}</p> : null}
       {loading ? <div className="personal-lark-loading"><Loader2 className="is-spinning" size={18} />{t("lark.loading")}</div> : null}
