@@ -4,14 +4,12 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from test_external_scheduler_worker import _args, worker
 from test_goal_acceptance_cli import _configure
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
@@ -59,33 +57,28 @@ def _fixture(tmp_path, monkeypatch, provider, enabled_uncovered):
         def acceptance(*arguments):
             return 0, run("goal-acceptance", *arguments, "--goal-id", GOAL)
         configured = _configure(acceptance, document)["goal_acceptance_contract"]
-        assert configured["enabled"] and configured["scope"]["todo_ids"] == ["todo_case_15"]
+        assert configured["status"] == "unverified"
+        assert [criterion["id"] for criterion in configured["criteria"]] == ["independent"]
+        assert configured["scope"]["todo_ids"] == ["todo_case_15"]
     return project, runtime, registry, run
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("enabled_uncovered", [False, True], ids=["disabled", "uncovered"])
-@pytest.mark.parametrize("settled", [False, True], ids=["returned", "settled"])
+@pytest.mark.parametrize("settled", [False, True], ids=["unsettled", "settled"])
 def test_body_change_rearms_but_display_edits_preserve_the_original_chain(
     tmp_path, monkeypatch, provider, enabled_uncovered, settled,
 ):
-    project, runtime, registry, run = _fixture(tmp_path, monkeypatch, provider, enabled_uncovered)
+    project, runtime, _registry, run = _fixture(tmp_path, monkeypatch, provider, enabled_uncovered)
 
     def quota(*extra):
         return run("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, *extra)
 
+    index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
+    before_observation = index.read_bytes() if index.exists() else b""
     original = quota()["autonomous_replan_obligation"]
     assert [trigger["kind"] for trigger in original["triggers"]] == ["long_todo_chain"]
     original_id = original["obligation_id"]
-    calls, host = project / "host-calls.jsonl", project / "controlled-host.py"
-    host.write_text("from pathlib import Path\nimport json,sys\n"
-        "with Path(sys.argv[1]).open('a') as stream:\n"
-        "    stream.write(json.dumps({'provider_requests':1,'outcome':'unresolved'})+'\\n')\n")
-    args = _args(fake_cli=Path(sys.executable).parent / "loopx", state_file=tmp_path / "worker.json",
-        wake_cmd=shlex.join([sys.executable, str(host), str(calls)]), quota_timeout_seconds=90,
-        wake_timeout_seconds=30)
-    args.registry, args.runtime_root, args.goal_id, args.agent_id = str(registry), str(runtime), GOAL, AGENT
-    index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
     spend = None
     if settled:
         turn = "turn-finite-sample-review"
@@ -127,9 +120,13 @@ def test_body_change_rearms_but_display_edits_preserve_the_original_chain(
         assert run(*spend)["appended"] is True
         assert quota().get("autonomous_replan_obligation") is None
     else:
-        assert worker.run_worker(args) == 0
-        assert worker.run_worker(args) == 0
-        assert len(calls.read_text().splitlines()) == 1
+        # These are real native observations, not Host attempt receipts. Reads
+        # must retain the obligation; external-worker dispatch/debounce has a
+        # separate owner and cannot be qualified by this continuity test.
+        for _ in range(2):
+            observed = quota()["autonomous_replan_obligation"]
+            assert observed["required"] and observed["obligation_id"] == original_id
+        assert (index.read_bytes() if index.exists() else b"") == before_observation
     before = index.read_bytes() if index.exists() else b""
     for number, edit in enumerate((("--priority", "P3"), ("--note", "Same finite sample requirement"))):
         run("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", "todo_case_00",
@@ -138,9 +135,7 @@ def test_body_change_rearms_but_display_edits_preserve_the_original_chain(
         if settled:
             assert current is None
         else:
-            assert current["obligation_id"] == original_id
-            assert worker.run_worker(args) == 0
-            assert len(calls.read_text().splitlines()) == 1
+            assert current["required"] and current["obligation_id"] == original_id
     run("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", "todo_case_00",
         "--update-operation-id", "owner-requires-universal-proof", "--text", REVISED_TEXT)
     revised = quota()["autonomous_replan_obligation"]
@@ -149,9 +144,9 @@ def test_body_change_rearms_but_display_edits_preserve_the_original_chain(
     if settled:
         assert revised["rearmed_after_obligation_id"] == original_id
         assert run(*spend)["appended"] is False
-    assert worker.run_worker(args) == 0
-    assert worker.run_worker(args) == 0
-    assert len(calls.read_text().splitlines()) == (1 if settled else 2)
+    for _ in range(2):
+        current = quota()["autonomous_replan_obligation"]
+        assert current["required"] and current["obligation_id"] == revised["obligation_id"]
     assert (index.read_bytes() if index.exists() else b"") == before
     rows = [json.loads(line) for line in before.decode().splitlines()]
     assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == int(settled)
