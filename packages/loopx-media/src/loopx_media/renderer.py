@@ -120,6 +120,8 @@ def render(request: dict) -> dict:
     if request.get("protocol") != PROTOCOL:
         raise ValueError("Unsupported renderer protocol")
     plan, out = request["plan"], Path(request["attempt_directory"])
+    if any(shot["kind"] in {"excerpt", "blender"} and shot.get("body") for shot in plan["shots"]):
+        raise ValueError("The spatial layout does not support body text; revise the brief")
     out.mkdir(mode=0o700, exist_ok=False)
     started = time.monotonic()
     cancel = Path(request["cancel_file"])

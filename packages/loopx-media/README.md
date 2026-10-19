@@ -39,6 +39,12 @@ RTL shaping and arbitrary font discovery are not qualified. macOS speech is
 optional; other platforms require supplied audio or explicit silence.
 No cloud voice, generative image/video or game engine is bundled here.
 
+Excerpt and Blender layouts display the title and source boundary; nonempty
+`body` text is explicitly refused. Preserve a needed qualifier in those visible
+fields, a separate title scene or timed captions before preparing a new revision.
+The renderer also refuses a stale/direct request with unsupported body text;
+it cannot return ready while silently dropping that text.
+
 ## Optional Blender scenes
 
 For real 3D geometry, install the same provider with its optional Blender extra

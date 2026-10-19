@@ -355,6 +355,33 @@ def _install_source_renderer(work):
     return root, command, state
 
 
+def test_spatial_body_refusal_creates_no_prepared_item(workspace):
+    work, _ = workspace
+    root = Path(__file__).resolve().parents[1]
+    plan = json.loads(
+        (root / "packages/loopx-media/examples/blender-handoff.json").read_text()
+    )
+    for kind in ("excerpt", "blender"):
+        invalid = deepcopy(plan)
+        invalid["shots"][1].update(kind=kind, body="IMPORTANT SYNTHETIC QUALIFIER")
+        if kind == "excerpt":
+            del invalid["shots"][1]["scene"]
+            invalid["shots"][1]["asset_id"] = "still"
+            invalid["assets"] = [
+                {
+                    "id": "still",
+                    "kind": "image",
+                    "path": "source.png",
+                    "sha256": "a" * 64,
+                    "source_ref": "synthetic:still",
+                    "visibility": "local_private",
+                }
+            ]
+        with pytest.raises(EffectRuntimeRejected, match="do not support body text"):
+            work.prepare(invalid, source_directory=work.project)
+    assert work.list()["compositions"] == []
+
+
 @pytest.mark.skipif(
     os.environ.get("LOOPX_MEDIA_RENDERER_TEST") != "1",
     reason="explicit optional local renderer qualification",
@@ -457,6 +484,30 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
         ],
     }
     prepared = work.prepare(second, source_directory=work.project)
+    # Actual provider boundary: a stale or direct caller cannot silently lose
+    # already-accepted text even if it bypasses current typed preparation.
+    from loopx.extensions.runtime import execute_extension_runtime_binding
+
+    record = work._record(prepared["composition_id"])
+    checked = media._owner("plan", {"plan": record["plan"]})
+    invalid = deepcopy(record["plan"])
+    invalid["shots"][0]["body"] = "IMPORTANT SYNTHETIC QUALIFIER"
+    refused = work.project / "refused-body"
+    with pytest.raises(RuntimeError):
+        execute_extension_runtime_binding(
+            work.binding().binding,
+            request={
+                "protocol": media.PROTOCOL,
+                "plan": invalid,
+                "layout_style": checked["layout_style"],
+                "plan_digest": record["plan_digest"],
+                "frame_count": record["frame_count"],
+                "sources": record["sources"],
+                "attempt_directory": str(refused),
+                "cancel_file": str(work.project / "not-cancelled"),
+            },
+        )
+    assert not refused.exists()
     rendered = work.render(prepared["composition_id"], expected_revision=1)
     assert (
         rendered["status"] == "ready"

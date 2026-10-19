@@ -118,6 +118,7 @@ export function validateMediaPlan(input: unknown) {
     if (kind !== "blender" && shot.scene !== undefined) fail("Scene geometry requires a Blender shot");
     const base = {id: token(shot.id), kind, seconds: number(shot.seconds, 1, 30), title: text(shot.title, 100),
       body: shot.body == null || shot.body === "" ? "" : text(shot.body, 300), source_ref: text(shot.source_ref, 240), boundary: text(shot.boundary, 180)};
+    if ((kind === "excerpt" || kind === "blender") && base.body) fail("Excerpt and Blender shots do not support body text; use a title, boundary or timed captions");
     if (kind === "blender") {
       fields(shot, ["id", "kind", "seconds", "title", "body", "source_ref", "boundary", "scene"]);
       const frames = number(base.seconds * fps, 12, 120, true);

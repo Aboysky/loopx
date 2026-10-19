@@ -56,6 +56,13 @@ without changing that digest. A changed plan requires the expected revision
 and invalidates old content approval. Existing layout tokens are reused;
 static page-density rules do not certify a timed movie or its learning effect.
 
+`body` is supported for title and diagram shots. Excerpt and Blender layouts
+show a title and source boundary, and reject nonempty body text at admission
+and rendering. A qualifier must be retained in a supported visible field,
+separate title scene or timed caption; it must not silently disappear. Existing
+prepared spatial plans with nonempty body now fail explicitly and need a new
+revision that preserves that meaning in a supported field.
+
 ## Execution and readback
 
 ```sh

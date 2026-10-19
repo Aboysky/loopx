@@ -85,6 +85,17 @@ test("caption admission preserves plain text and refuses structural paragraph se
 
 const spatialBrief = () => JSON.parse(readFileSync(new URL("../../packages/loopx-media/examples/blender-handoff.json", import.meta.url), "utf8"));
 
+test("spatial shots refuse body text instead of producing a movie that loses a qualifier", () => {
+  const excerpt = {...brief(), assets: [{id: "still", kind: "image", path: "source.png", sha256: "a".repeat(64), source_ref: "synthetic:still", visibility: "local_private"}],
+    shots: [{id: "view", kind: "excerpt", seconds: 6, title: "Source", asset_id: "still", source_ref: "synthetic:still", boundary: "Illustration"}]};
+  assert.equal(plan({plan: excerpt}).plan.shots[0]?.body, "");
+  assert.throws(() => plan({plan: {...excerpt, shots: [{...excerpt.shots[0], body: "IMPORTANT SYNTHETIC QUALIFIER"}]}}), /do not support body text/);
+  const blender = spatialBrief(); blender.shots[1].body = "IMPORTANT SYNTHETIC QUALIFIER";
+  assert.throws(() => plan({plan: blender}), /do not support body text/);
+  const title = brief(); title.shots[0] = {...title.shots[0], kind: "title", body: "A supported visible qualifier"};
+  assert.equal(plan({plan: title}).plan.shots[0]?.body, "A supported visible qualifier");
+});
+
 test("Blender scene geometry and camera belong to the same source-bound composition", () => {
   const raw = spatialBrief(), checked = plan({plan: raw});
   assert.equal(checked.frame_count, 60);
