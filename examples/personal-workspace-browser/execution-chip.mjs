@@ -231,6 +231,9 @@ export const executionChipScenario = {
         path: resolve(outputDir, "execution-chip-dsh-budget-desktop.png") });
       await managed.page.setViewportSize({ width: 390, height: 844 });
       await assertHairlineRow(managed.page, 44);
+      if (!await managed.page.getByText("选择：锁定 · 由本机配置锁定", { exact: false }).isVisible()) {
+        throw new Error("Expanded runtime details were hidden by the narrow subtitle styles");
+      }
       const budget = managed.page.locator(".personal-execution-chip-budget");
       if (!await budget.isVisible()) throw new Error("Mobile header lost the output budget");
       const box = await budget.boundingBox();
