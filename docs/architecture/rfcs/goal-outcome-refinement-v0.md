@@ -92,9 +92,10 @@ refinements do not create member deliveries or consume delegation wake evidence.
 The 39-line envelope reservation stays in `ChatSessionStore`, which already owns
 Session existence, private paths, locking and atomic writes. Moving it into
 external message admission or an execution store would split that ownership
-without reducing state complexity. Its reviewed module ceiling changes from
-2,016 to the measured 2,055 lines, with no extra headroom; canonical acceptance
-receipts and current admission remain with their existing owners.
+without reducing state complexity. The original slice measured 2,016 to 2,055
+lines. Rebasing onto main `b5a1a816a` retains the same 39-line increment: 2,028
+to 2,067 lines, which is the current reviewed ceiling with no extra headroom.
+Canonical acceptance receipts and current admission remain with their existing owners.
 
 The first exact lifetime binding retains legacy outcome declarations, whether it
 arrives through refinement, check configuration or explicit source binding.
@@ -284,6 +285,14 @@ and review-basis invalidation, avoiding a second work-identity policy or circula
 owner import. Larger Goal migration/supersession work is deliberately deferred.
 The provider is the existing canonical authority (File/SQLite qualified here),
 builtin Core origin, with no new public capability or Python decision owner.
+
+Native continuity qualification is distinct from external Host dispatch. The
+native body-edit regression checks persistent required obligations, semantic ACK,
+same-Turn settlement and observation without ledger writes. Durable deduplication
+of unresolved external-worker attempts remains with its worker owner; it is not
+delivered by this foundation. A comparison using that worker must freeze the
+same dispatch behavior in both arms and retain any repeated-call costs. The
+earlier mixed Host/native assertion is not qualified by a native-only pass.
 
 ## Decisive acceptance
 
