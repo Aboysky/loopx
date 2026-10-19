@@ -148,6 +148,16 @@ guard. Missing or invalid evidence holds dependent planning while independent
 work retains its authority. Capture validation and later mutation checks remain
 with their existing owners; prompt delivery does not prove model adoption.
 
+The unchanged public multi-subagent CLI fixture grows by 1,147 JSON characters
+and UTF-8 bytes when this context replaces its reference. Its differential
+allows 1,280 only for that reference-to-inline transition (133 headroom);
+absolute ceilings, line limits, later inline growth and the 8 KiB production
+diagnostic remain unchanged. This is an output qualification, not a full-cost SLO.
+
+中文：同一公开 multi-subagent CLI 夹具恢复完整内联后增加 1,147 个 JSON 字符／UTF-8
+字节；差分仅对该引用转内联的一次变化给予 1,280（余量 133），绝对上限、行数、后续
+内联增长检查及生产 8 KiB 诊断不改；这不是完整成本 SLO 验收。
+
 中文：能力规划上下文由既有 owner 限制在 3 KiB 内，短包超出诊断预算时仍完整内联。
 规划前读取它，但它不授予权限。`delivery=projected` 也用于完整上下文，不能仅据该值
 要求补读。共享 DSH/cloud Host 传递签名上下文；历史 `detail_ref` 保留原捕获路由与
