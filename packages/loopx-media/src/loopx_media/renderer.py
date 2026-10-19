@@ -314,6 +314,9 @@ def main() -> int:
         if str(request.get("operation", "")).startswith("generation."):
             from .generation import operate
             result = operate(request)
+        elif str(request.get("operation", "")).startswith("image."):
+            from .images import operate
+            result = operate(request)
         else:
             result = render(request)
     except RenderCancelled:

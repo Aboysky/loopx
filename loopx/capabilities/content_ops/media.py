@@ -81,9 +81,9 @@ class MediaWorkspace:
         self.root = _safe_path(self.project, f".local/content-media/{scope}")
         self.runtime_root = runtime_root
 
-    def binding(self):
+    def binding(self, *, permission: str = "content_media_write"):
         return resolve_optional_capability_binding(state_file=default_extension_state_file(self.runtime_root),
-            capability_id="content-ops", protocol=PROTOCOL, permission="content_media_write", extension_id="loopx-media")
+            capability_id="content-ops", protocol=PROTOCOL, permission=permission, extension_id="loopx-media")
 
     def _bundle(self, composition_id: str) -> Path:
         if not isinstance(composition_id, str) or not re.fullmatch(r"media_[a-f0-9]{24}", composition_id):

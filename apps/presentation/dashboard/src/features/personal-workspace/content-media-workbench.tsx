@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 import {useWorkspaceI18n} from "./i18n";
 import "./content-media-workbench.css";
+import {ContentGeneratedImages} from "./content-generated-images";
 import {ContentGeneratedFootage} from "./content-generated-footage";
 
 type Provider = {status: string; enabled: boolean | null; next_action: string | null};
@@ -19,7 +20,7 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
   const seconds = (value: number) => `${Number(value.toFixed(2))}s`;
   const [library, setLibrary] = useState<Library | null>(null), [selectedId, setSelectedId] = useState("");
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
-  const [view, setView] = useState<"composition" | "footage">("composition");
+  const [view, setView] = useState<"composition" | "footage" | "images">("composition");
   const pending = useRef(false), generation = useRef(0), readSequence = useRef(0);
   const selected = library?.compositions.find(item => item.composition_id === selectedId) ?? library?.compositions[0];
   async function request(action: string, item?: Composition) {
@@ -69,6 +70,7 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
   return <><div className="content-media-tabs" role="group" aria-label={copy("制作方式", "Production view")}>
     <button type="button" aria-pressed={view === "composition"} onClick={() => {setView("composition"); void reload();}}>{copy("视频成片", "Compositions")}</button>
     <button type="button" aria-pressed={view === "footage"} onClick={() => setView("footage")}>{copy("生成镜头", "Generated footage")}</button>
+    <button type="button" aria-pressed={view === "images"} onClick={() => setView("images")}>{copy("生成图像", "Generated images")}</button>
   </div>{view === "composition" ? <section className="content-media" aria-label={copy("视频制作", "Video production")}>
     <div className="content-media-heading"><div><h3>{copy("制作视频", "Produce a video")}</h3>
       <p>{copy("让 Agent 准备脚本、来源和时间线，在这里制作并查看作品。", "Have your Agent prepare the story, sources and timeline. Render and review the result here.")}</p></div>
@@ -95,5 +97,5 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
         <details><summary>{copy("来源与检查", "Sources and checks")}</summary><ul>{selected.shots.map((shot, i) => <li key={i}>{shot.title} — {shot.boundary}<br /><small>{shot.source_ref}</small></li>)}</ul>
           <p>{copy("本机私有作品。编码通过不代表创意质量、理解效果或发布许可；请观看并试听。", "Private local work. Encoding does not establish creative quality, audience understanding or publication approval. Watch and listen before sharing.")}</p></details>
       </div></div> : null}
-  </section> : <ContentGeneratedFootage key={goalId} goalId={goalId} />}</>;
+  </section> : view === "footage" ? <ContentGeneratedFootage key={goalId} goalId={goalId} /> : <ContentGeneratedImages key={goalId} goalId={goalId} />}</>;
 }

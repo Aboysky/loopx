@@ -8,11 +8,7 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
-from ...extensions.runtime import (
-    default_extension_state_file,
-    execute_extension_runtime_binding,
-    resolve_optional_capability_binding,
-)
+from ...extensions.runtime import execute_extension_runtime_binding
 from ...file_lock import exclusive_file_lock
 from .media import MediaWorkspace, PROTOCOL, _owner, _read, _safe_path, _save, _sha, now
 
@@ -23,13 +19,7 @@ class GenerationWorkspace:
         self.root = _safe_path(workspace.root, "generations")
 
     def binding(self):
-        return resolve_optional_capability_binding(
-            state_file=default_extension_state_file(self.media.runtime_root),
-            capability_id="content-ops",
-            protocol=PROTOCOL,
-            permission="content_media_generate",
-            extension_id="loopx-media",
-        )
+        return self.media.binding(permission="content_media_generate")
 
     def _bundle(self, ident: str) -> Path:
         if not isinstance(ident, str) or not re.fullmatch(r"gen_[a-f0-9]{24}", ident):
