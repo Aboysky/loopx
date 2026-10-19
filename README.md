@@ -1,20 +1,21 @@
 <div align="center">
 
-<h1 align="center">LoopX</h1>
+<h1 align="center">LoopX 2.0</h1>
 
-**Give your agents a goal. Keep the work moving.**
+**The workbench for long-horizon research.**
 
-The open, local-first control plane for long-horizon agents and personal agent teams.<br>
-<sub>Keep goals, decisions and evidence across sessions. Work with Codex, Claude Code, DeepSeek Harness and other supported runtimes.</sub>
+For enterprise teams, research organizations, and independent builders.<br>
+<sub>Coordinate agents around complex research goals, preserve decisions and evidence across sessions, inspect outcomes and costs, and carry findings into the next step. Open source and local first, with support for Codex, Claude Code, DeepSeek Harness, and other supported runtimes.</sub><br>
+<sub>2.0 development preview · the installation below follows the latest stable release.</sub>
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/releases-GitHub-181717)](https://github.com/loopx-project/loopx/releases/latest) [![GitHub contributors](https://img.shields.io/badge/contributors-GitHub-181717)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
 
 <a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
 [Get started](#try-loopx) · [Workspace](#meet-the-personal-agent-workspace) · [LHTB results](#lhtb-results) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
-<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4"><img src="docs/assets/personal-workspace/workspace-hero.webp" alt="LoopX Personal Agent Workspace: a Work map showing task dependencies, responsible agents, progress and decisions waiting for the owner" width="960"></a><br>
-<sub>Source-built App on an authored <a href="demo/workspace/README.md">Workspace stories replay</a>; no live Agent execution · <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">watch the 32-second walkthrough</a></sub>
+<a href="https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601"><img src="docs/assets/personal-workspace/research-workbench-hero.webp" alt="LoopX 2.0, the long-horizon research workbench for enterprise teams, research organizations and independent builders; recorded research history with count ribbons redrawn to scale in a labelled App frame" width="960"></a><br>
+<sub><a href="https://github.com/user-attachments/assets/543af0b1-c3d4-4cfb-aedd-a68563a20601">Watch the research-workbench film · 86s</a> · <a href="docs/assets/personal-workspace/loopx-research-films.md">transcripts, subtitles and sources</a>. Recorded App excerpts, synthetic examples and illustrations are labelled.</sub>
 
 **Start in Codex App in two steps.** Install once:
 
@@ -37,8 +38,9 @@ $loopx fix the open PR review feedback and keep the patch reviewable
 
 ---
 
-**More verified work. Less human attention.** LoopX gives agents durable goals,
-bounded continuation, peer ownership and recoverable handoffs. Your runtime
+**More verified work. Less human attention.** A control plane for long-horizon agents
+and personal agent teams gives LoopX durable goals, bounded continuation, peer
+ownership and recoverable handoffs. Your runtime
 provides the model and tools; LoopX keeps track of what to do next, what is
 accepted, and when to ask you.
 
