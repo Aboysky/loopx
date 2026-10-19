@@ -209,6 +209,22 @@ covers legacy readback and an explicit offline upgrade. Legacy files remain
 readable, but block new appends until reconciled; mixed ownership must hold
 deletion. Upgrade CLI and plugin together with writers frozen.
 
+## Measure Observer Overhead
+
+`packages/dsh-loopx-plugin/bench/observer-overhead.ts` measures the observer
+component cost on a deterministic synthetic DSH event stream: observer off/on
+arms, CPU (user+system), RSS, ledger append latency, ledger bytes, event loss,
+and clock uncertainty with full denominators. It writes a public-safe JSON +
+Markdown report and states its limits. It does not measure a live DSH host,
+model, network, or Cordis dispatch, and it does not qualify C1. See the
+[bench README](../../../packages/dsh-loopx-plugin/bench/README.md).
+
+Run it from `packages/dsh-loopx-plugin`:
+
+```bash
+node --experimental-strip-types bench/observer-overhead.ts --events 10000 --repeat 5
+```
+
 ## Validation
 
 ```bash
@@ -231,5 +247,6 @@ No dashboard surface, no L2 recommendations, no automatic recovery, no
 writeback into goals, todos, gates, or session runtime, and no change to the
 `loopx status` first screen. The adapter requires an externally pinned
 goal/session/run identity; it does not discover bindings through the Driver or
-LoopX CLI. This prototype also does not provide matched native/L1 execution,
-observer CPU/I/O/latency/storage measurement, or an eligible C1 run.
+LoopX CLI. This prototype also does not provide matched native/L1 execution, a
+live DSH host measurement, or an eligible C1 run. The bench tool measures
+observer component cost on a synthetic stream; it is not a live qualification.
