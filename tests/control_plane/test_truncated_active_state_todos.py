@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from loopx.contract import check_contract
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.status import active_state_todo_fields, collect_status
 from loopx.todos import list_goal_todos
 
@@ -141,6 +142,69 @@ def test_present_but_empty_agent_todo_section_remains_healthy(
         include_public_boundary_scan=False,
     )
     assert contract["ok"] is True
+
+
+def test_truncated_legacy_state_cli_paths_fail_closed(tmp_path: Path) -> None:
+    healthy = _state_text(agent_heading="Agent Todo", agent_todo=True)
+    wounded = healthy[: healthy.index("## Agent Todo")].rstrip() + "\n"
+    _goal, runtime_root, registry_path, _state_path = _fixture(tmp_path, wounded)
+
+    code, status = run_json_cli_result(
+        "status",
+        "--goal-id",
+        GOAL_ID,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+    )
+    assert code != 0
+    assert status["ok"] is False
+    assert any(
+        row["code"] == "state_incomplete" and row["goal_id"] == GOAL_ID
+        for row in status["contract"]["error_diagnostics"]
+    )
+    goal_attention = next(
+        item for item in status["attention_queue"]["items"] if item["goal_id"] == GOAL_ID
+    )
+    assert goal_attention["status"] == "state_incomplete"
+
+    code, listed = run_json_cli_result(
+        "todo",
+        "list",
+        "--goal-id",
+        GOAL_ID,
+        "--role",
+        "agent",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+    )
+    assert code != 0
+    assert listed["ok"] is False
+    assert listed["error_code"] == "state_incomplete"
+    assert listed["todo_count"] == 0
+
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"] = {
+        "registered_agents": ["agent-a"],
+        "agent_model": "peer_v1",
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    code, quota = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        "agent-a",
+        "--scan-path",
+        str(tmp_path),
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+    )
+    assert code != 0
+    assert quota["should_run"] is False
+    assert quota["state"] == "blocked_health"
+    assert quota["status"] == "state_incomplete"
 
 
 def test_malformed_todo_region_is_a_contract_error_not_a_crash(tmp_path: Path) -> None:

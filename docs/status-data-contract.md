@@ -955,10 +955,12 @@ Item fields:
   `project_asset.user_todos` projection keeps legacy `next` / `next_index`
   fields and may also include up to three unfinished `items` for thin workers
   that need more than the first open todo.
-- `agent_todos`: optional checkbox summary parsed from `## Agent Todo`,
-  `## Codex Todo`, or `## Project Agent Todo`. Agent-facing consumers may use
-  it to choose implementation work after gates and quota allow execution; it is
-  not a user approval signal. Status, quota, and review-packet projections
+- `agent_todos`: checkbox summary parsed from `## Agent Todo`,
+  `## Codex Todo`, or `## Project Agent Todo`. The section may be empty, but a
+  readable legacy state must include its heading; absence is
+  `state_incomplete`. Agent-facing consumers may use it to choose
+  implementation work after gates and quota allow execution; it is not a user
+  approval signal. Status, quota, and review-packet projections
   should preserve up to three unfinished agent todo items so short heartbeats do
   not confuse "first visible item" with the whole backlog. Todo summaries also
   expose `first_executable_items` for advancement-class work and
