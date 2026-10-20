@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import socket
 import ssl
 import subprocess
@@ -22,6 +23,12 @@ import threading
 import time
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
+
+# Reuse the generated binding without adding this release to the isolated
+# worker's module search path or requiring a site-installed LoopX package.
+_BARE_SHA256_PATTERN = runpy.run_path(
+    str(Path(__file__).resolve().parents[1] / "control_plane" / "content_digest.py")
+)["BARE_SHA256_PATTERN"]
 
 MAX_BYTES = 4_000_000
 MAX_TEXT = 100_000
@@ -223,7 +230,7 @@ def _text_page_parameters(offset: int, expected_sha256: str | None) -> None:
     if type(offset) is not int or not 0 <= offset <= MAX_BYTES:
         raise ValueError("invalid text offset")
     if ((expected_sha256 is not None and (not isinstance(expected_sha256, str)
-            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None))
+            or _BARE_SHA256_PATTERN.fullmatch(expected_sha256) is None))
             or (offset > 0 and expected_sha256 is None)):
         raise ValueError("text continuation requires the original source digest")
 
