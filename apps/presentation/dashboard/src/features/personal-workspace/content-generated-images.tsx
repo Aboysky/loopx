@@ -52,7 +52,8 @@ export function ContentGeneratedImages({goalId}: {goalId: string}) {
     submission_unknown:copy("请求结果未知","Request outcome unknown"),rejected:copy("请求被拒绝","Request rejected"),
     ready:copy("图像已保存","Image saved"),damaged:copy("本机图像校验失败","Local image verification failed"),
   };
-  function file(name: string) {return `${ENDPOINT}/file?${new URLSearchParams({goal_id:goalId,image_id:current!.image_id,file:name})}`;}
+  function file(name: string) {return `${ENDPOINT}/file?${new URLSearchParams({goal_id:goalId,image_id:current!.image_id,file:name,
+    revision:String(current!.revision),sha256:current!.result!.files[name].sha256})}`;}
   return <section className="content-media" aria-label={copy("生成图像","Generate images")}>
     <div className="content-media-heading"><div><h3>{copy("生成图像","Generate an illustration")}</h3>
       <p>{copy("让 Agent 准备提示词与参考图，在本机保留生成素材，再添加准确文字与图表。","Have your Agent prepare the prompt and reference. Save the generated source locally, then add exact text and diagrams.")}</p></div>
@@ -69,7 +70,7 @@ export function ContentGeneratedImages({goalId}: {goalId: string}) {
         {["submitting","submission_unknown","damaged"].includes(current.status) ? <><p>{copy("该请求不能按云端任务查询或自动重发。可读取本机已保存的响应；若没有响应，须先核实服务端用量。","This request cannot be polled as a cloud task or automatically resubmitted. Read its saved local response; if absent, reconcile provider usage first.")}</p>
           <button type="button" disabled={busy} onClick={()=>void operate("collect")}>{copy("读取已保存响应","Read saved response")}</button></> : null}
         {current.error_code && !error ? <p role="alert">{copy("本次操作尚未完成，草稿和原请求状态已保留。","The operation is incomplete; the draft and original request state are retained.")}</p> : null}
-        {current.status === "ready" && current.result ? <><img src={file("generated.png")} alt={current.title} />
+        {current.status === "ready" && current.result ? <><img src={file("generated.png")} alt={current.title} onError={() => setError(copy("无法读取这个版本的图像，请重新读取。","Cannot read this image version. Recheck the saved result."))} />
           <div className="content-media-downloads"><a href={file("generated.png")} download="generated.png">{copy("下载图像","Download image")}</a><a href={file("original.png")} download="original.png">{copy("服务原始图像","Original provider image")}</a></div>
           <p>{copy("AI 生成的示意素材；完整解码通过，内容含义仍需检查。","AI-generated illustration. Full decode passed; inspect its meaning.")}</p></> : null}
         <details><summary>{copy("提示词、来源与用量","Prompt, sources and usage")}</summary><p>{current.prompt}</p>

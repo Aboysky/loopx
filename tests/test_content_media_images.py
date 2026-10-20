@@ -415,6 +415,46 @@ def test_real_image_loopback_rejects_foreign_goal_revision_and_mixed_file_identi
         response = client.getresponse()
         assert response.status == 206 and response.read() == b"\x89PNG\r\n\x1a\n"
         client.close()
+        # Saved artifact links bind both the prepared version and exact bytes.
+        # These are HTTP reads, including partial video/image previews, not
+        # another generation or an acceptance decision.
+        from urllib.parse import urlencode
+
+        original = ws.file(ident, "generated.png").read_bytes()
+        reference = {
+            "goal_id": "media-demo", "image_id": ident, "file": "generated.png",
+            "revision": "1", "sha256": hashlib.sha256(original).hexdigest(),
+        }
+
+        def get_reference(values, suffix=""):
+            client = http.client.HTTPConnection(*server.server_address)
+            client.request("GET", "/api/chat/content-media/file?" + urlencode(values) + suffix,
+                           headers={"Range": "bytes=0-7"})
+            response = client.getresponse()
+            answer = response.status, response.read()
+            client.close()
+            return answer
+
+        assert get_reference(reference) == (206, original[:8])
+        for changed in [
+            {**reference, "revision": "2"},
+            {**reference, "revision": "0"},
+            {**reference, "revision": "true"},
+            {**reference, "sha256": "0" * 64},
+            {key: value for key, value in reference.items() if key != "sha256"},
+            {key: value for key, value in reference.items() if key != "revision"},
+            {**reference, "generation_id": "other"},
+            {**reference, "goal_id": "foreign"},
+        ]:
+            assert get_reference(changed)[0] == 404
+        assert get_reference(reference, "&revision=1")[0] == 404
+        assert get_reference(reference, "&revision=")[0] == 404
+        assert get_reference(reference, "&sha256=")[0] == 404
+        assert len(calls) == 1
+        replacement = ws.prepare({**brief(), "title": "A changed brief"}, source_directory=ws.media.project)
+        assert replacement["image_id"] != ident
+        assert get_reference(reference) == (206, original[:8]), "Immutable old image remains readable"
+        assert len(calls) == 1, "Preparing/reading a replacement must not resubmit generation"
         assert str(ws.media.project) not in json.dumps(result)
     finally:
         server.shutdown()

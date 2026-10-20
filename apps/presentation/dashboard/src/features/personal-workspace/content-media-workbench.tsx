@@ -20,6 +20,7 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
   const seconds = (value: number) => `${Number(value.toFixed(2))}s`;
   const [library, setLibrary] = useState<Library | null>(null), [selectedId, setSelectedId] = useState("");
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const [watching, setWatching] = useState(false);
   const [view, setView] = useState<"composition" | "footage" | "images">("composition");
   const pending = useRef(false), generation = useRef(0), readSequence = useRef(0);
   const selected = library?.compositions.find(item => item.composition_id === selectedId) ?? library?.compositions[0];
@@ -35,33 +36,36 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
     try {
       const value: Library = await request("list");
       if (current === generation.current && sequence === readSequence.current) {setLibrary(value); setError("");}
-    } catch {if (current === generation.current && sequence === readSequence.current) setError(copy("作品暂不可读，请重新读取。", "Cannot read compositions. Recheck the workspace."));}
+    } catch {if (current === generation.current && sequence === readSequence.current) {setWatching(false); setError(copy("作品暂不可读，请重新读取。", "Cannot read compositions. Recheck the workspace."));}}
   }
   useEffect(() => {
-    generation.current += 1; setLibrary(null); setSelectedId(""); pending.current = false; setBusy(false); void reload();
+    generation.current += 1; setLibrary(null); setSelectedId(""); pending.current = false; setBusy(false); setWatching(false); void reload();
     return () => {generation.current += 1;};
   }, [goalId]);
-  const running = library?.compositions.some(item => item.status === "rendering");
+  const rendering = selected?.status === "rendering";
   useEffect(() => {
-    if (!running) return;
+    if (!watching) return;
+    if (!rendering) {setWatching(false); return;}
     const timer = setInterval(() => void reload(), 2000);
     return () => clearInterval(timer);
-  }, [running, goalId]);
+  }, [watching, rendering, goalId]);
   async function operate(action: "render" | "cancel") {
     if (!selected || pending.current) return;
-    pending.current = true; setBusy(true); setError("");
+    pending.current = true; setBusy(true); setError(""); setWatching(false);
     const current = generation.current;
     try {
       const value = await request(action, selected);
       if (current !== generation.current) return;
       await reload();
+      if (current === generation.current && action === "render" && value.ok && value.status === "rendering") setWatching(true);
       if (!value.ok) setError(copy("渲染器未就绪。请启用已验证的本机视频扩展后重试。", "Renderer unavailable. Enable the verified local video extension, then retry."));
     } catch {if (current === generation.current) setError(copy("操作未确认。先重新读取，避免重复启动。", "Operation unconfirmed. Recheck before retrying."));}
     finally {if (current === generation.current) {pending.current = false; setBusy(false);}}
   }
-  function file(name: string) {return `${ENDPOINT}/file?${new URLSearchParams({goal_id: goalId, composition_id: selected!.composition_id, file: name})}`;}
+  function file(name: string) {return `${ENDPOINT}/file?${new URLSearchParams({goal_id: goalId, composition_id: selected!.composition_id, file: name,
+    revision: String(selected!.revision), sha256: selected!.result!.files[name].sha256})}`;}
   const status: Record<string, string> = {
-    prepared: copy("待制作", "Ready to render"), rendering: copy("正在制作", "Rendering"), ready: copy("作品已生成", "Video ready"),
+    prepared: copy("待制作", "Ready to render"), rendering: copy("已请求制作，等待结果", "Render requested; awaiting result"), ready: copy("作品已生成", "Video ready"),
     failed: copy("制作失败，可修复后重试", "Render failed; repair and retry"), cancelled: copy("已取消，可重新制作", "Cancelled; ready to retry"),
     interrupted: copy("上次制作中断，可重新制作", "Previous render interrupted; retry available"), damaged: copy("结果校验失败，请重新制作", "Result verification failed; render again"),
   };
@@ -73,7 +77,7 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
     <button type="button" aria-pressed={view === "images"} onClick={() => setView("images")}>{copy("生成图像", "Generated images")}</button>
   </div>{view === "composition" ? <section className="content-media" aria-label={copy("视频制作", "Video production")}>
     <div className="content-media-heading"><div><h3>{copy("制作视频", "Produce a video")}</h3>
-      <p>{copy("让 Agent 准备脚本、来源和时间线，在这里制作并查看作品。", "Have your Agent prepare the story, sources and timeline. Render and review the result here.")}</p></div>
+      <p>{copy("脚本与来源由当前对话准备；这里只读取已保存状态，制作后可重新读取。", "The current conversation prepares the story and sources. This view reads saved state; recheck after rendering.")}</p></div>
       <button type="button" onClick={() => void reload()} disabled={busy}>{copy("重新读取", "Recheck")}</button></div>
     {error ? <p role="alert">{error}</p> : null}
     {!library && !error ? <p role="status">{copy("正在读取作品…", "Loading compositions…")}</p> : null}
@@ -81,12 +85,12 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
     {library && !selected ? <p className="content-media-empty">{copy("还没有准备好的作品。把想讲的内容交给 Agent，它会通过 Content-Ops 保存可制作的脚本。", "No prepared compositions yet. Tell your Agent what to explain; it can save a renderable brief through Content-Ops.")}</p> : null}
     {selected ? <div className="content-media-workspace">
       <nav aria-label={copy("选择作品", "Choose a composition")}>{library!.compositions.map(item => <button key={item.composition_id} type="button" aria-pressed={item.composition_id === selected.composition_id}
-        onClick={() => setSelectedId(item.composition_id)}><span>{item.title}</span><small>{seconds(item.duration_seconds)} · {status[item.status] ?? item.status}</small></button>)}</nav>
+        disabled={busy} onClick={() => {setWatching(false); setError(""); setSelectedId(item.composition_id);}}><span>{item.title}</span><small>{seconds(item.duration_seconds)} · {status[item.status] ?? item.status}</small></button>)}</nav>
       <div className="content-media-result"><div className="content-media-title"><div><h4>{selected.title}</h4><p role="status">{status[selected.status] ?? selected.status} · {seconds(selected.duration_seconds)} · {copy("修订", "Revision")} {selected.revision}</p></div>
         {selected.status === "rendering" ? <button type="button" disabled={busy} onClick={() => void operate("cancel")}>{copy("取消制作", "Cancel render")}</button>
           : <button type="button" disabled={busy || !providerReady || selected.status === "ready"} onClick={() => void operate("render")}>{copy("制作视频", "Render video")}</button>}</div>
         {hasBlender && selected.status !== "ready" ? <p>{copy("包含 Blender 三维场景。制作需要已安装的本机 Blender 扩展依赖；作品会保留可编辑工程与颜色、深度画面。", "Includes Blender scenes. Rendering needs the local Blender extra; the editable project, color and depth frames are retained.")}</p> : null}
-        {selected.status === "ready" && selected.result ? <><video key={`${selected.composition_id}:${selected.result.files["video.mp4"].sha256}`} controls preload="metadata" poster={file("poster.png")} src={file("video.mp4")}>
+        {selected.status === "ready" && selected.result ? <><video key={`${selected.composition_id}:${selected.result.files["video.mp4"].sha256}`} controls preload="metadata" poster={file("poster.png")} src={file("video.mp4")} onError={() => setError(copy("无法读取这个版本的作品，请重新读取。", "Cannot read this artifact version. Recheck the saved result."))}>
           <track kind="captions" src={file("captions.vtt")} label={copy("字幕", "Captions")} default /></video>
           <div className="content-media-downloads"><a href={file("video.mp4")} download="video.mp4">{copy("下载视频", "Download video")}</a><a href={file("captions.srt")} download="captions.srt">{copy("字幕", "Subtitles")}</a><a href={file("transcript.txt")} download="transcript.txt">{copy("文字稿", "Transcript")}</a>
             {selected.result.files["blender-project.zip"] ? <a href={file("blender-project.zip")} download="blender-project.zip">{copy("Blender 工程与画面", "Blender project and passes")}</a> : null}</div>

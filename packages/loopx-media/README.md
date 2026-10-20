@@ -26,12 +26,27 @@ An isolated environment is also supported if its executable is on that PATH.
 
 An Agent prepares the story, source SHA256s and timing through
 [`content-ops media`](../../docs/reference/protocols/content-ops-media-v0.md).
-In the packaged App, open **Settings → Capabilities → a Goal → Content
-production**. Select the prepared composition, render, then view the video,
+In the packaged App, open **Goal → Files → Content artifacts**. Select the prepared composition, render, then view the video,
 captions, transcript and source boundaries in the same workbench. The CLI
 exposes the same operation. Rendering is local work; it grants no publication
 approval. Revise the brief through the Agent rather than re-entering source
 paths or protocol JSON in the browser.
+
+**Return to conversation** preserves the selected Goal and prepares no model call.
+Use it to give the Agent feedback and prepare another revision. **Goal delivery checks**
+opens the existing Goal acceptance interaction shared with other deliverables;
+opening it only reads its current requirements and receipts. A local render or
+cloud image never grants semantic acceptance, independent review, adoption or
+publication authority. This packaged production route currently requires an
+existing Goal; it does not create one for an ordinary project conversation.
+
+Artifact preview/download URLs bind the saved revision and file SHA256. A changed
+composition revision or different bytes makes that link unavailable rather than
+serving a replacement. Immutable image/footage identities keep their original
+verified outputs. Existing unpinned URLs remain compatible current-file reads.
+Reading saved work does not start rendering, generation or polling. An explicit
+render observes that operation while this view remains open; leaving the view or
+a failed read stops observation without cancelling the provider.
 
 Supported atoms are title scenes, measured text wrapping, animated node
 diagrams, hash-bound image/video excerpts, timed captions, supplied audio,
@@ -74,7 +89,7 @@ needs explicit extension registration; doctor cannot rebind an active revision.
 Preparation does not install Blender. The ordinary install still supports 2D;
 a missing Blender extra fails only an attempted 3D scene. Repair that local
 dependency and retry the unchanged prepared composition through the same CLI
-or **Content production** workbench. No second provider setting is needed.
+or **Content artifacts** workbench. No second provider setting is needed.
 
 An Agent selects a `blender` shot and supplies declarative objects, camera,
 lights, materials and position keyframes. The shared TypeScript owner admits
@@ -241,7 +256,7 @@ Packaged author fixture with synthetic source frames and generated footage.
 The [390px view](docs/footage-after-phone.png) retains the same controls;
 [downloads remain available after scrolling the detail](docs/footage-phone-download.png).
 
-In **Settings → Capabilities → a Goal → Content production**, the same workbench
+In **Goal → Files → Content artifacts**, the same workbench
 shows the prepared footage, external-upload/usage consequence, submit button,
 original-task checks, missing-provider/key state, saved video and last-frame
 download. It does not ask the owner to copy filesystem paths or re-enter the
@@ -261,7 +276,7 @@ shot requires a new prepared intent after reviewing the original outcome.
 
 ## Optional generated images
 
-Version 0.4 adds a single-image path in the same **Content production**
+Version 0.4 adds a single-image path in the same **Content artifacts**
 workbench. Install or explicitly upgrade this distribution and register the
 current manifest using the lifecycle above. Load a separately authorized
 `ARK_IMAGE_API_KEY` into the LoopX process; optional `ARK_IMAGE_BASE_URL` must

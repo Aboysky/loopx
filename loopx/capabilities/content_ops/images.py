@@ -216,10 +216,13 @@ class ImageWorkspace:
             _save(bundle / "record.json", record)
         return {**self.inspect(ident), "ok": record.get("error_code") is None}
 
-    def file(self, ident: str, name: str) -> Path:
-        if (
-            name not in {"generated.png", "original.png"}
-            or self.inspect(ident)["status"] != "ready"
-        ):
+    def file(self, ident: str, name: str, *, expected_revision: int | None = None) -> Path:
+        if name not in {"generated.png", "original.png"}:
+            raise ValueError("Verified image unavailable")
+        observed = self.inspect(ident)
+        if expected_revision is not None and (type(expected_revision) is not int
+                or expected_revision != observed["revision"]):
+            raise ValueError("Artifact revision changed")
+        if observed["status"] != "ready":
             raise ValueError("Verified image unavailable")
         return _safe_path(self._bundle(ident), f"output/{name}")

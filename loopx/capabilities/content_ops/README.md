@@ -31,12 +31,20 @@ or role-incomplete page sets. See
 
 `loopx content-ops media` prepares source-bound private compositions and renders
 them through the optional local `loopx-media` extension. The packaged
-**Settings → Capabilities → a Goal → Content production** workbench renders,
+**Goal → Files → Content artifacts** workbench renders,
 cancels and reads the same compositions, video, captions, transcript and source
 checks. It reuses existing layout tokens and content-item revision/approval,
 while keeping heavy image/audio/video computation in the optional distribution.
 See the [composition contract](../../../docs/reference/protocols/content-ops-media-v0.md)
 and [renderer installation and recovery](../../../packages/loopx-media/README.md).
+
+Creation and requested changes stay in the current Goal conversation; the results
+view returns to that conversation without sending a message. Capability settings
+retain configuration only and do not load production records or start work.
+Delivery requirements and checks reuse the existing Goal acceptance owner, also
+used by non-media deliverables; renderer checks do not create an acceptance or
+publication decision. This integration is Goal-scoped. Ordinary project
+conversations without a Goal are not routed through a fabricated Goal.
 
 `loopx content-ops generation` prepares immutable, priced cloud-footage intents
 and explicitly submits/checks/collects a bounded Seedance 2.5 video through the
@@ -60,8 +68,8 @@ and billing remain separate from byte readiness. See the provider guide's
 `loopx content-ops reference` reads an existing private source/style catalog,
 prepares version-checked capture/correction artifacts, retrieves topic/structure
 references, and prepares outlines with original credit and reuse conditions.
-The same TypeScript owner runs in the packaged **Content production → Source
-style references** workbench. Imports stay in browser page memory; downloads are private
+The same TypeScript owner runs in the packaged **Goal → Files → Content artifacts
+→ Prepare source and style references** disclosure. Imports stay in browser page memory; downloads are private
 review artifacts. This preview does not write the original catalog or activate
 a source. Inventory reuses Material Lifecycle, while managed apply/rollback
 still requires that owner's qualified source provider. See

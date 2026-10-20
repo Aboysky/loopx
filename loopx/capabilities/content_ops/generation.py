@@ -250,11 +250,16 @@ class GenerationWorkspace:
             _save(bundle / "record.json", record)
         return {**self.inspect(ident), "ok": record.get("error_code") is None}
 
-    def file(self, ident: str, name: str) -> Path:
+    def file(self, ident: str, name: str, *, expected_revision: int | None = None) -> Path:
+        if name not in {"generated.mp4", "poster.png", "last-frame.jpg"}:
+            raise ValueError("Verified footage file unavailable")
         record = self._record(ident)
+        observed = self.inspect(ident)
+        if expected_revision is not None and (type(expected_revision) is not int
+                or expected_revision != record["revision"] or expected_revision != observed["revision"]):
+            raise ValueError("Artifact revision changed")
         if (
-            name not in {"generated.mp4", "poster.png", "last-frame.jpg"}
-            or self.inspect(ident)["status"] != "ready"
+            observed["status"] != "ready"
             or name not in record["result"]["files"]
         ):
             raise ValueError("Verified footage file unavailable")

@@ -76,7 +76,8 @@ export function ContentGeneratedFootage({goalId}: {goalId: string}) {
     expired: copy("云端任务已超时", "Cloud task expired"), cancelled: copy("云端已取消", "Cancelled in the cloud"),
     damaged: copy("本机文件校验失败", "Local file verification failed"),
   };
-  function file(name: string) {return `${ENDPOINT}/file?${new URLSearchParams({goal_id: goalId, generation_id: current!.generation_id, file: name})}`;}
+  function file(name: string) {return `${ENDPOINT}/file?${new URLSearchParams({goal_id: goalId, generation_id: current!.generation_id, file: name,
+    revision: String(current!.revision), sha256: current!.result!.files[name].sha256})}`;}
   return <section className="content-media" aria-label={copy("生成镜头", "Generate footage")}>
     <div className="content-media-heading"><div><h3>{copy("生成镜头", "Generate footage")}</h3>
       <p>{copy("用已准备的提示词和参考帧生成素材，再在本机添加准确文字、图表和配音。", "Generate source footage from a prepared prompt and reference frames. Add exact text, diagrams and narration locally.")}</p></div>

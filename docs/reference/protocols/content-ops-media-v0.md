@@ -113,14 +113,39 @@ The loopback Chat server exposes `POST /api/chat/content-media` for list,
 inspect, render and cancel. Render/cancel use the current revision; the server
 binds the registered Goal/source route and rejects a different selected Goal,
 foreign origin or filesystem fields. Rendering runs in a bounded background
-worker so the page remains responsive. Polling occurs only while a render is
-pending and stops after a terminal readback.
+worker so the page remains responsive. The packaged production path is **Goal →
+Files → Content artifacts**, reached from the existing Goal conversation. Capability
+settings do not host production or reference workbenches. Returning to the
+conversation retains its Goal and does not send a message. Delivery requirements
+and checks reuse the existing Goal acceptance owner used by non-media artifacts;
+this media transport owns neither generic acceptance nor a second approval store.
+This route remains Goal-scoped; ordinary project conversations without a Goal
+are not silently assigned one.
+
+Reading saved work does not start polling. An explicit render observes its own
+pending operation until terminal readback, a failed read or leaving the view;
+opening a previously pending record only reads saved state. Stopping observation
+does not cancel the renderer or a cloud operation.
 
 `GET /api/chat/content-media/file` serves only fixed verified files from that
 composition, with byte ranges for playback, no-store and same-origin resource
 policy. It refuses escaping filenames, non-ready and damaged artifacts; it
 does not serve the private manifest or source files. Browser error projections
 do not include provider stderr or private paths.
+
+New preview/download links include both `revision` and the exact file `sha256`.
+The transport validates the current record revision and hashes the opened file
+descriptor before serving a full or ranged response. Missing, duplicated or
+invalid version fields, a changed composition revision and different bytes are
+unavailable; a prior link cannot silently return a replacement. Immutable image
+and footage records retain their separate original identities. Both version
+fields are optional together for compatibility with existing verified current-file
+links. Neither form certifies creative quality, independent review or acceptance.
+
+中文：制作与预览从当前 Goal 的“成果 → 内容作品”进入，设置页仅保留配置。
+“返回当前对话”不发送消息；交付检查复用已有 Goal 验收，不增加媒体私有审批。
+此入口尚不支持无 Goal 的普通项目对话，也不会自动创建 Goal。预览与下载绑定修订和
+文件摘要；旧修订或不同字节不会被静默替换。浏览保存状态不启动制作、生成或轮询。
 
 Missing provider, changed source, stale revision, text/glyph overflow, short
 footage, invalid narration timing, cancellation, stopped host and damaged bytes

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -91,19 +92,36 @@ class ContentMediaRequestMixin:
 
     def _content_media_file(self) -> None:
         try:
-            query = parse_qs(urlparse(self.path).query, strict_parsing=True)
-            if set(query) not in ({"goal_id", "composition_id", "file"}, {"goal_id", "generation_id", "file"}, {"goal_id", "image_id", "file"}) or any(
+            query = parse_qs(urlparse(self.path).query, strict_parsing=True, keep_blank_values=True)
+            # Existing links retain their verified current-file read. New artifact
+            # links pin both revision and bytes; a stale link never reads a replacement.
+            version_keys = {"revision", "sha256"}
+            pinned = bool(set(query) & version_keys)
+            fields = set(query) - version_keys
+            if fields not in ({"goal_id", "composition_id", "file"}, {"goal_id", "generation_id", "file"}, {"goal_id", "image_id", "file"}) or any(
                 len(v) != 1 for v in query.values()
             ):
                 raise ValueError("Invalid file request")
+            if pinned and (not version_keys <= set(query)
+                           or not re.fullmatch(r"[1-9][0-9]*", query["revision"][0])
+                           or not re.fullmatch(r"[a-f0-9]{64}", query["sha256"][0])):
+                raise ValueError("Invalid artifact version")
             workspace = self._media_workspace(query["goal_id"][0])
             name = query["file"][0]
+            owner: MediaWorkspace | ImageWorkspace | GenerationWorkspace
             if "image_id" in query:
-                path = ImageWorkspace(workspace).file(query["image_id"][0], name)
+                owner, ident = ImageWorkspace(workspace), query["image_id"][0]
+            elif "generation_id" in query:
+                owner, ident = GenerationWorkspace(workspace), query["generation_id"][0]
             else:
-                path = GenerationWorkspace(workspace).file(query["generation_id"][0], name) if "generation_id" in query else workspace.file(query["composition_id"][0], name)
+                owner, ident = workspace, query["composition_id"][0]
+            path = owner.file(ident, name, expected_revision=int(query["revision"][0]) if pinned else None)
             fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             with os.fdopen(fd, "rb") as source:
+                if pinned:
+                    if hashlib.file_digest(source, "sha256").hexdigest() != query["sha256"][0]:
+                        raise ValueError("Artifact bytes changed")
+                    source.seek(0)
                 size = os.fstat(source.fileno()).st_size
                 start, end, status = 0, size - 1, 200
                 header = self.headers.get("Range")
