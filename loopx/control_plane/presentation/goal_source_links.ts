@@ -1,6 +1,6 @@
 /** Local organization of existing source Goals, never execution registration. */
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import type {JsonObject} from "../effect_program.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 
 export function projectGoalSourceLinks(input: JsonObject): JsonObject {
