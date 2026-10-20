@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from ...control_plane.effect_runtime import effect_runtime_result
+from ..native_chat.codex_context import shared_chatgpt_transport
 
 
 def _digest(value: Any) -> str:
@@ -144,12 +145,21 @@ def execute(
         _write(directory / "output-schema.json", prepared["output_schema"])
         (directory / "prompt.txt").write_text(prepared["prompt"], encoding="utf-8")
         config = prepared["config"]
+        # Keep native account routing while ignoring unrelated user tools and
+        # rules. The shared host transport delegates credentials/refresh to
+        # Codex; it supplies no endpoint, bearer token or account configuration.
+        transport = shared_chatgpt_transport({}, {})
+        provider = transport["model_provider"]
+        transport_args = ["-c", f"model_provider={json.dumps(provider)}"]
+        for key, value in transport["model_providers"][provider].items():
+            transport_args.extend(["-c", f"model_providers.{provider}.{key}={json.dumps(value)}"])
         command = [
             codex,
             "exec",
             "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",
+            *transport_args,
             "--skip-git-repo-check",
             "--sandbox",
             "read-only",

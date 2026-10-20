@@ -91,6 +91,15 @@ def provider(
 import json,sys,time
 from pathlib import Path
 assert "\\u539f\\u59cb\\u76ee\\u6807" in sys.stdin.buffer.read().decode("utf-8")
+options = dict(arg.split('=', 1) for index, arg in enumerate(sys.argv) if index > 0 and sys.argv[index-1] == '-c')
+selected = json.loads(options['model_provider'])
+assert json.loads(options['model_providers.' + selected + '.requires_openai_auth']) is True
+assert json.loads(options['model_providers.' + selected + '.supports_websockets']) is False
+assert not any(key.endswith(('.base_url', '.env_key', '.experimental_bearer_token')) for key in options)
+assert '--ignore-user-config' in sys.argv and '--ignore-rules' in sys.argv
+assert sys.argv[sys.argv.index('--sandbox')+1] == 'read-only'
+assert json.loads(options['web_search']) == 'disabled'
+assert 'shell_tool' in sys.argv and 'unified_exec' in sys.argv
 time.sleep({delay})
 if {code}: sys.exit({code})
 Path(sys.argv[sys.argv.index('-o')+1]).write_bytes({payload!r})
