@@ -24,7 +24,11 @@ not independent verification of a model's translation or judgments.
 The Codex observer reuses native Chat's shared authenticated HTTP transport.
 Credentials and refresh remain with Codex's existing signed-in account; the
 observer neither copies tokens nor imports user tool/rule configuration. Its
-explicit read-only sandbox, disabled shell/exec/web tools and fixed supplied
+child follows the desktop service's explicit `LOOPX_CHAT_CODEX_HOME` account
+selection rather than an unrelated inherited `CODEX_HOME`. Without that Chat
+selection, ordinary CLI account discovery remains unchanged. This selects an
+existing native account directory; it does not copy credentials or change login.
+The explicit read-only sandbox, disabled shell/exec/web tools and fixed supplied
 evidence remain in force. A failed provider attempt stays in job history and
 requires an explicit retry after the host problem is repaired.
 

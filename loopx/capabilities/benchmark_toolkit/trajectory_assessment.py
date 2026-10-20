@@ -156,6 +156,12 @@ def execute(
         # rules. The shared host transport delegates credentials/refresh to
         # Codex; it supplies no endpoint, bearer token or account configuration.
         transport = shared_chatgpt_transport({}, {})
+        # The desktop service pins its Chat account independently of an
+        # unrelated terminal's CODEX_HOME. Use that existing host selection;
+        # leave ordinary CLI environments and Codex-owned credentials intact.
+        environment = dict(os.environ)
+        if chat_home := environment.get("LOOPX_CHAT_CODEX_HOME"):
+            environment["CODEX_HOME"] = chat_home
         provider = transport["model_provider"]
         transport_args = ["-c", f"model_provider={json.dumps(provider)}"]
         for key, value in transport["model_providers"][provider].items():
@@ -237,6 +243,7 @@ def execute(
                 stdin=prompt,
                 stdout=events,
                 stderr=errors,
+                env=environment,
                 text=True,
                 encoding="utf-8",
             )
