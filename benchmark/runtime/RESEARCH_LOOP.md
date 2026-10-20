@@ -4,9 +4,11 @@ The heartbeat runtime's explicit `research_loop=True` option retains the
 original research objective while separating an initial-candidate Todo from
 its deferred research successor. Omission preserves the previous treatment.
 The runtime selects the existing `evidence_conditioned_v1` replan strategy and
-rejects an explicitly conflicting strategy. The current request guard checks
-ordinary Host admission at each actual provider send. A configured
-Responses-compatible endpoint is required by that request boundary.
+rejects an explicitly conflicting strategy. This standalone stage/evidence
+entry retains the existing Host admission boundaries; it does not install a
+per-provider-request guard. When composed with C1's native request-admission
+entry, that entry checks ordinary Host admission at each actual provider send
+and requires a configured Responses-compatible endpoint.
 
 The entry creates the two stages using existing `todo_done` and successor
 semantics. Finishing the candidate releases real optimization work; it cannot
@@ -61,6 +63,9 @@ negative results and concrete blockers remain eligible evidence.
 显式研究入口保留原 Goal，把初始候选与后续研究表示成既有 Todo 和后继依赖。
 候选完成只释放后续研究，准备阶段使用 `surface_only`，不会声称已经取得收益。
 Stop、原预算和真实阻塞保持有效，不要求填满时长或改变原生评测规则。
+独立的阶段/证据入口沿用既有 Host 准入边界，不安装逐次 provider 请求守卫。
+只有组合 C1 的原生请求准入入口后，该入口才会在每次实际 provider 发送前检查
+普通 Host 准入，并要求配置兼容 Responses 的端点。
 
 本地探针固定所选文件，记录真实耗时、退出与超时状态；可选 solver 报告与宿主
 测量分开，坏诊断不能抹去可靠测量。所选文件清单哈希不是原生归档哈希。
