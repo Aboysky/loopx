@@ -21,6 +21,13 @@ the frontend does not present an unspecified or other-language result as a new
 analysis in the selected language. Output-language metadata records the request,
 not independent verification of a model's translation or judgments.
 
+The Codex observer reuses native Chat's shared authenticated HTTP transport.
+Credentials and refresh remain with Codex's existing signed-in account; the
+observer neither copies tokens nor imports user tool/rule configuration. Its
+explicit read-only sandbox, disabled shell/exec/web tools and fixed supplied
+evidence remain in force. A failed provider attempt stays in job history and
+requires an explicit retry after the host problem is repaired.
+
 ## What the measurements should answer
 
 Use one **research episode** as the process unit: a bounded question or competing
