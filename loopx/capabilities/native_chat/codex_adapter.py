@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 from pathlib import Path
+import queue
+import subprocess
+import threading
+import time
 from typing import Any, Callable
 
 from ...chat_agent import CodexChatAgentSession, CodexChatTimeoutError
@@ -18,6 +23,41 @@ from ...chat_codex_goal import CodexGoalDriver
 class CodexAppServerAdapter:
     session: CodexChatAgentSession
     goal_driver: CodexGoalDriver | None = None
+
+    @staticmethod
+    def failed_request_observation(*, codex_bin: str, codex_home: Path,
+                                   thread_ids: list[str], turn_id: str) -> dict[str, Any] | None:
+        """Read persisted native metadata/items; create no native conversation.
+
+        The initialized stdio client is not a listener or a model runner. It
+        uses the same native dispatcher as authentication/control and never
+        calls thread/start, resume, inject or turn/start.
+        """
+        from ...chat_agent import _reader
+
+        process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
+            cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", bufsize=1)
+        native = CodexChatAgentSession(process=process, messages=queue.Queue(), thread_id="",
+            work_dir=codex_home, response_timeout_sec=5)
+        try:
+            threading.Thread(target=_reader, args=(process.stdout, native.messages), daemon=True).start()
+            native._request("initialize", {"clientInfo": {"name": "loopx_chat", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": True}})
+            native._notify("initialized", {})
+            deadline = time.monotonic() + 5
+            for thread_id in dict.fromkeys(thread_ids):
+                native.thread_id = thread_id
+                native.response_timeout_sec = max(.01, deadline - time.monotonic())
+                proof = native.failed_request_readback(turn_id)
+                if proof is not None:
+                    return proof
+                if time.monotonic() >= deadline:
+                    break
+            return None
+        finally:
+            native.close()
 
     @property
     def current_model_id(self) -> str | None:
@@ -40,6 +80,7 @@ class CodexAppServerAdapter:
         work_dir: Path,
         goal_id: str | None,
         objective: str,
+        history: list[dict[str, Any]] | None = None,
         resume_thread_id: str | None = None,
         startup_timeout_sec: float = 30.0,
         idle_timeout_sec: float = 180.0,
@@ -54,6 +95,19 @@ class CodexAppServerAdapter:
         service_tier: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
     ) -> "CodexAppServerAdapter":
+        history_items = []
+        # Migration restores the full visible conversation in native history.
+        # The objective is repeated per Turn; putting the transcript there
+        # duplicates it indefinitely and prevents native compaction from helping.
+        for item in ([] if resume_thread_id else history or []):
+            role, text = item.get("role", "user"), str(item.get("content") or "")
+            if role not in {"user", "assistant"}:
+                raise ValueError("Visible Chat history requires user or assistant roles")
+            if text.strip():
+                history_items.append({
+                    "type": "message", "role": role,
+                    "content": [{"type": "output_text" if role == "assistant" else "input_text", "text": text}],
+                })
         retry_timeout = bool(resume_thread_id)
         while True:
             try:
@@ -85,6 +139,14 @@ class CodexAppServerAdapter:
                         session._request("thread/name/set", {
                             "threadId": session.thread_id, "name": "LoopX Chat",
                         })
+                        if history_items:
+                            # Persist before Core publishes the upstream binding,
+                            # even if the service restarts before its first Turn.
+                            # An unknown outcome fails closed: never retry or
+                            # fall back to replaying history inside a user Turn.
+                            session._request("thread/inject_items", {
+                                "threadId": session.thread_id, "items": history_items,
+                            })
                     except Exception:
                         session.close()
                         raise

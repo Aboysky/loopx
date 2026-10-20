@@ -33,6 +33,7 @@ class CodexChatAgentError(RuntimeError):
         self.gate = gate
         self.error_code = error_code
         self.native_error_info: dict[str, Any] | str | None = None
+        self.native_routing_timeout = False
 
 
 class CodexChatTimeoutError(CodexChatAgentError):
@@ -201,6 +202,12 @@ def _retry_error_details(error: Any) -> dict[str, Any]:
     return {"retry": {"codex_error_info": safe_info}}
 
 
+def _routing_discovery_timeout(error: Any) -> bool:
+    # A fixed native provider diagnostic, never a substring/prose retry grant.
+    return (isinstance(error, dict) and error.get("codexErrorInfo") == "other"
+            and error.get("message") == "workspace routing discovery timed out")
+
+
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
@@ -263,12 +270,14 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     if isinstance(safe_info, dict) and "activeTurnNotSteerable" not in safe_info:
         selected = ("upstream_transport_failure", "Codex 上游响应连接失败，本轮未完成。")
     if selected is None:
-        return CodexChatAgentError(
+        failure = CodexChatAgentError(
             fallback,
             gate=_host_tool_gate(
                 fallback, "Inspect the Codex host error before continuing."
             ),
         )
+        failure.native_routing_timeout = _routing_discovery_timeout(error)
+        return failure
     code, summary = selected
     policy = isinstance(info, str) and info in {"cyberPolicy", "misalignmentPolicyViolation"}
     return CodexChatAgentError(
@@ -1462,10 +1471,62 @@ class CodexChatAgentSession:
                 raise self._runtime_error("Codex returned an invalid control inventory cursor.")
             seen_cursors.add(cursor)
 
+    def failed_request_readback(self, turn_id: str) -> dict[str, Any] | None:
+        """Observe a historical pre-execution failure without resuming it.
+
+        Unlike a same-worker transport retry, this may inspect an older failed
+        request. Every native Turn must be terminal, and the selected request
+        must contain exactly its user input: no answer, tool, correction or
+        unknown item. The Core still owns any new continuation admission.
+        """
+        deadline = time.monotonic() + self.response_timeout_sec
+
+        def terminal() -> dict[str, Any] | None:
+            turns = list(self._control_items("thread/turns/list", {
+                "sortDirection": "desc", "itemsView": "summary",
+            }, deadline))
+            ids = [item.get("id") for item in turns]
+            if (not ids or any(not isinstance(value, str) or not value for value in ids)
+                    or len(set(ids)) != len(ids)
+                    or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in turns)):
+                return None
+            selected = next((item for item in turns if item["id"] == turn_id), None)
+            if not selected or selected.get("status") != "failed":
+                return None
+            info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
+            # `other` is evidence of a failed native request, not permission to
+            # retry it. The typed admission owner separately decides whether
+            # this proven user-only failure is eligible for one continuation.
+            if info in ("contextWindowExceeded", "serverOverloaded", "internalServerError", "other"):
+                return {"codex_error_info": info}
+            if isinstance(info, dict) and len(info) == 1:
+                detail = next(iter(info.values()))
+                status = detail.get("httpStatusCode") if isinstance(detail, dict) else False
+                if isinstance(detail, dict) and "httpStatusCode" in detail and (
+                    status is None or type(status) is int and 500 <= status <= 599
+                ):
+                    return {"codex_error_info": info}
+            return None
+
+        try:
+            proof = terminal()
+            if proof is None:
+                return None
+            items = list(self._control_items("thread/items/list", {"turnId": turn_id}, deadline))
+            if (len(items) != 1 or items[0].get("turnId") != turn_id
+                    or not isinstance(items[0].get("item"), dict)
+                    or items[0]["item"].get("type") != "userMessage"
+                    or not items[0]["item"].get("id") or terminal() != proof):
+                return None
+            return {"thread_id": self.thread_id, "turn_id": turn_id,
+                    "only_original_user_item": True, **proof}
+        except (CodexChatAgentError, OSError, TypeError, ValueError):
+            return None
+
     def transport_retry_readback(self, turn_id: str) -> dict[str, Any] | None:
         """Read native terminal/effect facts; notification history is insufficient.
 
-        Only a failed, latest Turn with a typed connection/overload error and a complete
+        Only a failed, latest Turn with a known connection/overload error and a complete
         text-only inventory is eligible. Unknown items, tools (including reads),
         delivery, additional user input and unreadable inventories stop recovery.
         This is adapter IO evidence, never permission to reopen a Core Turn.
@@ -1497,6 +1558,8 @@ class CodexChatAgentSession:
             info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
             if info == "serverOverloaded":
                 return {"codex_error_info": info}
+            if _routing_discovery_timeout(error):
+                return {"codex_error_info": info, "pre_execution_routing_timeout": True}
             if not isinstance(info, dict) or len(info) != 1:
                 return None
             variant, detail = next(iter(info.items()))
@@ -1536,6 +1599,8 @@ class CodexChatAgentSession:
             # An accepted user item binds the complete inventory to this native
             # request. A second user item can be a correction; never drop it.
             if user_count != 1 or failed_turn() != terminal:
+                return None
+            if terminal.get("pre_execution_routing_timeout") and len(items) != 1:
                 return None
             return {"thread_id": self.thread_id, "turn_id": turn_id,
                     "item_count": len(items), **terminal}

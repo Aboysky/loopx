@@ -167,9 +167,42 @@ def test_planning_heartbeat_and_turn_share_one_binding(
 
 
 def test_timeout_keeps_the_observed_session_for_next_heartbeat(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    import subprocess
+    from benchmark.runtime import worker
+
     env = resume_env(tmp_path, monkeypatch)
-    first = run_once(env | {"HOLD_SESSION": "1", "LOOPX_CODEX_TURN_TIMEOUT_SEC": "1"})
+    real_child_process = worker.child_process
+    observed_sessions = []
+
+    @contextmanager
+    def timeout_after_session_event(command, *, env, stdout, stderr):
+        with real_child_process(command, env=env, stdout=stdout, stderr=stderr) as process:
+            def communicate(*, input, timeout):
+                assert timeout == 1
+                # Inject the timeout after the real child publishes its native
+                # identity, rather than racing interpreter startup against 1s.
+                process.stdin.write(input)
+                process.stdin.close()
+                deadline = time.monotonic() + 15
+                while process.poll() is None and time.monotonic() < deadline:
+                    line, complete, _ = Path(stdout.name).read_text().partition("\n")
+                    if complete:
+                        event = json.loads(line)
+                        assert event["type"] == "thread.started"
+                        observed_sessions.append(event["thread_id"])
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    time.sleep(0.01)
+                raise AssertionError("fixture did not publish a session before timeout injection")
+
+            process.communicate = communicate
+            yield process
+
+    with monkeypatch.context() as fault:
+        fault.setattr(worker, "child_process", timeout_after_session_event)
+        first = run_once(env | {"HOLD_SESSION": "1", "LOOPX_CODEX_TURN_TIMEOUT_SEC": "1"})
     assert first["timed_out"] and not first["ok"]
+    assert observed_sessions == [first["session"]["session_id"]]
     second = run_once(env)
     assert second["ok"] and second["session"]["action"] == "resume"
     assert second["session"]["session_id"] == first["session"]["session_id"]
