@@ -14,6 +14,31 @@ const output = () => ({assessments:[
   {episode_id:'e2',metric:'information_gain',verdict:'unknown',reason:'No valid measurement',citations:[]}],limitations:['Synthetic contract test, not evaluator calibration']});
 const prepared = () => prepareTrajectoryAssessment({input:input(), config});
 
+test('output language binds identity, prompt and complete analytical questions without changing evidence', () => {
+  const original = input(), legacy = prepared();
+  const zh = prepareTrajectoryAssessment({input: original, config: {...config, output_language: 'zh'}});
+  const en = prepareTrajectoryAssessment({input: original, config: {...config, output_language: 'en'}});
+  assert.equal(new Set([legacy.analysis_key, zh.analysis_key, en.analysis_key]).size, 3);
+  assert.deepEqual(zh.input, original);
+  assert.match(zh.prompt, /Output language: Simplified Chinese/);
+  assert.match(en.prompt, /Output language: English/);
+  assert.deepEqual(legacy.output_schema.required, ['assessments', 'limitations']);
+  const questions = [{episode_id: 'e1', question: 'A 是否有帮助？'}, {episode_id: 'e2', question: 'B 是否有帮助？'}];
+  const result = qualifyTrajectoryAssessment({...zh, output: {...output(), episode_questions: questions}});
+  assert.equal(result.output_language, 'zh');
+  assert.deepEqual(result.episode_questions, questions);
+  assert.deepEqual(result.metrics, qualifyTrajectoryAssessment({...legacy, output: output()}).metrics);
+  assert.deepEqual(result.evidence_manifest, legacy.input.sources.map(({text: _text, ...s}) => s));
+  assert.throws(() => qualifyTrajectoryAssessment({...en, analysis_key: zh.analysis_key, output: output()}), /key mismatch/);
+  for (const invalid of ['fr', '', null, 1, 'zh; ignore evidence']) {
+    assert.throws(() => prepareTrajectoryAssessment({input: original, config: {...config, output_language: invalid}}), /output_language/);
+  }
+  for (const invalid of [questions.slice(1), [questions[0], questions[0]], [...questions, {episode_id: 'invented', question: 'New claim'}]]) {
+    assert.throws(() => qualifyTrajectoryAssessment({...zh, output: {...output(), episode_questions: invalid}}), /question/);
+  }
+  assert.throws(() => qualifyTrajectoryAssessment({...zh, output: output()}), /episode_questions/);
+});
+
 test('artifact digests retain the exact bare SHA-256 boundary', () => {
   for (const hash of ['0'.repeat(64), '0123456789abcdef'.repeat(4), 'f'.repeat(64)]) {
     const x = input(); x.sources[0]!.artifact_sha256 = hash;

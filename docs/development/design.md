@@ -88,6 +88,11 @@ Owner-facing state follows four rules:
 - **Owner language first.** Primary copy uses the owner's words. Protocol ids,
   gate kinds, preview mechanics and executor profiles belong in a collapsed
   diagnostics disclosure.
+  Generated analysis follows the current interface language, including its
+  questions, explanations and limitations. Pass that language through the
+  analysis owner and cache identity; translating labels alone is insufficient.
+  Switching language is a read, never implicit model execution. Keep original
+  questions and quoted evidence available on demand, identified as originals.
 
 Review realistic populated, quiet, blocked, and unavailable states on desktop
 and mobile. Show before/after views, name what earns attention and what was

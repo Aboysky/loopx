@@ -7,6 +7,20 @@ These use the S5/S11
 [research episode assessment](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement).
 It does not change solver prompts, benchmark scoring, checkpoints or research budgets.
 
+The Goal reader requests `output_language` (`zh` or `en`) from the current
+interface language on reads, explicit execution/retry, cancellation and citation
+readback. The typed assessment owner binds it and its presentation instructions
+to the analysis key. Each language has its own job/cache over the same registered
+pack and frozen evidence; browsing or switching language never starts a job.
+Generated `reason`, `limitations` and `episode_questions` follow that language.
+The latter map each existing episode ID to an analytical rendering of its
+question; the complete original question and source text remain available.
+IDs, eligibility, verdict tokens, citation ranges and source bytes are unchanged.
+Requests without a language retain their original identity and stored artifacts;
+the frontend does not present an unspecified or other-language result as a new
+analysis in the selected language. Output-language metadata records the request,
+not independent verification of a model's translation or judgments.
+
 ## What the measurements should answer
 
 Use one **research episode** as the process unit: a bounded question or competing

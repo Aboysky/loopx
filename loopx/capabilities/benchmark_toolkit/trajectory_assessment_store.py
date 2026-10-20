@@ -57,10 +57,11 @@ def _pack_id(owner_goal_id: str, record: dict) -> str:
     return _digest(identity)
 
 
-def _prepared(record: dict) -> dict:
+def _prepared(record: dict, output_language: str | None = None) -> dict:
     return effect_runtime_result(
         "benchmark.trajectory.prepare",
-        {"input": record["input"], "config": record["config"]},
+        {"input": record["input"], "config": {**record["config"],
+            **({"output_language": output_language} if output_language is not None else {})}},
     )
 
 
@@ -212,7 +213,8 @@ def _availability(record: dict, prepared: dict) -> str | None:
     return None
 
 
-def _summary(record: dict, reason: str | None) -> dict:
+def _summary(record: dict, reason: str | None, prepared: dict | None = None) -> dict:
+    analysis = prepared or record
     return {
         "pack_id": _pack_id(record["owner_goal_id"], record),
         "title": record["title"],
@@ -220,9 +222,9 @@ def _summary(record: dict, reason: str | None) -> dict:
         "selection": record["input"]["selection"],
         "episode_count": len(record["input"]["episodes"]),
         "source_count": len(record["input"]["sources"]),
-        "analysis_key": record["analysis_key"],
-        "method_version": record["method_version"],
-        "config": record["config"],
+        "analysis_key": analysis["analysis_key"],
+        "method_version": analysis["method_version"],
+        "config": analysis["config"],
         "availability": "unavailable" if reason else "available",
         "reason_code": reason,
         **({field: _captured_view(record, field) for field in ("solver_usage", "native_outcomes") if field in record}),
@@ -299,13 +301,15 @@ def register_pack(
     return {"ok": True, **_summary(record, None)}
 
 
-def discover(*, runtime_root: Path, owner_goal_id: str) -> dict:
+def discover(*, runtime_root: Path, owner_goal_id: str, output_language: str | None = None) -> dict:
     owner = _owner(runtime_root, owner_goal_id)
     index = _index(owner)
     packs = []
     for pack_id in index["pack_ids"]:
         _, record = _resolve(runtime_root, owner_goal_id, pack_id)
-        packs.append(_summary(record, _availability(record, _prepared(record))))
+        prepared = _prepared(record)
+        packs.append(_summary(record, _availability(record, prepared),
+            _prepared(record, output_language) if output_language is not None else None))
     available = any(p["availability"] == "available" for p in packs)
     return {
         "ok": True,
@@ -352,18 +356,23 @@ def _public_job(job: dict) -> dict:
 
 
 def inspect_pack(
-    *, runtime_root: Path, owner_goal_id: str, pack_id: str | None = None
+    *, runtime_root: Path, owner_goal_id: str, pack_id: str | None = None,
+    output_language: str | None = None,
 ) -> dict:
     owner, record = _resolve(runtime_root, owner_goal_id, pack_id)
     prepared = _prepared(record)
     reason = _availability(record, prepared)
-    directory = _job(owner, record, record["analysis_key"])
+    if output_language is not None:
+        prepared = _prepared(record, output_language)
+    identity = prepared if output_language is not None else record
+    directory = _job(owner, identity, identity["analysis_key"])
     job = read_job(directory) if (directory / "receipt.json").exists() else None
     result = None
     if job is not None:
         if (
-            job["analysis_key"] != record["analysis_key"]
+            job["analysis_key"] != identity["analysis_key"]
             or job["scope"] != record["input"]["scope"]
+            or job["config"] != prepared["config"]
         ):
             raise PackUnavailable("receipt_mismatch")
         if job["status"] == "succeeded":
@@ -375,13 +384,12 @@ def inspect_pack(
                     job.get("input_sha256") != _digest(record["input"])
                     or job.get("assessment_sha256")
                     != hashlib.sha256(payload).hexdigest()
-                    or job.get("config") != record["config"]
                 ):
                     raise PackUnavailable("historical_result_unverified")
                 result = json.loads(payload)
                 if (
                     result.get("schema_version") != "trajectory_assessment_v1"
-                    or result.get("analysis_key") != record["analysis_key"]
+                    or result.get("analysis_key") != identity["analysis_key"]
                     or result.get("scope") != record["input"]["scope"]
                     or result.get("method_version") != record["method_version"]
                     or job.get("method_version") != record["method_version"]
@@ -401,7 +409,7 @@ def inspect_pack(
                 )
     return {
         "ok": True,
-        **_summary(record, reason),
+        **_summary(record, reason, prepared if output_language is not None else None),
         "objective": record["input"]["objective"],
         "episodes": record["input"]["episodes"],
         "job": _public_job(job) if job else None,
@@ -416,14 +424,16 @@ def execute_pack(
     owner_goal_id: str,
     pack_id: str,
     analysis_key: str,
+    output_language: str | None = None,
     retry: bool = False,
     timeout_seconds: int = 900,
     codex: str = "codex",
 ) -> dict:
     owner, record = _resolve(runtime_root, owner_goal_id, pack_id)
-    _job(owner, record, analysis_key)
-    prepared = _prepared(record)
-    reason = _availability(record, prepared)
+    base = _prepared(record)
+    prepared = _prepared(record, output_language) if output_language is not None else base
+    _job(owner, prepared if output_language is not None else record, analysis_key)
+    reason = _availability(record, base)
     if reason:
         raise PackUnavailable(reason)
     return _public_job(
@@ -438,10 +448,12 @@ def execute_pack(
 
 
 def cancel_pack(
-    *, runtime_root: Path, owner_goal_id: str, pack_id: str, analysis_key: str
+    *, runtime_root: Path, owner_goal_id: str, pack_id: str, analysis_key: str,
+    output_language: str | None = None,
 ) -> dict:
     owner, record = _resolve(runtime_root, owner_goal_id, pack_id)
-    return _public_job(request_cancel(_job(owner, record, analysis_key)))
+    identity = _prepared(record, output_language) if output_language is not None else record
+    return _public_job(request_cancel(_job(owner, identity, analysis_key)))
 
 
 def read_citation(
@@ -453,12 +465,14 @@ def read_citation(
     source_id: str,
     first_line: int,
     last_line: int,
+    output_language: str | None = None,
 ) -> dict:
     _, record = _resolve(runtime_root, owner_goal_id, pack_id)
-    if analysis_key != record["analysis_key"]:
+    if analysis_key != (_prepared(record, output_language) if output_language is not None else record)["analysis_key"]:
         raise PackUnavailable("analysis_key_mismatch")
     view = inspect_pack(
-        runtime_root=runtime_root, owner_goal_id=owner_goal_id, pack_id=pack_id
+        runtime_root=runtime_root, owner_goal_id=owner_goal_id, pack_id=pack_id,
+        output_language=output_language,
     )
     result = view["result"]
     citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]

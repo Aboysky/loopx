@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {ArrowUpRight, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
-import type {AssessmentCitation, TrajectoryEpisode} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
+import type {AssessmentCitation, TrajectoryEpisode, TrajectoryOutputLanguage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
@@ -13,7 +13,7 @@ type Job = {status: string; attempt?: number; analysis_wall_seconds?: number | n
   config?: {model: string; effort: string; service_tier: string}; served_service_tier?: string | null;
   usage?: {input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number} | null};
 type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; method_version: string;
-  config: {model: string; effort: string; service_tier: string}; availability: string; reason_code: string | null;
+  config: {model: string; effort: string; service_tier: string; output_language?: TrajectoryOutputLanguage}; availability: string; reason_code: string | null;
   objective?: string; episodes?: TrajectoryEpisode[]; job?: Job | null};
 type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]}; pack: Pack | null};
 type Citation = AssessmentCitation & {artifact: string; text: string; applicability: string};
@@ -26,6 +26,7 @@ const locationFor = (goal: string) => {
 
 export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean, readSourceUrl?: string) {
   const endpoint = "/api/chat/research-analysis";
+  const outputLanguage = zh ? "zh" : "en";
   const [citation, setCitation] = useState<Citation | null>(null);
   const [citationError, setCitationError] = useState("");
   const [citationBusy, setCitationBusy] = useState(false);
@@ -44,22 +45,23 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const generation = useRef(0);
   const readSequence = useRef(0);
   const submitting = useRef(false);
-  const scope = useRef({goalId, packId: location.packId});
-  scope.current = {goalId, packId: location.packId};
+  const scope = useRef({goalId, packId: location.packId, outputLanguage});
+  scope.current = {goalId, packId: location.packId, outputLanguage};
   const read = useCallback(async (packId: string | null = location.packId, signal?: AbortSignal) => {
     const current = generation.current, sequence = ++readSequence.current;
-    const query = new URLSearchParams({goal_id: goalId, ...(packId ? {pack_id: packId} : {})});
+    const query = new URLSearchParams({goal_id: goalId, output_language: outputLanguage, ...(packId ? {pack_id: packId} : {})});
     let value: Snapshot;
     try {value = await requestJson<Snapshot>(sourceReadApiUrl(readSourceUrl, `${endpoint}?${query}`), {signal});}
     catch (e) {if (current === generation.current && sequence === readSequence.current && !signal?.aborted) setReadError(errorText(e)); throw e;}
-    if (!value?.ok || !Array.isArray(value.catalog?.packs) || (value.pack && value.pack.pack_id !== (packId ?? value.catalog.default_pack_id))) {
+    if (!value?.ok || !Array.isArray(value.catalog?.packs) || (value.pack && (value.pack.pack_id !== (packId ?? value.catalog.default_pack_id)
+        || value.pack.config.output_language !== outputLanguage || (value.pack.result && value.pack.result.output_language !== outputLanguage)))) {
       const failure = new Error(zh ? "分析来源读回不一致。" : "Analysis source readback does not match.");
       if (current === generation.current && sequence === readSequence.current && !signal?.aborted) setReadError(failure.message);
       throw failure;
     }
-    if (current === generation.current && sequence === readSequence.current && scope.current.goalId === goalId && scope.current.packId === packId && !signal?.aborted) {setSnapshot(value); setReadError(""); if (value.pack?.job?.status === "succeeded" || value.pack?.job?.status === "cancelled") setError("");}
+    if (current === generation.current && sequence === readSequence.current && scope.current.goalId === goalId && scope.current.packId === packId && scope.current.outputLanguage === outputLanguage && !signal?.aborted) {setSnapshot(value); setReadError(""); if (value.pack?.job?.status === "succeeded" || value.pack?.job?.status === "cancelled") setError("");}
     return value;
-  }, [goalId, location.packId, zh, readSourceUrl]);
+  }, [goalId, location.packId, zh, outputLanguage, readSourceUrl]);
   const applyLocation = useCallback((next: typeof location) => {
     // Selection and browser history share one source transition. Invalidate
     // pending reads/actions before a new scope can display the old snapshot.
@@ -69,9 +71,9 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
       setPending(false); setCancelPending(false); setError(""); setReadError("");
       setSnapshot(previous => previous?.pack?.pack_id === next.packId ? previous : previous ? {...previous, pack: null} : null);
     }
-    scope.current = {goalId, packId: next.packId};
+    scope.current = {goalId, packId: next.packId, outputLanguage};
     setLocation(next);
-  }, [goalId]);
+  }, [goalId, outputLanguage]);
   useEffect(() => {
     generation.current++; submitting.current = false;
     applyLocation(locationFor(goalId)); setSnapshot(null); setError(""); setReadError(""); setPending(false); setCancelPending(false);
@@ -85,7 +87,10 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     void read(location.packId, controller.signal).catch(() => undefined).finally(() => {if (!controller.signal.aborted) setLoading(false);});
     return () => controller.abort();
   }, [active, read, location.packId]);
-  const pack = snapshot?.pack ?? null;
+  // A language change is an analysis-scope change, not a model invocation.
+  // Hide the prior language synchronously, before the next effect/read finishes.
+  const currentSnapshot = snapshot?.pack && snapshot.pack.config.output_language !== outputLanguage ? null : snapshot;
+  const pack = currentSnapshot?.pack ?? null;
   useEffect(() => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
   useEffect(() => {
     if ((!citation && !citationBusy && !citationError) || !location.open || !active) return;
@@ -129,7 +134,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     show(); submitting.current = true; setPending(true); setError("");
     const current = generation.current;
     try {
-      await requestJson(sourceReadApiUrl(readSourceUrl, endpoint), {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key, retry})});
+      await requestJson(sourceReadApiUrl(readSourceUrl, endpoint), {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key, output_language: outputLanguage, retry})});
       if (current === generation.current) await read(pack.pack_id);
     } catch (e) {if (current === generation.current) {setError(errorText(e)); void read(pack.pack_id).catch(() => undefined);}}
     finally {if (current === generation.current) {submitting.current = false; setPending(false);}}
@@ -140,7 +145,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     const current = generation.current;
     setCancelPending(true);
     try {
-      await requestJson(sourceReadApiUrl(readSourceUrl, `${endpoint}/cancel`), {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key})});
+      await requestJson(sourceReadApiUrl(readSourceUrl, `${endpoint}/cancel`), {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key, output_language: outputLanguage})});
       if (current === generation.current) await read(pack.pack_id);
     } catch (e) {if (current === generation.current) setError(errorText(e));}
     finally {if (current === generation.current) setCancelPending(false);}
@@ -151,13 +156,13 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     if (origin) sourceTrigger.current = origin;
     show(false);
     const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationError("");
-    const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key, source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)});
+    const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key, output_language: outputLanguage, source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)});
     try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/citation?${query}`)); if (current === citeGeneration.current) setCitation(value);}
     catch (e) {if (current === citeGeneration.current) setCitationError(errorText(e));}
     finally {if (current === citeGeneration.current) setCitationBusy(false);}
   };
   const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {readOnly: Boolean(readSourceUrl) && snapshot?.execution_enabled !== true, citation, citationBusy, citationError, sourcePanel, readCitation, closeCitation, goalId, zh, location, snapshot, pack, readError, error: error || readError, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true, citation, citationBusy, citationError, sourcePanel, readCitation, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack, readError, error: error || readError, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
@@ -182,6 +187,7 @@ export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
     <Sparkles size={14} aria-hidden/>{a.pack?.result ? (a.zh ? "查看分析" : "View analysis") : a.zh ? "深度分析" : "Deep analysis"}
   </button><ContextHelp label={a.zh ? "分析说明" : "About deep analysis"}>
     {a.pack ? <p>{a.zh ? "分析请求设置（固定）：" : "Fixed analysis request: "}{a.pack.config.model} / {a.pack.config.effort} / {a.pack.config.service_tier}</p> : null}
+    <p>{a.zh ? "问题解读、理由与限制说明按界面语言生成；切换语言后单独缓存，需点击才生成。引用保留原文。" : "Questions, reasons and limitations follow the interface language. Each language is cached separately and generated only on request. Citations preserve the original text."}</p>
     <p>{a.pack?.result ? (a.zh ? "所选范围已有分析，查看不调用 Agent。" : "An analysis exists for the selected scope. Viewing never invokes an Agent.") : (a.zh ? "点击深度分析使用本机 Codex 账户，单独产生分析用量；普通浏览不调用 Agent。" : "Deep analysis uses the local Codex account with separate analysis usage; ordinary browsing never invokes an Agent.")}</p>
     <p>{a.zh ? "只分析已授权的固定轨迹，不改变研究历史。范围、方法与来源版本可在结果中查看。" : "Analyzes an authorized fixed trajectory without changing research history. Scope, method and source revisions remain available with the result."}</p>
   </ContextHelp></div>{a.pack && !a.pack.result && !unavailable ? <small>{a.pack.config.model} · {a.zh ? "单独用量" : "Separate usage"}</small> : null}</div>;
@@ -232,7 +238,8 @@ export function ResearchAnalysisPanel({analysis: a}: {analysis: Controller}) {
       {failed && !a.pending ? <p className="analysis-warning" role="status">{p.job?.status === "cancelled" ? (zh ? "分析已取消，研究历史保持可读。" : "Analysis cancelled. Research history remains readable.") : (zh ? "上次分析未完成；可重试，原失败记录会保留。" : "The last analysis did not complete. Retry preserves its failure record.")}</p> : null}
       {result ? <>
         <div className="analysis-finding"><span>{zh ? "Agent 判断 · 未校准" : "Agent interpretation · uncalibrated"}{p.applicability === "historical" ? (zh ? " · 历史结果" : " · Historical result") : ""}</span><h4>{headline}</h4></div>
-        {p.episodes?.map(episode => <section className="analysis-episode" key={episode.id}><h4>{episode.question}</h4>
+        {p.episodes?.map(episode => <section className="analysis-episode" key={episode.id}><h4>{result.episode_questions?.find(q => q.episode_id === episode.id)?.question ?? episode.question}</h4>
+          {result.episode_questions ? <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><p>{episode.question}</p></details> : null}
           <div className="analysis-episode-context">{(["benefit_test", "evidence_adoption"] as const).map(metric => {
             const row = result.assessments.find(item => item.episode_id === episode.id && item.metric === metric);
             return row ? <div key={metric}><strong>{metric === "benefit_test" ? (zh ? "原目标收益的检验与缺口" : "Original-objective utility test and its gaps") : (zh ? "证据如何影响后续行动" : "How evidence informed subsequent action")}</strong><p>{row.reason}</p>{citationButtons(row.citations)}</div> : null;
