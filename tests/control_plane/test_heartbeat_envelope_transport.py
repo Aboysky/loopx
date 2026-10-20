@@ -3,6 +3,7 @@ import json
 import os
 import shlex
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -14,8 +15,9 @@ from benchmark.runtime.codex import Execution
 from benchmark.runtime.worker import heartbeat_body
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from tests.control_plane.test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TURN_ID, ALTERNATIVE_TODO_ID, REPO_ROOT,
+    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, ALTERNATIVE_TODO_ID, REPO_ROOT,
     _write_fixture, _configure_selectable_alternative, _run_cli,
+    _initialize_fixture_authority,
     _run_generated_cli, _heartbeat_receipt_count, _spend_run_count,
 )
 
@@ -38,6 +40,9 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     assert 'writeback.settlement_plan.ordered_steps' in payload['task_body']
     assert 'When present, read inline `agent_context` before planning.' in payload['task_body']
     assert 'an `agent_context.detail_ref`' in payload['task_body']
+    assert 'using inline ACK argv' in payload['task_body']
+    assert 'needed missing/truncated/referenced command' in payload['task_body']
+    assert 'failure argv only after host update failure' in payload['task_body']
     assert '--decision-output-root' in payload['thin_prompt_command']
     assert '--turn-envelope' in payload['thin_prompt_command']
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
@@ -46,6 +51,36 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
             build_heartbeat_prompt(**(args | overrides), decision_output_root=tmp_path)
     with pytest.raises(ValueError, match='existing directory'):
         build_heartbeat_prompt(**args, decision_output_root=tmp_path / 'missing')
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_captured_scheduler_ack_is_inline_and_failure_detail_stays_on_original_source(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    capture = tmp_path / 'capture'
+    code, envelope = _run_cli(registry, runtime, 'quota', 'should-run',
+        '--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--todo-id', TODO_ID,
+        '--turn-instance-id', TURN_ID, '--codex-app', '--turn-envelope',
+        '--decision-output-dir', str(capture), cwd=project)
+    assert code == 0, envelope
+    original = (capture / 'decision.json').read_bytes()
+    source = json.loads(original)['scheduler_hint']['app_automation']
+    projected = envelope['scheduler']['app_automation']
+    assert projected['ack_cli_args'] == source['ack_hint']['cli_args']
+    assert 'ack_cli_args_detail_ref' not in projected
+    assert projected['failure_cli_args_detail_ref']['detail_ref'] == (
+        'full_decision.scheduler_hint.app_automation.failure_hint.cli_args'
+    )
+    before = _heartbeat_receipt_count(runtime, TURN_ID)
+    read = subprocess.run(shlex.split(envelope['detail_ref']['full_decision']),
+        capture_output=True, check=True).stdout
+    assert read == original
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == before
 
 
 @pytest.mark.parametrize('mode', ['plain', 'native-goal', 'loopx-goal', 'turn'])
@@ -107,7 +142,6 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path,
     guard = next(line for line in block.splitlines() if 'quota should-run' in line)
     guard = guard.replace('${LOOPX_TURN:?}', TURN_ID)
     argv = shlex.split(guard)
-    import subprocess
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
