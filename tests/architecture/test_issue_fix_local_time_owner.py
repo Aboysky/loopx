@@ -136,6 +136,19 @@ def collect(root: pathlib.Path) -> list[dict[str, object]]:
     return rows
 
 
+def collect_unfoldable(root: pathlib.Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for path in sorted((root / "loopx").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        rows.extend(unfoldable_rows(source, path.relative_to(root).as_posix()))
+    return rows
+
+
 def offenders(
     rows: list[dict[str, object]],
     *,
@@ -157,6 +170,29 @@ def offenders(
         if counted.get(file, 0) != allowed:
             found.append(
                 f"{file} declares {allowed} site(s), found {counted.get(file, 0)}"
+            )
+    return sorted(set(found))
+
+
+def unfoldable_offender_rows(
+    rows: list[dict[str, object]], *, declared: dict[str, int] | None = None
+) -> list[str]:
+    budget = DECLARED_UNFOLDABLE_SITES if declared is None else declared
+    found: list[str] = []
+    counted: dict[str, int] = {}
+    for row in rows:
+        file = str(row["file"])
+        if file in budget:
+            counted[file] = counted.get(file, 0) + 1
+            continue
+        found.append(
+            f"{file}:{row['line']} builds a local-time regex from a value this "
+            "scan cannot fold; declare it or route the site to the owner"
+        )
+    for file, allowed in budget.items():
+        if counted.get(file, 0) != allowed:
+            found.append(
+                f"{file} declares {allowed} unfoldable site(s), found {counted.get(file, 0)}"
             )
     return sorted(set(found))
 
@@ -201,6 +237,10 @@ def modules_importing_the_owner() -> set[str]:
 
 def test_no_other_module_states_the_local_time_shape() -> None:
     assert offenders(collect(REPO_ROOT)) == []
+
+
+def test_no_module_hides_an_unfoldable_local_time_construction() -> None:
+    assert unfoldable_offender_rows(collect_unfoldable(REPO_ROOT)) == []
 
 
 def test_every_stated_site_is_the_owner_or_a_declared_consumer() -> None:
@@ -307,11 +347,16 @@ def test_the_scan_leaves_a_different_decision_alone(label: str, source: str) -> 
     assert time_rows(source, "loopx/capabilities/probe.py") == [], label
 
 
-def test_unfoldable_probe_is_forced_into_the_open() -> None:
+def test_unfoldable_probe_is_rejected_through_the_repository_scan(
+    tmp_path: pathlib.Path,
+) -> None:
     source = "import re\n\n\ndef build(prefix):\n"
     source += '    return re.compile(prefix + "(?:[01]\\\\d|2[0-3]):[0-5]\\\\d")\n'
-    name = "loopx/capabilities/probe.py"
-    assert time_rows(source, name) == []
-    rows = unfoldable_rows(source, name)
-    assert rows, "the unfoldable probe must be seen"
+    probe_root = tmp_path / "loopx" / "capabilities"
+    probe_root.mkdir(parents=True)
+    (probe_root / "probe.py").write_text(source, encoding="utf-8")
+    assert time_rows(source, "loopx/capabilities/probe.py") == []
+    rows = collect_unfoldable(tmp_path)
+    assert [row["file"] for row in rows] == ["loopx/capabilities/probe.py"]
+    assert unfoldable_offender_rows(rows)[0].startswith("loopx/capabilities/probe.py:")
     assert DECLARED_UNFOLDABLE_SITES == {}
