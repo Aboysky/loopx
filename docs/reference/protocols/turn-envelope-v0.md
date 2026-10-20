@@ -281,10 +281,19 @@ captured full decision. Historical saved envelopes retain their original
 signatures; this projection change grants no closure or execution authority.
 The 8 KiB warning remains diagnostic when required meaning exceeds it.
 
+Shared DSH/cloud Host input forwards this audit from the signed capsule, with
+the original capture route and hash for additional acceptance/coverage evidence.
+Hosts read its ordered obligations and current judge before proposing closure;
+they return a semantic result while the outer Turn executor owns state, quota
+and scheduler effects. Audit-absent inputs retain their previous prompt.
+
 中文：验收 capsule 完整保留原来源的有序步骤、继续执行说明、当前结束／继续判断、
 认可的证据种类和不能作为证明的条件；展示裁剪不能丢掉条款或列表尾部。新投影使用
 既有签名维度，历史 envelope 的签名不重写。详细验收记录仍从同次捕获读取，体积
 超过 8 KiB 时保留 warning，不以缩短义务或放大预算替代语义验收。
+共享 DSH／云端 Host 输入也从签名 capsule 传递这份 audit，附原捕获路由与哈希，供
+补读验收／覆盖证据；提议收尾前须读取有序义务及当前 judge。Host 返回语义结果，
+状态、quota 和 scheduler 效果仍由外层 Turn executor 执行。没有 audit 的输入保持原 prompt。
 
 No new frontend/Lark operation or configuration is introduced. Regenerate saved
 expanded heartbeat prompts to consume the new contract; bootstrap prompts reload

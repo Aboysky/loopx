@@ -376,6 +376,13 @@ candidate 适配器也传递此前遗漏的签名限制，原范围／workspace 
 必需文本可以超出并警告。这只关闭传输遗漏，不代表三项收敛验收通过，也不授权退役仍
 活跃的 Python/host adapter。
 
+沿 capsule 追到实际共享 Host 输入又暴露一处丢失：DSH／云端只传递其中的
+unavailable-context 字段，签名有效的 audit 没有到达 provider。适配器现传递既有
+audit 及原捕获路由／哈希。真实 File/SQLite 普通工作与 replan 捕获通过无模型 DSH
+子进程验证有序义务、继续执行的 judge、非证明条件、签名拒绝及来源／状态未变。
+没有 audit 的 prompt 保持原输入；所有状态、quota 和 scheduler 效果仍归外层
+executor。本批只验证该调用方的条款交付，不证明模型遵守、安装采用或完整成本收益。
+
 统一工作上下文现在由既有 TS interaction owner 选择并满足必读，注册的 Python
 adapter 核验来源，在普通 heartbeat/quota 与签名 envelope 中返回完整当前任务来源，
 无需启用 TurnEnvelope。混合 Goal 文件仍必须经渐进式路径全文读取，不能按历史标题

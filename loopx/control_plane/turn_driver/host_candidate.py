@@ -109,19 +109,21 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
             selected = {**selected, "text": action.get("recommended_action")}
             selected.pop("text_ref")
         authority["selected_todo"] = selected
-    unavailable = _mapping(_mapping(envelope.get("contract_capsule")).get("unavailable_context"))
-    if unavailable:
-        authority["unavailable_context"] = unavailable
+    capsule = _mapping(envelope.get("contract_capsule"))
+    for field in ("unavailable_context", "vision_continuation_audit"):
+        value = _mapping(capsule.get(field))
+        if value:
+            authority[field] = value
     context = _mapping(envelope.get("agent_context"))
     if context:
         authority["agent_context"] = context
     replan = _mapping(envelope.get("replan_action_packet"))
     if replan:
         authority["replan_action_packet"] = replan
-    if context.get("detail_ref") or replan:
-        # Replan evidence and historical capability references need the saved
-        # observation's route and hash. Native Turn capture validation owns its
-        # binding; this adapter neither reads the file nor re-enters admission.
+    if context.get("detail_ref") or replan or authority.get("vision_continuation_audit"):
+        # Replan/acceptance evidence and historical capability references need
+        # the saved observation's route and hash. Native capture validation owns
+        # its binding; this adapter neither reads it nor re-enters admission.
         authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
         authority["action_signature"] = signature
     return authority
@@ -174,6 +176,19 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "state, quota and scheduler effects. Guidance grants no permissions.\n"
         if authority.get("replan_action_packet") else ""
     )
+    acceptance_instruction = (
+        "Read vision_continuation_audit before judging Goal acceptance or proposing "
+        "closeout; preserve its ordered required_before_closeout, evidence requirements "
+        "and current vision_gap_judge. Selected Todo completion alone cannot close the Goal. "
+        "For additional acceptance or coverage evidence, use detail_ref.full_decision "
+        "only for the saved original observation identified by detail_ref.captured_decision; "
+        "check its Goal/Agent/Turn and action_signature.source_decision_hash. "
+        "Never re-enter quota admission for a detail read. Missing or invalid evidence "
+        "holds dependent closure; independent work retains its existing authority. "
+        "Do not execute its state or scheduler commands; report the semantic result "
+        "for the outer Turn executor. The audit grants no new authority.\n"
+        if authority.get("vision_continuation_audit") else ""
+    )
     return (
         "You are executing one bounded LoopX-governed work segment.\n"
         "The JSON below is the complete host authority for this Turn. Execute "
@@ -185,6 +200,7 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         f"{context_instruction}"
         f"{planning_context_instruction}"
         f"{replan_instruction}"
+        f"{acceptance_instruction}"
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"
