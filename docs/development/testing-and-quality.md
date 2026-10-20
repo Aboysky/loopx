@@ -582,6 +582,63 @@ negative 或 mutation-style 断言，并让各 provider 复用同一 envelope �
 
 ### Local Validation Environment / 本地验证环境
 
+Choose dependencies for the validation scope before preparing a new worktree.
+Each checkout can retain its own `.venv` and several `node_modules` directories;
+installing every tool in every review checkout accumulates storage even when
+the change only needs a few Python tests.
+
+新建 worktree 时，先按验证范围选择依赖。每个检出目录都可能保留独立的
+`.venv` 和多份 `node_modules`；只验证几个 Python 测试时也安装全部工具，
+会随工作区数量持续累积占用。
+
+| Validation scope / 验证范围 | Setup / 安装范围 |
+| --- | --- |
+| Selected Python unit tests using pytest, JSON Schema or YAML / 指定的基础 Python 单元测试 | `uv sync --extra test-core` |
+| Full Python suite, lint, integration tests or premerge / 完整 Python 测试、静态检查、集成测试或提交前验证 | `uv sync --extra test` |
+| Full control-plane TypeScript tests or coverage / 完整控制面 TypeScript 测试或覆盖率 | Root `npm ci` plus `uv sync --extra test` for Python subprocesses / 根目录 Node 依赖及测试子进程所需的 Python 环境 |
+| Control-plane typecheck / 控制面类型检查 | `npm ci` at the repository root / 仓库根目录 |
+| Dashboard build or browser tests / Dashboard 构建或浏览器测试 | `npm ci --prefix apps/presentation/dashboard`; browser tests also require their documented browser and backend setup / 浏览器测试另需其文档指定的浏览器与后端环境 |
+| Site or desktop changes / 官网或桌面端改动 | Install in the affected app; include its documented build prerequisites / 在对应应用目录安装，并满足其构建前置条件 |
+
+For example, this targeted Python check needs neither the dashboard packages
+nor the full Python test extra:
+
+例如，以下定向 Python 检查无需安装 Dashboard 依赖或完整 Python 测试依赖：
+
+```bash
+uv sync --extra test-core
+uv run --extra test-core python -m pytest -q tests/test_file_lock.py tests/test_loopx_launcher_python_selection.py
+```
+
+`test-core` is an opt-in subset, not a full-suite qualification. Select explicit
+test files; MCP, Docker, image rendering, coverage and type-checking need the
+full `test` extra. Keep `--extra test-core` on subsequent `uv run` commands so
+the selected environment is synchronized consistently. `uv sync` can remove
+packages outside the selected extras: do not change a worktree's environment
+while another process is using it. Existing full-suite and CI commands below
+continue to use `test`.
+
+`test-core` 仅用于显式选择的测试文件，不代表完整测试通过。MCP、Docker、图片
+渲染、覆盖率和类型检查继续使用完整的 `test`。后续 `uv run` 也需指定
+`--extra test-core`，保持环境一致。`uv sync` 可能移除所选依赖组之外的包，
+因此不要修改正在被其他进程使用的工作区环境。下方完整验证及 CI 命令继续使用 `test`。
+
+Root `npm run test:control-plane` includes PostgreSQL tests that import `pg`,
+so the full command still needs root Node dependencies. It does not require
+installing dashboard, site and desktop dependencies indiscriminately. Preserve
+per-worktree environments: editable Python installs bind to a source checkout,
+and frontend builds write caches inside `node_modules`. Sharing one writable
+environment across branches can validate the wrong source or invalidate another
+task's dependencies. Package-manager download caches can be shared; removing
+retired environments requires a separate check for active users and recoverable
+dependency definitions.
+
+完整 `npm run test:control-plane` 包含导入 `pg` 的 PostgreSQL 测试，仍需根目录
+Node 依赖，但无需因此把 Dashboard、官网、桌面端依赖全部安装。保留工作区间的
+环境隔离：Python 可编辑安装绑定具体源码目录，前端构建也会向 `node_modules`
+写缓存。跨分支共用可写环境可能测试到错误源码，或破坏另一任务的依赖。
+可共享包管理器下载缓存；回收旧环境则应另行核实是否在用、依赖定义能否恢复。
+
 `npm run typecheck:control-plane` discovers all TypeScript sources under
 `loopx/control_plane/` and `loopx/zcode_goal_mode/`, including standalone bridges
 launched from Python and control-plane test drivers. New source files in these
