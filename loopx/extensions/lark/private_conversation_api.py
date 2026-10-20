@@ -37,6 +37,8 @@ class PrivateConversationRequestMixin:
         titles = {row["project_ref"]: Path(row["workspace_path"]).name
                   for row in self.server.runtime_controller.project_contexts.available()}
         health = self.server.lark_goal_topic_runtime.health_snapshot()
+        composed = getattr(self.server, "conversation_transports", None)
+        lark_profiles = set(health) - set(composed.transports if composed is not None else {})
         deliveries = self.server.lark_private_conversations.health()
         self._send_json({"ok": True, "revision": current["revision"], "connections": [
             {"binding_id": row["binding_id"], "app_ref": row["transport_ref"], "context_kind": row["context_kind"],
@@ -49,6 +51,12 @@ class PrivateConversationRequestMixin:
                 for item in bindings.agent_candidates(row["binding_id"])],
              "agent_targets": row.get("agent_targets", []),
              "listener_status": self._private_listener_status(row["transport_ref"], health),
+             **({"ingress": self.server.lark_private_conversations.ingress.health(row["binding_id"])}
+                if row.get("audience", "owner") == "owner"
+                and row["transport_ref"] in lark_profiles
+                and hasattr(self.server.lark_private_conversations, "ingress") else {}),
+             **({"owner_attention": self.server.lark_private_conversations.owner_attention.health(row["binding_id"])}
+                if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner" else {}),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]],
             "stop_recoveries": [{**row,
@@ -126,5 +134,17 @@ class PrivateConversationRequestMixin:
                 session_id=body.get("session_id"), target_ref=body.get("target_ref"))
         except (ValueError, OSError, KeyError, StopIteration) as exc:
             self._send_error(str(exc), status=400)
+            return
+        self._private_conversations()
+
+    def _private_conversation_owner_notifications(self) -> None:
+        try:
+            body = self._read_json()
+            if set(body) != {"binding_id", "binding_revision", "revision", "enabled"}:
+                raise ValueError("select the current private steward notification setting")
+            self.server.lark_private_conversations.owner_attention.configure(**body)
+        except (ValueError, OSError, KeyError, TypeError, RuntimeError):
+            # Source/provider errors may contain private paths or credentials.
+            self._send_error("Notification settings could not be changed. Refresh the connection and verify the original private Chat.", status=400)
             return
         self._private_conversations()

@@ -6,7 +6,8 @@ runner. Write it before admission so a crash can replay the same client identity
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from pathlib import Path
 import re
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,119 @@ class ChatExternalConversations:
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
         self.actions: Any | None = None
+
+    def _context_recovery_plan(self, row: dict[str, Any], *,
+                               observation: dict[str, Any] | None = None,
+                               source_verified: bool = False,
+                               discovery_only: bool = False) -> dict[str, Any]:
+        from ...chat_manager import MANAGER_CONTEXT_VERSION
+        from ...control_plane.effect_runtime import effect_runtime_result
+
+        store = self.controller.store
+        session = store.load_session(str(row.get("session_id") or ""))
+        turn = store.load_turn(str(row.get("session_id") or ""), str(row.get("turn_id") or ""))
+        if not session or not turn:
+            return {}
+        if discovery_only:
+            # A queue hint must not serialize provider identity IO across all
+            # historical failures. Reuse the same typed planner with the local
+            # enabled binding; admission independently resolves fresh authority.
+            selected_binding = next((item for item in self.bindings.read()["bindings"]
+                if item["binding_id"] == row["binding_id"] and item.get("enabled") is True), None)
+            if selected_binding is None:
+                return {}
+        else:
+            selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
+        return effect_runtime_result("collaboration.conversation.request", {
+            "request": {key: value for key, value in row.items() if key != "attachments"},
+            "current_session": session, "binding": selected_binding,
+            "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
+                "steering_observed": any(event.get("kind") == "turn.steered"
+                    for event in store.events_after(session["session_id"], turn["turn_id"], None)),
+                "native_observation": observation, "source_verified": source_verified},
+        })
+
+    def context_recovery_candidate(self, request_ref: str) -> bool:
+        """Discovery only; every authority and native fact is re-read at admission."""
+        try:
+            row = self.read_request(request_ref)
+            # Avoid provider IO for ordinary delivered results/control receipts.
+            if row.get("status") != "accepted":
+                return False
+            recovery = row.get("context_recovery")
+            if recovery and row.get("turn_id") != recovery["failed_turn_id"]:
+                return not row.get("delivery_verified")
+            if not row.get("delivery_verified"):
+                return False
+            turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
+            if not turn or turn.get("status") != "failed":
+                return False
+            return self._context_recovery_plan(row, discovery_only=True).get("recovery_candidate") is True
+        except (KeyError, ValueError, RuntimeError, OSError):
+            return False
+
+    def recover_failed_request(self, request_ref: str, *,
+                               source_observation: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+        """Reserve/admit one same-source continuation through the existing queue.
+
+        The failed Turn and its original notice remain immutable. The new Turn
+        has a deterministic client identity, original grant/source and a native
+        no-effects readback; a crash resumes that reservation, never replays the
+        failed Turn or fabricates successful execution.
+        """
+        from .codex_adapter import CodexAppServerAdapter
+        from ...chat_manager import MANAGER_CONTEXT_VERSION
+
+        path = self.root / f"{request_ref}.json"
+        with exclusive_file_lock(path, operation="admit_external_chat_request"):
+            row = self.read_request(request_ref)
+            with exclusive_file_lock(self.root / "source-fences" / f"{row['binding_id']}.{row['source']['source_ref']}.json", operation="route_external_chat_request"):
+                plan = self._context_recovery_plan(row)
+                if not plan.get("recovery_candidate"):
+                    return row
+                session = self.controller.store.load_session(row["session_id"])
+                turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
+                assert session is not None and turn is not None
+                self.controller._check_codex_home(session)
+                context = self.controller.project_contexts.session_context(session)
+                proof = CodexAppServerAdapter.failed_request_observation(
+                    codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
+                    thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
+                source = source_observation(selected)
+                plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None)
+                if not plan.get("recovery_eligible"):
+                    return row
+                recovery = row.get("context_recovery")
+                if recovery is None:
+                    recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": row["turn_id"],
+                        "native_observation": proof, "source_observation": source,
+                        "client_turn_id": plan["client_turn_id"],
+                        "failure_notice_delivery_verified": row["delivery_verified"]}
+                    row["context_recovery"] = recovery
+                    _atomic_write_json(path, row)
+                # Freeze correlation before the existing queue can dispatch.
+                self._record_steward_ingress(row, selected, session, plan["client_turn_id"])
+                continued, _ = self.controller.enqueue_turn(session_id=row["session_id"],
+                    client_turn_id=plan["client_turn_id"], message=row["message"],
+                    attachments=row.get("attachments"), origin=row.get("origin", "lark"),
+                    work_dir=context["project"], objective=context["objective"])
+                row.update(turn_id=continued["turn_id"], delivery_verified=False)
+                _atomic_write_json(path, row)
+            self.controller.resume_session_queue(session_id=row["session_id"],
+                work_dir=context["project"], objective=context["objective"])
+            return row
+
+    def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*", str(turn.get("client_turn_id") or ""))
+        if match is None:
+            return None
+        row = self.read_request(match[1])
+        recovery = row.get("context_recovery")
+        if (row.get("session_id") == session["session_id"] and recovery
+                and recovery["client_turn_id"] == turn["client_turn_id"]):
+            return {"request_ref": row["request_ref"], **recovery}
+        return None
 
     def _automation_cadence_observation(
         self, target: Mapping[str, Any]
@@ -91,7 +205,8 @@ class ChatExternalConversations:
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
               attachments: list[dict[str, Any]] | None = None,
-              origin: str = "lark") -> dict[str, Any]:
+              origin: str = "lark", defer_background_stop: bool = False,
+              source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         import re
         if origin not in {"lark", "external"}:
             raise ValueError("unsupported external conversation origin")
@@ -99,6 +214,8 @@ class ChatExternalConversations:
             raise ValueError("invalid external request reference")
         if command not in {None, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
             raise ValueError("unsupported external conversation command")
+        if source_preflight is not None and not callable(source_preflight):
+            raise ValueError("source preflight must be an in-process verifier")
         # These references enter the lock path before authority is resolved.
         # Check path-safe shape here; the typed owner checks current grants
         # and provider identity after both fences are acquired.
@@ -106,40 +223,65 @@ class ChatExternalConversations:
             if not isinstance(ref, str) or not re.fullmatch(r"[a-f0-9]{24}", ref):
                 raise ValueError("invalid external conversation source reference")
         path = self.root / f"{request_ref}.json"
-        with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"), exclusive_file_lock(path, operation="admit_external_chat_request"):
-            # Resolve after waiting for both fences, including exact replay.
-            # A lock-external provider probe cannot authorize the write and
-            # would duplicate this fresh authority check on every request.
-            selected = self.bindings.resolve(binding_id=binding_id, **source)
-            expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
-                        "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
-            if path.exists():
-                row = _read_json(path)
-                # Existing Lark journals predate persisted transport origin.
-                if any((row.get(key, "lark") if key == "origin" else row.get(key)) != value
-                       for key, value in expected.items()):
-                    raise ValueError("external request identity was reused with different content")
-                if row.get("status") != "prepared":
-                    return row
-            else:
-                row = {"schema_version": "loopx_chat_external_request_v0", "request_ref": request_ref,
-                       **expected, "status": "prepared", "session_id": None, "turn_id": None,
-                       "created_at": datetime.now(timezone.utc).isoformat()}
-                _atomic_write_json(path, row)
+        # A duplicate waits on its own request before taking the route fence;
+        # it must not hold up other messages while native cancellation runs.
+        with exclusive_file_lock(path, operation="admit_external_chat_request"):
+            with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"):
+                # Resolve after waiting for both fences, including exact replay.
+                # A lock-external provider probe cannot authorize the write and
+                # would duplicate this fresh authority check on every request.
+                selected = self.bindings.resolve(binding_id=binding_id, **source,
+                    **({"include_observation": True} if source_preflight is not None else {}))
+                # Earlier provider IO and App observations cannot authorize
+                # admission. Validate against this fresh selection inside both fences,
+                # before creating or replaying any canonical request.
+                if source_preflight is not None:
+                    if source_preflight(deepcopy(selected)) is not None:
+                        raise ValueError("source preflight must complete verification or raise")
+                expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
+                            "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
+                recovering_request = path.exists()
+                if recovering_request:
+                    row = _read_json(path)
+                    # Existing Lark journals predate persisted transport origin.
+                    if any((row.get(key, "lark") if key == "origin" else row.get(key)) != value
+                           for key, value in expected.items()):
+                        raise ValueError("external request identity was reused with different content")
+                    if row.get("status") != "prepared":
+                        return row
+                else:
+                    row = {"schema_version": "loopx_chat_external_request_v0", "request_ref": request_ref,
+                           **expected, "status": "prepared", "session_id": None, "turn_id": None,
+                           "created_at": datetime.now(timezone.utc).isoformat()}
+                    _atomic_write_json(path, row)
+                try:
+                    row = self._admit_prepared(path, row, selected, recovering_request=recovering_request)
+                except ValueError:
+                    self._reject_prepared(path, row)
+                    raise
+            # Native inventory/cancellation needs the frozen request fence,
+            # not the route fence. New messages retain their own fresh checks.
+            if (defer_background_stop or row["status"] != "prepared"
+                    or row.get("command") != "stop" or not row.get("background_turn_ids")):
+                return row
             try:
-                return self._admit_prepared(path, row, selected)
+                return self._finish_background_stop(path, row, selected)
             except ValueError:
-                # Invalid commands and definitive grant denials are terminal
-                # admission outcomes; recovery must not retry them forever.
-                row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
-                _atomic_write_json(path, row)
+                self._reject_prepared(path, row)
                 raise
 
-    def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _reject_prepared(path: Path, row: dict[str, Any]) -> None:
+        # Definitive command/grant denials must not retry indefinitely.
+        row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
+        _atomic_write_json(path, row)
+
+    def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any],
+                        *, recovering_request: bool = False) -> dict[str, Any]:
         controller = self.controller
         self.bindings.ensure_delivery_scope(selected)
         if not row.get("routing_recorded"):
-            choices = [item for item in self.pending() if item["binding_id"] == row["binding_id"]
+            choices = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
                 and item["source"]["source_ref"] == row["source"]["source_ref"]
                 and item.get("selection_recorded")]
             previous = max(choices, key=lambda item: item.get("selection_order", 0)) if choices else None
@@ -185,6 +327,12 @@ class ChatExternalConversations:
                 return row
         from ...control_plane.effect_runtime import effect_runtime_result
         observations = {}
+        if (row["command"] == "stop" and current and not current.get("active_turn_id")
+                and not row.get("target_recorded") and not target):
+            # Freeze canonical candidates before any fallible native inventory
+            # or transport resume. Historical IO must not gate active stopping.
+            from .codex_background_control import completed_turn_ids
+            observations["background_turn_ids"] = completed_turn_ids(controller, current["session_id"])
         if row["command"] in {"status", "help"}:
             active_id = current.get("active_turn_id") if current else None
             observations = {"context": selected["context"],
@@ -199,6 +347,7 @@ class ChatExternalConversations:
         plan = effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "attachment_count": len(row.get("attachments") or []),
+            "recovering_request": recovering_request,
             "current_session": current, "binding": selected["binding"],
             "agent_target": target, **observations})
         operation = plan["operation"]
@@ -226,7 +375,7 @@ class ChatExternalConversations:
                 row["response"] = "当前没有已授权且可用的 Agent。请在本机 Chat → 设置 → Lark，为此 App 明确授权已有 attached Session；名称相似不会获得授权。" if not choices else "可选 Agent（使用确切命令）：\n" + "\n".join(f"{item['agent_id']} · {item['goal_id']}\n/agent {item['target_ref']}" for item in choices)
             if row.get("selection_recorded"):
                 row["selection_order"] = 1 + max((item.get("selection_order", 0) for item in self.pending()
-                    if item["binding_id"] == row["binding_id"] and item["source"]["source_ref"] == row["source"]["source_ref"]), default=0)
+                    if item.get("binding_id") == row["binding_id"] and item["source"]["source_ref"] == row["source"]["source_ref"]), default=0)
             row.update(status="command_completed", session_id=None, turn_id=None)
         elif operation == "steward_action":
             parsed = self.bindings._core("collaboration.steward.command", {"command": row["command"], "message": row["message"]})
@@ -251,7 +400,11 @@ class ChatExternalConversations:
                 row["status_snapshot"] = plan["status_snapshot"]
         elif operation in {"new", "stop"}:
             row.update(target_recorded=True, session_id=plan["session_id"], turn_id=plan["turn_id"])
+            if operation == "stop":
+                row["background_turn_ids"] = plan.get("background_turn_ids", [])
             _atomic_write_json(path, row)
+            if operation == "stop" and row["background_turn_ids"]:
+                return row  # Finish outside the route fence, under this request.
             if operation == "stop" and row["session_id"] and row["turn_id"]:
                 controller.interrupt_turn(session_id=row["session_id"], turn_id=row["turn_id"])
             elif operation == "new" and row["session_id"]:
@@ -278,6 +431,26 @@ class ChatExternalConversations:
                 if str(exc) != "session_queue_full":
                     raise
                 row.update(status="rejected", response="队列已满，本条没有被受理；请稍后重新发送。")
+        _atomic_write_json(path, row)
+        return row
+
+    def _finish_background_stop(self, path: Path, row: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
+        from .codex_background_control import completed_background_turns, interrupt_completed_background_turns
+        from ...control_plane.effect_runtime import effect_runtime_result
+
+        controller = self.controller
+        row["background_turn_ids"] = completed_background_turns(
+            controller, row["session_id"], row["background_turn_ids"])
+        _atomic_write_json(path, row)
+        # Reuse the typed response after narrowing. No live terminals is idle;
+        # failed inventory never reaches this point. Later work is ineligible.
+        plan = effect_runtime_result("collaboration.conversation.request", {
+            "request": {key: value for key, value in row.items() if key != "attachments"},
+            "current_session": controller.store.load_session(row["session_id"]),
+            "binding": selected["binding"], "agent_target": row.get("agent_target")})
+        if row["background_turn_ids"]:
+            interrupt_completed_background_turns(controller, row["session_id"], row["background_turn_ids"])
+        row.update(status="command_completed", response_code=plan["response_code"])
         _atomic_write_json(path, row)
         return row
 
@@ -325,8 +498,9 @@ class ChatExternalConversations:
         latest: dict[str, dict[str, Any]] = {}
         for row in sorted(self.pending(), key=lambda row: row.get("created_at", "")):
             resources = row.get("commission_resources") or {}
-            if (row["binding_id"] == saved["binding_id"] and row["source"]["source_ref"] == saved["source_ref"]
-                    and resources.get("goal_id") in allowed):
+            if (resources.get("goal_id") in allowed
+                    and row["binding_id"] == saved["binding_id"]
+                    and row["source"]["source_ref"] == saved["source_ref"]):
                 latest[resources["goal_id"]] = row
         facts = []
         for goal_id, row in latest.items():
@@ -360,6 +534,62 @@ class ChatExternalConversations:
                 "result_excerpt": str((turn.get("response") or {}).get("message") or "")[:500],
                 "canonical_acceptance_attested": False})
         return facts
+
+    def todo_confirmation_reply(self, request_ref: str, response: dict[str, Any]) -> str:
+        """Project an external owner's Todo preview through the existing action owner.
+
+        The original request journal freezes expiry and idempotency before IO.
+        This creates an action preview only; the authenticated /confirm worker
+        remains the sole route to the canonical Todo writer.
+        """
+        message = str(response.get("message") or "")
+        proposals = [p for p in response.get("proposals") or [] if p.get("kind") == "todo"]
+        if not proposals:
+            return message
+        path = self.root / f"{request_ref}.json"
+        with exclusive_file_lock(path, operation="offer_external_todo_confirmation"):
+            row = _read_json(path)
+            selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
+            if selected["binding"]["context_kind"] != "steward":
+                return message
+            if self.actions is None:
+                return message + "\n\n待办尚未写入：当前宿主的确认入口不可用。"
+            if row.get("todo_confirmation_reply") is not None:
+                return str(row["todo_confirmation_reply"])
+            context = selected["context"]
+            if "todo_confirmation_created_at" not in row:
+                row["todo_confirmation_created_at"] = datetime.now(timezone.utc).isoformat()
+                _atomic_write_json(path, row)
+            created = row["todo_confirmation_created_at"]
+            expiry = (datetime.fromisoformat(created) + timedelta(minutes=15)).isoformat()
+            audience = {key: context[key] for key in
+                        ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]}
+            lines = [message]
+            for index, todo in enumerate(proposals):
+                try:
+                    request = {"action_kind": "todo.create", "summary": str(todo["text"]),
+                        "idempotency_key": f"external-todo-{request_ref}-{index}",
+                        "context": {"kind": "manager", "goal_id": "loopx-manager", **audience, "expires_at": expiry},
+                        "normalized_parameters": {"goal_id": todo.get("goal_id"), "text": todo["text"],
+                                                  "priority": todo.get("priority", "P1")}}
+                    self.bindings._core("collaboration.steward.authorize_creation", {
+                        "context": context, "proposal": {**request, "created_at": created},
+                        "now": datetime.now(timezone.utc).isoformat(), "operation": "preview"})
+                except (OSError, ValueError, KeyError, RuntimeError):
+                    lines.append("待办尚未写入：目标 Goal、当前授权或规范预览不可用；请在原对话核对目标后重新准备预览。")
+                    continue
+                # An uncertain preview-store write is safe to recover by this
+                # same idempotency key. Do not cache a failure and strand a
+                # successfully persisted preview without its confirmation route.
+                proposal = self.actions.preview(request)
+                goal = self.actions._goal(str(todo["goal_id"]))
+                title = str(goal.get("title") or todo["goal_id"])
+                lines.append(f"目标：{title}\n待记录：{todo['text']}\n尚未写入，也未启动执行。"
+                    f"请在本私聊于预览生成后 15 分钟内发送 /confirm {proposal['proposal_id']}；"
+                    f"取消：/cancel {proposal['proposal_id']}。")
+            row["todo_confirmation_reply"] = "\n\n".join(lines)
+            _atomic_write_json(path, row)
+            return row["todo_confirmation_reply"]
 
     def _run_steward_action(self, row: dict[str, Any]) -> None:
         """The existing service worker advances a journaled native operation.
@@ -437,19 +667,25 @@ class ChatExternalConversations:
                         }, response=f"已受理原委托的恢复，保留原生线程、目标及累计用量。总 token 上限 {row['command_argument']['native_token_budget']}；结果会返回此私聊。\n停止：/stop-commission {argument}")
                     elif row["command"] == "cancel_commission":
                         self.actions.cancel(argument)
-                        row["response"] = "已取消这份新委托预览；没有创建或启动 Goal。"
+                        row["response"] = ("已取消待办预览；没有写入待办或启动执行。"
+                            if proposal["action_kind"] == "todo.create" else
+                            "已取消这份新委托预览；没有创建或启动 Goal。")
                     else:
                         result = self.actions.apply(argument, steward_context=context, steward_confirmed_at=row["created_at"])
                         applied = result["proposal"]
                         if applied.get("status") != "applied":
-                            raise ValueError("the creation preview became stale; prepare a new /delegate request")
+                            raise ValueError("the creation preview became stale; prepare a new preview")
                         resources = applied["receipt"]["resource_ids"]
-                        # Canonical creation has committed. Retain its exact
-                        # receipt before fallible adoption or notification.
-                        row.update(commission_resources=resources, commission_adoption_pending=True,
-                                   commission_gate=bool(result.get("gate")))
-                        _atomic_write_json(path, row)
-                        self._adopt_commission(row, applied)
+                        if applied["action_kind"] == "todo.create":
+                            row.update(todo_receipt=applied["receipt"], response=(
+                                f"已记录待办：{applied['normalized_parameters']['text']}\n"
+                                f"目标：{resources['goal_id']}；规范写入回执已读回。本次没有启动执行。"))
+                        else:
+                            # Persist a committed creation before fallible adoption.
+                            row.update(commission_resources=resources, commission_adoption_pending=True,
+                                       commission_gate=bool(result.get("gate")))
+                            _atomic_write_json(path, row)
+                            self._adopt_commission(row, applied)
                 row["status"] = "command_completed"
             except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 # No automatic wider permission, regenerated preview or new
@@ -481,6 +717,8 @@ class ChatExternalConversations:
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="record_external_chat_delivery"):
             row = _read_json(path)
+            if row.get("request_ref") != request_ref:
+                raise ValueError("delivery request journal unavailable")
             if row.get("commission_adoption_pending"):
                 raise ValueError("commission adoption is pending; notification cannot settle the effect")
             if (row.get("session_id"), row.get("turn_id")) != (session_id, turn_id):
@@ -499,12 +737,16 @@ class ChatExternalConversations:
                 # delivering their pending response; do not add an idle probe.
                 if row["status"] == "command_completed" and not row.get("commission_adoption_pending"):
                     continue
-                self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
                 if row["status"] == "prepared":
+                    # Admission resolves current authority after both request
+                    # and route fences. A separate pre-fence network probe
+                    # neither authorizes recovery nor needs to precede it.
                     self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],
                                message=row["message"], command=row["command"],
                                attachments=row.get("attachments"), origin=row.get("origin", "lark"))
-                elif row["status"] == "command_queued":
+                    continue
+                self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
+                if row["status"] == "command_queued":
                     self._run_steward_action(row)
                 elif row["status"] == "accepted":
                     if row.get("agent_target"):

@@ -223,8 +223,13 @@ and never justify blind resubmission. This does not add restart persistence.
 
 New non-game native trials include brief guidance to keep researching the original
 task objective, treating implementation, passing checks and submission as milestones.
-The same text reaches the startup prompt, workspace `AGENTS.md` and LoopX Goal;
-the complete original task remains the planning input. Trial budgets and deadlines
+This guidance reaches the startup prompt and workspace `AGENTS.md`. New LoopX
+Goals now retain the task's original `agent_query` as their objective, so planning
+and replan readback preserve its stated priorities rather than a generic reminder.
+If the query points to task files, those files remain required source material;
+this does not extract or invent a structured acceptance contract. Existing Goals
+and restored checkpoints retain their captured objective without migration.
+Trial budgets and deadlines
 stay with the existing runner, without extra agent-facing budget instructions.
 This changes guidance for new native attempts across all five workers, preserving
 grading, cooldown, selection, blind/best-only controls, game prompts and frozen runs.
@@ -424,6 +429,35 @@ resume continuity, capability use, evaluator completion and integrity need
 runtime/post-run qualification before any score is countable. Raw trial outputs
 and credentials belong outside the public repository.
 
+## Default research checkpoint retention
+
+**Default change:** new controller-enabled native runs automatically keep only
+the newest complete point plus explicit pins. After publishing a successful
+capture reply, a separate storage worker applies the policy saved at
+`checkpoints/.checkpoint-retention/policy.json`. Pass
+`--checkpoint-retention-policy PRIVATE_POLICY_JSON` to override that policy, or
+`--no-checkpoint-retention` to keep every point without starting storage
+maintenance. These options are mutually exclusive. Capture itself remains
+explicitly enabled through its existing declaration and controller; runs without
+that path do not start retention. A storage-maintenance failure is reported separately in
+`checkpoints/retention-error.json`; it does not turn a successful capture into
+a failure or cancel source research. Inspect that error before assuming space
+was reclaimed. Successful maintenance writes `retention-last.json` and the
+bank's durable deletion receipts.
+
+Use the [checkpoint retention policy and preview](../../docs/reference/research-checkpoint.md#default-bank-rotation)
+to choose uniform or tiered history, protect recent publications and pin every
+selected continuation/dependency. The policy controls the outer inert artifact
+bank only; native submissions, archives, counters and cooldown keep their owners.
+Use separate policy files for separate lineages. Do not import a donor's pins
+into a different receiver's new bank.
+
+For frozen running donors, use the documented standalone storage watcher rather
+than editing or restarting the research runtime. Stop that watcher to disable
+its rotation; use `--no-checkpoint-retention` for new runs. Removing the custom
+policy option reselects the default. The existing CLI/Host
+qualification remains separate from frontend delivery and scientific utility.
+
 ## Default replan cadence
 
 New `heartbeat-resume` and `heartbeat-explore` trials replan after **6 settled
@@ -438,6 +472,26 @@ The shared control plane counts settled work Turns, not tool calls or idle wakes
 other replan reasons may trigger sooner. Both runtime and worker-profile receipts
 record the resolved cadence. Only newly launched attempts use the new default;
 keep existing runs and archived settings pinned.
+
+### Optional Goal in the planning horizon
+
+For `heartbeat-resume` and `heartbeat-explore`, add `--planning-horizon-goal`
+to include the full same-source original Goal and acceptance in preselection
+planning context. `--no-planning-horizon-goal` explicitly disables it. Omission
+retains the ordinary disabled treatment. Plain and native-Goal workers reject
+this setting. It does not enable stride, Explore or TurnEnvelope.
+
+The adapter writes the shared `execution_profile.planning_horizon_goal` through
+`configure-goal`, checks the effective readback before work, and records an
+explicit setting in both worker profile and runtime receipt. Restore follows
+the same path: an explicit true/false overrides the donor setting. An omitted
+setting encountering an enabled donor fails the readback instead of silently
+labeling the run off. Historical receipts without this field remain absent;
+report export rejects mismatched or malformed settings.
+
+Compare on/off from the same qualified pre-replan checkpoint with equal remaining
+budget, source and other settings. Input fidelity does not establish better
+research or scores. See the [shared Goal configuration and rollback](../../docs/reference/protocols/quota-planning-horizon-v0.md#enable-read-back-and-disable).
 
 ### Optional structured stride strategy
 
@@ -480,3 +534,29 @@ hash bindings. The adapter does not launch jobs, qualify integrity, read session
 or upload to a network service. Supplemental settings need publication review;
 missing provenance must remain explicit. Canonical experiment-board rows continue
 to use benchmark-toolkit's upload-envelope and readback contracts.
+
+For a new export using native ranking, add `"native_ranking"` to each selected
+run's reviewed `settings`, with exactly these two fields:
+
+```json
+{"native_ranking": {"selection": "pass_rate_first", "score_direction": "maximize"}}
+```
+
+Copy the effective values from the pinned native task's judge configuration:
+`selection` is `score_first`, `valid_then_score`, or `pass_rate_first`;
+`score_direction` is `maximize` or `minimize`. Task names never select a policy.
+Unknown/incomplete metadata and a contradictory `best_score.higher_is_better`
+fail export. The adapter binds native history and final `best_round`,
+`best_score`, and `best_pass_rate`, then checks the selected sample's score and
+pass rate. It exports numeric sample pass rates and the selected pass-rate metric;
+it does not rerank submissions or call a scorer. A selected score may therefore
+be below another sample even when scores are maximized.
+
+Without this metadata, the historical scalar-maximum verification path remains;
+immutable Portfolio snapshots need no migration. Neither path requires SForge
+for export or standalone offline verification. `--verify` checks file bindings,
+direction consistency, and selected-sample witnesses, not ranking optimality or
+the truth of supplied policy metadata. The recorded task/source hashes do not
+prove that metadata matches the private task configuration; that provenance
+still needs operator review. This is an S11/E2 terminal-report repair, with no
+change to native scoring, integrity qualification, or study promotion.

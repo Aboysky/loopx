@@ -7,6 +7,10 @@ from ..control_plane.goals.goal_vision_policy import (
     DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
     MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD,
 )
+from ..control_plane.work_items.progress_review_policy import (
+    PROGRESS_REVIEW_MODES,
+    PROGRESS_REVIEW_SIGNALS,
+)
 from ..orchestration import EXPLORE_HARNESS_PROFILES
 from .registry_admin_peer import (
     register_peer_runtime_arguments,
@@ -69,6 +73,15 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     configure_goal_parser.add_argument(
         "--clear-execution-replan-after-turns", action="store_true",
         help="Remove the Goal effective-Turn override and restore device/default inheritance.",
+    )
+    from argparse import BooleanOptionalAction
+    configure_goal_parser.add_argument(
+        "--execution-planning-horizon-goal", action=BooleanOptionalAction, default=None,
+        help="Include the full same-source Goal in preselection planning horizons. Default off; no selection or execution authority change.",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-planning-horizon-goal", action="store_true",
+        help="Remove the Goal horizon override and restore review-configuration inheritance.",
     )
     from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
     configure_goal_parser.add_argument(
@@ -140,7 +153,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     )
     configure_goal_parser.add_argument(
         "--progress-review-mode",
-        choices=["off", "shadow", "assist"],
+        choices=PROGRESS_REVIEW_MODES,
         help=(
             "Optional scoped progress-review sentinel: shadow records typed drift "
             "receipts; assist lets consecutive drift receipts raise the existing "
@@ -149,7 +162,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     )
     configure_goal_parser.add_argument(
         "--progress-review-signal",
-        choices=["noul", "choice"],
+        choices=PROGRESS_REVIEW_SIGNALS,
         help="Which receipt judgment pair counts as drift for this goal.",
     )
     configure_goal_parser.add_argument(
@@ -516,9 +529,16 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         ),
     )
     configure_goal_parser.add_argument(
+        "--reward-memory-agent-id",
+        help=(
+            "Configure or disable only this registered Agent's independent binding. "
+            "Preserves shared and sibling bindings; do not combine with --reward-memory-agent."
+        ),
+    )
+    configure_goal_parser.add_argument(
         "--clear-reward-memory-config",
         action="store_true",
-        help="Disable the Reward Memory experiment and clear its agent allowlist.",
+        help="Disable only --reward-memory-agent-id when supplied; otherwise clear all Reward Memory bindings.",
     )
     configure_goal_parser.add_argument(
         "--execute",

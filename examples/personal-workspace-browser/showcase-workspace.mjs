@@ -4,6 +4,31 @@
 // take their before/after screenshots from this state so reviewers judge the
 // composition against realistic content rather than fixture placeholders.
 // Every name, number and title here is invented.
+import { sealProjectionEnvelope, PROJECTION_ENVELOPE_SEAL_REQUEST } from "../../loopx/control_plane/projection_envelope.ts";
+
+/** Synthetic response metadata, not evidence of real source/backend freshness. */
+export function deliveryReadFixture(snapshot) {
+  const map = snapshot.goal_map;
+  const sources = [{source_id: "fixture_delivery", read_status: "read", last_read_at: snapshot.observed_at}];
+  const seal = (projection, coverage, upstream = []) => sealProjectionEnvelope({
+    schema_version: PROJECTION_ENVELOPE_SEAL_REQUEST, projection,
+    observed_at: snapshot.observed_at, sources: projection === "goal_task_map" ? sources : [], coverage, upstream,
+  });
+  const omitted = map ? [
+    {reason: "map_node_limit", count: map.limits.omitted_node_count},
+    {reason: "unresolved_map_relations", count: map.limits.missing_endpoint_count + map.limits.cycle_edge_count},
+  ].filter(row => row.count > 0) : [];
+  const mapEnvelope = map ? seal("goal_task_map", {scope: "goal_task_map",
+    expected_count: map.limits.source_truncated ? null : map.nodes.length + map.limits.omitted_node_count,
+    included_count: map.nodes.length, omitted}) : null;
+  const missing = [snapshot.graph, map, snapshot.acceptance].filter(value => value == null).length;
+  return {...snapshot, goal_map: map ? {...map, projection_envelope: mapEnvelope} : null,
+    projection_envelope: seal("delivery_review", {scope: "selected_goal_delivery", expected_count: 3,
+      included_count: 3 - missing, omitted: missing ? [{reason: "unavailable_components", count: missing}] : []},
+    mapEnvelope ? [mapEnvelope] : []),
+  };
+}
+
 export const showcaseGoalId = "progress-projection";
 export const showcaseGoalTitle = "Migrate billing exports to the ledger API";
 const goalId = showcaseGoalId;
@@ -65,7 +90,7 @@ const mapNode = (id, kind, nodeTitle, state, depth, extra = {}) =>
 const mapEdge = (from, to, relation, enforcement) =>
   ({ edge_id: `map_${from}_${to}_${relation}`, from_node_id: `map_${from}`, to_node_id: `map_${to}`, relation, enforcement, reason: "Recorded task relation." });
 function deliverySnapshot() {
-  return {
+  return deliveryReadFixture({
     ok: true, goal_id: goalId, observed_at: minutesAgo(1), acceptance,
     goal_map: {
       schema_version: "goal_task_map_v0", mode: "read_only", goal_id: goalId,
@@ -90,11 +115,18 @@ function deliverySnapshot() {
       ],
     },
     graph: null,
-  };
+  });
 }
 
 /** Installs the showcase status, usage and delivery reads. `state` stays live: change it, then refresh. */
 export async function installShowcaseWorkspace(api, page, state) {
+  // The check panel refreshes its owning read independently of the map. This
+  // visual fixture supplies that same synthetic contract; real execution is
+  // qualified by goal-acceptance-oracle.mjs against SQLite/HTTP/CLI.
+  await page.route("**/api/chat/goal-acceptance?*", route => route.fulfill({
+    contentType: "application/json", json: {ok: true, goal_id: goalId,
+      provider_revision: "showcase:3", goal_acceptance_contract: acceptance.goal_acceptance_contract},
+  }));
   await page.route("**/api/chat/delivery-review?*", (route) => state.deliveryFails
     ? route.fulfill({ status: 503, contentType: "application/json", json: { ok: false, error: "temporarily unavailable" } })
     : route.fulfill({ contentType: "application/json", json: deliverySnapshot() }));
@@ -107,7 +139,9 @@ export async function installShowcaseWorkspace(api, page, state) {
       if (workspaceNames[goal.id]) goal.display_name = workspaceNames[goal.id];
     }
     const goal = fixture.run_history.goals.find((item) => item.id === goalId);
-    if (goal) Object.assign(goal, { display_name: title, acceptance_observation: acceptance });
+    if (goal) Object.assign(goal, { display_name: title,
+      goal_objective: "Move legacy billing exports onto the ledger service.",
+      acceptance_observation: acceptance });
     const queueItem = fixture.attention_queue.items.find((item) => item.goal_id === goalId);
     if (queueItem) {
       const items = [...openTodos, deferredTodo, ...recentDone];
@@ -148,6 +182,6 @@ export async function installShowcaseWorkspace(api, page, state) {
 export async function openShowcaseGoal(page) {
   await page.locator(".personal-goal-row").filter({ has: page.locator("strong", { hasText: title }) }).first().locator(".personal-goal-link").click();
   await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
-  await page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
+  await page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/, current: "page" }).waitFor();
   await page.locator(".goal-now, .work-map, .delivery-review [role=alert]").first().waitFor({ timeout: 15_000 });
 }

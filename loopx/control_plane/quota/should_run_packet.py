@@ -2,7 +2,7 @@ from __future__ import annotations
 from .effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
 from .effect_program import ReceiptBoundReplayPhase
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,7 +29,6 @@ from ..agents.agent_scope import (
     _agent_scope_deferred_resume_candidates,
     _agent_scope_frontier_action,
     _agent_scope_no_candidate_frontier,
-    _selected_candidate_priority_frontier,
     _attach_agent_identity_contracts,
 )
 from ..agents.capability_gate import missing_required_capabilities
@@ -87,6 +86,7 @@ from ..scheduler.execution_context import (
 from ..scheduler.external_evidence_observation import (
     build_external_evidence_observation_obligation,
 )
+from ..scheduler.arbitration import SchedulerArbitration
 from ..scheduler.scheduler_hint import build_scheduler_hint
 from ..scheduler.state import (
     load_app_automation_scheduler_state,
@@ -120,7 +120,7 @@ from ..work_items.action_selection_contract import (
 )
 from ..work_items.goal_route_hint import build_goal_route_hint
 from ..work_items.interaction_contract import (
-    build_interaction_contract,
+    _build_interaction_contract_projection,
     unadmitted_action_selection,
     finalize_user_gate_notification_cooldown,
 )
@@ -196,7 +196,7 @@ def _compact_autonomous_candidate_context(
 
 
 def _scheduler_hint(
-    payload: dict[str, Any], *, include_detail: bool = False,
+    payload: dict[str, Any], *, arbitration: SchedulerArbitration | None = None, include_detail: bool = False,
     codex_app_scheduler_state: dict[str, Any] | None = None, available_capabilities: Any = None, codex_app_current_rrule: Any = None,
     codex_app_automation_id: Any = None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None = None,
@@ -204,7 +204,7 @@ def _scheduler_hint(
     return build_scheduler_hint(
         payload,
         user_action_required=_user_channel_action_required(payload),
-        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
+        arbitration=arbitration,
         include_detail=include_detail,
         codex_app_scheduler_state=codex_app_scheduler_state,
         available_capabilities=available_capabilities, codex_app_current_rrule=codex_app_current_rrule,
@@ -219,6 +219,7 @@ def _load_app_automation_scheduler_state(
     goal_id: str,
     agent_id: str | None,
     surface: str,
+    read_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     raw_runtime_root = status_payload.get("runtime_root")
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -229,6 +230,7 @@ def _load_app_automation_scheduler_state(
         goal_id=goal_id,
         agent_id=safe_agent_id,
         surface=surface,
+        read_observer=read_observer,
     )
 
 
@@ -457,22 +459,6 @@ def _delivery_preemptions_for_route(
         preemptions.append("control_repair")
     if not normal_delivery_allowed:
         preemptions.append("delivery_not_allowed")
-    requested_candidate = prepared.requested_action_candidate
-    agent_id = normalize_todo_claimed_by(
-        (prepared.agent_identity or {}).get("agent_id")
-    )
-    if (
-        not preemptions
-        and agent_id
-        and isinstance(prepared.agent_todo_summary, dict)
-        and isinstance(requested_candidate, dict)
-        and _selected_candidate_priority_frontier(
-            agent_id=agent_id,
-            summary=prepared.agent_todo_summary,
-            selected=requested_candidate,
-        )
-    ):
-        preemptions.append("ready_deferred_successor_priority_preemption")
     return preemptions
 
 
@@ -484,10 +470,12 @@ def _resolve_agent_lane_delivery_route(
     delivery_preemptions: list[str],
     should_run: bool,
     normal_delivery_allowed: bool,
-) -> dict[str, Any] | None:
-    """Project candidates once, then let TypeScript own their delivery route."""
+) -> tuple[dict[str, Any] | None, bool]:
+    """Return the selected route with its typed admission decision."""
 
     if prepared.requested_action_todo_id is not None:
+        scoped_fallback = prepared.scoped_user_gate_fallback or {}
+        scoped_selected = scoped_fallback.get("selected_executable") or {}
         qualification = qualify_action_selection_from_inventory(
             requested_todo_id=prepared.requested_action_todo_id,
             candidate=prepared.requested_action_candidate,
@@ -495,18 +483,27 @@ def _resolve_agent_lane_delivery_route(
             should_run=should_run,
             normal_delivery_allowed=normal_delivery_allowed,
             delivery_preemptions=delivery_preemptions,
+            scoped_fallback_todo_id=normalize_todo_id(scoped_selected.get("todo_id")),
+            quota_state=prepared.state,
+            goal_health_ok=prepared.goal_health_ok,
         )
         prepared.action_selection_qualification = qualification
+
+    if (prepared.action_selection_qualification or {}).get("state") == "qualified":
+        # The typed selection owner may admit this exact scoped fallback while
+        # the broader user-gated delivery lane remains closed. Keep selected
+        # workspace/boundary guards active without reopening normal delivery.
+        should_run = True
 
     if isinstance(prepared.guarded_agent_lane_next_action, dict):
         # Workspace/scope guards can change admission after initial selection.
         # Keep the selected identity frozen, but report the final qualification.
-        return prepared.guarded_agent_lane_next_action
+        return prepared.guarded_agent_lane_next_action, should_run
 
     if prepared.requested_action_todo_id is not None:
         qualification = prepared.action_selection_qualification or {}
         if qualification.get("state") != "qualified":
-            return None
+            return None, should_run
         if not isinstance(prepared.requested_action_candidate, dict):
             raise RuntimeError(
                 "qualified action selection is missing its projected candidate"
@@ -515,7 +512,7 @@ def _resolve_agent_lane_delivery_route(
             **prepared.requested_action_candidate,
             "selected_by": "agent_action_selection",
             "selection_binding": "pending_action_selection",
-        }
+        }, should_run
 
     item = prepared.item
     fallback = prepared.receipt_bound_agent_next_action
@@ -562,7 +559,7 @@ def _resolve_agent_lane_delivery_route(
         (prepared.agent_identity or {}).get("agent_id")
     )
     if not delivery_agent_id:
-        return fallback
+        return fallback, should_run
 
     continuity_todo = prepared.delivery_continuity_todo
     delivery_anchor = prepared.delivery_continuity_anchor
@@ -581,7 +578,7 @@ def _resolve_agent_lane_delivery_route(
         and fallback is None
         and replan_candidate is None
     ):
-        return None
+        return None, should_run
     delivery_route = evaluate_delivery_route(
         agent_id=delivery_agent_id,
         previous_todo_id=(
@@ -682,7 +679,7 @@ def _resolve_agent_lane_delivery_route(
         # The router may find an independent successor after the bound Todo
         # becomes unavailable.  That successor cannot replace an already
         # committed settlement identity inside the same heartbeat Turn.
-        return None
+        return None, should_run
 
     boundary = delivery_route.get("boundary")
     if (
@@ -693,14 +690,14 @@ def _resolve_agent_lane_delivery_route(
         return {
             **selected_action,
             "delivery_boundary": boundary["delivery_boundary"],
-        }
-    return selected_action
+        }, should_run
+    return selected_action, should_run
 
 
-def _scoped_gate_deferred_replan_frontier(
+def _selected_deferred_replan_frontier(
     prepared: _QuotaDecisionPreparation,
 ) -> dict[str, Any] | None:
-    """Keep an authoritative gate fallback in the replan lane.
+    """Keep an authoritative selected resume in the replan lane.
 
     The fallback selector may choose a ready deferred successor while an open
     advancement remains covered by the gate. That choice is a lifecycle replan,
@@ -713,13 +710,19 @@ def _scoped_gate_deferred_replan_frontier(
         if isinstance(fallback, dict)
         else None
     )
+    receipt_resume = prepared.receipt_bound_successor_replan
+    if receipt_resume:
+        selected = next((candidate for candidate in _agent_scope_deferred_resume_candidates(
+            prepared.agent_todo_summary or {},
+            agent_id=normalize_todo_claimed_by((prepared.agent_identity or {}).get("agent_id")),
+        ) if normalize_todo_id(candidate.get("todo_id")) == prepared.receipt_bound_todo_id), None)
     agent_id = normalize_todo_claimed_by(
         (prepared.agent_identity or {}).get("agent_id")
     )
     if (
         not agent_id
         or not isinstance(selected, dict)
-        or selected.get("fallback_kind") != "deferred_successor_replan"
+        or (not receipt_resume and selected.get("fallback_kind") != "deferred_successor_replan")
     ):
         return None
     todo_id = normalize_todo_id(selected.get("todo_id")) or "<todo_id>"
@@ -729,7 +732,7 @@ def _scoped_gate_deferred_replan_frontier(
         quiet_noop_allowed=False,
         spend_policy="spend once after validated successor replan/todo writeback",
         reason=(
-            f"scoped user gate fallback selected ready deferred successor {todo_id}; "
+            f"selected ready deferred successor {todo_id}; "
             "resolve its lifecycle before selecting another advancement"
         ),
         recommended_action=(
@@ -740,7 +743,7 @@ def _scoped_gate_deferred_replan_frontier(
         candidate_counts={"deferred_resume_candidate_count": 1},
         extra_fields={
             "deferred_resume_candidates": [selected],
-            "scoped_user_gate_fallback": True,
+            "scoped_user_gate_fallback": not receipt_resume,
         },
     )
 
@@ -810,6 +813,8 @@ def _planning_projections(
         capability_gate=prepared.capability_gate,
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
+        source_status=prepared.status_payload,
+        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", False),
         replan_selection_context=(
             {
                 "has_turn_identity": bool(turn_instance_id),
@@ -1112,7 +1117,7 @@ def _resolve_quota_should_run_route(
         capability_repair_allowed=capability_repair_allowed,
         workspace_repair_allowed=workspace_repair_allowed,
     )
-    agent_lane_next_action = _resolve_agent_lane_delivery_route(
+    agent_lane_next_action, should_run = _resolve_agent_lane_delivery_route(
         prepared,
         due_monitor_attempt=due_monitor_attempt,
         receipt_bound_replan_decision=receipt_bound_replan_decision,
@@ -1130,27 +1135,32 @@ def _resolve_quota_should_run_route(
     elif (
         not replan_decision_allowed
         and not receipt_bound_monitor_settled
-        and prepared.receipt_bound_todo_id is None
+        and (prepared.receipt_bound_todo_id is None or prepared.receipt_bound_successor_replan)
     ):
         # The typed receipt owner already selected this Turn's immutable
-        # binding. Frontier discovery is for unbound Turns: a newly ready
-        # successor must not replace an interrupted Turn's Todo/effect after
-        # the receipt-bound delivery route has been resolved above.
+        # binding. Only its original, still-ready resume replan can reenter
+        # this frontier. An unrelated newly ready successor cannot replace
+        # an interrupted Turn's Todo/effect.
         selected_recommended_action = selected_action_with_agent_lane(
             selected_recommended_action,
             agent_lane_next_action=agent_lane_next_action,
         )
         agent_scope_frontier = (
-            _scoped_gate_deferred_replan_frontier(prepared)
+            _selected_deferred_replan_frontier(prepared)
             or _agent_scope_no_candidate_frontier(
                 agent_identity=prepared.agent_identity,
                 agent_todo_summary=prepared.agent_todo_summary,
                 agent_lane_next_action=agent_lane_next_action,
                 work_lane_contract=prepared.work_lane_contract,
-                candidate_should_run=bool(
-                    (should_run and normal_delivery_allowed)
-                    or ready_deferred_resume_candidates
-                ),
+                # A satisfied dependency is readiness, not admission. The
+                # existing scoped fallback above qualifies an independent
+                # successor under a user gate; an unqualified ready row must
+                # not resurrect delivery refused by the current quota owner.
+                candidate_should_run=bool(should_run and (
+                    normal_delivery_allowed
+                    or (ready_deferred_resume_candidates
+                        and prepared.goal_health_ok and state == "eligible")
+                )),
             )
         )
         if (
@@ -1626,6 +1636,9 @@ def _build_quota_should_run_payload(
     include_agent_todo_detail: bool = False,
     runtime_root: str | Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    scheduler_state_read_observer: (
+        Callable[[Mapping[str, Any]], None] | None
+    ) = None,
 ) -> dict[str, Any]:
     if prepared.receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED:
         payload = _build_settled_quota_payload(prepared, route)
@@ -1648,8 +1661,8 @@ def _build_quota_should_run_payload(
         resolved_scheduler_context=prepared.resolved_scheduler_context,
     )
     payload["automation_liveness"] = build_automation_liveness(payload)
-    payload["interaction_contract"] = build_interaction_contract(
-        payload,
+    payload["interaction_contract"], arbitration = _build_interaction_contract_projection(
+        payload, agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         available_capabilities=prepared.runtime_available_capabilities,
         scheduler_execution_context=prepared.resolved_scheduler_context,
         turn_instance_id=turn_instance_id,
@@ -1657,7 +1670,7 @@ def _build_quota_should_run_payload(
         registry_path=prepared.status_payload.get("registry"),
     )
     payload["scheduler_hint"] = _scheduler_hint(
-        payload,
+        payload, arbitration=arbitration,
         include_detail=prepared.include_scheduler_detail,
         available_capabilities=prepared.runtime_available_capabilities,
         codex_app_scheduler_state=(
@@ -1667,6 +1680,7 @@ def _build_quota_should_run_payload(
                 agent_id=quota_decision_agent_id(payload)
                 or prepared.requested_agent_id,
                 surface=prepared.resolved_scheduler_context.context.host_surface.value,
+                read_observer=scheduler_state_read_observer,
             )
             if prepared.resolved_scheduler_context.ok
             and prepared.resolved_scheduler_context.context is not None

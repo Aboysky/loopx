@@ -17,7 +17,7 @@ from loopx.control_plane.scheduler import scheduler_hint as scheduler_hint_modul
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
-from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
 from loopx.control_plane.scheduler.state import (
     SCHEDULER_HOST_UPDATE_FAILURE_SCHEMA_VERSION,
 )
@@ -167,6 +167,7 @@ def test_unrelated_user_gate_allows_ready_deferred_successor_replan() -> None:
     assert selected["fallback_kind"] == "deferred_successor_replan"
     assert payload["decision"] == "successor_replan_required"
     assert payload["effective_action"] == "successor_replan_required"
+    assert payload["should_run"] is True
     assert payload["selected_todo"]["todo_id"] == "todo_ready_deferred"
     assert payload["interaction_contract"]["mode"] == "scoped_user_gate_fallback"
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is True
@@ -296,6 +297,8 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
     )
 
     assert "scoped_user_gate_fallback" not in payload
+    assert payload["should_run"] is False
+    assert payload["effective_action"] == "operator_gate_notify"
     assert payload["interaction_contract"]["mode"] == "user_gate"
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is False
     expected_response_plan = {

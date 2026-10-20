@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .control_plane.goals.acceptance_http import GoalAcceptanceRequestMixin
+
 import json
 import mimetypes
 import re
@@ -9,10 +11,13 @@ from collections.abc import Callable, Mapping
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
 
 from .presentation import configuration_api as config_api
+from .presentation.codex_accounts_api import CodexAccountService
+if TYPE_CHECKING:
+    from .capabilities.native_chat.transports import ChatConversationTransports
 from .attached_session_api import AttachedSessionRequestMixin
 from .zcode_goal_mode.api import ZCodeGoalRequestMixin
 from .chat import (
@@ -39,7 +44,6 @@ from .chat_goal_subagent_api import (
 from .chat_status_api import ChatStatusRequestMixin
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
-    TERMINAL_TURN_STATES,
     ChatRuntimeController,
     ChatTurnAcceptanceUnavailableError,
 )
@@ -49,11 +53,12 @@ from .chat_manager import (
 )
 from .chat_session_open import open_chat_session
 from .chat_ssh_source_api import SshSourceRequestMixin
-from .chat_store import ChatSessionStore, normalize_agent_model_id
+from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
+from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
-from .chat_loopx_mode import handle_loopx_request
+from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
     project_chat_session_snapshot,
@@ -86,20 +91,22 @@ from .extensions.lark.goal_channel import (
     setup_lark_goal_channel,
 )
 from .extensions.lark.goal_topic_connections import list_lark_apps
-from .extensions.lark.goal_topic_runtime import LarkGoalTopicRuntimeService
+from .extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 from .extensions.lark.manager_routing import authorized_manager_goal_ids
 from .extensions.lark.cli_transport import CommandRunner
 from .extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,
 )
-from .history import load_registry
 from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
+from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
+from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GoalSourceRequestMixin
 from .chat_todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
+from .control_plane.projects.registry_codec import load_registry
 from .registry import registry_goals, resolve_state_file
 from .state_projection import build_active_state_structured_projection
 from .status_server import (
@@ -255,7 +262,7 @@ def build_chat_status_projection(
     queue_items = queue.get("items") if isinstance(queue, dict) else []
     queue_by_goal = {
         str(item.get("goal_id") or ""): item
-        for item in queue_items if isinstance(queue_items, list) and isinstance(item, dict)
+        for item in (queue_items if isinstance(queue_items, list) else []) if isinstance(item, dict)
     }
     goals: list[dict[str, Any]] = []
     for raw_goal in registry_goals(registry):
@@ -281,7 +288,8 @@ def build_chat_status_projection(
         latest_validation = asset.get("latest_validation")
         if isinstance(latest_validation, dict) and latest_validation.get("summary"):
             evidence.insert(0, _compact_text(latest_validation.get("summary")))
-        quota = item.get("quota") if isinstance(item, dict) and isinstance(item.get("quota"), dict) else {}
+        raw_quota = item.get("quota") if isinstance(item, dict) else None
+        quota = raw_quota if isinstance(raw_quota, dict) else {}
         goals.append(
             {
                 "goal_id": goal_id,
@@ -437,7 +445,9 @@ class ChatHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     registry_path: Path
+    runtime_root: Path
     runtime_root_override: str | None
+    codex_account_service: CodexAccountService
     scan_roots: list[Path]
     limit: int
     selected_goal_id: str | None
@@ -456,6 +466,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
     lark_private_conversations: LarkPrivateConversations
     ssh_config_path: Path | None
     goal_subagent_configuration_enabled: bool
+    conversation_transports: ChatConversationTransports
+    delegation_wake_service: DelegationWakeService
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # Freeze before serving: an in-place package upgrade must not retag the
@@ -465,6 +477,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
         self.completed_todo_pages = CompletedTodoPages()
 
     def server_close(self) -> None:
+        if hasattr(self, "codex_account_service"):
+            self.codex_account_service.close()
         if hasattr(self, "lark_app_setup_manager"):
             self.lark_app_setup_manager.close()
         if hasattr(self, "manager_return_service"):
@@ -481,10 +495,13 @@ class ChatHTTPServer(ThreadingHTTPServer):
 
 
 class ChatRequestHandler(
+    GoalSourceRequestMixin,
+    GoalAcceptanceRequestMixin,
     ZCodeGoalRequestMixin,
     PrivateConversationRequestMixin,
     CompletedTodoRequestMixin,
     ExploreResultsRequestMixin,
+    ResearchAnalysisRequestMixin,
     TodoDetailRequestMixin,
     AttachedSessionRequestMixin,
     SshSourceRequestMixin,
@@ -532,7 +549,12 @@ class ChatRequestHandler(
         turn_replay_safe: bool = False,
         todo_receipt: dict[str, Any] | None = None,
         delivery_state: Literal["not_delivered", "unresolved"] | None = None,
+        **unsupported: object,
     ) -> None:
+        # Legacy mixins expose **kwargs; keep unknown options rejected at the
+        # concrete boundary instead of silently widening the HTTP contract.
+        if unsupported:
+            raise TypeError("unsupported error response options")
         payload: dict[str, Any] = {"ok": False, "error": _compact_text(message)}
         if error_code:
             payload["error_code"] = _compact_text(error_code, limit=80)
@@ -621,10 +643,10 @@ class ChatRequestHandler(
     def _create_session(self) -> None:
         try:
             body = self._read_json()
-            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "mode", "context_kind", "project_ref"}
+            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "agent_reasoning_effort", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
-            goal_id = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
+            goal_id: str | None = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
             # ``agent_id`` is the caller's explicit executor pick and stays empty
             # when the caller does not make one. Each channel then resolves its
             # own default through its own owner instead of inheriting whatever
@@ -632,6 +654,8 @@ class ChatRequestHandler(
             requested_endpoint = _compact_text(body.get("agent_id"), limit=80)
             model_value = body.get("agent_model_id")
             requested_model = normalize_agent_model_id(model_value) if model_value not in (None, "") else None
+            requested_effort = (normalize_agent_reasoning_effort(body["agent_reasoning_effort"])
+                                if body.get("agent_reasoning_effort") is not None else None)
             mode = _compact_text(body.get("mode"), limit=40) or "resume_latest"
             context_kind = _compact_text(body.get("context_kind"), limit=40) or "goal"
             if context_kind not in {"goal", "manager", "project"}:
@@ -650,10 +674,10 @@ class ChatRequestHandler(
                 context = self._session_context({"goal_id": None, "channel_id": selected["channel_id"],
                                                  "project_context": selected["context"]})
             else:
-                registry, goal = self._registry_and_goal(goal_id)
+                registry, goal = self._registry_and_goal(goal_id or "")
                 context = _goal_public_context(registry, goal)
             runtime_objective = str(context["objective"] or context["title"])
-            project = context["project"]
+            project = cast(Path, context["project"])
             if not project.is_dir():
                 raise CodexChatAgentError(
                     "The Goal project root is unavailable.",
@@ -672,6 +696,7 @@ class ChatRequestHandler(
                 mode=mode,
                 requested_endpoint=requested_endpoint,
                 agent_model_id=requested_model,
+                **({"agent_reasoning_effort": requested_effort} if requested_effort is not None else {}),
                 **({"project_ref": project_ref} if context_kind == "project" else {}),
             )
         except CodexChatAgentError as exc:
@@ -699,16 +724,21 @@ class ChatRequestHandler(
     def _agent_model_options(self) -> None:
         try:
             body = self._read_json()
-            if set(body) != {"agent_id"}:
+            if "agent_id" not in body or set(body) - {"agent_id", "goal_id", "agent_model_id"}:
                 raise ValueError("agent_id is required")
             agent_id = _compact_text(body.get("agent_id"), limit=80)
             if not agent_id:
                 raise ValueError("agent_id is required")
+            goal_id = _compact_text(body.get("goal_id"), limit=160) or None
+            if goal_id:
+                self._registry_and_goal(goal_id)
+            requested_model = normalize_agent_model_id(body["agent_model_id"]) if body.get("agent_model_id") is not None else None
             # Discovery is deliberately bounded to a selected, known endpoint.
             # It opens no persisted LoopX Chat session and exposes no command or
             # local workspace data to the browser.
             result = self.server.runtime_controller.inspect_agent_model_options(
-                agent_id, work_dir=Path.cwd()
+                agent_id, work_dir=Path.cwd(), **({"goal_id": goal_id} if goal_id else {}),
+                **({"agent_model_id": requested_model} if requested_model else {}),
             )
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, gate=exc.gate, error_code=exc.error_code)
@@ -771,6 +801,7 @@ class ChatRequestHandler(
         )
 
     def _session_turn(self, session_id: str) -> None:
+        self.server.runtime_controller.recover_exited_turn(session_id)
         session = self.server.chat_store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             self._send_error(
@@ -778,12 +809,15 @@ class ChatRequestHandler(
                 status=404,
                 session_invalidated=True,
                 turn_replay_safe=True,
+                delivery_state="not_delivered",
             )
             return
         try:
             body = self._read_json(max_bytes=CHAT_TURN_MAX_BODY_BYTES)
-            if set(body) - {"message", "client_turn_id", "attachments"}:
+            if set(body) - {"message", "client_turn_id", "attachments", "delivery"}:
                 raise ValueError("unknown turn field")
+            if body.get("delivery") not in (None, "queue"):
+                raise ValueError("delivery must be queue when supplied")
             validate_chat_turn_envelope(body)
             message = str(body.get("message") or "").strip()
             if not message:
@@ -793,17 +827,35 @@ class ChatRequestHandler(
         except (ValueError, TypeError, OverflowError) as exc:
             self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
             return
+        bound = session.get("steward_context") or session.get("project_context") or {}
+        bound_input = bound.get("audience") in {"bound_owner", "bound_group"}
         try:
-            context = self._session_context(session)
-            runtime_objective = str(context["objective"] or context["title"])
-            turn, created = self.server.runtime_controller.submit_turn(
-                session_id=session_id,
-                client_turn_id=client_turn_id,
-                message=message,
-                attachments=attachments,
-                work_dir=context["project"],
-                objective=runtime_objective,
-            )
+            # Bound local input resolves its context in the source admission
+            # owner, once, outside the grant fence. Do not repeat provider IO
+            # here or pass an unverified saved workspace as caller authority.
+            context = None if bound_input else self._session_context(session)
+            runtime_objective = str(context["objective"] or context["title"]) if context else ""
+        except (ValueError, KeyError) as exc:
+            # No Turn has been admitted when its owning context cannot resolve.
+            self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
+            return
+        try:
+            # Existing private bound Sessions share their canonical queue after
+            # fresh local-source admission. The body cannot assert an origin,
+            # provider principal or a broader local-owner conversation scope.
+            if body.get("delivery") == "queue" or bound_input:
+                turn, created = self.server.runtime_controller.enqueue_turn(
+                    session_id=session_id, client_turn_id=client_turn_id,
+                    message=message, attachments=attachments,
+                    work_dir=cast(Path, context["project"]) if context else None, objective=runtime_objective, origin="web",
+                )
+            else:
+                assert context is not None
+                turn, created = self.server.runtime_controller.submit_turn(
+                    session_id=session_id, client_turn_id=client_turn_id,
+                    message=message, attachments=attachments,
+                    work_dir=cast(Path, context["project"]), objective=runtime_objective,
+                )
             if body.get("client_turn_id"):
                 turn_id = str(turn["turn_id"])
                 self._send_json(
@@ -852,6 +904,10 @@ class ChatRequestHandler(
             )
             return
         except RuntimeError as exc:
+            if str(exc) == "session_queue_full":
+                self._send_error("Session queue is full; the message was not accepted.", status=429,
+                                 error_code="session_queue_full", delivery_state="not_delivered", turn_replay_safe=True)
+                return
             self._send_json(
                 {
                     "ok": False,
@@ -863,6 +919,10 @@ class ChatRequestHandler(
             return
         except KeyError:
             self._send_error("chat session was not found", status=404, session_invalidated=True)
+            return
+        except ValueError as exc:
+            self._send_error(str(exc), **({"delivery_state": "not_delivered", "turn_replay_safe": True}
+                                          if bound_input else {}))
             return
         except Exception as exc:  # noqa: BLE001 - compact local validation error.
             self._send_error(str(exc))
@@ -879,14 +939,32 @@ class ChatRequestHandler(
 
     def _session_snapshot(self, session_id: str) -> None:
         try:
-            self._send_json(project_chat_session_snapshot(
+            self.server.runtime_controller.recover_exited_turn(session_id)
+            snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
+            self._send_json(snapshot(
                 self.server.runtime_root, self.server.chat_store, session_id,
                 registry=self.server.registry_path))
         except KeyError:
             self._send_error("chat session was not found", status=404)
 
     def _list_sessions(self) -> None:
-        query = parse_qs(urlparse(self.path).query)
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        if "conversation_binding_id" in query:
+            if set(query) != {"conversation_binding_id"} or len(query["conversation_binding_id"]) != 1 or not query["conversation_binding_id"][0]:
+                return self._send_error("select one exact conversation binding without other Session filters", status=400)
+            bindings = self.server.runtime_controller.project_contexts.conversation_bindings
+            try:
+                if bindings is None:
+                    raise ValueError("conversation bindings unavailable")
+                sessions = bindings.local_sessions(query["conversation_binding_id"][0])
+            except (ValueError, OSError, KeyError):
+                # A failed provider/store read may contain private diagnostics.
+                # Refuse this selector; never fall back to an unfiltered list.
+                return self._send_error("Original private conversation is unavailable; verify its App, owner and workspace binding.", status=409)
+            # Older services ignore this new query. A matching selector in the
+            # response lets callers reject their ordinary, unfiltered result.
+            return self._send_json({"ok": True, "schema_version": "loopx_chat_session_list_v1",
+                                    "conversation_binding_id": query["conversation_binding_id"][0], "sessions": sessions})
         goal_id = _compact_text((query.get("goal_id") or [""])[0], limit=160) or None
         agent_id = _compact_text((query.get("agent_id") or [""])[0], limit=80) or None
         channel_id = _compact_text((query.get("channel_id") or [""])[0], limit=160) or None
@@ -903,19 +981,22 @@ class ChatRequestHandler(
         )
 
     def _turn_events(self, session_id: str, turn_id: str) -> None:
+        from .presentation.codex_activity import public_activity_event
+
+        self.server.runtime_controller.recover_exited_turn(session_id, turn_id)
         if self.server.chat_store.load_turn(session_id, turn_id) is None:
             self._send_error("chat turn was not found", status=404)
             return
         last_event_id = self.headers.get("Last-Event-ID")
         query = parse_qs(urlparse(self.path).query)
         if not last_event_id:
-            last_event_id = (query.get("after") or [None])[0]
+            last_event_id = (query.get("after") or [""])[0] or None
         if str(last_event_id or "0") != "0":
-            turn = self.server.chat_store.load_turn(session_id, turn_id) or {}
+            prior_turn = self.server.chat_store.load_turn(session_id, turn_id) or {}
             self.server.chat_store.update_turn(
                 session_id,
                 turn_id,
-                sse_reconnect_count=int(turn.get("sse_reconnect_count") or 0) + 1,
+                sse_reconnect_count=int(prior_turn.get("sse_reconnect_count") or 0) + 1,
             )
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -932,6 +1013,7 @@ class ChatRequestHandler(
                 events = self.server.chat_store.events_after(session_id, turn_id, cursor)
                 for event in events:
                     cursor = str(event["event_id"])
+                    event = public_activity_event(event)
                     data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                     self.wfile.write(
                         f"id: {cursor}\nevent: {event['kind']}\ndata: {data}\n\n".encode("utf-8")
@@ -1018,7 +1100,7 @@ class ChatRequestHandler(
             objective = str(context["objective"] or context["title"])
             restored = self.server.runtime_controller.resume_session(
                 session_id=session_id,
-                work_dir=context["project"],
+                work_dir=cast(Path, context["project"]),
                 objective=objective,
             )
         except KeyError:
@@ -1368,6 +1450,7 @@ class ChatRequestHandler(
         )
 
     def _action_apply(self, proposal_id: str) -> None:
+        proposal: dict[str, object] | None
         try:
             body = self._read_json()
             if body:
@@ -1517,11 +1600,14 @@ class ChatRequestHandler(
                     "endpoints": self.server.runtime_controller.capabilities(),
                 }
             )
-        get_dispatch = {
+        get_dispatch: dict[str, Callable[[], None]] = {
+            GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/goal-results": self._goal_results,
             "/api/chat/explore-results": self._explore_results,
+            RESEARCH_ANALYSIS_PATH: self._research_analysis_read,
+            RESEARCH_ANALYSIS_PATH + "/citation": self._research_analysis_read,
             CHAT_SESSIONS_PATH: self._list_sessions,
             CHAT_ACTIONS_PATH: self._action_list,
             CHAT_GOAL_CONTEXTS_PATH: self._goal_contexts,
@@ -1533,6 +1619,7 @@ class ChatRequestHandler(
             **self._configuration_get_routes(),
             DEFAULT_CHAT_STATUS_PATH: self._status,
             "/api/chat/delivery-review": self._delivery_review,
+            "/api/chat/goal-acceptance": self._goal_acceptance_inspect,
             SSH_HOST_CATALOG_PATH: self._ssh_hosts,
         }
         if path in get_dispatch:
@@ -1567,12 +1654,16 @@ class ChatRequestHandler(
         path = urlparse(self.path).path
         if self._dispatch_zcode_goal(path, apply=True):
             return
-        post_dispatch = {
+        post_dispatch: dict[str, Callable[[], None]] = {
+            GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
+            RESEARCH_ANALYSIS_PATH: self._research_analysis_write,
+            RESEARCH_ANALYSIS_PATH + "/cancel": self._research_analysis_write,
             CHAT_SESSIONS_PATH: self._create_session,
             CHAT_AGENT_MODEL_OPTIONS_PATH: self._agent_model_options,
             CHAT_ATTACH_SESSION_PATH: self._attach_session,
             CHAT_PROJECTION_MESSAGES_PATH: self._record_projection_exchange,
             CHAT_ACTION_PREVIEW_PATH: self._action_preview,
+            "/api/chat/goal-acceptance": self._goal_acceptance_update,
             CHAT_TODO_DRY_RUN_PATH: lambda: self._todo(apply=False),
             CHAT_TODO_APPLY_PATH: lambda: self._todo(apply=True),
             CHAT_GOAL_CHANNEL_SETUP_PATH: self._goal_channel_setup,
@@ -1581,6 +1672,7 @@ class ChatRequestHandler(
             CHAT_LARK_CONNECTIONS_PATH: self._lark_connect,
             PRIVATE_CONVERSATIONS_PATH: self._private_conversation_connect,
             PRIVATE_CONVERSATIONS_PATH + "/agent-targets": self._private_conversation_agent_target,
+            PRIVATE_CONVERSATIONS_PATH + "/owner-notifications": self._private_conversation_owner_notifications,
             **self._configuration_post_routes(),
             **self._ssh_source_post_routes(),
         }
@@ -1690,6 +1782,7 @@ def serve_chat(
     server = ChatHTTPServer((host, port), ChatRequestHandler)
     server.registry_path = resolved_registry_path
     server.runtime_root = runtime_root
+    server.codex_account_service = CodexAccountService(runtime_root)
     server.runtime_root_override = resolved_runtime_root_override
     server.scan_roots = resolved_scan_roots
     server.limit = limit
@@ -1715,18 +1808,25 @@ def serve_chat(
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
+    def manager_scope(session: dict[str, object]) -> list[str] | None:
+        if isinstance(session.get("steward_context"), dict):
+            bindings = server.runtime_controller.project_contexts.conversation_bindings
+            if bindings is None:
+                raise ValueError("Steward conversation bindings are unavailable")
+            return cast(list[str] | None, bindings.steward_scope(session))
+        return authorized_manager_goal_ids(
+            build_lark_goal_topic_runtime_snapshot(
+                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
+            ), session, runtime_root=server.runtime_controller.coordination_runtime_root,
+            registry_path=resolved_registry_path, executor_runtime_root=runtime_root,
+        )
+
     server.runtime_controller = ChatRuntimeController(
         store=server.chat_store,
         registry_path=resolved_registry_path,
         project_contexts=ChatProjectContexts(resolved_scan_roots, workspace_grant=project_workspace_grant,
                                             filesystem_scope=project_filesystem_scope),
-        manager_scope_resolver=lambda session: (
-            server.runtime_controller.project_contexts.conversation_bindings.steward_scope(session)
-            if isinstance(session.get("steward_context"), dict) else authorized_manager_goal_ids(
-            build_lark_goal_topic_runtime_snapshot(
-                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
-            ), session, runtime_root=runtime_root,
-        )),
+        manager_scope_resolver=manager_scope,
         codex_bin=codex_bin,
         claude_bin=claude_bin,
         kiro_cli_bin=kiro_cli_bin,
@@ -1746,7 +1846,7 @@ def serve_chat(
 
     server.lark_private_conversations = private_transport
 
-    def _lark_snapshot():
+    def _lark_snapshot() -> dict[str, object]:
         snapshot = build_lark_goal_topic_runtime_snapshot(registry_path=server.registry_path,
             runtime_root_override=server.runtime_root_override)
         snapshot["private_profiles"] = private_transport.profiles()
@@ -1758,6 +1858,7 @@ def serve_chat(
         chat_store=server.chat_store,
         runtime_controller=server.runtime_controller,
         workspace_roots=resolved_scan_roots,
+        runtime_root_override=server.runtime_root_override,
     )
     private_transport.core.actions = server.action_service
     # An admitted steward team preview is projected into the typed action store,
@@ -1785,9 +1886,8 @@ def serve_chat(
     server.manager_return_service = start_return_service(
         server, server.runtime_controller.coordination_runtime_root, start_service=False
     )
-    from .chat_loopx_mode import DelegationWakeService
 
-    def _wake_goal_context(session):
+    def _wake_goal_context(session: dict[str, object]) -> dict[str, object]:
         registry = load_registry(server.registry_path)
         goal = next(
             (item for item in registry_goals(registry) if str(item.get("id") or "") == str(session["goal_id"])),

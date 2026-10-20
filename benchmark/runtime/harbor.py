@@ -19,7 +19,7 @@ from harbor.utils.trajectory_utils import format_trajectory_json
 from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
 
 
@@ -41,6 +41,15 @@ _GOAL_ID = "benchmark-goal"
 _AGENT_ID = "benchmark-agent"
 
 
+# Non-LoopX workers stage only these paths; keep this list closed over the
+# loopx-internal import closure of native_codex_goal.py (see the import test).
+NATIVE_GOAL_SOURCE_PATHS = (
+    "benchmark/runtime",
+    "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+    "loopx/control_plane/turn_driver/codex_stdio.py",
+)
+
+
 class BenchmarkCodex(CodexOffline):
     """One independent LoopX control plane per Harbor trial."""
 
@@ -56,11 +65,15 @@ class BenchmarkCodex(CodexOffline):
         replan_after_todos=None,
         replan_after_turns=None,
         stride_strategy=None,
+        planning_horizon_goal=None,
         checkpoint_request_path=None,
+        checkpoint_request=None,
         task_entry=None,
-        planning_timeout_sec=300,
+        planning_timeout_sec=None,
         turn_envelope=False,
+        native_goal_continue=False,
         task_objective=None,
+        research_loop=False,
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
         defer_codex_home=False,
@@ -77,9 +90,10 @@ class BenchmarkCodex(CodexOffline):
             task_entry,
             turn_envelope,
         )
-        self.planning_timeout = None if planning_timeout_sec is None else float(planning_timeout_sec)
-        if self.planning_timeout is not None and not 0 < self.planning_timeout < float("inf"):
-            raise ValueError("planning timeout must be finite and positive")
+        if planning_timeout_sec is not None:
+            raise ValueError(
+                "Remove planning_timeout_sec; planning shares scheduler_timeout_sec with execution"
+            )
         self.scheduler_timeout = int(scheduler_timeout_sec)
         if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
             raise ValueError(
@@ -99,16 +113,39 @@ class BenchmarkCodex(CodexOffline):
         self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
             raise ValueError("replan_after_todos must be between 1 and 5")
+        from .research_loop import research_stride_strategy
+
+        stride_strategy = research_stride_strategy(research_loop, stride_strategy)
         if stride_strategy is not None and not self.execution.uses_loopx:
             raise ValueError("stride_strategy requires a LoopX execution mode")
         self.stride_strategy = (normalize_stride_strategy(stride_strategy)
                                 if stride_strategy is not None else None)
+        if planning_horizon_goal is not None:
+            if not isinstance(planning_horizon_goal, bool):
+                raise ValueError("planning_horizon_goal must be a boolean")
+            if not self.execution.uses_loopx:
+                raise ValueError("planning_horizon_goal requires a LoopX execution mode")
+        self.planning_horizon_goal = planning_horizon_goal
+        if not isinstance(research_loop, bool) or (research_loop and self.execution.mode != "heartbeat"):
+            raise ValueError("research_loop requires heartbeat execution")
+        self.research_loop = research_loop
         self.checkpoint_request_path = None
+        self._checkpoint_declaration = None
+        if checkpoint_request is not None:
+            if checkpoint_request_path is None:
+                raise ValueError("checkpoint_request requires its staged guest path")
+            from .checkpoint import parse_checkpoint_request
+            self._checkpoint_declaration = parse_checkpoint_request(checkpoint_request)
         if checkpoint_request_path is not None:
             if self.execution.mode not in {"heartbeat", "turn"}:
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
+        if not isinstance(native_goal_continue, bool):
+            raise ValueError("native_goal_continue must be a boolean opt-in")
+        if native_goal_continue and not self.execution.native_goal:
+            raise ValueError("native_goal_continue requires a native-Goal execution mode")
+        self.native_goal_continue = native_goal_continue
         self.goal_id, self.agent_id = goal_id, agent_id
         self.defer_codex_home = defer_codex_home
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
@@ -121,6 +158,12 @@ class BenchmarkCodex(CodexOffline):
                               "Complete the current benchmark task through validated LoopX Todos.")
         super().__init__(*args, **kwargs)
 
+    def _turn_envelope_receipt(self) -> dict:
+        return turn_envelope_receipt(explicit=self.execution.turn_envelope)
+
+    def _planning_receipt(self) -> dict:
+        return {"native_goal_continue": True} if self.native_goal_continue else {}
+
     def _replan_configuration(self) -> tuple[str, str, int]:
         # Transport existing Goal fields; the typed control plane owns counting.
         if self.replan_after_turns is not None:
@@ -132,7 +175,9 @@ class BenchmarkCodex(CodexOffline):
     def _replan_receipt(self) -> dict[str, int | str]:
         key, _, value = self._replan_configuration()
         return {key: value, **({"stride_strategy": self.stride_strategy}
-                             if self.stride_strategy is not None else {})}
+                             if self.stride_strategy is not None else {}),
+                **({"planning_horizon_goal": self.planning_horizon_goal}
+                   if self.planning_horizon_goal is not None else {})}
 
     @staticmethod
     def name() -> str:
@@ -151,9 +196,7 @@ class BenchmarkCodex(CodexOffline):
         self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"
-            paths = () if self.execution.uses_loopx else (
-                "benchmark/runtime", "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
-            )
+            paths = () if self.execution.uses_loopx else NATIVE_GOAL_SOURCE_PATHS
             archive_source(source, head, archive, paths)
             await environment.upload_file(archive, f"{_ROOT}/source.tar")
             await self.exec_as_root(environment, command=(
@@ -291,6 +334,12 @@ class BenchmarkCodex(CodexOffline):
                 raise RuntimeError("LoopX doctor returned invalid JSON") from exc
             if doctor_payload.get("ok") is not True:
                 raise RuntimeError(f"LoopX doctor failed: {doctor_payload}")
+            if self.research_loop:
+                wrapper = (f"#!/bin/sh\nexec env PYTHONPATH={shlex.quote(_SRC)} "
+                           f"{_PYTHON}/bin/python3 -m benchmark.runtime.research_probe \"$@\"\n")
+                await self.exec_as_agent(environment,
+                    command=f"printf %s {shlex.quote(wrapper)} > {_PROFILE}/bin/loopx-research-probe; "
+                            f"chmod 0755 {_PROFILE}/bin/loopx-research-probe", env=self._profile_env())
 
         receipt = {
             "loopx_commit": actual_commit,
@@ -299,7 +348,9 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
+            **({"research_loop": True} if self.research_loop else {}),
+            **self._turn_envelope_receipt(),
+            **self._planning_receipt(),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
@@ -386,6 +437,9 @@ class BenchmarkCodex(CodexOffline):
         key, option, expected = self._replan_configuration()
         stride_args = (["--execution-stride-strategy", self.stride_strategy]
                        if self.stride_strategy is not None else [])
+        if self.planning_horizon_goal is not None:
+            stride_args.append("--execution-planning-horizon-goal" if self.planning_horizon_goal
+                               else "--no-execution-planning-horizon-goal")
         pending = await environment.exec(
             command=f"test -e {_LOOPX_RUNTIME}/benchmark-pending-turn.json"
         )
@@ -454,8 +508,12 @@ class BenchmarkCodex(CodexOffline):
                 cwd=cwd,
             )
 
-        if self.execution.task_entry == "seeded-todo":
+        if self.execution.task_entry == "seeded-todo" or self.research_loop:
             await self._seed_phase(environment, cwd=cwd)
+        if self.research_loop:
+            from .research_loop import prepare_research_continuation
+
+            await prepare_research_continuation(self, environment, cwd=cwd)
 
         cadence = await self._loopx(
             environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
@@ -466,6 +524,9 @@ class BenchmarkCodex(CodexOffline):
             raise RuntimeError(
                 f"replan cadence readback mismatch for {key}: expected {expected}, got {configured!r}"
             )
+        actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal", False)
+        if actual_horizon != (self.planning_horizon_goal or False):
+            raise RuntimeError("planning_horizon_goal readback mismatch")
         strategy = configured_state.get("execution_profile", {}).get("stride_strategy", "off")
         if strategy != (self.stride_strategy or "off"):
             raise RuntimeError(
@@ -478,6 +539,13 @@ class BenchmarkCodex(CodexOffline):
             "implement and validate against the task's full requirements and acceptance "
             "criteria. Keep unmet requirements explicit when judging task completion."
         )
+        if self.research_loop:
+            text = (
+                f"[P0] Build and evaluate the strongest feasible initial candidate for {self._task_document}. "
+                "Check the actual interface, correctness and resource use before the first submission. "
+                "Preserve the tested candidate and released feedback. Completing this candidate stage "
+                "does not complete the separate original research work."
+            )
         if self._seeded_todo_id:
             listed = await self._loopx(environment, [
                 "todo", "list", "--goal-id", self.goal_id, "--role", "agent",
@@ -539,9 +607,11 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_SHARED_SKILLS": _SHARED_SKILLS,
                 "LOOPX_EXECUTION_MODE": self.execution.mode,
                 "LOOPX_TASK_ENTRY": self.execution.task_entry,
+                **({"LOOPX_RESEARCH_LOOP": "1"} if self.research_loop else {}),
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
+                **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
@@ -653,7 +723,8 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **({"turn_envelope": True} if self.execution.turn_envelope else {}),
+            **self._turn_envelope_receipt(),
+            **self._planning_receipt(),
             "home_scope": "trial",
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
@@ -691,19 +762,22 @@ class BenchmarkCodex(CodexOffline):
             env = self._worker_env(cwd=cwd)
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
-                planning_timeout = deadline - time.monotonic() - 30
-                if self.planning_timeout is not None:
-                    planning_timeout = min(self.planning_timeout, planning_timeout)
-                if planning_timeout <= 0:
+                remaining = int(deadline - time.monotonic())
+                if remaining <= 160:
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(
-                    environment, command=shlex.join(wake_command), cwd=cwd,
+                    environment,
+                    command=(
+                        # Use the remote task clock, as the execution path does.
+                        f"export LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + {remaining} )); "
+                        f"{shlex.join(wake_command)}"
+                    ),
+                    cwd=cwd,
                     env=env | {
                         "LOOPX_TASK_STAGE": "plan",
-                        "LOOPX_PLANNING_TIMEOUT_SEC": str(planning_timeout),
                         "LOOPX_PLANNING_RESULT": result_path,
                     },
-                    timeout_sec=planning_timeout + 30,
+                    timeout_sec=remaining + 30,
                 )
                 observed = await environment.exec(command=f"cat {result_path}")
                 entry = json.loads(observed.stdout or "")

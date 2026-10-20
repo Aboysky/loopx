@@ -12,7 +12,7 @@ from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
 def main():
     with tempfile.TemporaryDirectory(prefix="loopx-completed-pages-") as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         registry = root / "registry.json"
         goals = []
         for goal_id in ("slow-goal", "progress-projection"):

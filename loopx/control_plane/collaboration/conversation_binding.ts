@@ -279,6 +279,16 @@ export function planConversationBinding(params: JsonObject): JsonObject {
   return {changed: true, state: next};
 }
 
+function boundProject(params: JsonObject, row: JsonObject): Record<string, string> {
+  if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
+  const projects = params.available_projects.map(normalizeProjectContext).filter(project => project.project_ref === row.project_ref);
+  if (projects.length !== 1) throw new EffectRuntimeRequestError("workspace grant is unavailable or ambiguous");
+  if (row.grant === "workspace_write" && projects[0].grant !== "workspace_write") {
+    throw new EffectRuntimeRequestError("workspace write grant is no longer available");
+  }
+  return projects[0];
+}
+
 export function resolveBoundConversation(params: JsonObject): JsonObject {
   const current = state(params.current);
   const id = ref(params.binding_id, "binding identity");
@@ -287,6 +297,13 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
   observed(row, params.observation);
   const source = ref(params.source_ref, "source conversation identity");
   const group = row.audience === "group";
+  // The local operator may continue an existing private Session. This is a
+  // distinct host-observed origin, never a fabricated provider human event.
+  const local = params.origin === "web";
+  if (params.origin !== undefined && !local) throw new EffectRuntimeRequestError("unsupported bound input origin");
+  if (local && (group || params.session_context === undefined || params.private_human_message !== false)) {
+    throw new EffectRuntimeRequestError("local input requires an existing private bound Session");
+  }
   let topic: JsonObject = {};
   if (group) {
     const groupRef = ref(params.group_ref, "group reference"), topicRef = ref(params.topic_ref, "topic reference");
@@ -296,19 +313,14 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("message audience is outside the binding grant");
     }
     topic = {group_ref: groupRef, topic_ref: topicRef, filesystem_scope: "workspace_only"};
-  } else if (params.sender_ref !== row.operator_ref || params.private_human_message !== true
+  } else if (params.sender_ref !== row.operator_ref || params.private_human_message !== !local
       || params.group_ref !== undefined || params.topic_ref !== undefined || params.group_human_message === true) {
     throw new EffectRuntimeRequestError("message audience is outside the binding grant");
   }
-  if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
-  const projects = params.available_projects.map(normalizeProjectContext).filter(project => project.project_ref === row.project_ref);
-  if (projects.length !== 1) throw new EffectRuntimeRequestError("workspace grant is unavailable or ambiguous");
-  if (row.grant === "workspace_write" && projects[0].grant !== "workspace_write") {
-    throw new EffectRuntimeRequestError("workspace write grant is no longer available");
-  }
+  const project = boundProject(params, row);
   const goals = row.context_kind === "steward" && row.goal_scope === "all_registered"
     ? normalizeStewardGoalScope(params.available_goal_ids) : row.goal_ids;
-  const rawContext = {...projects[0], ...topic, audience: group ? "bound_group" : "bound_owner", binding_id: id, source_ref: source,
+  const rawContext = {...project, ...topic, audience: group ? "bound_group" : "bound_owner", binding_id: id, source_ref: source,
     provider_ref: row.provider_ref, operator_ref: row.operator_ref, grant: row.grant,
     ...(row.context_kind === "steward" ? {kind: "bound_steward", grant: "portfolio_read", goal_ids: goals} : {})};
   const context = group ? normalizeProjectContext(rawContext) : rawContext;
@@ -322,13 +334,56 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
       : JSON.stringify(saved) === JSON.stringify(context);
     if (!matches) throw new EffectRuntimeRequestError("bound Session context changed");
   }
+  const channel = row.context_kind === "steward"
+    ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`;
+  if (params.session !== undefined) {
+    const session = requireJsonObject(params.session, "canonical bound Session");
+    const steward = row.context_kind === "steward";
+    sessionIdentity(session.session_id, "bound Session identity");
+    if (session.status === "closed" || session.channel_id !== channel
+        || session.goal_id !== (steward ? "loopx-manager" : null)
+        || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
+        || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null
+        || params.session_context === undefined
+        || JSON.stringify(steward ? session.steward_context : session.project_context) !== JSON.stringify(params.session_context)) {
+      throw new EffectRuntimeRequestError("canonical bound Session identity changed");
+    }
+  }
   // This is an audience proof, not a host-tool grant. Only the independently
   // verified owner in this private source may inherit an explicit machine
   // owner grant. Portfolio scope and project write grants do not imply it.
   return {binding: row, context, owner_manager_audience: row.context_kind === "steward"
-      && projects[0].filesystem_scope !== "workspace_only",
-    channel_id: row.context_kind === "steward"
-    ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`};
+      && project.filesystem_scope !== "workspace_only",
+    channel_id: channel};
+}
+
+/** Discover existing private targets from canonical metadata. This is a read
+ * projection: the next input still needs fresh source and execution admission.
+ */
+export function listLocalBoundSessions(params: JsonObject): JsonObject {
+  const current = state(params.current);
+  const id = ref(params.binding_id, "binding identity");
+  const row = current.bindings.find(item => item.binding_id === id);
+  if (!row) throw new EffectRuntimeRequestError("conversation binding is no longer authorized");
+  observed(row, params.observation);
+  if (row.audience === "group") throw new EffectRuntimeRequestError("local discovery requires a private binding");
+  boundProject(params, row);
+  if (!Array.isArray(params.sessions)) throw new EffectRuntimeRequestError("canonical Session observations unavailable");
+  const ids: string[] = [];
+  for (const value of params.sessions) {
+    const session = requireJsonObject(value, "canonical Session");
+    const contexts = [session.project_context, session.steward_context];
+    if (!contexts.some(value => value && typeof value === "object" && !Array.isArray(value)
+        && (value as JsonObject).binding_id === id) || session.status === "closed") continue;
+    const steward = row.context_kind === "steward";
+    const saved = requireJsonObject(steward ? session.steward_context : session.project_context, "bound Session context");
+    resolveBoundConversation({...params, source_ref: saved.source_ref,
+      session,
+      sender_ref: row.operator_ref, private_human_message: false, origin: "web", session_context: saved});
+    ids.push(sessionIdentity(session.session_id, "bound Session identity"));
+  }
+  if (new Set(ids).size !== ids.length) throw new EffectRuntimeRequestError("canonical bound Session identity is ambiguous");
+  return {session_ids: ids};
 }
 
 /** Shared native command projection. Provider grammar carries the explicit
@@ -346,6 +401,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
   const current = params.current_session === null ? null : requireJsonObject(params.current_session, "current Session");
+  if (params.context_recovery !== undefined) {
+    return planContextRecovery(params, row, current);
+  }
   const target = row.target_recorded === true ? row : current;
   const session = target?.session_id ?? null;
   const turn = row.target_recorded === true ? row.turn_id ?? null : current?.active_turn_id ?? null;
@@ -386,10 +444,88 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       response_code: "unsupported_attachment"};
   }
   if (command === "stop" || command === "new") {
+    if (command === "stop" && params.recovering_request === true && row.target_recorded !== true) {
+      // Older prepared journals may predate freezing before inventory. Their
+      // original scope is unknown; current work cannot reconstruct that intent.
+      throw new EffectRuntimeRequestError("the original stop scope was not recorded");
+    }
+    const rawBackground = command === "stop"
+      ? (row.target_recorded === true ? row.background_turn_ids : params.background_turn_ids) ?? [] : [];
+    if (!Array.isArray(rawBackground)) throw new EffectRuntimeRequestError("invalid background Turn observation");
+    const background = rawBackground.map(value => sessionIdentity(value, "completed background Turn"));
+    if (new Set(background).size !== background.length || (background.length && (!session || params.agent_target))) {
+      throw new EffectRuntimeRequestError("background Turns require the original ordinary Session");
+    }
     return {operation: command, session_id: session, turn_id: turn,
-      response_code: command === "new" ? "new_session" : turn ? "stop_requested" : "no_active_turn"};
+      ...(background.length ? {background_turn_ids: background} : {}),
+      response_code: command === "new" ? "new_session" : turn || background.length ? "stop_requested" : "no_active_turn"};
   }
   return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
+}
+
+/** A new, correlated continuation after an observed pre-execution failure.
+ * A delivered failure notice is not a completed business request. This bounded
+ * migration path never reopens the failed Turn or retries unknown effects.
+ */
+function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonObject | null): JsonObject {
+  const recovery = requireJsonObject(params.context_recovery, "context recovery observation");
+  const version = requireInteger(recovery.version, "context representation version");
+  if (version < 1) throw new EffectRuntimeRequestError("invalid context representation version");
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true
+      || row.agent_target != null || current.session_id !== row.session_id || current.agent_id !== "codex"
+      || current.upstream_mode !== "chat" || current.status === "closed"
+      || current.session_mode === "attached_host") return no;
+  const selected = binding(params.binding);
+  if (selected.context_kind !== "steward" || selected.audience === "group") return no;
+  const saved = normalizeStewardContext(current.steward_context);
+  const source = requireJsonObject(row.source, "original conversation source");
+  if (row.binding_id !== selected.binding_id || saved.binding_id !== selected.binding_id
+      || saved.source_ref !== source.source_ref || saved.provider_ref !== selected.provider_ref
+      || saved.operator_ref !== selected.operator_ref || source.sender_ref !== selected.operator_ref
+      || source.private_human_message !== true
+      || current.channel_id !== `manager.external.native.${selected.binding_id}.${saved.source_ref}`) return no;
+  const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
+      || recovery.steering_observed !== false
+      || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded"].includes(String(failed.error_code))
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
+  if (previous && (previous.version !== version || previous.failed_turn_id !== row.turn_id
+      || previous.client_turn_id !== client)) return no;
+  const history = current.upstream_context_history ?? [];
+  if (!Array.isArray(history)) throw new EffectRuntimeRequestError("invalid native context provenance");
+  const oldThreads = history.map(value => requireJsonObject(value, "native context provenance"))
+    .filter(item => Number.isSafeInteger(item.manager_context_version) && Number(item.manager_context_version) < version)
+    .map(item => sessionIdentity(item.thread_id, "original native thread"));
+  if (Number.isSafeInteger(current.manager_context_version) && Number(current.manager_context_version) < version) {
+    oldThreads.push(sessionIdentity(current.upstream_thread_id, "original native thread"));
+  }
+  const currentHostFailure = current.manager_context_version === version && failed.error_code === "host_gate";
+  const nativeThreads = currentHostFailure
+    ? [sessionIdentity(current.upstream_thread_id, "current native thread"), ...oldThreads] : oldThreads;
+  if (!nativeThreads.length) return no;
+  const candidate = {...no, recovery_candidate: true, client_turn_id: client,
+    session_id: current.session_id, failed_turn_id: failed.turn_id, native_thread_ids: [...new Set(nativeThreads)]};
+  if (recovery.native_observation == null) return candidate;
+  const observed = requireJsonObject(recovery.native_observation, "native failure readback");
+  if (!nativeThreads.includes(String(observed.thread_id)) || observed.turn_id !== failed.upstream_turn_id
+      || observed.only_original_user_item !== true || recovery.source_verified !== true) return candidate;
+  const info = observed.codex_error_info;
+  let transient = (oldThreads.includes(String(observed.thread_id))
+    && ["contextWindowExceeded", "serverOverloaded", "internalServerError"].includes(String(info)))
+    || (currentHostFailure && observed.thread_id === current.upstream_thread_id && info === "other");
+  if (info && typeof info === "object" && !Array.isArray(info)) {
+    const entries = Object.entries(info);
+    if (entries.length === 1 && ["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(entries[0][0])) {
+      const detail = requireJsonObject(entries[0][1], "native connection readback");
+      transient = Object.hasOwn(detail, "httpStatusCode") && (detail.httpStatusCode === null
+        || Number.isSafeInteger(detail.httpStatusCode) && Number(detail.httpStatusCode) >= 500 && Number(detail.httpStatusCode) <= 599);
+    }
+  }
+  return {...candidate, recovery_eligible: transient};
 }
 
 /** A labelled observation of the same authorized context and canonical queue.
@@ -477,10 +613,19 @@ export function authorizeStewardCreation(params: JsonObject): JsonObject {
   const selected = normalizeStewardContext(params.context);
   const proposal = requireJsonObject(params.proposal, "creation proposal");
   const audience = requireJsonObject(proposal.context, "creation audience");
-  if (proposal.action_kind !== "goal.create" || audience.kind !== "manager"
+  const todoCreation = proposal.action_kind === "todo.create";
+  if ((!todoCreation && proposal.action_kind !== "goal.create") || audience.kind !== "manager"
       || audience.goal_id !== "loopx-manager") throw new EffectRuntimeRequestError("not a steward creation preview");
   for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]) {
     if (audience[field] !== selected[field]) throw new EffectRuntimeRequestError("confirmation audience changed");
+  }
+  if (todoCreation) {
+    const parameters = requireJsonObject(proposal.normalized_parameters, "Todo creation parameters");
+    if (!(selected.goal_ids as string[]).includes(String(parameters.goal_id))
+        || parameters.start_execution === true || parameters.agent_id != null
+        || ["stop", "resume"].includes(String(params.operation))) {
+      throw new EffectRuntimeRequestError("Todo confirmation requires its currently granted Goal and cannot start execution");
+    }
   }
   if (["stop", "resume"].includes(String(params.operation))) {
     const receipt = requireJsonObject(proposal.receipt, "commission receipt");

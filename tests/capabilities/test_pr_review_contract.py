@@ -40,7 +40,7 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "review_sequence_membership": "review_action_kind_non_null_only",
         "no_action_inventory_location": "pull_requests",
         "generic_rereview_terms_force_fresh_audit": False,
-        "no_action_behavior": "compact_exact_head_conclusion_readback_only",
+        "no_action_behavior": "compact_exact_head_review_or_lifecycle_readback_only",
         "no_action_execution_artifacts": "plan_and_template_null_commands_empty",
         "force_fresh_audit_requires": (
             "An explicit request to rerun evidence despite the unchanged/no-action "
@@ -675,6 +675,25 @@ def test_motivation_publishes_existing_problem_context_before_implementation():
     assert set(publication["fields"] + publication["increment_fields"]) <= (
         set(context["fields"]) | set(context["fields_by_verdict"]["justified_increment"]))
     assert "not truth or comprehension" in publication["rule"]
+
+
+def test_experience_review_challenges_total_work_without_erasing_consent():
+    # Agent-consumed prose is behavior: preserve both the reduction obligation
+    # and its legitimate-consent/configuration countercases in the shared packet.
+    contract = build_agent_response_contract()["review_execution_contract"]
+    context = next(row for row in contract["evidence_requirements"]
+                   if row["evidence_id"] == "problem_context")
+    impact = context["outcome_impact"]
+    assert impact["applicable_fields"] == ["before_after", "evidence_refs"]
+    rule = impact["rule"]
+    for obligation in ("original request", "entire human job", "smaller lawful alternative",
+                       "zero additional rounds", "off-screen preparation",
+                       "high feature value alone is insufficient", "not a universal click gate",
+                       "Optional technical editing remains valid", "necessary scoped consent"):
+        assert obligation in rule
+    direct = build_review_execution_contract()
+    assert next(row for row in direct["evidence_requirements"]
+                if row["evidence_id"] == "problem_context")["outcome_impact"] == impact
 
 
 def test_review_packet_and_template_share_optional_visual_explanation(capsys):

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
+import os
 import queue
 import stat
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -70,6 +74,167 @@ class _FakeAppServerProcess:
 
     def kill(self) -> None:
         self.returncode = -1
+
+
+@pytest.mark.parametrize("phase", ["write", "flush"])
+def test_guarded_native_request_keeps_original_send_and_response_budget(tmp_path, phase):
+    process = _FakeAppServerProcess()
+    session = chat_agent.CodexChatAgentSession(
+        process=process, messages=queue.Queue(), thread_id="original-thread", work_dir=tmp_path,
+        response_timeout_sec=3, _launch_guard=contextlib.nullcontext,
+    )
+    release = threading.Event()
+
+    class SlowInput(io.StringIO):
+        def write(self, text):
+            if phase == "write":
+                assert release.wait(timeout=4)
+            return super().write(text)
+
+        def flush(self):
+            if phase == "flush":
+                assert release.wait(timeout=4)
+            packet = json.loads(self.getvalue())
+            session.messages.put({"id": packet["id"], "result": {"threadId": "original-thread"}})
+
+    process.stdin = SlowInput()
+    timer = threading.Timer(1.2, release.set)
+    timer.start()
+    try:
+        result = session._request("turn/start", {"threadId": "original-thread", "text": "完整☃"})
+        assert result == {"threadId": "original-thread"}
+        assert process.poll() is None
+        assert json.loads(process.stdin.getvalue())["params"]["text"] == "完整☃"
+        assert session._response_waiters == {}
+    finally:
+        release.set()
+        timer.join(timeout=2)
+
+
+def test_slow_native_reader_accepts_complete_unicode_with_original_deadline(tmp_path):
+    ready = tmp_path / "ready"
+    peer = (
+        "import json,sys,time\nfrom pathlib import Path\n"
+        f"Path({str(ready)!r}).touch()\n"
+        "time.sleep(1.2)\nrow=json.loads(sys.stdin.readline())\n"
+        "text=row['params']['text']\n"
+        "print(json.dumps({'id':row['id'],'result':{'threadId':row['params']['threadId'],"
+        "'complete':text == '完整☃' * (1024 * 1024)}}),flush=True)\n"
+        "sys.stdin.read()\n"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", peer], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True, encoding="utf-8", start_new_session=os.name == "posix",
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
+    )
+    session = chat_agent.CodexChatAgentSession(
+        process=process, messages=queue.Queue(), thread_id="original-thread", work_dir=tmp_path,
+        response_timeout_sec=3, process_tree_owned=True, _launch_guard=contextlib.nullcontext,
+    )
+
+    def read_response():
+        line = process.stdout.readline()
+        session.messages.put(json.loads(line) if line else EOFError())
+
+    reader = threading.Thread(target=read_response, daemon=True)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists()
+        result = session._request("turn/start", {
+            "threadId": "original-thread", "text": "完整☃" * (1024 * 1024),
+        })
+        assert result == {"threadId": "original-thread", "complete": True}
+        assert process.poll() is None and session._response_waiters == {}
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=2)
+        reader.join(timeout=2)
+        assert not reader.is_alive()
+        for writer in threading.enumerate():
+            if writer.name == "loopx-native-stdin-writer":
+                writer.join(timeout=2)
+                assert not writer.is_alive()
+        process.stdin.close()
+        process.stdout.close()
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_managed_chat_materializes_only_new_threads_without_a_turn(monkeypatch, tmp_path, resume):
+    process = _FakeAppServerProcess()
+    if not resume:
+        process.stdout = io.StringIO(process.stdout.getvalue() + json.dumps({
+            "id": 3, "result": {},
+        }) + "\n")
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    adapter = chat_runtime.CodexAppServerAdapter.start(
+        codex_bin="codex", work_dir=tmp_path, goal_id="fixture", objective="Chat",
+        resume_thread_id="thread-loopx-chat" if resume else None,
+    )
+    try:
+        requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        names = [row for row in requests if row["method"] == "thread/name/set"]
+        assert names == ([] if resume else [{
+            "method": "thread/name/set", "id": 3,
+            "params": {"threadId": "thread-loopx-chat", "name": "LoopX Chat"},
+        }])
+        assert adapter.upstream_thread_id == "thread-loopx-chat"
+        assert not any(row["method"] in {"turn/start", "thread/fork"} for row in requests)
+        assert [row["method"] for row in requests].count(
+            "thread/resume" if resume else "thread/start") == 1
+    finally:
+        adapter.close_session()
+
+
+def test_failed_empty_thread_materialization_closes_without_publishing_or_replaying(monkeypatch, tmp_path):
+    from loopx.chat_store import ChatSessionStore
+
+    process = _FakeAppServerProcess()
+    process.stdout = io.StringIO(process.stdout.getvalue() + json.dumps({
+        "id": 3, "error": {"code": -32603, "message": "private provider detail"},
+    }) + "\n")
+    real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda name: "codex" if name == "codex" else real_which(name))
+    launches = []
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, *a, **k:
+        (launches.append(command) or process) if command[0] == "codex" else real_popen(command, *a, **k))
+    store = ChatSessionStore(tmp_path)
+    controller = chat_runtime.ChatRuntimeController(store=store, codex_bin="codex")
+    monkeypatch.setattr(controller, "capabilities", lambda: [{"agent_id": "codex", "available": True}])
+    try:
+        with pytest.raises(chat_agent.CodexChatAgentError, match="rejected thread/name/set") as caught:
+            controller.open_session(goal_id="loopx-manager", agent_id="codex", work_dir=tmp_path,
+                                    objective="Chat", mode="new", channel_id="manager")
+        assert "private provider detail" not in str(caught.value)
+        assert store.list_sessions() == []
+        assert controller.adapters == {}
+        assert len(launches) == 1 and process.returncode == 0
+        methods = [json.loads(line)["method"] for line in process.stdin.getvalue().splitlines()]
+        assert methods.count("thread/start") == 1
+        assert not set(methods) & {"thread/resume", "thread/fork", "turn/start"}
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("reported", [None, "fixture-model"])
+def test_requested_model_is_not_reported_as_observed_without_native_readback(tmp_path, monkeypatch, reported):
+    from loopx.chat_runtime import CodexAppServerAdapter
+    response = {"thread": {"id": "model-readback"}, **({"model": reported} if reported else {})}
+    process = _FakeAppServerProcess(thread_response=response)
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+        goal_id="fixture", objective="Read configuration.", model="fixture-model")
+    try:
+        assert session.model == "fixture-model"  # The request remains explicit for execution.
+        assert CodexAppServerAdapter(session).current_model_id == reported
+        assert not any(json.loads(line).get("method") == "turn/start" for line in process.stdin.getvalue().splitlines())
+    finally:
+        session.close()
 
 
 def _stop_server(tmp_path, monkeypatch, *, failure=None):
@@ -186,6 +351,87 @@ def test_transient_recovery_requires_complete_native_terminal_and_effect_readbac
     else:
         assert proof is None
     assert all(method in {"thread/turns/list", "thread/items/list"} for method, _ in calls)
+
+
+@pytest.mark.parametrize("fault", [None, "older", "tool", "answer", "foreign", "late-message", "policy"])
+def test_routing_timeout_recovery_requires_latest_user_only_stable_native_inventory(tmp_path, monkeypatch, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="routing-thread", work_dir=tmp_path)
+    reads = 0
+
+    def write(packet):
+        nonlocal reads
+        method, params = packet["method"], packet["params"]
+        assert params["threadId"] == "routing-thread"
+        if method == "thread/turns/list":
+            reads += 1
+            error = {"codexErrorInfo": "cyberPolicy" if fault == "policy" else "other",
+                "message": "changed private detail" if fault == "late-message" and reads > 1
+                           else "workspace routing discovery timed out"}
+            rows = [{"id": "failed", "status": "failed", "error": error}]
+            if fault == "older":
+                rows.insert(0, {"id": "newer-completed", "status": "completed"})
+            result = {"data": rows}
+        else:
+            assert method == "thread/items/list" and params["turnId"] == "failed"
+            rows = [{"turnId": "foreign" if fault == "foreign" else "failed",
+                "item": {"id": "request", "type": "userMessage"}}]
+            if params.get("cursor"):
+                rows = [{"turnId": "failed", "item": {"id": "later",
+                    "type": "commandExecution" if fault == "tool" else "agentMessage"}}]
+            result = {"data": rows, "nextCursor": "next" if fault in {"tool", "answer"}
+                      and not params.get("cursor") else None}
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = session.transport_retry_readback("failed")
+    if fault is None:
+        assert proof == {"thread_id": "routing-thread", "turn_id": "failed", "item_count": 1,
+            "codex_error_info": "other", "pre_execution_routing_timeout": True}
+        assert reads == 2
+    else:
+        assert proof is None
+
+
+@pytest.mark.parametrize("fault", [None, "older", "host-other", "active", "tool", "answer", "correction",
+    "foreign", "unknown", "changed-error", "policy", "usage", "unauthorized", "http401"])
+def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp_path, monkeypatch, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="original-thread", work_dir=tmp_path, response_timeout_sec=.2)
+    calls, reads = [], 0
+
+    def write(packet):
+        nonlocal reads
+        method, params = packet["method"], packet["params"]
+        calls.append(method)
+        assert params["threadId"] == "original-thread"
+        if method == "thread/turns/list":
+            reads += 1
+            info = {"host-other": "other", "policy": "cyberPolicy", "usage": "usageLimitExceeded",
+                "unauthorized": "unauthorized", "http401": {"responseStreamDisconnected": {"httpStatusCode": 401}}}.get(fault, "contextWindowExceeded")
+            if fault == "changed-error" and reads > 1:
+                info = "other"
+            rows = [{"id": "failed", "status": "failed", "error": {"codexErrorInfo": info}}]
+            if fault in {"older", "active"}:
+                rows.insert(0, {"id": "later", "status": "completed" if fault == "older" else "inProgress"})
+            result = {"data": rows}
+        else:
+            assert method == "thread/items/list" and params["turnId"] == "failed"
+            kind = {"tool": "commandExecution", "answer": "agentMessage", "unknown": "futureItem"}.get(fault, "userMessage")
+            rows = [{"turnId": "foreign" if fault == "foreign" else "failed", "item": {"id": "input", "type": kind}}]
+            if fault == "correction":
+                rows.append({"turnId": "failed", "item": {"id": "correction", "type": "userMessage"}})
+            result = {"data": rows}
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = session.failed_request_readback("failed")
+    if fault in {None, "older", "host-other"}:
+        assert proof == {"thread_id": "original-thread", "turn_id": "failed",
+            "only_original_user_item": True, "codex_error_info": "other" if fault == "host-other" else "contextWindowExceeded"}
+    else:
+        assert proof is None
+    assert set(calls) <= {"thread/turns/list", "thread/items/list"}
 
 
 def test_stop_cancels_completed_and_late_command_items_but_preserves_older_terminal(tmp_path, monkeypatch):
@@ -618,7 +864,8 @@ def test_project_git_configuration_preserves_local_config_without_account_inheri
     process = _FakeAppServerProcess(config_response={"config": {}},
         thread_response={"thread": {"id": "thread-loopx-chat"},
                          "activePermissionProfile": {"id": profile},
-                         "runtimeWorkspaceRoots": [str(workspace)]})
+                         "runtimeWorkspaceRoots": [str(workspace)],
+                         "sandbox": {"type": "workspaceWrite", "writableRoots": [str(workspace / ".git")]}})
     real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
     binary = tmp_path / "native-codex"
     monkeypatch.setattr(chat_agent.shutil, "which", lambda name:
@@ -659,6 +906,115 @@ def test_project_git_configuration_preserves_local_config_without_account_inheri
             assert run("rev-parse", "HEAD", environment={**control_env, **settings}).returncode != 0
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("skills", ["absent", "directory", "symlink", "parent-symlink"])
+@pytest.mark.parametrize("metadata,grant", [
+    ("directory", "workspace_write"), ("directory", "workspace_read"),
+    ("symlink", "workspace_write"), ("worktree", "workspace_write"),
+])
+def test_owner_project_git_writes_use_native_permissions_without_isolated_account(
+        monkeypatch, tmp_path, resume, metadata, grant, skills):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    git = workspace / ".git"
+    if metadata == "directory":
+        git.mkdir()
+    elif metadata == "symlink":
+        git.symlink_to(foreign, target_is_directory=True)
+    else:
+        git.write_text(f"gitdir: {foreign}\n")
+    if skills == "parent-symlink":
+        (foreign / "skills").mkdir()
+        (workspace / ".codex").symlink_to(foreign, target_is_directory=True)
+    elif skills != "absent":
+        (workspace / ".codex").mkdir()
+        if skills == "directory":
+            (workspace / ".codex" / "skills").mkdir()
+        else:
+            (workspace / ".codex" / "skills").symlink_to(foreign, target_is_directory=True)
+    enabled = metadata == "directory" and grant == "workspace_write"
+    expected_roots = [str(git)] if enabled else []
+    if enabled and skills == "directory":
+        expected_roots.append(str(workspace / ".codex" / "skills"))
+    approved = str(workspace / "existing")
+    settings = {"writable_roots": [approved], "network_access": True, "exclude_slash_tmp": True}
+    process = _FakeAppServerProcess(config_response={"config": {"sandbox_workspace_write": settings}}, thread_response={
+        "thread": {"id": "thread-loopx-chat"},
+        "sandbox": {"type": "workspaceWrite", "writableRoots": [approved, *expected_roots]},
+    })
+    monkeypatch.setenv("SYNTHETIC_OWNER_ENV", "retained")
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    launched = []
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **kw:
+        launched.append(kw) or process)
+    host_config = {"features": {"apps": True}, "mcp_servers": {"owner": {"enabled": True}}}
+    original_config = json.loads(json.dumps(host_config))
+    home = tmp_path / "owner-codex"
+    context = ChatProjectContexts([workspace], workspace_grant=grant).available()[0]
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=workspace,
+        goal_id=None, objective="project", project_context=context, codex_home=home,
+        model="synthetic-model", reasoning_effort="high", host_config=host_config,
+        resume_thread_id="thread-loopx-chat" if resume else None)
+    try:
+        requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        start = next(r["params"] for r in requests if r.get("method") in {"thread/start", "thread/resume"})
+        assert start["approvalPolicy"] == "never"
+        assert "permissions" not in start
+        assert session.permissions_profile is None
+        assert start["sandbox"] == ("workspace-write" if grant == "workspace_write" else "read-only")
+        if enabled:
+            assert start["config"]["sandbox_workspace_write"] == {
+                **settings, "writable_roots": [approved, *expected_roots]}
+        else:
+            assert "sandbox_workspace_write" not in start["config"]
+        assert host_config == original_config
+        assert start["config"]["features"] == original_config["features"]
+        assert start["config"]["mcp_servers"] == original_config["mcp_servers"]
+        assert launched[0]["env"]["CODEX_HOME"] == str(home)
+        assert launched[0]["env"]["SYNTHETIC_OWNER_ENV"] == "retained"
+        assert not session._host_model_auth
+        sent = []
+        monkeypatch.setattr(session, "_request", lambda method, params, **kw:
+            sent.append(params) or {"turn": {"id": "owned-turn"}})
+        monkeypatch.setattr(session, "_next_event", lambda **kw:
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+        session.send("Perform the authorized repository update.")
+        assert "permissions" not in sent[0]
+        assert sent[0]["threadId"] == "thread-loopx-chat"
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("fault", ["invalid-roots", "missing-root", "foreign-root", "wrong-policy", "invalid-native-roots", "missing-skills-root"])
+def test_owner_git_permissions_require_valid_configuration_and_native_readback(monkeypatch, tmp_path, fault):
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    (tmp_path / ".git").mkdir()
+    if fault == "missing-skills-root":
+        (tmp_path / ".codex" / "skills").mkdir(parents=True)
+    process = _FakeAppServerProcess(
+        config_response={"config": {"sandbox_workspace_write": {"writable_roots": "invalid"}}
+                         if fault == "invalid-roots" else {"sandbox_workspace_write": None}},
+        thread_response={"thread": {"id": "thread-loopx-chat"},
+                         "sandbox": {"type": "readOnly" if fault == "wrong-policy" else "workspaceWrite",
+                                     "writableRoots": (str(tmp_path / ".git") if fault == "invalid-native-roots"
+                                                       else [str(tmp_path / ".git")] if fault == "missing-skills-root"
+                                                       else ["/other"] if fault == "foreign-root" else [])}})
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **kw: process)
+    with pytest.raises(chat_agent.CodexChatAgentError, match="Invalid|did not apply"):
+        chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+            goal_id=None, objective="project", project_context=ChatProjectContexts([tmp_path]).available()[0],
+            model="synthetic-model", reasoning_effort="high")
+    methods = [json.loads(line).get("method") for line in process.stdin.getvalue().splitlines()]
+    assert "turn/start" not in methods
+    if fault == "invalid-roots":
+        assert "thread/start" not in methods
+    assert process.returncode == 0
 
 
 class _FakeClaudeProcess:
@@ -860,7 +1216,8 @@ def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_
     steps = [p["step"] for kind, p in events if kind == "agent.phase" and "step" in p]
     assert [(s["id"], s["state"]) for s in steps] == [
         ("rs_1", "running"), ("rs_1", "completed"), ("exec-1", "running"), ("exec-1", "completed")]
-    assert steps[1]["detail"] == "Read the notes first."
+    assert steps[1]["title"] == "" and "detail" not in steps[1]
+    assert "Read the notes first." not in json.dumps(events)
     assert (steps[3]["verb"], steps[3]["title"], steps[3]["exit_code"]) == ("read", "notes.md", 0)
     assert steps[3]["detail"] == "cat notes.md"
     serialized = json.dumps(events)
@@ -1265,6 +1622,37 @@ def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkey
     assert ("For bounded workspace edits" in prompt) is execution_mode
     assert ("Do not edit files" in prompt) is not execution_mode
     assert "protected_action" in prompt and "gate" in prompt
+    for competing_route in (
+        "For a Todo proposal include goal_id",
+        "emit context_handoff={goal_id,agent_id,brief}",
+        "include goal_draft={objective,completion_criteria",
+    ):
+        assert (competing_route in prompt) is not execution_mode
+    if execution_mode:
+        assert chat_agent.WORK_RESULT_VERIFICATION_INSTRUCTION in prompt
+        assert "Never claim the change has been written without a verified control-plane receipt" not in prompt
+        assert "keep proposals=[], goal_draft=null and context_handoff=null" in prompt
+        assert "protected_action must be null" in prompt
+
+
+@pytest.mark.parametrize("mode", [
+    {}, {"runtime_profile": "trusted_owner"}, {"project_work": True}, {"execution_mode": True},
+])
+def test_turn_guidance_scopes_gates_without_cutting_requested_results(mode):
+    prompt = chat_agent._turn_prompt(
+        "Inspect the seven requested files; publishing still needs owner authorization.", **mode
+    )
+    assert "stop only actions that depend on the missing authority or tool" in prompt
+    assert "Continue independent authorized work" in prompt
+    assert "End the request only when no independent authorized work remains" in prompt
+    assert "describe the unresolved gate in gate" in prompt
+    assert "Preserve all requested results" in prompt
+    assert "more than five actionable items" not in prompt
+    # Scoped continuation cannot grant execution through the protected route.
+    if mode.get("execution_mode"):
+        assert "protected_action must be null" in prompt
+    else:
+        assert "never authority to execute" in prompt
 
 
 @pytest.mark.parametrize("config", [[], {"model": 42}, {"model_reasoning_effort": {"invalid": "high"}}])
@@ -1384,14 +1772,15 @@ def test_typed_terminal_errors_preserve_category_without_promoting_partial_answe
         assert "不会自动重放" in caught.value.gate["next_action"]
 
 
-def test_structured_invalid_upstream_request_is_not_a_generic_host_gate() -> None:
+@pytest.mark.parametrize("status", [{}, {"status": 400}])
+def test_structured_invalid_upstream_request_is_not_a_generic_host_gate(status) -> None:
     error = chat_agent._terminal_turn_error(
         {
             "codexErrorInfo": "other",
             "message": json.dumps(
                 {
                     "type": "error",
-                    "status": 400,
+                    **status,
                     "error": {
                         "type": "invalid_request_error",
                         "message": "private upstream model detail",
@@ -1404,6 +1793,41 @@ def test_structured_invalid_upstream_request_is_not_a_generic_host_gate() -> Non
     assert error.error_code == "upstream_invalid_request"
     assert "private upstream" not in str(error) + json.dumps(error.gate)
     assert "模型" in error.gate["next_action"]
+    assert "不会自动重放" in error.gate["next_action"]
+
+
+@pytest.mark.parametrize("status", [None, True, 400.0, "400", 401, 500])
+def test_conflicting_or_malformed_http_status_does_not_classify_request_error(status):
+    error = chat_agent._terminal_turn_error({"codexErrorInfo": "other", "message": json.dumps({
+        "status": status, "error": {"type": "invalid_request_error", "message": "private detail"},
+    })}, "generic fallback")
+    assert error.error_code == "host_gate"
+    assert str(error) == "generic fallback"
+    assert "private detail" not in json.dumps(error.gate)
+
+
+@pytest.mark.parametrize("terminal_method", ["error", "turn/completed"])
+def test_statusless_request_rejection_settles_without_final_answer(monkeypatch, tmp_path, terminal_method):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(),
+        thread_id="request-fixture", work_dir=tmp_path,
+    )
+    error = {"codexErrorInfo": "other", "message": json.dumps({"error": {
+        "type": "invalid_request_error", "message": "private provider model details",
+    }})}
+    params = {"threadId": "request-fixture", "turnId": "rejected-turn"}
+    if terminal_method == "error":
+        params.update(error=error, willRetry=False)
+    else:
+        params["turn"] = {"id": "rejected-turn", "status": "failed", "error": error}
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "rejected-turn"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: {"method": terminal_method, "params": params})
+    events = []
+    with pytest.raises(chat_agent.CodexChatAgentError) as caught:
+        session.send("Answer this synthetic request.", on_event=lambda k, p: events.append((k, p)))
+    assert caught.value.error_code == "upstream_invalid_request"
+    assert "private provider" not in str(caught.value) + json.dumps(caught.value.gate)
+    assert not any(k == "answer.final" for k, _ in events)
 
 
 def test_unstructured_upstream_error_stays_generic() -> None:

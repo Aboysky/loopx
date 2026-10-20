@@ -1,20 +1,38 @@
-import {useEffect, useState, type ReactNode} from "react";
+import {type ReactNode} from "react";
 import {type DeliveryReviewRead} from "./delivery-review-state";
 import {GoalWorkspaceWork} from "./goal-workspace-work";
-import { ArrowRight, CircleCheck, CircleDashed, CircleX, Hand, Info } from "lucide-react";
+import { ArrowRight, Hand, Info } from "lucide-react";
 import { DeliveryReviewContent, DeliveryWorkMap } from "./delivery-review";
 import { relativeTime } from "./goal-activity-view";
 import { goalAcceptanceContractCopy } from "./delivery-review-copy";
 import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
+import { GoalResearchHistory } from "./goal-research-history";
+import { GoalAcceptanceContractSection } from "./goal-acceptance-contract";
 import type { WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
-import {projectGoalAcceptanceCriteria} from "../../data/goal-acceptance-observation";
+import type { SinceYouLookedDelta } from "./since-you-looked";
 import "./goal-overview.css";
 
 export const goalOverviewAttentionId = "goal-overview-attention";
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail }: {
+/** "3 hours ago" for the owner's last look; falls back to the date for older marks. */
+function relativeLookLabel(iso: string, locale: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const minutes = Math.max(1, Math.round((Date.now() - then) / 60_000));
+  const format = new Intl.RelativeTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { numeric: "always" });
+  if (minutes < 60) return format.format(-minutes, "minute");
+  if (minutes < 60 * 24) return format.format(-Math.round(minutes / 60), "hour");
+  if (minutes < 60 * 24 * 14) return format.format(-Math.round(minutes / (60 * 24)), "day");
+  return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { month: "short", day: "numeric" }).format(then);
+}
+
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, readSourceUrl, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
+  readSourceUrl?: string;
+  onOpenAgentConversation?: (agentId: string) => void;
+  /** Material changes since the owner's last acknowledged look; null when none. */
+  sinceYouLooked?: SinceYouLookedDelta | null; onMarkSeen?: () => void;
   railOpen: boolean; onCloseRail: () => void;
   review: DeliveryReviewRead; digest: GoalWorkspaceDigest;
   active: boolean; goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
@@ -23,25 +41,15 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   readOnly: boolean; onOpenDetails: () => void; onSelect: (selection: WorkspaceDrawerSelection | null) => void; onView: (view: WorkspaceGoalTab) => void;
 }) {
   const { t, locale } = useWorkspaceI18n();
-  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches);
-  const [directionExpanded, setDirectionExpanded] = useState(false);
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 640px)");
-    const update = () => setNarrow(media.matches);
-    update(); media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
   const copy = locale === "zh-CN" ? {
     direction: "方向", current: "当前推进", agentSummary: "Agent 的进展摘要", attention: "需要你", details: "Goal 信息",
     tasks: "查看任务", execution: "执行记录", optional: "{count} 项可选",
-    noTarget: "尚未声明可衡量目标。目标通过 Goal 的验收配置声明。",
-    verified: "{passed}/{total} 项条件当前通过", criterion: { accepted: "当前通过", failed: "未通过", unverified: "尚未核验", stale: "依据已过期", held: "关联待确认", partial: "仅任务检查通过" },
+    objectiveUnavailable: "此来源尚未提供 Goal 的目标声明。",
     remote: "此来源仅提供同步的状态与验收观察，交付链需要实时本机来源。",
   } : {
     direction: "Direction", current: "Current work", agentSummary: "Agent's progress summary", attention: "Needs you", details: "Goal information",
     tasks: "View tasks", execution: "Execution", optional: "{count} optional",
-    noTarget: "No measurable target declared. Targets are declared through the Goal's acceptance configuration.",
-    verified: "{passed} of {total} criteria currently passing", criterion: { accepted: "Currently passing", failed: "Failing", unverified: "Not yet verified", stale: "Basis changed", held: "Association held", partial: "Task checks only" },
+    objectiveUnavailable: "This source has not provided the Goal's declared objective.",
     remote: "This source provides synchronized status and acceptance observations. The delivery chain requires the live local source.",
   };
   const attention = userTodos.filter(item => item.goalId === goal.goalId);
@@ -52,43 +60,35 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   const showAttention = attention.length > 0 || (totalAttention !== null && totalAttention > 0);
   const moreAttention = needs.availability !== "ok" || needs.coverage !== "complete" || (totalAttention ?? attention.length) > 3;
   const run = items.find((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> => item.kind === "run" && item.run.goalId === goal.goalId);
-  const observation = goal.acceptanceObservation?.goal_id === goal.goalId ? goal.acceptanceObservation : null;
-  const contract = observation?.goal_acceptance_contract?.enabled === true ? observation.goal_acceptance_contract : null;
-  const criteria = contract ? projectGoalAcceptanceCriteria(contract) : [];
-  const passed = criteria.filter(criterion => criterion.state === "accepted").length;
+  const observation = review.snapshot?.acceptance ?? (goal.acceptanceObservation?.goal_id === goal.goalId ? goal.acceptanceObservation : null);
   const acceptanceCopy = goalAcceptanceContractCopy[locale === "zh-CN" ? "zh-CN" : "en"];
+  const sinceParts = sinceYouLooked ? [
+    sinceYouLooked.newlyDone ? t("since.newlyDone", { count: sinceYouLooked.newlyDone }) : null,
+    sinceYouLooked.newDecisions ? t("since.newDecisions", { count: sinceYouLooked.newDecisions }) : null,
+    sinceYouLooked.newlyBlocked ? t("since.newlyBlocked", { count: sinceYouLooked.newlyBlocked }) : null,
+    sinceYouLooked.resultsReturned ? t("since.resultsReturned", { count: sinceYouLooked.resultsReturned }) : null,
+  ].filter((part): part is string => part !== null) : [];
   return <section className="goal-overview" aria-label={t("header.overview")}>
+    {sinceYouLooked && sinceParts.length ? (
+      <p className="goal-overview-since" data-testid="goal-since-you-looked" role="status">
+        <span>{t("since.lead", { when: relativeLookLabel(sinceYouLooked.since, locale) })} {sinceParts.join(locale === "zh-CN" ? "、" : ", ")}</span>
+        {onMarkSeen ? <button onClick={onMarkSeen} type="button">{t("since.markSeen")}</button> : null}
+      </p>
+    ) : null}
     <div className={`goal-overview-summary${showAttention ? " has-attention" : ""}`}>
       <section className="goal-overview-direction" aria-label={copy.direction}>
         <header className="goal-overview-heading">
-          <h2>{contract ? copy.direction : copy.current}</h2>
-          {contract ? <span>{acceptanceCopy.verificationState[contract.status]}</span> : null}
+          <h2>{copy.direction}</h2>
           <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
         </header>
-        <button className="goal-direction-toggle" type="button" aria-expanded={!narrow || directionExpanded} onClick={() => setDirectionExpanded(value => !value)}>
-          {locale === "zh-CN" ? (directionExpanded ? "收起目标与条件" : "展开目标与条件") : (directionExpanded ? "Hide direction and criteria" : "Show direction and criteria")}
-        </button>
-        <div className="goal-direction-content" hidden={narrow && !directionExpanded}>
-        {contract ? <>
-          <p className="goal-overview-objective">{contract.objective || acceptanceCopy.unknown}</p>
-          {criteria.length ? <>
-            <div className="goal-overview-progress">
-              <span>{copy.verified.replace("{passed}", String(passed)).replace("{total}", String(criteria.length))}</span>
-              <span aria-hidden className="goal-criteria-meter">{criteria.map(criterion => <i className={`is-${criterion.state}`} key={criterion.id} />)}</span>
-            </div>
-            <ul className="goal-overview-criteria">{criteria.map(criterion => <li className={`is-${criterion.state}`} key={criterion.id}>
-              {criterion.state === "accepted" ? <CircleCheck aria-hidden size={16} /> : criterion.state === "failed" ? <CircleX aria-hidden size={16} /> : <CircleDashed aria-hidden size={16} />}
-              <span>{criterion.description}</span><small>{copy.criterion[criterion.state]}</small>
-            </li>)}</ul>
-          </> : null}
-          <p className="goal-overview-note"><small>{copy.agentSummary}</small> {goal.nextSentence}</p>
-        </> : <>
-          <p className="goal-overview-objective goal-overview-current">{goal.nextSentence}</p>
+        <p className={`goal-overview-objective${digest.objective ? "" : " is-unavailable"}`} data-testid="goal-declared-objective">{digest.objective ?? copy.objectiveUnavailable}</p>
+        <details className="goal-overview-agent-note"><summary>{copy.current}</summary>
+          <p className="goal-overview-note">{goal.nextSentence}</p>
           {goal.agentSentence && goal.agentSentence !== goal.nextSentence ? <details className="goal-overview-agent-note"><summary>{copy.agentSummary}</summary><p className="goal-overview-note">{goal.agentSentence}</p></details> : null}
-          <p className="goal-overview-note">{copy.noTarget}</p>
-        </>}
+        </details>
+        <WorkerReadback goal={goal} zh={locale === "zh-CN"} onViewTasks={() => onView("tasks")}/>
+        <GoalAcceptanceContractSection overview goalId={goal.goalId} contract={observation?.goal_acceptance_contract} copy={acceptanceCopy} current={review.usable} localSource={!readOnly} canManage={!readOnly && active && review.usable}/>
         {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><ArrowRight aria-hidden size={15} /></button> : null}
-        </div>
       </section>
       {showAttention ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
         <header>
@@ -106,10 +106,39 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
-    <GoalWorkspaceWork goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
+    {!readOnly || readSourceUrl ? <GoalResearchHistory key={goal.goalId} goalId={goal.goalId} readSourceUrl={readSourceUrl} active={active} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision}/> : null}
+    <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
       readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
     {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>
-      : <DeliveryReviewContent review={review} hideWorkMap active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />}
+      : <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />}
+  </section>;
+}
+
+function WorkerReadback({goal, zh, onViewTasks}: {goal: WorkspaceGoal; zh: boolean; onViewTasks: () => void}) {
+  const source = goal.workerObservations;
+  if (!source) return null;
+  return <section className="goal-overview-worker-state" aria-label={zh ? "外部执行器状态" : "External worker status"}>
+    <h3>{zh ? "执行器最近的观察" : "Last worker observation"}</h3>
+    {source.read_status !== "read" ? <p role="status">{zh
+      ? "执行器记录缺失有效来源或与当前目标配置不一致。当前执行结果未知。"
+      : "The worker record is unreadable or does not match the current Goal configuration. Its current outcome is unknown."}</p> : null}
+    {source.rows.map(row => <div key={row.agent_id}>
+      <p><strong>{row.status === "replan_paused" ? (zh ? "需要方向，已暂停复核" : "Direction needed; review paused")
+        : (zh ? "原请求结果未知，已暂停新派发" : "Original outcome unknown; new dispatch paused")}</strong></p>
+      <p>{row.status === "replan_paused" ? (zh
+        ? "本次复核没有解决原义务。补充具体任务或相关结果，再重启执行器以检查当前准入。"
+        : "The review did not resolve its original obligation. Add concrete work or relevant results, then restart the worker to check current admission.") : (zh
+        ? "先核实原操作及其结算。已发送请求仍可能产生费用；新事件或重启不能证明原请求未执行。"
+        : "Check the original operation and its settlement first. An issued request may still incur costs; a new event or restart cannot prove it did not run.")}</p>
+      <p className="goal-overview-note">{zh ? "此记录不证明 Goal 达成；完整费用未知。" : "This record does not establish Goal completion. Complete costs are unknown."}</p>
+      <details><summary>{zh ? "原工作与观察时间" : "Original work and observation time"}</summary>
+        <dl><div><dt>Agent</dt><dd>{row.agent_id}</dd></div>
+          <div><dt>{zh ? "义务" : "Obligation"}</dt><dd>{row.obligation_id}</dd></div>
+          <div><dt>{zh ? "原回合" : "Original Turn"}</dt><dd>{row.turn_instance_id ?? (zh ? "未绑定，需原 Host 核实" : "Unbound; check the original Host")}</dd></div>
+          <div><dt>{zh ? "记录时间" : "Observed at"}</dt><dd><time dateTime={row.observed_at}>{row.observed_at}</time></dd></div></dl>
+      </details>
+    </div>)}
+    <button type="button" onClick={onViewTasks}>{zh ? "查看任务与依赖" : "View work and dependencies"}</button>
   </section>;
 }

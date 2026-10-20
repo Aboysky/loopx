@@ -1188,6 +1188,17 @@ for example, `committed` requires the full phase prefix. These are enforced
 checks, not guidance. `turn inspect-journal` reports a contradictory snapshot
 as `replay_blocked` with `journal_status_phase_mismatch`.
 
+With `--retry-failed-turn`, journal inspection selects the persisted session
+reader from the retained plan's host and binding scope, for both one-shot and
+`--watch` reads. A DSH Turn therefore checks its DSH binding rather than the
+operator's current default host. Missing or mismatched host/scope/owner bindings
+remain blocked; inspection reports a recovery plan with no execution effects.
+This does not retry a failed Turn or authorize a new host invocation.
+
+`--retry-failed-turn` 的单次及 `--watch` 检查均按原计划的 host 和绑定范围读取
+原会话，DSH 不再被当前默认 Codex reader 误报为会话缺失。缺失或 host、范围、
+owner 不匹配仍拒绝；诊断读回不执行重试，也不授予新的执行权限。
+
 A digest-named journal that cannot be read cannot safely be skipped as evidence
 of absence or uniqueness. This also holds when another matching file is readable.
 Non-journal sidecars and identifiable other Turns are ignored; duplicate exact
@@ -1258,10 +1269,54 @@ This is a fragment, not a complete collector configuration. `execution_config`
 is project-relative, without traversal or symlinks, and remains outside the
 member workspace. The selected binding must grant that registered requester
 the operation's exact Agent/Todo. Use `codex-cli`, `--codex-operation-tools`
-and the original pinned model/effort. Do not select `fresh`, change the owning
+and the original pinned model/effort, or the explicit DSH entry described below.
+Do not select `fresh`, change the owning
 home, binary, sandbox or effective MCP configuration, or retarget the Todo.
 Prepare the operation in this same managed session/profile. Existing delegation
 inspection and ordinary Turn admission still determine whether it can run.
+
+If text messages already have an owner, set `"callbacks_only": true` inside
+the v1 collector's `operation_callbacks` object and retain `enabled: true`.
+The collector then starts only `card.action.trigger`, using the same callback,
+wake and result-recovery owners. It does not start an IM listener, ingest text,
+or change the existing text consumer. `callbacks_only` defaults to `false`,
+preserving message collection. Older releases reject this nested option before
+starting a consumer instead of silently starting another IM stream. Disabling
+both inputs or enabling message turn-start sync in callback-only mode is
+rejected. Keep the configured routes as the result-delivery chat allowlist;
+their inboxes need not be enabled when text collection is disabled. Plans and
+status expose `collect_messages: false` and do not claim complete text capture.
+Listener readiness, a real authenticated callback, native continuation and
+original-card result delivery remain separate evidence.
+
+For the candidate DSH transport, prepare through the normal CLI with
+`--host dsh --dsh-operation-module /absolute/native-operation.js` and retain
+those exact options in the original delegation binding. Also pin the original
+`--dsh-runtime-bin`, `--dsh-home`, `--dsh-cordis`, provider/model/effort and token
+budget. The supported restart candidate is Python SDK `0.2.1a3` built from
+official source `2fbf4359` plus explicit npm runtime
+`@deepseek-ai/dsh@0.2.1-alpha.3`; it is not a published Python runtime release.
+SDK/bundled runtime `0.1.5rc1` cannot resume across processes. Do not substitute
+`--dsh-runner`, a replacement home/session, or a changed provider endpoint.
+The native module, SDK/runtime closure, effective profile, patch and endpoint
+hash are compared again before model input. Missing/corrupt history refuses.
+
+`--operation-source-route-json '{"host_surface":"registered-surface","thread_id":"registered-thread"}'`
+selects an already registered return audience when required. The original
+source is not executor authentication. `--confirmed-operation-id` is the
+callback-owned exact locator; both flags retain their old Codex aliases.
+Do not supply a locator as proof of confirmation. Removing
+`--dsh-operation-module` disables this transport for subsequent Turns; it does
+not cancel an existing operation or reconcile an uncertain result. Keep the
+old pinned SDK/runtime/profile available for rollback and original recovery.
+Ordinary DSH and legacy Codex paths retain their existing behavior.
+
+中文：DSH 候选通过正常 CLI 显式加载绝对路径原生模块，并把相同参数保留在原
+delegation binding。保持原 runtime/home/patch、provider、模型/深度、token
+预算及 endpoint；不能换 session 绕过恢复失败。缺失/损坏历史在模型输入前拒绝。
+配置可用不等于运行资格；夹具确认、派发、规范结果、原卡回传和真实交易分别验收。
+移除模块开关只关闭后续 Turn 的该 transport，不取消旧操作或解除未知结果；保留
+旧 pin 供回滚与原操作恢复，不改全局安装。
 
 If the original standalone operation Session was prepared **without** a
 delegation MCP server, its profile includes `mcp_server: null`. Preserve that
@@ -1331,6 +1386,118 @@ frame, but does **not** edit this grant. Frontend grant editing and genuine
 original-source outcome delivery remain partial; synthetic startup tests do
 not establish an end-to-end user or trading loop.
 
+### Freeze an operator-authored operation request
+
+An owned Codex or DSH Turn can prepare an operator-authored immutable request
+without asking the model to reproduce the whole JSON object. This optional
+transport reuses `loopx_operation` and the canonical prepare service. It creates
+no actor, approval, budget, or execution authority.
+
+Keep one complete `operation.execute` preparation request in an operator-private
+file. Compute the SHA-256 of its exact UTF-8 bytes, then add both options to the
+existing `turn run-once` invocation:
+
+```sh
+request_sha=$(python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$request_file")
+# request_file must be absolute. Retain the original Goal/Agent/Todo and host options.
+loopx turn run-once ... \
+  --operation-request-file "$request_file" \
+  --operation-request-sha256 "$request_sha"
+```
+
+This requires the existing `--codex-operation-tools` or
+`--host dsh --dsh-operation-module ...` opt-in. With neither file option set,
+the tool schema, inline prepare form and session profile remain unchanged.
+When configured, `context` returns `prepared_request.ref`; the model uses:
+
+```json
+{"action":"prepare","request":{"ref":"request-<exact-context-locator>"}}
+```
+
+Configured preparation refuses an inline replacement, extra fields, unknown
+locators and model-selected paths. The private handler resolves the locator
+**after** matching the actual native call's original arguments. DSH socket
+pairing is unchanged. The locator is bound to the current Turn, Goal instance,
+Agent, Todo, native Session and profile; it is not a transferable permission.
+Context exposes neither the file path nor its full payload. Inspect the
+canonical proposal to read the accepted terms.
+
+The host checks the hash before SDK startup and again when the authenticated
+prepare call resolves the file. Files are bounded to the operation transport's
+256 KiB frame limit and must contain strict JSON without duplicate keys or
+non-finite values. The existing prepare service still checks current Goal
+admission, terms, expiry and audience, injects its own executor, and writes the
+only canonical proposal. It does not infer human confirmation or allow domain
+effects. Duplicate preparation with the same unchanged request uses existing
+canonical idempotency; this does not authorize retrying a consumed or unknown
+external effect.
+
+For callback continuation, keep the original file bytes/hash and both options
+in the same operator-owned binding's `host_args`. The source hash and selected
+return audience enter the native profile. Changing content, audience, or
+removing the options from an existing bound Session requires the existing
+explicit fresh-context and new-approval path. Do not renew an expired request,
+reuse an old confirmation, or rewrite a failed Turn to apply the feature.
+Removing the options disables it for future fresh Sessions; preserve any file
+needed to reconcile an already prepared/confirmed operation.
+
+This is an operator CLI preparation option. Existing proposal/card readback
+uses the same canonical state; no new Dashboard file selector or grant editor
+is delivered. Genuine confirmation, automatic original-Session continuation,
+original-audience result return and domain utility remain separate acceptance.
+
+### Continue the original operation owner
+
+Ordinary delegation requires different requester and worker Agents and a task
+completion basis. An authenticated confirmation may instead need to continue
+the same Agent's original operation Session while its broader Todo stays open.
+Do not create another Agent or declare that Todo complete to obtain a wake.
+For this case, the same operator-owned execution configuration can opt in one
+binding with `"continuation_kind": "original_operation"`. Set both `agent_id`
+and its sole intended `requesters` entry to the original operation Agent,
+`todo_id` to the original executor Todo, and preserve that Session's exact
+workspace, host arguments and bounded timeout. `output_refs` may be empty:
+this route returns canonical operation evidence, not accepted peer artifacts.
+Keep the existing collector `managed_turn_wake` pointed at this exact binding.
+This does not make the ordinary delegation API accept self-delegation.
+
+The callback checks the Goal lifetime, explicit owner grant, confirmation,
+unexpired immutable operation, original session/profile, and absence of prior
+start/consumption/outcome. It commits one `operation_turn_launch_v0` intent in
+the existing operation store before requesting the normal `turn run-once`
+entrypoint. The intent's `turn_instance_id` locates the existing Turn journal.
+`turn_requested` is a process request, not verified native start or domain
+execution. `existing_turn` never spawns again. `launch_uncertain` retains the
+original intent for explicit reconciliation; callback replay does not retry it.
+Native host start, first consumption, actual outcome and original-source
+delivery still require their own receipts. A typed wait never completes the
+broader Todo or creates a peer acceptance receipt.
+
+This exact authenticated human input uses the existing manual interval bypass;
+it does not shorten the automatic heartbeat interval. Removing the binding or
+collector wake stops new admission. An already reserved/requested Turn must be
+inspected or stopped through the existing Turn/host recovery path; grant removal
+does not cancel it or prove that no effect occurred. Keep the original SDK,
+runtime, home, module, patch and endpoint pins for recovery. Never use an expired
+or terminal operation to qualify a new launch. Configuration and local tests
+do not qualify a live collector, original-card delivery or financial effects.
+Dashboard grant editing remains a separate frontend gap; no new setting or
+default activation is introduced here.
+
+中文：同一 Agent 的原操作确认续跑，使用原 execution configuration 中显式的
+`continuation_kind: original_operation`，requester、Agent、Todo 必须精确指向原
+操作 owner。保留原工作树、session/profile、runtime/home/patch 和有界 timeout；
+不另造角色，不靠完成整个 Todo 或空校验器取得启动资格。普通 delegation 的跨
+Agent 和任务验收规则不放宽。原 collector 的 wake 配置仍须明确绑定此项，默认不启用。
+
+确认回调只在原 canonical operation 写入一次启动 intent，再沿正常 Turn 入口
+继续；并发/重复回调不再 spawn，启动响应丢失保留 intent、只允许原记录对账。
+`turn_requested`、`existing_turn` 和 `launch_uncertain` 都不是原生启动、消费、
+成交或原卡送达证明。真实本人确认沿已有 manual interval bypass 处理，自动心跳
+周期不变；撤销配置只阻止新准入，已申请的 Turn 须沿原恢复/停止路径核对。typed
+wait 不完成原 Todo、不产生 peer acceptance。前端配置、真实 collector/原卡和金融
+效果分别验收，不从本机测试或启动 intent 推断已完成。
+
 中文：此适配默认关闭。认证 Lark 确认只能请求既有 delegation 续跑，不能直接
 执行金融操作；启动 grant 与用户对不可变条款的批准独立。上例是原 collector v1
 配置片段，不是完整配置。`execution_config` 必须项目内相对路径、无穿越或符号
@@ -1347,3 +1514,16 @@ plan/inspect 的 `operation_callback_managed_wake_configured` 仅证明配置，
 移除启动配置或原 requester grant 在下一 callback 生效，已开始工作须走原停止/
 对账流程；丢失 ACK 不自动重启。Dashboard 沿用共享 frame 展示状态，但尚不能编辑
 此 grant；前端配置与真实原来源结果送达仍为部分交付，不能据合成测试称交易闭环。
+
+
+### Owner-pinned checker evidence
+
+Delegation evidence can include the acceptance owner's optional
+[owner-pinned oracle record](goal-acceptance-observations.md#owner-pinned-oracle-and-exact-versions).
+It names the source, check time and tested input/output versions only when the
+current owner contract and files still match and every returned output is covered
+at its exact version. Unconfigured, missing, changed or failed evidence stays
+unavailable; a current worker check or requester adoption cannot manufacture it.
+The Team evidence detail and correction trace show the same CLI/HTTP observation.
+This record attests a configured checker on declared snapshots; it does not
+identify a remote human/Agent verifier or prove that an objection was resolved.

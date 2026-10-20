@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {resolve} from "node:path";
+import {mkdtemp, rm, symlink} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join, resolve} from "node:path";
 import {createInterface} from "node:readline";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
@@ -10,8 +12,11 @@ import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 export const completedHistoryIsolationScenario = {
   id: "completed-history-isolation",
   async run({browser, collectCoverage, url}) {
+    const temporary = await mkdtemp(join(tmpdir(), "loopx-history-alias-"));
+    const alias = join(temporary, "alias");
+    await symlink(tmpdir(), alias, process.platform === "win32" ? "junction" : "dir");
     const backend = spawn(resolveTestPython({repoRoot}), ["-u", resolve(repoRoot, "examples/personal-workspace-browser/completed_history_fixture.py")], {
-      cwd: repoRoot, env: {...process.env, PYTHONPATH: ""}, stdio: ["pipe", "pipe", "pipe"],
+      cwd: repoRoot, env: {...process.env, PYTHONPATH: "", TMPDIR: alias, TEMP: alias, TMP: alias}, stdio: ["pipe", "pipe", "pipe"],
     });
     const closed = once(backend, "close");
     let diagnostics = "", context, slowRead;
@@ -107,6 +112,7 @@ export const completedHistoryIsolationScenario = {
       lines.close();
       backend.stdin.end();
       await closed;
+      await rm(temporary, {recursive: true, force: true});
     }
   },
 };

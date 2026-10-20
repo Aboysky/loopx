@@ -145,7 +145,7 @@ function goalCapability({
   };
 }
 
-export function goalCapabilityCatalog(multiSubagentConfiguration) {
+export function goalCapabilityCatalog(multiSubagentConfiguration, rewardMemoryConfiguration) {
   return [
     goalCapability({
       capabilityId: "todo_replan_cadence",
@@ -195,12 +195,31 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
     }),
     multiSubagentCapability({ current: multiSubagentConfiguration }),
     goalCapability({ availability: "retired", capabilityId: "local_authority_shadow", displayName: "Retired authority observation", fields: [], readOnlyReason: "Clear retired observation config explicitly; bootstrap runtime shadow separately." }),
-    goalCapability({
+    {...goalCapability({
       availability: "experimental_opt_in",
       capabilityId: "reward_memory",
       displayName: "Reward Memory experiment",
-      fields: [],
+      fields: rewardMemoryConfiguration ? [
+        {key:"agent_id",label:"Agent",description:"",input_kind:"text",required:false},
+        {key:"enabled",label:"Enabled",description:"",input_kind:"boolean",required:false},
+        {key:"config_path",label:"Private config",description:"",input_kind:"text",required:false},
+        {key:"enabled_agents",label:"Shared Agents",description:"",input_kind:"string_list",required:false},
+      ] : [],
       readOnlyReason: "Requires a reviewed local-private provider binding.",
+    }), ...(rewardMemoryConfiguration ? {current:rewardMemoryConfiguration} : {})},
+    goalCapability({
+      availability: "supported_explicit_opt_in",
+      capabilityId: "decision_context",
+      displayName: "Decision evidence recall",
+      fields: [],
+      readOnlyReason: "Use an explicit private profile for temporary recall.",
+    }),
+    goalCapability({
+      availability: "supported_explicit_opt_in",
+      capabilityId: "content_ops",
+      displayName: "Content references",
+      fields: [],
+      readOnlyReason: "Read-only source catalog.",
     }),
   ];
 }
@@ -445,7 +464,14 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     failNextGoalSubagentResponse: false,
     failNextLifecyclePreview: false,
     failNextActionPreview: false,
+    // When set, the next action preview answers with this typed gate (409), as
+    // the real service does for a refusal that writes nothing.
+    nextActionPreviewGate: null,
     failNextStatusRequest: false,
+    /** When set, every status read answers this HTTP status until cleared: a source that cannot be projected. */
+    statusFailure: null,
+    /** When set, replaces the capabilities adapters list: the runtimes this host reports. */
+    runtimeAgentsOverride: null,
     freezeGoalSubagentStatusProjection: false,
     goalSubagentConfigurationEnabled,
     goalActivationStates: new Map([
@@ -458,6 +484,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     goalSubagentWrites: [],
     interrupts: [],
     goalConfigurationRequests: [],
+    goalMemoryConfigurations: new Map(),
     machineConfigurationRequests: [],
     machineInspectionStatus: "configured",
     failNextMachineInspection: false,
@@ -496,6 +523,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     hostThreadActivity: {},
     /** Scenario hook applied to every status payload after the shared fixture rules. */
     transformStatus: null,
+    directoryContract: null,
     answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
@@ -503,6 +531,10 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
   };
   await page.route(`http://127.0.0.1:${fixturePort}/status.json*`, async (route) => {
     state.statusRequestCount += 1;
+    if (state.statusFailure) {
+      await route.fulfill({ contentType: "application/json", json: { ok: false, error: "LoopX status could not be projected for the workspace." }, status: state.statusFailure });
+      return;
+    }
     const requestUrl = new URL(route.request().url());
     const requestedGoalId = requestUrl.searchParams.get("goal_id");
     if (progressiveWorkspace && requestUrl.searchParams.get("view") === "workspace-directory") {
@@ -517,6 +549,8 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
         goals: [...state.goalActivationStates.entries()].map(([id, activation_state]) => ({
           activation_state, display_name: registeredNames.get(id) ?? id, id, registry_member: true,
         })),
+        // The real service states its source facts here too (a missing registry is a warning).
+        contract: state.directoryContract ?? { ok: true, summary: { errors: 0, warnings: 0, checks: 0 }, errors: [], warnings: [], checks: [] },
       }, status: 200 });
       return;
     }
@@ -940,6 +974,16 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       status: 200,
     });
   });
+  // Real status fixtures advertise this same-origin reader too. Keep the
+  // default empty extension inventory inside the fixture rather than reading
+  // an unrelated installed service. Research scenarios replace this route
+  // with their published surfaces or explicitly isolated native owner.
+  await page.route("**/extension-presentation-surfaces", route => route.fulfill({json: {
+    ok: true, presentation_surfaces: {
+      schema_version: "extension_presentation_surfaces_v0", count: 0,
+      ready_count: 0, review_due_count: 0, empty_count: 0, invalid_count: 0, items: [],
+    },
+  }}));
   const sidebarOrders = new Map();
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
@@ -1319,7 +1363,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
           schema_version: "capability_configuration_catalog_v0",
           capabilities: [...machineConfigurationBase.capability_catalog.capabilities.filter(
             (capability) => !capability.available_scopes.includes("goal"),
-          ), ...goalCapabilityCatalog(multiSubagentConfiguration).map((capability) => capability.capability_id === "periodic_report" ? periodicReportCapability({
+          ), ...goalCapabilityCatalog(multiSubagentConfiguration, state.goalMemoryConfigurations.get(goalId)).map((capability) => capability.capability_id === "periodic_report" ? periodicReportCapability({
               machineCurrent: periodicConfiguration,
               effectiveConfiguration: {
                 schema_version: "capability_configuration_resolution_v0",
@@ -1426,14 +1470,23 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       }, status: 200 });
       return;
     }
+    if (url.pathname === "/api/chat/projects" && request.method() === "GET") {
+      await route.fulfill({json: {ok: true, projects: []}});
+      return;
+    }
+    if (url.pathname === "/api/chat/lark/private-conversations" && request.method() === "GET") {
+      await route.fulfill({json: {ok: true, revision: 0, connections: [], stop_recoveries: []}});
+      return;
+    }
     if (url.pathname === "/api/chat/lark/apps") {
+      const apps = [
+        { active: true, app_ref: "mew", brand: "feishu", label: "LoopX Mew", ready: true, reply_ready: true },
+        { active: true, app_ref: "mew-research", brand: "feishu", label: "LoopX Research", ready: true, reply_ready: true },
+      ].filter(app => !url.searchParams.has("app_ref") || app.app_ref === url.searchParams.get("app_ref"));
       await route.fulfill({ contentType: "application/json", json: {
-        ok: true,
-        schema_version: "loopx_lark_apps_v0",
-        apps: [
-          { active: true, app_ref: "mew", brand: "feishu", label: "LoopX Mew", ready: true, reply_ready: true },
-          { active: true, app_ref: "mew-research", brand: "feishu", label: "LoopX Research", ready: true, reply_ready: true },
-        ],
+        ok: true, schema_version: "loopx_lark_apps_v0",
+        apps: apps.map(app => url.searchParams.get("verify") === "false"
+          ? {...app, ready: false, reply_ready: false, health_error_code: "lark_app_unverified"} : app),
       }, status: 200 });
       return;
     }
@@ -1459,7 +1512,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
         const existing = runtime.larkConnections.find((item) => item.connection_id === body.connection_id && item.goal_id === body.goal_id);
         if (!existing || body.app_ref || body.chat_id || body.agent_bindings) throw new Error("Editing must select the stored connection without replacing its identity");
         if (body.execute) {
-          Object.assign(existing, { turn_trigger: body.turn_trigger ?? existing.turn_trigger, agent_id: body.agent_id, ingress_mode: body.ingress_mode, capture_scope: body.capture_scope });
+          Object.assign(existing, { read_goal_scope: body.read_goal_scope ?? existing.read_goal_scope, turn_trigger: body.turn_trigger ?? existing.turn_trigger, agent_id: body.agent_id, ingress_mode: body.ingress_mode, capture_scope: body.capture_scope });
           state.larkWrites.push({ ...body });
         }
         await route.fulfill({ contentType: "application/json", json: { ok: true, status: body.execute ? "connected" : "preview_ready" }, status: 200 });
@@ -1478,6 +1531,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
             agent_id: body.conversation_kind === "manager" ? "loopx-manager" : binding.agent_id ?? null,
             conversation_kind: body.conversation_kind ?? "goal",
             turn_trigger: body.turn_trigger ?? "addressed",
+            read_goal_scope: body.read_goal_scope ?? "all_registered",
             connection_id: connectionId,
             app_label: binding.app_ref === "mew-research" ? "LoopX Research" : "LoopX Mew", app_ref: binding.app_ref, chat_name: body.chat_name, enabled: true,
             capture_scope: body.capture_scope,
@@ -1587,7 +1641,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
         ...(state.goalSubagentConfigurationEnabled ? { goal_subagent_configuration: "preview_locked" } : {}),
         goal_id: null, streaming: true, resume: true, interrupt: true, typed_actions: true,
         action_kinds: ["goal.create", "goal.lifecycle", "agent.bind", "heartbeat.bind", "monitor.create", "run.correct"],
-        adapters: [
+        adapters: state.runtimeAgentsOverride ?? [
           { agent_id: "codex", display_name: "Codex", adapter_kind: "codex_app_server", available: true, streaming: true, resume: true, interrupt: true },
           { agent_id: "claude-code", display_name: "Claude Code", adapter_kind: "claude_code_cli", available: true, streaming: true, resume: true, interrupt: true },
           { agent_id: "offline-agent", display_name: "Offline Agent", adapter_kind: "acp", available: false, streaming: false, resume: false, interrupt: false },
@@ -1880,6 +1934,17 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
           contentType: "application/json",
           json: { error: "Action preview temporarily unavailable", error_code: "preview_unavailable", ok: false },
           status: 503,
+        });
+        return;
+      }
+      if (state.nextActionPreviewGate) {
+        const gate = state.nextActionPreviewGate;
+        state.nextActionPreviewGate = null;
+        state.actionPreviews.push({ ...body, gated: gate.kind });
+        await route.fulfill({
+          contentType: "application/json",
+          json: { ok: false, schema_version: "loopx_chat_action_preview_gate_v1", error: "This preview needs an explicit public-safe selection.", error_code: "action_preview_gate", gate, write_attempted: false },
+          status: 409,
         });
         return;
       }

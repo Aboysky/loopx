@@ -5,6 +5,8 @@ import os
 import shutil
 import signal
 import socket
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from runtime_retirement_diagnostics import (
-    failure_trace, file_state, observe_copied_runtime, trace_events,
+    failure_trace, file_state, observe_copied_runtime, reap_copied_runtime, trace_events,
 )
 
 from loopx.control_plane import effect_runtime
@@ -28,6 +30,43 @@ from loopx.control_plane.coordination.runtime_shadow import (
 
 _TURN_KEY = "sha256:" + "a" * 64
 _TODO_ID = "todo_fixture0001"
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
+    tmp_path, monkeypatch, replacement,
+):
+    locator = tmp_path / "runtime.json"
+    if replacement:
+        locator.write_text(json.dumps({"token": "replacement"}))
+    monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *a, **kw: {})
+    with subprocess.Popen(
+        [sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(60)"],
+        stdout=subprocess.PIPE, text=True, start_new_session=os.name == "posix",
+    ) as process:
+        try:
+            assert process.stdout.readline().strip() == "ready"
+            info = {"pid": process.pid, "token": "original"}
+            # Serving handoff remains enough for the operator's existing action.
+            assert effect_runtime._stop_effect_runtime(
+                locator, info, timeout=.05,
+            )["status"] == "stopped"
+            # Namespace disposal needs stronger evidence than locator turnover.
+            assert effect_runtime._stop_effect_runtime(
+                locator, info, timeout=.05, wait_for_process_exit=True,
+            )["status"] == "shutdown_pending"
+            assert process.poll() is None
+            process.terminate()
+            process.wait(timeout=5)
+            assert effect_runtime._stop_effect_runtime(
+                locator, info, timeout=.05, wait_for_process_exit=True,
+            )["status"] == "stopped"
+            if replacement:
+                assert json.loads(locator.read_text()) == {"token": "replacement"}
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 def _effect_id(label: str) -> str:
@@ -598,10 +637,12 @@ def test_identical_release_does_not_reuse_a_retired_lazy_loader(
         effect_runtime.restart_effect_runtime()
 
 
+@pytest.mark.parametrize("cleanup_delay", [0, 0.6], ids=["serving", "idle-retired"])
 def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     tmp_path: Path,
     monkeypatch,
     request,
+    cleanup_delay: float,
 ) -> None:
     staged_root, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
     runtime_dir = tmp_path / "runtime"
@@ -622,9 +663,20 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     assert original_info != replacement_info
     assert replacement_info.exists()
 
+    replacement_locator = effect_runtime._read_info(
+        replacement_info, fingerprint=replacement_fingerprint,
+    )
+    assert replacement_locator is not None
+    runtime_count = len(captures)
+    time.sleep(cleanup_delay)
     shutdown_started = time.monotonic()
-    effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+    # Cleanup owns this exact process. Rediscovery can race its 250 ms idle
+    # retirement or start a third runtime merely to shut that new one down.
+    effect_runtime._stop_effect_runtime(
+        replacement_info, replacement_locator, timeout=2, wait_for_process_exit=True,
+    )
     shutdown_acknowledged = time.monotonic()
+    assert len(captures) == runtime_count, "cleanup must not start another runtime"
     deadline = time.monotonic() + 2
     while (
         original_info.exists() or replacement_info.exists()
@@ -659,6 +711,16 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
 def test_runtime_retirement_trace_filters_private_stderr() -> None:
     raw = b'private path/token\nloopx_fixture_retirement:{"event":{}}\nloopx_fixture_retirement:{"event":"lock_release_error","code":"EPERM","token":"private","path":"private","pid":12,"ms":1}\n'
     assert trace_events(raw) == [{"event": "lock_release_error", "pid": 12, "ms": 1, "code": "EPERM"}]
+
+
+@pytest.mark.parametrize("main_thread", [True, False, "private", 1])
+def test_runtime_retirement_trace_preserves_only_boolean_thread_identity(main_thread) -> None:
+    payload = {"event": "kill_enter", "main_thread": main_thread, "token": "private"}
+    raw = ("loopx_fixture_retirement:" + json.dumps(payload) + "\n").encode()
+    expected = {"event": "kill_enter"}
+    if type(main_thread) is bool:
+        expected["main_thread"] = main_thread
+    assert trace_events(raw) == [expected]
 
 
 @pytest.mark.parametrize("details,expected", [
@@ -1338,7 +1400,8 @@ def test_runtime_drains_admitted_write_before_exit(
     cache_fault: str | None,
 ) -> None:
     """Socket lifetime must not define the lifetime of an accepted effect."""
-    root, captures = observe_copied_runtime(tmp_path, monkeypatch, request)
+    processes = []
+    root, captures = observe_copied_runtime(tmp_path, monkeypatch, request, processes=processes)
     if cache_fault:
         # Exercise cache failure even under an outer coverage/disabled-cache run,
         # using only this fixture's private cache rather than an inherited one.
@@ -1429,6 +1492,10 @@ def test_runtime_drains_admitted_write_before_exit(
                 time.sleep(0.025)
             assert not effect_runtime._pid_is_alive(original["pid"]), "retirement must release the runtime process"
             assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
+            if cache_fault:
+                assert not any(path.is_file() for path in (runtime_dir / "compile-cache").rglob("*")), (
+                    "failed optional persistence must not re-enter the main environment's native exit flush"
+                )
             assert capsys.readouterr().out == "", "healthy drains must stay quiet"
     except Exception as error:
         try:
@@ -1446,14 +1513,7 @@ def test_runtime_drains_admitted_write_before_exit(
         raise
     finally:
         lock_path.unlink(missing_ok=True)
-        cleanup_deadline = time.monotonic() + 3
-        while time.monotonic() < cleanup_deadline:
-            effect_runtime._reap_exited_runtime_child(info)
-            if not effect_runtime._pid_is_alive(original["pid"]):
-                break
-            time.sleep(0.025)
-        if effect_runtime._pid_is_alive(original["pid"]):
-            os.kill(int(original["pid"]), signal.SIGTERM)
+        reap_copied_runtime(processes, int(original["pid"]))
 
 
 @pytest.mark.parametrize("diagnostics_available", [True, False])

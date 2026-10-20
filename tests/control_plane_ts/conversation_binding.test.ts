@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {planConversationBinding, resolveBoundConversation, planBoundConversationRequest,
-  stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
+  stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget,
+  listLocalBoundSessions} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
 
 const project = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/authorized/notes",
@@ -15,6 +16,76 @@ const observation = {transport_ref: row.transport_ref, provider_ref: row.provide
 const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision: 0, bindings: []};
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
+
+for (const kind of ["project", "steward"]) {
+  const selected = kind === "steward" ? {...row, context_kind: kind, grant: "portfolio_read", goal_ids: []} : row;
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const lookup = {current: configured, binding_id: row.binding_id, observation, available_projects: [project]};
+  const context = resolveBoundConversation({...lookup, source_ref: "e".repeat(24),
+    sender_ref: row.operator_ref, private_human_message: true}).context;
+  const session = {session_id: "original", goal_id: kind === "steward" ? "loopx-manager" : null,
+    agent_id: "codex", executor_endpoint_id: "codex", session_mode: "managed_runtime", status: "ready",
+    channel_id: `${kind === "steward" ? "manager.external.native" : "project.external"}.${row.binding_id}.${"e".repeat(24)}`,
+    ...(kind === "steward" ? {steward_context: context} : {project_context: context})};
+  const continuation = {...lookup, source_ref: "e".repeat(24), sender_ref: row.operator_ref,
+    private_human_message: false, origin: "web", session_context: context};
+
+  test(`${kind} discovery reuses verified saved identity and excludes unrelated or closed Sessions`, () => {
+    const snapshots = [session, {...session, session_id: "historical", status: "closed"},
+      {session_id: "local", goal_id: null, channel_id: `project.${project.project_ref}`}];
+    const before = structuredClone(snapshots);
+    assert.deepEqual(listLocalBoundSessions({...lookup, sessions: snapshots}), {session_ids: ["original"]});
+    assert.deepEqual(snapshots, before);
+    assert.deepEqual(listLocalBoundSessions({...lookup, sessions: []}), {session_ids: []});
+    assert.throws(() => listLocalBoundSessions({...lookup, sessions: [session, session]}), /ambiguous/);
+    assert.deepEqual(resolveBoundConversation({...continuation, session}).context, context);
+    assert.throws(() => resolveBoundConversation({...continuation, session: {...session, status: "closed"}}),
+      /canonical bound Session identity/);
+  });
+
+  test(`${kind} discovery refuses changed canonical role, executor, channel or saved source`, () => {
+    for (const change of [{goal_id: "another-goal"}, {channel_id: "manager"}, {agent_id: "other"},
+      {executor_endpoint_id: "other"}, {session_mode: "attached_host"},
+      {[kind === "steward" ? "project_context" : "steward_context"]: context},
+      {[kind === "steward" ? "steward_context" : "project_context"]:
+        {...context as Record<string, unknown>, operator_ref: "f".repeat(24)}},
+      {[kind === "steward" ? "steward_context" : "project_context"]:
+        {...context as Record<string, unknown>, source_ref: "f".repeat(24)}}]) {
+      assert.throws(() => listLocalBoundSessions({...lookup, sessions: [{...session, ...change}]}));
+      assert.throws(() => resolveBoundConversation({...continuation, session: {...session, ...change}}));
+    }
+    for (const change of [{current}, {available_projects: []},
+      {observation: {...observation, verified: false}},
+      {observation: {...observation, provider_ref: "f".repeat(24)}},
+      {observation: {...observation, operator_ref: "f".repeat(24)}},
+      {observation: {...observation, transport_ref: "another-app"}}]) {
+      // An empty inventory is not permission to bypass current source checks.
+      assert.throws(() => listLocalBoundSessions({...lookup, ...change, sessions: []}));
+    }
+  });
+}
+
+test("local discovery never promotes a group binding to a private recipient", () => {
+  const group = "1".repeat(24);
+  const configured = planConversationBinding({...request,
+    binding: {...row, audience: "group", group_refs: [group]}, available_group_refs: [group]}).state;
+  assert.throws(() => listLocalBoundSessions({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], sessions: []}), /private binding/);
+});
+
+test("an unfrozen recovered stop cannot borrow current cancellation scope", () => {
+  const request = {request_ref: "e".repeat(24), command: "stop"};
+  const current = {session_id: "new-session", active_turn_id: "new-active"};
+  assert.throws(() => planBoundConversationRequest({request, current_session: current,
+    recovering_request: true, background_turn_ids: ["new-background"]}), /original stop scope was not recorded/);
+  assert.equal(planBoundConversationRequest({request, current_session: current,
+    recovering_request: false}).turn_id, "new-active");
+  assert.deepEqual(planBoundConversationRequest({request: {...request, target_recorded: true,
+    session_id: "original", turn_id: null, background_turn_ids: ["old"]},
+    current_session: current, recovering_request: true, background_turn_ids: ["new-background"]}), {
+    operation: "stop", session_id: "original", turn_id: null,
+    background_turn_ids: ["old"], response_code: "stop_requested"});
+});
 
 test("group topics require an observed App membership and cannot inherit private recipients or portfolio", () => {
   const group = "1".repeat(24), topic = "2".repeat(24);
@@ -156,7 +227,7 @@ test("binding independently verifies the owner and does not create a Goal", () =
   assert.throws(() => planConversationBinding({...request, expected_revision: 1}), /revision/);
 });
 
-test("a selected steward has a verified empty portfolio and adopts only its own exact new creation", () => {
+test("a selected steward retains its bounded portfolio for provider and local continuation", () => {
   const steward = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
   const next = planConversationBinding({...request, binding: steward}).state as typeof current;
   const use = {current: next, binding_id: row.binding_id, source_ref: "e".repeat(24),
@@ -165,7 +236,7 @@ test("a selected steward has a verified empty portfolio and adopts only its own 
   assert.equal(resolveConversationScope({channel_id: selected.channel_id, goal_id: "loopx-manager",
     steward_context: selected.context, origin: "lark"}).bound_steward, true);
   assert.equal(resolveConversationScope({channel_id: selected.channel_id, goal_id: "loopx-manager",
-    steward_context: selected.context, origin: "web"}).bound_steward, undefined);
+    steward_context: selected.context, origin: "web"}).bound_steward, true);
   const context = selected.context as Record<string, unknown>;
   const proposal = {proposal_id: "proposal-" + "f".repeat(32), status: "applied", action_kind: "goal.create",
     context, receipt: {outcome: "goal_created", projection_verified: true, resource_ids: {goal_id: "fresh-goal"}}};
@@ -207,6 +278,28 @@ test("one App has one binding owner, and a context change cannot move an existin
   const other = {...project, project_ref: "f".repeat(24), workspace_path: "/authorized/other"};
   assert.throws(() => planConversationBinding({...request, current: next, expected_revision: 1,
     binding: {...row, project_ref: other.project_ref}, available_projects: [other]}), /new binding identity/);
+});
+
+test("Todo confirmation names a current Goal, preserves its owner and cannot start work", () => {
+  const context = {...project, kind: "bound_steward", audience: "bound_owner", grant: "portfolio_read",
+    goal_ids: ["maintenance"], binding_id: row.binding_id, source_ref: "e".repeat(24),
+    provider_ref: row.provider_ref, operator_ref: row.operator_ref};
+  const proposal = {action_kind: "todo.create", created_at: "2026-01-01T10:00:00Z",
+    context: {...context, kind: "manager", goal_id: "loopx-manager", expires_at: "2026-01-01T10:15:00Z"},
+    normalized_parameters: {goal_id: "maintenance", text: "Remember a feature", priority: "P2"}};
+  const request = {context, proposal, now: "2026-01-01T10:01:00Z", operation: "confirm"};
+  assert.equal(authorizeStewardCreation(request).authorized, true);
+  for (const change of [{goal_id: "foreign"}, {goal_id: undefined}, {start_execution: true}, {agent_id: "worker"}]) {
+    assert.throws(() => authorizeStewardCreation({...request,
+      proposal: {...proposal, normalized_parameters: {...proposal.normalized_parameters, ...change}}}), /Todo confirmation/);
+  }
+  for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]) {
+    assert.throws(() => authorizeStewardCreation({...request, context: {...context, [field]: "f".repeat(24)}}), /audience/);
+  }
+  for (const operation of ["stop", "resume"]) {
+    assert.throws(() => authorizeStewardCreation({...request, operation}), /cannot start/);
+  }
+  assert.throws(() => authorizeStewardCreation({...request, now: "2026-01-01T10:16:00Z"}), /expired/);
 });
 
 test("external project audience has its own Session identity without portfolio or peer scope", () => {
@@ -373,7 +466,7 @@ test("attached status names the registered recipient and stop cannot pretend hos
 });
 
 
-test("generic external provenance uses the same typed bound audience as legacy Lark", () => {
+test("provider and authorized local input classify the same bounded private audience", () => {
   for (const contextKind of ["project", "steward"]) {
     const selectedRow = contextKind === "project" ? row : {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
     const next = planConversationBinding({...request, binding: selectedRow}).state;
@@ -384,7 +477,42 @@ test("generic external provenance uses the same typed bound audience as legacy L
       ...(contextKind === "project" ? {project_context: selected.context} : {steward_context: selected.context})};
     assert.deepEqual(resolveConversationScope({...session, origin: "external"}),
       resolveConversationScope({...session, origin: "lark"}));
-    assert.notDeepEqual(resolveConversationScope({...session, origin: "web"}),
+    assert.deepEqual(resolveConversationScope({...session, origin: "web"}),
       resolveConversationScope({...session, origin: "external"}));
   }
+});
+
+
+test("local input requires the exact existing private context and fresh binding proof", () => {
+  for (const kind of ["project", "steward"]) {
+    const binding = kind === "project" ? row : {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
+    const next = planConversationBinding({...request, binding}).state;
+    const providerUse = {current: next, binding_id: row.binding_id, source_ref: "e".repeat(24),
+      sender_ref: row.operator_ref, private_human_message: true, observation, available_projects: [project]};
+    const original = resolveBoundConversation(providerUse);
+    const local = {...providerUse, origin: "web", private_human_message: false, session_context: original.context};
+    assert.deepEqual(resolveBoundConversation(local), original);
+    const scope = resolveConversationScope({goal_id: kind === "project" ? null : "loopx-manager",
+      channel_id: original.channel_id, project_context: original.context, steward_context: original.context, origin: "web"});
+    assert.equal(scope.private_conversation, false);
+    assert.equal(scope.kind, kind === "project" ? "project_workspace" : "external_audience");
+    for (const bad of [{session_context: undefined}, {private_human_message: true}, {origin: "model"},
+      {sender_ref: "f".repeat(24)}, {current}, {available_projects: []},
+      {observation: {...observation, verified: false}},
+      {session_context: {...original.context as object, source_ref: "f".repeat(24)}}]) {
+      assert.throws(() => resolveBoundConversation({...local, ...bad}));
+    }
+  }
+});
+
+test("local input cannot impersonate a group participant or inherit its workspace", () => {
+  const groupRef = "1".repeat(24), topic = "2".repeat(24);
+  const group = {...row, audience: "group", group_refs: [groupRef]};
+  const next = planConversationBinding({...request, binding: group, available_group_refs: [groupRef]}).state;
+  const use = {current: next, binding_id: row.binding_id, source_ref: topic, group_ref: groupRef, topic_ref: topic,
+    sender_ref: "3".repeat(24), private_human_message: false, group_human_message: true, observation, available_projects: [project]};
+  const selected = resolveBoundConversation(use);
+  assert.throws(() => resolveBoundConversation({...use, origin: "web", session_context: selected.context}));
+  assert.equal(resolveConversationScope({goal_id: null, channel_id: selected.channel_id,
+    project_context: selected.context, origin: "web"}).kind, "unavailable");
 });

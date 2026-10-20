@@ -8,6 +8,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIRECT_LOADER_ALLOWLIST = {
+    "loopx/runtime.py",
     "loopx/authority.py",
     "loopx/control_plane/coordination/new_goal_storage_transport.py",
     "loopx/chat_server.py",
@@ -29,6 +30,9 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/configure_goal.py",
     "loopx/control_plane/collaboration/goal_instance_scope.py",
     "loopx/control_plane/collaboration/peers.py",
+    "loopx/control_plane/collaboration/request_control_source.py",
+    "loopx/control_plane/collaboration/request_amendment.py",
+    "loopx/presentation/request_control_api.py",
     "loopx/control_plane/collaboration/source_grant_observation.py",
     "loopx/control_plane/goals/first_party_host_admission.py",
     "loopx/control_plane/goals/direction_runtime.py",
@@ -46,6 +50,7 @@ DIRECT_LOADER_ALLOWLIST = {
 # Storage-location readers grant no runtime action. Exceptions name the exact
 # functions; another direct loader in either module must still fail.
 METADATA_READER_FUNCTIONS = {
+    "loopx/runtime.py": {"_archive_source_goal_refs"},
     "loopx/capabilities/native_chat/project_context.py": {"coordination_runtime_root"},
     "loopx/control_plane/goals/source_session_recreation.py": {"_canonical_runtime_root"},
 }
@@ -127,9 +132,12 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
     # native creation tests additionally prove the executable refusal boundary.
     metadata_readers = {
         **METADATA_READER_FUNCTIONS,
+        "loopx/control_plane/collaboration/request_control_source.py": {"_locked_request"},
+        "loopx/control_plane/collaboration/request_amendment.py": {"_root"},
+        "loopx/presentation/request_control_api.py": {"_request_control_source"},
         "loopx/chat_server.py": {"serve_chat"},
         "loopx/presentation/goal_direction_api.py": {"_direction_route"},
-        "loopx/chat_status_api.py": {"_status"},
+        "loopx/chat_status_api.py": {"_discovery_registry"},
         "loopx/control_plane/goals/direction_runtime.py": {"_source"},
         "loopx/control_plane/coordination/new_goal_storage_transport.py": {"initialize_goal_storage_target"},
         "loopx/presentation/goal_amendment_api.py": {"_amendment_inspect"},
@@ -150,8 +158,8 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
     assert "source_session_goal_lifetime" in attached_owner
 
 
-def test_metadata_exception_rejects_another_direct_loader() -> None:
-    relative = "loopx/control_plane/goals/source_session_recreation.py"
+@pytest.mark.parametrize("relative", tuple(METADATA_READER_FUNCTIONS))
+def test_metadata_exception_rejects_another_direct_loader(relative: str) -> None:
     source = (REPO_ROOT / relative).read_text(encoding="utf-8")
     tree = ast.parse(source + "\n\ndef execute_goal(registry_path):\n    return load_project_registry(registry_path)\n")
     with pytest.raises(AssertionError):

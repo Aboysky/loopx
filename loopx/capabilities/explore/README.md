@@ -2,6 +2,16 @@
 
 Status: supported optional capability; default-off harness execution contract.
 
+Ordinary result writeback can include an optional `execution_observation`
+(`explore_execution_observation_v0`): exact candidate SHA-256 and input revision,
+planned/executed method ids and change reason, measured elapsed/limit seconds,
+search iterations, stop reason and opaque evidence refs. Unknown measurements
+are explicit nulls. Its refs and input revision must belong to the enclosing
+finding. Released `result_ref` requires a matching `result_candidate_sha256`.
+This records producer evidence, not verified execution or utility. Findings,
+replan context and the existing research-history detail retain it; omission
+preserves old events. See the [local probe producer](../../../benchmark/runtime/RESEARCH_LOOP.md).
+
 ## At a Glance
 
 Explore Harness is a supported, default-off optional capability for
@@ -166,6 +176,53 @@ actual tested input revision yourself, since a code revision alone need not
 identify the tested data. Keep raw logs local and reference bounded evidence.
 These prompts guide optional capture, not a finding-per-turn requirement;
 successful ingestion and later use must be measured separately.
+
+At a meaningful experimental conclusion or route change, maintain the question
+in that **same result**, rather than scheduling a history-cleanup pass. Reuse its
+stable `node_id` and exact question/applicability. The optional fields below work
+in both full and path-delta attachments:
+
+```json
+{
+  "question_update": {"status": "resolved"},
+  "relations": [{
+    "to_node": "uniform-estimate",
+    "edge_type": "depends_on",
+    "summary": "Transferring this result requires the separately established uniform estimate."
+  }]
+}
+```
+
+This fragment extends a filled attachment, not a standalone result. A finite
+question can be `resolved` with a negative answer while its finding remains
+`refuted`. Use `dead_end` for an explicitly stopped route; retain `open` or
+`exploring` for unresolved work. `blocked` requires `blocked_reason` inside
+`question_update`. Explain the answer, limits and next discriminating check in
+the existing interpretation/path delta. Finding labels and scores never infer
+question status. Routine work still needs no attachment or maintenance step.
+
+Only the recorded question owner may evolve an existing question through this
+path. Exact scope, parent, tags, evidence and prior findings survive. Up to four
+relations can point from this question to existing nodes in the same Goal;
+their types reuse the result-log vocabulary. Self-links, duplicates, missing
+targets and dependency/subtopic cycles reject before primary commit. A relation
+needs an observed basis, not temporal proximity. No other node is edited.
+
+The existing locked journal appends question/finding/relations as one batch;
+concurrent graph drift refuses that batch for retry. Todo linking retains its
+existing recoverable delivery boundary and claim/lease requirements. Recovering
+an old committed graph batch only retries its missing Todo link, preserving any
+later question update. Exact successful replay remains read-only.
+
+Omitting both fields retains create-only capture: a new question starts `open`,
+and later findings leave its state unchanged. A new result can explicitly
+reopen an answered question when evidence warrants it; replaying an old `open`
+event cannot reopen it. The next `turn-context` displays current
+`question_status`, any blocking reason and up to three incident relations beside
+the scoped finding, independently of that finding's status. Omitted relations
+and long manual relation summaries are disclosed. State/relation changes
+invalidate evidence-page revisions. Existing graph/presentation consumers use
+the same persisted node and edge shapes; this adds no remote sink write.
 
 Place the filled template in the top-level `explore_result` field of the vision
 JSON already passed to `--agent-vision-json`. This explicit field saves a separate

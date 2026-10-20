@@ -35,7 +35,6 @@ from .control_plane.effect_runtime import (
     effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
 )
 from .control_plane.coordination.local_authority import local_authority_is_promoted
-from .control_plane.todos.handoff_mode import show_goal_handoff_mode
 from .control_plane.turn_driver.journal_store import (
     load_turn_journal,
     turn_journal_path,
@@ -276,6 +275,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         request_id: str,
         decision: Literal["adopt", "defer", "reject", "no_change"],
         reason: str,
+        request_revision: int | None = None,
+        request_digest: str | None = None,
     ) -> dict:
         """Record your independent decision; this does not change task ownership or priority."""
         check_scope()
@@ -288,6 +289,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             reason,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
+            request_revision=request_revision,
+            request_revision_digest=request_digest,
         )
 
     @server.tool()
@@ -343,7 +346,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         + conversation_answer_instruction()
     ))
     def return_result(request_id: str, text: str, update_id: str | None = None,
-                      attachment_refs: list[str] | None = None) -> dict:
+                      attachment_refs: list[str] | None = None, request_revision: int | None = None) -> dict:
         """Return a conclusion to the original requester. For a later changed fact,
         append an update with a stable update_id; retry with the same id and text.
         Neither a blocker nor a returned result certifies completion of the work.
@@ -362,10 +365,32 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             text,
             update_id=update_id,
             attachment_refs=attachment_refs,
+            request_revision=request_revision,
             workspace=workspace,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
+
+    if caller_goal_ref is not None:
+        @server.tool()
+        def control_peer_request(request_id: str, receiver_agent_id: str,
+                                 operation: Literal["inspect", "revise", "cancel", "recover"],
+                                 parameters: dict | None = None, execute: bool = False) -> dict:
+            """Control your own exact-profile peer request using its current revision/digest.
+
+            Revise/cancel need a stable operation_id in parameters. Preview by
+            default. Recovery reads the original effect; cancellation remains
+            pending until its original Goal terminal receipt is linked. It does
+            not revoke committed Goal work or grant new execution permission.
+            """
+            from .control_plane.collaboration.request_amendment import control_request
+            from .capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+
+            check_scope()
+            return control_request(registry_path=registry, runtime_root=root, goal_ref=caller_goal_ref,
+                replan_configuration_reader=resolve_todo_replan_cadence_goal,
+                receiver_agent_id=receiver_agent_id, request_id=request_id, actor_agent_id=agent_id,
+                operation=operation, parameters=parameters, execute=execute)
 
     @server.tool()
     def consume_peer_result(request_id: str, result_key: str = "conclusion") -> dict:
@@ -513,7 +538,10 @@ class Delegations:
     def operations(self, *, limit: int = 20, cursor: str | None = None) -> dict:
         from .control_plane.collaboration.delegation_inventory import read_delegation_inventory
 
-        return read_delegation_inventory(self, limit=limit, cursor=cursor)
+        # One page uses one executable revision; records are still read live,
+        # and the next page resolves its own current revision.
+        with effect_runtime_request_scope():
+            return read_delegation_inventory(self, limit=limit, cursor=cursor)
 
     def inspect(self, binding_id: str) -> dict:
         """Observe the real Turn preflight; never create a request or run a host."""
@@ -599,14 +627,11 @@ class Delegations:
                      "--turn-instance-id", operation, *self._execution_arguments(binding, operation)]
         # Host arguments are operator-owned, but inspection must stay read-only
         # even when they contain an abbreviated execution flag or a selector.
-        from .cli_runtime import add_subcommand_format, build_cli_parser
-        from .cli_commands.turn_registration import register_turn_commands
+        from .cli_runtime import _build_selected_parser, _SelectedParseRejected
 
-        parser, subparsers = build_cli_parser()
-        register_turn_commands(subparsers, add_subcommand_format)
         try:
-            selected = parser.parse_args(arguments)
-        except SystemExit as exc:
+            selected = _build_selected_parser("turn").parse_args(arguments)
+        except (SystemExit, _SelectedParseRejected) as exc:
             raise ValueError("invalid delegation Turn arguments") from exc
         workspace = workspace_identity[2]
         selected_project = Path(selected.project)
@@ -1535,20 +1560,16 @@ class Delegations:
     ) -> dict:
         """Acquire the promoted hard lease before worker or completion effects."""
 
-        if not local_authority_is_promoted(
-            runtime_root=self.root,
-            goal_id=self.goal_id,
-        ):
-            if row.get("task_lease", {}).get("required") is True:
-                raise ValueError("delegation canonical authority disappeared; reconcile the original execution")
-            row["task_lease"] = {"required": False, "handoff_mode": "legacy"}
-            self._fenced_write(path, row)
-            return row["task_lease"]
-        handoff_mode = show_goal_handoff_mode(
-            registry_path=self.registry,
-            runtime_root_arg=str(self.root),
-            goal_id=self.goal_id,
-        )["handoff_mode"]
+        from .control_plane.work_items.task_lease import inspect_task_lease
+
+        observed = inspect_task_lease(registry_path=self.registry, runtime_root=self.root,
+                                      goal_id=self.goal_id, todo_id=binding["todo_id"])
+        support = observed.get("execution_policy")
+        if not isinstance(support, dict) or type(support.get("supported")) is not bool:
+            raise RuntimeError("lease inspection omitted typed execution-policy support")
+        if not support["supported"]:
+            raise ValueError(str(support.get("reason") or "current execution policy is unavailable"))
+        handoff_mode = observed["handoff_mode"]
         if handoff_mode != "hard_lease":
             if row.get("task_lease", {}).get("required") is True:
                 raise ValueError("delegation authority mode changed; reconcile the original execution")
@@ -1707,9 +1728,10 @@ class Delegations:
                 self._write_delegation_bootstrap(row, binding)
                 self._acquire_delegation_lease(path, row, binding)
                 self._observe(path, row, "running")
-            if row.get("task_lease", {}).get("required") is True and "lease" not in row["task_lease"]:
-                # Upgrade a still-current operation record by replaying its
-                # original claim, not by inventing a replacement execution.
+            elif row["status"] == "running":
+                # Resumption rechecks typed policy support even for old records
+                # that said no lease was required. Hard mode replays its original
+                # claim proof; it cannot invent a replacement execution.
                 self._acquire_delegation_lease(path, row, binding)
             if row["status"] == "running":
                 self._raise_if_stop_requested(path)
@@ -1842,6 +1864,8 @@ def register_delegation_tools(server, delegations: Delegations) -> None:
 
         Accepted items are rechecked; unavailable requires reconciliation, not duplicate
         dispatch. Read the original operation for full artifacts. Listing starts no work.
+        Read projection_envelope before claiming current or complete state: its scope
+        is this requester page, and alerts and omitted operations must be disclosed.
         """
         return delegations.operations(limit=limit, cursor=cursor)
 

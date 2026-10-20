@@ -43,7 +43,6 @@ from loopx.control_plane.turn_driver.subagent_execution_topology import (
 )
 from loopx.control_plane.turn_driver.executor import BuiltInHostError
 from loopx.control_plane.quota.live_decision import bind_scheduler_followup_cli_routes
-from loopx.todos import complete_goal_todo
 
 
 def _envelope(
@@ -306,7 +305,7 @@ def test_turn_plan_maps_admitted_child_to_codex_native_operation() -> None:
             "host_adapter": {
                 "host": "codex-cli",
                 "native_operation": "spawn_agent",
-                "arguments": {"fork_context": False},
+                "arguments": {"fork_turns": "none"},
                 "requires_session": False,
             },
         }
@@ -525,7 +524,7 @@ def test_turn_plan_exposes_forked_snapshot_only_when_explicitly_selected() -> No
     assert operation["host_adapter"] == {
         "host": "codex-cli",
         "native_operation": "spawn_agent",
-        "arguments": {"fork_context": True},
+        "arguments": {"fork_turns": "all"},
         "requires_session": False,
     }
 
@@ -898,7 +897,7 @@ def test_turn_host_request_carries_typed_child_operations() -> None:
     assert request["child_operations"][0]["host_adapter"] == {
         "host": "codex-cli",
         "native_operation": "spawn_agent",
-        "arguments": {"fork_context": False},
+        "arguments": {"fork_turns": "none"},
         "requires_session": False,
     }
     assert request["result_contract"]["stdout"] == "one public-safe JSON object"
@@ -1388,6 +1387,7 @@ def _write_live_fixture(
     *,
     todo_metadata_extra: str = "",
     extra_agent_todo_lines: tuple[str, ...] = (),
+    provider: str = "file",
 ) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -1462,44 +1462,23 @@ def _write_live_fixture(
         + "\n",
         encoding="utf-8",
     )
-    return project, runtime, registry
-
-
-def _promote_turn_fixture(project: Path, runtime: Path) -> None:
-    state = (
-        project
-        / ".codex"
-        / "goals"
-        / "loopx-turn-fixture"
-        / "ACTIVE_GOAL_STATE.md"
+    parsed = parse_active_state_todos(
+        state.read_text(encoding="utf-8"),
+        item_limit=None,
     )
     projection = build_todo_runtime_shadow_projection(
         goal_id="loopx-turn-fixture",
         handoff_mode="soft_claim",
-        todos=[
-            {
-                "schema_version": "todo_item_v0",
-                "index": 1,
-                "done": False,
-                "text": "[P0] Advance one public fixture.",
-                "todo_id": "todo_fixture0001",
-                "role": "agent",
-                "status": "open",
-                "archive_state": "active",
-                "source_section": "Agent Todo",
-                "task_class": "advancement_task",
-                "action_kind": "fixture",
-                "claimed_by": "codex-fixture",
-                "priority": "P0",
-            }
-        ],
+        todos=parsed["agent_todos"]["items"],
     )
     initialize_canonical_authority(
         runtime,
         "loopx-turn-fixture",
         projection,
         state_path=state,
+        provider=provider,
     )
+    return project, runtime, registry
 
 
 def test_quota_cli_projects_outer_controller_without_codex_app_action(
@@ -2351,17 +2330,10 @@ def test_turn_run_once_cli_dsh_preserves_material_path_delta(
     tmp_path: Path, malformed_packet: bool,
 ) -> None:
     project, runtime, registry = _write_live_fixture(
-        tmp_path, todo_metadata_extra="no_followup=true"
+        tmp_path,
+        todo_metadata_extra="no_followup=true",
     )
     state_path = project / ".codex/goals/loopx-turn-fixture/ACTIVE_GOAL_STATE.md"
-    parsed = parse_active_state_todos(state_path.read_text(encoding="utf-8"), item_limit=None)
-    projection = build_todo_runtime_shadow_projection(
-        goal_id="loopx-turn-fixture", handoff_mode="soft_claim",
-        todos=parsed["agent_todos"]["items"],
-    )
-    initialize_canonical_authority(
-        runtime, "loopx-turn-fixture", projection, state_path=state_path
-    )
     host_project = project / "isolated-dsh-workspace"
     host_project.mkdir()
     vision = {
@@ -2595,17 +2567,6 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
     next_obligation = next_plan["turn_envelope"]["replan_action_packet"]
     assert next_obligation["decision"] == "replan_required"
 
-    recovered_completion = complete_goal_todo(
-        registry_path=registry,
-        goal_id="loopx-turn-fixture",
-        todo_id="todo_fixture0001",
-        role="agent",
-        agent_id="codex-fixture",
-        completion_turn_key=payload["resume_turn_key"],
-    )
-    assert recovered_completion["idempotent_replay"] is True
-    assert recovered_completion["changed"] is False
-
     replayed_output = io.StringIO()
     with contextlib.redirect_stdout(replayed_output):
         replayed_exit_code = cli_main(
@@ -2627,7 +2588,6 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
-    _promote_turn_fixture(project, runtime)
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
@@ -2956,13 +2916,13 @@ def test_turn_run_once_cli_projects_durable_no_followup_continuation(
 
 
 @pytest.mark.parametrize(
-    "durable_completion_turn_key",
+    "display_completion_turn_key",
     [None, "sha256:different-turn"],
     ids=["missing-turn-key", "different-turn-key"],
 )
-def test_turn_run_once_cli_terminal_recovery_rejects_unowned_completion(
+def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
     tmp_path: Path,
-    durable_completion_turn_key: str | None,
+    display_completion_turn_key: str | None,
 ) -> None:
     project, runtime, registry = _write_live_fixture(
         tmp_path,
@@ -2997,8 +2957,8 @@ def test_turn_run_once_cli_terminal_recovery_rejects_unowned_completion(
     assert current_turn_field in state
     replacement = (
         ""
-        if durable_completion_turn_key is None
-        else f" completion_turn_key={durable_completion_turn_key}"
+        if display_completion_turn_key is None
+        else f" completion_turn_key={display_completion_turn_key}"
     )
     state_path.write_text(
         state.replace(current_turn_field, replacement),
@@ -3067,19 +3027,32 @@ def test_turn_run_once_cli_terminal_recovery_rejects_unowned_completion(
         )
     resumed = json.loads(resumed_output.getvalue())
 
-    assert resumed_exit_code == 1, resumed
-    assert resumed["settlement_result"]["failure"] == {
-        "kind": "effect_outcome_unknown",
-        "step_kind": "terminal_closeout",
-        "reason": "closeout readback failed",
+    assert resumed_exit_code == 0, resumed
+    assert resumed["status"] == "committed"
+    assert resumed["settlement_result"]["failure"] is None
+    assert not any(resumed["effects"].values())
+    assert resumed["todo_completion"] == {
+        "todo_id": "todo_fixture0001",
+        "continuation": "no_followup",
     }
     recovered_events = [
         json.loads(line)
         for line in event_path.read_text(encoding="utf-8").splitlines()
     ]
+    terminal_events = [
+        event
+        for event in recovered_events
+        if (
+            event.get("event_kind") == "todo_complete"
+            and event.get("run_id") == turn_key
+        )
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["status"] == "terminal_no_followup"
+    assert terminal_events[0]["details"]["command"] == "turn recovery probe"
     assert not any(
         event.get("event_kind") == "todo_complete"
-        and event.get("run_id") == turn_key
+        and event.get("run_id") != turn_key
         for event in recovered_events
     )
 
@@ -3452,10 +3425,6 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
         spend_quota_slot as real_spend_quota_slot,
     )
 
-    from loopx.cli_commands.turn_todo_writeback import (
-        update_goal_todo as real_update_goal_todo,
-    )
-
     project, runtime, registry = _write_live_fixture(tmp_path)
     state_path = (
         project
@@ -3493,7 +3462,7 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     )
     refresh_workspace_paths: list[Path | None] = []
     spend_workspace_paths: list[Path | None] = []
-    updated_todo_ids: list[str] = []
+    refresh_todo_ids: list[str] = []
 
     def adaptive_turn_envelope(*args: object, **kwargs: object) -> dict[str, object]:
         envelope = real_build_turn_envelope(*args, **kwargs)
@@ -3511,15 +3480,12 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
 
     def recording_refresh_state_run(*args: object, **kwargs: object) -> dict[str, object]:
         refresh_workspace_paths.append(kwargs.get("delivery_workspace_path"))
+        refresh_todo_ids.append(str(kwargs.get("todo_id") or ""))
         return real_refresh_state_run(*args, **kwargs)
 
     def recording_spend_quota_slot(*args: object, **kwargs: object) -> dict[str, object]:
         spend_workspace_paths.append(kwargs.get("workspace_path"))
         return real_spend_quota_slot(*args, **kwargs)
-
-    def recording_update_goal_todo(*args: object, **kwargs: object) -> dict[str, object]:
-        updated_todo_ids.append(str(kwargs.get("todo_id") or ""))
-        return real_update_goal_todo(*args, **kwargs)
 
     def fake_codex_host(request: dict[str, object], **_kwargs: object) -> dict[str, object]:
         return {
@@ -3551,10 +3517,6 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     monkeypatch.setattr(
         "loopx.cli_commands.turn_run_once.spend_quota_slot",
         recording_spend_quota_slot,
-    )
-    monkeypatch.setattr(
-        "loopx.cli_commands.turn_todo_writeback.update_goal_todo",
-        recording_update_goal_todo,
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -3598,9 +3560,7 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert payload["effects"]["quota_spent"] is True
     assert refresh_workspace_paths == [project]
     assert spend_workspace_paths == [project]
-    assert updated_todo_ids == (
-        [] if result_kind == "validated_progress" else ["todo_fixture0001"]
-    )
+    assert refresh_todo_ids == ["todo_fixture0001"]
     state = (
         project
         / ".codex"
@@ -3615,8 +3575,8 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert journal["host_result"]["next_action"] == "Run one revised public fixture check"
     assert journal["host_result"]["recommended_action"] != journal["host_result"]["next_action"]
     assert "Run one revised public fixture check" not in state
-    if result_kind != "validated_progress":
-        assert f"LoopX%20Turn%20{result_kind}" in state
+    assert journal["host_result"]["summary"] == "One public fixture advanced."
+    assert "One%20public%20fixture%20advanced" not in state
 
 
 def test_turn_run_once_codex_cli_wires_validated_reflection_post_settlement(

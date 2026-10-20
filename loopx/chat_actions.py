@@ -18,6 +18,7 @@ from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat_monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
 from .chat_todo_actions import ChatTodoActionMixin
+from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .configure_goal import configure_goal
 from .control_plane.goals.configure_goal_service import (
     bind_goal_agent_with_global_sync,
@@ -39,6 +40,7 @@ from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
 SUPPORTED_ACTION_KINDS = {
+    "goal.acceptance.check",
     "todo.create",
     "todo.update",
     "run.correct",
@@ -91,6 +93,18 @@ class ProtectedActionGate(ActionConflictError):
         )
         self.proposal: dict[str, Any] | None = None
         super().__init__(self.gate["summary"])
+
+
+class _AgentUnavailableError(ValueError):
+    """Availability refusal from the existing endpoint eligibility owner.
+
+    Tool, trust and workspace admission failures remain ordinary ValueErrors;
+    callers must not infer this narrower condition from their message text.
+    """
+
+    def __init__(self, message: str, *, capability: Mapping[str, Any] | None = None) -> None:
+        self.capability = dict(capability) if capability is not None else None
+        super().__init__(message)
 
 
 def _opaque(value: Any, *, field: str) -> str:
@@ -214,6 +228,7 @@ def _monitor_text(parameters: Mapping[str, Any]) -> str | None:
 
 
 class ChatActionService(
+    GoalAcceptanceActionMixin,
     ChatActionNormalizationMixin,
     ChatGoalLifecycleActionMixin,
     ChatMonitorActionMixin,
@@ -229,11 +244,19 @@ class ChatActionService(
         chat_store: ChatSessionStore | None = None,
         runtime_controller: Any | None = None,
         workspace_roots: Sequence[Path] = (),
+        runtime_root_override: str | Path | None = None,
     ) -> None:
         self.store = store
         self.registry_path = Path(registry_path).expanduser().resolve()
         self.chat_store = chat_store
         self.runtime_controller = runtime_controller
+        # The runtime root the serving Chat selected (its --runtime-root). A
+        # creation on a registry that does not exist yet has no recorded root
+        # to follow, so the first Goal must persist where the service already
+        # keeps its own state, never in an implicit default beside it.
+        self.runtime_root_override = (
+            str(runtime_root_override) if runtime_root_override else None
+        )
         self.workspace_roots = tuple(
             Path(root).expanduser().resolve() for root in workspace_roots
         )
@@ -292,11 +315,53 @@ class ChatActionService(
         return goal
 
     def _registry_fingerprint(self) -> str:
+        """Identity of the registry a proposal was previewed against.
+
+        A fresh install has no registry until its first Goal is created. That
+        absence is a stable fact to fingerprint, so the first creation can be
+        reviewed and confirmed from the page; a registry that appears between
+        preview and apply still reads as a change and asks for a new review.
+        """
+
         try:
             content = self.registry_path.read_bytes()
+        except FileNotFoundError:
+            return "registry-absent"
         except OSError as exc:
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()
+
+    def _creation_agent_eligibility(
+        self, agent_id: str, *, project: Path | None = None
+    ) -> dict[str, Any]:
+        """Availability refusal for a Goal's first Agent becomes a typed gate.
+
+        A fresh install often has no usable Agent yet. The owner who clicks
+        "Create a Goal" needs the reason in their own language and the way to
+        fix it, not a protocol sentence: the preview answers with a gate that
+        names the Agent and, when the catalog states it, why it is unavailable.
+        Nothing is written and nothing is granted; a working Agent still goes
+        through the same eligibility check.
+        """
+
+        try:
+            return self._agent_eligibility(agent_id, project=project)
+        except _AgentUnavailableError as exc:
+            row = exc.capability
+            gate: dict[str, Any] = {
+                "kind": "agent_unavailable",
+                "agent_id": agent_id,
+                "registered": row is not None,
+                "summary": f"The selected Agent ({agent_id}) is not available to start this Goal.",
+                "next_action": "Resolve the reported availability issue, then preview this request again.",
+                "detail": str(exc),
+            }
+            if row is not None:
+                for field in ("unavailable_reason", "executable", "environment_variable"):
+                    value = row.get(field)
+                    if isinstance(value, str) and value:
+                        gate[field] = value
+            raise ProtectedActionGate("goal.create", gate=gate) from exc
 
     def _agent_eligibility(
         self,
@@ -324,9 +389,9 @@ class ChatActionService(
             None,
         )
         if row is None:
-            raise ValueError("selected Agent endpoint is not registered")
+            raise _AgentUnavailableError("selected Agent endpoint is not registered")
         if row.get("available") is not True:
-            raise ValueError("selected Agent endpoint is not healthy")
+            raise _AgentUnavailableError("selected Agent endpoint is not healthy", capability=row)
         if requires_tools and row.get("tool_calls") is not True:
             raise ValueError("selected Agent endpoint cannot execute Goal tools")
         if str(row.get("trust_scope") or "") not in {"read_only", "workspace_write"}:
@@ -651,7 +716,9 @@ class ChatActionService(
             },
         )
         registry = self._registry()
-        runtime_root = resolve_runtime_root(registry, registry_path=self.registry_path).resolve()
+        runtime_root = resolve_runtime_root(
+            registry, self.runtime_root_override, registry_path=self.registry_path
+        ).resolve()
         objective = str(parameters.get("objective") or parameters["title"])
         if existing_goal is not None:
             # Registry publication precedes storage initialization. Resume the
@@ -1187,14 +1254,24 @@ class ChatActionService(
                 }
             )
             agent_id = str(normalized.get("agent_id") or "codex")
-            eligibility = self._agent_eligibility(agent_id, project=project)
+            eligibility = self._creation_agent_eligibility(agent_id, project=project)
             workspace_binding = self._goal_workspace_binding(
                 project, source_goal, requested_ref=str(normalized.get("workspace_ref") or "current")
             )
             normalized["workspace_ref"] = workspace_binding["workspace_ref"]
         else:
             eligibility = None
-        if action_kind == "operation.execute":
+        if action_kind == "goal.acceptance.check":
+            if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
+                raise ValueError("check plan context must match its target Goal")
+            fingerprint, preview = self._acceptance_preview(normalized)
+            if "resolved_document" in preview:
+                # Owner-produced review snapshot only; apply re-resolves the
+                # original reference against the native reviewed-context digest.
+                normalized["resolved_document"] = preview["resolved_document"]
+            evidence = ["The existing typed acceptance owner validated this plan without changing configuration or executing commands."]
+            permission = "local_command_execution"
+        elif action_kind == "operation.execute":
             fingerprint = _digest(normalized)
             evidence = [
                 "The provider-neutral operation envelope and immutable digests validated.",
@@ -1429,8 +1506,8 @@ class ChatActionService(
             }
         if (proposal.get("context") or {}).get("binding_id"):
             if steward_context is None:
-                raise ProtectedActionGate("goal.create", gate={"kind": "authenticated_steward_confirmation_required",
-                    "summary": "Confirm this commission from its original owner private conversation.",
+                raise ProtectedActionGate(str(proposal["action_kind"]), gate={"kind": "authenticated_steward_confirmation_required",
+                    "summary": "Confirm this proposal from its original owner private conversation.",
                     "next_action": "Use the exact /confirm command in the originating Bot before it expires."})
             from .control_plane.effect_runtime import effect_runtime_result
             effect_runtime_result("collaboration.steward.authorize_creation", {
@@ -1449,6 +1526,8 @@ class ChatActionService(
         parameters = proposal.get("normalized_parameters")
         if not isinstance(parameters, dict):
             raise ValueError("typed Chat action proposal is malformed")
+        if action_kind == "goal.acceptance.check":
+            return self._apply_acceptance_check(proposal_id)
         if action_kind == "goal.create":
             return self._apply_goal_create(proposal_id, proposal, parameters)
         if action_kind == "goal.lifecycle":

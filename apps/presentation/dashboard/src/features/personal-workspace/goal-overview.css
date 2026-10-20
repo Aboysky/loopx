@@ -25,6 +25,13 @@
 .goal-overview .goal-overview-heading button:hover { border-color: transparent; background: var(--pw-hover); color: var(--pw-text); }
 
 .goal-overview-objective { max-width: 44em; color: var(--pw-text); font-size: var(--text-heading); font-weight: 600; letter-spacing: -0.015em; line-height: var(--leading-heading); text-wrap: pretty; }
+.goal-overview-objective.is-unavailable { font-size: var(--text-body); line-height: var(--leading-body); font-weight: 400; color: var(--pw-muted); letter-spacing: normal; }
+.goal-overview .delivery-acceptance-content > [role="alert"] { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* One quiet line above the hero: what changed since the owner's last look. Idle content stays still. */
+.goal-overview-since { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--pw-line); color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-variant-numeric: tabular-nums; }
+.goal-overview-since button { min-height: 28px; padding: 0 10px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: transparent; color: var(--pw-text); font-size: var(--text-caption); cursor: pointer; }
+.goal-overview-since button:hover { border-color: var(--pw-blue); color: var(--pw-blue-ink); }
+.goal-overview-since button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .goal-overview-note { max-width: 56em; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
 .goal-overview-note small { color: var(--pw-faint); }
 
@@ -72,8 +79,12 @@
 .personal-composer-folded .personal-composer-tools > summary { padding-inline: 8px; border-radius: 6px; list-style: none; }
 .personal-composer-folded .personal-composer-tools > summary::-webkit-details-marker { display: none; }
 .personal-composer-folded .personal-composer-tools > summary:hover { background: var(--pw-hover); color: var(--pw-text); }
-.personal-composer-folded .personal-composer-tools .personal-quick-prompts { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 20; display: grid; gap: 4px; width: max-content; max-width: min(320px, calc(100vw - 32px)); padding: 6px; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); box-shadow: 0 12px 32px rgb(0 0 0 / 8%), 0 1px 2px rgb(0 0 0 / 6%); animation: goal-panel-enter var(--motion-base) var(--ease-out); }
-.personal-composer-folded .personal-quick-prompts button { justify-content: flex-start; }
+.personal-composer-folded .personal-composer-tools > summary { display: block; max-width: min(60vw, 420px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The folded composer's rows pop up as one panel, so a derived row above the shipped prompts never widens the trigger. */
+.personal-composer-folded .personal-composer-tools .personal-composer-tools-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 20; display: grid; gap: 6px; width: max-content; max-width: min(320px, calc(100vw - 32px)); padding: 6px; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); box-shadow: 0 12px 32px rgb(0 0 0 / 8%), 0 1px 2px rgb(0 0 0 / 6%); animation: goal-panel-enter var(--motion-base) var(--ease-out); }
+.personal-composer-folded .personal-composer-tools .personal-quick-prompts, .personal-composer-folded .personal-composer-tools .personal-goal-suggestions { display: grid; gap: 4px; margin: 0; }
+.personal-composer-folded .personal-composer-tools .personal-goal-suggestions { padding-bottom: 6px; border-bottom: 1px solid var(--pw-line); }
+.personal-composer-folded .personal-quick-prompts button, .personal-composer-folded .personal-goal-suggestions button { justify-content: flex-start; }
 .personal-composer-pill { display: flex; align-items: center; gap: 10px; flex: 0 1 560px; min-width: 0; min-height: 44px; padding: 0 16px; border: 1px solid var(--pw-line-strong); border-radius: 16px; background: var(--pw-card); color: var(--pw-faint); cursor: text; font: inherit; font-size: var(--text-body); line-height: var(--leading-body); text-align: left; transition: border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); animation: goal-panel-enter var(--motion-section) var(--ease-out); }
 .personal-composer-pill span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-composer-pill:hover { border-color: var(--pw-muted); color: var(--pw-muted); }
@@ -87,7 +98,7 @@
 @keyframes goal-panel-enter { from { opacity: 0; transform: translateY(4px); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .personal-goal-view-panel:not([hidden]), .personal-composer-pill, .personal-composer-folded .personal-quick-prompts { animation: none; }
+  .personal-goal-view-panel:not([hidden]), .personal-composer-pill, .personal-composer-folded .personal-composer-tools-panel { animation: none; }
   .goal-overview-criteria li, .goal-overview-attention li, .goal-overview-run svg, .goal-overview-attention li svg:last-child { transition: none; }
 }
 
@@ -106,3 +117,47 @@
 .goal-overview-agent-note p { margin-top: 8px; }
 
 .goal-overview-current { font-size: var(--text-lead); line-height: var(--leading-lead); font-weight: 500; }
+
+/* The existing check controller is part of the brief, never a second hero. */
+.goal-overview .delivery-acceptance-contract.is-overview { border: 0; border-radius: 0; background: transparent; }
+.goal-overview .delivery-acceptance-contract.is-overview > .delivery-acceptance-content { padding: 0; gap: 12px; }
+.goal-overview .is-overview .delivery-check-heading h3 { color: var(--pw-muted); font-size: var(--text-caption); font-weight: 500; line-height: var(--leading-caption); }
+.goal-overview .is-overview .delivery-check-heading .goal-overview-objective { color: var(--pw-text); }
+.goal-overview .is-overview .delivery-check-primary { min-height: 44px; }
+.goal-overview .is-overview .delivery-check-primary:not(.is-prepared) { background: transparent; color: var(--pw-text); }
+.goal-overview .is-overview .goal-overview-criteria { padding: 0; }
+.goal-overview .is-overview .delivery-check-result .goal-overview-criteria { gap: 0; }
+.goal-overview .is-overview .delivery-check-result { gap: 8px; }
+.goal-overview .is-overview .delivery-check-result > p:first-child { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-overview .is-overview :is(.delivery-check-result, .delivery-check-plan) > details, .goal-overview .is-overview .delivery-check-advanced { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-overview .is-overview summary { padding: 8px 0; font-weight: 400; }
+.goal-overview .is-overview .delivery-check-summary .goal-overview-progress { display: inline-flex; width: calc(100% - 1.25em); max-width: 100%; margin: 0; }
+
+@media (max-width: 640px) {
+  .goal-overview .is-overview .goal-overview-criteria li { grid-template-columns: 16px minmax(0, 1fr); }
+  .goal-overview .is-overview .goal-overview-criteria small { grid-column: 2; }
+}
+
+.goal-outcomes { margin-top: 16px; }
+.goal-outcomes > p, .goal-outcome > small { color: var(--pw-muted); font-size: var(--text-caption); }
+.goal-outcome { padding: 12px 0; border-top: 1px solid var(--pw-line); }
+.goal-outcome h5 { font: inherit; font-weight: 600; margin: 0 0 4px; }
+.goal-outcome .goal-overview-criteria li { grid-template-columns: minmax(0, 1fr) auto; }
+.goal-outcome details { margin-top: 8px; }
+.goal-outcome form { display: grid; gap: 8px; margin-top: 8px; }
+.goal-outcome label { display: grid; gap: 6px; }
+.goal-outcome textarea { width: 100%; min-height: 72px; padding: 8px; resize: vertical; border: 1px solid var(--pw-line); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+.goal-outcome code { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .goal-outcome .goal-overview-criteria li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .goal-outcome .goal-overview-criteria small { grid-column: 1; }
+}
+/* Driver observations remain separate from the Goal's activation and acceptance. */
+.goal-overview-worker-state { display: grid; gap: 8px; padding-block: 16px; border-block: 1px solid var(--pw-line); }
+.goal-overview-worker-state h3 { color: var(--pw-muted); font-size: var(--text-caption); font-weight: 500; line-height: var(--leading-caption); }
+.goal-overview-worker-state p { margin-block: .5rem; overflow-wrap: anywhere; }
+.goal-overview-worker-state details { margin-block: .5rem; }
+.goal-overview-worker-state dl { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-overview-worker-state dt { font-weight: 600; }
+.goal-overview-worker-state dd { margin: .2rem 0 .6rem; overflow-wrap: anywhere; }
+.goal-overview-worker-state > button { justify-self: start; }

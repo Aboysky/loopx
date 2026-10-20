@@ -237,8 +237,11 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx upgrade-plan", "purpose": "Plan default heartbeat upgrade propagation."},
             {
-                "command": "loopx update [check|plan|apply]",
-                "purpose": "Inspect installation ownership, then explicitly apply archive updates.",
+                "command": "loopx update [check|plan|apply] / loopx upgrade",
+                "purpose": (
+                    "Inspect installation ownership, then explicitly apply archive updates, "
+                    "or run one command that upgrades the CLI and the installed macOS App."
+                ),
             },
             {
                 "command": "loopx project-skill --help",
@@ -337,6 +340,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             {
                 "command": "loopx zcode-goal --help",
                 "purpose": "Explicitly bind and inspect one managed ZCode CLI native Goal session.",
+            },
+            {
+                "command": "loopx research-checkpoint --help",
+                "purpose": "Explicitly capture, verify, or adopt a sealed checkpoint through current Goal and native Host owners.",
             },
             {
                 "command": "loopx promotion-readiness",

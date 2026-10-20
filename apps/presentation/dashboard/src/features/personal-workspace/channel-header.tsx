@@ -5,11 +5,11 @@ import { useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
-import { discoverAgentModelOptions, type AgentModelDiscovery } from "../../data/chat";
-import { useEffect, useState } from "react";
+import { ChatModelMenu } from "./chat-model-menu";
 
 export function ChannelHeader({
   agents,
+  agentWorkActive = false,
   conversationScope,
   goalLifecycleBusy,
   managerChannelBinding,
@@ -22,6 +22,7 @@ export function ChannelHeader({
   allWorkOpen,
   onOpenManagerChat,
   onOpenManagerSettings,
+  onOpenConversationSettings,
   onOpenWorkspace,
   onRefresh,
   onRequestGoalLifecycle,
@@ -29,22 +30,29 @@ export function ChannelHeader({
   onSelectGoalTab,
   onSelectAgent,
   onSelectAgentModel,
+  onSelectAgentReasoningEffort,
   onReturnManagerHome,
   refreshState,
   readOnlySourceLabel,
   resumeReviewed,
   selectedAgentId,
   selectedAgentModelId,
+  selectedAgentModelReadback,
+  selectedAgentReasoningEffort,
   selectedGoal,
   selectedGoalTab,
+  scopeUnavailable = false,
   workspaceGrantLabel,
+  originalConversationTitle,
 }: {
   agents: WorkspaceAgentOption[];
+  agentWorkActive?: boolean;
   /** Steward conversation scope; absent when the host grants no workspace. */
   conversationScope?: { options: { disabled?: boolean; label: string; value: string }[]; value: string; onChange: (value: string) => void } | null;
   goalLifecycleBusy?: boolean;
   /** Set while the steward conversation is scoped to a workspace. */
   workspaceGrantLabel?: string | null;
+  originalConversationTitle?: string;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerChatOpen?: boolean;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
@@ -55,6 +63,7 @@ export function ChannelHeader({
   allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
+  onOpenConversationSettings?: () => void;
   onOpenWorkspace?: () => void;
   onRefresh?: () => void;
   /** Absent when the selected source does not authorize Goal lifecycle changes. */
@@ -63,6 +72,7 @@ export function ChannelHeader({
   onSelectGoalTab: (tab: WorkspaceGoalTab) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectAgentModel?: (modelId: string) => void;
+  onSelectAgentReasoningEffort?: (effort: string) => void;
   onReturnManagerHome?: () => void;
   refreshState?: "idle" | "loading" | "done" | "error";
   readOnlySourceLabel?: string;
@@ -70,41 +80,16 @@ export function ChannelHeader({
   resumeReviewed?: boolean;
   selectedAgentId: string;
   selectedAgentModelId?: string;
+  selectedAgentModelReadback?: import("../../data/chat").ChatSessionSummary;
+  selectedAgentReasoningEffort?: string;
   selectedGoal: WorkspaceGoal | null;
   selectedGoalTab: WorkspaceGoalTab;
+  /** A requested Goal scope failed; do not present the steward as its fallback. */
+  scopeUnavailable?: boolean;
 }) {
   const { locale, t } = useWorkspaceI18n();
-  const [modelDiscovery, setModelDiscovery] = useState<AgentModelDiscovery | null>(null);
-  const [modelDiscoveryState, setModelDiscoveryState] = useState<"idle" | "loading" | "error">("idle");
-  useEffect(() => {
-    if (readOnlySourceLabel) return;
-    const controller = new AbortController();
-    setModelDiscovery(null);
-    setModelDiscoveryState("loading");
-    void discoverAgentModelOptions(selectedAgentId, controller.signal)
-      .then((result) => { if (!controller.signal.aborted) { setModelDiscovery(result); setModelDiscoveryState("idle"); } })
-      .catch(() => { if (!controller.signal.aborted) setModelDiscoveryState("error"); });
-    return () => controller.abort();
-  }, [readOnlySourceLabel, selectedAgentId]);
-  const model = modelDiscovery?.model;
-  const selectedModel = selectedAgentModelId === undefined ? model?.selected || model?.options[0]?.value || "" : selectedAgentModelId;
-  const modelControl = model && model.options.length ? (
-    <WorkspaceSelect
-      ariaLabel={locale === "zh-CN" ? "选择模型" : "Select model"}
-      className="personal-agent-select personal-model-select"
-      onChange={(value) => onSelectAgentModel?.(value)}
-      options={[
-        ...(!selectedModel ? [{ disabled: true, label: locale === "zh-CN" ? "当前模型未知" : "Current model unknown", value: "" }] : []),
-        ...(selectedModel && !model.options.some((option) => option.value === selectedModel)
-          ? [{ disabled: true, label: `${locale === "zh-CN" ? "当前模型" : "Current model"}: ${selectedModel}`, value: selectedModel }] : []),
-        ...model.options.map((option) => ({ label: option.label, value: option.value })),
-      ]}
-      prefixLabel={locale === "zh-CN" ? "模型" : "Model"}
-      value={selectedModel}
-    />
-  ) : selectedAgentModelId === "" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "当前模型未知" : "Current model unknown"}</small>
-    : modelDiscoveryState === "loading" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "正在读取模型…" : "Reading models…"}</small>
-    : modelDiscoveryState === "error" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "无法读取模型" : "Models unavailable"}</small> : null;
+  const statusOnly = selectedAgentId === "status-only";
+  const ordinaryConversation = Boolean(selectedGoal || workspaceGrantLabel);
   // The chip reports the selected executor, whose credential pays for it, and
   // the resolved model, so an executor and a model that disagree are visible
   // instead of arriving as one silent configuration.
@@ -174,23 +159,37 @@ export function ChannelHeader({
                   : "header.managerAllocationConfigured")
     : null;
 
-  const runtimeControl = readOnlySourceLabel ? (
-    <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
+  const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
+    <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{selectedGoal?.title === readOnlySourceLabel ? null : readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
   ) : <>
-    <WorkspaceSelect
+    {ordinaryConversation ? <WorkspaceSelect
             ariaLabel={t("header.selectChatRuntime")}
             className="personal-agent-select"
             icon={<Bot size={16} />}
             onChange={onSelectAgent}
-            options={agents.map((agent) => ({
+            options={[
+              ...(statusOnly ? [{ value: "", label: locale === "zh-CN" ? "选择执行器" : "Choose executor", disabled: true }] : []),
+              ...agents.filter((agent) => agent.agentId !== "status-only").map((agent) => ({
               disabled: !agent.available,
               label: `${agent.label}${agent.available ? "" : ` · ${t("header.agentUnavailable")}`}`,
               value: agent.agentId,
-            }))}
-            prefixLabel={t("header.chatRuntime")}
-            value={selectedAgentId}
-    />
-    {modelControl}
+            }))]}
+            prefixLabel={selectedGoal ? (locale === "zh-CN" ? "执行器" : "Executor") : t("header.chatRuntime")}
+            value={statusOnly ? "" : selectedAgentId}
+    /> : null}
+    {agents.some((agent) => agent.agentId === "status-only") ? <button type="button" className="personal-icon-button personal-status-mode"
+      aria-pressed={statusOnly} aria-label={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`} title={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`}
+      onClick={() => statusOnly ? onSelectAgent(!ordinaryConversation && managerChannelBinding
+        ? managerChannelBinding.executor_endpoint
+        : agents.find((agent) => agent.agentId !== "status-only" && agent.available)?.agentId ?? "status-only") : onSelectAgent("status-only")}>
+      <Eye size={16} />{statusOnly ? t("header.statusOnlyAgent") : null}
+    </button> : null}
+    {/* The steward's machine binding owns its model; Goal defaults cannot label it. */}
+    {!statusOnly && ordinaryConversation ? <ChatModelMenu key={`${selectedGoal?.goalId ?? workspaceGrantLabel ?? "steward"}:${selectedAgentId}`}
+      agentId={selectedAgentId} goalId={selectedGoal?.goalId} ordinary={ordinaryConversation}
+      model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
+      onModel={onSelectAgentModel} onEffort={onSelectAgentReasoningEffort}
+      onOpenDefaults={selectedGoal ? onOpenConversationSettings : undefined}/> : null}
   </>;
 
   const executionChipClass = managerExecutionUnavailable
@@ -206,8 +205,8 @@ export function ChannelHeader({
 
   // The steward channel binding describes the steward executor; a workspace
   // conversation runs on the selected runtime instead.
-  const stewardBindingVisible = !selectedGoal && !workspaceGrantLabel;
-  const scopeControl = !selectedGoal && managerChatOpen && conversationScope && !readOnlySourceLabel ? (
+  const stewardBindingVisible = !scopeUnavailable && !selectedGoal && !workspaceGrantLabel && !originalConversationTitle;
+  const scopeControl = !scopeUnavailable && !selectedGoal && managerChatOpen && conversationScope && !readOnlySourceLabel ? (
     <WorkspaceSelect
       ariaLabel={t("header.conversationScope")}
       className="personal-agent-select personal-scope-select"
@@ -218,12 +217,20 @@ export function ChannelHeader({
       value={conversationScope.value}
     />
   ) : null;
+  // Source continuation reports its immutable executor; ordinary conversation
+  // configuration remains with its own controls.
+  const sourceRuntimeControl = !originalConversationTitle || scopeUnavailable || agentWorkActive || readOnlySourceLabel
+    ? runtimeControl : <>
+      <span className="personal-read-only-source"><Bot size={15} />{selectedAgentId}</span>
+      <ChatModelMenu agentId={selectedAgentId} ordinary={false} readback={selectedAgentModelReadback}
+        model={selectedAgentModelId} effort={selectedAgentReasoningEffort} />
+    </>;
 
   return (
     <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)} data-workspace-scope={workspaceGrantLabel ? "true" : undefined}>
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
-        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenDetails={onOpenGoalDetails} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{t("header.manager")}</h1>}
+        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenDetails={onOpenGoalDetails} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{originalConversationTitle ?? t(scopeUnavailable ? "header.goalView" : "header.manager")}</h1>}
         {workspaceGrantLabel ? <p className="personal-channel-activity">{t("workspace.conversation", { grant: workspaceGrantLabel })}</p> : null}
         <div className="personal-manager-context">
         {stewardBindingVisible && managerChannelBinding ? (
@@ -244,10 +251,9 @@ export function ChannelHeader({
         {stewardBindingVisible && (managerRuntime || managerExecutionDefaultReason) ? <details className="personal-runtime-details" open={managerRuntime != null && managerRuntime.status !== "ready" ? true : undefined}><summary>{locale === "zh-CN" ? "运行环境" : "Execution environment"}</summary>
         {!selectedGoal && managerRuntime ? (
           <p>{managerRuntime.status === "ready"
-            ? t("header.managerRuntime", {
-              profile: managerRuntime.runtime_profile,
-              sandbox: managerRuntime.sandbox,
-            })
+            ? t(managerRuntime.runtime_profile === "trusted_owner"
+              ? "header.managerRuntimeTrusted"
+              : "header.managerRuntimeRestricted")
             : t("header.managerRuntimeFallback", {
               profile: managerRuntime.runtime_profile,
               sandbox: managerRuntime.sandbox,
@@ -278,12 +284,12 @@ export function ChannelHeader({
         </nav>
         {runtimeControl}
         </div>
-      ) : (
+      ) : !scopeUnavailable ? (
         <nav aria-label={t("header.managerView")} className="personal-goal-tabs">
           <button aria-current={!managerChatOpen ? "page" : undefined} onClick={onReturnManagerHome} type="button">{t("header.managerOverview")}</button>
           <button aria-current={managerChatOpen ? "page" : undefined} onClick={onOpenManagerChat} type="button">{t("header.chat")}</button>
         </nav>
-      )}
+      ) : null}
       <div className="personal-channel-actions">
         {selectedGoal && onOpenAllWork ? <button type="button" className="personal-icon-button goal-all-work-trigger" aria-label={locale === "zh-CN" ? "打开全部工作" : "Open all work"} aria-expanded={allWorkOpen} aria-haspopup="dialog" onClick={onOpenAllWork}><List size={17} aria-hidden/></button> : null}
         {selectedGoal && !selectedGoal.loadState && onRequestGoalLifecycle ? (
@@ -293,10 +299,11 @@ export function ChannelHeader({
           <button aria-label={t("header.goalSettings")} title={t("header.goalSettingsDescription")} className="personal-icon-button personal-goal-settings-action" onClick={onOpenGoalCapabilities} type="button"><SlidersHorizontal aria-hidden size={17} /></button>
         ) : null}
         {scopeControl}
-        {!selectedGoal ? runtimeControl : null}
+        {!selectedGoal ? sourceRuntimeControl : null}
         {onRefresh ? (
           <span className={`personal-refresh-control is-${refreshState ?? "idle"}`}>
-            {refreshState === "loading" ? <small>{t("header.refreshing")}</small> : refreshState === "done" ? <small>{t("header.refreshDone")}</small> : refreshState === "error" ? <small>{t("header.refreshFailed")}</small> : null}
+            {refreshState === "loading" ? <small>{t("header.refreshing")}</small> : refreshState === "error" ? <small>{t("header.refreshFailed")}</small> : null}
+            <span className="personal-sr-only" role="status">{refreshState === "done" ? t("header.refreshDone") : null}</span>
             <button aria-label={refreshState === "loading" ? t("header.refreshing") : t("header.refresh")} className="personal-icon-button" disabled={refreshState === "loading"} onClick={onRefresh} type="button">
               <RefreshCw className={refreshState === "loading" ? "is-spinning" : undefined} size={17} />
             </button>

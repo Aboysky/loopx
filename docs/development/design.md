@@ -48,6 +48,23 @@ Judge the whole viewport, including information repeated across components.
 Before implementation, inventory the visible elements and their value. Keep
 conversation, results, and decisions prominent; consolidate routine activity;
 offer one-step access to relevant controls and details without a chain of pages.
+Start from the owner's original task and minimize the whole job they must do.
+Agent preparation should absorb discovery, identifiers, formatting and execution
+detail within existing authority. The owner supplies missing intent and real
+decisions. Compare a smaller lawful route before justifying individual controls:
+a sequence of locally useful fields can still assign the wrong work to the user.
+Reuse prior scoped authorization; explain any remaining command effect at its
+decision point. Advanced configuration must remain optional for an ordinary task
+when an Agent can prepare the same reviewable plan.
+Count mandatory interaction rounds from the original intent to a usable result,
+including preparation outside the visible page. One round is one user statement,
+choice or confirmation required to continue; merging buttons does not merge
+decisions. Most ordinary capabilities should complete in one round. With intent
+and scoped authorization already present, aim for zero additional rounds.
+Two or more rounds need a concrete missing fact, consequential choice or authority
+boundary for each extra round. High value may justify deeper collaboration, but
+does not itself justify mandatory friction. Keep voluntary exploration separate,
+and record navigation, copying, waiting and recovery effort alongside round count.
 Do not collapse failures, missing authority, uncertain observations, or actions
 requiring judgment into a reassuring success summary. Read models select facts;
 they must not invent execution, acceptance, or completion from prose or counts.
@@ -75,14 +92,64 @@ Owner-facing state follows four rules:
 Review realistic populated, quiet, blocked, and unavailable states on desktop
 and mobile. Show before/after views, name what earns attention and what was
 consolidated, and verify keyboard access and return to the original context.
-Record this in the PR's visual evidence section. The repository first-screen
-preview approval gate still applies.
+Put the actual first viewport directly in the PR description's visual evidence
+section, with its revision and data/build boundary. Follow the repository's
+[First-Screen Review Evidence](../../AGENTS.md#first-screen-review-evidence):
+ordinary authorized work reuses prior direction without another user approval;
+refresh evidence when the visible result changes.
 
 Review proportions as well as typography. Within a workspace view, align the
 greeting, summaries, work list, and composer to one content frame. An overview
 board may be wider than a conversation's reading column. Keep ready-state
 runtime details alongside their model context, allow failures to expand, and
 size empty summaries to their content rather than filling large decorative cards.
+
+### Explanations On Demand
+
+The primary view presents the result, its unit and scope, material uncertainty,
+and the next useful action. A truthful interface does not need to repeat its
+methodology in every component. Review the whole viewport for repeated scope,
+source, method and limitation paragraphs before adding another note.
+
+- Keep the smallest qualifier needed to read a value correctly beside it:
+  selected sample, partial window, uncalibrated, unknown or historical. Keep
+  failed reads, missing authority and consequences such as separate model usage
+  visible at the affected value or action. Never hide these in help.
+- Put optional definitions, denominator rules, sampling caveats and chart-reading
+  explanations in one nearby information disclosure per related region. Prefer
+  one shared explanation to an icon beside every metric or repeated footnotes.
+  Put long provenance and diagnostic fields in the existing collapsed details.
+- The same help must work on hover, keyboard focus and click/tap. It must remain
+  readable when the pointer enters it, dismiss with Escape or an outside click,
+  fit a narrow viewport, and not trigger the operation it explains. Do not rely
+  on a native `title` alone, color alone or hover-only access.
+- After loading a requested source or detail asynchronously, bring the mounted
+  content into view and move keyboard focus there. Opening its parent must not
+  compete for that focus. Closing returns to the exact originating control;
+  a late response after closing or changing scope must not reopen the detail.
+  Check immediate and delayed responses on desktop and narrow screens.
+- Preserve actual unknowns, denominators, negative results and evidence links.
+  Reduce explanatory noise without replacing missing evidence with a reassuring
+  summary. Keep chart keys that are necessary to decode the marks visible.
+- When a metric applies to fewer items than the displayed sample, identify
+  explicitly ineligible items in its existing detail and show their count beside
+  the metric. Unknown eligible judgments stay in the denominator. Missing item
+  metadata or an arithmetic count gap cannot establish ineligibility.
+- Review a metric group as one composition: prominent values, body-size names,
+  one shared unit/denominator explanation and only nonzero exceptions beside
+  the affected value. Avoid six repeated status lines, all-zero qualifiers and
+  per-cell footnotes. On wide screens, use a compact value band so the related
+  graph or result remains nearby; reflow on narrower screens. Merge optional
+  source, method and cost material into the existing disclosure where practical.
+
+For example, research metrics can show “19 episodes · purposive sample ·
+uncalibrated” once, with a nearby explanation of yes/eligible counts and unknowns.
+They should not repeat a whole-study exclusion paragraph above and below the
+same six values. A source-read failure still appears directly beside the values.
+
+中文要点：结果、单位、必要范围标记与异常直接可见；范围、方法、分母和读图的重复
+解释就近按需展开。整页去重，保留图例及真实未知；悬浮、键盘和触屏使用同一入口，
+不能把失败、权限缺失或额外用量藏进提示。
 
 ## Source Of Truth
 
@@ -503,6 +570,8 @@ parity is required. Framework migration alone must not alter the UI.
 - [ ] Marketing and application controls use the correct shape language.
 - [ ] Desktop and mobile layouts are validated.
 - [ ] Keyboard, focus, contrast, and reduced-motion behavior are preserved.
+- [ ] Repeated explanations are consolidated; help works on hover, focus and tap,
+      while material qualifiers, failures and action consequences remain visible.
 - [ ] Owner decisions complete in place with a readback; live treatment is
       backed by an observed active fact; protocol identifiers are not primary copy.
 - [ ] English and Chinese content remain usable.

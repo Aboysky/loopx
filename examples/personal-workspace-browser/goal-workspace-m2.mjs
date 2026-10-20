@@ -3,7 +3,7 @@ import {resolve} from "node:path";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {readFile} from "node:fs/promises";
 import {openWorkspacePage} from "./scenario-context.mjs";
-import {installShowcaseWorkspace, openShowcaseGoal, showcaseGoalId} from "./showcase-workspace.mjs";
+import {deliveryReadFixture, installShowcaseWorkspace, openShowcaseGoal, showcaseGoalId} from "./showcase-workspace.mjs";
 
 export const goalWorkspaceM2Scenario = {
   id: "goal-workspace-m2",
@@ -36,11 +36,11 @@ export const goalWorkspaceM2Scenario = {
       };
       await page.route("**/api/chat/delivery-review?*", async route => {
         if (!scale) {await route.fallback(); return;}
-        await route.fulfill({json: {ok:true, goal_id:showcaseGoalId, observed_at:new Date().toISOString(), acceptance:null, graph:null,
+        await route.fulfill({json: deliveryReadFixture({ok:true, goal_id:showcaseGoalId, observed_at:new Date().toISOString(), acceptance:null, graph:null,
           goal_map:{schema_version:"goal_task_map_v0",mode:"read_only",goal_id:showcaseGoalId,
             limits:{node_limit:200,emitted_node_count:200,omitted_node_count:0,source_truncated:false,missing_endpoint_count:0,cycle_edge_count:0,topology_complete:true},
             nodes:many.map((todo,i)=>({node_id:todo.todo_id,kind:"deliverable",title:todo.text,state:i===0?"blocked":"open",depth:i%2,refs:{todo_ids:[todo.todo_id]}})),
-            edges:many.filter((_,i)=>i%2===1).map(todo=>({edge_id:`edge-${todo.todo_id}`,from_node_id:todo.todo_id,to_node_id:`scale-${String(Number(todo.todo_id.slice(6))-1).padStart(3,"0")}`,relation:"depends_on",enforcement:"typed_condition",reason:"Recorded synthetic completion condition"}))}}});
+            edges:many.filter((_,i)=>i%2===1).map(todo=>({edge_id:`edge-${todo.todo_id}`,from_node_id:todo.todo_id,to_node_id:`scale-${String(Number(todo.todo_id.slice(6))-1).padStart(3,"0")}`,relation:"depends_on",enforcement:"typed_condition",reason:"Recorded synthetic completion condition"}))}})});
       });
       page.on("request", request => {if (request.method() !== "GET" && /actions|quota|validat/.test(request.url())) writes.push(request.url());});
     }});
@@ -76,21 +76,37 @@ export const goalWorkspaceM2Scenario = {
       await now.locator('.work-map').waitFor();
       await now.getByRole('button',{name:'按负责人',exact:true}).click();
       await now.locator('[data-todo-id="showcase-reconcile"]').click();
+      await page.waitForURL(value => value.searchParams.get("todo") === "showcase-reconcile");
       await page.locator('.personal-drawer-close').click();
+      await page.waitForURL(value => !value.searchParams.has("todo"));
+      await page.locator('.personal-context-drawer').waitFor({state:"hidden"});
       await page.goBack({waitUntil:"domcontentloaded"});
+      // Back restores the task just closed, not a selection from an earlier view.
+      await page.waitForURL(value => value.searchParams.get("todo") === "showcase-reconcile");
       await page.locator('.personal-context-drawer').waitFor();
-      assert.equal(new URL(page.url()).searchParams.get("todo"), "showcase-map-columns");
-      await page.locator('.personal-drawer-close').click();
+      await now.locator('[data-todo-id="showcase-reconcile"][aria-pressed="true"]').waitFor();
+      assert.equal(await now.locator('[data-todo-id="showcase-reconcile"]').getAttribute('aria-pressed'),'true');
+      await page.goForward({waitUntil:"domcontentloaded"});
+      await page.waitForURL(value => !value.searchParams.has("todo"));
+      await page.locator('.personal-context-drawer').waitFor({state:"hidden"});
       assert.equal(writes.length,0,`Read-only navigation made an effect request: ${writes}`);
       await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-desktop.png'),animations:'disabled'});
       await page.setViewportSize({width:390,height:844});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
       await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-mobile.png'),animations:'disabled'});
-      const direction = page.locator(".goal-direction-content");
-      await direction.waitFor({state:"hidden"});
-      await page.getByRole("button",{name:"展开目标与条件",exact:true}).click();
-      await direction.waitFor({state:"visible"});
-      await page.getByRole("button",{name:"收起目标与条件",exact:true}).click();
+      // An enabled contract uses the native acceptance disclosure; the
+      // fallback direction button only exists without a contract or plan.
+      const inspection = page.locator(".goal-overview .delivery-check-inspection");
+      const criteria = inspection.locator(".goal-overview-criteria");
+      await page.locator(".goal-overview .delivery-acceptance-contract .goal-overview-objective").waitFor({state:"visible"});
+      await criteria.waitFor({state:"hidden"});
+      const summary = inspection.locator(":scope > summary");
+      await summary.focus(); await page.keyboard.press("Enter");
+      await criteria.waitFor({state:"visible"});
+      assert.equal(await inspection.evaluate(node => node.open), true);
+      await page.keyboard.press("Enter");
+      await criteria.waitFor({state:"hidden"});
+      assert.equal(await inspection.evaluate(node => node.open), false);
       const railTrigger = page.getByRole("button",{name:"打开全部工作",exact:true});
       await railTrigger.focus(); await page.keyboard.press("Enter");
       const railDialog = page.getByRole("dialog",{name:"全部工作",exact:true});
@@ -163,7 +179,7 @@ async function verifyRemoteSelection(browser, url) {
     await page.route("http://127.0.0.1:8978/status.json*", route => route.fulfill({json:snapshot}));
     page.on("request",request => {
       const parsed = new URL(request.url());
-      if (parsed.port === new URL(url).port && /\/api\/chat\/(todo\/detail|completed-todos|delivery-review|goal-results)/.test(parsed.pathname)) localOwnerReads.push(parsed.pathname);
+      if (parsed.port === new URL(url).port && /\/api\/chat\/(todo\/detail|completed-todos|delivery-review|goal-results|codex-attached)/.test(parsed.pathname)) localOwnerReads.push(parsed.pathname);
     });
   }});
   try {
@@ -172,8 +188,14 @@ async function verifyRemoteSelection(browser, url) {
     assert.equal(await page.locator(".personal-context-drawer").count(),0,"An unknown remote Todo must not acquire a local request reader");
     await page.getByRole("status").filter({hasText:"链接中的任务未出现在此来源的当前快照中"}).waitFor();
     assert.equal(await page.getByRole("button",{name:"添加任务",exact:true}).count(),0);
+    assert.equal(await page.locator('.goal-owner-conversation').count(),0,"A remote snapshot cannot open a local Agent conversation");
     await page.getByRole("region",{name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
     assert.equal(await page.locator(".work-map").count(),0,"Remote selection cannot reuse a local map");
+    target.searchParams.set("view", "conversation");
+    target.searchParams.set("workAgent", "worker");
+    await page.goto(target.href);
+    await page.getByRole("status").filter({hasText:"此来源仅提供状态快照，无法在这里读取或回复原会话。"}).waitFor();
+    assert.equal(await page.getByRole("region", {name:"Agent 工作会话",exact:true}).getByRole("textbox").count(),0);
     assert.deepEqual(localOwnerReads,[],"Remote deep link caused local owner reads");
   } finally {await session.close();}
 }

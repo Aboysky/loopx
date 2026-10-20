@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import zlib
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -20,7 +20,6 @@ from ..todos.frontier_deadline import build_frontier_recheck_plan
 from .arbitration import (
     SchedulerArbitration,
     SchedulerDisposition,
-    build_scheduler_arbitration,
 )
 from .app_automation_compat import (
     CODEX_APP_SCHEDULER_ACK_HINT_SCHEMA_VERSION,
@@ -773,7 +772,14 @@ class _SchedulerHintBuilder:
             "local_scheduler_unchanged_poll_limit": cli_limit,
             "claude_code_loop_unchanged_poll_limit": claude_limit,
         }
-        reset_profile_snapshot = reset_profile_snapshot_override or profile_snapshot
+        # A deadline can shrink the allowed buckets without changing the
+        # monitor/phase identity. Bind the effective progression so the typed
+        # commit owner sees an identity reset, rather than an index regression.
+        # Elapsed time within the same buckets must not reset backoff.
+        reset_profile_snapshot = {
+            **(reset_profile_snapshot_override or profile_snapshot),
+            "app_automation_progression_minutes": app_cadence_progression,
+        }
         (
             reset_token,
             identity_signature,
@@ -1174,6 +1180,7 @@ def _monitor_bounded_wait_profile(
     cadence_class: str,
     default_interval_minutes: int,
     max_interval_minutes: int,
+    unchanged_poll_limit: int | None = 3,
 ) -> dict[str, Any]:
     """Cap a wait profile to the tightest continuous-monitor wakeup."""
 
@@ -1199,8 +1206,8 @@ def _monitor_bounded_wait_profile(
             "app_automation_initial_rrule": rrule_for_minutes(initial_interval),
             "app_automation_max_interval_minutes": max_interval_minutes,
             "unchanged_poll_backoff_multiplier": 2,
-            "local_scheduler_unchanged_poll_limit": 3,
-            "claude_code_loop_unchanged_poll_limit": 3,
+            "local_scheduler_unchanged_poll_limit": unchanged_poll_limit,
+            "claude_code_loop_unchanged_poll_limit": unchanged_poll_limit,
             **monitor_plan["reset_profile"],
         }
         if isinstance(monitor_plan, dict)
@@ -1296,7 +1303,7 @@ def build_scheduler_hint(
     payload: dict[str, Any],
     *,
     user_action_required: bool = False,
-    agent_scope_frontier_actions: Collection[str] = (),
+    arbitration: SchedulerArbitration | None = None,
     include_detail: bool = False,
     codex_app_scheduler_state: dict[str, Any] | None = None,
     available_capabilities: Any = None,
@@ -1440,11 +1447,8 @@ def build_scheduler_hint(
         if isinstance(capability_gate.get("available"), list)
         else []
     )
-    agent_scope_action_set = {str(value) for value in agent_scope_frontier_actions}
-    arbitration = build_scheduler_arbitration(
-        payload,
-        agent_scope_frontier_actions=agent_scope_action_set,
-    )
+    if arbitration is None:
+        raise ValueError("scheduler arbitration must come from the interaction projection")
     automatic_cadence_wait = _automatic_cadence_wait_eligibility(payload)
     if (
         automatic_cadence_wait is not None
@@ -1598,6 +1602,36 @@ def build_scheduler_hint(
         )
 
     if arbitration.disposition == SchedulerDisposition.AGENT_SCOPE_WAIT:
+        if arbitration.scheduled_recheck_after_seconds is not None:
+            horizon = max(1, math.ceil(arbitration.scheduled_recheck_after_seconds / 60))
+            progression = sorted({min(bucket, horizon) for bucket in (10, 20, 30, 60)})
+            return builder.build(
+                action="backoff_until_state_change",
+                cadence_class="agent_scope_wait",
+                reason=(
+                    "an automatic clock-backed successor is pending; keep quiet rechecks "
+                    "until its scheduled instant, then follow fresh admission gates"
+                ),
+                codex_interval=progression[0],
+                codex_max=progression[-1],
+                cli_limit=None,
+                claude_limit=None,
+                cadence_progression_override=progression,
+            )
+        if arbitration.pending_dependency_wait:
+            return builder.build(
+                action="backoff_until_state_change",
+                cadence_class="agent_scope_wait",
+                reason=(
+                    "an exact successor has a registered pending dependency; keep quiet "
+                    "source rechecks and follow fresh admission gates when it changes"
+                ),
+                codex_interval=10,
+                codex_max=60,
+                cli_limit=None,
+                claude_limit=None,
+                cadence_progression_override=[10, 20, 30, 60],
+            )
         return builder.build(
             action="backoff_until_reassigned",
             cadence_class="agent_scope_wait",
@@ -1615,11 +1649,13 @@ def build_scheduler_hint(
         )
 
     if arbitration.disposition == SchedulerDisposition.MONITOR_WAIT:
+        unchanged_limit = None if arbitration.pending_dependency_wait else 3
         monitor_profile = _monitor_bounded_wait_profile(
             payload,
             cadence_class="monitor_wait",
             default_interval_minutes=MONITOR_WAIT_HOST_FLOOR_MINUTES,
             max_interval_minutes=60,
+            unchanged_poll_limit=unchanged_limit,
         )
         return builder.build(
             action="backoff_until_material_transition",
@@ -1628,8 +1664,8 @@ def build_scheduler_hint(
                 "monitor-only quiet polls should remain alive but use a slower "
                 "cadence until material evidence, a blocker, or replan obligation appears"
             ),
-            cli_limit=3,
-            claude_limit=3,
+            cli_limit=unchanged_limit,
+            claude_limit=unchanged_limit,
             **monitor_profile,
         )
 

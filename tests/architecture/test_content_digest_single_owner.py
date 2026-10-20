@@ -161,6 +161,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.benchmark_toolkit.integrity",
     "loopx.capabilities.benchmark_toolkit.runtime_continuity",
     "loopx.capabilities.benchmark_toolkit.study_projection",
+    "loopx.capabilities.benchmark_toolkit.trajectory_assessment_store",
     "loopx.capabilities.content_ops.item_lifecycle",
     "loopx.capabilities.deep_research.runtime",
     "loopx.capabilities.issue_fix.outcome_projection",
@@ -182,6 +183,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.collaboration.inbox",
     "loopx.control_plane.collaboration.links",
     "loopx.control_plane.collaboration.peers",
+    "loopx.control_plane.collaboration.request_control_source",
     "loopx.control_plane.collaboration.result_files",
     "loopx.control_plane.coordination.local_authority_shadow_history",
     "loopx.control_plane.coordination.shadow_management",
@@ -191,6 +193,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.goals.deletion_service",
     "loopx.control_plane.goals.goal_amendment_proposal",
     "loopx.control_plane.projects.registry_codec",
+    "loopx.control_plane.status.goal_source",
     "loopx.control_plane.testing.cli_output_semantics",
     "loopx.control_plane.testing.release_commit_qualification",
     "loopx.control_plane.todos.completion_result",
@@ -199,24 +202,31 @@ CONSUMER_MODULES = (
     "loopx.control_plane.todos.completion_validation_store",
     "loopx.control_plane.todos.machine_section_projection",
     "loopx.control_plane.turn_driver.codex_sessions",
+    "loopx.control_plane.turn_driver.operation_requests",
     "loopx.control_plane.work_items.governed_transition_proposal",
     "loopx.control_plane.work_items.progress_review_policy",
-    "loopx.control_plane.work_items.task_lease",
     "loopx.domain_packs.issue_fix",
     "loopx.extensions.lark.document_comment_provider",
     "loopx.extensions.openviking_semantic_preference.history_export",
     "loopx.extensions.presentation",
+    "loopx.hosts.checkpoint_retention",
+    "loopx.hosts.codex_checkpoint",
     "loopx.presentation.chat_bundle",
     "loopx.presentation.static_site",
 )
 
 # A consumer that hands `re` a pattern this file cannot fold. Folding reads
-# every construction except the declared marker reader, which is fenced below.
+# every construction except the declared readers, each fenced below.
 UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {
     "loopx.capabilities.benchmark_toolkit.integrity": (
         "_marker_present matches an escaped caller-supplied filename/token inside "
         "command text with explicit basename boundaries; it does not validate a "
         "whole-value digest. Its sole dynamic regex is fenced to that reader."
+    ),
+    "loopx.control_plane.testing.cli_output_semantics": (
+        "authoring_input_observations matches an escaped, local literal instruction "
+        "inside a complete Markdown Todo line, not a whole-value digest. A focused "
+        "fence pins its sole unreadable call, surrounding grammar and literal input."
     ),
 }
 
@@ -1227,6 +1237,35 @@ def test_every_declared_unreadable_consumer_site_is_still_there() -> None:
         assert unreadable, f"{dotted} has no unreadable construction left to declare"
 
 
+def test_cli_output_dynamic_prose_pattern_is_fenced_to_its_literal_question() -> None:
+    dotted = "loopx.control_plane.testing.cli_output_semantics"
+    module = importlib.import_module(dotted)
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    reader = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "authoring_input_observations")
+    calls = [node for node in ast.walk(reader) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+             and (node.func.value.id, node.func.attr) == ("re", "search")]
+    assert len(calls) == 1
+    unreadable = [site for site in _module_of(dotted)["constructions"] if not site["readable"]]
+    assert [site["line"] for site in unreadable] == [calls[0].lineno]
+    # Fixed surrounding Markdown grammar makes this a full prose observation,
+    # never a whole-value digest validator. The escaped middle must stay local
+    # literal text, not owner.pattern, a parameter or a provider's regex.
+    pattern = calls[0].args[0]
+    assert isinstance(pattern, ast.BinOp) and isinstance(pattern.op, ast.Add)
+    assert isinstance(pattern.right, ast.Constant) and pattern.right.value == "$"
+    assert isinstance(pattern.left, ast.BinOp) and isinstance(pattern.left.op, ast.Add)
+    assert isinstance(pattern.left.left, ast.Constant)
+    assert pattern.left.left.value == r"^3\. Todos: [^\n]*"
+    escaped = pattern.left.right
+    assert ast.unparse(escaped) == "re.escape(first_delivery_guidance)"
+    literal = next(node.value for node in reader.body if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "first_delivery_guidance"
+                           for target in node.targets))
+    assert isinstance(literal, ast.Constant) and isinstance(literal.value, str) and literal.value
+
+
 # --- layer 4: behaviour, per spelling and per surface -------------------------------------
 
 
@@ -1556,6 +1595,37 @@ def test_inbox_linked_references_keep_their_two_shapes(tmp_path: Path) -> None:
         {},
         "links_unreadable_or_conflicting",
     )
+
+
+def test_turn_agenda_addresses_keep_the_bare_digest_contract(tmp_path: Path) -> None:
+    from loopx.control_plane.collaboration.inbox import ENTRY_SCHEMA, _hash, read_inbox_transaction
+
+    target = {"goal_id": "digest-fixture", "agent_id": "worker"}
+    folder = tmp_path / ".local" / "manager-context" / "entries" / _hash(target)
+    folder.mkdir(parents=True)
+    rejected = (HEX64.upper(), HEX64[:-1], HEX64 + "0", "g" * 64,
+                "sha256-" + HEX64, HEX64 + ".stop")
+    # Keep each spelling separate on case-insensitive filesystems: an uppercase
+    # negative must not overwrite a valid lowercase request's record bytes.
+    for stem, accepted in [*((item, True) for item in BARE_ACCEPTS),
+                           *((item, False) for item in rejected)]:
+        for path in folder.iterdir():
+            path.unlink()
+        (folder / f"{stem}.json").write_text(json.dumps({
+            "schema_version": ENTRY_SCHEMA, **target, "request_id": stem,
+            "source_id": "synthetic-source", "message": "Inspect the fixture.",
+        }), encoding="utf-8")
+        (folder / f"{HEX64}.txt").write_text("{}", encoding="utf-8")
+        before = {path.name: path.read_bytes() for path in folder.iterdir()}
+        result = read_inbox_transaction(tmp_path, {
+            "operation": "turn_context", **target,
+            "read_command": "loopx manager-inbox read",
+        })["unfinished_delegations"]
+        assert {item["request_id"] for item in result["items"]} == ({stem} if accepted else set())
+        assert result["incoming_count"] == int(accepted)
+        assert result["scan_complete"] is True
+        assert result["unavailable_count"] == 0
+        assert {path.name: path.read_bytes() for path in folder.iterdir()} == before
 
 
 def test_outcome_projection_fingerprint_requires_the_envelope() -> None:

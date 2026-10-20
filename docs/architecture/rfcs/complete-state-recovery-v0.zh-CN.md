@@ -2,7 +2,7 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** 提案；备份创建和仅配置的隔离恢复已存在，完整状态验证与重新激活尚不存在
+- **交付成熟度：** 部分实现：M1 完整归档验证与 File/SQLite 隔离检查已实现；受控重新启用仍开放
 - **作者 / 负责人：** 控制面状态、可靠性及受影响领域的维护者
 - **创建：** 2026-10-08
 - **最近规范修订：** 2026-10-08
@@ -19,6 +19,65 @@
 RFC 只授权有界实现切片，不授权真实恢复、provider 晋升、凭据转移或默认值变更。
 
 ## 1. 决策摘要
+
+### 当前实现检查点
+
+M1 的有界路径已包含增量 `backup-state verify`、loopback HTTP 上传及不可变报告读回，
+以及打包设置/能力中心交互。真实生产归档在原来源不可达后，通过既有配置与选定的
+File/SQLite Todo/history owner 检查。v0 缺少完整捕获/owner 元数据，因此所有审计仍为
+held，未知状态不改称可恢复，执行权限始终为 false。限制与回退见[备份指南](../../reference/configuration-backup.md#inspect-a-complete-backup-without-activating-it)。
+报告保留实际归档/普通文件字节数及归档处理、owner 读取耗时；历史读回不重新计时。
+备份指南记录了独立的真实容量案例，包括精确成员/历史边界及 128 个 File/SQLite Goal；
+历史超限在发布前拒绝。M1 的运行资格仍不完整：第 12 节容量决定已记录，多个上限组合的
+最坏情形及更广的平台/provider 资格继续开放。
+本检查点不证明 M2/M3、live adoption、远端 provider 或 G1 团队验收，不重写原身份或回执。
+
+
+### writer 截止后的交付（2026-10-16）
+
+已合入的 [R5/T4 截止](loopx-overall-roadmap-v0.zh-CN.md#post-6396-delivery-plan)
+简化当前写入归属，不提供更强的捕获 profile 或激活回执。复用 M1 verifier、安全
+解包和可读审计；下一实现沿既有 M2，先做一个本地 File／SQLite profile：记录必要
+组件 owner revision 与实际捕获一致性，覆盖并发／静止／crash／降级；v0 继续可读，
+不完整审计继续 held。
+
+随后复用 [#5206](https://github.com/loopx-project/loopx/issues/5206) 的 Goal 生命周期
+工作交付 M3 单 Goal 打包恢复。演练前冻结 owner 支持、源／目标 fence、替代延续或
+新生命周期决定、effect 处置和 RPO/RTO。原操作、后写和不支持／未知 effect 各自归
+原 owner；复制 lease 或 provider 身份不能激活目标。在发起产品入口返回独立验收的
+未完成工作结果，记录已恢复、丢失／未知工作和人工介入。服务及额外平台 profile
+继续由 M4/M5 承接。本协调检查点未实现 M2/M3，也不启动恢复或激活。
+
+<a id="planned-agent-transfer"></a>
+<a id="in-place-major-upgrade"></a>
+
+### 2.0 原地迁移式升级：已有原子能力与 Agent prompt
+
+本次迁移指**现有 LoopX 1.x 工作原地升级到 2.0**。保持同一机器、项目、
+registry/runtime 路由及 Goal/Agent 身份，由用户的 Agent 配合[可复制升级 prompt](../../guides/agent-upgrade.md)
+组合现有操作。本次不交付跨环境搬迁、会话转移、专用迁移 executor 或 UI。
+
+Agent 识别安装归属及各 Goal 的真实 provider、格式和所有权策略，通过原 owner
+停止受影响旧写方、对账未完成操作并结清获准处理的租约，先私有备份。沿安装 owner
+更新，并在改变 Goal 数据前用兼容工具校验备份。只执行必要变化，然后按当前准入
+继续原工作。有效的已有配置保持选定；修改
+新 Goal 默认值不等于升级现有 Goal。
+
+| 实际升级需要 | 既有 owner／入口 |
+| --- | --- |
+| 安装包／runtime 与 Host 材料 | 既有安装 owner 和 `update check/plan/apply`；保持状态路由并验证实际激活层。 |
+| 旧 canonical authority 格式 | `authority-archive upgrade`；对现有 store 备份、校验和格式升级，不切换 provider。 |
+| 尚用 Markdown authority 的 Goal | `coordination-shadow inspect-source/prepare-import/apply-import`；为同一已注册 Goal 向审核的 provider 导入完整记录。 |
+| 历史 `legacy` 所有权策略 | `handoff-mode plan-migration/migrate`；保留归属与已结算历史，明确选择 `soft_claim` 或 `hard_lease`。 |
+
+用普通 1.4.2 安装在同一隔离环境、同一路径升级到固定 2.0 候选，读回完整活动／
+归档记录、关系、配置和原 receipts，继续原任务有用的一步并验证结果。覆盖相关拒绝
+及原 operation 恢复，不重复副作用、不覆盖后写。只打磨既有 owner 的可复现断点。
+回退二进制不等于回退数据，保留对应备份／恢复与升级后新写的边界。
+
+下文 M2/M3 灾难恢复独立保留。原地升级不要求新 Goal lifetime，也不证明跨机
+搬迁、原源不可用恢复、所有 Host 或 D2/D3 合格。本提案不授权活跃升级、发布、
+凭证转移或付费执行。
 
 ### 首个支持的用户结果
 
@@ -152,6 +211,42 @@ reconciliation 和 readback。任何单独 owner 都不能安全推断其他 own
 | [Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | 拥有 effect identity、settlement、未知结果 readback 和 replay 决策。恢复流程只向其路由原始证据。 |
 | [配置备份](../../reference/configuration-backup.md) | 保持配置处于隔离 checkpoint。Adoption 继续通过 machine 与 Goal configuration owner 完成。 |
 
+### 完整备份检查与研究 checkpoint 的复用
+
+已合入的[研究 checkpoint 契约](../../reference/research-checkpoint.md)面向独立
+准入的 Goal／会话研究分支；完整备份检查面向原来源可能已不可用的操作者。
+当前两种格式不能互相交给对方 verifier。两者均保留原 owner 权威；研究分支允许
+来源继续存在，灾难替换则必须在准入新工作前排除旧 writer。
+
+| 边界 | 既有 owner 与复用 | 保留的分工 |
+| --- | --- | --- |
+| 状态清单 | `state_backup.build_state_backup_plan`；checkpoint `_loopx_state_components` 已为单 Goal 调用它 | 完整归档可含多 Goal；checkpoint 拒绝不完整或捕获期间移动的 scoped 清单 |
+| SQLite 捕获 | 两种创建路径共用既有 `snapshotSqliteDatabase` owner | M1 离线读已捕获库，不能将不可信恢复库快照为当前 authority |
+| 摘要 | 两个 typed owner 共用 `canonicalAuthoritySha256` 表达结构身份，文件以字节摘要绑定 | 归档／外部／内嵌清单与 checkpoint witness schema 不同；摘要相等不代表格式互通 |
+| 隔离与发布 | 归档 adapter 加 typed recovery owner；checkpoint `checkpoint_artifacts.ts` 管私有 staging 和清单验证 | 不可信 tar 的链接、header、展开需专用检查；目录捕获拒绝符号链接并检查来源移动。相似文件操作不等于重复决策 |
+| 历史回读 | M1 共用 canonical configuration/File/SQLite/Todo/history reader 和不可变 audit | Checkpoint 使用版本绑定的 Todo context、Explore event codec、native 会话历史；M1 可读报告不是可采用会话 |
+| 会话、知识与工作采用 | 既有 Goal lifetime、Codex session、Todo continuation、Explore、effect owner | Checkpoint 显式准入／采用；M1 不调用它们。Lease、quota、timer、credential、effect 保持历史状态 |
+
+有界重构审视结论：共用的清单、快照及摘要规则已经复用，M1 无需新增统一恢复服务
+或格式转换器；强并提取路径会掩盖输入检查差异。Python 保留 archive／Host adapter
+职责，共享决策留在 typed owner。这是源码契约审视，不是新执行的联合恢复验收。
+
+**M2 检查点：**在原 component/profile 验收内明确格式／版本、完整组件清单、已捕获
+owner revision 与捕获边界、provider 资格。未来衔接先隔离核验这些事实；v0 缺失事实
+仍为 unknown，不能从文件时间或 SQLite 可读性推断。保留 v0 历史 reader。
+
+**M3 检查点：**仅合格 profile 能从隔离核验进入当前 Goal／会话准入、知识采用及
+当前工作准入。复用上述 owner，重试保留来源摘要、目标身份与 operation 身份。
+中断采用需原 owner 回读／补偿；外部结果未知须按原身份对账。研究分支不证明排他
+替换。M1 不交付格式桥接或自动激活。
+
+原 M3 演练即联合验收：普通 Goal 先完成部分工作并留下未完成 Todo，来源不可用后，
+经 packaged journey 预览找回／历史／未知工作、取得 owner 准入、继续未完成工作，
+并独立检查结果。覆盖缺失／损坏组件、版本／provider 拒绝、捕获移动、过期身份、
+重试及采用中断，证明不复活旧权限、不泄露私有数据。这属于 M2/M3 证据，不新增为
+M1 全恢复前置条件。M1 原 Settings 入口展示可读任务／历史及 hold；后续阶段合格前
+不能提供看似可用的继续执行动作。
+
 ## 4. 当前系统契约
 
 在指定基线上，`loopx/state_backup.py` 会发现 runtime root、项目 `.loopx` 状态、
@@ -164,10 +259,10 @@ digest 和大小，并排除 WAL/SHM sidecar。其他文件和目录可能在来
 因此，该命令只具备组件本地 SQLite snapshot 语义和 best-effort 文件捕获，不具备
 跨 owner point-in-time 保证。
 
-`loopx backup-state` 支持 plan 和 create。它不能验证已有归档、安全物化归档、
-分类状态 owner、reconcile reference 或重新激活 runtime。当前测试用 Python tar
-API 提取，验证 SQLite integrity 与内容，并检查发布／权限行为；它们没有建立
-restore 契约。
+设计基线中的 `loopx backup-state` 只有 plan/create，测试通过 Python tar API 手工解包。
+第 1 节记录的当前有界 M1 路径已通过 CLI 和打包 UI 提供验证后的隔离解包及既有 owner
+读回。它不采用身份、不处置 pending effect、不重新激活 runtime；这些后续 owner 边界
+仍保持开放。
 
 配置备份另行支持 export、verify 和 isolated restore。其 checkpoint 是惰性的：
 它不会创建 live registry、provider selection、writer fence、lease、Host session、
@@ -385,6 +480,67 @@ grant。协调器记录这些 receipt，但不能铸造或扩大它们。
 identity；Agent 永远不获得数据库访问权。NoKV 或其他 provider 在独立证明同一
 逻辑契约前不受支持。通用 filesystem copy 不能代替 provider profile。
 
+### 首个本地 profile 的捕获 owner 清单
+
+下列源码清单面向首个单 Goal File/SQLite profile，标明 M2 应从哪里取得证据，
+**不证明**某份备份已经包含全部必要组件。实际捕获必须解析所选 Goal 的 route 与
+dependency closure，区分 owner 确认不存在、来源不可读和来源无法识别，并让尚未
+解决的必要 owner 保持 hold。可选安装不意味着活跃 Goal 的依赖也是可选的。
+
+| 可变边界与既有 owner | 当前捕获／读回 | 尚缺的捕获或 adoption 证据 |
+| --- | --- | --- |
+| Registry route 与 machine/Goal 配置：[配置捕获 adapter](../../../loopx/capabilities/configuration_backup.py)、[类型化 checkpoint envelope](../../../loopx/control_plane/configuration_backup.ts)、[machine 配置 store](../../../loopx/capabilities/machine_configuration/store.py) | 完整备份比较各自 owner 实际解码的 registry 与 machine 配置字节和映射副本见证；缺失／不同副本、A → B → A，以及确认不存在却仍保留旧副本均拒绝发布。私有清单记录匹配 revision 与配置捕获区间。 | 仍需绑定 authority 和其他所有必要 owner 的独立区间与依赖；配置来源一致和有效 envelope 不证明跨 owner 一致性。 |
+| Goal 正文、vision 与权威材料引用：registry 解析的 active state、[vision checkpoint owner](../../../loopx/control_plane/goals/vision_checkpoint.ts) | 通过既有材料根目录边界复制 active-state 及已声明的本地 `kind=goal_doc` 文档；不递归解析哈希注册或正文链接。 | 保留完整 Goal 与绑定 revision 的必要 artifact，分类不可用依赖，并让派生 Markdown 投影服从其 owner。 |
+| Canonical 工作、租约及保留的 operation history：[本地 provider selection](../../../loopx/control_plane/coordination/local_authority_provider.ts)、[authority archive owner](../../../loopx/control_plane/coordination/authority_archive.ts)、[legacy writer fence](../../../loopx/control_plane/coordination/legacy_writer_fence.ts) | File head/history 位于同一原子 envelope；SQLite 使用[既有 physical snapshot owner](../../../loopx/control_plane/coordination/sqlite_backup.ts)。M1 只打开已有 store 并验证 head/history，不选定 live 目标。 | 绑定 provider/store identity、selector、fence、revision 与 cursor，取得 owner export 或合格 snapshot。组件本地一致性不证明跨 owner 一致性，也不使历史租约有效。 |
+| Quota 记账与 Turn settlement：[accounting artifact transaction](../../../loopx/control_plane/quota/accounting_artifact_transaction.ts)、[spend owner](../../../loopx/control_plane/quota/spend_commit.ts)、[Turn journal commit](../../../loopx/control_plane/turn_driver/turn_journal_effects.ts) | 保留 included runtime/project root 内文件；M1 不 reconcile 其 transaction lineage。 | 将已提交 receipt、index 与进行中 journal input 按精确 settlement identity 一起捕获；由原 owner 处置 replay 或歧义，避免第二次扣账。 |
+| Goal lifetime 与 session/execution binding：[source-session lifetime owner](../../../loopx/control_plane/goals/source_session_lifetime.ts)、[Chat session lifecycle](../../../loopx/control_plane/goals/chat_session_lifecycle.ts)、[execution identity](../../../loopx/control_plane/runtime/execution_identity.ts) | 沿既有路径 owner 保留实际 registry 旁按 Goal 身份定位的注册、重建与 Turn-settlement 目录；这些路径之外的原生 Host session store 不会被隐式捕获或采用。 | 解析真实入口的 owner、lifetime 与 generation，在原入口继续之前证明 stale executor 排除与合格 session recovery 路径。 |
+| Pending effect、delivery 与派生投影 outbox：[source Turn effect gate](../../../loopx/control_plane/goals/source_session_lifetime.ts)、[return-delivery classifier](../../../loopx/control_plane/collaboration/return_delivery.ts)、[authority shadow outbox](../../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts) | Included journal/outbox 只保留为字节，不推断外部结果或 replay 资格。 | 每个 effect/transport owner 处置 committed、absent 或 unknown 结果及精确 receipt；区分派生投影与外部 effect，未知外部结果保持 hold。 |
+| Scheduler 与可选 Host automation：[scheduler state owner](../../../loopx/control_plane/scheduler/state_store.ts)、[备份发现](../../../loopx/state_backup.py) | 可复制 runtime scheduler 文件及显式纳入的 Codex automation/skill 目录；保存的 timer 不是观察到的活跃 Host schedule。 | 绑定 cadence/reset identity，reconcile 真实 Host 状态并排除重复 admission；其他 Host/provider 状态需要独立、显式的捕获契约。 |
+| Knowledge/artifact、extension 状态与 credential：所选 Goal 的 material/provider owner，适用时包括 [decision-context recovery](../../../loopx/capabilities/decision_context/capture_recovery.py) | 只纳入发现的 root；physical SQLite snapshot 不证明 provider 语义完整性。私有原始字节可能含 credential。 | 枚举实际必要来源与 provider version，取得各自 export/verify 证据。Credential custody、轮换／撤销及外部访问仍归各自 owner；复制字节不授予访问权。 |
+
+[Source-session lifecycle 路径 owner](../../../loopx/control_plane/goals/source_session_registry_state.py) 现在为
+实际 writer 与完整备份发现提供同一注册、重建和 Turn-settlement 目录，关闭外部
+source registry 相邻日志的遗漏；不扫描其他 Goal 目录，也不把日志字节当作已处置
+的 effect。File/SQLite 真实 producer/verifier 的失源验证保留这些字节和本地声明的
+Goal 文档，同时维持 inert/held。M2 仍需完整 required-owner closure、独立区间／
+依赖和实际 material/provider export；哈希注册本身不是已捕获的源内容。
+
+**顺序反例与有界拒绝。** 旧 producer 可能先复制 registry A、再编码配置 B，
+同时通过所有字节与配置 digest 检查。当前完整 producer 保留解码实际使用的源
+快照，比较每份已映射普通文件副本；字节不同或缺少见证就停止发布。File/SQLite
+覆盖持续变化与 A → B → A 回退，事后重读 live 路径不能证明这类情况；路由到
+外部的源 registry 与缺少见证各有负向覆盖。
+
+发现到复制之间另有拒绝边界：旧计划生成后 registry 声明可能改变，导致归档
+保留旧文档、新原始 registry 和与新 registry 匹配的配置 checkpoint。新完整备份
+计划保留实际 registry 读取及固定归档路径，已复制成员也必须与发现时字节一致。
+路由、发现和配置复用既有 registry codec 的不可变读取选项。File/SQLite 验证
+拒绝、重新规划恢复及失源后的 inert 读回。这是保守的字节检查（无关 registry
+变更也要求重试），不等于必要材料 export、共享 owner epoch 或 M2 profile 合格；
+历史计划和有界迁移 producer 保持原契约。
+
+同一规则也覆盖既有 machine 配置 store owner：checkpoint 和见证使用同一次
+实际读取，包括确认不存在。变更、新建或删除配置都不能与已复制文件矛盾；
+不可用的 machine 来源拒绝捕获，不被标成不存在。自包含的本地链接复用归档内
+普通目标文件的见证；保留的 tar 链接不能伪装成 owner 确认不存在。这只关闭配置
+来源的 IO 边界；链接改向及 A → B → A 均按已保存的 route 核对。
+尚未关闭完整恢复集的 owner closure 或一致性 profile。
+
+历史 v0 归档仍可能包含上述组合。[恢复测试](../../../tests/test_state_recovery.py)
+显式构造保留较早原始 registry／工作、较晚 owner 验证配置的旧归档，不携带新的
+捕获声明。原来源消失后，M1 读回较早工作并保留 `held`、`legacy_best_effort`、
+`legacy_manifest_incomplete` 及无执行权边界。这保留历史读回，同时收紧新发布；
+不代表 `online` profile 或 M2 完整清单合格。保留上述生命周期日志也不授权
+通用备份绕过仅供生命周期操作的 `source_session_v1` 拒绝规则。
+
+下一实现切片归属既有 backup/recovery workflow：解析一个 Goal 的必要 owner
+closure，经各自 owner 捕获配置与 canonical authority，在任何 profile 合格前记录
+source interval/dependency。复用类型化 authority export/snapshot 与配置 envelope，
+Python 保留 filesystem/transport adapter 角色。通过真实 producer 与惰性 verifier
+覆盖并发写入、必要 owner 缺失和 dependency 移动；其他行在取得 owner 证据前显式
+保持 hold。M2 完整清单准入及各 profile 出口、M3 admission、冻结的 RPO/RTO 条件
+仍开放；本清单不新增平行 coordinator，也不改变这些条件。
+
 ### 实现归属与复用证据
 
 M3 实现必须在代码准入前记录 decision-owner matrix。对于每个 Goal identity、
@@ -580,6 +736,7 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 1. **M1 capacity 默认值。** Backup/reliability maintainer 必须在 M1 合并前冻结
    archive、expansion、entry、graph 与 verification-time 默认值。建议从当前
    backup-size telemetry 推导，并以显式 override fail closed。这不阻塞 RFC。
+   [下述决定](#m1-容量默认值决定)仅冻结现有本地惰性检查 profile；更广资格仍未完成。
 2. **精确 replacement continuity。** Goal lifecycle 与 provider owner 必须在 M3
    前决定是否允许任一本地 disaster-recovery profile 保留来源
    `goal_instance_id`。建议铸造新 lifetime，除非旧 authority 可证明已不可逆 fence，
@@ -591,6 +748,43 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 4. **Windows 与非 POSIX filesystem。** Platform owner 必须在声明 M3/M5 支持前
    验证 ACL、link、case、Unicode、sparse-file 和 atomic-publication 行为。M1 可以
    报告 platform unqualified，并在提取前停止。
+
+<a id="待决m1-容量默认值"></a>
+### M1 容量默认值决定
+
+**状态：已批准现有本地 POSIX File/SQLite 惰性检查 profile。** 2026-10-15，
+维护者 @huangruiteng [同意容量提案](https://github.com/loopx-project/loopx/pull/6279#issuecomment-6186241464)，
+所审提案版本为 `5751b050f616f156fa591aac5aa82627d8396fe0`；下表默认值在
+`7f62b602019429c05a03254ab2f30a3fafa32c6e` 保持不变。该决定只关闭第 12 节
+第 1 项，不授予合并权限，不批准多个上限组合的最坏负载、生产 SLO、其它平台／
+provider、捕获一致性、身份接纳或 M2/M3 重新启用。同条评论要求的 checkpoint
+复用审视记录于第 3 节，与容量同意是独立事项。
+
+当前上限由归档 adapter、typed audit owner 与隔离 worker 实施；
+[备份指南](../../reference/configuration-backup.md#measured-local-capacity-cases)
+保留原始源码版本、环境、测量值和复现命令。这些是历史证据，不是后续合并版本的实测。
+
+| 已批准的当前 profile 值 | 保护目标 | 已有证据及边界 |
+| --- | --- | --- |
+| 归档 128 MiB；展开 tar 流和普通文件总量 512 MiB；展开比例 2,000 | 发布前限制压缩输入、复制和解压放大 | 指南有接近上限的原生输入及超限拒绝。比例有源码限制，但未记录独立的精确比例边界测量。 |
+| 外部及内嵌清单各 16 MiB；扩展 tar header 每项 128 KiB、累计 16 MiB；JSON 深度 64 | 限制 metadata 解码与遍历 | 指南有外部清单 16 MiB／超一字节；恢复测试在解码前拒绝超大 PAX 变体及 sparse。最大结构化 metadata、累计 header 与深度组合未资格化。 |
+| 20,000 个 member；路径最多 64 段／1,024 字符／每段 255 UTF-8 字节；链接解析最多 40 跳 | 限制清单与路径处理，拒绝歧义或越界提取 | 指南有精确 20,000／20,001；测试覆盖路径、链接、碰撞与占用目标拒绝。并未测量所有路径形状的精确上限和最长链接链。 |
+| 128 个 Goal；128 个 SQLite 文件；每 Goal 20,000 个已提交事务 | 限制 owner 清单与完整历史读取，不截断历史 | 指南有原生 128／129 清单；`test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication` 覆盖 20,000／20,001。不保证 128 个满历史 Goal 同时符合其它上限与时限。 |
+| 当前 audit 结构最多 258 个 component、128 个 dependency link | 通过上述清单上限约束本 profile 的图 | 来自 1 个配置、最多 128 个数据库、最多 128 个各自依赖配置的 Goal，以及 1 个 unknown 余项。这不是通用 graph 上限或完整 mutable-owner 清单，通用 graph profile 不在本提案内。 |
+| 隔离 owner verifier：90 秒；V8 old-space 512 MiB；SQLite 进程级 heap 至多 64 MiB | 将数据库／owner 检查限制在共享 daemon 之外 | Timeout 清理和 SQLite view 拒绝测试覆盖隔离。Heap 有源码限制；整个进程树峰值内存、最坏耗时未资格化。该超时不是归档全流程 deadline 或 RTO。 |
+| 既有 transport：仅两项清单检查用 64 MiB private snapshot；普通 RPC 和 worker 输入 2 MiB；owner stdout 2 Mi 字符；历史 audit 输入 16 MiB | 限制传输和历史报告解码，不扩大普通 transport | 大清单 transport 与 audit 完整性测试覆盖路径。独立上限不能相加，也不保证任意最大 audit 均可发布。 |
+| 复制前目标剩余空间至少为普通文件复制字节数加 16 MiB | 发布前拒绝已知空间不足 | 有源码检查和失败清理测试；不保证抵御并发磁盘消耗，也不证明最坏空间预留成功。 |
+
+源码 owner 为 [`state_recovery_io.py`](../../../loopx/control_plane/state_recovery_io.py)、
+[`state_recovery.ts`](../../../loopx/control_plane/state_recovery.ts) 和
+[`state_recovery_worker.ts`](../../../loopx/control_plane/state_recovery_worker.ts)。
+既有 [Python 恢复用例](../../../tests/test_state_recovery.py)及
+[typed audit 用例](../../../tests/control_plane_ts/state_recovery.test.ts)
+分别验证可读性、拒绝、清理和历史回读。测试数量不能代替维护者决定；合成指南没有
+提供实际生产 backup-size telemetry 或多个最大负载组合的资格证据。
+
+批准的值仍保留上述证据限制。可读副本仍是历史数据：容量同意不启用 Goal、
+不授予当前 Goal 依据的 writer、不恢复 lease，也不授权重放未决 effect。
 
 ---
 
@@ -605,9 +799,9 @@ retention 与运行资格。后二者都不会推迟基本的 M1/M3 产品旅程
 | 日期 | 决策 | Owner／批准 | 替代方案 | 变更的规范章节 |
 | --- | --- | --- | --- | --- |
 | 2026-10-08 | 提议以惰性优先、由既有 owner 组合的完整状态恢复 | 通过 issue #5940 评审 RFC | 原始提取、单体事务、仅人工 runbook | 初始文档 |
+| 2026-10-15 | 冻结不变的 M1 本地 POSIX File/SQLite 惰性检查容量；提案 `5751b050f`，`7f62b6020` 未改值 | [@huangruiteng 容量同意](https://github.com/loopx-project/loopx/pull/6279#issuecomment-6186241464) | 提高上限、新增 override 或推迟本地 profile | §12.1；不含更广资格或合并授权 |
 
-只有 RFC 拉取请求合并后，设计才被接受。上表记录提案历史，不表示先前已有
-maintainer approval。
+初始行记录提案历史。下列容量决定仅覆盖指定范围，不证明其它恢复阶段完成。
 
 ## 附录 C：证据注册表
 

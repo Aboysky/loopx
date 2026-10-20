@@ -1,8 +1,9 @@
-import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
+import type {OracleEvidence} from "./goal-acceptance-observation";
+import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
 import { z } from "zod";
-import { actionSourceBasisSchema } from "./action-source-basis.js";
+import { actionSourceBasisSchema, todoUpdateSourceBasisSchema } from "./action-source-basis.js";
 
 import {
   todoApplyResultMatchesRequest,
@@ -55,7 +56,7 @@ export {
   pendingGoalReviews,
   proposalReviewState,
   sessionInvalidatedByPayload,
-  selectAvailableChatAgent,
+  selectChatAgent,
   selectChatGoal,
   stewardPrompts,
   turnReplaySafeByPayload,
@@ -204,6 +205,10 @@ export const chatCapabilitiesSchema = z.object({
     source: z.string().optional(),
     tool_calls: z.boolean().optional(),
     trust_scope: z.string().optional(),
+    // Readiness: why an unavailable built-in runtime is unavailable and what it needs.
+    unavailable_reason: z.string().nullable().optional(),
+    executable: z.string().nullable().optional(),
+    environment_variable: z.string().nullable().optional(),
   })).optional(),
   lark_cli: z.object({
     available: z.boolean(),
@@ -215,6 +220,7 @@ export const chatCapabilitiesSchema = z.object({
 
 export const todoProposalSchema = z.object({
   kind: z.literal("todo"),
+  goal_id: z.string().min(1).optional(),
   text: z.string(),
   priority: z.enum(["P0", "P1", "P2"]),
   rationale: z.string(),
@@ -410,6 +416,7 @@ export class ChatApiError extends Error {
 }
 
 export const typedActionKindSchema = z.enum([
+  "goal.acceptance.check",
   "goal.create",
   "goal.update",
   "goal.lifecycle",
@@ -639,13 +646,17 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
   return parsedPayload as T;
 }
 
-export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal) {
+export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal, sourceNamespace?: string) {
   const query = new URLSearchParams({goal_id: goalId, todo_id: todoId});
+  if (sourceNamespace) query.set("source_namespace", sourceNamespace);
   const result = z.object({
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+    review_basis: todoUpdateSourceBasisSchema.optional(),
+    source_access: z.object({namespace: z.string()}).optional(),
   }).parse(await requestJson<unknown>(`/api/chat/todo/detail?${query}`, {signal}));
   if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
+  if (sourceNamespace && result.source_access?.namespace !== sourceNamespace) throw new Error("Task source changed");
   return result;
 }
 
@@ -684,18 +695,32 @@ export async function recordProjectionExchange(options: {
 export type ConversationContext =
   | { kind: "manager" }
   | { kind: "goal"; goalId: string }
-  | { kind: "project"; projectRef: string };
+  | { kind: "project"; projectRef: string }
+  // A UI address for an existing source-owned Session, never a new Core channel.
+  | ({ kind: "bound" } & BoundConversationTarget);
+
+export type BoundConversationTarget = { bindingId: string; sessionId: string };
+
+/** Goal projections cannot answer a source-owned or ordinary workspace Chat. */
+export function conversationSupportsStatusProjection(context: ConversationContext) {
+  return context.kind === "manager" || context.kind === "goal";
+}
 
 // Goal ids are single path segments, so a key containing "/" never names a Goal.
 const PROJECT_CONVERSATION_KEY_PREFIX = "project/";
 
 export function conversationContextKey(context: ConversationContext): string {
   if (context.kind === "manager") return "manager";
+  if (context.kind === "bound") return `bound/${encodeURIComponent(context.bindingId)}/${encodeURIComponent(context.sessionId)}`;
   return context.kind === "goal" ? context.goalId : `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
 }
 
 export function conversationContextOfKey(key: string): ConversationContext {
   if (key === "manager") return { kind: "manager" };
+  if (key.startsWith("bound/")) {
+    const [, bindingId = "", sessionId = ""] = key.split("/");
+    return { kind: "bound", bindingId: decodeURIComponent(bindingId), sessionId: decodeURIComponent(sessionId) };
+  }
   if (key.startsWith(PROJECT_CONVERSATION_KEY_PREFIX)) {
     return { kind: "project", projectRef: key.slice(PROJECT_CONVERSATION_KEY_PREFIX.length) };
   }
@@ -704,6 +729,7 @@ export function conversationContextOfKey(key: string): ConversationContext {
 
 export function conversationChannelId(context: ConversationContext): string {
   if (context.kind === "manager") return "manager";
+  if (context.kind === "bound") return conversationContextKey(context);
   return context.kind === "goal" ? `goal.${context.goalId}` : `project.${context.projectRef}`;
 }
 
@@ -713,7 +739,19 @@ export async function createChatSession(
   mode: "resume_latest" | "new" = "resume_latest",
   signal?: AbortSignal,
   agentModelId?: string,
+  agentReasoningEffort?: string,
 ) {
+  if (context.kind === "bound") {
+    if (mode !== "resume_latest" || agentModelId || agentReasoningEffort) {
+      throw new Error("An original conversation cannot be replaced or reconfigured here.");
+    }
+    const session = await resolveBoundChatSession(context, signal);
+    if (!session.resumable || (agentId && agentId !== session.agent_id)) {
+      throw new Error("The original conversation is unavailable on its executor.");
+    }
+    return { ok: true as const, resumed: true, session_id: session.session_id,
+      agent_id: session.agent_id, goal_id: session.goal_id, session };
+  }
   return requestJson<{
     agent_id: string;
     goal_id: string | null;
@@ -728,23 +766,24 @@ export async function createChatSession(
     // silently re-point the steward channel away from its configured executor.
     // A project Session carries only the host-issued reference, never a Goal.
     body: JSON.stringify(context.kind === "project"
-      ? { context_kind: "project", project_ref: context.projectRef, agent_id: agentId, agent_model_id: agentModelId, mode }
-      : { goal_id: context.kind === "goal" ? context.goalId : "", agent_id: agentId, agent_model_id: agentModelId, mode, context_kind: context.kind }),
+      ? { context_kind: "project", project_ref: context.projectRef, agent_id: agentId, agent_model_id: agentModelId, agent_reasoning_effort: agentReasoningEffort, mode }
+      : { goal_id: context.kind === "goal" ? context.goalId : "", agent_id: agentId, agent_model_id: agentModelId, agent_reasoning_effort: agentReasoningEffort, mode, context_kind: context.kind }),
   });
 }
 
-export type AgentModelOption = { value: string; label: string };
+export type AgentModelOption = { value: string; label: string; reasoning_efforts?: string[] };
 export type AgentModelDiscovery = {
   ok: true;
   schema_version: "loopx_chat_agent_model_options_v1";
   agent_id: string;
   supported: boolean;
   model: { id: string; label: string; selected: string; options: AgentModelOption[] } | null;
+  reasoning_effort?: { id: string; label: string; selected: string; options: AgentModelOption[] } | null;
 };
 
-export function discoverAgentModelOptions(agentId: string, signal?: AbortSignal) {
+export function discoverAgentModelOptions(agentId: string, signal?: AbortSignal, goalId?: string, modelId?: string) {
   return requestJson<AgentModelDiscovery>("/api/chat/agent-model-options", {
-    method: "POST", signal, body: JSON.stringify({agent_id: agentId}),
+    method: "POST", signal, body: JSON.stringify({agent_id: agentId, ...(goalId ? {goal_id: goalId} : {}), ...(modelId ? {agent_model_id: modelId} : {})}),
   });
 }
 
@@ -762,6 +801,8 @@ export type ChatSessionSummary = {
   project_ref?: string | null;
   agent_id: string;
   agent_model_id?: string | null;
+  agent_reasoning_effort?: string | null;
+  agent_service_tier?: string | null;
   adapter_kind: string;
   channel_id?: string;
   status: string;
@@ -780,8 +821,19 @@ export type ChatSessionSummary = {
 
 export type { ChatProject };
 
+const chatProjectsSchema = z.object({
+  ok: z.literal(true),
+  projects: z.array(z.object({
+    project_ref: z.string().min(1), title: z.string(),
+    grant: z.enum(["workspace_read", "workspace_write"]),
+    goal_workspace_ref: z.string().optional(),
+  })),
+});
+
 export async function fetchChatProjects(signal?: AbortSignal) {
-  return requestJson<{ok: true; projects: ChatProject[]}>("/api/chat/projects", {signal});
+  const parsed = chatProjectsSchema.safeParse(await requestJson<unknown>("/api/chat/projects", {signal}));
+  if (!parsed.success) throw new Error("The workspace list could not be read. Refresh to retry.");
+  return parsed.data;
 }
 
 /** ``chat_store`` Session modes; an omitted mode is a managed runtime Session. */
@@ -827,6 +879,7 @@ export type ChatVisibleMessage = {
   return_delivery?: {
     schema_version: "manager_return_delivery_status_v0";
     phase: "decision" | "conclusion";
+    request_revision?: number | null;
     status: string;
     created_at?: string | null;
     delivered_at?: string | null;
@@ -860,24 +913,58 @@ export type ChatSessionSnapshot = {
 };
 
 export async function fetchChatSession(sessionId: string, signal?: AbortSignal) {
-  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${sessionId}`, { signal });
+  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
 }
 
 export async function fetchChatSessions(options: {
   agentId?: string;
   channelId?: string;
   goalId?: string;
+  bound?: BoundConversationTarget;
   signal?: AbortSignal;
 }) {
   const query = new URLSearchParams();
-  if (options.agentId) query.set("agent_id", options.agentId);
-  if (options.channelId) query.set("channel_id", options.channelId);
-  if (options.goalId) query.set("goal_id", options.goalId);
-  return requestJson<{
+  if (options.bound) {
+    if (!/^[a-f0-9]{24}$/.test(options.bound.bindingId)
+      || !/^[A-Za-z0-9._-]{1,160}$/.test(options.bound.sessionId)) {
+      throw new Error("Invalid original conversation address.");
+    }
+    query.set("conversation_binding_id", options.bound.bindingId);
+  } else {
+    if (options.agentId) query.set("agent_id", options.agentId);
+    if (options.channelId) query.set("channel_id", options.channelId);
+    if (options.goalId) query.set("goal_id", options.goalId);
+  }
+  const listed = await requestJson<{
     ok: true;
     schema_version: "loopx_chat_session_list_v1";
+    conversation_binding_id?: string;
     sessions: ChatSessionSummary[];
   }>(`/api/chat/sessions?${query.toString()}`, { signal: options.signal });
+  if (!options.bound) return listed;
+  // An older service may ignore the selector and return unrelated ordinary
+  // history. The owner's echo is mandatory before any transcript is read.
+  if (listed.conversation_binding_id !== options.bound.bindingId) {
+    throw new Error("This service cannot verify the original conversation. Update LoopX and retry.");
+  }
+  const sessions = listed.sessions.filter(row => row.session_id === options.bound!.sessionId);
+  if (sessions.length !== 1) throw new Error("The original conversation is no longer available from this connection.");
+  return { ...listed, sessions };
+}
+
+export async function resolveBoundChatSession(target: BoundConversationTarget, signal?: AbortSignal) {
+  return (await fetchChatSessions({ bound: target, signal })).sessions[0];
+}
+
+/** Discovery chooses once; subsequent navigation freezes the exact Session. */
+export async function discoverBoundChatSession(bindingId: string, signal?: AbortSignal) {
+  if (!/^[a-f0-9]{24}$/.test(bindingId)) throw new Error("Invalid conversation connection.");
+  const listed = await requestJson<{ conversation_binding_id?: string; sessions: ChatSessionSummary[] }>(
+    `/api/chat/sessions?conversation_binding_id=${bindingId}`, { signal });
+  if (listed.conversation_binding_id !== bindingId) throw new Error("This service cannot verify the original conversation. Update LoopX and retry.");
+  const session = [...listed.sessions].sort((a, b) => b.last_activity_at.localeCompare(a.last_activity_at))[0];
+  if (!session || !/^[A-Za-z0-9._-]{1,160}$/.test(session.session_id)) throw new Error("No original conversation is available yet. Start it in Lark first.");
+  return session;
 }
 
 export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
@@ -907,13 +994,28 @@ export async function fetchChatHistory(options: {
   agentId?: string;
   channelId: string;
   goalId?: string;
+  bound?: BoundConversationTarget;
 }, previous?: ChatHistory): Promise<ChatHistory> {
-  const listed = previous ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(5000) });
+  // Source authorization must be re-read even when recovering an older snapshot.
+  const listed = (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(5000) });
   const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
-  const missing = listed.sessions.filter((session) => !known.has(session.session_id));
-  const results = await Promise.allSettled(missing.map((session) => fetchChatSession(session.session_id, AbortSignal.timeout(5000))));
+  const missing = listed.sessions.filter((session) => {
+    const saved = known.get(session.session_id)?.session;
+    return !saved || (options.bound && (!session.transcript_revision
+      || session.transcript_revision !== saved.transcript_revision
+      || session.updated_at !== saved.updated_at || session.active_turn_id !== saved.active_turn_id
+      || session.status !== saved.status));
+  });
+  if (options.bound) for (const session of missing) known.delete(session.session_id);
+  const results = await Promise.allSettled(missing.map(async (session) => {
+    const snapshot = await fetchChatSession(session.session_id, AbortSignal.timeout(5000));
+    if (snapshot.session.session_id !== session.session_id || snapshot.session.agent_id !== session.agent_id) {
+      throw new Error("The original Session identity changed during history read.");
+    }
+    return snapshot;
+  }));
   for (const result of results) {
     if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
   }
@@ -932,10 +1034,12 @@ export async function acceptChatTurn(
   clientTurnId: string,
   attachments: ChatImageAttachmentInput[] = [],
   signal?: AbortSignal,
+  delivery?: "queue",
 ) {
   const body = JSON.stringify({
     message,
     client_turn_id: clientTurnId,
+    ...(delivery ? { delivery } : {}),
     ...(attachments.length ? { attachments: attachments.map((attachment) => ({
       data_url: attachment.dataUrl,
       id: attachment.id,
@@ -1029,8 +1133,12 @@ export async function streamChatTurn(
   const stallTimeoutMs = options.stallTimeoutMs ?? CHAT_STREAM_STALL_TIMEOUT_MS;
   let cursor = "";
   let attempts = 0;
+  let stalls = 0;
   let terminal = false;
-  while (!terminal && attempts < 4) {
+  // An owned desktop service can need several seconds to restart. Read-only
+  // reconnects cover that window (7.75s backoff), without resubmitting a Turn.
+  // Keep the existing four-watchdog limit for genuinely silent connections.
+  while (!terminal && attempts < 6) {
     signal?.throwIfAborted();
     const origin = typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
     const url = new URL(chatApiUrl(eventsUrl), origin);
@@ -1079,20 +1187,20 @@ export async function streamChatTurn(
         }
         if (done || terminal) break;
       }
-      attempts = terminal ? attempts : attempts + 1;
+      if (!terminal) throw new ChatApiError("Agent 事件流连接已断开。", {});
     } catch (error) {
       if (signal?.aborted) throw error;
       attempts += 1;
-      if (attempts >= 4) {
-        // A stalled connection is a transport failure, not a caller abort, so
-        // it ends with the same typed error as any other exhausted reconnect.
-        if (stalled) {
-          throw new ChatApiError("Agent 事件流连接已断开。", {
-            reconnect_attempts: attempts,
-            stall_timeout_ms: stallTimeoutMs,
-          });
-        }
-        throw error;
+      if (stalled) stalls += 1;
+      if (attempts >= 6 || stalls >= 4) {
+        // Fetch refusals (including WebKit's raw "Load failed") and clean EOF
+        // are transport failures too. Preserve the Session/Turn recovery route
+        // through the receive wrapper instead of presenting them as an outcome.
+        throw new ChatApiError("Agent 事件流连接已断开。", {
+          ...(error instanceof ChatApiError ? error.payload : {}),
+          reconnect_attempts: attempts,
+          ...(stalled ? { stall_timeout_ms: stallTimeoutMs } : {}),
+        });
       }
       // A local phase keeps the pending reply honest while the reader resumes
       // from its cursor. It carries no event id, so the cursor is unchanged.
@@ -1173,7 +1281,7 @@ export type DelegationReadback = {
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
   validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
-    output_versions?: Array<{ref: string; sha256: string}>};
+    output_versions?: Array<{ref: string; sha256: string}>; oracle_checks?: Array<OracleEvidence & {criterion_id: string}>};
   task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";
     recovery_kind: "repair_required" | "replan_required"; summary: string; validator_kind: string;
     turn_key: string; resume_mode: "revalidate_cached_result"};
@@ -2198,9 +2306,10 @@ const larkAppsSchema = z.object({
   })),
 });
 
-export async function fetchLarkApps() {
+export async function fetchLarkApps(options?: {verify: boolean; appRef?: string; signal?: AbortSignal}) {
+  const query = options ? new URLSearchParams({verify: String(options.verify), ...(options.appRef ? {app_ref: options.appRef} : {})}) : null;
   return larkAppsSchema.parse(
-    await requestJson<unknown>("/api/chat/lark/apps"),
+    await requestJson<unknown>(`/api/chat/lark/apps${query ? `?${query}` : ""}`, {signal: options?.signal}),
   ).apps;
 }
 
@@ -2287,6 +2396,7 @@ export async function fetchLarkGroupChats(appRef: string, query?: string) {
 export type LarkGoalConnection = {
   conversation_kind?: "goal" | "manager";
   turn_trigger?: "addressed" | "human_messages";
+  read_goal_scope?: "all_registered" | "selected" | null;
   agent_id: string | null;
   connection_id: string;
   app_label: string;
@@ -2319,6 +2429,7 @@ const larkConnectionsSchema = z.object({
   connections: z.array(z.object({
     conversation_kind: z.enum(["goal", "manager"]).default("goal"),
     turn_trigger: z.enum(["addressed", "human_messages"]).default("addressed"),
+    read_goal_scope: z.enum(["all_registered", "selected"]).nullable().default("selected"),
     agent_id: z.string().nullable().default(null),
     connection_id: z.string(),
     app_label: z.string(),
@@ -2357,15 +2468,16 @@ const larkConnectionsSchema = z.object({
   })),
 });
 
-export async function fetchLarkConnections() {
+export async function fetchLarkConnections(signal?: AbortSignal) {
   return larkConnectionsSchema.parse(
-    await requestJson<unknown>("/api/chat/lark/connections"),
+    await requestJson<unknown>("/api/chat/lark/connections", {signal}),
   ).connections;
 }
 
 export async function connectLarkGoalTopic(options: {
   conversationKind?: "goal" | "manager";
   turnTrigger?: "addressed" | "human_messages";
+  readGoalScope?: "all_registered" | "selected";
   agentBindings?: Array<{ agentId: string; appRef: string }>;
   agentId?: string;
   appRef?: string;
@@ -2394,6 +2506,7 @@ export async function connectLarkGoalTopic(options: {
         ...(options.connectionId ? { connection_id: options.connectionId } : {}),
         conversation_kind: options.conversationKind ?? "goal",
         ...(options.turnTrigger ? { turn_trigger: options.turnTrigger } : {}),
+        ...(options.readGoalScope ? { read_goal_scope: options.readGoalScope } : {}),
         capture_scope: options.captureScope,
         chat_id: options.chatId,
         chat_name: options.chatName,
@@ -2465,7 +2578,7 @@ export const ownershipPreviewSchema = z.object({
 });
 export type GoalOwnership = z.infer<typeof goalOwnershipSchema>;
 export type OwnershipPreview = z.infer<typeof ownershipPreviewSchema>;
-export type ExecutionOwnershipMode = typeof EXECUTION_HANDOFF_MODES[number];
+export type ExecutionOwnershipMode = ExecutionHandoffMode;
 
 export async function fetchGoalOwnership(goalId: string) {
   return goalOwnershipSchema.parse(await requestJson<unknown>(`/api/chat/goal-ownership?${new URLSearchParams({goal_id: goalId})}`));
@@ -2496,6 +2609,15 @@ const privateConversationSchema = z.object({
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
   audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
   pending_count: z.number().int(), recovery_count: z.number().int(),
+  ingress: z.object({status: z.enum(["unobserved", "verified", "gap", "unavailable"]),
+    last_checked_at: z.number().nullable(), last_complete_at: z.number().nullable(),
+    source_gap_count: z.number().int().nonnegative(), without_reply_count: z.number().int().nonnegative()}).optional(),
+  owner_attention: z.discriminatedUnion("available", [
+    z.object({available: z.literal(true), enabled: z.boolean(), revision: z.number().int(),
+      last_checked_at: z.number().nullable(), error_code: z.string().nullable(),
+      pending_count: z.number().int(), unconfirmed_count: z.number().int(), failed_count: z.number().int()}),
+    z.object({available: z.literal(false), error_code: z.string()}),
+  ]).optional(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
 const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
@@ -2504,8 +2626,8 @@ export type PrivateConversationStopRecovery = z.infer<typeof privateConversation
 const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
   connections: z.array(privateConversationSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema).default([])});
 export type PrivateConversation = z.infer<typeof privateConversationSchema>;
-export async function fetchPrivateConversations() {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
+export async function fetchPrivateConversations(signal?: AbortSignal) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", { signal }));
 }
 export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write", groupIds?: string[]) {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
@@ -2524,6 +2646,13 @@ export async function disconnectPrivateConversation(bindingId: string, revision:
 export async function changePrivateAgentTarget(bindingId: string, revision: number, target: {session_id: string} | {target_ref: string}) {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
+  }));
+}
+
+export async function changeOwnerNotifications(bindingId: string, bindingRevision: number, revision: number, enabled: boolean) {
+  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/owner-notifications", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({binding_id: bindingId, binding_revision: bindingRevision, revision, enabled}),
   }));
 }
 

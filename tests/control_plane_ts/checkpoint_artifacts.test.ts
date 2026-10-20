@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
+import fs from "node:fs/promises";
+import {syncBuiltinESMExports} from "node:module";
 import test from "node:test";
-import {chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile} from "node:fs/promises";
+import {chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {checkpointArtifacts} from "../../loopx/control_plane/runtime/checkpoint_artifacts.ts";
+import {EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 
 async function fixture(t: test.TestContext) {
@@ -39,6 +43,60 @@ test("capture, verify and inert materialization preserve executable code and emp
     expected_sha256: captured.sha256, destination: join(root, "restored")}), /already exists/);
 });
 
+test("a read-only participant's copied mode survives the durability flush and materialization", async t => {
+  const {root, request} = await fixture(t);
+  await chmod(join(root, "code/solution.sh"), 0o444);
+  const components = request.components;
+  const probe = await checkpointArtifacts({action: "probe", components});
+  const captured = await checkpointArtifacts({...request, components, expected_source_sha256: probe.source_sha256});
+  assert.equal(captured.integrity_verified, true);
+  const copied = join(root, "captured/components/code/solution.sh");
+  assert.equal((await stat(copied)).mode & 0o777, 0o444);
+  await checkpointArtifacts({action: "materialize", root: request.destination, expected_sha256: captured.sha256,
+    destination: join(root, "restored")});
+  const restored = join(root, "restored/components/code/solution.sh");
+  assert.equal(await readFile(restored, "utf8"), "#!/bin/sh\nexit 0\n");
+  assert.equal((await stat(restored)).mode & 0o777, 0o444);
+});
+
+test("nested inventories retain depth-first sibling order and every byte and mode", async t => {
+  const {root, request} = await fixture(t);
+  const source = join(root, "tree");
+  await mkdir(source, {mode: 0o700});
+  await mkdir(join(source, "a"), {mode: 0o700});
+  await mkdir(join(source, "a/b"), {mode: 0o700});
+  const leaves = ["a/b/deep", "a/b-", "a/b.txt", "a-", "a.txt",
+    ...Array.from({length: 64}, (_, i) => `z${String(i).padStart(2, "0")}`)];
+  for (const [i, name] of [...leaves].reverse().entries()) {
+    await writeFile(join(source, name), `evidence:${name}\n`, {mode: i % 2 ? 0o600 : 0o400});
+  }
+  // The filesystem owns its supported permission bits (Windows exposes a
+  // different subset). Observe those independently before calling capture.
+  const modes = new Map<string, number>();
+  for (const name of ["", "a", "a/b", ...leaves]) modes.set(name, (await stat(join(source, name))).mode & 0o777);
+  const file = (name: string) => ({path: name, kind: "file", mode: modes.get(name)!,
+    size: Buffer.byteLength(`evidence:${name}\n`), sha256: createHash("sha256").update(`evidence:${name}\n`).digest("hex")});
+  const directory = (name: string) => ({path: name, kind: "directory", mode: modes.get(name)!});
+  // Flat string sorting would put a- before a/b; completion order is also
+  // irrelevant. This is the existing manifest's depth-first traversal contract.
+  const expected = [directory(""), directory("a"), directory("a/b"), ...leaves.map(file)];
+  const components = [{id: "tree", source_path: source}];
+  const probe = await checkpointArtifacts({action: "probe", components});
+  assert.deepEqual(probe.source_witness, {tree: expected});
+  const captured = await checkpointArtifacts({...request, components, expected_source_sha256: probe.source_sha256});
+  const manifest = JSON.parse(await readFile(join(request.destination, "checkpoint.json"), "utf8"));
+  assert.deepEqual(manifest.source_witness, {tree: expected});
+  assert.deepEqual(manifest.artifact_witness, {tree: expected});
+  const restored = join(root, "restored");
+  await checkpointArtifacts({action: "materialize", root: request.destination,
+    expected_sha256: captured.sha256, destination: restored});
+  for (const name of leaves) {
+    const copy = join(restored, "components/tree", name);
+    assert.equal(await readFile(copy, "utf8"), `evidence:${name}\n`);
+    assert.equal((await stat(copy)).mode & 0o777, file(name).mode);
+  }
+});
+
 test("changed source, duplicate identities and overlapping sources publish no unit", async t => {
   const {root, request} = await fixture(t);
   await writeFile(join(root, "conversation"), "new native cursor");
@@ -46,6 +104,48 @@ test("changed source, duplicate identities and overlapping sources publish no un
   await assert.rejects(checkpointArtifacts({...request, components: [...request.components, request.components[0]]}), /duplicated/);
   await assert.rejects(checkpointArtifacts({action: "probe", components: [request.components[0], {id: "nested", source_path: join(root, "code/empty")}]}), /overlap/);
   assert.deepEqual((await readdir(root)).sort(), ["code", "conversation"]);
+});
+
+test("copied bytes reject ABA source movement even when the final source matches the probe", async t => {
+  const {root, request} = await fixture(t), original = fs.copyFile;
+  const source = join(root, "code/solution.sh"), bytes = await readFile(source);
+  const copy = t.mock.method(fs, "copyFile", async (...args: Parameters<typeof fs.copyFile>) => {
+    if (args[0] !== source) return original(...args);
+    await writeFile(source, "unreviewed intermediate bytes\n");
+    try {await original(...args);}
+    finally {await writeFile(source, bytes);}
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(checkpointArtifacts(request), /copied bytes do not match/);
+    assert.deepEqual(await readFile(source), bytes);
+    assert.deepEqual((await readdir(root)).sort(), ["code", "conversation"]);
+  } finally {copy.mock.restore(); syncBuiltinESMExports();}
+});
+
+test("a failed copy drains started member IO before removing the unpublished staging tree", async t => {
+  const {root, request} = await fixture(t), original = fs.copyFile;
+  for (let i = 0; i < 24; i++) await writeFile(join(root, "code", `member-${i}`), `retained evidence ${i}`);
+  const probe = await checkpointArtifacts({action: "probe", components: request.components});
+  let active = 0, peak = 0, calls = 0;
+  const copy = t.mock.method(fs, "copyFile", async (...args: Parameters<typeof fs.copyFile>) => {
+    active++; peak = Math.max(peak, active);
+    const first = calls++ === 0;
+    try {
+      // Controlled storage latency lets sibling copies overlap the injected
+      // failure. It is a cleanup invariant, not a performance threshold.
+      await new Promise(resolve => setTimeout(resolve, first ? 30 : 80));
+      if (first) throw new Error("injected member copy failure");
+      await original(...args);
+    } finally {active--;}
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(checkpointArtifacts({...request, expected_source_sha256: probe.source_sha256}), /injected member copy failure/);
+    assert.equal(active, 0, "no member IO may outlive staging cleanup");
+    assert.ok(peak <= 8, "member IO must remain bounded");
+    assert.deepEqual((await readdir(root)).sort(), ["code", "conversation"]);
+  } finally {copy.mock.restore(); syncBuiltinESMExports();}
 });
 
 test("missing, changed and extra artifact members or foreign expected digest reject", async t => {
@@ -90,8 +190,12 @@ test("symlink sources, nested links and redirected destinations reject without p
   const {root, request} = await fixture(t);
   await symlink(join(root, "code"), join(root, "alias"), process.platform === "win32" ? "junction" : "dir");
   await assert.rejects(checkpointArtifacts({action: "probe", components: [{id: "code", source_path: join(root, "alias")}]}), /symlink/);
-  await symlink(join(root, "conversation"), join(root, "code/link"));
-  await assert.rejects(checkpointArtifacts(request), /symlink/);
+  // File symlink creation needs Developer Mode or admin on Windows; the
+  // junction cases still cover redirected sources and destinations.
+  if (process.platform !== "win32") {
+    await symlink(join(root, "conversation"), join(root, "code/link"));
+    await assert.rejects(checkpointArtifacts(request), /symlink/);
+  }
   await assert.rejects(checkpointArtifacts({...request, destination: join(root, "alias/capture")}), /symlink/);
 });
 
@@ -243,6 +347,32 @@ test("receipt-owned replan settlement returns to its original writer without adm
     ...quota.replan_action_packet, settlement_only: false}}}), /admitted identity/);
   assert.equal((await checkpointArtifacts({...request, quota: {...quota, replan_action_packet: {
     ...quota.replan_action_packet, decision: "replan_required", settlement_only: false}}})).capture, true);
+});
+
+test("the selection hop that binds a Todo is released as pending closeout, not an identity failure", async () => {
+  // Real-CLI shape: the agent selects a Todo on the Turn whose original guard
+  // owns the replan. The receipt view is "upgraded" with the new binding.
+  const id = "replan-0123456789abcdef", turn = "fixture-turn";
+  const identity = {goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    todo_id: "todo_selected", effect_id: `fixture-goal:fixture-agent:todo_selected:${turn}`};
+  const quota = {ok: true, goal_id: "fixture-goal", effective_action: "autonomous_replan_required",
+    replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "replan_required", obligation_id: id},
+    heartbeat_receipt: {status: "upgraded", turn_instance_id: turn, event_id: "fixture-event",
+      closeout_required: true, semantic_replan_obligation_id: id, settlement_identity: identity}};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  assert.deepEqual(await checkpointArtifacts(request), {
+    capture: false, reason: "turn_closeout_pending", execution_authority_granted: false,
+  });
+  // Statuses outside the durable receipt views stay refused, now as a typed
+  // request rejection whose reason survives the runtime boundary.
+  for (const status of ["pending", "failed", "uncommitted"]) {
+    await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt: {
+      ...quota.heartbeat_receipt, status}}}),
+    (error: unknown) => error instanceof EffectRuntimeRequestError && /admitted identity/.test(error.message));
+  }
+  await assert.rejects(checkpointArtifacts({...request, quota: {...quota, heartbeat_receipt: {
+    ...quota.heartbeat_receipt, settlement_identity: {...identity, turn_instance_id: "another-turn"}}}}),
+  (error: unknown) => error instanceof EffectRuntimeRequestError);
 });
 
 test("committed semantic replan can capture before work selection without inventing settlement authority", async () => {

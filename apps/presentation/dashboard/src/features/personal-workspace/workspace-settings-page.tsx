@@ -1,3 +1,5 @@
+import {GoalAcceptanceContractSection} from "./goal-acceptance-contract";
+import {goalAcceptanceContractCopy} from "./delivery-review-copy";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2 } from "lucide-react";
 
@@ -13,10 +15,19 @@ import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { ConfigurationBackupSettings } from "./configuration-backup-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
+import { CodexAccountSettings } from "./codex-account-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
+import type { AttentionNotificationSupport } from "./attention-notifications";
 
-type WorkspaceSettingsTab = "ownership" | "steward" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
+const attentionNotificationSupportCopy = {
+  default: "settings.attentionNotificationsDefault",
+  denied: "settings.attentionNotificationsDenied",
+  granted: "settings.attentionNotificationsGranted",
+  unsupported: "settings.attentionNotificationsUnsupported",
+} as const;
+
+type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
 
 type SettingsPage = Exclude<WorkspaceSettingsTab, "machine">;
 
@@ -29,6 +40,7 @@ const tabIcons: Record<SettingsPage, typeof Settings2> = {
   lark: Settings2,
   provider: KeyRound,
   steward: Bot,
+  conversation: Bot,
 };
 
 export function WorkspaceSettingsPage({
@@ -42,6 +54,9 @@ export function WorkspaceSettingsPage({
   onClose,
   onThemeChange,
   theme,
+  attentionNotifications,
+  onAttentionNotificationsChange,
+  onOpenOriginalConversation,
 }: {
   callbacks: PersonalWorkspaceCallbacks;
   focusGoalConnection?: boolean;
@@ -53,6 +68,9 @@ export function WorkspaceSettingsPage({
   onClose: () => void;
   onThemeChange: (theme: WorkspaceTheme) => void;
   theme: WorkspaceTheme;
+  attentionNotifications?: { enabled: boolean; support: AttentionNotificationSupport };
+  onAttentionNotificationsChange?: (enabled: boolean) => void | Promise<void>;
+  onOpenOriginalConversation?: (target: import("../../data/chat").BoundConversationTarget) => void;
 }) {
   const { locale, setLocale, t } = useWorkspaceI18n();
   // Preserve existing Goal-settings links while presenting one capability entry.
@@ -84,6 +102,7 @@ export function WorkspaceSettingsPage({
       label: t("settings.agentGroup"),
       tabs: [
         { key: "steward", label: t("settings.steward") },
+        { key: "conversation", label: locale === "zh-CN" ? "对话与模型" : "Conversations and models" },
         // The model provider is one machine decision (which endpoint and key the
         // operator credential holds); the capability catalog is another (which
         // machine defaults every Goal inherits). They answer different questions
@@ -113,6 +132,7 @@ export function WorkspaceSettingsPage({
     },
   ];
   const headings: Record<SettingsPage, { title: string }> = {
+    conversation: {title: locale === "zh-CN" ? "Goal 对话默认值" : "Goal conversation defaults"},
     ownership: {title: t("ownership.title")},
     appearance: {
       title: t("settings.appearance"),
@@ -199,6 +219,7 @@ export function WorkspaceSettingsPage({
         </header>
         {tab === "lark" ? (
           <LarkSettingsPage
+            onOpenOriginalConversation={onOpenOriginalConversation}
             embedded
             focusGoalConnection={focusGoalConnection}
             goals={goals}
@@ -210,11 +231,13 @@ export function WorkspaceSettingsPage({
 
         {tab === "provider" ? (
           <div className="personal-provider-settings">
+            <CodexAccountSettings />
             <OperatorCredentialSettings />
           </div>
         ) : null}
 
         {tab === "steward" ? <MachineConfigurationSettings onChanged={onChanged} section="steward" /> : null}
+        {tab === "conversation" ? <MachineConfigurationSettings onChanged={onChanged} section="conversation" /> : null}
         {tab === "capabilities" && capabilityScope === "machine" ? <MachineConfigurationSettings onChanged={onChanged} section="other" /> : null}
         {tab === "capabilities" && capabilityScope === "goal" ? (
           <GoalCapabilitySettings
@@ -233,6 +256,7 @@ export function WorkspaceSettingsPage({
               }} />
               <GoalAmendmentSettings goalId={selectedGoal.goalId} />
               <GoalDirectionSettings goalId={selectedGoal.goalId} />
+              <GoalAcceptanceContractSection goalId={selectedGoal.goalId} current canManage management copy={goalAcceptanceContractCopy[locale]} />
         </div> : null}
         {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
         {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}
@@ -253,6 +277,24 @@ export function WorkspaceSettingsPage({
                 <strong>{t("settings.themeHighContrast")}</strong>
               </button>
             </div>
+            {attentionNotifications && onAttentionNotificationsChange ? (
+              <div className="personal-attention-notifications" data-testid="attention-notification-settings">
+                <h3>{t("settings.attentionNotifications")}</h3>
+                <label className="personal-notification-toggle">
+                  <input
+                    checked={attentionNotifications.enabled}
+                    disabled={attentionNotifications.support === "unsupported" || attentionNotifications.support === "denied"}
+                    onChange={(event) => void onAttentionNotificationsChange(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>{t("settings.attentionNotificationsToggle")}</span>
+                </label>
+                <p className="personal-notification-hint">{t("settings.attentionNotificationsHint")}</p>
+                <p className={attentionNotifications.support === "denied" ? "personal-notification-error" : "personal-notification-hint"} data-testid="attention-notification-permission" role="status">
+                  {t(attentionNotificationSupportCopy[attentionNotifications.support])}
+                </p>
+              </div>
+            ) : null}
           </section>
         ) : null}
 

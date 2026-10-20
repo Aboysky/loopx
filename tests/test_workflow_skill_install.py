@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -435,7 +436,8 @@ def test_frozen_bundle_install_lifecycle(
     bundled_skills = bundle / layout
     for skill_id in PACKAGED_HOST_SKILL_IDS:
         shutil.copytree(canonical / skill_id, bundled_skills / skill_id)
-    shutil.copy2(Path(install_module.__file__).with_name("lexical_retrieval.py"),
+    shutil.copy2((Path(install_module.__file__).parent / "capabilities" / "context_providers"
+                  / "lexical_retrieval.py"),
                  bundled_skills / "loopx-self-repair/scripts/lexical_retrieval.py")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     if with_meipass:
@@ -550,3 +552,34 @@ def test_frozen_bundle_layout_precedence(
     expected = "share/loopx/skills" if complete_wheel_layout else "skills"
     assert source["available"] is True
     assert source["skills_root"] == tmp_path / expected
+
+
+@pytest.mark.parametrize("damage", ("remove", "edit"))
+def test_installed_scenario_references_are_reachable_and_drift_is_detected(
+    tmp_path: Path, damage: str,
+) -> None:
+    skills_dir = tmp_path / "isolated host" / "skills"
+    installed = workflow_skill_install(skills_dir=skills_dir, execute=True)
+    assert installed["ok"] is True
+    skill_root = skills_dir / "loopx-project"
+    source = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+    destinations = {
+        destination.split("#", 1)[0]
+        for destination in re.findall(r"\[[^\]]+\]\((references/[^)]+)\)", source)
+    }
+    assert destinations
+    for destination in destinations:
+        assert (skill_root / destination).is_file(), destination
+    recurring = skill_root / "references/heartbeat-hosts.md"
+    assert "LoopX managed heartbeat bootstrap v2" in recurring.read_text(encoding="utf-8")
+    assert "../../AGENTS.md" not in (skills_dir / "loopx-pr-review/SKILL.md").read_text(encoding="utf-8")
+    repeated = workflow_skill_install(skills_dir=skills_dir, execute=True)
+    assert set(repeated["installed"].values()) == {"unchanged"}
+
+    if damage == "remove":
+        recurring.unlink()
+    else:
+        recurring.write_text("unreviewed replacement\n", encoding="utf-8")
+    readback = workflow_skill_install(skills_dir=skills_dir)["before"]
+    assert readback["ready"] is False
+    assert "loopx-project" in readback["digest_mismatches"]

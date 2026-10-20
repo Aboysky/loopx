@@ -13,7 +13,7 @@
   "formal_model": {
     "schema_version": "loopx_semantic_formal_model_v0",
     "universes": {
-      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified.",
+      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified.",
       "values": "U(v): ambient runtime values; S(v): registered admitted values",
       "sites": "L: source locations that define, produce, consume, interpret, pass through, project, or persist values",
       "scopes": "Scope: global or bounded_context(context_id); ScopeDeclarations are the forked names the registry declares as bounded contexts",
@@ -73,25 +73,25 @@
     "invariants": [
       {
         "id": "F1_producer_closedness",
-        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
+        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
         "enforcement": "m0_5",
         "evidence": "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES reach in loopx/semantics/production.py; check_producers visits only vocabularies that declare producers, and validate_production claims no whole-program closedness; unresolved dynamic sites are reported, not treated as proven safe",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 27,
+          "registered": 28,
           "evidence_bound": "producer_scan_reach"
         }
       },
       {
         "id": "F2_canonical_value_liveness",
-        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 21 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
+        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 6 vocabularies: 5 kernel and 1 outside the kernel tier. The 22 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
         "enforcement": "m0_5",
         "evidence": "every value of a vocabulary in Producers(V) has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
         "domain": {
           "quantifies_over": "vocabularies[producers].producers",
           "verified": 6,
-          "registered": 27,
+          "registered": 28,
           "evidence_bound": "producer_scan_reach"
         }
       },
@@ -103,7 +103,7 @@
         "domain": {
           "quantifies_over": "vocabularies[*]",
           "verified": 0,
-          "registered": 27,
+          "registered": 28,
           "evidence_bound": "inventory_only"
         }
       },
@@ -170,8 +170,8 @@
     }
   },
   "coverage_floor": {
-    "vocabularies": 27,
-    "owner_symbols": 53,
+    "vocabularies": 28,
+    "owner_symbols": 54,
     "literal_scan_fields": 1,
     "projections": 1,
     "relations": 9,
@@ -363,7 +363,7 @@
         "loopx/control_plane/agents/agent_scope.py::_other_agent_or_exhausted_frontier",
         "loopx/control_plane/agents/agent_scope.py::_route_continuation_frontier",
         "loopx/control_plane/agents/agent_scope.py::_selected_candidate_priority_frontier",
-        "loopx/control_plane/quota/should_run_packet.py::_scoped_gate_deferred_replan_frontier"
+        "loopx/control_plane/quota/should_run_packet.py::_selected_deferred_replan_frontier"
       ],
       "call_producers": {
         "loopx/control_plane/agents/agent_scope_frontier.py::build_agent_scope_frontier_payload": [
@@ -451,15 +451,15 @@
       "value_notes": {
         "agent_monitor_only": "The lane is monitor-only for this agent: not actionable by the agent, advancement work is the blocked scope, and the scheduler holds it in an agent-monitor wait.",
         "agent_workspace_repair": "Workspace repair is allowed, and it outranks self-repair: the agent workspace is repaired before any further delivery. It is an explicit typed REPAIR_ACTIONS member, so the route is repair_required.",
-        "automation_prompt_upgrade_required": "The installed automation prompt identity must be repaired first. It is one of the conditions that withholds autonomous_replan_decision_allowed, and the automation action is repair_automation_prompt_identity.",
+        "automation_prompt_upgrade_required": "The installed automation prompt identity must be repaired first. It is one of the conditions that withholds autonomous replan admission, and the automation action is repair_automation_prompt_identity.",
         "autonomous_replan_required": "An autonomous replan is required and its scope applies to this agent. It is one of REPLAN_ACTIONS, so the route is replan_required.",
-        "blocked_health": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
-        "blocked_wait": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "blocked_health": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
+        "blocked_wait": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "boundary_projection_repair": "A required write scope is missing from the projected goal boundary; trigger required_write_scope_missing_from_goal_boundary.",
         "capability_bridge_repair": "Capability repair is allowed once workspace repair and self-repair are not; the capability bridge is repaired before delivery.",
         "control_plane_health_repair": "Control-plane health repair for an unavailable closeout query or a stall health blocker; recommended_mode repair_control_plane_health. One of the five self-repair spend actions that stand in for the generic control_plane_repair.",
         "control_plane_projection_repair": "Stall repair for a lane left waiting with no owner projection; trigger waiting_without_owner_projection.",
-        "control_plane_repair": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "control_plane_repair": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "coordinate_task_bundle": "Replaces normal_run when a ready task-orchestration contract makes this lane the coordinator: admitted or explicitly selected peer lanes are activated or resumed before its own worker-lane delivery.",
         "external_evidence_observe": "An external-evidence monitor requires a read-only observation before any quiet no-op.",
         "governed_capability_intent": "A governed capability intent is pending. It is the only action that routes to capability_action_required, and only when the intent projection matches the envelope goal and agent and names a command; a mismatch is a contract_error instead.",
@@ -468,25 +468,27 @@
         "lark_inbox_reply_due": "A direct Lark question, bot mention, or verified reply to the bot is pending a reply, and normal delivery is allowed for that reply.",
         "monitor_due": "A monitor poll is due; should_run and normal delivery follow the same monitor_due flag. Its not-due counterpart in the same branch is monitor_quiet_skip.",
         "monitor_quiet_skip": "A monitor poll that is not due. The scheduler maps it to a monitor wait, and it spends no quota.",
-        "normal_run": "Normal delivery is allowed; the first branch of quota_effective_action. With delivery_allowed and must_attempt set it routes to ready_for_host.",
-        "operator_gate_notify": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "normal_run": "Normal delivery is allowed; the first branch of quotaEffectiveAction. With delivery_allowed and must_attempt set it routes to ready_for_host.",
+        "operator_gate_notify": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "operator_inbox_material_review_due": "Captured operator-inbox material is pending bounded review, and normal delivery is allowed for that review.",
         "outcome_floor_recovery": "Normal delivery is refused but recovery delivery is allowed, through the quota safe bypass of kind outcome_floor_recovery.",
         "peer_coordination_blocked": "Peer coordination blocks this lane. The scheduler keeps a no-spend observer alive with bounded stateful backoff because peer readiness, coordinator configuration, reassignment, or local work can change asynchronously.",
-        "quota_skip": "The final fallback of quota_effective_action: no delivery is allowed, no repair applies, and no more specific blocked state matched.",
+        "quota_skip": "The final fallback of quotaEffectiveAction: no delivery is allowed, no repair applies, and no more specific blocked state matched.",
         "runtime_user_gate_projection_repair": "A runtime capability user-gate projection needs repair; recommended_mode repair_user_gate_projection, blocked scope user_gate_projection.",
         "scoped_user_gate_fallback": "A scoped user-gate fallback applies while replan decisions are not allowed. It replaces quota_skip, monitor_quiet_skip or an absent action, and obliges one non-gated fallback segment after the user-gate notice.",
         "state_projection_gap_repair": "A state-projection gap on a candidate that should run or must attempt; trigger state_projection_gap.",
         "terminal_no_followup": "The Goal is terminal with no follow-up. The controller reads it as the terminal_action partition, so with no prior receipt the disposition is terminal, and the scheduler stops.",
-        "throttled_skip": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
+        "throttled_skip": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "todo_decision_scope_projection_repair": "A Todo user-gate scope is missing from the decision-scope projection; trigger user_gate_scope_projection_drift.",
         "unsettled_host_turn_recovery": "A host Turn is unsettled and must be recovered before anything else: the selected Todo and action portfolio are dropped, should_run is set, and normal, recovery and self-repair delivery are all refused."
       },
       "producers": [
         "loopx/control_plane/work_items/action_selection_contract.py::build_action_selection_recovery_fields",
-        "loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action",
-        "loopx/control_plane/quota/decision_summary.py::quota_effective_action",
-        "loopx/control_plane/quota/decision_summary.py::resolve_quota_run_decision",
+        "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction",
+        "loopx/control_plane/quota/run_decision.ts::quotaEffectiveAction",
+        "loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision",
+        "loopx/control_plane/quota/run_decision.ts::applyGoalOverrides",
+        "loopx/control_plane/quota/run_decision.ts::applyInboxOverrides",
         "loopx/cli_commands/quota_failure_report.py::quota_failure_payload",
         "loopx/control_plane/quota/heartbeat_receipt.py::fail_heartbeat_receipt",
         "loopx/control_plane/quota/live_decision.py::_apply_pending_capability_intent_precedence",
@@ -506,14 +508,15 @@
       ],
       "compatibility_only": {},
       "return_producers": [
-        "loopx/control_plane/quota/decision_summary.py::quota_effective_action",
-        "loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action"
+        "loopx/control_plane/quota/run_decision.ts::quotaEffectiveAction",
+        "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction"
       ],
       "return_paths": {
-        "loopx/control_plane/quota/decision_summary.py::_task_orchestration_effective_action": [
+        "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction": [
           0
         ]
-      }
+      },
+      "input_producer": "loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision"
     },
     "settlement_step_kind": {
       "meaning": "Effect-program settlement step executed for one Turn.",
@@ -972,6 +975,25 @@
         "autonomous_replan": "Appended when the replan decision is allowed, meaning no inbox priority is due and the replan obligation passes plan health, workspace guard, automation-prompt and registered-agent checks. The same branch clears normal delivery and sets the effective action to autonomous_replan_required, so the replan owns the whole turn.",
         "control_repair": "Appended when the turn is routed to a control-plane repair instead of delivery: stall self-repair, a capability gate asking to repair the bridge, a workspace guard being present, or a required automation-prompt upgrade. The repair is control-plane work, so it displaces the delivery it would otherwise run alongside.",
         "delivery_not_allowed": "The catch-all appended last when normal delivery is off for a reason none of the four specific causes names, such as a monitor-only work mode, a settled receipt-bound monitor, a monitor-quiet skip or an external-evidence wait. Because it is appended last it only surfaces as the chosen reason when no more specific cause applies."
+      }
+    },
+    "state_recovery_component_state": {
+      "meaning": "Offline owner-local readability of a component in an inert recovery audit; never execution or adoption authority.",
+      "tier": "cross_runtime",
+      "status": "canonical",
+      "owners": {
+        "python": null,
+        "typescript": "loopx/control_plane/state_recovery_contract.ts::RECOVERY_COMPONENT_STATES"
+      },
+      "values": [
+        "readable",
+        "historical_only",
+        "unknown"
+      ],
+      "value_notes": {
+        "readable": "An existing configuration verifier or the selected File/SQLite authority and full Todo/history readers accepted the captured component. This is historical readability, not a current Goal identity, permission or execution grant.",
+        "historical_only": "A standalone SQLite copy passed its bounded offline structural integrity check, but its bytes have not been adopted by a current domain owner. Restored provider identities and leases remain historical data.",
+        "unknown": "No supported owner inventory exists for remaining v0 state, or a component failed format, availability, qualified-runtime or owner-read validation. Unknown never becomes readable merely because archive or file hashes matched."
       }
     }
   },

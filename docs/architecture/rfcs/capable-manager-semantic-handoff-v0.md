@@ -107,7 +107,7 @@ The baseline already has substantial reusable machinery:
 
 | Existing owner | Source / fact | Consequence |
 | --- | --- | --- |
-| Manager identity/config | `loopx/chat_manager.py`: `open_manager_session`, `manager_workspace`, `manager_model_config` | Stable global role, audience-derived private workspace, `resume_latest`; default Codex model is `gpt-6-astra` / `high` |
+| Manager identity/config | `loopx/chat_manager.py`: `open_manager_session`, `manager_workspace`, `manager_model_config` | Stable global role, audience-derived private workspace, `resume_latest`; default Codex model is `gpt-6.1-sol` / `xhigh` |
 | Host execution | `loopx/chat_agent.py`: `_turn_prompt`, `CodexChatAgentSession.start`; `loopx/chat_runtime.py`: adapter creation/restoration | Codex app-server start/resume exists. Planning uses read-only sandbox and never approvals; only the manager read dynamic tool is added by this path |
 | Manager behavioral restriction | `MANAGER_AGENT_OBJECTIVE` and the planning prompt | Shell/arbitrary repository reads and mutations are restricted; outside intent delegation, durable changes become preview/apply proposals |
 | Session restoration | `loopx/chat_runtime.py` | Saved upstream identity is resumed when compatible; context-version and audience changes can force a new thread. This is not evidence that every deployed request resumes successfully |
@@ -808,6 +808,20 @@ Target an ingress receipt within two seconds on a healthy local service, indepen
 
 Use existing service recovery and receipt pumps. No manager-specific business automation for each kind of request. Expose configuration and failures through the existing CLI, capability settings and manager conversation. Troubleshooting distinguishes model failure, tool/policy denial, state conflict, unreachable receiver and transport formatting/delivery failure.
 
+**Provider configuration rejection:** a structured Responses
+`invalid_request_error` remains a rejected request when its JSON envelope omits
+HTTP status; conflicting or malformed status does not establish that category.
+Chat explains the model/account/provider check without publishing upstream prose
+or replaying the request. Desktop-owned Chat defaults to the standard Codex home
+unless its dedicated Chat override is explicit, so an unrelated terminal's
+provider configuration cannot replace the default account. CLI and LaunchAgent
+home precedence, original Session identity, explicit Runtime selection and
+provider permissions remain with their existing owners. Model discovery reads
+the same native home as execution. Changing the executor in the guided settings
+clears the previous model/effort overrides for the existing backend to resolve;
+preview and apply still own the persisted change. This bounded repair
+does not qualify sustained operation or every provider/model combination.
+
 **Turn-bound steering (A23):** preserve the requested Session, exact Turn,
 unchanged text and ingress identity through browser persistence, dispatch and
 replay. The current frontend requires persistent retry readback before sending;
@@ -846,6 +860,13 @@ No parallel bridge ledger or scheduler is required. The bundled provider's
 records bounded cross-conversation dispatch and remaining replacement qualification;
 private DM onboarding, ordinary non-Goal chat, streaming and media remain
 unqualified until the pinned installed journey passes.
+
+Group reply source verification reads the fresh message envelope and App identity
+in parallel before checking the canonical topic root. This removes their serial IO
+dependency without caching either observation or reading event-supplied ancestry
+early. Root mentions, current grants and original reply receipts still gate each
+outbound operation. Source-check timing alone does not qualify ingress feedback,
+complete-answer latency or the installed realtime journey.
 
 **Product boundary:** the Bot is a realtime conversation entry, not another
 steward. Ordinary project chat and direct conversation with a selected existing

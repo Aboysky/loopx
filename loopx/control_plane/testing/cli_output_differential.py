@@ -671,11 +671,18 @@ def _schema_migration_growth_allowance(
 
 
 # The unchanged status matrix adds 2,801 pretty JSON chars / 102 lines /
-# 1,910 compact chars for five source rows. This reviewed one-time transition
-# leaves headroom without changing absolute ceilings or ordinary v0-to-v0 growth.
+# 1,910 compact chars for five source rows. Quota should-run adds 2,617 JSON
+# chars or 167 Markdown chars for its inherited and direct source rows. This
+# reviewed one-time transition leaves headroom without changing absolute
+# ceilings or ordinary v0-to-v0 growth.
 _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
     ratio=0,
     json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_048},
+    markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
+)
+_QUOTA_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
+    ratio=0,
+    json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_800},
     markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
 )
 
@@ -683,16 +690,24 @@ _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
 def _projection_envelope_migration(
     base: dict[str, Any], candidate: dict[str, Any], *, output_format: str,
 ) -> tuple[dict[Metric, int], list[str], list[str]]:
-    """Qualify the one-time status schema transition, never unrelated growth."""
+    """Qualify the one-time projection schema transition, never unrelated growth."""
     before = tuple(base.get("projection_envelope_schema_versions") or [])
     after = tuple(candidate.get("projection_envelope_schema_versions") or [])
     if before == after:
         return {}, [], []
-    row_id = str(base["row_id"])
-    if (row_id.startswith(("surface/status/", "variant/status_task_graph_detail/"))
+    surface_id = str(base.get("surface_id") or "")
+    if (surface_id in {"status", "quota_should_run"}
             and before == () and after == ("loopx_projection_envelope_v0",)):
-        allowance = (_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.json
-                     if output_format == "json" else _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.markdown)
+        migration_allowance = (
+            _QUOTA_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE
+            if surface_id == "quota_should_run"
+            else _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE
+        )
+        allowance = (
+            migration_allowance.json
+            if output_format == "json"
+            else migration_allowance.markdown
+        )
         return allowance, [], ["projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
     return {}, ["projection envelope schema coverage changed"], []
 
@@ -754,7 +769,102 @@ def _authoring_input_migration(
             {"chars": 256, "utf8_bytes": 256, "lines": 0, "compact_payload_chars": 256}
         )
         reason = "Vision CLI authoring input added"
+    elif (surface in {"start_goal_guided", "start_goal_guided_command_pack_detail",
+                      "bootstrap_command_pack", "bootstrap_command_pack_message_only"}
+            and before.get("first_delivery_guidance") is False
+            and after.get("first_delivery_guidance") is True):
+        # Frozen 96-row fixture: +2,340 JSON chars, +3,496 for explicit
+        # command-pack detail, +578 Markdown. Keep all existing consumers and
+        # the full guidance; no additional lines or absolute budget increase.
+        chars = (
+            (3_600 if surface == "start_goal_guided_command_pack_detail" else 2_400)
+            if base.get("format") == "json" else 600
+        )
+        limits = {"chars": chars, "utf8_bytes": chars, "lines": 0,
+                  "compact_payload_chars": chars if base.get("format") == "json" else 0}
+        reason = "complete initial-delivery quality guidance added"
     return limits, [reason + "; bounded one-time growth"] if limits else []
+
+
+def _continuation_instruction_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[Metric, int], list[str]]:
+    """Qualify only reviewed instruction transitions on their actual carriers."""
+    row_id = str(base["row_id"])
+    surface = row_id.split("/")[1]
+    before = base.get("continuation_instructions") or {}
+    after = candidate.get("continuation_instructions") or {}
+
+    def migrated(clause: str) -> bool:
+        return (before.get(f"{clause}_before") is True
+                and before.get(f"{clause}_after") is False
+                and after.get(f"{clause}_before") is False
+                and after.get(f"{clause}_after") is True)
+
+    chars = 0
+    if surface in {
+        "quota_should_run", "loopx_turn_plan", "quota_should_run_all_detail",
+        "quota_should_run_goal_boundary_detail", "quota_should_run_scheduler_detail",
+        "quota_should_run_todo_summary_detail", "quota_should_run_turn_envelope",
+        "quota_should_run_user_todo_summary_detail", "quota_should_run_vision_detail",
+    }:
+        # Same-fixture context +208, with one character of receipt metadata
+        # variation; optional replan guidance +363. Do not loosen line budgets.
+        if migrated("context"):
+            chars += 224
+        if migrated("replan"):
+            chars += 384
+    elif surface in {"heartbeat_prompt_thin", "heartbeat_prompt_brief", "heartbeat_prompt_compact"}:
+        # Complete stop/correction rollout: thin +154, brief +163, compact +215.
+        if migrated("stop"):
+            chars = 224
+        if migrated("authorized_delivery"):
+            # Same public fixture: thin +427 body chars plus generator policy
+            # text in brief; retain authority/recovery clauses. Once present,
+            # ordinary growth limits resume; no new line or shape allowance.
+            chars += 512
+    if row_id.startswith((
+        "surface/heartbeat_prompt_thin/",
+        "variant/heartbeat_prompt_brief/",
+        "variant/heartbeat_prompt_compact/",
+        "variant/heartbeat_prompt_full/",
+    )) and migrated("outcome_refinement"):
+        # The complete outcome paragraph adds 523 chars/bytes in all four
+        # matched heartbeat modes. Bound that one-time addition, including
+        # a boolean budget diagnostic's single-character variation; later
+        # growth, other surfaces, lines and shapes receive no new allowance.
+        chars += 544
+    if not chars:
+        return {}, []
+    return {
+        "chars": chars, "utf8_bytes": chars, "lines": 0,
+        "compact_payload_chars": chars if base.get("format") == "json" else 0,
+    }, ["reviewed continuation instructions migrated; bounded one-time growth"]
+
+
+def _inline_agent_context_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[str, int], list[str]]:
+    # The unchanged public multi-subagent fixture grows 1,147 JSON characters
+    # when its bounded contribution replaces a historical reference. Qualify
+    # only that transition (133 chars headroom), never later inline growth.
+    old_paths = set(base.get("json_shape_paths") or [])
+    new_paths = set(candidate.get("json_shape_paths") or [])
+    if (
+        base.get("row_id") == "variant/quota_should_run_turn_envelope_multi_subagent/small/json"
+        and candidate.get("row_id") == base["row_id"]
+        and base.get("format") == candidate.get("format") == "json"
+        and base.get("action_signature_coverages") == candidate.get("action_signature_coverages")
+        == [ACTION_SIGNATURE_COVERAGE_V4]
+        and {"$.agent_context.detail_ref", "$.agent_context.content_hash"} <= old_paths
+        and "$.agent_context.contributions[]" not in old_paths
+        and {"$.agent_context.contributions[]", "$.agent_context.failures"} <= new_paths
+        and "$.agent_context.detail_ref" not in new_paths
+    ):
+        return {metric: 1_280 for metric in ("chars", "utf8_bytes", "compact_payload_chars")}, [
+            "bounded planning context migrated from reference to inline; one-time growth"
+        ]
+    return {}, []
 
 
 def _compare_row_growth(
@@ -777,6 +887,10 @@ def _compare_row_growth(
     review_signals.extend(fence_signals)
     authoring_allowance, authoring_signals = _authoring_input_migration(base, candidate)
     review_signals.extend(authoring_signals)
+    continuation_allowance, continuation_signals = _continuation_instruction_migration(base, candidate)
+    review_signals.extend(continuation_signals)
+    context_allowance, context_signals = _inline_agent_context_migration(base, candidate)
+    review_signals.extend(context_signals)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -818,6 +932,8 @@ def _compare_row_growth(
             projection_allowance.get(metric, 0),
             fence_allowance.get(metric, 0),
             authoring_allowance.get(metric, 0),
+            continuation_allowance.get(metric, 0),
+            context_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK
