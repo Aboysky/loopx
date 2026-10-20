@@ -420,11 +420,11 @@ def test_method_upgrade_reads_verified_old_result_without_rejudging(pack, monkey
     current = inspect_pack(**scope)
     original_prepare = store._prepared
 
-    def upgraded_method(record):
+    def upgraded_method(record, output_language=None):
         # Simulate a new method identity at the typed-owner boundary. The real
         # old method, child process and stored receipt were exercised above.
         return {
-            **original_prepare(record),
+            **original_prepare(record, output_language),
             "analysis_key": "b" * 64,
             "method_version": "future-method",
         }

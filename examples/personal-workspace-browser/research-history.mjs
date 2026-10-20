@@ -125,13 +125,15 @@ export const researchHistoryScenario = {
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
     let unavailableAnalysis = false, episodeMetadataLimit = null, comparisonFixture = false;
-    let analysisWrites = 0;
+    let analysisWrites = 0, localizedFixture = false;
     try {
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_, page) => {
         await page.route("**/api/chat/research-analysis**", async route => {
           if (route.request().method() !== "GET") {analysisWrites++; return route.fulfill({status: 403, json: {error: "Read-only presentation fixture"}});}
           if (!analysisFixture) return route.fulfill({json: {ok: true, catalog: {availability: "unavailable", reason_code: "no_available_pack", default_pack_id: null, packs: []}, pack: null}});
           const query = new URL(route.request().url()).searchParams;
+          const language = query.get('output_language');
+          assert(['zh', 'en'].includes(language), 'Every analysis and original-citation read binds the interface language');
           if (new URL(route.request().url()).pathname.endsWith('/citation')) {
             if (holdCitation) {citationStarted(); await new Promise(resolve => {releaseCitation = resolve;});}
             if (failedCitation) return route.fulfill({status: 503, json: {error: 'Synthetic citation transport unavailable'}});
@@ -144,6 +146,17 @@ export const researchHistoryScenario = {
           const selected = ["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a";
           if (holdOldAnalysis && selected === "a") {slowStarted(); await new Promise(resolve => {releaseOld = resolve;});}
           const readback = comparisonFixture ? comparisonReadback() : analysisReadback(selected);
+          for (const pack of [...readback.catalog.packs, readback.pack]) pack.config = {...pack.config, output_language: language};
+          if (readback.pack.result) {
+            readback.pack.result.output_language = language;
+            if (localizedFixture) {
+              readback.pack.result.episode_questions = readback.pack.episodes.map(episode => ({episode_id: episode.id,
+                question: language === 'zh' ? `${episode.id} 是否检验原始目标？` : `Did ${episode.id} test the original objective?`}));
+              for (const assessment of readback.pack.result.assessments) assessment.reason = language === 'zh'
+                ? '来源只记录了实验结果，缺少干预与目标瓶颈的联系。' : 'The source records the result but not the intervention’s link to the objective bottleneck.';
+              readback.pack.result.limitations = [language === 'zh' ? '合成展示；不是科学校准结果。' : 'Synthetic presentation; not scientific calibration.'];
+            }
+          }
           if (episodeMetadataLimit === 0) delete readback.pack.episodes;
           else if (episodeMetadataLimit !== null) readback.pack.episodes = readback.pack.episodes.slice(-episodeMetadataLimit);
           await route.fulfill(unavailableAnalysis && selected === "a"
@@ -721,6 +734,30 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await rows.last().locator(':scope > summary').click();
       await rows.last().getByText(/Synthetic evidence connects/).waitFor();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      localizedFixture = true;
+      await page.reload({waitUntil: 'networkidle'});
+      await history.getByRole('button', {name: '查看分析', exact: true}).click();
+      const chineseAnalysis = history.getByRole('region', {name: '轨迹深度分析', exact: true});
+      await chineseAnalysis.locator('.analysis-episode h4').first().filter({hasText: 'variant-alpha 是否检验原始目标？'}).waitFor();
+      assert.match(await chineseAnalysis.innerText(), /来源只记录了实验结果/);
+      const originalQuestion = chineseAnalysis.locator('.analysis-episode').first().getByText('原始研究问题', {exact: true});
+      await originalQuestion.click();
+      assert.match(await chineseAnalysis.locator('.analysis-episode').first().innerText(), /variant-alpha 的实验是否检验原始目标/);
+      await originalQuestion.click();
+      await page.setViewportSize({width: 1440, height: 1000});
+      await chineseAnalysis.evaluate(element => element.scrollIntoView({block: 'start'}));
+      await page.screenshot({path: resolve(outputDir, 'research-analysis-language-zh.png'), animations: 'disabled'});
+      await page.setViewportSize({width: 390, height: 844});
+      await chineseAnalysis.evaluate(element => element.scrollIntoView({block: 'start'}));
+      await page.screenshot({path: resolve(outputDir, 'research-analysis-language-mobile.png'), animations: 'disabled'});
+      await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
+      await page.reload({waitUntil: 'networkidle'});
+      const englishAnalysis = page.getByRole('region', {name: 'Trajectory analysis', exact: true});
+      await englishAnalysis.locator('.analysis-episode h4').first().filter({hasText: 'Did variant-alpha test the original objective?'}).waitFor();
+      assert.doesNotMatch(await englishAnalysis.innerText(), /来源只记录了实验结果/);
+      await page.evaluate(key => localStorage.setItem(key, 'zh-CN'), 'loopx-pw-locale');
+      await page.reload({waitUntil: 'networkidle'});
+      await chineseAnalysis.locator('.analysis-episode h4').first().filter({hasText: 'variant-alpha 是否检验原始目标？'}).waitFor();
       assert.equal(analysisWrites, 0, "Cached, reload, switch and keyboard reading never request execution");
       assert.equal(api.turnRequests.length, 0, "Reading the graph cannot start an Agent");
       return {note: "Three unchanged real checkpoint histories through production HTTP + packaged UI; per-Goal complete pagination, genuine negative evidence, no invented edges, reload/back/forward, mobile and failed refresh. Separate synthetic coincident-target regression; no benchmark qualification or model dispatch.",

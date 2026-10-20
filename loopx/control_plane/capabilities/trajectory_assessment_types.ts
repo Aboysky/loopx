@@ -2,6 +2,8 @@
 export const TRAJECTORY_METRICS = ['goal_alignment', 'benefit_test', 'discrimination', 'information_gain', 'evidence_adoption', 'redundancy'] as const;
 export type TrajectoryMetric = typeof TRAJECTORY_METRICS[number];
 export type AssessmentVerdict = 'yes' | 'no' | 'unknown';
+/** Analysis presentation only; never the language or identity of source evidence. */
+export type TrajectoryOutputLanguage = 'zh' | 'en';
 export interface TrajectorySource {
   id: string; artifact: string; artifact_sha256: string; first_line: number; text: string;
 }
@@ -28,6 +30,8 @@ export interface TrajectoryAssessment {
   metrics: Array<{metric: TrajectoryMetric; yes: number; no: number; unknown: number; eligible: number;
     assessed_fraction: number | null; missing_data_bounds: [number, number] | null}>;
   limitations: string[];
+  output_language?: TrajectoryOutputLanguage;
+  episode_questions?: Array<{episode_id: string; question: string}>;
 }
 
 /** Provider-observed facts, separate from inferred episode judgments. */

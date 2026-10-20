@@ -136,7 +136,8 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
                   return <details className="research-assessment" key={assessment.episode_id}>
                     <summary><span className="research-assessment-name">{assessment.episode_id}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
                     <div className="research-assessment-body">
-                      {episode ? <p className="research-assessment-question">{episode.question}</p> : null}
+                      {episode ? <><p className="research-assessment-question">{result.episode_questions?.find(q => q.episode_id === episode.id)?.question ?? episode.question}</p>
+                        {result.episode_questions ? <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><p>{episode.question}</p></details> : null}</> : null}
                       <p>{assessment.reason}</p>
                       <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
                     </div>
