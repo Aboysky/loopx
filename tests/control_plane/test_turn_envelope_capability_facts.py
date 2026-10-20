@@ -184,6 +184,9 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     prompt = prompt_path.read_text()
     authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
     assert authority["vision_continuation_audit"] == projected
+    # The native work-size and outcome rules must reach the provider too;
+    # retaining an audit alone cannot tell it what qualifies as useful work.
+    assert authority["execution_profile"] == full["execution_profile"]
     assert authority["vision_continuation_audit"]["vision_gap_judge"]["done"] is False
     assert authority["action_signature"] == envelope["action_signature"]
     assert authority["detail_ref"] == envelope["detail_ref"]
@@ -204,6 +207,16 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     ):
         invalid = deepcopy(request)
         invalid["turn_envelope"]["contract_capsule"]["vision_continuation_audit"][field] = value
+        refused = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
+        assert refused.returncode != 0 and "action signature" in refused.stderr
+        assert prompt_path.read_text() == prompt
+    for field, value in (
+        ("minimum_scale", "any_operation"),
+        ("must_include", []),
+        ("outcome_floor", {"configured": False, "must_advance": []}),
+    ):
+        invalid = deepcopy(request)
+        invalid["turn_envelope"]["contract_capsule"]["execution_profile"][field] = value
         refused = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
         assert refused.returncode != 0 and "action signature" in refused.stderr
         assert prompt_path.read_text() == prompt

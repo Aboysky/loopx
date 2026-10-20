@@ -540,9 +540,16 @@ audit never reached the provider. That adapter now forwards the existing audit
 and original capture route/hash. Real File/SQLite normal/replan captures through
 a protocol-only DSH subprocess cover ordered obligations, the continuing judge,
 insufficient-proof conditions, signature refusal and unchanged source/state.
-Audit-absent prompts retain their prior input; the outer executor keeps all
+The same audit also found work qualification missing: the capsule filtered out
+outcome-floor/degradation rules, and that Host omitted the whole existing
+execution profile. The typed projection now retains it intact and the Host
+forwards it, with work/validation evidence returned to the outer executor.
+Native source oracles and signed mutations cover these rules. Inputs without
+either contract retain their prior prompt; the outer executor keeps all
 state/quota/scheduler effects. This qualifies clause delivery at that caller,
-not model adherence, installed adoption or complete-cost improvement.
+not model adherence, installed adoption or complete-cost improvement. Count the
+cost of restored requirements; the earlier incomplete input is not an accepted
+efficiency baseline.
 
 中文：本批修复验收步骤、继续说明和当前判断在 capsule 中丢失的问题；签名一致曾只
 比较已经裁剪过的投影。File/SQLite 同次捕获验证完整条款和篡改后的签名差异；

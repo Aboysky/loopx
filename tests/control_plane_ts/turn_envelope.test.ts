@@ -73,6 +73,39 @@ const protocolActionFields = {
   agent_action: "advance one bounded segment",
 };
 
+test("work profile retains outcome rules, ordered requirements and signature coverage", () => {
+  const source = payload();
+  const profile = {
+    cadence: "bounded_progress_segment", minimum_scale: "multi_surface_or_implementation",
+    must_include: ["coherent_artifact", "targeted_validation", "state_writeback"],
+    spend_rule: "spend_only_after_artifact_validation_writeback",
+    outcome_floor: {configured: true, surface_streak_threshold: 3,
+      must_advance: ["primary_goal_outcome"],
+      avoid: ["Retain the complete accepted outcome. " + "完整条件 ".repeat(120)]},
+    degradation_policy: {small_scale_streak_threshold: 2, on_degradation: "require_blocker_or_expand_next_batch"},
+  };
+  source.execution_profile = profile;
+  const original = structuredClone(source);
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const projected = (envelope.contract_capsule as JsonObject).execution_profile;
+  assert.deepEqual(projected, profile);
+  const signature = turnEnvelopeActionSignatureDocument(envelope);
+  for (const mutate of [
+    (value: JsonObject) => {value.minimum_scale = "any_operation";},
+    (value: JsonObject) => {value.must_include = [];},
+    (value: JsonObject) => {(value.outcome_floor as JsonObject).must_advance = [];},
+    (value: JsonObject) => {delete value.degradation_policy;},
+  ]) {
+    const changed = structuredClone(envelope);
+    mutate((changed.contract_capsule as JsonObject).execution_profile as JsonObject);
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed), signature);
+  }
+  assert.deepEqual(source, original);
+  assert.equal((buildTurnEnvelope({payload: payload(), protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""}).contract_capsule as JsonObject).execution_profile, undefined);
+});
+
 test("budget pressure retains complete independent planning context", () => {
   const source = payload();
   const context = {

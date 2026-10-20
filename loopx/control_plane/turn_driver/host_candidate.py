@@ -110,7 +110,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
             selected.pop("text_ref")
         authority["selected_todo"] = selected
     capsule = _mapping(envelope.get("contract_capsule"))
-    for field in ("unavailable_context", "vision_continuation_audit"):
+    for field in ("unavailable_context", "vision_continuation_audit", "execution_profile"):
         value = _mapping(capsule.get(field))
         if value:
             authority[field] = value
@@ -189,6 +189,13 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "for the outer Turn executor. The audit grants no new authority.\n"
         if authority.get("vision_continuation_audit") else ""
     )
+    work_instruction = (
+        "Use execution_profile to size and qualify the work, including its required "
+        "artifact, validation, outcome and degradation rules. Return the work and "
+        "validation evidence; state writeback and quota effects belong to the outer "
+        "Turn executor. The profile grants no new permissions.\n"
+        if authority.get("execution_profile") else ""
+    )
     return (
         "You are executing one bounded LoopX-governed work segment.\n"
         "The JSON below is the complete host authority for this Turn. Execute "
@@ -201,6 +208,7 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         f"{planning_context_instruction}"
         f"{replan_instruction}"
         f"{acceptance_instruction}"
+        f"{work_instruction}"
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"

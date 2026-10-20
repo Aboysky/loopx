@@ -67,7 +67,6 @@ const CONTRACT_CAPSULE_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "selected_next_due_at", "non_runnable_non_monitor_count",
     "material_transition", "action",
   ],
-  execution_profile: ["cadence", "minimum_scale", "spend_rule", "must_include"],
   execution_obligation: [
     "kind", "contract", "contract_obligation", "must_attempt_work",
     "notify_is_execution_gate", "delivery_allowed", "reason",
@@ -538,6 +537,12 @@ function contractCapsule(
   }
   const unavailableContext = projectTurnStartUnavailableContext(payload.turn_start_capability_hook_dispatch);
   if (unavailableContext) capsule.unavailable_context = unavailableContext;
+  // Work qualification is behavioral context, including its outcome and
+  // degradation rules. Display-field filtering must not weaken that contract.
+  const executionProfile = object(payload.execution_profile);
+  if (Object.keys(executionProfile).length > 0) {
+    capsule.execution_profile = structuredClone(executionProfile);
+  }
   // These existing source fields govern evidence and continuation, rather
   // than summarize display text. Preserve every clause, order, empty value
   // and current judge without copying the detailed acceptance-gap ledger.

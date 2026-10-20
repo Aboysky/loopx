@@ -285,7 +285,12 @@ Shared DSH/cloud Host input forwards this audit from the signed capsule, with
 the original capture route and hash for additional acceptance/coverage evidence.
 Hosts read its ordered obligations and current judge before proposing closure;
 they return a semantic result while the outer Turn executor owns state, quota
-and scheduler effects. Audit-absent inputs retain their previous prompt.
+and scheduler effects. The same input carries the complete existing
+`execution_profile`, including outcome-floor and degradation rules, to size and
+qualify work. Display filtering must not discard those clauses or ordered
+requirements before signing. Hosts return work and validation evidence; the
+profile does not transfer writeback or quota ownership. Historical profiles keep
+their original signature, and inputs without either contract retain their prompt.
 
 中文：验收 capsule 完整保留原来源的有序步骤、继续执行说明、当前结束／继续判断、
 认可的证据种类和不能作为证明的条件；展示裁剪不能丢掉条款或列表尾部。新投影使用
@@ -293,7 +298,10 @@ and scheduler effects. Audit-absent inputs retain their previous prompt.
 超过 8 KiB 时保留 warning，不以缩短义务或放大预算替代语义验收。
 共享 DSH／云端 Host 输入也从签名 capsule 传递这份 audit，附原捕获路由与哈希，供
 补读验收／覆盖证据；提议收尾前须读取有序义务及当前 judge。Host 返回语义结果，
-状态、quota 和 scheduler 效果仍由外层 Turn executor 执行。没有 audit 的输入保持原 prompt。
+状态、quota 和 scheduler 效果仍由外层 Turn executor 执行。同一输入也传递完整的既有
+`execution_profile`，包括成果底线、退化规则和有序要求，供确定工作规模及验收；不能
+在签名前按展示字段丢弃。Host 返回工作及验证证据，不取得写回或扣额权。历史 profile
+保留原签名；两种契约都不存在时保持原 prompt。
 
 No new frontend/Lark operation or configuration is introduced. Regenerate saved
 expanded heartbeat prompts to consume the new contract; bootstrap prompts reload
