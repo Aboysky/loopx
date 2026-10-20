@@ -1098,8 +1098,12 @@ function buildPersonalHomeModel(
         })),
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,
+      workerObservations: !goal.host_worker_observations ? null
+        : goal.host_worker_observations.goal_id === goal.id ? goal.host_worker_observations
+        : {read_status: "unreadable", rows: []},
       goalId: goal.id,
       parentGoalId: goal.parent_goal_id,
+      sourceAccess: goal.source_access ? {...goal.source_access, readOnly: true} : undefined,
       latestActivity: row.latestRun?.generated_at ?? "",
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
@@ -1127,7 +1131,7 @@ function buildPersonalHomeModel(
           modelConfig: goal.spawn_policy?.model_config,
         },
       } : {}),
-      title: personalGoalTitle(goal.id, goal.display_name),
+      title: personalGoalTitle(goal.id, goal.source_access?.label ?? goal.display_name),
       usage: (() => {
         const goalUsage = usageById.get(goal.id);
         return goalUsage ? {
@@ -1279,6 +1283,7 @@ function PersonalGoalHome({
   theme: "light" | "dark";
 }) {
   const readOnly = statusSourceControl.activeSource.readOnly
+    || rows.find(row => row.goal.id === requestedGoalId)?.goal.source_access?.read_only === true
     || Boolean(rootGoalId && !rows.some(row => row.goal.id === rootGoalId));
   const remoteGoalLifecycleHost = statusSourceControl.activeSource.kind === "ssh_tunnel"
     ? statusSourceControl.activeSource.hostAlias
