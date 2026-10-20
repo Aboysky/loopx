@@ -167,6 +167,8 @@ def test_continuation_reuses_identical_excerpts_despite_other_capture_bytes(pack
     new_operation = {**scope, "pack_id": successor["pack_id"], "analysis_key": successor["analysis_key"]}
     completed = execute_pack(**new_operation, codex="must-not-run")
     assert completed["reused"] and completed["reused_from_analysis_key"] == operation["analysis_key"]
+    reused_output = json.loads((old_directory.parent / successor["analysis_key"] / "model-output.json").read_text())
+    assert set(reused_output) == {"assessments", "limitations"}
     view = inspect_pack(**scope)
     assert view["result"]["scope"]["revision"] == "capture-2"
     assert view["result"]["metrics"] == original["metrics"]

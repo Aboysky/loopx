@@ -210,7 +210,9 @@ def execute(
             # Same declared evidence, eligibility, scope and model contract.
             # Requalify against the new exact manifest; never splice labels or
             # add old metric totals to new ones. This path launches no child.
-            output = reuse_from["output"]
+            output = {key: reuse_from["output"][key] for key in
+                      ("assessments", "limitations", "episode_questions")
+                      if key in reuse_from["output"]}
             result = effect_runtime_result(
                 "benchmark.trajectory.qualify", {**prepared, "output": output}
             )

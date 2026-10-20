@@ -125,7 +125,7 @@ export const researchHistoryScenario = {
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
     let unavailableAnalysis = false, episodeMetadataLimit = null, comparisonFixture = false;
-    let analysisWrites = 0, localizedFixture = false, continuationFixture = false;
+    let analysisWrites = 0, localizedFixture = false, continuationFixture = false, equivalentContinuation = false;
     try {
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_, page) => {
         await page.route("**/api/chat/research-analysis**", async route => {
@@ -179,6 +179,11 @@ export const researchHistoryScenario = {
           }
           if (episodeMetadataLimit === 0) delete readback.pack.episodes;
           else if (episodeMetadataLimit !== null) readback.pack.episodes = readback.pack.episodes.slice(-episodeMetadataLimit);
+          if (equivalentContinuation && selected === 'a') {
+            Object.assign(readback.pack.continuation, {can_reuse: true,
+              sources: {added: [], revised: [], removed: []}, episodes: {added: [], revised: [], removed: []}, reassessed_episode_ids: [], verdict_changes: []});
+            readback.pack.result = null; readback.pack.job = null;
+          }
           await route.fulfill(unavailableAnalysis && selected === "a"
             ? {status: 503, json: {error: "Synthetic analysis read unavailable"}}
             : {json: readback});
@@ -807,6 +812,12 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
       await page.getByRole('button', {name: 'Previous version', exact: true}).waitFor();
+      equivalentContinuation = true;
+      await page.reload({waitUntil: 'networkidle'});
+      await page.getByRole('button', {name: 'Reuse analysis', exact: true}).first().waitFor();
+      await page.getByRole('button', {name: 'About deep analysis', exact: true}).click();
+      await page.getByText('This action reuses existing judgments without a model call; original usage stays with the previous version.', {exact: true}).waitFor();
+      await page.keyboard.press('Escape');
       assert.equal(analysisWrites, 0, "Cached, reload, switch and keyboard reading never request execution");
       assert.equal(api.turnRequests.length, 0, "Reading the graph cannot start an Agent");
       return {note: "Three unchanged real checkpoint histories through production HTTP + packaged UI; per-Goal complete pagination, genuine negative evidence, no invented edges, reload/back/forward, mobile and failed refresh. Separate synthetic coincident-target regression; no benchmark qualification or model dispatch.",
