@@ -132,7 +132,7 @@ export function boundedMonitorProfile(profile: HintProfile, payload: JsonObject,
   return {...profile, interval: initial, progression,
     reset: reset ? {cadence_class: profile.cadence_class, app_automation_initial_interval_minutes: initial,
       app_automation_initial_rrule: rruleForMinutes(initial), app_automation_max_interval_minutes: profile.maximum,
-      unchanged_poll_backoff_multiplier: 2, local_scheduler_unchanged_poll_limit: 3,
-      claude_code_loop_unchanged_poll_limit: 3, ...reset} : undefined,
+      unchanged_poll_backoff_multiplier: 2, local_scheduler_unchanged_poll_limit: profile.cli_limit,
+      claude_code_loop_unchanged_poll_limit: profile.claude_limit, ...reset} : undefined,
     detail: plan ?? undefined};
 }

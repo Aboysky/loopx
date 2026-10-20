@@ -4,6 +4,8 @@ import { jsonObject, requireJsonObject, requireNonEmptyString, requireBoolean, r
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { projectCadenceSchedule } from "../quota/automation_cadence.ts";
+import { EffectiveAction } from "../quota/effective_action.generated.ts";
+import { schedulerQuotaContext, SCHEDULER_QUOTA_IDENTITY_KEYS as BASE_KEYS } from "../quota/turn_envelope.ts";
 import { rruleForMinutes, schedulerRruleIntervalMinutes,
   APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY } from "./state_store.ts";
 import { evaluateSchedulerStateTransition, SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
@@ -12,7 +14,6 @@ import { schedulerAckHint, schedulerFailureHint, schedulerFallbackHint, legacySc
 import { applyHintExecutionContext, goalRuntimeContinuation } from "./hint_execution.ts";
 import { boundedMonitorProfile, hintFrontier, hintPendingRetry, hintTimestamp, type HintProfile } from "./hint_wait.ts";
 
-const BASE_KEYS = ["goal_id", "agent_identity.agent_id", "effective_action", "heartbeat_recommendation.recommended_mode", "interaction_contract.mode"];
 const FRONTIER_KEYS = ["selected_todo.todo_id", "selected_todo.action_kind", "selected_todo.target_key", "selected_todo.claimed_by", "selected_todo.capability_binding_ref"];
 const SSH = "codex_app_ssh_goal";
 const NATIVE_BLOCK = "update_goal_blocked_keep_loopx_active";
@@ -277,7 +278,7 @@ function completeCadenceProjection(request: CompleteHintRequest, profile: HintPr
   const contains = ["local_scheduler", "codex_cli_tui", "claude_code_loop", "final_quota_replan_check", "reset_policy_detail", "stateful_backoff_detail"];
   if (profile.cli_limit !== null) { limits[SSH] = profile.cli_limit; after[SSH] = (loops[SSH] as JsonObject).after_limit; contains.splice(2, 0, SSH); }
   const arbitration = request.arbitration as JsonObject;
-  const spend = jsonObject(payload.automation_liveness)?.spend_policy || jsonObject(payload.execution_obligation)?.spend_policy || jsonObject(payload.heartbeat_recommendation)?.spend_policy || null;
+  const spend = schedulerQuotaContext(payload).spend_policy;
   const hint: JsonObject = {schema_version: "scheduler_hint_v0", source: "quota.should-run", action: profile.action,
     cadence_class: profile.cadence_class, reason_code: arbitration.reason_code, reason: profile.reason, spend_policy: spend,
     app_automation: app, unchanged_poll: {limits, after_limits: after, final_quota_replan_check_enabled: replan.enabled,
@@ -434,7 +435,7 @@ function pausedHint(context: JsonObject, mode: string): JsonObject {
 
 function automaticCadenceWait(payload: JsonObject, arbitration: JsonObject, context: JsonObject): JsonObject | null {
   const eligibility = jsonObject(jsonObject(payload.automation_cadence_readback)?.eligibility);
-  if (payload.decision !== "wait" || payload.effective_action !== "blocked_wait" || arbitration.disposition !== "quiet_wait"
+  if (payload.decision !== "wait" || payload.effective_action !== EffectiveAction.BLOCKED_WAIT || arbitration.disposition !== "quiet_wait"
     || !(context.app_automation_applicability === "applicable" || context.codex_app_applicability === "applicable")
     || !eligibility || eligibility.state !== "waiting" || eligibility.reason !== "minimum_interval_wait"
     || eligibility.eligible_now !== false || typeof eligibility.next_eligible_at_ms !== "number"
@@ -453,6 +454,9 @@ function selectedProfile(request: JsonObject, arbitration: JsonObject): HintProf
   const disposition = String(arbitration.disposition);
   let profile = CADENCE_PROFILES[disposition];
   if (!profile) throw new EffectRuntimeRequestError(`unhandled scheduler disposition: ${disposition}`);
+  if (disposition === "monitor_wait" && arbitration.pending_dependency_wait === true) {
+    profile = {...profile, cli_limit: null, claude_limit: null};
+  }
   if (disposition === "human_gate" || disposition === "monitor_wait") profile = boundedMonitorProfile(profile, payload, request);
   if (disposition === "active_work") profile = {...profile, advance: arbitration.mode === "capability_bridge_repair"
     && jsonObject(jsonObject(payload.interaction_contract)?.agent_channel)?.delivery_allowed === false};
@@ -464,6 +468,10 @@ function selectedProfile(request: JsonObject, arbitration: JsonObject): HintProf
     profile = {...profile, action: "backoff_until_state_change", interval: progression[0], maximum: progression[progression.length - 1],
       cli_limit: null, claude_limit: null, progression,
       reason: "an automatic clock-backed successor is pending; keep quiet rechecks until its scheduled instant, then follow fresh admission gates"};
+  } else if (disposition === "agent_scope_wait" && arbitration.pending_dependency_wait === true) {
+    profile = {...profile, action: "backoff_until_state_change", interval: 10, maximum: 60,
+      cli_limit: null, claude_limit: null, progression: [10, 20, 30, 60],
+      reason: "an exact successor has a registered pending dependency; keep quiet source rechecks and follow fresh admission gates when it changes"};
   }
   return profile;
 }
@@ -472,7 +480,7 @@ function completeHint(request: CompleteHintRequest): JsonObject {
   const context = requireJsonObject(request.context, "scheduler execution context");
   const payload = requireJsonObject(request.payload, "quota hint facts");
   if (context.valid !== true) return invalidContextHint(context);
-  const mode = String(jsonObject(payload.heartbeat_recommendation)?.recommended_mode || "");
+  const mode = schedulerQuotaContext(payload).recommended_mode;
   if (mode === "goal_stopped" || mode === "quota_paused") return pausedHint(context, mode);
   if (!jsonObject(request.arbitration)) throw new EffectRuntimeRequestError("scheduler arbitration must come from the interaction projection");
   const arbitration = request.arbitration as JsonObject;
