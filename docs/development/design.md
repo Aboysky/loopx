@@ -151,7 +151,10 @@ source, method and limitation paragraphs before adding another note.
   actual judgment. Show the shared interpretation once on demand. Expand an
   individual row for its complete question, verbatim rationale and source links;
   do not repeat a long question template, full rationale and button wall for
-  every item. Use declared identities rather than extracting guessed labels
+  every item. Apply the same hierarchy to the deep-analysis reader: opening
+  analysis should show comparable episode rows, not expand every evidence
+  section. Show each rationale and its citations once within that episode.
+  Use declared identities rather than extracting guessed labels
   from prose. Keep unknowns, exclusions and denominators visible at the metric,
   and preserve keyboard and touch access to the full evidence.
 - When analysis has a successor, show one compact version/change summary and

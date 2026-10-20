@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from "react";
-import {ArrowUpRight, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
+import {ArrowUpRight, ChevronDown, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
 import {requestJson} from "../../data/chat";
@@ -279,16 +279,21 @@ export function ResearchAnalysisPanel({analysis: a}: {analysis: Controller}) {
       {failed && !a.pending ? <p className="analysis-warning" role="status">{p.job?.status === "cancelled" ? (zh ? "分析已取消，研究历史保持可读。" : "Analysis cancelled. Research history remains readable.") : (zh ? "上次分析未完成；可重试，原失败记录会保留。" : "The last analysis did not complete. Retry preserves its failure record.")}</p> : null}
       {result ? <>
         <div className="analysis-finding"><span>{zh ? "Agent 判断 · 未校准" : "Agent interpretation · uncalibrated"}{p.applicability === "historical" ? (zh ? " · 历史结果" : " · Historical result") : ""}</span><h4>{headline}</h4></div>
-        {p.episodes?.map(episode => <section className="analysis-episode" key={episode.id}><h4>{result.episode_questions?.find(q => q.episode_id === episode.id)?.question ?? episode.question}</h4>
+        {p.episodes?.map(episode => <details className="analysis-episode" key={`${p.pack_id}:${p.analysis_key}:${episode.id}`}>
+          <summary><span className="analysis-episode-name">{episode.id}</span><span className="analysis-episode-verdicts">{(["benefit_test", "evidence_adoption"] as const).map(metric => {
+            const row = result.assessments.find(item => item.episode_id === episode.id && item.metric === metric);
+            return row ? <span key={metric}>{metricCopy[metric][zh ? 0 : 1]} · {verdictLabel(metric, row.verdict, zh)}</span> : null;
+          })}</span><ChevronDown size={14} aria-hidden/></summary>
+          <div className="analysis-episode-body"><h4>{result.episode_questions?.find(q => q.episode_id === episode.id)?.question ?? episode.question}</h4>
           {result.episode_questions ? <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><p>{episode.question}</p></details> : null}
           <div className="analysis-episode-context">{(["benefit_test", "evidence_adoption"] as const).map(metric => {
             const row = result.assessments.find(item => item.episode_id === episode.id && item.metric === metric);
             return row ? <div key={metric}><strong>{metric === "benefit_test" ? (zh ? "原目标收益的检验与缺口" : "Original-objective utility test and its gaps") : (zh ? "证据如何影响后续行动" : "How evidence informed subsequent action")}</strong><p>{row.reason}</p>{citationButtons(row.citations)}</div> : null;
           })}</div>
-          <details className="analysis-evidence-details"><summary>{zh ? "展开逐项判断与证据" : "Inspect individual judgments and evidence"}</summary><div className="analysis-judgments">{result.assessments.filter(row => row.episode_id === episode.id).map(row => {
+          <div className="analysis-judgments">{result.assessments.filter(row => row.episode_id === episode.id && row.metric !== "benefit_test" && row.metric !== "evidence_adoption").map(row => {
           const label = metricCopy[row.metric];
           return <details key={row.metric}><summary><strong>{label?.[zh ? 0 : 1] ?? row.metric}</strong><span>{verdictLabel(row.metric, row.verdict, zh)}</span></summary><p className="analysis-question">{label?.[zh ? 2 : 3]}</p><p>{row.reason}</p>{citationButtons(row.citations)}</details>;
-        })}</div></details></section>)}
+        })}</div></div></details>)}
         <details className="analysis-method"><summary>{zh ? "来源、方法、覆盖与分析成本" : "Sources, method, coverage and analysis cost"}</summary><p>{p.objective}</p><dl><dt>{zh ? "来源范围" : "Source scope"}</dt><dd>{p.scope.case_id} · {p.scope.run_id}<br/>{p.scope.window}</dd><dt>{zh ? "方法" : "Method"}</dt><dd>{result.method_version} · {zh ? "模型判断未校准" : "Uncalibrated model judgment"}</dd><dt>{zh ? "模型设置" : "Requested model"}</dt><dd>{p.config.model} / {p.config.effort} / {p.config.service_tier} · {zh ? "实际服务档位" : "Served tier"}: {p.job?.served_service_tier ?? (zh ? "未知" : "unknown")}</dd><dt>{zh ? "分析用量" : "Analysis usage"}</dt><dd>{p.job?.reused_from_analysis_key ? (zh ? "复用上一版判读，无新增模型调用；原用量保留在上一版。" : "Reused previous judgments without a new model call; original usage stays with the previous version.") : <>{p.job?.analysis_wall_seconds == null ? "—" : `${p.job.analysis_wall_seconds.toFixed(1)}s`} · {zh ? "输入" : "input"} {p.job?.usage?.input_tokens?.toLocaleString() ?? "—"} / {zh ? "输出" : "output"} {p.job?.usage?.output_tokens?.toLocaleString() ?? "—"} tokens · {zh ? "金额未采集，推理 token 已包含于输出" : "Dollar cost unmeasured; reasoning tokens are included in output"}</>}</dd><dt>{zh ? "覆盖" : "Coverage"}</dt><dd>{p.episode_count} {zh ? "个固定片段" : "fixed episodes"} · {p.source_count} {zh ? "份来源" : "sources"} · {zh ? "总体片段数" : "Population"}: {p.selection.population_episodes ?? (zh ? "未知" : "unknown")}</dd><dt>{zh ? "取样规则" : "Selection"}</dt><dd>{p.selection.rule}</dd><dt>{zh ? "版本" : "Revision"}</dt><dd>{p.scope.revision}</dd></dl><ul>{result.limitations.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{zh ? "引用行存在不等于解释正确；本页不提供独立科学校准结论。" : "A valid citation range does not establish entailment or independent scientific calibration."}</p></details>
       </> : null}
       {/* Bound native evidence is readable before any model assessment exists. */}
