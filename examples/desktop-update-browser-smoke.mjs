@@ -483,7 +483,7 @@ try {
   // its error projection (fresh Mac without Python 3.11+: installer exit 2),
   // not the pre-fix permanent loading shape. The projection is derived by the
   // page from desktop_update_status itself.
-  environmentTelemetry = { os_version: "26.5", arch: "aarch64", runtime_executable_found: false, python3_found: false, python3_version: null };
+  environmentTelemetry = { os_version: "26.5", arch: "aarch64", runtime_executable_found: false, python3_found: false, python3_version: null, node_found: null, node_version: null };
   nativeState = { phase: "error", details: { code: "runtime_install_exit_2" } };
   await page.reload();
   await page.waitForFunction(() => document.querySelector("main").dataset.state === "error");
