@@ -1,0 +1,312 @@
+{
+  "schema_version": "loopx_public_packaged_ui_qualification_v1",
+  "recorded_at_utc": "2026-10-20T06:48:06.541555+00:00",
+  "pull_request": 6784,
+  "qualification": "Complete selected packaged Outcomes and acceptance-oracle journeys",
+  "tested_head": "20894c3c3e07eaf3902d11fde5a3b80ff76b84ce",
+  "tested_tree": "4be8fb37bbc1a2734bd902d44212ce1682baca78",
+  "source_parent": "9f2cba7cd1585b42245ac31a5badbafb938f83fc",
+  "source_fix_scope": [
+    "Handoff uses the shared configured-checks decoder for all four retained sources",
+    "Goal source links use the canonical digest predicate; consumer inventory is registered"
+  ],
+  "build": {
+    "status": "passed",
+    "head": "20894c3c3e07eaf3902d11fde5a3b80ff76b84ce",
+    "tree": "4be8fb37bbc1a2734bd902d44212ce1682baca78",
+    "bundle_source_revision": "20894c3c3e07eaf3902d11fde5a3b80ff76b84ce",
+    "source_inputs_equal": true,
+    "source_input_count": 584,
+    "bundle_manifest_sha256": "0d7e63713ab66d27b83ba29eca81427a621711163c58fcf75a048e7a10d2131b",
+    "build_command": ".venv/bin/python scripts/chat_bundle.py build",
+    "included_checks": [
+      "Dashboard tsc --noEmit",
+      "Vite production Chat build",
+      "Chat bundle integrity and source freshness"
+    ],
+    "bundle_file_count": 36,
+    "current_asset_count": 31
+  },
+  "environment": {
+    "python": "3.12.14",
+    "node": "24.19.0",
+    "sqlite": "3.53.3",
+    "playwright": "1.62.1",
+    "chromium_revision": "1234",
+    "browser": "Chrome for Testing 151.0.7922.34",
+    "chinese_font": "Noto Sans CJK SC",
+    "usage_ping": "disabled"
+  },
+  "results": [
+    {
+      "journey": "outcomes",
+      "status": "passed",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-20T06:43:49Z",
+      "finished_at_utc": "2026-10-20T06:44:36Z",
+      "elapsed_seconds": 47.088,
+      "imports_only_warmup_seconds": 5.38,
+      "harness": "examples/personal-workspace-browser/goal-outcome-recovery.mjs",
+      "executed_harness_sha256": "965e868e4989b237725f001608f50434bc55d69bd971a2c03cdd54d9fc9de4ec",
+      "fixture_deadline_ms": 90000,
+      "checks": [
+        "newer native outcome/older delivery snapshot",
+        "draft and pending request/delivery loading and error",
+        "unsubmitted draft/read failure",
+        "committed write/lost reply/failed reconciliation",
+        "stale basis disables rebase",
+        "same-operation replay without duplication",
+        "native concurrent write/explicit rebase",
+        "imported check configuration/delivery loading and error",
+        "synthetic lifetime change clears pending and imported configuration",
+        "remote same-id source/cache/write isolation",
+        "390px",
+        "keyboard"
+      ]
+    },
+    {
+      "journey": "oracle",
+      "status": "passed",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-20T06:44:58Z",
+      "finished_at_utc": "2026-10-20T06:45:40Z",
+      "elapsed_seconds": 42.209,
+      "imports_only_warmup_seconds": 1.052,
+      "harness": "examples/personal-workspace-browser/goal-acceptance-oracle.mjs",
+      "executed_harness_sha256": "40aecd7f6c83c0c8d95932ef639d26eaae25fac99d859087588bb15fd07191d9",
+      "fixture_deadline_ms": 20000,
+      "checks": [
+        "native conversation preparation without execution",
+        "automatic prepared-plan discovery",
+        "one contextual owner action",
+        "no mandatory JSON/revision form",
+        "exact native readback",
+        "download preserves source and exact versions",
+        "stale export retains historical witness without passing or command execution",
+        "changed output clears green without execution",
+        "failure/recovery",
+        "advanced import rejection",
+        "remove checks/default outcome review",
+        "390px",
+        "keyboard/reduced-motion"
+      ]
+    }
+  ],
+  "outcomes_capture": {
+    "source_harness": "examples/personal-workspace-browser/goal-outcome-recovery.mjs",
+    "source_sha256": "8706e689a7a7b16a7d7184b4a0c1486bdd49fac1ece6b88215d4d73c57361ea7",
+    "capture_sha256": "965e868e4989b237725f001608f50434bc55d69bd971a2c03cdd54d9fc9de4ec",
+    "inverse_transform_equals_original": true,
+    "changes": [
+      "Relative support import for ignored capture location",
+      "Two supplemental initial Overview screenshots and scroll/viewport observations; restore original desktop size before journey"
+    ],
+    "original_assertions_deadlines_and_operations": "preserved",
+    "not_yet_executed": false,
+    "execution_status": "passed"
+  },
+  "outcomes_first_viewports": [
+    {
+      "name": "overview-desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "observation": {
+        "windowScrollY": 0,
+        "viewportWidth": 1440,
+        "documentScrollWidth": 1440,
+        "nonzeroElementScroll": []
+      }
+    },
+    {
+      "name": "overview-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "observation": {
+        "windowScrollY": 0,
+        "viewportWidth": 390,
+        "documentScrollWidth": 390,
+        "nonzeroElementScroll": []
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "outcomes-overview-desktop.png",
+      "bytes": 132060,
+      "sha256": "66d74ec52a2e1a4235b72a096ef6b127edb03e6466659f8de2534ce576c59395",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "journey": "outcomes",
+      "first_viewport": true,
+      "reviewed_visually": true,
+      "public_safe_synthetic_fixture": true,
+      "png_metadata": {}
+    },
+    {
+      "file": "outcomes-overview-narrow.png",
+      "bytes": 63972,
+      "sha256": "17fa93ee82eb5090ff48201cd0e76d594416b92d4ca5d588db96fb7102db9a1e",
+      "dimensions": [
+        390,
+        844
+      ],
+      "journey": "outcomes",
+      "first_viewport": true,
+      "reviewed_visually": true,
+      "public_safe_synthetic_fixture": true,
+      "png_metadata": {}
+    },
+    {
+      "file": "outcomes-read-failure-desktop.png",
+      "bytes": 128116,
+      "sha256": "60210c43389172dbd5ec6d23e40831e8b2bad26bf3f4860b64ebd7a1f064aa78",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "journey": "outcomes",
+      "first_viewport": false,
+      "reviewed_visually": true,
+      "public_safe_synthetic_fixture": true,
+      "png_metadata": {}
+    },
+    {
+      "file": "outcomes-read-failure-narrow.png",
+      "bytes": 60537,
+      "sha256": "fccc3e99ad15041a3f9bb6dd096ba1492ea468b6a2eeecc7e3b5c5efbb8f9284",
+      "dimensions": [
+        390,
+        844
+      ],
+      "journey": "outcomes",
+      "first_viewport": false,
+      "reviewed_visually": true,
+      "public_safe_synthetic_fixture": true,
+      "png_metadata": {}
+    },
+    {
+      "file": "oracle-plan-desktop.png",
+      "bytes": 158891,
+      "sha256": "9694e986bb7ed583404e1ce4f3c58fcba1df71f08290c84fdf83a6cf80b18c73",
+      "dimensions": [
+        1512,
+        982
+      ],
+      "journey": "oracle",
+      "first_viewport": true,
+      "reviewed_visually": true,
+      "public_safe_synthetic_fixture": true,
+      "png_metadata": {}
+    }
+  ],
+  "visual_review": {
+    "all_ten_images_inspected": true,
+    "finding": "Readable desktop and narrow compositions, intact Chinese glyphs, and explicit retained/unavailable/current-check states. The four initial views are distinguished from recovery/result captures.",
+    "private_content_found": false
+  },
+  "boundaries": {
+    "owners": "Actual disposable SQLite authority, native CLI refinement/check execution, actual acceptance HTTP routes and native prepared-tool owner.",
+    "synthetic": "Fixture Goals and artifact content; injected transport failures and source/lifetime projections for recovery. Oracle workspace navigation/status and model/tool transport are scripted.",
+    "unchanged_contracts": "All original journey assertions, owner commands and fixture deadlines retained. Outcomes adds only two initial screenshots/scroll observations and the relative import adjustment required by the ignored copy.",
+    "runtime_cleanup": "Outcomes original helper completed; outer owned namespace was not running. Oracle owned namespace was explicitly retired with the canonical wait-for-exit helper and reported stopped=true.",
+    "scope": "Source-built packaged browser qualification. Installed-App delivery, live-model interpretation, Windows CI, other provider suites and B4 worker UI are separate qualifications."
+  },
+  "publication": {
+    "equivalent_public_source_commit": "7e31b8e10afd42c5a247d400939ff2411cf984e8",
+    "equivalent_public_source_tree": "4be8fb37bbc1a2734bd902d44212ce1682baca78",
+    "tested_local_commit": "20894c3c3e07eaf3902d11fde5a3b80ff76b84ce",
+    "public_and_tested_source_trees_identical": true,
+    "evidence_commit_scope": "Five unchanged public synthetic screenshots and this curated qualification summary only; product source is unchanged.",
+    "published_screenshot_count": 5,
+    "source_runtime_assertion": "Tests ran on the identified source tree before this evidence-only commit. A later commit SHA is not claimed as a separate runtime rerun."
+  },
+  "backend_qualification": {
+    "tested_tree": "4be8fb37bbc1a2734bd902d44212ce1682baca78",
+    "acceptance_and_postgresql": {
+      "passed": 498,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 186.295,
+      "postgresql": "16.15",
+      "suites": [
+        "goal_acceptance_authority.test.ts",
+        "goal_acceptance_runtime.test.ts",
+        "goal_outcome_refinement.test.ts",
+        "postgresql_authority_store.integration.test.ts"
+      ]
+    },
+    "changed_replan_and_scheduler_owners": {
+      "passed": 125,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 3.561,
+      "suites": [
+        "frontier_revision.test.ts",
+        "interaction_contract.test.ts",
+        "outcome_research_continuity_integration.test.ts",
+        "replan_history.test.ts",
+        "replan_semantics.test.ts",
+        "scheduler_arbitration.test.ts"
+      ]
+    },
+    "repair_regressions": {
+      "handoff": 16,
+      "canonical_digest_owner": 17,
+      "goal_source_links": 5,
+      "failed": 0,
+      "skipped": 0,
+      "before_failures": "Current v2 handoff was dropped; source-link duplicated the canonical digest matcher."
+    },
+    "actual_cli": [
+      {
+        "scope": "native retry; three original cases across File and SQLite",
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0,
+        "pytest_seconds": 22.21
+      },
+      {
+        "scope": "five cumulative Outcomes and stale artifact across File and SQLite",
+        "passed": 4,
+        "failed": 0,
+        "skipped": 0,
+        "pytest_seconds": 123.93
+      },
+      {
+        "scope": "real old checkpoint producer to current consumer; admitted and settled across File and SQLite",
+        "passed": 4,
+        "failed": 0,
+        "skipped": 0,
+        "pytest_seconds": 127.51,
+        "producer_source": "dc9fdbb5186618ec2e797a9d7545e2fe524fee56",
+        "producer_tree": "9c2803cf79ab5225af17251c1b17c11c546c215c"
+      }
+    ],
+    "static_checks": {
+      "control_plane_typecheck": "passed",
+      "whole_maintainability_ratchet": {
+        "status": "ok",
+        "unreviewed": 0,
+        "stale_exceptions": 0,
+        "magnitude_regressions": 0,
+        "existing_reviewed_exceptions": 2
+      },
+      "repair_ruff": "passed",
+      "bilingual_rfc": "passed against main 5853e151d97d9129bda9dce45a92a0944dcb9565",
+      "diff_check": "passed"
+    },
+    "qualification_limits": [
+      "Selected complete owner and CLI journeys, not all-repository tests.",
+      "Scripted adapters and injected recovery faults, not live-model interpretation or efficiency.",
+      "Local PostgreSQL and browser execution, not installed-App delivery or native Windows execution.",
+      "Remote CI, formal approval and unresolved review threads remain separate gates."
+    ],
+    "owned_runtime_cleanup": "The isolated PostgreSQL server and browser/runtime namespaces were stopped. Legacy CLI namespace cleanup used the existing authenticated physical-locator helper; active owned processes were zero."
+  }
+}
