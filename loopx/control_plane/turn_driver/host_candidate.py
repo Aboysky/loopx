@@ -254,22 +254,14 @@ def _complete_material_fields(result: dict[str, Any], kind: str) -> None:
     """Fill the required delivery fields of a material host candidate."""
     result["delivery_batch_scale"] = "single_surface"
     result["delivery_outcome"] = "outcome_progress"
-    # Material results require these bounded text fields; fill them from
-    # adjacent fields if the model returned a sparse block.
+    # Preserve sparse legacy candidates; the executor validates both supplied
+    # fields and these aliases against the same result contract.
     if not result.get("recommended_action"):
-        result["recommended_action"] = _bounded(
-            result.get("next_action") or result.get("classification") or kind,
-            limit=TEXT_LIMITS["recommended_action"],
-        )
+        result["recommended_action"] = result.get("next_action") or result.get("classification") or kind
     if not result.get("next_action"):
-        result["next_action"] = _bounded(
-            result.get("recommended_action"),
-            limit=TEXT_LIMITS["next_action"],
-        )
+        result["next_action"] = result.get("recommended_action")
     if not result.get("classification"):
-        result["classification"] = _bounded(
-            kind, limit=TEXT_LIMITS["classification"]
-        )
+        result["classification"] = kind
 
 
 def build_result(
@@ -327,11 +319,14 @@ def build_result(
         "result_kind": kind,
         "completed_phases": list(COMPLETED_PHASES),
     }
-    for field, limit in TEXT_LIMITS.items():
+    for field in TEXT_LIMITS:
         if field == "vision_unchanged_reason":
             continue
         value = candidate.get(field)
-        text = _bounded(value, limit=limit)
+        # The executor must see an over-limit candidate and reject it. Clipping
+        # can remove a trailing constraint and turn invalid input into a valid
+        # but semantically different next action or progress claim.
+        text = str(value or "").strip()
         if text:
             result[field] = text
 
@@ -346,9 +341,7 @@ def build_result(
     has_path_delta = "path_delta_mode" in candidate or "agent_vision_json" in candidate
     unchanged_reason = candidate.get("vision_unchanged_reason")
     if unchanged_reason:
-        result["vision_unchanged_reason"] = _bounded(
-            unchanged_reason, limit=TEXT_LIMITS["vision_unchanged_reason"]
-        )
+        result["vision_unchanged_reason"] = str(unchanged_reason).strip()
     elif not has_path_delta:
         # Keep the legacy material-without-packet behavior for older hosts.
         result["vision_unchanged_reason"] = _bounded(

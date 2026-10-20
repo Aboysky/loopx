@@ -632,20 +632,36 @@ def test_build_result_is_accepted_by_the_real_host_result_validator(
     assert verdict["ok"], verdict["errors"]
 
 
-def test_build_result_bounds_every_free_text_field() -> None:
+@pytest.mark.parametrize("field,limit", [
+    ("classification", 120), ("summary", 400), ("next_action", 1_200),
+    ("recommended_action", 1_200), ("vision_unchanged_reason", 240),
+])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+@pytest.mark.parametrize("extra", [0, 1])
+def test_candidate_text_reaches_executor_limits_without_losing_its_tail(
+    field: str, limit: int, kind: str, extra: int,
+) -> None:
+    # Independent limits from the Turn result contract. A trailing restriction
+    # must reach the validator, including on stop and legacy unchanged paths.
+    tail = "Stop before publication."
+    value = "验" * (limit + extra - len(tail)) + tail
+    candidate = {
+        "result_kind": kind, "classification": "implementation_refined",
+        "summary": "The isolated artifact was checked.",
+        "next_action": "Continue the accepted work.",
+        "recommended_action": "Read the next current decision.",
+        "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+        field: value,
+    }
+    request = _signed_request()
     result = turn_host_adapter.build_result(
-        _signed_request(),
-        {
-            "result_kind": "user_action_required",
-            "classification": "x" * 500,
-            "summary": "y" * 900,
-            "next_action": "z" * 5000,
-        },
+        request, candidate,
     )
-    # Independent limits from the Turn result contract, not the adapter's table.
-    assert len(result["classification"]) <= 120
-    assert len(result["summary"]) <= 400
-    assert len(result["next_action"]) <= 1_200
+    assert result[field] == value
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"] is (extra == 0), verdict["errors"]
+    if extra:
+        assert f"{field} exceeds {limit} characters" in verdict["errors"]
 
 
 def test_adapter_runs_hermetically_through_the_module_entry() -> None:

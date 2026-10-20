@@ -599,6 +599,15 @@ This closes the producer-to-detail transport gap only. Live models, packaged
 App/Lark, later authority checks and the remaining convergence matrix retain
 their independent acceptance; no Python projection is retired by this slice.
 
+The shared Host result adapter now retains supplied text for the existing Turn
+validator instead of truncating it into a passing candidate. Over-limit next
+actions could lose a trailing approval constraint while still being accepted.
+File/SQLite native CLI and actual DSH subprocess qualification cover rejection
+before task validation/writeback/spend/ACK, failed-result replay, and a corrected
+fresh Turn settling once. Boundary-length valid results retain their behavior.
+This is result-transport correctness; it does not qualify model adoption, undo
+Host work already performed, or close the three convergence streams.
+
 The first ordinary-CLI consolidation replaces an exactly identical
 `heartbeat_recommendation.blocked_priority_fallback` mirror with
 `blocked_priority_fallback_ref="$.blocked_priority_fallback"`. The complete root

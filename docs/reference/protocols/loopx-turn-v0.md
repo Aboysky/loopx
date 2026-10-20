@@ -677,6 +677,19 @@ no-declaration result. The executor accepts those empty strings and rejects
 non-empty stop-result declarations. The shared material validation applies to
 generic CLI, Codex CLI, dsh, and optional-cloud host results.
 
+Shared dsh/optional-cloud adapters preserve candidate text through the existing
+Turn result limits. They must not truncate a supplied classification, summary,
+next action, recommendation or unchanged-path reason to make it pass validation:
+a trailing constraint can change the meaning. The executor rejects over-limit
+text before task validation, durable writeback, quota spend or scheduler ACK.
+Generated adapter diagnostics remain bounded. Existing transport/output limits
+still apply, and a failed result does not undo work the Host already performed.
+
+共享 dsh/可选云端适配器保留候选结果的完整文本，交给现有 Turn 结果校验器判定上限；
+不得截短分类、摘要、后续行动、建议或路径不变理由以使其通过，否则可能丢失末尾约束。
+超限结果在任务验证、持久写回、quota 扣费和 scheduler ACK 前被拒绝。适配器生成的
+诊断仍有界，原传输和输出上限保留；结果被拒绝不会撤销 Host 已经执行的工作。
+
 The existing TypeScript Vision normalizer owns packet interpretation and emits
 the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility
 behavior does not verify the submitted packet's top-level `schema_version`;

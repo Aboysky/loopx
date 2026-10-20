@@ -412,6 +412,12 @@ fixture。只读规划与可选 quota capture 默认值不变，原生执行 Tur
 这只关闭 producer 到 detail 的传输缺口。真实模型、打包 App/Lark、后续 authority 检查
 及其余收敛矩阵仍独立验收，本切片不退役任何 Python 投影。
 
+共享 Host 结果适配器现在保留所提供文本，交给既有 Turn 校验器，而不通过截短使
+候选通过。超限后续行动原本可能丢失末尾审批约束却仍获接受。File/SQLite 原生 CLI
+和实际 DSH 子进程验证任务校验、写回、扣费、ACK 前的拒绝、失败结果重放，以及
+修正后的新 Turn 只结算一次。边界长度的合法结果保持原行为。这只证明结果传输
+正确性，不证明模型采用、撤销 Host 已执行工作或关闭原三批收敛验收。
+
 首个普通 CLI 整合将完全相同的
 `heartbeat_recommendation.blocked_priority_fallback` 副本替换为
 `blocked_priority_fallback_ref="$.blocked_priority_fallback"`。根字段的完整事实、
