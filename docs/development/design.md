@@ -154,6 +154,11 @@ source, method and limitation paragraphs before adding another note.
   every item. Use declared identities rather than extracting guessed labels
   from prose. Keep unknowns, exclusions and denominators visible at the metric,
   and preserve keyboard and touch access to the full evidence.
+- When analysis has a successor, show one compact version/change summary and
+  the existing previous-version entry. Keep the new result separate from the
+  last valid result while pending or failed. Put detailed input differences and
+  changed judgments in the same optional disclosure; do not introduce another
+  setup page, repeated methodology paragraphs or automatic model execution.
 
 For example, research metrics can show “19 episodes · purposive sample ·
 uncalibrated” once, with a nearby explanation of yes/eligible counts and unknowns.
