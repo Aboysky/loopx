@@ -72,7 +72,9 @@ def _build(previous: Path | None, *, install: bool) -> None:
             "Node.js/npm is required to build a source checkout; release wheels already contain the frontend"
         )
     if install:
-        subprocess.run([npm, "ci", "--ignore-scripts"], cwd=dashboard, check=True)
+        from scripts.development_dependencies import ensure_node_dependencies
+
+        ensure_node_dependencies(ROOT, "dashboard", ignore_scripts=True)
     before = contract.source_inputs(ROOT)
     previous_assets(previous)  # Reject invalid lineage before spending a build.
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)

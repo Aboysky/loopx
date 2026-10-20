@@ -47,6 +47,8 @@ def source(tmp_path, monkeypatch):
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0)
 
+    from scripts import development_dependencies
+    monkeypatch.setattr(development_dependencies, "ensure_node_dependencies", lambda *a, **kw: False)
     monkeypatch.setattr(builder.subprocess, "run", run)
     return generation
 
@@ -143,6 +145,9 @@ def run(command, **kwargs):
     output = kwargs.get('env', {}).get('LOOPX_CHAT_OUT_DIR', '')
     return original_run([sys.executable, str(root / 'backend.py'), str(root), mode, output], check=True)
 builder.subprocess.run = run
+from scripts import development_dependencies
+# This test owns bundle serialization; dependency compatibility has its own tests.
+development_dependencies.ensure_node_dependencies = lambda *a, **kw: run(['npm', 'ci'])
 (root / ('ready-' + sys.argv[3])).touch()
 deadline = time.monotonic() + 10
 while not (root / 'start').exists():

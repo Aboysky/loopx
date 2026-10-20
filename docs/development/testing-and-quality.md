@@ -639,6 +639,68 @@ Node 依赖，但无需因此把 Dashboard、官网、桌面端依赖全部安�
 写缓存。跨分支共用可写环境可能测试到错误源码，或破坏另一任务的依赖。
 可共享包管理器下载缓存；回收旧环境则应另行核实是否在用、依赖定义能否恢复。
 
+#### Reuse checked dependencies / 复用已验证的依赖
+
+Use the checkout-local helper to prepare only the scopes needed for the task:
+
+通过工作区内的统一入口，仅准备本次任务需要的依赖：
+
+```bash
+bash scripts/loopx-python.sh --exec scripts/development_dependencies.py setup --scope python-core --scope node
+bash scripts/loopx-python.sh --exec scripts/development_dependencies.py setup --scope dashboard
+```
+
+Available scopes are `python-core`, `python-full`, `node`, `dashboard`, `site`
+and `desktop`; select only one Python profile. On Windows, invoke the helper
+with a Python 3.11+ interpreter directly. Python delegates compatibility and
+incremental installation to `uv sync`. Node checks manifests, lockfiles, effective
+npm configuration, Node/npm versions, platform, installed package metadata,
+executables and the dependency graph before reuse. Compatible existing pure-JS
+installs can be adopted; legacy native modules or lifecycle scripts without a
+matching receipt require one reinstall. `setup --force` forces Node installation.
+Failed installs do not leave a success receipt. Download caches remain reusable.
+
+范围包括 `python-core`、`python-full`、`node`、`dashboard`、`site`、`desktop`；
+每次只选一个 Python 依赖组。Windows 可直接使用 Python 3.11+ 运行脚本。
+Python 由 `uv sync` 检查兼容性并增量安装。Node 复用前核对项目定义、锁文件、
+npm 有效配置、Node/npm 版本、平台、包元数据、可执行入口及依赖树。
+符合条件的既有纯 JavaScript 安装可直接接管；缺少匹配记录的原生模块或带安装脚本
+的旧环境需重新安装一次。`setup --force` 强制重装 Node 依赖；失败不会留下
+成功记录，下载缓存仍可复用。
+
+Chat source-bundle builds use the same check, preserving their existing
+`--ignore-scripts` policy. Explicit setup preserves normal npm lifecycle scripts;
+the policies have distinct receipts. Receipts live inside ignored dependency
+directories and contain hashes of configuration, not configuration credentials.
+This avoids repeated installation, but does not deduplicate writable environments
+across branches or verify every byte of an installed package.
+
+Chat 源码构建使用相同检查，并保留原有的 `--ignore-scripts` 策略；显式 setup
+沿用 npm 普通安装脚本行为，两种策略分别校验记录。记录存放在被忽略的依赖目录，
+配置只保存摘要，不保存凭据。此机制减少重复安装，不跨分支共享可写环境，也不逐字节
+验证所有包文件。请在工作区没有其他构建或测试运行时执行依赖变更。
+
+Preview retirement of an old managed environment with:
+
+预览旧受管环境的回收结果：
+
+```bash
+bash scripts/loopx-python.sh --exec scripts/development_dependencies.py retire --scope node --days 7
+```
+
+Only `--apply` deletes the selected dependency directory. Retirement requires
+an aged setup receipt, restorable dependency definitions, no tracked files and
+no observed checkout processes/open files. Unknown process visibility retains
+the environment. It never removes checkout source or adopts unmanaged environments
+for deletion. Receipt age is time since setup, not proof of inactivity; stop all
+checkout users before applying, since a process can start after the check.
+
+只有显式添加 `--apply` 才删除选定依赖目录。回收要求安装记录超过指定天数、
+依赖定义完整、目录中没有受版本控制的文件，且未发现占用工作区的进程或打开文件；
+无法确认进程状态时保留。不会删除工作区源码，也不会直接删除未受管环境。
+记录年龄是距上次 setup 的时间，不是闲置证明；应用前应停止工作区使用者，
+因为检查结束后仍可能有新进程启动。
+
 `npm run typecheck:control-plane` discovers all TypeScript sources under
 `loopx/control_plane/` and `loopx/zcode_goal_mode/`, including standalone bridges
 launched from Python and control-plane test drivers. New source files in these
