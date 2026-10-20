@@ -842,14 +842,41 @@ def _continuation_instruction_migration(
     }, ["reviewed continuation instructions migrated; bounded one-time growth"]
 
 
-def _inline_agent_context_migration(
+def _turn_projection_migration(
     base: dict[str, Any], candidate: dict[str, Any],
 ) -> tuple[dict[str, int], list[str]]:
+    old_paths = set(base.get("json_shape_paths") or [])
+    new_paths = set(candidate.get("json_shape_paths") or [])
+    profile = "$.turn_envelope.contract_capsule.execution_profile"
+    restored = {f"{profile}.{field}" for field in (
+        "small_scale_streak_threshold", "outcome_floor", "outcome_floor.configured",
+        "outcome_floor.surface_streak_threshold", "outcome_floor.must_advance",
+        "outcome_floor.must_advance[]",
+    )}
+    if (
+        str(base.get("row_id", "")).startswith("surface/loopx_turn_plan/")
+        and candidate.get("row_id") == base["row_id"]
+        and base.get("format") == candidate.get("format") == "json"
+        and {f"{profile}.{field}" for field in (
+            "cadence", "minimum_scale", "spend_rule", "must_include", "must_include[]",
+        )} <= old_paths
+        and old_paths.isdisjoint(restored)
+        and old_paths <= new_paths and new_paths - old_paths == restored
+        and base.get("action_signature_coverages") == candidate.get("action_signature_coverages")
+        and base.get("action_signature_coverages") in (
+            [ACTION_SIGNATURE_COVERAGE_V0], [ACTION_SIGNATURE_COVERAGE_V2],
+        )
+    ):
+        # Same 96-row fixture: restoring the native outcome/degradation rules
+        # adds 138–142 JSON chars/bytes, zero lines. Keep 18 chars of headroom
+        # only for this first complete projection; later/partial/unrelated
+        # growth and absolute ceilings retain their existing guards.
+        return {metric: 160 for metric in ("chars", "utf8_bytes", "compact_payload_chars")}, [
+            "complete execution profile restored; bounded one-time JSON growth"
+        ]
     # The unchanged public multi-subagent fixture grows 1,147 JSON characters
     # when its bounded contribution replaces a historical reference. Qualify
     # only that transition (133 chars headroom), never later inline growth.
-    old_paths = set(base.get("json_shape_paths") or [])
-    new_paths = set(candidate.get("json_shape_paths") or [])
     if (
         base.get("row_id") == "variant/quota_should_run_turn_envelope_multi_subagent/small/json"
         and candidate.get("row_id") == base["row_id"]
@@ -889,7 +916,7 @@ def _compare_row_growth(
     review_signals.extend(authoring_signals)
     continuation_allowance, continuation_signals = _continuation_instruction_migration(base, candidate)
     review_signals.extend(continuation_signals)
-    context_allowance, context_signals = _inline_agent_context_migration(base, candidate)
+    context_allowance, context_signals = _turn_projection_migration(base, candidate)
     review_signals.extend(context_signals)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}

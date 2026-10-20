@@ -551,6 +551,17 @@ not model adherence, installed adoption or complete-cost improvement. Count the
 cost of restored requirements; the earlier incomplete input is not an accepted
 efficiency baseline.
 
+The complete execution profile adds 138–142 JSON characters/UTF-8 bytes and no
+lines to ordinary Turn plans on the unchanged 96-row public CLI fixture. The
+original base/head differential fails its 64/70-character and 128-byte growth
+allowances; this remains a recorded failure. Qualify the restored outcome-floor
+and degradation fields with a 160-character/byte one-time allowance only when
+the old four-field profile becomes complete, with unchanged signature coverage
+and no other JSON-shape change. Already complete, partial or unrelated changes
+receive no allowance. Keep absolute budgets, line limits, fixture populations,
+complete source/Host clause checks and the production 8 KiB diagnostic. This
+explains the required presentation cost, not model tokens or efficiency gains.
+
 中文：本批修复验收步骤、继续说明和当前判断在 capsule 中丢失的问题；签名一致曾只
 比较已经裁剪过的投影。File/SQLite 同次捕获验证完整条款和篡改后的签名差异；
 8 KiB 警告线保留。安装态 host、模型效果及整体统一仍按原三个 Todo 验收。
