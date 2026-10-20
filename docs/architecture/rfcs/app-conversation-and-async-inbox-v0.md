@@ -1313,7 +1313,12 @@ the complete visible user/assistant history once in native persisted history;
 the old upstream identity remains recorded, and native Goal/attached executions
 are not replaced by this migration.
 
-Core may admit one correlated continuation per request for this migration only
+Discovery uses the local enabled binding and the same typed candidate planner,
+without provider identity IO for every historical failure. This is a queue hint;
+admission still re-resolves current App/owner/grant and exact source/native proof
+under the existing fences before reserving or enqueueing any continuation.
+
+Core may admit one correlated continuation per request and context version
 after current App/owner/grant and unchanged source verification, an exact failed
 native Turn readback, and a complete inventory containing only its original user
 item. Policy/usage denials, corrections, tools, unknown effects, closed Sessions,
@@ -1323,6 +1328,29 @@ queue owns continuation, and a distinct frozen delivery phase owns the eventual
 original-source result. A restart resumes the deterministic reservation rather
 than dispatching it twice. Existing provider replies accompany recovery as data
 so completed work can be retained without repeating its effects.
+
+The same bounded admission also covers a current-format `host_gate` failure
+whose native error is `other`, only when the stable native inventory proves
+there was exactly the original user input and no execution item. It resumes the
+existing thread, without a history migration or error-message text matching.
+This proves absence of execution, not provider health or eventual success. A
+terminal Core failure is returned and retained; it cannot enqueue another
+continuation.
+
+The existing in-flight transport retry also recognizes the exact native
+`other` diagnostic `workspace routing discovery timed out`. This provider hint
+alone grants no retry: a fresh, stable inventory must show the latest failed
+native Turn contains only its original user item. Unknown or changed diagnostics,
+additional items, stop/grant/configuration changes and exhausted budgets remain
+holds. It reuses the original Core Turn, input, Session and three-retry/backoff
+budget; it never reopens a terminal historical request or resets a reservation
+after restart. Native error prose is not copied into the retry journal. Existing
+App and Lark retry progress and final readback expose the same request's outcome.
+
+Recovery discovery backoff is only a temporary hint. The existing reply worker
+retains its per-request fairness count while that canonical request still exists;
+an omitted hint does not retire work or let earlier unresolved requests repeatedly
+take every available slot. The four-worker and no-extra-backlog limits stay intact.
 
 Continuation admission, progress, cursor and final delivery use a version-scoped
 presentation journal. They never reopen the acknowledged original Inbox source

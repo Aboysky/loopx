@@ -96,13 +96,17 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
     # The unchanged fixture on main b5a1a816a measures 10,522 JSON chars and
     # 8,579 Markdown. The complete outcome paragraph adds 523 body/Markdown
     # chars; omitting absent brief metadata saves 35 JSON chars: 11,010/9,102.
-    # These hashes retain every prior clause and route, plus that reviewed
+    # The later diagnostic-only renderer change retains that full body and JSON,
+    # prints an identical active/resolved path once and omits absent pre-quota
+    # metadata: Markdown is 8,867 chars. The expected output was derived from
+    # b16aeb3's frozen 9,102-char rendering using only those two substitutions.
+    # These hashes retain every prior clause and route, plus the reviewed
     # instruction transition. This is a synthetic spelling, not a Windows run.
     assert hashlib.sha256(payload["task_body"].encode()).hexdigest() == (
         "cfc65091d2710ef298174e6a5280edf55f6cc7acdce8e5688a2ae213b5f4b4ac"
     )
     assert hashlib.sha256(markdown.encode()).hexdigest() == (
-        "9a5b0d2d927744e1b52ad0598a0a3668237264f4d741fcf3cf0f647a02b90cce"
+        "29604e41d97963976ab8911e69c6328421aeaf63053cdb12c197dbe9b5291b9b"
     )
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["heartbeat_prompt_brief"]
     assert spec.max_chars == {"json": 11_400, "markdown": 9_600}

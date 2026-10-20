@@ -1829,7 +1829,9 @@ def test_brief_long_path_budget_retains_semantics_across_parent_depths(
                     measurement=measure_cli_output(oversized, output_format="json"),
                 )
         else:
-            assert len(text.splitlines()) == 94
+            # The frozen 94-line body/envelope loses only two diagnostic
+            # lines: one duplicate route and one absent pre-quota command.
+            assert len(text.splitlines()) == 92
             normalized = text.replace(root, "<OWNED_ROOT>")
         outputs.append({"format": output_format, "normalized": normalized})
         return exit_code, text
