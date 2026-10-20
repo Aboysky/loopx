@@ -31,7 +31,8 @@ try {
     await page.goto(`http://127.0.0.1:${port}/${packaged ? "chat/" : ""}?statusUrl=/status.json`, {waitUntil: "networkidle"});
     if (viewport.width < 640) {
       const sidebar = page.getByRole("button", {name: language === "en" ? "Open Goal navigation" : "打开 Goal 导航"});
-      if (await sidebar.isVisible()) await sidebar.click();
+      await sidebar.waitFor({state: "visible"});
+      await sidebar.click();
     }
     await page.locator(".personal-goal-link").first().click({timeout: 10000});
     await page.getByRole("button", {name: language === "en" ? "Overview" : "概览", exact: true}).click();
