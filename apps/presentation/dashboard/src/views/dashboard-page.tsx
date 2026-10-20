@@ -1098,6 +1098,9 @@ function buildPersonalHomeModel(
         })),
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,
+      workerObservations: !goal.host_worker_observations ? null
+        : goal.host_worker_observations.goal_id === goal.id ? goal.host_worker_observations
+        : {read_status: "unreadable", rows: []},
       goalId: goal.id,
       parentGoalId: goal.parent_goal_id,
       sourceAccess: goal.source_access ? {...goal.source_access, readOnly: true} : undefined,
@@ -1128,7 +1131,7 @@ function buildPersonalHomeModel(
           modelConfig: goal.spawn_policy?.model_config,
         },
       } : {}),
-      title: personalGoalTitle(goal.id, goal.display_name),
+      title: personalGoalTitle(goal.id, goal.source_access?.label ?? goal.display_name),
       usage: (() => {
         const goalUsage = usageById.get(goal.id);
         return goalUsage ? {
