@@ -1,15 +1,14 @@
 import {useEffect, useRef, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
-  changePrivateAgentTarget, changeOwnerNotifications, fetchChatProjects, fetchChatCapabilities, fetchLarkApps, fetchLarkGroupChats, type PrivateConversation,
+  changePrivateAgentTarget, changeOwnerNotifications, fetchChatProjects, fetchChatCapabilities, fetchLarkGroupChats, type PrivateConversation,
   discoverBoundChatSession, type BoundConversationTarget,
   type ChatProject, type LarkApp, type PrivateConversationStopRecovery} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import "./private-conversation.css";
 
-export function PrivateConversationPanel({ onOpenOriginal }: { onOpenOriginal?: (target: BoundConversationTarget) => void }) {
+export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[]; onOpenOriginal?: (target: BoundConversationTarget) => void}) {
   const {locale} = useWorkspaceI18n();
   const zh = locale === "zh-CN";
-  const [apps, setApps] = useState<LarkApp[]>([]);
   const [projects, setProjects] = useState<ChatProject[]>([]);
   const [executors, setExecutors] = useState<string[]>([]);
   const [rows, setRows] = useState<PrivateConversation[]>([]);
@@ -52,7 +51,6 @@ export function PrivateConversationPanel({ onOpenOriginal }: { onOpenOriginal?: 
     let active = true;
     const failed = (error: unknown) => {if (active) setError(String(error));};
     // Existing conversations do not wait for credential/configuration catalogs.
-    void fetchLarkApps().then(apps => {if (active) setApps(apps.filter(app => app.ready && app.app_ref !== "default"));}).catch(failed);
     void fetchChatProjects().then(projects => {if (active) {
       setProjects(projects.projects);
       if (projects.projects.length === 1) setProject(projects.projects[0].project_ref);
@@ -205,7 +203,7 @@ export function PrivateConversationPanel({ onOpenOriginal }: { onOpenOriginal?: 
       <option value="workspace_write" disabled={projects.find(item => item.project_ref === project)?.grant === "workspace_read"}>{zh ? "工作区读写（默认）" : "Workspace writes (default)"}</option>
     </select></label> : null}
     {role === "project" && effectiveProjectGrant === "workspace_write" ? <p role="status">{zh ? "此 App 可按你的指令编辑选定工作区；不提高已直连 Agent 的原宿主权限。更改权限会建立新绑定和新会话，旧会话不会自动提升权限，已有 Agent 直连需重新授权。" : "This App may edit the selected workspace on your instruction; attached Agents retain their original host permissions. Changing access creates a new binding and Session. Existing Chat does not gain access and Agent targets require new authorization."}</p> : null}
-    <div className="personal-detail-actions"><button disabled={busy || !app || !project || !executor || (audience === "group" && (loadingGroups || groupIds.length === 0 || groupIds.length > 16))} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read", audience === "group" ? groupIds : undefined))} type="button">
+    <div className="personal-detail-actions"><button disabled={busy || !apps.some(item => item.app_ref === app && item.ready) || !project || !executor || (audience === "group" && (loadingGroups || groupIds.length === 0 || groupIds.length > 16))} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read", audience === "group" ? groupIds : undefined))} type="button">
       {busy ? (zh ? "正在核验" : "Verifying") : (audience === "group" ? (zh ? "连接指定群话题" : "Connect selected group topics") : (zh ? "连接本人私聊" : "Connect owner private Chat"))}</button>
       <button disabled={busy} onClick={() => void act(refresh)} type="button">{zh ? "刷新状态" : "Refresh status"}</button></div>
     <p>{zh ? "发送文字、图片或图文消息开始；后续消息进入原会话队列。/status 查看工作区、角色与持久排队状态，/help 查看用法与解绑入口，/stop 停止当前聊天执行，/new 开启新会话。文件、音视频、附在控制命令或已选择 Agent 上的图片会明确提示暂不支持。" : "Send text, images or image/text posts to begin; follow-ups queue in the same Session. /status shows the workspace, role and durable queue, /help explains commands and where to unbind, /stop stops the current Chat Turn, /new starts a new conversation. Files, audio/video, and images sent with control commands or to a selected attached Agent receive an explicit unsupported response."}</p>

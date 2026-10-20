@@ -1098,8 +1098,12 @@ function buildPersonalHomeModel(
         })),
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,
+      workerObservations: !goal.host_worker_observations ? null
+        : goal.host_worker_observations.goal_id === goal.id ? goal.host_worker_observations
+        : {read_status: "unreadable", rows: []},
       goalId: goal.id,
       parentGoalId: goal.parent_goal_id,
+      sourceAccess: goal.source_access ? {...goal.source_access, readOnly: true} : undefined,
       latestActivity: row.latestRun?.generated_at ?? "",
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
@@ -1127,7 +1131,7 @@ function buildPersonalHomeModel(
           modelConfig: goal.spawn_policy?.model_config,
         },
       } : {}),
-      title: personalGoalTitle(goal.id, goal.display_name),
+      title: personalGoalTitle(goal.id, goal.source_access?.label ?? goal.display_name),
       usage: (() => {
         const goalUsage = usageById.get(goal.id);
         return goalUsage ? {
@@ -1279,6 +1283,7 @@ function PersonalGoalHome({
   theme: "light" | "dark";
 }) {
   const readOnly = statusSourceControl.activeSource.readOnly
+    || rows.find(row => row.goal.id === requestedGoalId)?.goal.source_access?.read_only === true
     || Boolean(rootGoalId && !rows.some(row => row.goal.id === rootGoalId));
   const remoteGoalLifecycleHost = statusSourceControl.activeSource.kind === "ssh_tunnel"
     ? statusSourceControl.activeSource.hostAlias
@@ -3654,7 +3659,9 @@ export function DashboardPage() {
   }, [exampleModeRequested, requestedStatusUrl, search.statusUrl, search.rootGoalId, source.kind, source.label]);
 
   useEffect(() => {
-    if (isLoading && search.rootGoalId) return;
+    // A source transition can still expose the previous source's Goal rows.
+    // Reconcile only its committed URL, including during browser Back/Forward.
+    if (isLoading || (source.kind === "url" && search.statusUrl && search.statusUrl !== source.label)) return;
     if (search.statusUrl && source.kind === "example") {
       return;
     }
@@ -3662,6 +3669,7 @@ export function DashboardPage() {
     if (goalRows.length === 0) {
       if (search.goalId) {
         void navigate({
+          replace: true,
           search: (current) => ({
             ...current,
             goalId: "",
@@ -3673,13 +3681,14 @@ export function DashboardPage() {
     if (search.goalId && !goalIds.has(search.goalId)
       && goalArchiveLoadState.phase !== "loading") {
       void navigate({
+        replace: true,
         search: (current) => ({
           ...current,
           goalId: "",
         }),
       });
     }
-  }, [goalArchiveLoadState.phase, goalRows, isLoading, navigate, search.goalId, search.rootGoalId, search.statusUrl, source.kind]);
+  }, [goalArchiveLoadState.phase, goalRows, isLoading, navigate, search.goalId, search.rootGoalId, search.statusUrl, source.kind, source.label]);
 
   useEffect(() => {
     if (!progress || isLoading || !search.goalId || source.kind !== "url") return;
