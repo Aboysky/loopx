@@ -19,6 +19,53 @@ _PROCESS_TERMINATE_GRACE_SECONDS = 1.0
 _PROCESS_GROUP_STOP_TIMEOUT_SECONDS = 1.0
 
 
+def write_process_stdin_before_deadline(
+    process: subprocess.Popen[str], text: str, *, deadline: float,
+    cancel_and_reap: Callable[[], None],
+) -> None:
+    """Finish one native frame, or cancel its peer before returning failure.
+
+    The caller owns the serialization and launch fence. A bounded wait keeps a
+    full pipe from stranding that fence; the same process is reaped and its
+    writer joined before the caller releases it. Use the existing text stream
+    so successful large/Unicode frames retain their original wire semantics on
+    every supported Python platform, including Windows 3.11.
+    """
+    stream = process.stdin
+    if stream is None:
+        raise BrokenPipeError("native input stream is closed")
+    if time.monotonic() >= deadline:
+        raise TimeoutError("native input dispatch deadline expired")
+    finished = threading.Event()
+    failures: list[BaseException] = []
+
+    def write() -> None:
+        try:
+            stream.write(text)
+            stream.flush()
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    writer = threading.Thread(target=write, name="loopx-native-stdin-writer", daemon=True)
+    writer.start()
+    try:
+        if not finished.wait(max(0, deadline - time.monotonic())):
+            raise TimeoutError("native input dispatch deadline expired")
+        if failures:
+            raise failures[0]
+    except BaseException:
+        try:
+            cancel_and_reap()
+        finally:
+            writer.join(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+        if writer.is_alive():
+            raise RuntimeError("native input writer did not drain after peer cancellation")
+        raise
+    writer.join()
+
+
 @dataclass(frozen=True)
 class CappedProcessResult:
     returncode: int
