@@ -689,6 +689,14 @@ numbers, arrays and objects are rejected, including false, zero and empty
 containers. They must not become instructions through string coercion or
 missing-field fallbacks. Legacy null/omitted optional text keeps its absence
 semantics; sparse adapter candidates retain their established defaults.
+Explicit `delivery_batch_scale` and `delivery_outcome` also pass through to
+their existing validators; only omitted metadata uses the legacy
+`single_surface` / `outcome_progress` defaults. The adapter must not replace a
+declared result with progress or accept read-only scale aliases for new writes.
+Valid vocabulary does not establish a qualifying settlement: `surface_only`
+and an `outcome_gap` without its required typed blocker remain subject to the
+existing refresh-state refusal after task validation, before writeback, spend
+or ACK. Valid declared scales reach durable delivery history unchanged.
 
 共享 dsh/可选云端适配器保留候选结果的完整文本，交给现有 Turn 结果校验器判定上限；
 不得截短分类、摘要、后续行动、建议或路径不变理由以使其通过，否则可能丢失末尾约束。
@@ -697,6 +705,12 @@ semantics; sparse adapter candidates retain their established defaults.
 候选文本字段保留原 JSON 类型直到校验；布尔值、数字、数组和对象（含 false、零和
 空容器）会被拒绝，不得经字符串转换或缺字段兜底变成行动。旧 null/省略的可选
 文本继续按缺省处理，稀疏适配器候选保留既有默认值。
+明确提供的 `delivery_batch_scale` 与 `delivery_outcome` 也原样交给既有校验器；
+只有省略元数据时才使用旧 `single_surface` / `outcome_progress` 默认值。适配器
+不得将所声明结果替换为进展，也不得让只读 scale 别名用于新写入。词汇合法不代表
+满足结算条件：`surface_only` 及缺少规定 typed blocker 的 `outcome_gap` 仍会在
+任务验证后、写回／扣费／ACK 前被既有 refresh-state 拒绝。合法声明的规模原样
+进入持久交付历史。
 
 The existing TypeScript Vision normalizer owns packet interpretation and emits
 the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility

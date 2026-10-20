@@ -1,4 +1,4 @@
-"""A real DSH subprocess cannot hide invalid result text from native settlement."""
+"""A real DSH subprocess preserves the result that native settlement validates."""
 from __future__ import annotations
 
 import json
@@ -12,14 +12,19 @@ from tests.control_plane.test_turn_host_decision_capture import _fixture_module
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("invalid_action,error", [
-    ("Review the evidence. " * 65 + "Stop before publication; approval is still required.",
-     "next_action exceeds 1200 characters"),
-    ({"action": "Continue", "constraint": "Stop before publication."}, "next_action must be a string"),
-    (False, "next_action must be a string"),
-], ids=["overlimit", "object", "false"])
+@pytest.mark.parametrize("candidate_fields,error,before_task_validation", [
+    ({"next_action": "Review the evidence. " * 65 + "Stop before publication; approval is still required."},
+     "next_action exceeds 1200 characters", True),
+    ({"next_action": {"action": "Continue", "constraint": "Stop before publication."}},
+     "next_action must be a string", True),
+    ({"next_action": False}, "next_action must be a string", True),
+    ({"delivery_batch_scale": "single_segment"}, "legacy alias 'single_segment' is read-only", True),
+    ({"delivery_outcome": False}, "delivery_outcome must be one of", True),
+    ({"delivery_outcome": "surface_only"}, "cannot settle a Turn", False),
+    ({"delivery_outcome": "outcome_gap"}, "blocked", False),
+], ids=["overlimit", "object", "false", "legacy-scale", "invalid-outcome", "surface-only", "untyped-gap"])
 def test_native_turn_rejects_invalid_candidate_before_writeback(
-    tmp_path, monkeypatch, provider, invalid_action, error,
+    tmp_path, monkeypatch, provider, candidate_fields, error, before_task_validation,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     f = _fixture_module()
@@ -35,8 +40,9 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
         "result_kind": "validated_progress", "classification": "artifact_checked",
         "summary": "The isolated artifact was checked.",
         "recommended_action": "Continue the accepted task.",
-        "next_action": invalid_action,
+        "next_action": "Continue the accepted task.",
         "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+        **candidate_fields,
     }
     (workspace / "candidate.json").write_text(json.dumps(candidate))
     runner = tmp_path / "runner.py"
@@ -58,30 +64,57 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
         "--validation-command-json", json.dumps(validator), "--scan-root", str(project),
         "--no-global-sync", "--timeout-seconds", "30"]
     code, failed = f._run_cli([*base, "--turn-instance-id", "invalid-result", "--execute"])
-    assert code == 1 and failed["status"] == "failed", failed
+    assert code == 1 and not failed["ok"], failed
     assert error in json.dumps(failed)
-    assert failed["validation_stage"] == "host_result_contract"
-    assert failed["effects"] == {
-        "host_invoked": True, "state_written": False,
-        "quota_spent": False, "scheduler_acknowledged": False,
-    }
-    assert not (workspace / "validator-ran").exists()
+    if before_task_validation:
+        assert failed["status"] == "failed"
+        assert failed["validation_stage"] == "host_result_contract"
+        assert failed["effects"] == {
+            "host_invoked": True, "state_written": False,
+            "quota_spent": False, "scheduler_acknowledged": False,
+        }
+        resume_key = failed["resume_turn_key"]
+    else:
+        # Vocabulary-valid outcomes still face the existing native settlement
+        # rule. Its CLI error leaves the validated journal for recovery.
+        journal_path, = (runtime / "goals" / f.GOAL_ID / "turns").glob("*.json")
+        journal = json.loads(journal_path.read_text())
+        assert journal["host_result"]["delivery_outcome"] == candidate_fields["delivery_outcome"]
+        assert journal["completed_phases"] == ["host_execute", "typed_result", "validation"]
+        assert "writeback" not in journal and "quota_spend" not in journal
+        resume_key = journal["turn_key"]
+    assert (workspace / "validator-ran").exists() is not before_task_validation
     assert f._quota_spend_count(runtime) == 0
     code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID])
     assert code == 0 and current["todos"] == listed["todos"]
 
     # A correction is a fresh admitted Turn, not a replay of an invalid result.
-    candidate["next_action"] = "Stop before publication; approval is still required."
+    candidate.update({
+        "next_action": "Stop before publication; approval is still required.",
+        "delivery_batch_scale": "implementation", "delivery_outcome": "outcome_progress",
+    })
     (workspace / "candidate.json").write_text(json.dumps(candidate))
-    code, repeated = f._run_cli([*base, "--resume-turn-key", failed["resume_turn_key"], "--execute"])
-    assert code == 1 and repeated["status"] == "failed", repeated
-    assert not any(repeated["effects"].values())
+    code, repeated = f._run_cli([*base, "--resume-turn-key", resume_key, "--execute"])
+    assert code == 1 and not repeated["ok"], repeated
+    if before_task_validation:
+        assert repeated["status"] == "failed" and not any(repeated["effects"].values())
+    else:
+        assert error in json.dumps(repeated)
+        journal = json.loads(journal_path.read_text())
+        assert journal["completed_phases"] == ["host_execute", "typed_result", "validation"]
+        assert "writeback" not in journal and "quota_spend" not in journal
+    assert f._quota_spend_count(runtime) == 0
     assert (workspace / "invocations.txt").read_text() == "host\n"
-    assert not (workspace / "validator-ran").exists()
+    assert (workspace / "validator-ran").exists() is not before_task_validation
     code, recovered = f._run_cli([*base, "--turn-instance-id", "corrected-result", "--execute"])
     assert code == 0 and recovered["status"] == "committed", recovered
     assert (workspace / "validator-ran").read_text() == "verified"
     assert f._quota_spend_count(runtime) == 1
+    rows = [json.loads(line) for line in
+        (runtime / "goals" / f.GOAL_ID / "runs/index.jsonl").read_text().splitlines()]
+    progress = next(row for row in rows if row.get("classification") == "artifact_checked")
+    assert progress["delivery_batch_scale"] == "implementation"
+    assert progress["delivery_outcome"] == "outcome_progress"
     code, replay = f._run_cli([*base, "--resume-turn-key", recovered["resume_turn_key"], "--execute"])
     assert code == 0 and replay["ok"], replay
     assert not any(replay["effects"].values())

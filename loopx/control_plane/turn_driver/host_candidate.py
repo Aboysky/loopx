@@ -12,6 +12,8 @@ import json
 from typing import Any
 
 from ..quota.turn_envelope import turn_envelope_action_signature_document
+from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
+from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
@@ -192,6 +194,8 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "- summary: what changed or why stopped (<=400 chars)\n"
         "- recommended_action: the bounded follow-up recommendation (<=1200 chars)\n"
         "- next_action: the concrete next step (<=1200 chars)\n"
+        f"- delivery_batch_scale (material results): {' | '.join(DELIVERY_BATCH_SCALE_CHOICES)}\n"
+        f"- delivery_outcome (material results): {' | '.join(DELIVERY_OUTCOME_CHOICES)}\n"
         "- vision_unchanged_reason: why a material result's goal path is unchanged "
         "(<=240 chars)\n"
         "For material result kinds (validated_progress, repair_required, and "
@@ -250,10 +254,14 @@ def parse_model_json(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _complete_material_fields(result: dict[str, Any], kind: str) -> None:
+def _complete_material_fields(
+    result: dict[str, Any], candidate: Mapping[str, Any], kind: str,
+) -> None:
     """Fill the required delivery fields of a material host candidate."""
-    result["delivery_batch_scale"] = "single_surface"
-    result["delivery_outcome"] = "outcome_progress"
+    # Only omitted metadata gets the legacy defaults. Supplied values, including
+    # null and invalid JSON types, belong to the existing executor validators.
+    result["delivery_batch_scale"] = candidate.get("delivery_batch_scale", "single_surface")
+    result["delivery_outcome"] = candidate.get("delivery_outcome", "outcome_progress")
     # Preserve sparse legacy candidates; the executor validates both supplied
     # fields and these aliases against the same result contract.
     if "recommended_action" not in result:
@@ -331,7 +339,7 @@ def build_result(
             result[field] = text
 
     if kind in MATERIAL_KINDS:
-        _complete_material_fields(result, kind)
+        _complete_material_fields(result, candidate, kind)
     for field in ("path_delta_mode", "agent_vision_json"):
         if field in candidate:
             # Preserve the structured executor input verbatim. The executor

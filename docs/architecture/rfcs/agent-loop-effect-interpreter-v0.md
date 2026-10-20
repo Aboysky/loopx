@@ -605,6 +605,14 @@ actions could lose a trailing approval constraint while still being accepted.
 JSON booleans, numbers and containers also retain their types for rejection by
 that validator; false/zero cannot disappear into sparse-field defaults. Legacy
 null/omitted optional text retains its existing absence semantics.
+Explicit delivery scale and outcome now retain their values and JSON types;
+only omitted metadata uses the existing sparse defaults. Previously a declared
+`surface_only`, unqualified `outcome_gap` or invalid value became
+`outcome_progress`, bypassing the existing refusal and recording a quota spend.
+The shared prompt uses the existing delivery vocabularies. Native File/SQLite
+tests preserve valid scale history, reject invalid vocabulary before task
+validation, and reject nonqualifying outcomes before writeback/spend/ACK even
+when the independent task check passes. No settlement policy is added here.
 File/SQLite native CLI and actual DSH subprocess qualification cover rejection
 before task validation/writeback/spend/ACK, failed-result replay, and a corrected
 fresh Turn settling once. Boundary-length valid results retain their behavior.
