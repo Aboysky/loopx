@@ -66,6 +66,19 @@ function receiptFor(request: JsonObject, kind: "configure" | "verify" | "refine"
     decode: original => ({fields: canonicalAuthorityObject(original.result, "acceptance operation result"), changed: true})});
   return {identity, receipt};
 }
+/** The pre-v2 public adapter always included disable, even when false.
+ * Recover only that exact retained wire identity; never retry a mutation or
+ * rewrite a receipt. Current requests keep their original hash for new writes. */
+async function configureReceiptReadback(store: AuthorityStore, request: JsonObject, result: JsonObject): Promise<JsonObject> {
+  if (result.reason_code !== "coordination_operation_identity_mismatch" || Object.hasOwn(request, "disable")) return result;
+  // The old adapter also allowed document:null with its default disable:false.
+  for (const disable of request.document === null ? [true, false] : [false]) {
+    const legacy = receiptFor({...request, disable}, "configure");
+    const replay = await legacy.receipt.read(store);
+    if (replay?.status === "replayed") return replay;
+  }
+  return result;
+}
 function requestGoalRef(request: JsonObject): WireExactGoalRef | null {
   return request.goal_ref === undefined
     ? null
@@ -174,7 +187,8 @@ async function commit(store: AuthorityStore, request: JsonObject, head: Authorit
     receipts: [{...command.identity, result}],
   });
   // No Todo/Markdown display document changes in this transaction.
-  return replayWithCurrentProjection(store, committed, String(request.goal_id));
+  const recovered = kind === "configure" ? await configureReceiptReadback(store, request, committed) : committed;
+  return replayWithCurrentProjection(store, recovered, String(request.goal_id));
 }
 
 /** Append planning requirements without configuring checks or changing Goal/Todo intent. */
@@ -214,10 +228,10 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
   acceptanceRequire(request.disable !== true || request.document === null, "legacy disable requires document:null");
   const command = receiptFor(request, "configure");
   const replay = await command.receipt.read(store);
-  if (replay) return replayWithCurrentProjection(store, replay, String(request.goal_id));
+  if (replay) return replayWithCurrentProjection(store, await configureReceiptReadback(store, request, replay), String(request.goal_id));
   const observation = await command.receipt.observe(store);
   if (observation.kind === "receipt") {
-    return replayWithCurrentProjection(store, observation.result, String(request.goal_id));
+    return replayWithCurrentProjection(store, await configureReceiptReadback(store, request, observation.result), String(request.goal_id));
   }
   if (observation.authority.status !== "loaded") return source(store, {...current(observation.authority, request)});
   const document = request.document === null ? null : resolveGoalAcceptanceDocument(observation.authority.head, String(request.goal_id), request.document);
