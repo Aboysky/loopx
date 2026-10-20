@@ -45,10 +45,10 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
   const rendering = selected?.status === "rendering";
   useEffect(() => {
     if (!watching) return;
-    if (!rendering) {setWatching(false); return;}
+    if (!rendering || view !== "composition") {setWatching(false); return;}
     const timer = setInterval(() => void reload(), 2000);
     return () => clearInterval(timer);
-  }, [watching, rendering, goalId]);
+  }, [watching, rendering, view, goalId]);
   async function operate(action: "render" | "cancel") {
     if (!selected || pending.current) return;
     pending.current = true; setBusy(true); setError(""); setWatching(false);

@@ -44,7 +44,7 @@ Artifact preview/download URLs bind the saved revision and file SHA256. A change
 composition revision or different bytes makes that link unavailable rather than
 serving a replacement. Immutable image/footage identities keep their original
 verified outputs. Existing unpinned URLs remain compatible current-file reads.
-Reading saved work does not start rendering, generation or polling. An explicit
+Opening saved media does not start rendering, generation or provider polling. An explicit
 render observes that operation while this view remains open; leaving the view or
 a failed read stops observation without cancelling the provider.
 
