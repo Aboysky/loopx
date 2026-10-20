@@ -256,11 +256,11 @@ def _complete_material_fields(result: dict[str, Any], kind: str) -> None:
     result["delivery_outcome"] = "outcome_progress"
     # Preserve sparse legacy candidates; the executor validates both supplied
     # fields and these aliases against the same result contract.
-    if not result.get("recommended_action"):
+    if "recommended_action" not in result:
         result["recommended_action"] = result.get("next_action") or result.get("classification") or kind
-    if not result.get("next_action"):
+    if "next_action" not in result:
         result["next_action"] = result.get("recommended_action")
-    if not result.get("classification"):
+    if "classification" not in result:
         result["classification"] = kind
 
 
@@ -326,8 +326,8 @@ def build_result(
         # The executor must see an over-limit candidate and reject it. Clipping
         # can remove a trailing constraint and turn invalid input into a valid
         # but semantically different next action or progress claim.
-        text = str(value or "").strip()
-        if text:
+        text = value.strip() if isinstance(value, str) else value
+        if text or (value is not None and not isinstance(value, str)):
             result[field] = text
 
     if kind in MATERIAL_KINDS:
@@ -340,8 +340,10 @@ def build_result(
 
     has_path_delta = "path_delta_mode" in candidate or "agent_vision_json" in candidate
     unchanged_reason = candidate.get("vision_unchanged_reason")
-    if unchanged_reason:
-        result["vision_unchanged_reason"] = str(unchanged_reason).strip()
+    if unchanged_reason is not None and not isinstance(unchanged_reason, str):
+        result["vision_unchanged_reason"] = unchanged_reason
+    elif unchanged_reason:
+        result["vision_unchanged_reason"] = unchanged_reason.strip()
     elif not has_path_delta:
         # Keep the legacy material-without-packet behavior for older hosts.
         result["vision_unchanged_reason"] = _bounded(

@@ -218,7 +218,13 @@ def _bounded_public_text(
     required: bool,
     errors: list[str],
 ) -> str | None:
-    text = str(result.get(field) or "").strip()
+    value = result.get(field)
+    # Missing/null legacy optional text remains absent. Other JSON types must
+    # not acquire instruction meaning through Python string coercion.
+    if value is not None and not isinstance(value, str):
+        errors.append(f"{field} must be a string")
+        return None
+    text = (value or "").strip()
     if required and not text:
         errors.append(f"{field} is required")
         return None

@@ -664,6 +664,44 @@ def test_candidate_text_reaches_executor_limits_without_losing_its_tail(
         assert f"{field} exceeds {limit} characters" in verdict["errors"]
 
 
+@pytest.mark.parametrize("field", [
+    "classification", "summary", "next_action", "recommended_action", "vision_unchanged_reason",
+])
+@pytest.mark.parametrize("value", [True, False, 42, 0, 1.25, {}, [], {"action": "Continue"}, ["Continue"]])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+def test_nontext_candidate_fields_reach_the_executor_without_coercion(field, value, kind):
+    request = _signed_request()
+    valid = {
+        "result_kind": kind, "classification": "artifact_checked", "summary": "Evidence checked.",
+        "next_action": "Continue the accepted task.", "recommended_action": "Read current requirements.",
+        "vision_unchanged_reason": "The accepted Goal is unchanged.",
+    }
+    adapted = turn_host_adapter.build_result(request, {**valid, field: value})
+    assert type(adapted[field]) is type(value) and adapted[field] == value
+    # The generic host route must reject the same raw JSON type even without
+    # the shared DSH/Ark adapter. A transport cannot repair malformed meaning.
+    direct = {**turn_host_adapter.build_result(request, valid), field: value}
+    for result in (adapted, direct):
+        verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+        assert not verdict["ok"]
+        assert f"{field} must be a string" in verdict["errors"]
+
+
+@pytest.mark.parametrize("field", [
+    "classification", "summary", "next_action", "recommended_action", "vision_unchanged_reason",
+])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+def test_legacy_null_candidate_text_still_uses_the_existing_absent_field_behavior(field, kind):
+    request = _signed_request()
+    result = turn_host_adapter.build_result(request, {
+        "result_kind": kind, "classification": "artifact_checked", "summary": "Evidence checked.",
+        "next_action": "Continue the accepted task.", "recommended_action": "Read current requirements.",
+        "vision_unchanged_reason": "The accepted Goal is unchanged.", field: None,
+    })
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
+
+
 def test_adapter_runs_hermetically_through_the_module_entry() -> None:
     # `python -m loopx.dsh_goal_mode` must drive the same stdin/stdout
     # contract as the legacy script, using a fake dsh runner.

@@ -684,11 +684,19 @@ a trailing constraint can change the meaning. The executor rejects over-limit
 text before task validation, durable writeback, quota spend or scheduler ACK.
 Generated adapter diagnostics remain bounded. Existing transport/output limits
 still apply, and a failed result does not undo work the Host already performed.
+Candidate text fields retain their JSON types until validation: booleans,
+numbers, arrays and objects are rejected, including false, zero and empty
+containers. They must not become instructions through string coercion or
+missing-field fallbacks. Legacy null/omitted optional text keeps its absence
+semantics; sparse adapter candidates retain their established defaults.
 
 共享 dsh/可选云端适配器保留候选结果的完整文本，交给现有 Turn 结果校验器判定上限；
 不得截短分类、摘要、后续行动、建议或路径不变理由以使其通过，否则可能丢失末尾约束。
 超限结果在任务验证、持久写回、quota 扣费和 scheduler ACK 前被拒绝。适配器生成的
 诊断仍有界，原传输和输出上限保留；结果被拒绝不会撤销 Host 已经执行的工作。
+候选文本字段保留原 JSON 类型直到校验；布尔值、数字、数组和对象（含 false、零和
+空容器）会被拒绝，不得经字符串转换或缺字段兜底变成行动。旧 null/省略的可选
+文本继续按缺省处理，稀疏适配器候选保留既有默认值。
 
 The existing TypeScript Vision normalizer owns packet interpretation and emits
 the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility

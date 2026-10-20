@@ -12,7 +12,15 @@ from tests.control_plane.test_turn_host_decision_capture import _fixture_module
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_turn_rejects_full_overlimit_candidate_before_writeback(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("invalid_action,error", [
+    ("Review the evidence. " * 65 + "Stop before publication; approval is still required.",
+     "next_action exceeds 1200 characters"),
+    ({"action": "Continue", "constraint": "Stop before publication."}, "next_action must be a string"),
+    (False, "next_action must be a string"),
+], ids=["overlimit", "object", "false"])
+def test_native_turn_rejects_invalid_candidate_before_writeback(
+    tmp_path, monkeypatch, provider, invalid_action, error,
+):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     f = _fixture_module()
     project, runtime, workspace, registry = f._write_fixture(tmp_path, turn_count=2)
@@ -27,7 +35,7 @@ def test_native_turn_rejects_full_overlimit_candidate_before_writeback(tmp_path,
         "result_kind": "validated_progress", "classification": "artifact_checked",
         "summary": "The isolated artifact was checked.",
         "recommended_action": "Continue the accepted task.",
-        "next_action": "Review the evidence. " * 65 + "Stop before publication; approval is still required.",
+        "next_action": invalid_action,
         "vision_unchanged_reason": "The accepted Goal remains unchanged.",
     }
     (workspace / "candidate.json").write_text(json.dumps(candidate))
@@ -49,9 +57,9 @@ def test_native_turn_rejects_full_overlimit_candidate_before_writeback(tmp_path,
             "--workspace", str(workspace), "--dsh-home", str(tmp_path / "dsh-home"), "--dsh-runner", str(runner)]),
         "--validation-command-json", json.dumps(validator), "--scan-root", str(project),
         "--no-global-sync", "--timeout-seconds", "30"]
-    code, failed = f._run_cli([*base, "--turn-instance-id", "overlimit-result", "--execute"])
+    code, failed = f._run_cli([*base, "--turn-instance-id", "invalid-result", "--execute"])
     assert code == 1 and failed["status"] == "failed", failed
-    assert "next_action exceeds 1200 characters" in json.dumps(failed)
+    assert error in json.dumps(failed)
     assert failed["validation_stage"] == "host_result_contract"
     assert failed["effects"] == {
         "host_invoked": True, "state_written": False,

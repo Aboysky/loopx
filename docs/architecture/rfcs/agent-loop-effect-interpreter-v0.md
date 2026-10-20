@@ -602,6 +602,9 @@ their independent acceptance; no Python projection is retired by this slice.
 The shared Host result adapter now retains supplied text for the existing Turn
 validator instead of truncating it into a passing candidate. Over-limit next
 actions could lose a trailing approval constraint while still being accepted.
+JSON booleans, numbers and containers also retain their types for rejection by
+that validator; false/zero cannot disappear into sparse-field defaults. Legacy
+null/omitted optional text retains its existing absence semantics.
 File/SQLite native CLI and actual DSH subprocess qualification cover rejection
 before task validation/writeback/spend/ACK, failed-result replay, and a corrected
 fresh Turn settling once. Boundary-length valid results retain their behavior.
