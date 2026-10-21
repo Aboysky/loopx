@@ -435,7 +435,14 @@ def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
 
     async def cli(environment, args, **kwargs):
         calls.append(args)
-        return {"after": {"execution_profile": {"replan_after_effective_turns": 6}}}
+        return {
+            "after": {
+                "execution_profile": {
+                    "replan_after_effective_turns": 6,
+                    "planning_horizon_goal": True,
+                }
+            }
+        }
 
     async def no_pending(**kwargs):
         return SimpleNamespace(return_code=1)
