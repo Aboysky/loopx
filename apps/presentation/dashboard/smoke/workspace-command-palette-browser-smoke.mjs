@@ -43,6 +43,7 @@ try {
     const {page} = session;
     try {
       await openShowcaseGoal(page);
+      assert.equal(await dialogFor(page).count(), 0, "Closed palette must not retain searchable labels/results");
       await page.screenshot({path: resolve(outputDir, `commands-closed-${locale}.png`), animations: 'disabled'});
       const launcher = page.getByRole('button', {name: locale === 'en' ? 'Quick navigation' : '快速导航', exact: true});
       await launcher.focus();

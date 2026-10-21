@@ -35,6 +35,7 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
     const dialog = dialogRef.current;
     if (!open || !dialog) return;
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    composing.current = false;
     setQuery("");
     setActiveId(null);
     dialog.showModal();
@@ -55,6 +56,9 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
     onClose();
     onSelect(current);
   }
+
+  // Keep closed palette labels/results out of the workspace DOM.
+  if (!open) return null;
 
   return <dialog ref={dialogRef} className="workspace-command-palette" aria-labelledby={`${id}-title`}
     aria-describedby={`${id}-scope`} onCancel={event => { event.preventDefault(); if (!composing.current) onClose(); }}
