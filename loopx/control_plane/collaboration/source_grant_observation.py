@@ -156,17 +156,56 @@ def _source_registry_recipients(registry_path: Path | None, *, context_only: boo
 
 
 def source_execution_bindings(
-    runtime_root: Path, registry_path: Path | None, session: dict[str, Any], turn: dict[str, Any]
+    runtime_root: Path, registry_path: Path | None, session: dict[str, Any], turn: dict[str, Any],
+    *, required_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Observe one compatible registry; TS owns sender and exact binding grants."""
     if conversation_scope(session, origin=turn.get("origin", "unknown"))["kind"] != "external_audience":
+        if required_binding is not None:
+            raise ValueError("original source execution grant requires verified external provenance")
         return {"bindings": []}
     observed = _source_registry_recipients(registry_path)
     ingress, source = external_source_policy(runtime_root, session, turn)
     result: dict[str, Any] = effect_runtime_result("collaboration.source.execution_bindings", {
         "source": source, "sender_id": ingress["sender_id"], "available": observed["available"],
+        **({"required_binding": required_binding} if required_binding is not None else {}),
     })
     return result
+
+
+def require_delegation_source_execution(runtime_root: Path, registry_path: Path, *,
+        goal_id: str, requester_agent_id: str, source_request_id: str,
+        binding: dict[str, Any], caller_goal_ref: dict[str, Any] | None) -> None:
+    """Reobserve the original Chat source; the existing TS owner decides its grant.
+
+    A return address only locates frozen evidence. It never grants execution,
+    and observing it must not recover or mutate the original Chat store.
+    """
+    from ...file_lock import exclusive_file_lock
+    from .goal_instance_scope import collaboration_goal_scope
+    from .inbox import _entry
+    from .source_chat_observation import observe_source_chat
+
+    try:
+        with exclusive_file_lock((_root(runtime_root) / "policy.json").with_suffix(".lock")), collaboration_goal_scope(
+            registry_path, goal_id=goal_id, agents=(requester_agent_id, binding["agent_id"]),
+            caller_goal_ref=caller_goal_ref, require_active=True,
+        ) as scope:
+            original = _entry(runtime_root, goal_id, binding["agent_id"], source_request_id, scope=scope)
+            route = _read(_root(runtime_root) / "roundtrips" / (source_request_id + ".json"))
+            if (original.get("execution_binding_id") != binding["id"]
+                    or any(route.get(key) != original.get(key) for key in
+                           ("request_id", "goal_id", "agent_id", "source_id", "goal_ref"))):
+                raise ValueError("original source execution identity changed")
+            session, turn = observe_source_chat(runtime_root, route)
+            target = {"goal_id": goal_id, "agent_id": binding["agent_id"]}
+            grant = source_context_target_authority(runtime_root, session, turn, target)
+            if grant.get("source_id") != original["source_id"] or target not in grant.get("targets", []):
+                raise ValueError("original source execution context is no longer authorized")
+            source_execution_bindings(runtime_root, registry_path, session, turn,
+                required_binding={**target, "requester_agent_id": requester_agent_id, "binding_id": binding["id"]})
+    except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected) as exc:
+        raise ValueError("original source execution authority is unavailable or revoked") from exc
 
 
 def source_context_authority(

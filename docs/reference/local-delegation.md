@@ -53,6 +53,17 @@ work or configures owner acceptance. Disable by removing the exact binding
 from the operator configuration; existing operations retain their history and
 cannot re-execute or return accepted evidence under a revoked grant.
 
+Chat-originated execution also retains its original Inbox request and frozen
+conversation provenance. The worker rechecks that source's current sender,
+recipient and exact Goal/Agent/requester/binding grant at entry, before Host
+launch, and before completion. Missing provenance or a revoked source grant
+rejects queued work on the original operation before a Host or Turn starts.
+Historical inspection remains available. If the Host already returned, its
+original Turn and unsettled effects remain visible; restoring authority permits
+only that operation's settlement without repeating the Host. Completing the
+requester's Chat Turn does not cancel independently delegated work. Operator/MCP
+operations without a Chat source retain their existing binding authority.
+
 Member completion uses the ordinary active-Goal continuation, including legacy
 non-hard-lease routes. It does not declare terminal `no_followup` for a
 requester-owned synthesis. This lets controller validation finish the Todo
@@ -67,6 +78,13 @@ Goal 验收的任务，必须通过既有 `todo add --validation-command-json` �
 执行前后核对。校验通过仍不等于规范完成、产物未变或接收方采纳。预检不启动工作、
 不配置 owner 验收；移除原配置中的精确 binding 即撤销 grant，保留历史但拒绝重新
 执行或返回已撤权任务的有效结果。
+
+Chat 发起的执行还保留原 Inbox 请求与固定的对话来源。worker 在入口、Host 启动前和
+完成前，重新核对来源当前的发送者、接收者及精确 Goal/Agent/requester/binding grant。
+来源不可读或 grant 被撤销时，排队工作在原 operation 上拒绝，不启动 Host 或 Turn；
+历史记录仍可查看。Host 已返回时保留原 Turn 与未结算效果，恢复授权后仅续接该
+operation 的结算，不重跑 Host。请求方 Chat Turn 完成不取消独立委派的工作。
+没有 Chat 来源的 operator/MCP 操作继续沿用原 binding 授权。
 
 成员完成沿用普通 active-Goal 继续状态，旧的非 hard-lease 路径也如此；不会为仍由
 请求方负责的汇总声明 terminal `no_followup`。因此可以先通过 controller 校验完成

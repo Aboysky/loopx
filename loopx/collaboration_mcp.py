@@ -63,6 +63,7 @@ from .control_plane.collaboration.goal_instance_scope import (
     decide_collaboration_lifecycle,
 )
 from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
+from .control_plane.collaboration.source_grant_observation import require_delegation_source_execution
 from .control_plane.collaboration.peers import (
     _goal,
     consume_return,
@@ -761,9 +762,7 @@ class Delegations:
                         raise ValueError(DELEGATION_STOPPED_MESSAGE) from None
                 should_spawn = row["status"] not in DELEGATION_TERMINAL_STATUSES
                 if should_spawn:
-                    self.binding(
-                        row["identity"]["binding"]["id"], require_active=True
-                    )
+                    self._bound(row, require_active=True)
         except LockAcquireTimeoutError:
             # A live worker already owns the operation lock.  Observation is
             # sufficient; spawning another process cannot advance settlement.
@@ -823,6 +822,10 @@ class Delegations:
         binding = self.binding(row["identity"]["binding"]["id"], require_active=require_active)
         if row["identity"]["binding"] != binding:
             raise ValueError("delegation binding changed; reconcile original execution")
+        if require_active and "source_request_id" in row["identity"]:
+            require_delegation_source_execution(self.root, self.registry, goal_id=self.goal_id,
+                requester_agent_id=self.agent_id, source_request_id=row["identity"]["source_request_id"], binding=binding,
+                caller_goal_ref=self._caller_goal_ref())
         return binding
 
     @staticmethod
@@ -1370,13 +1373,12 @@ class Delegations:
                 # Different request ids cannot run the same assigned task concurrently.
                 task_lock = _root(self.root) / "execution-slots" / _hash([self.goal_id, binding["todo_id"]])
                 with exclusive_file_lock(task_lock, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
-                    try:
-                        self._execute(path, row, binding)
-                    except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
-                        row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
-                        self._fenced_write(path, row)
-                        if row["status"] == "prepared":
-                            self._observe(path, row, "rejected")
+                    self._execute(path, row, binding)
+            except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
+                row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
+                self._fenced_write(path, row)
+                if row["status"] == "prepared":
+                    self._observe(path, row, "rejected")
             except DelegationStopRequested as stop:
                 # SIGTERM, a checkpoint or a fenced write acknowledges intent.
                 # Each Host supervisor may still be cleaning its own group;
@@ -1724,6 +1726,7 @@ class Delegations:
                 acceptance = delegation_validation.capture(self, binding)
                 if acceptance["plan"]["state"] != "ready" or not acceptance["files_current"]:
                     raise ValueError("delegation task acceptance rejected before host launch")
+                self._bound(row, require_active=True)
                 row["turn_instance_id"] = self._turn_instance_id(row)
                 self._write_delegation_bootstrap(row, binding)
                 self._acquire_delegation_lease(path, row, binding)
@@ -1735,6 +1738,7 @@ class Delegations:
                 self._acquire_delegation_lease(path, row, binding)
             if row["status"] == "running":
                 self._raise_if_stop_requested(path)
+                self._bound(row, require_active=True)
                 turn_key = delegation_validation.matching_turn_key(self, row, binding)
                 selector = (
                     ["--resume-turn-key", turn_key]
@@ -1787,6 +1791,7 @@ class Delegations:
             # fence through settlement, result publication and acceptance.
             with exclusive_file_lock(self._dispatch_lock(path)):
                 self._raise_if_stop_requested(path)
+                self._bound(row, require_active=True)
                 self._complete_delegated_todo(row, binding)
                 if needs_settlement:
                     result = self._cli(
