@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,20 @@ PrintPayload = Callable[
 FormatSelector = Callable[..., str]
 
 
+def _attach_pr_dependency_observation(
+    payload: dict[str, Any], observation: dict[str, Any] | None,
+) -> None:
+    if observation is None:
+        return
+    payload["pr_dependency_observation"] = observation
+    written = observation["state_written"]
+    effects = payload.setdefault("effects", {})
+    if written is True or (written is None and effects.get("state_written") is False):
+        effects["state_written"] = written
+    if written is not False and isinstance(payload.get("boundary"), dict):
+        payload["boundary"]["read_only"] = False
+
+
 def handle_turn_command(
     args: argparse.Namespace,
     *,
@@ -67,6 +82,7 @@ def handle_turn_command(
             output_format=output_format, print_payload=print_payload,
         )
     payload: dict[str, Any] = {}
+    pr_dependency_observation: dict[str, Any] | None = None
     try:
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
@@ -175,6 +191,7 @@ def handle_turn_command(
                 from ..capabilities.agent_turn_recall import run_configured_agent_turn_recall_fail_open
                 from ..capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
                 from .lark_inbox import dispatch_goal_lark_turn_start_hooks
+                from ..control_plane.todos.contract import normalize_required_capabilities
 
                 turn_start_hook_dispatch = dispatch_goal_lark_turn_start_hooks(
                     registry_path=registry_path,
@@ -197,6 +214,34 @@ def handle_turn_command(
                     agent_id=args.agent_id,
                     available=args.available_capabilities,
                 )
+
+                # Observe synchronized dependencies before selection and business
+                # quota, independently of the blocked business Host.
+                # Plans, dry runs and recovery of an original journal never poll.
+                if "external_evidence_poll" in normalize_required_capabilities(args.available_capabilities):
+                    from ..capabilities.issue_fix.pr_wait_reconcile import reconcile_pr_wait_dependencies
+
+                    observation_started = time.monotonic_ns()
+                    try:
+                        pr_dependency_observation = reconcile_pr_wait_dependencies(
+                            registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                            goal_id=args.goal_id, agent_id=args.agent_id,
+                        )
+                        pr_dependency_observation["state_written"] = bool(
+                            pr_dependency_observation["external_read_count"]
+                        )
+                    except Exception as exc:  # noqa: BLE001 - optional observation is fail-open
+                        # A lost provider/log response is not proof of zero reads
+                        # or zero local effects. Preserve that uncertainty while
+                        # the ordinary decision owner still checks all admission.
+                        pr_dependency_observation = {
+                            "ok": False, "degraded": True, "failure_count": 1,
+                            "error_category": type(exc).__name__,
+                            "external_read_count": None, "state_written": None,
+                        }
+                    pr_dependency_observation["duration_ms"] = (
+                        time.monotonic_ns() - observation_started
+                    ) // 1_000_000
             from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
             turn_start_hook_dispatch = extend_preferences(turn_start_hook_dispatch, runtime_root=runtime_root,
                 registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
@@ -325,6 +370,7 @@ def handle_turn_command(
                 # never run its command as an arbitrary host/shell adapter.
                 payload.update(mode="run_once", status="capability_action_required",
                                execute=bool(args.execute), executed=False)
+                _attach_pr_dependency_observation(payload, pr_dependency_observation)
                 print_payload(payload, output_format(args), _render_loopx_turn_plan_markdown)
                 return 0
 
@@ -351,6 +397,7 @@ def handle_turn_command(
         payload = build_turn_error_payload(
             payload, exc, turn_command=args.turn_command,
         )
+    _attach_pr_dependency_observation(payload, pr_dependency_observation)
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"

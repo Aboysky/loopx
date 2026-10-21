@@ -471,6 +471,19 @@ shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off
 isolation. This does not qualify installed heartbeat/App adoption or model value.
 
+Fresh executing native Turns now compose the existing opt-in PR dependency
+observer before their governing decision. An exact merged observation can
+satisfy the original wait without asking the blocked business Host to select
+that observation. The TypeScript plan, retained merge evidence and ordinary
+execution admission remain the owners; the CLI reports observation cost and
+failure/uncertain-write readback. File/SQLite qualification covers paused
+business compute, subsequent validated protocol-host work and original-journal
+replay, with the original requirement, ownership and merge timestamp retained.
+Plans, dry runs, missing declarations and journal recovery add no observation.
+This is a native CLI adoption slice; installed heartbeat declarations,
+App/Lark caller adoption, sustained live scheduling, model outcomes and the
+three convergence acceptances remain open.
+
 Bounded planning context now remains inline instead of forcing a full-decision
 read under envelope budget pressure. Its existing owner retains the 3 KiB bound;
 the shared DSH/cloud adapter transports the signed contribution and, for saved

@@ -13,6 +13,33 @@ from ..presentation.renderers.turn_envelope_markdown import (
 )
 
 
+def _pr_dependency_observation_lines(payload: Mapping[str, object]) -> list[str]:
+    observation = payload.get("pr_dependency_observation")
+    if not isinstance(observation, dict):
+        return []
+    lines = [
+        f"- PR dependency reads: {observation.get('external_read_count')}",
+        f"- PR observation duration_ms: {observation.get('duration_ms')}",
+        f"- PR dependency observation degraded: {observation.get('degraded')}",
+        f"- PR unavailable dependencies: {observation.get('unavailable_dependency_count')}",
+        f"- PR observation state_written: {observation.get('state_written')}",
+    ]
+    if observation.get("error_category"):
+        lines.append(f"- PR observation error: {observation['error_category']}")
+    for result in observation.get("results", []):
+        lines.append(f"- PR dependency {result['pr_ref']}: {result['state']}"
+                     + (f" ({result['error_category']})" if result.get("error_category") else ""))
+    plan = observation.get("plan")
+    if isinstance(plan, dict):
+        lines.append(f"- PR retry interval_seconds: {plan.get('poll_interval_seconds')}")
+        observed = {result["pr_ref"] for result in observation.get("results", [])}
+        retained_failures = [target for target in plan.get("waiting_targets", [])
+                             if target.get("last_observed_state") == "FAILED" and target["pr_ref"] not in observed]
+        for target in retained_failures[:4]:
+            lines.append(f"- PR dependency {target['pr_ref']}: FAILED; next_check_at: {target['next_due_at']}")
+    return lines
+
+
 def build_turn_error_payload(
     planned: dict[str, Any], exc: Exception, *, turn_command: str,
     execution_started: bool = False,
@@ -72,6 +99,7 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
     capability = payload.get("capability_action") if isinstance(payload.get("capability_action"), dict) else {}
     intent = capability.get("intent") if isinstance(capability.get("intent"), dict) else {}
     envelope = payload.get("turn_envelope")
+    observation = payload.get("pr_dependency_observation")
     return "\n".join(
         [
             "# LoopX Turn Plan",
@@ -79,7 +107,10 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
             f"- execution_mode: {host.get('execution_mode')}",
             f"- route: {route.get('kind')}",
             f"- would_invoke_host: {route.get('would_invoke_host')}",
-            "- side_effects: none",
+            ("- side_effects: PR dependency observation"
+             if isinstance(observation, dict) and observation.get("state_written") is not False
+             else "- side_effects: none"),
+            *_pr_dependency_observation_lines(payload),
             *(["- capability_action: required (not executed)",
                f"- next_command: {capability.get('command') or intent.get('command')}"] if capability else []),
             *turn_envelope_budget_warning_lines(
@@ -164,6 +195,7 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             f"- host_invoked: {effects.get('host_invoked')}",
             f"- state_written: {effects.get('state_written')}",
             f"- quota_spent: {effects.get('quota_spent')}",
+            *_pr_dependency_observation_lines(payload),
             *([f"- error: {payload['error']}"] if payload.get("error") else []),
             *([f"- journal_readback: {journal_observation.get('status')}",
                f"- recorded_effects: {journal_observation.get('recorded_effects')}",

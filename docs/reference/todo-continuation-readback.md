@@ -37,8 +37,24 @@ alone do not opt in. Omitting that declaration keeps external observation off.
 Explicit prequota invocation authorizes compact metadata reads and local
 observation writeback, never merge, review, remote mutation or quota spend.
 Read back with `todo list --goal-id GOAL --todo-id TODO --format json`.
-These same typed dependency facts are the boundary to reuse in TurnEnvelope;
-this heartbeat adoption does not claim that every Turn host already polls them.
+
+Fresh `turn run-once --execute` invocations with that same explicit capability
+now call the existing PR dependency observer before collecting the governing
+decision. Observation can satisfy the wait while business compute is paused;
+the ordinary stop, quota, claim, lease and launch checks still govern execution.
+Planning, dry runs and `--resume-turn-key` recovery perform no new observation.
+Omitting the capability retains the previous path. Disabling the declaration
+stops future automatic reads and retains previously verified merge facts.
+
+The native CLI returns `pr_dependency_observation` in JSON: remote read count,
+observer duration in milliseconds, degraded/failure readback, the existing
+target/cadence plan and observation `state_written`. Markdown summarizes those
+counts, cadence and failures. Observation `state_written` is `null` after an uncertain provider/log failure; a failed response must
+not claim zero local effects. Observation has no separate model call or business
+quota debit. The existing four-target bound and 30-minute retry cadence apply;
+actual network latency and total host costs remain workload-dependent. This
+qualifies the native CLI bridge. Installed heartbeat declarations, App/Lark
+caller adoption and sustained live scheduling remain separate boundaries.
 
 `pr_merged:owner/repo#42` 只标识依赖；缺少合并事件不证明 GitHub 仍在等待。
 历史交付监督不再豁免这种未观察等待，因果阻塞结算仍要求已注册的
@@ -56,7 +72,20 @@ provider 失败不能解除等待。观察不修改 Todo 状态、要求、认�
 prequota；只声明 filesystem/shell 不会启用。省略该声明即关闭外部观察。
 显式调用仅授权紧凑元数据读取和本地观察记账，不授权合并、review、远端写入或额度支出。
 通过 `todo list --goal-id GOAL --todo-id TODO --format json` 回读。
-TurnEnvelope 应复用同一类型化依赖事实；本批未证明所有 Turn host 已接入自动核验。
+
+新的 `turn run-once --execute` 调用在显式声明同一能力后，会在收集本次 governing
+decision 前运行既有 PR 依赖观察器。业务额度暂停时仍可满足依赖条件；停止、quota、
+claim、lease 与宿主启动仍由原准入约束。plan、dry run 与 `--resume-turn-key`
+恢复不执行新观察；省略能力声明保持原路径。移除声明会停止之后的自动读取，已验证的
+合并事实保留。
+
+原生 CLI 的 JSON 返回 `pr_dependency_observation`：远端读取次数、观察耗时毫秒、
+退化／失败读回、既有目标／节奏计划与观察 `state_written`；Markdown 汇总次数、
+节奏与失败。provider
+或日志响应不确定时，最后一项为 `null`，失败不能被解释为零本地效果。观察没有单独的
+模型调用或业务额度扣费；沿用每次四项和 30 分钟重试节奏，实际网络延迟及完整宿主成本
+仍依赖工作负载。本切片验证原生 CLI 接入；安装态 heartbeat 声明、App/Lark 调用方采用
+与持续真实调度仍分别验收。
 
 ## Completion dependency cycles / 完成依赖环
 

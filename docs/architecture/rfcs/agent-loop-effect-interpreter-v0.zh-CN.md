@@ -329,6 +329,14 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat/App 或模型收益
 已验收。
 
+新的原生 Turn 执行入口在 governing decision 前组合既有 opt-in PR 依赖观察器，
+精确合并事实可满足原等待，不要求被该等待阻挡的业务 Host 主动选择观察工作。目标计划、
+保留的合并证据与正常执行准入继续归 TS 及原 owner；CLI 读回观察成本、失败与不确定
+写入。File/SQLite 验证覆盖业务额度暂停、随后经过独立校验的协议宿主工作和原 journal
+重放，保留原要求、归属及合并时间。plan、dry run、缺少声明与 journal 恢复不添加观察。
+本切片只完成原生 CLI 接入；安装态 heartbeat 声明、App/Lark 调用方采用、持续真实调度、
+模型结果与以下三批收敛验收保持开放。
+
 有界规划上下文现在保持内联，不再因短包预算压力而强制读取整份决策；既有 owner 的
 3 KiB 限制保留。共享 DSH/cloud adapter 传递签名内容，历史引用同时保留原捕获路由和
 哈希。thin renderer 仅在存在 `agent_context.detail_ref` 时要求能力补读，不能把也用于
