@@ -167,7 +167,18 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
         "import json\nfrom pathlib import Path\n"
         "def run_dsh_turn(*, prompt, workspace, **kwargs):\n"
         "    Path(workspace, 'received.txt').write_text(prompt)\n"
-        "    return json.dumps({'result_kind':'wait','summary':'Protocol input recorded.'})\n"
+        "    return json.dumps({\n"
+        "        'result_kind':'validated_progress',\n"
+        "        'classification':'profile work validated',\n"
+        "        'summary':'The bounded profile work and validation completed.',\n"
+        "        'recommended_action':'Retain the validated implementation evidence.',\n"
+        "        'next_action':'Use the validated result in the next accepted segment.',\n"
+        "        'delivery_batch_scale':'implementation',\n"
+        "        'delivery_outcome':'primary_goal_outcome',\n"
+        "        'vision_unchanged_reason':'The accepted goal path is unchanged.',\n"
+        "        'work_evidence':['artifact:profile-driven-change'],\n"
+        "        'validation_evidence':['check:profile-targeted-validation'],\n"
+        "    })\n"
     )
     command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
@@ -179,7 +190,24 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
                "route": "replan_required" if replan else "primary_delivery", "turn_envelope": envelope}
     result = subprocess.run(command, input=json.dumps(request), text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(result.stdout)["result_kind"] == "wait"
+    host_result = json.loads(result.stdout)
+    assert host_result["result_kind"] == "validated_progress"
+    assert host_result["delivery_batch_scale"] == "implementation"
+    assert host_result["delivery_outcome"] == "primary_goal_outcome"
+    assert host_result["work_evidence"] == ["artifact:profile-driven-change"]
+    assert host_result["validation_evidence"] == [
+        "check:profile-targeted-validation"
+    ]
+    from loopx.control_plane.turn_driver.executor import (
+        validate_loopx_turn_host_result,
+    )
+
+    verdict = validate_loopx_turn_host_result(plan, host_result)
+    assert verdict["ok"], verdict["errors"]
+    assert verdict["result"]["delivery_batch_scale"] == "implementation"
+    assert verdict["result"]["delivery_outcome"] == "primary_goal_outcome"
+    assert verdict["result"]["work_evidence"] == host_result["work_evidence"]
+    assert verdict["result"]["validation_evidence"] == host_result["validation_evidence"]
     prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])

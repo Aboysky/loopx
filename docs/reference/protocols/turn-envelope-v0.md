@@ -288,9 +288,17 @@ they return a semantic result while the outer Turn executor owns state, quota
 and scheduler effects. The same input carries the complete existing
 `execution_profile`, including outcome-floor and degradation rules, to size and
 qualify work. Display filtering must not discard those clauses or ordered
-requirements before signing. Hosts return work and validation evidence; the
-profile does not transfer writeback or quota ownership. Historical profiles keep
-their original signature, and inputs without either contract retain their prompt.
+requirements before signing. A new material result carrying `execution_profile`
+must return `work_evidence` and `validation_evidence` as separate arrays of
+1-8 non-empty public-safe strings, at most 240 characters per item and 1,200
+characters per field. The Host must preserve its actual
+`delivery_batch_scale` and `delivery_outcome` rather than replacing them with a
+fixed progress class. The outer Turn executor validates and retains this evidence
+in the typed host result; `turn run-once` projects it as `host_evidence`.
+Legacy journal replay may retain an older material result without these fields.
+Stop results omit both arrays. The profile does not transfer writeback or quota
+ownership. Historical profiles keep their original signature, and inputs without
+either contract retain their prompt.
 
 中文：验收 capsule 完整保留原来源的有序步骤、继续执行说明、当前结束／继续判断、
 认可的证据种类和不能作为证明的条件；展示裁剪不能丢掉条款或列表尾部。新投影使用
@@ -300,8 +308,14 @@ their original signature, and inputs without either contract retain their prompt
 补读验收／覆盖证据；提议收尾前须读取有序义务及当前 judge。Host 返回语义结果，
 状态、quota 和 scheduler 效果仍由外层 Turn executor 执行。同一输入也传递完整的既有
 `execution_profile`，包括成果底线、退化规则和有序要求，供确定工作规模及验收；不能
-在签名前按展示字段丢弃。Host 返回工作及验证证据，不取得写回或扣额权。历史 profile
-保留原签名；两种契约都不存在时保持原 prompt。
+在签名前按展示字段丢弃。携带 `execution_profile` 的新 material result 必须分别返回
+`work_evidence` 与 `validation_evidence` 字符串数组：各 1-8 项、每项不超过 240 字符、
+整字段不超过 1,200 字符，且公开安全。Host 必须保留实际
+`delivery_batch_scale` 与 `delivery_outcome`，不能改写成固定的 progress 分类。外层
+Turn executor 验证 typed result 并保留证据，`turn run-once` 以 `host_evidence`
+投影回读；旧 journal replay 可保留缺少这些字段的历史 material result，stop result
+不得返回两组证据。Host 不取得写回或扣额权。历史 profile 保留原签名；两种契约都不
+存在时保持原 prompt。
 
 No new frontend/Lark operation or configuration is introduced. Regenerate saved
 expanded heartbeat prompts to consume the new contract; bootstrap prompts reload

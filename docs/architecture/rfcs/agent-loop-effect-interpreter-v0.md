@@ -543,13 +543,15 @@ insufficient-proof conditions, signature refusal and unchanged source/state.
 The same audit also found work qualification missing: the capsule filtered out
 outcome-floor/degradation rules, and that Host omitted the whole existing
 execution profile. The typed projection now retains it intact and the Host
-forwards it, with work/validation evidence returned to the outer executor.
+forwards it. A new material result carrying that profile returns typed,
+public-safe `work_evidence` and `validation_evidence` arrays and preserves its
+actual delivery scale/outcome; the outer executor validates and retains both.
 Native source oracles and signed mutations cover these rules. Inputs without
-either contract retain their prior prompt; the outer executor keeps all
-state/quota/scheduler effects. This qualifies clause delivery at that caller,
-not model adherence, installed adoption or complete-cost improvement. Count the
-cost of restored requirements; the earlier incomplete input is not an accepted
-efficiency baseline.
+either contract retain their prior prompt, and older journal replay remains
+readable. The outer executor keeps all state/quota/scheduler effects. This
+qualifies clause delivery at that caller, not model adherence, installed
+adoption or complete-cost improvement. Count the cost of restored requirements;
+the earlier incomplete input is not an accepted efficiency baseline.
 
 The complete execution profile adds 138–142 JSON characters/UTF-8 bytes and no
 lines to ordinary Turn plans on the unchanged 96-row public CLI fixture. The

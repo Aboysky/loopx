@@ -15,6 +15,7 @@ from ..quota.turn_envelope import turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
+from .executor import HOST_RESULT_EVIDENCE_LIMITS
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
 LOOPX_TURN_RESULT_SCHEMA = "loopx_turn_result_v0"
@@ -57,6 +58,13 @@ def _canonical_hash(value: Any) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + sha256(encoded).hexdigest()
+
+
+def _execution_profile_present(request: Mapping[str, Any]) -> bool:
+    envelope = _mapping(request.get("turn_envelope"))
+    capsule = _mapping(envelope.get("contract_capsule"))
+    profile = capsule.get("execution_profile")
+    return isinstance(profile, Mapping) and bool(profile)
 
 
 def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -239,6 +247,16 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "iteration_failed when this iteration failed without authorizing a "
         "retry or successor. "
         "Do not include raw transcripts, credentials, or absolute local paths."
+        + (
+            " Because execution_profile is present, every material result must "
+            "also return work_evidence and validation_evidence as separate arrays "
+            "of 1-8 short public-safe strings (<=240 characters each, <=1200 "
+            "characters total per field). Name the artifact or observation as work "
+            "evidence and the command or readback that checked it as validation "
+            "evidence. Omit both fields for wait, user_action_required and "
+            "iteration_failed."
+            if authority.get("execution_profile") else ""
+        )
     )
 
 
@@ -345,6 +363,29 @@ def build_result(
                 limit=TEXT_LIMITS["vision_unchanged_reason"],
             ),
         }
+    if kind in MATERIAL_KINDS and _execution_profile_present(request):
+        missing_evidence = [
+            field for field in HOST_RESULT_EVIDENCE_LIMITS
+            if field not in candidate
+        ]
+        if missing_evidence:
+            return {
+                "schema_version": LOOPX_TURN_RESULT_SCHEMA,
+                "turn_key": turn_key,
+                "result_kind": "wait",
+                "completed_phases": list(COMPLETED_PHASES),
+                "classification": "missing_host_execution_evidence",
+                "next_action": _bounded(
+                    f"{host_name} returned a material result without required "
+                    + " and ".join(missing_evidence)
+                    + "; rerun with typed public-safe work and validation evidence.",
+                    limit=TEXT_LIMITS["next_action"],
+                ),
+                "vision_unchanged_reason": _bounded(
+                    "host adapter could not accept material work without typed evidence",
+                    limit=TEXT_LIMITS["vision_unchanged_reason"],
+                ),
+            }
     result: dict[str, Any] = {
         "schema_version": LOOPX_TURN_RESULT_SCHEMA,
         "turn_key": turn_key,
@@ -361,13 +402,17 @@ def build_result(
         text = value.strip() if isinstance(value, str) else value
         if text or (value is not None and not isinstance(value, str)):
             result[field] = text
-
     if kind in MATERIAL_KINDS:
         _complete_material_fields(result, candidate, kind)
     for field in ("path_delta_mode", "agent_vision_json"):
         if field in candidate:
             # Preserve the structured executor input verbatim. The executor
             # owns type, size, JSON and semantic validation.
+            result[field] = candidate[field]
+    for field in HOST_RESULT_EVIDENCE_LIMITS:
+        if field in candidate:
+            # Preserve the bounded evidence value for the executor's typed
+            # validation and durable host-result readback.
             result[field] = candidate[field]
 
     has_path_delta = "path_delta_mode" in candidate or "agent_vision_json" in candidate
