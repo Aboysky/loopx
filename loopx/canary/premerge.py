@@ -166,6 +166,7 @@ def _visual_review_paths(changed_files: list[str], repo_root: Path) -> list[str]
         path for path in _dedupe(changed_files)
         if Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
         and (repo_root / path).is_file()
+        and not (repo_root / path).is_symlink()
     ]
 
 

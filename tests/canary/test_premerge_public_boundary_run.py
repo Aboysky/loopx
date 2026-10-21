@@ -193,3 +193,19 @@ def test_image_named_directory_does_not_hide_text(tmp_path: Path) -> None:
 def test_deleted_capture_does_not_leave_a_phantom_visual_hold(tmp_path: Path) -> None:
     classification = classify_premerge_surfaces(["deleted.png"], repo_root=tmp_path)
     assert classification["manual_holds"] == []
+
+
+def test_image_named_symlink_keeps_explicit_text_scan(tmp_path: Path) -> None:
+    target = tmp_path / "entry.md"
+    target.write_bytes(b"\xff\xfe")
+    try:
+        (tmp_path / "capture.png").symlink_to(target.name)
+    except OSError:
+        pytest.skip("host does not permit creating symbolic links")
+    classification = classify_premerge_surfaces(["capture.png"], repo_root=tmp_path)
+    run = _public_boundary_changed_files_run(
+        changed_files=["capture.png"], execute=True, timeout_seconds=30, repo_root=tmp_path,
+    )
+    assert classification["manual_holds"] == []
+    assert run["ok"] is False
+    assert "invalid UTF-8" in run["selected_checks"][0]["stderr_tail"]
