@@ -104,8 +104,8 @@ class FeedTests(unittest.TestCase):
 
     def test_workflow_builds_and_uploads_the_signed_windows_installer(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("runner: windows-latest", workflow)
-        self.assertIn("bundle: nsis", workflow)
+        self.assertIn("runs-on: windows-latest", workflow)
+        self.assertIn("BUNDLE: nsis", workflow)
         self.assertIn("dist/updater/*.exe", workflow)
         feed_step = workflow.split("- name: Generate complete feed", 1)[1].split(
             "- name: Upload immutable artifacts", 1
@@ -134,6 +134,71 @@ class FeedTests(unittest.TestCase):
         self.assertIn("*-updater-setup.exe*) continue", collect_step)
         self.assertIn('ls dist/updater/*"$VERSION"*-updater-setup.exe', collect_step)
         self.assertIn("VERSION: ${{ needs.identity.outputs.version }}", collect_step)
+
+    def test_stable_publish_does_not_require_the_windows_build(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        build_macos = workflow.split("\n  build-macos:\n", 1)[1].split(
+            "\n  build-windows:\n", 1
+        )[0]
+        build_windows = workflow.split("\n  build-windows:\n", 1)[1].split(
+            "\n  publish:\n", 1
+        )[0]
+        self.assertIn(
+            "if: needs.identity.outputs.channel == 'stable' || needs.identity.outputs.channel == 'main'",
+            build_macos,
+        )
+        self.assertIn("if: needs.identity.outputs.channel == 'main'", build_windows)
+        self.assertIn("name: signed-updater-windows-latest", build_windows)
+
+        publish = workflow.split("\n  publish:\n", 1)[1]
+        self.assertIn(
+            "needs: [identity, build-macos, build-windows, validate]", publish
+        )
+        condition = publish.split("if: >-", 1)[1].split("runs-on:", 1)[0]
+        expression = " ".join(line.strip() for line in condition.splitlines())
+        python_expression = (
+            expression.replace("always()", "True")
+            .replace("&&", " and ")
+            .replace("||", " or ")
+            .replace("needs.identity.result", "identity_result")
+            .replace("needs.build-macos.result", "darwin_result")
+            .replace("needs.build-windows.result", "windows_result")
+            .replace("needs.validate.result", "validate_result")
+            .replace("needs.identity.outputs.channel", "channel")
+        )
+
+        def publish_after(
+            channel,
+            identity_result="success",
+            darwin_result="success",
+            windows_result="skipped",
+            validate_result="success",
+        ):
+            return eval(  # noqa: S307 - repository-owned expression, no builtins.
+                python_expression,
+                {"__builtins__": {}},
+                {
+                    "channel": channel,
+                    "identity_result": identity_result,
+                    "darwin_result": darwin_result,
+                    "windows_result": windows_result,
+                    "validate_result": validate_result,
+                },
+            )
+
+        self.assertTrue(
+            publish_after("stable", windows_result="failure"),
+            "a Windows failure must not withhold the Darwin-only stable feed",
+        )
+        self.assertFalse(
+            publish_after("main", windows_result="failure"),
+            "a main release must reject a failed Windows build",
+        )
+        self.assertFalse(
+            publish_after("main", windows_result="skipped"),
+            "a main release must reject a missing Windows build",
+        )
+        self.assertTrue(publish_after("main", windows_result="success"))
 
     def test_workflow_pointer_upload_stays_inside_the_advance_branch(self):
         publish = WORKFLOW.read_text(encoding="utf-8").split(
