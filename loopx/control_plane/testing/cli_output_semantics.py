@@ -123,6 +123,11 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         "scope negative results to tested conditions and local proxies to their coverage. "
         "Reuse still-applicable evidence instead of repeating checks without a new uncertainty."
     )
+    open_work_review = (
+        "Review unmet requirements even with open Todos. ",
+        "Strongest first delivery is the objective; diagnostic validation and available feedback can strengthen it. ",
+        "Flat metrics alone prove neither progress nor exhaustion. ",
+    )
     stop = (
         "host_action=pause_or_delete_current_heartbeat: automation_update pause current "
         "heartbeat once; verify stopped; unconfirmed/unavailable: never claim stopped; "
@@ -185,6 +190,9 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         "context_after": contains(context_prefix + brief + context_suffix),
         "replan_before": contains(replan) and not contains(replan + " " + correction),
         "replan_after": contains(replan + " " + correction),
+        "open_work_review_before": contains(replan + " " + correction)
+            and not any(contains(clause) for clause in open_work_review),
+        "open_work_review_after": contains("".join(open_work_review) + replan + " " + correction),
         "stop_before": any(contains(clause) for clause in old_stops),
         "stop_after": contains(stop),
         "authorized_delivery_before": contains(old_work) and not any(contains(clause) for clause in delivery_clauses),

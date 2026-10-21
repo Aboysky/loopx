@@ -48,7 +48,9 @@ const REPLAN_PLANNING_GUIDANCE = [
     "and hard constraints from provisional agent-created candidate rules; revisit the latter " +
     "when they obstruct the goal. Do not relax frozen acceptance, authority, budget or stops, " +
     "or rewrite criteria after failure.",
-  "Compare expected goal/information gain with full marginal cost. " +
+  "Review unmet requirements even with open Todos. Strongest first delivery is the objective; " +
+    "diagnostic validation and available feedback can strengthen it. Flat metrics alone prove neither progress nor exhaustion. " +
+    "Compare expected goal/information gain with full marginal cost. " +
     "Before widening repeated validation, check that the changed intervention reaches the " +
     "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; " +
     "scope negative results to tested conditions and local proxies to their coverage. " +

@@ -161,6 +161,8 @@ def test_authoring_growth_is_bounded_one_time_and_surface_scoped(
 @pytest.mark.parametrize("surface,fmt,clauses,growth", [
     ("quota_should_run", "json", ["context"], 208),
     ("loopx_turn_plan", "json", ["context"], 209),
+    ("loopx_turn_plan", "json", ["open_work_review"], 216),
+    ("quota_should_run", "json", ["open_work_review"], 213),
     ("quota_should_run", "json", ["context", "replan"], 571),
     ("quota_should_run_vision_detail", "markdown", ["context"], 208),
     ("heartbeat_prompt_compact", "markdown", ["stop"], 215),
@@ -225,6 +227,34 @@ def test_continuation_observation_retains_every_stop_and_context_clause():
                        "fresh guard", "grants no authority"]:
             assert not continuation_instruction_observations(
                 render((prefix + brief + suffix).replace(clause, "")))["context_after"]
+
+
+def test_open_work_review_cost_requires_complete_new_and_retained_guidance():
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations
+
+    prior = (
+        "Compare expected goal/information gain with full marginal cost. "
+        "Before widening repeated validation, check that the changed intervention reaches the "
+        "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; "
+        "scope negative results to tested conditions and local proxies to their coverage. "
+        "Reuse still-applicable evidence instead of repeating checks without a new uncertainty. "
+        "Correct within the affected work first; widen replanning only when current goal, path, dependency "
+        "or acceptance evidence warrants it. A due review can retain the path; it does not force a pivot. "
+        "At the next review, check whether the correction reached subsequent work and authoritative outcomes; "
+        "a recorded decision alone proves neither adoption nor improvement."
+    )
+    clauses = ["Review unmet requirements even with open Todos. ",
+        "Strongest first delivery is the objective; diagnostic validation and available feedback can strengthen it. ",
+        "Flat metrics alone prove neither progress nor exhaustion. "]
+    for render in [lambda text: text, lambda text: json.dumps({"planning_guidance": [text]})]:
+        before = continuation_instruction_observations(render(prior))
+        after = continuation_instruction_observations(render("".join(clauses) + prior))
+        assert before["open_work_review_before"] and not before["open_work_review_after"]
+        assert after["open_work_review_after"] and not after["open_work_review_before"]
+        for clause in clauses + ["full marginal cost", "current artifact", "negative results", "new uncertainty",
+                                 "affected work first", "does not force a pivot", "neither adoption nor improvement"]:
+            partial = continuation_instruction_observations(render(("".join(clauses) + prior).replace(clause, "")))
+            assert not partial["open_work_review_before"] and not partial["open_work_review_after"]
 
 
 def test_authoring_observations_require_complete_structured_or_rendered_guidance():

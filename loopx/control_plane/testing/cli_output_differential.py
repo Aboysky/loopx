@@ -814,6 +814,11 @@ def _continuation_instruction_migration(
             chars += 224
         if migrated("replan"):
             chars += 384
+        if migrated("open_work_review"):
+            # Same fixture: +212 text bytes, +213 quota / +216 turn-plan
+            # JSON chars after accounting metadata. Preserve all prior prose;
+            # only this complete transition receives the one-time allowance.
+            chars += 224
     elif surface in {"heartbeat_prompt_thin", "heartbeat_prompt_brief", "heartbeat_prompt_compact"}:
         # Complete stop/correction rollout: thin +154, brief +163, compact +215.
         if migrated("stop"):
