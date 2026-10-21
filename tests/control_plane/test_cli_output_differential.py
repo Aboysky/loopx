@@ -998,7 +998,7 @@ def test_planning_horizon_v0_migration_has_one_bounded_growth_budget() -> None:
         chars=43_200,
         utf8_bytes=43_200,
         lines=1_084,
-        compact_payload_chars=22_800,
+        compact_payload_chars=23_000,
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
@@ -1010,6 +1010,11 @@ def test_planning_horizon_v0_migration_has_one_bounded_growth_budget() -> None:
         "turn_envelope_action_dimensions_v0 -> turn_envelope_action_dimensions_v3",
         "planning_horizon schema migrated: none -> quota_planning_horizon_v0",
     ]
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        oversized = {**candidate, metric: candidate[metric] + 1}
+        assert not compare_cli_output_receipts(_receipt(_row()), _receipt(oversized))["ok"]
+    grown = {**candidate, "compact_payload_chars": candidate["compact_payload_chars"] + 3_000}
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
 
 
 def test_planning_horizon_v0_migration_fails_above_its_bounded_growth() -> None:

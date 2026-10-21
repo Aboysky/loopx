@@ -672,6 +672,59 @@ test("planning detail stays cold while its action dimension remains signed", () 
   assert.equal(horizon.detail_refs_ref, "$.detail_ref");
 });
 
+test("Goal horizon reuses only identical inline acceptance and keeps its source signed", () => {
+  const source = payload();
+  const acceptance = {revision: 3, scope: {kind: "all_advancement"}, status: "failed",
+    verification: {results: [{criterion_id: "complete", passed: false}]}};
+  source.planning_horizon = {schema_version: "quota_planning_horizon_v0", core_goal: {
+    objective: "Deliver the whole outcome", acceptance_contract: acceptance}};
+  const channel = (source.interaction_contract as JsonObject).agent_channel as JsonObject;
+  channel.work_context = {complete: true, sources: [{source: "goal_acceptance", content: {
+    goal_acceptance_contract: acceptance}}]};
+  const build = () => buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const envelope = build();
+  const core = ((envelope.action as JsonObject).planning_horizon as JsonObject).core_goal as JsonObject;
+  assert.equal(core.acceptance_contract, undefined);
+  assert.equal(core.acceptance_contract_ref, "$.work_context.sources[0].content.goal_acceptance_contract");
+  assert.deepEqual((source.planning_horizon as JsonObject).core_goal,
+    {objective: "Deliver the whole outcome", acceptance_contract: acceptance}, "compaction must not mutate full quota");
+  const signature = turnEnvelopeActionSignatureDocument(envelope);
+  const changed = structuredClone(envelope);
+  const row = ((changed.work_context as JsonObject).sources as JsonObject[])[0];
+  (row.content as JsonObject).goal_acceptance_contract = {...acceptance, status: "accepted"};
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed), signature);
+  for (const content of [{goal_acceptance_contract: {...acceptance, revision: 4}}, {},
+    {goal_acceptance_contract: {...acceptance, scope: {kind: "selected_work"}}}]) {
+    channel.work_context = {sources: [{source: "goal_acceptance", content}]};
+    const retained = ((build().action as JsonObject).planning_horizon as JsonObject).core_goal as JsonObject;
+    assert.deepEqual(retained.acceptance_contract, acceptance);
+    assert.equal(retained.acceptance_contract_ref, undefined);
+  }
+});
+
+test("Goal horizon reuses identical selected work text without dropping other work or its bounds", () => {
+  const source = payload();
+  const text = "Deliver the complete candidate and check the independent acceptance before settling.";
+  source.selected_todo = {...source.selected_todo as JsonObject, text};
+  const horizon = {core_goal: {objective: "Finish the whole Goal"},
+    work_items: [{todo_id: "todo-1", text}, {todo_id: "todo-2", text: "Run diagnostic validation"}],
+    completeness: {complete: false, omitted_candidate_todo_count: 3}};
+  source.planning_horizon = horizon;
+  const build = () => buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const projected = () => (build().action as JsonObject).planning_horizon as JsonObject;
+  assert.deepEqual(projected().work_items, [{todo_id: "todo-1", text_ref: "$.action.selected_todo.text"}, horizon.work_items[1]]);
+  assert.deepEqual(projected().completeness, horizon.completeness);
+  assert.equal(horizon.work_items[0].text, text, "full quota source must remain intact");
+  source.recommended_action = text;
+  assert.equal((projected().work_items as JsonObject[])[0].text_ref, "$.action.recommended_action");
+  source.selected_todo = {...source.selected_todo as JsonObject, text: "Different work"};
+  assert.equal((projected().work_items as JsonObject[])[0].text, text);
+  source.planning_horizon = {work_items: horizon.work_items};
+  assert.deepEqual(projected().work_items, horizon.work_items, "Goal opt-out keeps the existing transport");
+});
+
 test("v0 compaction metric preserves Unicode code-point compatibility", () => {
   const source = payload();
   source.reason = "推进一段 🚀";

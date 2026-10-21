@@ -126,11 +126,13 @@ _ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
 # default agent path and TurnEnvelope. This allowance applies only while the
 # schema and action-signature coverage move to v0/v3; after merge the candidate
 # becomes the new baseline and ordinary growth limits apply again.
+# Default Goal + flat work context costs 2,940 compact characters on the
+# matched multi-Agent fixture; preserve its work visibility and completeness.
 _PLANNING_HORIZON_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
     "chars": 3_200,
     "utf8_bytes": 3_200,
     "lines": 84,
-    "compact_payload_chars": 2_800,
+    "compact_payload_chars": 3_000,
 }
 
 # Capability-owned context adds one bounded signed planning contribution. Only
