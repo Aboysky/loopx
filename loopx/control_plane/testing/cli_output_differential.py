@@ -817,7 +817,7 @@ def _continuation_instruction_migration(
         if migrated("replan"):
             chars += 384
         if migrated("objective_maintenance"):
-            # Matched fixture: maintenance +205 chars; combined with the
+            # Matched fixture: maintenance +208 chars (including separator); combined with the
             # existing work-review transition totals at most +424 / 4 lines.
             # Only this exact new instruction gets the one-time allowance.
             chars += 224
