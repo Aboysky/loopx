@@ -1,6 +1,7 @@
 import {NON_WORK_FIELDS, goalAcceptanceTodoDigest} from "./acceptance_work_basis.ts";
 export {goalAcceptanceTodoDigest} from "./acceptance_work_basis.ts";
 import {goalOutcomeCheckBasis, projectGoalOutcomes} from "./outcome_requirements.ts";
+import {projectGoalObjective, currentGoalObjective} from "./goal_objective.ts";
 /** Owner-configured acceptance basis. This is neither a permission grant nor
  * the full shared Goal intent/amendment authority. The Todo manifest is unchanged. */
 import type {JsonObject} from "../effect_program.ts";
@@ -336,13 +337,16 @@ export function goalAcceptanceWorkDigest(head: JsonObject, goalId: string, scope
   // This semantic fingerprint is independent of provider row representation.
   // Projection and mutation callers separately validate the canonical read model.
   const todos = indexCoordinationProjectionTodos(head, goalId).todos;
-  return acceptanceWorkDigest(todos, scope);
+  return acceptanceWorkDigest(todos, scope, head);
 }
-function acceptanceWorkDigest(todos: ReadonlyMap<string, JsonObject>, scope?: AcceptanceScope): string {
-  if (scope?.kind === "selected_work") return canonicalAuthoritySha256(scope.todo_ids.map(todo_id => ({
+function acceptanceWorkDigest(todos: ReadonlyMap<string, JsonObject>, scope: AcceptanceScope | undefined,
+  head: JsonObject): string {
+  const objective = currentGoalObjective(head)?.revisions.at(-1)?.digest;
+  const digest = (work: unknown) => canonicalAuthoritySha256(objective === undefined ? work : {work, objective});
+  if (scope?.kind === "selected_work") return digest(scope.todo_ids.map(todo_id => ({
     todo_id, digest: todos.has(todo_id) ? goalAcceptanceTodoDigest(todos.get(todo_id)!) : null,
   })));
-  return canonicalAuthoritySha256([...todos.values()].filter(advancement)
+  return digest([...todos.values()].filter(advancement)
     .sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)))
     .map(todo => ({todo_id: todo.todo_id, digest: goalAcceptanceTodoDigest(todo)})));
 }
@@ -568,7 +572,7 @@ export class GoalAcceptanceRead {
     let status = "unverified";
     if (receipt) {
       if (receipt.contract_revision !== state.revision || receipt.contract_digest !== state.digest ||
-          receipt.work_digest !== acceptanceWorkDigest(todos, state.document.scope)) status = "stale";
+          receipt.work_digest !== acceptanceWorkDigest(todos, state.document.scope, this.head)) status = "stale";
       else if (receipt.results.some(item => !item.passed)) status = "failed";
       else if (receipt.todo_id !== null) status = "partial";
       else status = "accepted";
@@ -587,7 +591,9 @@ export class GoalAcceptanceRead {
   contract(): JsonObject {
     const checks = structuredClone(this.checks());
     const outcomes = projectGoalOutcomes(this.head, this.goalId, checks);
-    return outcomes === null ? checks : {...checks, outcome_requirements: outcomes};
+    const objective = projectGoalObjective(this.head);
+    return {...checks, ...(outcomes === null ? {} : {outcome_requirements: outcomes}),
+      ...(objective === null ? {} : {goal_objective: objective})};
   }
 
   workGuards(todoIds: readonly string[]): Record<string, JsonObject> {

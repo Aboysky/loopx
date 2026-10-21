@@ -14,8 +14,9 @@ import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from ".
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {configureGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
-import {acceptanceWorkGuard, goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance,
+import {acceptanceWorkGuard, goalAcceptanceTodoDigest, goalAcceptanceWorkDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance,
   projectGoalAcceptanceWorkGuards} from "../../loopx/control_plane/goals/acceptance_contract.ts";
+import {reviseGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
@@ -346,6 +347,30 @@ test("collection validation keeps acceptance errors ahead of malformed Todo data
   delete head.goal_acceptance;
   assert.throws(() => canonicalTodoCollection(head, "goal-a", false));
   assert.deepEqual(projectGoalAcceptanceWorkGuards(head, "goal-a", []), {});
+});
+
+test("collection preserves objective-only reads and invalidates verification after an objective revision", () => {
+  const records = [todo()];
+  const head = projection(records);
+  const direction = {objective: "Maintain the delivered service", reason: "Bootstrap is complete", source_ref: "message:owner"};
+  head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the service", ["agent-a"], direction);
+  const objective = canonicalTodoCollection(head, "goal-a", false).acceptance.goal_objective as JsonObject;
+  assert.equal(objective.objective, direction.objective, "an objective is visible without optional acceptance checks");
+  for (const scope of [undefined, {kind: "selected_work" as const, todo_ids: ["todo_work"]}]) {
+    const state = acceptance(records);
+    const document = normalizeGoalAcceptanceDocument({...state.document as JsonObject, ...(scope ? {scope} : {})});
+    head.goal_acceptance = {...state, document, digest: canonicalAuthoritySha256(document)};
+    const configured = head.goal_acceptance as JsonObject;
+    configured.verification = {operation_id: "verified", contract_revision: 1, contract_digest: configured.digest,
+      work_digest: goalAcceptanceWorkDigest(head, "goal-a", scope),
+      todo_id: null, results: [{criterion_id: "criterion-a", passed: true, exit_code: 0}]};
+    assert.equal(canonicalTodoCollection(head, "goal-a", false).acceptance.status, "accepted");
+    const changed = structuredClone(head);
+    changed.goal_objective = reviseGoalObjective(changed, null, "Bootstrap the service", ["agent-a"],
+      {...direction, objective: "Maintain the service and its recovery path"});
+    assert.equal(canonicalTodoCollection(changed, "goal-a", false).acceptance.status, "stale");
+    assert.equal(canonicalTodoCollection(head, "goal-a", false).acceptance.status, "accepted", "the prior snapshot stays independent");
+  }
 });
 
 test("completion plans both validators and rejects a combined budget exceeding 29 seconds", async t => {

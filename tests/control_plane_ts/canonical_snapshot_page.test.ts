@@ -14,6 +14,7 @@ import {productionScaleCoordinationFixture} from "./production_scale_coordinatio
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument} from "../../loopx/control_plane/goals/acceptance_contract.ts";
+import {reviseGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 import {collectSnapshot, registerCanonicalSnapshotConformance, seedSnapshot, snapshotRequest, snapshotFixture} from "./canonical_snapshot_conformance.ts";
 
 async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
@@ -61,6 +62,18 @@ for (const kind of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" 
     assert.equal(guard.allowed, false);
     assert.equal(guard.reason_code, "goal_acceptance_stale");
     assert.notDeepEqual(after.snapshot, before.snapshot);
+  });
+  test(`${kind}: objective-only snapshots retain the current Goal direction`, async t => {
+    const {store} = await fixture(t, kind);
+    const head = authorityProjectionFixture("goal-a", [], [], "native");
+    const direction = {objective: "Maintain the service and its recovery path", reason: "Bootstrap is complete", source_ref: "message:owner"};
+    head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the service", ["agent-a"], direction);
+    await seedSnapshot(store, head);
+    const result = await readCanonicalSnapshotFromStore(snapshotRequest(), store);
+    const contract = result.goal_acceptance_contract as JsonObject;
+    assert.equal((contract.goal_objective as JsonObject).objective, direction.objective);
+    assert.equal(contract.criteria, undefined, "the Goal direction does not enable optional acceptance checks");
+    assert.deepEqual(result.goal_acceptance_work_guards, {});
   });
   test(`${kind}: UTF-8 byte pages retain records beyond the old 2 MiB RPC ceiling`, async t => {
     const {store} = await fixture(t, kind);
