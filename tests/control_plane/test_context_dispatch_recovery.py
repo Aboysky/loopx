@@ -149,7 +149,7 @@ def test_prepared_recovery_rechecks_current_authority(prepared_handoff, monkeypa
         monkeypatch.setattr(execution.Delegations, "read", revoke_after_read)
     elif gate == "operation_stopped":
         worker.stop(operation, execute=True)
-    else:
+    elif gate == "binding_changed":
         config = json.loads(worker.config.read_text())
         config["bindings"][0]["timeout_seconds"] += 1
         worker.config.write_text(json.dumps(config))
