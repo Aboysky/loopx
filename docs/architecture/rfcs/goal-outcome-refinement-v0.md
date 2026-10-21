@@ -304,7 +304,7 @@ threshold, forced Todo closure or periodic audit is introduced.
 
 The replan source codec previously omitted default outcomes and retained only
 seven configured-check summary fields. Ordinary work context already carried
-the complete acceptance readback; the dedicated replan `core_goal` and optional
+the complete acceptance readback; the dedicated replan `core_goal` and
 Goal planning horizon did not. Both now reuse that same owner-projected readback,
 including cumulative requirements, self-review provenance, linked work, check
 results and lifetime/freshness facts. This removes a lossy parallel field list;
@@ -345,8 +345,39 @@ continuation observer qualifies only the complete old-to-new wording once with
 224 characters/bytes, no added lines or shapes. Missing clauses, an upgraded
 baseline, other carriers and excess growth retain ordinary rejection. The two
 host fixtures' guidance costs 1,984 bytes instead of 1,772, so their scoped
-advice ceiling becomes 2,000 instead of 1,800. The 8 KiB envelope warning and
-absolute CLI/runtime budgets are unchanged; this is a measured input cost.
+advice ceiling becomes 2,000 instead of 1,800. That guidance-only change retains
+the absolute CLI/runtime budgets; this is a measured input cost.
+
+### Goal context before work selection
+
+The original Goal and recorded acceptance now enter applicable preselection
+horizons by default. This is a context change, not another planning round or a
+new scheduling rule. The five-work-item summary and explicit completeness/detail
+paths remain bounded; seeing the Goal does not make that summary exhaustive.
+Flat runnable backlogs also receive the bounded work view. Missing declared
+dependencies or gaps do not establish sound ordering; they must not hide that
+view. The summary reports omissions and a complete-read route, not a claim that
+its five items are the whole plan. TurnEnvelope references identical selected
+work text when the reference is smaller, retaining other work and completeness.
+The existing configuration owner retains an explicit false for rollback and
+comparisons. Settings moves this control into Advanced settings, preserves
+machine/Goal precedence and sparse inherited values, and does not rewrite
+persisted configurations on read. EdgeBench heartbeat workers pin and record
+the resolved boolean before work, including for omitted CLI options; existing
+receipts remain historical. TurnEnvelope references an identical inline
+acceptance source instead of repeating its body, retaining mismatched evidence.
+Source/default qualification remains separate from installed/model adoption.
+
+Matched public fixtures measure 8,077 → 9,370 characters for small Turn plan and
+20,805 → 23,745 for multi-Agent quota JSON. The latter initially exceeds the
+23,000-character ceiling and existing horizon migration's 2,800 compact growth
+allowance. The increase includes Goal context and a previously absent bounded
+work summary; discarding the latter would hide useful flat-backlog context.
+Retain it and change only that absolute ceiling to 24,000 and the one-time
+horizon migration's compact allowance to 3,000. Excess and same-schema growth
+remain rejected; other ceilings, per-Todo growth and the 8 KiB envelope warning
+are unchanged.
+This qualifies the input-cost tradeoff, not token, latency or model-quality gains.
 
 ## Decisive acceptance
 
