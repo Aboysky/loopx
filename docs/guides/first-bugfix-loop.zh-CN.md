@@ -1,4 +1,4 @@
-# 第一次用 LoopX 查 bug：从失败测试到提交
+# LoopX 查 bug 入门
 
 [English](first-bugfix-loop.md)
 
