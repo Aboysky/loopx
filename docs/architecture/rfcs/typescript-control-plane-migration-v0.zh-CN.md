@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-20
+- Last revised：2026-10-21
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -31,6 +31,15 @@ Python builder 和 App 兼容组合逻辑已退役。Python 保留既有 executi
 它们在兼容调用者迁移后退出。交付前仍须分别验证不变的 reset-token 与
 follow-up wire 契约、真实 runtime transport、已安装调用者，以及匹配的完整
 SQLite CLI 性能。仅减少请求次数不能证明性能收益。
+
+### 全局读取 CLI 调用者接入
+
+既有五个全局读取命令现在使用按命令 parser 和共享 dispatcher。
+`summary_all_registration.py` 统一持有仅解析参数的注册实现，旧注册 import 保留
+同一函数的 alias。完整 parser 的兼容调用者复用相同 handler 分发，旧完整 CLI
+分支已删除。Help 和诊断保留既有 interface；实际读取保留 registry/runtime 解析、
+guard、格式和 typed owner。这不新增领域规则、桥接操作或数据缓存。增量资格验证
+单独计入待合入的 quota 请求作用域接入，避免重复计算其收益。
 
 ### 产品对话与通用异步 inbox
 

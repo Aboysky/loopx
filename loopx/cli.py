@@ -121,7 +121,6 @@ from .cli_commands import (
     handle_review_batch_command,
     handle_registry_admin_command,
     handle_starter_command,
-    handle_summary_all_command,
     handle_support_control_command,
     handle_handoff_mode_command,
     handle_task_lease_command,
@@ -835,16 +834,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if lark_inbox_result is not None:
         return lark_inbox_result
-
-    summary_all_result = handle_summary_all_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if summary_all_result is not None:
-        return summary_all_result
 
     pr_review_result = handle_pr_review_command(
         args,
