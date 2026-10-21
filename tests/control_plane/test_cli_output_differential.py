@@ -78,6 +78,43 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("coverage", ["turn_envelope_action_dimensions_v0", "turn_envelope_action_dimensions_v2"])
+def test_complete_work_profile_growth_is_one_time_and_preserves_other_guards(coverage):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    profile = "$.turn_envelope.contract_capsule.execution_profile"
+    old_paths = [f"{profile}.{field}" for field in (
+        "cadence", "minimum_scale", "spend_rule", "must_include", "must_include[]",
+    )]
+    added = [f"{profile}.{field}" for field in (
+        "small_scale_streak_threshold", "outcome_floor", "outcome_floor.configured",
+        "outcome_floor.surface_streak_threshold", "outcome_floor.must_advance",
+        "outcome_floor.must_advance[]",
+    )]
+    base = _row(row_id="surface/loopx_turn_plan/crowded/json", format="json",
+                chars=1000, utf8_bytes=1000, lines=20, compact_payload_chars=800,
+                action_signature_coverages=[coverage],
+                json_shape_paths=old_paths)
+    candidate = {**base, "json_shape_paths": old_paths + added,
+                 "chars": 1142, "utf8_bytes": 1142, "compact_payload_chars": 942}
+    result = _compare_row(base, candidate)
+    assert not result["failures"]
+    assert result["review_signals"]
+    assert _compare_row(candidate, {**candidate, "chars": 1284})["failures"]
+    for paths in ([], old_paths + added, old_paths + added[:1]):
+        assert _compare_row({**base, "json_shape_paths": paths}, candidate)["failures"]
+    for paths in (old_paths + added[:-1], old_paths[1:] + added,
+                  old_paths + added + ["$.unrelated"]):
+        assert _compare_row(base, {**candidate, "json_shape_paths": paths})["failures"]
+    for key, value in (("row_id", "surface/status/crowded/json"),
+                       ("format", "markdown"), ("action_signature_coverages", [])):
+        assert _compare_row({**base, key: value}, {**candidate, key: value})["failures"]
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        assert _compare_row(base, {
+            **candidate, metric: base[metric] + result["allowances"][metric] + 1,
+        })["failures"]
+
+
 @pytest.mark.parametrize("surface,output_format,feature,growth", [
     ("start_goal_guided", "json", "complete_todo_readback", (948, 6, 894)),
     ("start_goal_guided_command_pack_detail", "markdown", "complete_todo_readback", (436, 2, 0)),
