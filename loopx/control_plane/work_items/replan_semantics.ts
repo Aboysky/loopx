@@ -353,6 +353,9 @@ function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
   const formalObligation = typeof delta.obligation_id === "string" && /^replan-[a-f0-9]{16}$/.test(delta.obligation_id);
   const gaps = request.acceptance_gaps.map(value => {
     const gap = object(value);
+    // A Vision ACK cannot impersonate this Agent's exact canonical adoption.
+    // The owning objective operation removes the gap after work reconciliation.
+    if (gap.kind === "goal_objective_review_required") return false;
     if (gap.kind === "goal_outcome_uncovered") {
       return gap.source === "goal_acceptance_contract" && typeof gap.agent_id === "string" &&
         !!gap.agent_id && ack.agent_id === gap.agent_id &&
