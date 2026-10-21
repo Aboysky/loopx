@@ -251,6 +251,8 @@ def test_open_work_review_cost_requires_complete_new_and_retained_guidance():
         after = continuation_instruction_observations(render("".join(clauses) + prior))
         assert before["open_work_review_before"] and not before["open_work_review_after"]
         assert after["open_work_review_after"] and not after["open_work_review_before"]
+        windows = render("\r\n".join(["".join(clauses), prior]))
+        assert continuation_instruction_observations(windows)["open_work_review_after"]
         for clause in clauses + ["full marginal cost", "current artifact", "negative results", "new uncertainty",
                                  "affected work first", "does not force a pivot", "neither adoption nor improvement"]:
             partial = continuation_instruction_observations(render(("".join(clauses) + prior).replace(clause, "")))
@@ -1744,6 +1746,11 @@ def test_objective_maintenance_cost_requires_complete_one_time_instruction():
     base = {"row_id": "surface/loopx_turn_plan/small/json", "format": "json", "continuation_instructions": before}
     candidate = {**base, "continuation_instructions": after}
     assert _continuation_instruction_migration(base, candidate)[0]["chars"] == 224
+    combined = {**after, "open_work_review_after": True}
+    assert _continuation_instruction_migration(
+        {**base, "continuation_instructions": {**before, "open_work_review_before": True}},
+        {**candidate, "continuation_instructions": combined},
+    )[0]["chars"] == 512
     assert not _continuation_instruction_migration(candidate, candidate)[0]
     for clause in clauses:
         partial = continuation_instruction_observations(prior + " " + clause)

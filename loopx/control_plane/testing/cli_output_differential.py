@@ -817,9 +817,9 @@ def _continuation_instruction_migration(
         if migrated("replan"):
             chars += 384
         if migrated("objective_maintenance"):
-            # Matched fixture: maintenance +208 chars (including separator); combined with the
-            # existing work-review transition totals at most +424 / 4 lines.
-            # Only this exact new instruction gets the one-time allowance.
+            # Matched fixture: maintenance +208 chars (including separator).
+            # The complete reviewed transition also carries platform-normalized
+            # projection metadata; preserve that prose with a bounded allowance.
             chars += 224
             lines = 4
         if migrated("open_work_review"):
@@ -827,6 +827,11 @@ def _continuation_instruction_migration(
             # JSON chars after accounting metadata. Preserve all prior prose;
             # only this complete transition receives the one-time allowance.
             chars += 224
+            if migrated("objective_maintenance"):
+                # Combined objective + work-review migration measured 497
+                # characters on Windows. Do not drop either reviewed clause to
+                # satisfy the legacy 224-character growth floor.
+                chars = max(chars, 512)
     elif surface in {"heartbeat_prompt_thin", "heartbeat_prompt_brief", "heartbeat_prompt_compact"}:
         # Complete stop/correction rollout: thin +154, brief +163, compact +215.
         if migrated("stop"):

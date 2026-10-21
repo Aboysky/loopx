@@ -159,6 +159,9 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         collect(payload)
     def contains(clause: str) -> bool:
         return any(clause in value for value in strings)
+    def contains_folded(clause: str) -> bool:
+        folded = " ".join(clause.split())
+        return any(folded in " ".join(value.split()) for value in strings)
     # Exact reviewed prose transition; this observes output cost only and never
     # classifies work/admission. Keep these clauses independent of live constants.
     old_work = "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, never wake counts."
@@ -194,9 +197,9 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         "context_after": contains(context_prefix + brief + context_suffix),
         "replan_before": contains(replan) and not contains(replan + " " + correction),
         "replan_after": contains(replan + " " + correction),
-        "open_work_review_before": contains(replan + " " + correction)
-            and not any(contains(clause) for clause in open_work_review),
-        "open_work_review_after": contains("".join(open_work_review) + replan + " " + correction),
+        "open_work_review_before": contains_folded(replan + " " + correction)
+            and not any(contains_folded(clause) for clause in open_work_review),
+        "open_work_review_after": contains_folded("".join(open_work_review) + replan + " " + correction),
         "stop_before": any(contains(clause) for clause in old_stops),
         "stop_after": contains(stop),
         "authorized_delivery_before": contains(old_work) and not any(contains(clause) for clause in delivery_clauses),
