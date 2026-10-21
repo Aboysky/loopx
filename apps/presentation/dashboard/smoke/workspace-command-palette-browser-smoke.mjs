@@ -178,7 +178,7 @@ try {
         const response = await fetchWorkspaceBackend(route, backend);
         await route.fulfill({response});
       });
-      await page.route('**/api/chat/todos/*', async route => {
+      await page.route('**/api/chat/todo/detail?*', async route => {
         const response = await fetchWorkspaceBackend(route, backend);
         await route.fulfill({response});
       });
@@ -189,8 +189,14 @@ try {
     const search = await openPalette(page);
     await search.fill('核对');
     await dialogFor(page).getByRole('option', {name: /核对导出报告/}).waitFor({state: 'visible'});
+    const detailRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/chat/todo/detail');
     await search.press('Enter');
     await page.locator('[data-context-drawer]').waitFor({state: 'visible'});
+    const detail = await (await detailRead).json();
+    assert.equal(detail.ok, true);
+    assert.equal(detail.todo_id, added.todo_id);
+    assert.ok(detail.text.endsWith(text), 'the real Todo owner preserves the request after its priority marker');
+    await page.locator('.personal-task-request').getByText(text, {exact: false}).waitFor({state: 'visible'});
     assert.match(page.url(), new RegExp(`todo=${added.todo_id}`));
     await page.keyboard.press('Escape');
     failStatus = true;
