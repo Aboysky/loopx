@@ -158,7 +158,7 @@ export function DesktopUpdate() {
         : (zh ? "Windows 稳定版与 MSI 安装需手动运行新的签名安装包；App 内自动更新目前只在 main 预览通道提供（NSIS）。" : "Windows stable and MSI installs update by running a newer signed installer; in-App automatic updates currently ship on the main preview channel (NSIS).");
     }
     if (platform === "macos") {
-      return zh ? "App 会在当前通道自动更新：已准备的更新在下次打开时安装。也可在此手动更新。" : "The App updates itself on this channel: a prepared update installs on the next open. You can also update here.";
+      return zh ? "先打开本地版本，更新在后台准备，下次打开时生效。也可在此手动更新。" : "Open the local version first. Updates prepare in the background and apply on the next open. You can also update here.";
     }
     return zh ? "更新会跟随所选通道；请检查更新以确认本机是否有可用安装包。" : "Updates follow the selected channel; check for updates to see whether this machine has an installer.";
   };
