@@ -20,7 +20,7 @@ import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordinati
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
 import {executeCoordinationTodoTerminalLifecycle, type CoordinationTodoTerminalLifecycleInput} from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
-import {listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
+import {canonicalTodoCollection, listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 
 const now = new Date("2026-09-17T12:00:00Z");
 const todo = (extra: JsonObject = {}): JsonObject => ({schema_version: "todo_domain_record_v0",
@@ -321,6 +321,31 @@ test("collection guard projection reuses one acceptance and Todo snapshot", () =
   assert.equal(Object.keys(guards).length, records.length);
   assert.ok(Object.values(guards).every(guard => guard.reason_code === "goal_acceptance_unbound"));
   assert.ok(elapsedMs < 1_000, `150 Todo guards should remain a bounded collection read, got ${elapsedMs}ms`);
+});
+
+test("collection projections do not expose shared mutable acceptance verdicts", () => {
+  const records = [todo()];
+  const head = projection(records, acceptance(records));
+  const before = structuredClone(head);
+  const collection = canonicalTodoCollection(head, "goal-a", false);
+  const expected = projectGoalAcceptanceWorkGuards(head, "goal-a", ["todo_work"]);
+  const guards = collection.projectWorkGuards(["todo_work"]);
+  (guards.todo_work.criterion_ids as string[]).push("foreign-criterion");
+  ((collection.acceptance.tasks as JsonObject[])[0].criterion_ids as string[]).push("foreign-contract");
+  (collection.acceptance.non_goals as string[]).push("foreign-non-goal");
+  assert.deepEqual(collection.projectWorkGuards(["todo_work"]), expected);
+  assert.deepEqual(projectGoalAcceptance(head, "goal-a"), projectGoalAcceptance(before, "goal-a"));
+  assert.deepEqual(head, before);
+});
+
+test("collection validation keeps acceptance errors ahead of malformed Todo data", () => {
+  const records = [todo()];
+  const head = projection(records, {...acceptance(records), digest: "invalid"});
+  head.todos = [{todo_id: "invalid"}];
+  assert.throws(() => canonicalTodoCollection(head, "goal-a", false), /acceptance contract digest mismatch/);
+  delete head.goal_acceptance;
+  assert.throws(() => canonicalTodoCollection(head, "goal-a", false));
+  assert.deepEqual(projectGoalAcceptanceWorkGuards(head, "goal-a", []), {});
 });
 
 test("completion plans both validators and rejects a combined budget exceeding 29 seconds", async t => {
