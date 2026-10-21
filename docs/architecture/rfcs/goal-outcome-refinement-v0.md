@@ -51,6 +51,96 @@ promote every message, housekeeping action or intermediate step.
 
 ## Ordinary user messages
 
+<a id="current-operating-objective"></a>
+
+### Current operating objective
+
+The original declaration can become an obsolete description of current work.
+Reading the latest file bytes does not establish semantic freshness. R4's Goal
+owner now proposes a bounded, owner-applied operating-objective revision in the
+existing canonical authority. `goal_objective_revision_v0` is a new shared
+planning contract owned by `goals/goal_objective.ts`, not a new capability or
+provider. File/SQLite remain the ordinary local transports; shared lease
+admission uses the same typed rule on PostgreSQL. Python adapts CLI, host and
+proposal IO; it does not decide revision/adoption semantics.
+
+The current objective, reason and opaque source reference form an ordered,
+digest-linked history. The original declaration, root non-goals, acceptance,
+permissions, budgets, stops, existing Todos and leases are retained. This does
+not authorize a purpose outside those commitments. Changing those commitments
+requires their existing governed authority or a new Goal lifetime. Outcome
+refinement remains append-only; it cannot silently rewrite a requirement.
+
+The normal conversation guidance directs an Agent to prepare a revision when
+explicit user direction invalidates the recorded objective. The native
+`loopx_collaboration` tool exposes `prepare_goal_objective`, and fixes its
+Goal/Agent/source Turn instead of accepting caller-supplied routing. Preparation
+uses the existing `goal.update` review/apply channel, with no Goal effect.
+**Goal settings → Task ownership → Current objective and revisions** lets the
+owner review an Agent's proposal or enter a revision, apply it and read back the
+actual current text and each peer's adoption. Other broad `goal.update` effects
+remain unavailable. A proposal, a source label or prose in a document cannot
+authorize an owner effect.
+
+CLI preparation uses `goal-acceptance prepare-objective --goal-id GOAL
+--agent-id AGENT --document revision.json --operation-id ID --execute`, where
+the document contains `objective`, `reason` and `source_ref`. `--execute` here
+saves the proposal only. An authorized local owner can use `revise-objective`
+with the same document, a stable operation id and `--expected-provider-revision`
+from `goal-acceptance inspect`; it previews unless `--execute` is supplied.
+It rejects Agent actors. Never use the owner spelling to impersonate authority.
+
+Once applied, the canonical objective is carried through normal Todo/status,
+work context, planning horizon and replan reads. Team plans already bind the
+canonical provider revision, so an older plan cannot survive an objective
+change. Unadopted peers receive an existing frontier/replan gap; native member
+starts and new canonical claims/lease acquisitions reject
+unadopted execution. Old active Turn recovery, lease renewal and release remain
+available. This is a next-execution boundary, not a mid-Turn interrupt or a new
+scheduler/wake system.
+
+Each peer reconciles its own work through normal Todo/Vision operations, reads
+`goal-acceptance inspect --goal-id GOAL --agent-id AGENT`, then records
+`adopt-objective` with `revision`, `digest`, `work_digest` (the returned
+`objective_work_digest`) and `review_summary`, the current provider revision
+and its own stable operation id. Native callers use `adopt_goal_objective`.
+Adoption is a recorded work review, not proof of successful work or permission.
+An ordinary Vision ACK cannot substitute for it. One peer can continue after
+adopting while others remain pending. A later peer must adopt before acquiring
+work even if it was not registered at revision time. Competing writes use CAS;
+lost replies recover the original receipt, and replaying an older adoption
+cannot acknowledge a later revision. Old configured verification becomes stale
+against a changed objective. A successor lifetime cannot inherit its
+predecessor's objective implicitly.
+
+Revisions are exceptional direction changes, not per-Turn maintenance. Ordinary
+progress, Todo/route changes, diagnostic feedback and wording polish do not
+justify a new shared objective. Agents reuse a pending proposal for the same
+objective rather than prompting the owner again or polling. The owner reviews
+semantic necessity; the runtime rejects identical/whitespace-only objectives
+but does not pretend to detect semantic equivalence. An unchanged repeated
+adoption does not write a provider revision. Work changes and peer adoption
+never invalidate an Agent's already-current objective adoption. Owner previews
+bind the prospective objective digest, so unrelated work/peer writes need no
+new review; changed objective/source/lifetime still invalidates that review.
+
+No revision is inferred from age or installed automatically on upgrade.
+Unchanged Goals retain their existing execution rules; the additional general
+guidance is conditional on an actual user correction. After adoption, ordinary
+Turns do not require another acknowledgement. Stored revision history is bounded
+and never silently pruned. Before adoption, revert the code if necessary; after
+records exist, retain readers and admission fences, and roll back intent with a
+new owner-reviewed revision rather than deleting history.
+
+Validation must cover real proposal/apply, a second Agent's reads/adoption,
+competing bases, old-response recovery, in-flight settlement and new-execution
+refusal on the actual stores, plus the packaged UI. Scripted native tool calls
+qualify the shipped tool/effect path; they do not prove a model will always
+recognize stale semantics. Model adherence, installed-host adoption, live Lark
+delivery and matched benchmark benefit remain separate qualification. Lark
+conversation workers reuse the native tool contract; this change does not
+rename topics, send messages or introduce a separate amendment authority.
+
 The bound Agent distinguishes a direct human request from heartbeat instructions,
 quoted documents, tool results and peer messages using the actual host context.
 No substring classifier infers user authority or importance. Before continuing a

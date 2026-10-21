@@ -37,6 +37,68 @@
 
 ## 普通用户消息
 
+<a id="current-operating-objective"></a>
+
+### 当前执行目标
+
+原始声明可能已经不能描述当前工作；读到文件最新字节不代表语义仍然有效。
+R4 Goal owner 在既有 canonical authority 中增加有界、由 owner 应用的执行目标
+修订。`goal_objective_revision_v0` 是 `goals/goal_objective.ts` 拥有的新共享规划
+合同，不是新能力或 provider。File/SQLite 复用本机传输；PostgreSQL 的共享 lease
+准入也使用同一 TS 规则。Python 只适配 CLI、宿主和提案 IO。
+
+当前目标、原因和不透明来源引用形成带摘要的有序历史。保留原始声明、根目标的
+non-goals、验收、权限、预算、停止条件及现有 Todo/lease；不能借修订扩大权限或
+逃离原始承诺。改变这些承诺仍需对应的受治理操作或新 Goal 生命周期。Outcome
+refinement 仍是追加式操作，不能暗中改写已有 requirement。
+
+正常对话指引要求 Agent 在明确用户方向使旧目标失效时准备修订。原生
+`loopx_collaboration` 提供 `prepare_goal_objective`，由宿主绑定 Goal、Agent 和
+来源 Turn。准备复用既有 `goal.update` 审阅/应用通道，不修改 Goal。
+**Goal 设置 → 任务所有权 → 当前目标与修订** 可以审阅 Agent 提案或填写新目标，
+应用后读回当前正文及每位 Agent 的采用状态。其他宽泛的 `goal.update` 操作仍
+不可执行；提案、来源标签和文档中的文字不授予 owner 权限。
+
+CLI 使用 `goal-acceptance prepare-objective --goal-id GOAL --agent-id AGENT
+--document revision.json --operation-id ID --execute`；JSON 包含 `objective`、
+`reason`、`source_ref`。这里的 execute 只保存提案。有权限的本机 owner 可使用
+`revise-objective`，传同样的正文、稳定操作编号和 inspect 返回的
+`--expected-provider-revision`；不传 `--execute` 只预览。Agent actor 被拒绝，
+不能省略身份冒充 owner。
+
+生效版本进入普通 Todo/status、工作上下文、horizon 和 replan 读取。团队计划已
+绑定 canonical provider revision，旧计划会因目标变化失效。未采用版本的 Agent
+进入既有 frontier/replan 缺口；原生成员新 start、新 claim 和
+lease acquisition 会拒绝其新执行。在途 Turn 的恢复、续租和释放保留。这是下一次
+执行的边界，不是中途打断或新调度器，也不会额外唤醒 Agent。
+
+每个 Agent 先通过普通 Todo/Vision 操作对齐自己的工作，再执行带自身身份的
+`goal-acceptance inspect`，用 `revision`、`digest`、`work_digest`（返回的
+`objective_work_digest`）、`review_summary`、当前 provider revision 和稳定操作
+编号调用 `adopt-objective`。原生工具对应 `adopt_goal_objective`。采用记录不是
+成功证据或权限，普通 Vision ACK 不能代替它。已采用的 Agent 可以独立继续，
+不用等全员；修订后才登记的新 Agent 也必须在取得工作前采用。CAS 防止并发覆盖，
+丢失响应恢复原回执，旧采用操作重放不能确认新版本。旧的配置检查结果在目标
+变化后转为 stale；后继 Goal 实例不能自动继承旧目标。
+
+修订只用于必要的方向变化，不是每轮维护。普通进展、Todo／路线调整、诊断反馈和
+措辞润色不应生成共享目标新版本。相同目标的待审提案复用，不反复打扰 owner 或轮询。
+owner 判断语义必要性；运行时拒绝相同或仅空白不同的目标，不伪装成语义等价检测器。
+重复采用当前版本不写 provider revision；工作变化或其他 Agent 的采用不会使已确认
+状态失效。owner 预览绑定将生效的目标摘要，因此无关工作／同伴写入无需重新审阅，
+但目标、来源或生命周期变化仍会使旧审阅失效。
+
+升级不自动创建修订，也不凭年龄判断过期。未修订 Goal 的执行规则保留；新增
+通用指引只在实际用户纠正时适用。采用后普通 Turn 不重复 ACK。历史有容量上限，
+不会静默裁剪。写入前可回退代码；写入后保留读取与准入围栏，使用新的 owner
+修订回退方向，不能删除历史。
+
+验收覆盖真实提案/应用、另一 Agent 的读取/采用、并发基线、旧响应恢复、在途
+结算及新执行拒绝，以及打包 UI。脚本调用原生工具证明已交付的调用/生效链路，
+不证明模型总能识别语义过期。模型遵循、已安装宿主采用、真实 Lark 交付和匹配
+benchmark 收益仍需分别验证。Lark 对话 worker 复用原生工具合同；不改 topic 名，
+不发送消息，不新增修改权限。
+
 绑定 Goal 的 Agent 根据真实宿主上下文，区分直接人类请求、心跳、引用文档、
 工具结果和同伴消息。不能靠关键词推断用户权限或重要性。推进重要新成果或
 实质纠正前，复用内联成果上下文（缺失时才查询）、细化对应条目，再经正常 Todo 操作关联工作。
