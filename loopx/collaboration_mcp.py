@@ -678,6 +678,7 @@ class Delegations:
             "authority": {"ready": True, "reason": None},
             "preview": preview, "acceptance": acceptance["plan"],
             "validation_files_current": acceptance["files_current"],
+            "lane": {"state": turn_lane_liveness(self._lane_target(binding))["state"]},
         })
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
