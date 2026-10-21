@@ -419,8 +419,13 @@ fixture。只读规划与可选 quota capture 默认值不变，原生执行 Tur
 现在也保留原值及 JSON 类型，只有省略元数据时才沿用稀疏默认值。此前声明的
 `surface_only`、不满足条件的 `outcome_gap` 或非法值都会变成 `outcome_progress`，
 绕过既有拒绝并记入 quota 扣费。共享 prompt 使用既有交付词汇。原生 File/SQLite
-测试保留合法规模历史，在任务验证前拒绝非法词汇，并证明独立任务检查通过后，
-不满足条件的结果仍在写回／扣费／ACK 前被拒绝；此处没有新增结算策略。
+测试保留合法规模历史。新材料结果也在任务验证或效果准备前复用既有结算规则：
+`surface_only` 与 `outcome_gap` 返回 typed `validation_failed`，不留下 prepared
+写回。此前词汇合法但不满足结算条件的结果会进入 refresh-state，抛出通用 CLI
+错误，留下反复遭遇同一拒绝的 in-progress prepared 写回。Host 合同不携带 typed
+blocker observation；普通 CLI 的阻塞结算保持原行为。历史缓存结果仍走 provider
+读回／恢复，覆盖 provider 返回 unknown 后读到 committed receipt，不重启 Host 或
+重复写回；此处没有新增结算策略。
 File/SQLite 原生 CLI
 和实际 DSH 子进程验证任务校验、写回、扣费、ACK 前的拒绝、失败结果重放，以及
 修正后的新 Turn 只结算一次。边界长度的合法结果保持原行为。这只证明结果传输

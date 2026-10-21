@@ -693,10 +693,17 @@ Explicit `delivery_batch_scale` and `delivery_outcome` also pass through to
 their existing validators; only omitted metadata uses the legacy
 `single_surface` / `outcome_progress` defaults. The adapter must not replace a
 declared result with progress or accept read-only scale aliases for new writes.
-Valid vocabulary does not establish a qualifying settlement: `surface_only`
-and an `outcome_gap` without its required typed blocker remain subject to the
-existing refresh-state refusal after task validation, before writeback, spend
-or ACK. Valid declared scales reach durable delivery history unchanged.
+Valid vocabulary does not establish a qualifying settlement. For new material
+Host results, the validator reuses the existing settlement rule before task
+validation or effect preparation. `surface_only` and `outcome_gap` return
+`validation_failed` at `host_result_contract`: this Host contract carries no
+typed blocker observation. The failed journal retains no prepared writeback;
+ordinary replay has no effects, and a corrected candidate needs a new Turn or
+an explicitly admitted failed-result retry. Historical cached results keep
+their provider readback and settlement recovery; a possibly committed effect
+cannot be discarded by this new-candidate check. Ordinary CLI typed-blocker
+settlement remains unchanged. Valid declared scales reach durable history
+unchanged.
 
 共享 dsh/可选云端适配器保留候选结果的完整文本，交给现有 Turn 结果校验器判定上限；
 不得截短分类、摘要、后续行动、建议或路径不变理由以使其通过，否则可能丢失末尾约束。
@@ -708,9 +715,13 @@ or ACK. Valid declared scales reach durable delivery history unchanged.
 明确提供的 `delivery_batch_scale` 与 `delivery_outcome` 也原样交给既有校验器；
 只有省略元数据时才使用旧 `single_surface` / `outcome_progress` 默认值。适配器
 不得将所声明结果替换为进展，也不得让只读 scale 别名用于新写入。词汇合法不代表
-满足结算条件：`surface_only` 及缺少规定 typed blocker 的 `outcome_gap` 仍会在
-任务验证后、写回／扣费／ACK 前被既有 refresh-state 拒绝。合法声明的规模原样
-进入持久交付历史。
+满足结算条件。新材料 Host 结果在任务校验或效果准备前复用既有结算规则：
+`surface_only` 与 `outcome_gap` 返回 `host_result_contract` 阶段的
+`validation_failed`，因为当前 Host 合同不携带 typed blocker observation。
+失败 journal 不留下 prepared 写回；普通重放无效果，修正候选须通过新 Turn 或明确
+准入的失败结果重试。历史缓存结果继续走 provider 读回和结算恢复，不能由新增候选
+校验丢弃可能已经提交的效果。普通 CLI 的 typed blocker 结算保持原行为。合法声明
+的规模原样进入持久历史。
 
 The existing TypeScript Vision normalizer owns packet interpretation and emits
 the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility

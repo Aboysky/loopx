@@ -610,9 +610,16 @@ only omitted metadata uses the existing sparse defaults. Previously a declared
 `surface_only`, unqualified `outcome_gap` or invalid value became
 `outcome_progress`, bypassing the existing refusal and recording a quota spend.
 The shared prompt uses the existing delivery vocabularies. Native File/SQLite
-tests preserve valid scale history, reject invalid vocabulary before task
-validation, and reject nonqualifying outcomes before writeback/spend/ACK even
-when the independent task check passes. No settlement policy is added here.
+tests preserve valid scale history. New material results also reuse the existing
+settlement rule before task validation or effect preparation: `surface_only`
+and `outcome_gap` produce a typed `validation_failed` without a prepared
+writeback. Previously vocabulary-valid but nonqualifying results reached
+refresh-state, raised a generic CLI error and left an in-progress prepared
+writeback that repeated the same refusal. The Host contract carries no typed
+blocker observation; ordinary CLI blocked settlement is unchanged. Historical
+cached results retain provider readback/recovery, including an unknown provider
+observation followed by a committed receipt, without relaunching the Host or
+repeating writeback. No settlement policy is added here.
 File/SQLite native CLI and actual DSH subprocess qualification cover rejection
 before task validation/writeback/spend/ACK, failed-result replay, and a corrected
 fresh Turn settling once. Boundary-length valid results retain their behavior.

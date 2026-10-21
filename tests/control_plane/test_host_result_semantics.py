@@ -12,19 +12,19 @@ from tests.control_plane.test_turn_host_decision_capture import _fixture_module
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("candidate_fields,error,before_task_validation", [
+@pytest.mark.parametrize("candidate_fields,error", [
     ({"next_action": "Review the evidence. " * 65 + "Stop before publication; approval is still required."},
-     "next_action exceeds 1200 characters", True),
+     "next_action exceeds 1200 characters"),
     ({"next_action": {"action": "Continue", "constraint": "Stop before publication."}},
-     "next_action must be a string", True),
-    ({"next_action": False}, "next_action must be a string", True),
-    ({"delivery_batch_scale": "single_segment"}, "legacy alias 'single_segment' is read-only", True),
-    ({"delivery_outcome": False}, "delivery_outcome must be one of", True),
-    ({"delivery_outcome": "surface_only"}, "cannot settle a Turn", False),
-    ({"delivery_outcome": "outcome_gap"}, "blocked", False),
+     "next_action must be a string"),
+    ({"next_action": False}, "next_action must be a string"),
+    ({"delivery_batch_scale": "single_segment"}, "legacy alias 'single_segment' is read-only"),
+    ({"delivery_outcome": False}, "delivery_outcome must be one of"),
+    ({"delivery_outcome": "surface_only"}, "cannot settle a Turn"),
+    ({"delivery_outcome": "outcome_gap"}, "blocked"),
 ], ids=["overlimit", "object", "false", "legacy-scale", "invalid-outcome", "surface-only", "untyped-gap"])
 def test_native_turn_rejects_invalid_candidate_before_writeback(
-    tmp_path, monkeypatch, provider, candidate_fields, error, before_task_validation,
+    tmp_path, monkeypatch, provider, candidate_fields, error,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     f = _fixture_module()
@@ -66,24 +66,22 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
     code, failed = f._run_cli([*base, "--turn-instance-id", "invalid-result", "--execute"])
     assert code == 1 and not failed["ok"], failed
     assert error in json.dumps(failed)
-    if before_task_validation:
-        assert failed["status"] == "failed"
-        assert failed["validation_stage"] == "host_result_contract"
-        assert failed["effects"] == {
-            "host_invoked": True, "state_written": False,
-            "quota_spent": False, "scheduler_acknowledged": False,
-        }
-        resume_key = failed["resume_turn_key"]
-    else:
-        # Vocabulary-valid outcomes still face the existing native settlement
-        # rule. Its CLI error leaves the validated journal for recovery.
-        journal_path, = (runtime / "goals" / f.GOAL_ID / "turns").glob("*.json")
-        journal = json.loads(journal_path.read_text())
-        assert journal["host_result"]["delivery_outcome"] == candidate_fields["delivery_outcome"]
-        assert journal["completed_phases"] == ["host_execute", "typed_result", "validation"]
-        assert "writeback" not in journal and "quota_spend" not in journal
-        resume_key = journal["turn_key"]
-    assert (workspace / "validator-ran").exists() is not before_task_validation
+    assert failed["schema_version"] == "loopx_turn_execution_v0"
+    assert failed["status"] == "failed"
+    assert failed["result_kind"] == "validation_failed"
+    assert failed["validation_stage"] == "host_result_contract"
+    assert failed["effects"] == {
+        "host_invoked": True, "state_written": False,
+        "quota_spent": False, "scheduler_acknowledged": False,
+    }
+    resume_key = failed["resume_turn_key"]
+    journal_path, = (runtime / "goals" / f.GOAL_ID / "turns").glob("*.json")
+    journal = json.loads(journal_path.read_text())
+    assert journal["status"] == "failed"
+    assert journal["completed_phases"] == ["host_execute", "typed_result"]
+    assert not journal.get("effect_attempts")
+    assert "writeback" not in journal and "quota_spend" not in journal
+    assert not (workspace / "validator-ran").exists()
     assert f._quota_spend_count(runtime) == 0
     code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID])
     assert code == 0 and current["todos"] == listed["todos"]
@@ -96,16 +94,10 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
     (workspace / "candidate.json").write_text(json.dumps(candidate))
     code, repeated = f._run_cli([*base, "--resume-turn-key", resume_key, "--execute"])
     assert code == 1 and not repeated["ok"], repeated
-    if before_task_validation:
-        assert repeated["status"] == "failed" and not any(repeated["effects"].values())
-    else:
-        assert error in json.dumps(repeated)
-        journal = json.loads(journal_path.read_text())
-        assert journal["completed_phases"] == ["host_execute", "typed_result", "validation"]
-        assert "writeback" not in journal and "quota_spend" not in journal
+    assert repeated["status"] == "failed" and not any(repeated["effects"].values())
     assert f._quota_spend_count(runtime) == 0
     assert (workspace / "invocations.txt").read_text() == "host\n"
-    assert (workspace / "validator-ran").exists() is not before_task_validation
+    assert not (workspace / "validator-ran").exists()
     code, recovered = f._run_cli([*base, "--turn-instance-id", "corrected-result", "--execute"])
     assert code == 0 and recovered["status"] == "committed", recovered
     assert (workspace / "validator-ran").read_text() == "verified"

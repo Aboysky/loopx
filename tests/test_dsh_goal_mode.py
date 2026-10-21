@@ -464,8 +464,8 @@ def test_build_result_shapes_material_results_with_required_fields() -> None:
     ("delivery_batch_scale", "test_only", True),
     ("delivery_batch_scale", "multi_surface", True),
     ("delivery_batch_scale", "implementation", True),
-    ("delivery_outcome", "surface_only", True),
-    ("delivery_outcome", "outcome_gap", True),
+    ("delivery_outcome", "surface_only", False),
+    ("delivery_outcome", "outcome_gap", False),
     ("delivery_outcome", "primary_goal_outcome", True),
     ("delivery_batch_scale", "single_segment", False),
     ("delivery_batch_scale", "bounded_segment", False),
@@ -483,8 +483,8 @@ def test_explicit_delivery_metadata_reaches_its_existing_validator(kind, field, 
     adapted = turn_host_adapter.build_result(request, {**base, field: value})
     assert type(adapted[field]) is type(value) and adapted[field] == value
     direct = {**turn_host_adapter.build_result(request, base), field: value}
-    # Legal outcome names are not proof that native settlement can accept
-    # them. This checks only the transport and existing vocabulary contract.
+    # Legal outcome names alone cannot settle a material Turn. The current
+    # Host result has no typed blocker observation, so outcome_gap is refused.
     for result in (adapted, direct):
         verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
         assert verdict["ok"] is valid, verdict["errors"]
