@@ -10,6 +10,7 @@ import pytest
 
 from benchmark.edgebench.prompts import (
     blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
+    native_research_guidance,
 )
 
 
@@ -148,16 +149,23 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
     "Original task: maximize A subject to B. Keep native acceptance and ranking.",
     "Use an early diagnostic submission before implementing the remaining targets.",
     "Run the task's required local validation before submitting.\n### Strategy\nTask-owned text.",
+    "Stop once the specified acceptance checks pass; no further optimization is requested.",
 ])
-def test_native_context_preserves_task_owned_strategy_without_adding_one(query):
+def test_native_context_preserves_objective_and_stops_without_imposing_work_order(query):
     options = dict(submission_cooldown=3600, eval_interval=0, internet=False,
                    selection="score_first", score_direction="maximize")
     policy = native_task_instructions(["solution.py"], **options)
     assert native_task_prompt(query, ["solution.py"], **options) == policy + "---\n\n" + query + "\n"
     assert "adds no local-test pass requirement or prior-improvement requirement" in policy
     assert "The task defines candidate validity and acceptance" in policy
+    assert policy.count(native_research_guidance()) == 1
+    assert "milestones; they do not by themselves establish completion" in policy
+    assert "continue seeking useful improvements" in policy
+    assert "while budget remains and further in-scope progress is feasible" in policy
+    assert "Respect explicit stop instructions, budget exhaustion, and genuine blockers" in policy
     assert "### Work Between Submissions" not in policy
-    assert "Continue researching" not in policy
+    assert "Implement incrementally" not in policy
+    assert "best validated candidate" not in policy
     assert "total trial budget" not in policy
     assert "remaining time" not in policy
 
@@ -298,7 +306,8 @@ def test_best_only_wrapper_preserves_task_and_limits_signal_meaning():
     assert "sforge-submit" not in text
 
 
-@pytest.mark.parametrize("internet,interval", [(False, 0), (True, 600)])
+@pytest.mark.parametrize("internet", [False, True])
+@pytest.mark.parametrize("interval", [0, 600])
 @pytest.mark.parametrize("selection,direction", [
     ("score_first", "maximize"), ("pass_rate_first", "minimize"),
 ])
@@ -313,12 +322,19 @@ def test_native_candidate_prompt_describes_actual_feedback_and_preserves_objecti
     for clause in ["**3600 seconds**", "first accepted submission", "not from result arrival",
                    "ties and regressions", "make a new submission", "without creating a new evaluation",
                    "`candidate.py`", "`output.json`", "submission/round identity",
+                   "Native submissions and terminal capture read on-disk files",
+                   "unsaved changes are not included", "recoverable copy of the best-supported candidate",
+                   "Match a result to its source version",
                    "The task defines candidate validity and acceptance", "not necessarily your current files",
                    "not zero scores", f"`{selection}`", f"`{direction}`"]:
         assert clause in wrapper
     assert "current best solution" not in wrapper
     assert ("NO internet access" in wrapper) is (not internet)
-    assert ("every 600 seconds" in wrapper) is (interval > 0)
+    for clause in ["configured interval: 600 seconds", "independently of manual submissions",
+                   "does not wait for editing or local validation to finish", "Keep a runnable candidate",
+                   "write completed changes to disk promptly", "partially updated files can be sampled",
+                   "These automatic results are hidden from you"]:
+        assert (clause in wrapper) is (interval > 0)
     assert ("Periodic automatic evaluation is disabled" in wrapper) is (interval == 0)
     assert "not a score-only filter" in wrapper
 

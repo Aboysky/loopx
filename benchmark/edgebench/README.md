@@ -223,11 +223,26 @@ and never justify blind resubmission. This does not add restart persistence.
 
 New non-game native trials describe the task, submission tools, feedback and
 evaluation rules in the startup prompt and workspace `AGENTS.md`. The wrapper no
-longer prescribes incremental implementation, continued research, or a
-best-validated-candidate workflow. It adds no local-test pass or prior-improvement
-prerequisite for submission; task-owned requirements still apply. New LoopX Goals
-retain the original `agent_query` as their objective, including references to task
-files. Existing Goals and restored checkpoints keep their captured objective.
+longer prescribes incremental implementation or a best-validated-candidate
+workflow. A brief objective/completion reminder retains continued optimization:
+implementation, passing checks and submission alone do not complete the objective.
+Useful in-scope improvements remain the goal within the budget, task acceptance
+and explicit stopping conditions. This does not force budget consumption after
+completion or a genuine blocker. The wrapper adds no local-test pass or
+prior-improvement prerequisite for submission; task-owned requirements still
+apply. New LoopX Goals retain the original `agent_query` as their objective,
+including references to task files. Existing Goals and restored checkpoints keep
+their captured objective.
+
+Submission paths are also the host's capture input. With periodic automatic
+evaluation enabled, the host reads those paths independently of manual submissions
+and without waiting for edits or local tests to finish. The prompt therefore keeps
+the requirement to leave a runnable candidate there and save completed changes
+promptly; partial writes can be captured and fail evaluation. With interval zero,
+the prompt explicitly reports periodic evaluation as disabled. Both modes retain
+on-disk manual/terminal capture, recoverable best-candidate and result/source
+identity guidance. A runnable sampled candidate need not pass every local check
+or demonstrate an improvement before evaluation.
 
 Shared `loopx-planned` entry also drops the adapter's research-strategy prefix.
 The product planning packet, including Core first-delivery guidance, is unchanged

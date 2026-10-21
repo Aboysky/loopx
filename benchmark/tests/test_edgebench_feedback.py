@@ -377,6 +377,9 @@ def test_cli_native_context_default_and_explicit_controls_reach_registration(tmp
             assert f"**{cooldown} seconds**" in prompt
             assert "The task defines candidate validity and acceptance" in prompt
             assert "adds no local-test pass requirement or prior-improvement requirement" in prompt
+            assert "continue seeking useful improvements" in prompt
+            assert ("Keep a runnable candidate" in prompt) is (interval > 0)
+            assert ("independently of manual submissions" in prompt) is (interval > 0)
             assert "### Work Between Submissions" not in prompt
             assert prompt.startswith(kwargs["agent"].workspace_instructions)
         else:
