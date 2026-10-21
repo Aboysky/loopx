@@ -333,7 +333,6 @@ class OpenVikingContextProvider:
             command,
             text=True,
             encoding="utf-8",
-            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=max(1.0, timeout_seconds),
