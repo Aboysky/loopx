@@ -294,6 +294,60 @@ delivered by this foundation. A comparison using that worker must freeze the
 same dispatch behavior in both arms and retain any repeated-call costs. The
 earlier mixed Host/native assertion is not qualified by a native-only pass.
 
+## Open-work review continuity
+
+An unfinished linked Todo covers work; it does not prove progress or satisfaction.
+The existing typed-progress and effective-Turn review mechanisms can review that
+same open Todo. `goal_outcome_uncovered` retains its narrower no-linked-work
+meaning, including existing blocked/deferred waits. No additional timer, score
+threshold, forced Todo closure or periodic audit is introduced.
+
+The replan source codec previously omitted default outcomes and retained only
+seven configured-check summary fields. Ordinary work context already carried
+the complete acceptance readback; the dedicated replan `core_goal` and optional
+Goal planning horizon did not. Both now reuse that same owner-projected readback,
+including cumulative requirements, self-review provenance, linked work, check
+results and lifetime/freshness facts. This removes a lossy parallel field list;
+Python transports the source and existing TypeScript owners retain decisions.
+No new capability, provider, persisted vocabulary or UI operation is added.
+
+Default replan guidance asks the Agent to review unmet requirements even with
+open work, including when no structured outcomes or checks exist. Strongest
+first delivery remains the objective;
+diagnostic validation and available feedback are means to strengthen it. An open
+Todo, repeated local pass or flat metric alone proves neither progress nor
+exhaustion. Useful negative findings remain valid reasons to continue. This is
+Agent guidance, not a new machine-enforced success or stop rule.
+
+Qualify this seam through File/SQLite CLI refinement → stall/cadence review →
+actual artifact repair → evidence writeback → one settlement → continued open
+Todo. Check the same acceptance source in TurnEnvelope work context, reject
+evidence-free review, preserve retry identity and distinguish configured checks
+from default self-assessment. Existing no-declaration admission, wait rules,
+cadence, optional stride gates and root completion authority remain unchanged.
+More complete acceptance input costs bytes when acceptance exists; the brief
+default guidance also changes ordinary replan packets. Neither is
+a latency, token or score improvement claim. The Agent may still miss or misjudge
+progress; actual adoption and matched task outcomes remain S11 qualification.
+
+The EdgeBench heartbeat workers use the existing default six-effective-Turn
+cadence, independent of Todo completion or configured checks. They do not
+automatically declare supporting outcomes or translate background native scores
+into Core acceptance. Default review guidance therefore must not depend on those
+optional facts. Source preservation applies when the Agent has recorded them.
+Native automatic sampling, solver-visible feedback, scoring and worker stop rules
+remain with the benchmark provider; no hidden feedback is made available here.
+
+The guidance addition preserves every previous clause and adds 212 text bytes.
+On the same CLI fixture, crowded quota grows by 213 JSON characters and Turn
+plan by 216; both initially fail the existing growth limits. The existing
+continuation observer qualifies only the complete old-to-new wording once with
+224 characters/bytes, no added lines or shapes. Missing clauses, an upgraded
+baseline, other carriers and excess growth retain ordinary rejection. The two
+host fixtures' guidance costs 1,984 bytes instead of 1,772, so their scoped
+advice ceiling becomes 2,000 instead of 1,800. The 8 KiB envelope warning and
+absolute CLI/runtime budgets are unchanged; this is a measured input cost.
+
 ## Decisive acceptance
 
 Use disposable public-safe File and SQLite Goals, never active operational state.
