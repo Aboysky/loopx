@@ -252,6 +252,10 @@ jobs:
           CHANNEL: ${{ needs.identity.outputs.channel }}
         run: |
           set -euo pipefail
+          # Stable builds intentionally have no Windows artifact. Without
+          # nullglob, Bash passes the unmatched pattern to `gh`, which exits
+          # before the feed and channel pointer are published.
+          shopt -s nullglob
           if [ "$EVENT_NAME" != release ]; then
             gh release create "$RELEASE_TAG" --prerelease --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime preview."
           fi

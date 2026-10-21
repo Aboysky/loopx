@@ -1,7 +1,11 @@
 """Fail closed before advertising incomplete updates."""
 import base64
 import importlib.util
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -199,6 +203,155 @@ class FeedTests(unittest.TestCase):
             "a main release must reject a missing Windows build",
         )
         self.assertTrue(publish_after("main", windows_result="success"))
+
+    def _upload_step_script(self):
+        lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+        step = next(
+            index
+            for index, line in enumerate(lines)
+            if line.strip()
+            == "- name: Upload immutable artifacts, publish channel pointer last"
+        )
+        run = next(
+            index
+            for index in range(step + 1, len(lines))
+            if lines[index].strip() == "run: |"
+        )
+        script_indent = len(lines[run + 1]) - len(lines[run + 1].lstrip())
+        body = []
+        for line in lines[run + 1 :]:
+            if line.strip() and len(line) - len(line.lstrip()) < script_indent:
+                break
+            body.append(line[script_indent:])
+        return "\n".join(body).rstrip()
+
+    def _working_bash(self):
+        candidates = [os.environ.get("BASH"), shutil.which("bash")]
+        git = shutil.which("git")
+        if git:
+            candidates.append(str(Path(git).resolve().parents[1] / "bin" / "bash.exe"))
+        if os.name == "nt":
+            candidates.extend(
+                [
+                    r"C:\Program Files\Git\bin\bash.exe",
+                    r"C:\Program Files\Git\usr\bin\bash.exe",
+                ]
+            )
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                probe = subprocess.run(
+                    [candidate, "-c", "exit 0"],
+                    capture_output=True,
+                    timeout=10,
+                )
+            except OSError:
+                continue
+            if probe.returncode == 0:
+                return candidate
+        self.skipTest("a working bash is required for the upload-step regression")
+
+    def _run_upload_step(self, channel, version, tag, include_windows):
+        bash = self._working_bash()
+        script = self._upload_step_script()
+        case_dir = self.root / f"upload-{channel}-{int(include_windows)}"
+        updater = case_dir / "dist" / "updater"
+        updater.mkdir(parents=True)
+        for name in ("LoopX.app.tar.gz", "LoopX.app.tar.gz.sig"):
+            shutil.copy2(self.root / name, updater / name)
+        if include_windows:
+            for name in (
+                "LoopX_0.0.0-main.123.1_x64-updater-setup.exe",
+                "LoopX_0.0.0-main.123.1_x64-updater-setup.exe.sig",
+            ):
+                shutil.copy2(self.root / name, updater / name)
+        payload = feed.build(updater, version, tag, channel)
+        (updater / "desktop-updater.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+        bin_dir = case_dir / "bin"
+        bin_dir.mkdir()
+        gh_log = case_dir / "gh.log"
+        gh = bin_dir / "gh"
+        gh.write_text(
+            "#!/bin/sh\n"
+            'printf \'%s\\n\' "$*" >> "$GH_LOG"\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        gh.chmod(0o755)
+        env = {
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "GH_LOG": str(gh_log),
+            "RELEASE_TAG": tag,
+            "SOURCE_REF": "source-ref",
+            "EVENT_NAME": "release",
+            "CHANNEL": channel,
+        }
+        result = subprocess.run(
+            [bash, "-c", script],
+            cwd=case_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return gh_log.read_text(encoding="utf-8").splitlines()
+
+    def test_upload_step_skips_absent_windows_artifact_on_stable(self):
+        stable = self._run_upload_step("stable", "1.2.4", "v1.2.4", False)
+        self.assertIn("release upload v1.2.4 dist/updater/LoopX.app.tar.gz", stable)
+        self.assertIn(
+            "release upload v1.2.4 dist/updater/LoopX.app.tar.gz.sig", stable
+        )
+        self.assertIn(
+            "release upload v1.2.4 dist/updater/desktop-updater.json --clobber",
+            stable,
+        )
+        self.assertIn(
+            "release upload desktop-stable dist/updater/desktop-updater.json --clobber",
+            stable,
+        )
+        self.assertFalse(any(".exe" in line for line in stable))
+        self.assertFalse(any("*" in line for line in stable))
+
+        main = self._run_upload_step(
+            "main", "0.0.0-main.123.1", "desktop-main-123-1", True
+        )
+        self.assertIn(
+            "release upload desktop-main-123-1 "
+            "dist/updater/LoopX_0.0.0-main.123.1_x64-updater-setup.exe",
+            main,
+        )
+        self.assertIn(
+            "release upload desktop-main dist/updater/desktop-updater.json --clobber",
+            main,
+        )
+        feed_upload = next(
+            index
+            for index, line in enumerate(main)
+            if "dist/updater/desktop-updater.json --clobber" in line
+            and "desktop-main " not in line
+        )
+        pointer_upload = next(
+            index
+            for index, line in enumerate(main)
+            if line.startswith("release upload desktop-main ")
+        )
+        self.assertLess(feed_upload, pointer_upload)
+
+    def test_upload_step_rejects_main_without_windows_artifact(self):
+        case_dir = self.root / "upload-main-missing"
+        updater = case_dir / "dist" / "updater"
+        updater.mkdir(parents=True)
+        for name in ("LoopX.app.tar.gz", "LoopX.app.tar.gz.sig"):
+            shutil.copy2(self.root / name, updater / name)
+        with self.assertRaises(ValueError):
+            feed.build(updater, "0.0.0-main.123.1", "desktop-main-123-1", "main")
 
     def test_workflow_pointer_upload_stays_inside_the_advance_branch(self):
         publish = WORKFLOW.read_text(encoding="utf-8").split(
