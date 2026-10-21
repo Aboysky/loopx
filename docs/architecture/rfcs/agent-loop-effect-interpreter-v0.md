@@ -599,6 +599,33 @@ This closes the producer-to-detail transport gap only. Live models, packaged
 App/Lark, later authority checks and the remaining convergence matrix retain
 their independent acceptance; no Python projection is retired by this slice.
 
+The shared Host result adapter now retains supplied text for the existing Turn
+validator instead of truncating it into a passing candidate. Over-limit next
+actions could lose a trailing approval constraint while still being accepted.
+JSON booleans, numbers and containers also retain their types for rejection by
+that validator; false/zero cannot disappear into sparse-field defaults. Legacy
+null/omitted optional text retains its existing absence semantics.
+Explicit delivery scale and outcome now retain their values and JSON types;
+only omitted metadata uses the existing sparse defaults. Previously a declared
+`surface_only`, unqualified `outcome_gap` or invalid value became
+`outcome_progress`, bypassing the existing refusal and recording a quota spend.
+The shared prompt uses the existing delivery vocabularies. Native File/SQLite
+tests preserve valid scale history. New material results also reuse the existing
+settlement rule before task validation or effect preparation: `surface_only`
+and `outcome_gap` produce a typed `validation_failed` without a prepared
+writeback. Previously vocabulary-valid but nonqualifying results reached
+refresh-state, raised a generic CLI error and left an in-progress prepared
+writeback that repeated the same refusal. The Host contract carries no typed
+blocker observation; ordinary CLI blocked settlement is unchanged. Historical
+cached results retain provider readback/recovery, including an unknown provider
+observation followed by a committed receipt, without relaunching the Host or
+repeating writeback. No settlement policy is added here.
+File/SQLite native CLI and actual DSH subprocess qualification cover rejection
+before task validation/writeback/spend/ACK, failed-result replay, and a corrected
+fresh Turn settling once. Boundary-length valid results retain their behavior.
+This is result-transport correctness; it does not qualify model adoption, undo
+Host work already performed, or close the three convergence streams.
+
 The first ordinary-CLI consolidation replaces an exactly identical
 `heartbeat_recommendation.blocked_priority_fallback` mirror with
 `blocked_priority_fallback_ref="$.blocked_priority_fallback"`. The complete root
