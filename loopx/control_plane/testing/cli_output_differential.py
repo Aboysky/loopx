@@ -803,7 +803,7 @@ def _continuation_instruction_migration(
                 and after.get(f"{clause}_before") is False
                 and after.get(f"{clause}_after") is True)
 
-    chars = 0
+    chars, lines = 0, 0
     if surface in {
         "quota_should_run", "loopx_turn_plan", "quota_should_run_all_detail",
         "quota_should_run_goal_boundary_detail", "quota_should_run_scheduler_detail",
@@ -816,6 +816,12 @@ def _continuation_instruction_migration(
             chars += 224
         if migrated("replan"):
             chars += 384
+        if migrated("objective_maintenance"):
+            # Matched fixture: maintenance +205 chars; combined with the
+            # existing work-review transition totals at most +424 / 4 lines.
+            # Only this exact new instruction gets the one-time allowance.
+            chars += 224
+            lines = 4
         if migrated("open_work_review"):
             # Same fixture: +212 text bytes, +213 quota / +216 turn-plan
             # JSON chars after accounting metadata. Preserve all prior prose;
@@ -841,10 +847,18 @@ def _continuation_instruction_migration(
         # a boolean budget diagnostic's single-character variation; later
         # growth, other surfaces, lines and shapes receive no new allowance.
         chars += 544
+    if (surface in {"loopx_turn_plan", "quota_should_run_turn_envelope"}
+            and base.get("format") == candidate.get("format") == "markdown"
+            and base.get("turn_budget_warning") is False and candidate.get("turn_budget_warning") is True
+            and (base.get("turn_envelope_cost_basis") or {}).get("objective_maintenance_before") is True
+            and (candidate.get("turn_envelope_cost_basis") or {}).get("objective_maintenance_after") is True):
+        # Measured warning appearance: +417/+419 chars and four lines. Preserve
+        # the warning and its target; paired JSON proves the reviewed cause.
+        chars, lines = max(chars, 448), 4
     if not chars:
         return {}, []
     return {
-        "chars": chars, "utf8_bytes": chars, "lines": 0,
+        "chars": chars, "utf8_bytes": chars, "lines": lines,
         "compact_payload_chars": chars if base.get("format") == "json" else 0,
     }, ["reviewed continuation instructions migrated; bounded one-time growth"]
 
