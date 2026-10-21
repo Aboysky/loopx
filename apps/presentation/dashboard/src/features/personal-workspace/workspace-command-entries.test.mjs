@@ -13,7 +13,7 @@ const items = [
   ...['draft', 'ready', 'gated', 'stale', 'error', 'applied', 'rejected', 'deferred'].map(status => ({kind: 'proposal', proposal: {previewId: status, goalId: 'one', title: 'Review change', status}})),
   {kind: 'proposal', proposal: {previewId: 'foreign', goalId: 'two', title: 'Other preview', status: 'ready'}},
 ];
-const input = {goals, goalId: 'one', items, readOnly: false, unavailable: false};
+const input = {userTodos: [], sourceId: '/status.json', goals, goalId: 'one', items, readOnly: false, unavailable: false};
 test('indexes Goals and only current loaded Goal details and reviewable previews', () => {
   const before = JSON.stringify(input);
   const entries = workspaceCommandEntries(input);
@@ -47,4 +47,36 @@ test('keyboard shortcut respects IME, repeat and modifier combinations', () => {
   for (const override of [{isComposing: true}, {keyCode: 229}, {repeat: true}, {altKey: true}, {shiftKey: true}, {ctrlKey: false}, {key: 'j'}]) {
     assert.equal(isPaletteShortcut({...key, ...override}), false);
   }
+});
+
+test('user_gate and user_action title/ID search reuses same-Goal, same-source attention details', () => {
+  const userTodos = ['user_gate', 'user_action'].map((taskClass, index) => ({
+    todoId: `user-${index}`, goalId: 'one', sourceId: '/status.json',
+    text: index ? 'Provide export sample' : 'Approve export scope', blocking: !index,
+    details: {taskClass, interaction: index ? 'user_action' : 'decision', lifecycle: 'open'},
+  }));
+  const scoped = {...input, userTodos: [...userTodos,
+    {...userTodos[0], goalId: 'two', text: 'Other Goal gate'},
+    {...userTodos[0], sourceId: '/remote.json', text: 'Other source gate'},
+  ]};
+  const before = JSON.stringify(scoped);
+  for (const readOnly of [false, true]) {
+    const entries = workspaceCommandEntries({...scoped, readOnly});
+    for (const item of userTodos) {
+      for (const query of [item.text, item.todoId]) {
+        const matches = filterWorkspaceCommands(entries, query);
+        assert.equal(matches.length, 1);
+        assert.equal(matches[0].group, 'todo');
+        assert.deepEqual(matches[0].destination, {kind: 'detail', selection: {kind: 'attention', item}});
+      }
+    }
+    assert.equal(filterWorkspaceCommands(entries, 'Other Goal gate').length, 0);
+    assert.equal(filterWorkspaceCommands(entries, 'Other source gate').length, 0);
+  }
+  assert.equal(JSON.stringify(scoped), before, 'search/navigation cannot mutate attention state');
+  assert.deepEqual(workspaceCommandEntries({...scoped, unavailable: true}), []);
+  assert.ok(workspaceCommandEntries({...scoped, goalId: 'loading'}).every(entry => entry.group === 'goal'));
+  const remote = workspaceCommandEntries({...scoped, sourceId: '/remote.json', readOnly: true});
+  assert.equal(filterWorkspaceCommands(remote, 'Other source gate').length, 1);
+  assert.equal(filterWorkspaceCommands(remote, 'Approve export scope').length, 0);
 });

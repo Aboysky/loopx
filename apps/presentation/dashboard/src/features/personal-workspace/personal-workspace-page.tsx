@@ -2662,6 +2662,7 @@ export function PersonalWorkspacePage({
         enabled={!settingsOpen && !mobileSidebarOpen} readOnly={readOnly} unavailable={paletteUnavailable}
         onOpen={() => setPaletteScope(paletteContext)} onClose={() => setPaletteScope(null)}
         entries={workspaceCommandEntries({ goals: workspaceGoals, goalId: selectedGoalId, readOnly,
+          userTodos: model.userTodos, sourceId: seenStatusSource,
           unavailable: paletteUnavailable, items: items.filter(item => item.kind !== "proposal"
             || (!actionReadback.isError && actionReadback.data?.some(current => current.proposal_id === item.proposal.previewId))) })}
         onSelect={entry => {

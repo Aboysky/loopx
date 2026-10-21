@@ -1,4 +1,4 @@
-import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
+import type { WorkspaceAttention, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 /** Presentation destinations only: no executable action or free-text request. */
 export type WorkspaceCommandEntry = {
@@ -9,8 +9,9 @@ export type WorkspaceCommandEntry = {
   destination: { kind: "goal"; goalId: string } | { kind: "detail"; selection: WorkspaceDrawerSelection };
 };
 
-export function workspaceCommandEntries({ goals, goalId, items, readOnly, unavailable }: {
+export function workspaceCommandEntries({ goals, goalId, items, userTodos, sourceId, readOnly, unavailable }: {
   goals: WorkspaceGoal[]; goalId: string | null; items: WorkspaceTimelineItem[];
+  userTodos: WorkspaceAttention[]; sourceId?: string;
   readOnly: boolean; unavailable: boolean;
 }): WorkspaceCommandEntry[] {
   if (unavailable) return [];
@@ -27,6 +28,13 @@ export function workspaceCommandEntries({ goals, goalId, items, readOnly, unavai
       ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy,
     } } },
   });
+  for (const item of userTodos) {
+    if (item.goalId !== goalId || item.sourceId !== sourceId) continue;
+    entries.push({
+      id: `attention:${item.todoId}`, title: item.text, group: "todo",
+      destination: { kind: "detail", selection: { kind: "attention", item } },
+    });
+  }
   for (const item of items) {
     if (item.kind === "output" && item.output.goalId === goalId) entries.push({
       id: `output:${item.output.outputId}`, title: item.output.title, group: "output",

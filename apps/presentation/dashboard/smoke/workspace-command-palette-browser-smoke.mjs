@@ -172,6 +172,12 @@ try {
     const text = '核对导出报告 Validate export report';
     const added = await cli('add', '--goal-id', 'progress-projection', '--role', 'agent', '--task-class', 'advancement_task', '--text', text);
     assert.equal(added.ok, true);
+    const userTodos = [];
+    for (const [taskClass, text] of [['user_gate', 'Approve export scope'], ['user_action', 'Provide export sample']]) {
+      const result = await cli('add', '--goal-id', 'progress-projection', '--role', 'user', '--task-class', taskClass, '--text', text);
+      assert.equal(result.ok, true);
+      userTodos.push({todoId: result.todo_id, text});
+    }
     let failStatus = false;
     session = await openWorkspacePage(browser, url, {beforeGoto: async (_api, page) => {
       await page.route(target => target.pathname === '/status.json', async route => {
@@ -187,6 +193,30 @@ try {
     const {page} = session;
     await page.locator('.personal-goal-row').first().locator('.personal-goal-link').click();
     await page.getByTestId('goal-vitals').waitFor({state: 'visible'});
+    const writes = [];
+    page.on('request', request => {if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) writes.push(new URL(request.url()).pathname);});
+    async function checkUserNavigation(target, readOnly = false) {
+      for (const item of userTodos) {
+        for (const query of [item.text, item.todoId]) {
+          const search = await openPalette(target);
+          await search.fill(query);
+          assert.equal(await dialogFor(target).getByRole('option').count(), 1);
+          await search.press('Enter');
+          const drawer = target.locator('[data-context-kind="attention"]');
+          await drawer.waitFor({state: 'visible'});
+          assert.ok((await drawer.innerText()).includes(item.text));
+          await drawer.locator('.personal-attention-identifiers summary').click();
+          assert.equal(await drawer.locator('.personal-attention-identifiers dd').first().innerText(), item.todoId);
+          if (readOnly) {
+            assert.equal(await drawer.locator('.personal-decision-bar button').count(), 0);
+            assert.match(await drawer.innerText(), /Read-only|read-only|只读/);
+          }
+          await target.keyboard.press('Escape');
+          await drawer.waitFor({state: 'hidden'});
+        }
+      }
+    }
+    await checkUserNavigation(page);
     const search = await openPalette(page);
     await search.fill('核对');
     await dialogFor(page).getByRole('option', {name: /核对导出报告/}).waitFor({state: 'visible'});
@@ -213,6 +243,24 @@ try {
     await openPalette(page);
     await dialogFor(page).getByRole('combobox').fill('核对');
     await dialogFor(page).getByRole('option', {name: /核对导出报告/}).waitFor({state: 'visible'});
+    assert.deepEqual(writes, [], 'real user/agent Todo navigation and recovery make zero writes');
+    const snapshotResponse = await fetch(`${backend}/status.json`);
+    assert.equal(snapshotResponse.ok, true);
+    const snapshot = await snapshotResponse.json();
+    const readOnlySession = await openWorkspacePage(browser,
+      `http://127.0.0.1:${port}/chat/?statusUrl=http%3A%2F%2F127.0.0.1%3A8976%2Fstatus.json`, {
+        beforeGoto: async (_api, target) => {
+          await target.route('http://127.0.0.1:8976/status.json*', route => route.fulfill({json: snapshot}));
+        },
+      });
+    try {
+      const target = readOnlySession.page;
+      await target.locator('.personal-goal-row').first().locator('.personal-goal-link').click();
+      const remoteWrites = [];
+      target.on('request', request => {if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) remoteWrites.push(request.method());});
+      await checkUserNavigation(target, true);
+      assert.deepEqual(remoteWrites, [], 'read-only attention navigation makes zero writes');
+    } finally {await readOnlySession.close();}
   } finally {
     await session?.close(); lines.close();
     if (child.exitCode === null && child.signalCode === null) {
@@ -220,5 +268,5 @@ try {
       try {await closed;} finally {clearTimeout(kill);}
     }
   }
-  console.log('workspace command palette: en/zh, keyboard/IME/focus, narrow/reduced motion, navigation/no writes, real Todo readback/recovery passed');
+  console.log('workspace command palette: en/zh, keyboard/IME/focus, narrow/reduced motion, navigation/no writes, real Agent/User Todo title/ID navigation, read-only attention and readback/recovery passed');
 } finally {await browser?.close(); server.kill('SIGTERM');}
