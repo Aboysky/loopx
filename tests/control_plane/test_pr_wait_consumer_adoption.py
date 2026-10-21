@@ -15,7 +15,7 @@ from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
 from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from loopx.todos import add_goal_todo, list_goal_todos
-from tests.capabilities.test_pr_wait_observation import _invoke_turn
+from tests.capabilities.test_pr_wait_observation import _invoke_turn, _observation
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.test_loopx_turn_driver import _write_live_fixture
 
@@ -29,6 +29,9 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     project, runtime, registry = _write_live_fixture(
         tmp_path, provider=provider, todo_metadata_extra="resume_when=pr_merged:other/repo#42",
     )
+    config = json.loads(registry.read_text())
+    config["goals"][0]["available_capabilities"] = ["external_evidence_poll"]
+    registry.write_text(json.dumps(config))
     requirement = "Preserve the accepted requirement. " * 22 + "Require the terminal independent artifact marker."
     todo_id = add_goal_todo(
         registry_path=registry, goal_id="loopx-turn-fixture", role="agent", claimed_by="codex-fixture",
@@ -95,6 +98,8 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
         "    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
         "    (root / 'validated-artifact').write_text('terminal independent artifact marker')\n"
         "    return json.dumps({'result_kind':'validated_progress','classification':'dependency_followthrough',"
+        "'work_evidence':['validated-artifact'],"
+        "'validation_evidence':['Independent command verifies the terminal artifact marker'],"
         "'summary':'Validated the original dependency-bound fixture work.','delivery_batch_scale':'implementation',"
         "'delivery_outcome':'outcome_progress','delivery_boundary':'in_flight_continuation',"
         "'recommended_action':'Continue the original accepted work.'})\n"
@@ -107,7 +112,7 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
             "--no-global-sync", "--execute"]
     code, result = _invoke_turn(argv)
     assert code == 0 and result["status"] == "committed", json.dumps(result, indent=2)
-    assert result["pr_dependency_observation"]["external_read_count"] == (2 if observer_entry == "native" else 0)
+    assert _observation(result)["external_read_count"] == (2 if observer_entry == "native" else 0)
     assert len(captured) == 1
     full = captured[0]
     envelope = build_turn_envelope(full)

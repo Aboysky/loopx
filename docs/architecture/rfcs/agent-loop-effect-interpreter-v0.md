@@ -471,18 +471,23 @@ shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off
 isolation. This does not qualify installed heartbeat/App adoption or model value.
 
-Fresh executing native Turns now compose the existing opt-in PR dependency
-observer before their governing decision. An exact merged observation can
-satisfy the original wait without asking the blocked business Host to select
-that observation. The TypeScript plan, retained merge evidence and ordinary
-execution admission remain the owners; the CLI reports observation cost and
-failure/uncertain-write readback. File/SQLite qualification covers paused
-business compute, subsequent validated protocol-host work and original-journal
-replay, with the original requirement, ownership and merge timestamp retained.
-Plans, dry runs, missing declarations and journal recovery add no observation.
-This is a native CLI adoption slice; installed heartbeat declarations,
-App/Lark caller adoption, sustained live scheduling, model outcomes and the
-three convergence acceptances remain open.
+PR dependency observation now uses the existing registered TurnStart lifecycle
+shared by executing quota guards, native Turns and compatibility prequota.
+Permission comes from the typed Goal/Agent capability owner, including remembered
+host observations and revocation; callers need no repeated flag when permission
+already exists. Capability-owned diagnostics preserve domain policy outside core
+Turn code. The existing complete-source TypeScript plan, merge-fact owner and
+normal execution admission remain authoritative. Goal-local single flight and
+durable per-dependency cadence prevent duplicate concurrent/due reads.
+File/SQLite qualification covers paused/stopped business, generated full/thin
+heartbeat commands, cross-entrypoint observation, revocation, unknown effects,
+unrelated validated work after provider failure and original-journal replay.
+App/Lark's shared context backend consumes canonical readiness without polling.
+Plans, read-only/status/context paths, missing permission and recovery add no
+observation. Installed executor adoption, legitimate recovery of existing live
+owners, sustained scheduling, model outcomes and the three convergence
+acceptances remain open. Generic memory lifecycle integration is a separate
+remaining boundary; post-writeback hooks retain their effect-free contract.
 
 The same captured decision now retains the selected Task's existing continuation
 condition and readiness through the full selection projection, signed envelope
