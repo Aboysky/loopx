@@ -3,6 +3,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthorityObject, canonicalAuthoritySha256, AuthorityStoreProtocolError} from "../coordination/authority_store_codec.ts";
 import {indexCoordinationProjectionTodos} from "../coordination/coordination_projection.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {readGoalAcceptanceLifecycle, sameExactGoalRef, parseWireExactGoalRef, type WireExactGoalRef} from "./acceptance_lifecycle.ts";
 
 export const GOAL_OBJECTIVE_SCHEMA = "goal_objective_revision_v0";
@@ -55,7 +56,7 @@ export function readGoalObjective(head: JsonObject): GoalObjectiveState | null {
   for (const value of Object.values(adopted)) {
     const row = canonicalAuthorityObject(value, "objective adoption"); keys(row, ["revision", "digest", "work_digest", "review_summary"]);
     requireValue(Number.isSafeInteger(row.revision) && Number(row.revision) >= 1 && Number(row.revision) <= revisions.length, "invalid adopted objective revision");
-    requireValue(revisions[Number(row.revision) - 1].digest === row.digest && /^[a-f0-9]{64}$/.test(String(row.work_digest)), "adoption basis mismatch");
+    requireValue(revisions[Number(row.revision) - 1].digest === row.digest && BARE_SHA256_PATTERN.test(String(row.work_digest)), "adoption basis mismatch");
     text(row.review_summary, "work review", 1024);
   }
   requireValue(Buffer.byteLength(JSON.stringify(raw), "utf8") <= 256 * 1024, "objective revision capacity exceeded");
