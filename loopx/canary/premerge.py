@@ -348,10 +348,13 @@ def classify_premerge_surfaces(
         mark("extension_runtime", "extension-runtime")
     if any(_path_matches(path, DOC_CONTENT_TOKENS) for path in files):
         mark("docs_project_content", "docs-project-content-ops")
-    if any(_path_matches(path, PUBLIC_BOUNDARY_TOKENS) for path in files):
+    if any(
+        _path_matches(path, PUBLIC_BOUNDARY_TOKENS)
+        or Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
+        for path in files
+    ):
         mark("public_boundary")
     for path in _visual_review_paths(files, repo_root):
-        mark("public_boundary")
         manual_holds.append({
             "kind": "visual_evidence",
             "path": path,

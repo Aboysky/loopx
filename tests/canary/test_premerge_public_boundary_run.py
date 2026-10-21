@@ -135,6 +135,23 @@ def test_binary_capture_is_visible_but_never_qualified_by_text_scan(tmp_path: Pa
     assert classification["public_boundary_scan_recommended"] is True
 
 
+def _isolated_gate(tmp_path: Path, changed_files: list[str]) -> dict:
+    # An isolated real checkout and empty catalog exercise the shipped gate
+    # without unrelated catalog jobs; its Git hygiene checks still execute.
+    catalog = tmp_path / "catalog.md"
+    catalog.write_text("# Isolated canary catalog\n")
+    for args in (
+        ["init", "-q"], ["add", "catalog.md", *changed_files],
+        ["-c", "user.name=Canary Fixture", "-c", "user.email=canary@example.invalid",
+         "commit", "-qm", "fixture"],
+    ):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+    return build_premerge_validation_gate(
+        repo_root=tmp_path, changed_files=changed_files, base_ref="HEAD",
+        tier="quick", execute=True, catalog_path=catalog,
+    )
+
+
 @pytest.mark.parametrize("body", [None, b"ordinary text masquerading as an image"])
 def test_actual_image_only_gate_keeps_existing_visual_review_hold(
     tmp_path: Path, body: bytes | None,
@@ -142,20 +159,7 @@ def test_actual_image_only_gate_keeps_existing_visual_review_hold(
     image = _image(tmp_path)
     if body is not None:
         image.write_bytes(body)
-    # An isolated real checkout and empty catalog exercise the shipped gate
-    # without unrelated catalog jobs; its Git hygiene checks still execute.
-    catalog = tmp_path / "catalog.md"
-    catalog.write_text("# Isolated canary catalog\n")
-    for args in (
-        ["init", "-q"], ["add", "capture.PNG", "catalog.md"],
-        ["-c", "user.name=Canary Fixture", "-c", "user.email=canary@example.invalid",
-         "commit", "-qm", "fixture"],
-    ):
-        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
-    payload = build_premerge_validation_gate(
-        repo_root=tmp_path, changed_files=["capture.PNG"], base_ref="HEAD",
-        tier="quick", execute=True, catalog_path=catalog,
-    )
+    payload = _isolated_gate(tmp_path, ["capture.PNG"])
     assert payload["ok"] is False
     assert payload["gate"]["status"] == "manual_review_required"
     assert payload["gate"]["merge_gate_passed"] is False
@@ -209,3 +213,7 @@ def test_image_named_symlink_keeps_explicit_text_scan(tmp_path: Path) -> None:
     assert classification["manual_holds"] == []
     assert run["ok"] is False
     assert "invalid UTF-8" in run["selected_checks"][0]["stderr_tail"]
+    payload = _isolated_gate(tmp_path, ["capture.png"])
+    assert payload["ok"] is False
+    assert payload["gate"]["status"] == "failed"
+    assert payload["gate"]["run_failure_count"] == 1
