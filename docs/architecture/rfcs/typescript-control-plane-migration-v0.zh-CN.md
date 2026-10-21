@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-20
+- Last revised：2026-10-21
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -394,6 +394,18 @@ promotion gate。
 
 - 检查点已移至执行账本：[Provider-neutral projection conformance 检查点（2026-09-12）](ledger/typescript-control-plane-migration-v0/2026-09-12-provider-neutral-projection-conformance.zh-CN.md)。
 - 检查点已移至执行账本：[Canonical Todo 展示检查点（2026-09-12）](ledger/typescript-control-plane-migration-v0/2026-09-12-canonical-todo-presentation.zh-CN.md)。
+
+### Quota Todo 来源选择（2026-10-21）
+
+Quota 来源读取与 planning-inventory 读取先选定优先且可用的 summary，
+再调用既有 typed 投影 owner。canonical/legacy 优先级与权威空选择保持不变。
+未选中的行不再跨 runtime transport；未选中行格式错误不会阻断有效的选中来源。
+选中来源的投影失败仍向上传播，不会采用另一来源。
+
+重复的 planning adapter 与被丢弃的投影已删除。Python 保留兼容来源选择，
+直到 quota 与 planning 调用者迁入同一进程。这里不新增 RPC、数据缓存或领域规则实现。
+这个有界调用者改动仍须验证完整命令的 SQLite 性能与已安装 File/SQLite 等价性；
+仅减少请求次数不能证明性能收益。
 
 ### 长程持久化也是迁移收益的一部分
 
