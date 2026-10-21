@@ -56,6 +56,16 @@ actual network latency and total host costs remain workload-dependent. This
 qualifies the native CLI bridge. Installed heartbeat declarations, App/Lark
 caller adoption and sustained live scheduling remain separate boundaries.
 
+Full decisions retain the selected Task's existing `resume_when`, `resume_ready`
+and complete `resume_condition`; TurnEnvelope carries the same fields in
+`action.selected_todo` and signs them with the action. Native Host inputs retain
+that proof, including its repository, event identity and original event time,
+alongside the complete Task requirements. This is observation transport;
+execution still needs the ordinary current admission. The projection does not
+recompute satisfaction or substitute another Task's proof. Tasks without these
+fields keep their prior shape, and saved journal envelopes keep their original
+signed contents. `managed-step` remains a read-only controller and does not poll.
+
 `pr_merged:owner/repo#42` 只标识依赖；缺少合并事件不证明 GitHub 仍在等待。
 历史交付监督不再豁免这种未观察等待，因果阻塞结算仍要求已注册的
 `monitor_changed` 或 `todo_done` 目标及当前回读。
@@ -86,6 +96,13 @@ claim、lease 与宿主启动仍由原准入约束。plan、dry run 与 `--resum
 模型调用或业务额度扣费；沿用每次四项和 30 分钟重试节奏，实际网络延迟及完整宿主成本
 仍依赖工作负载。本切片验证原生 CLI 接入；安装态 heartbeat 声明、App/Lark 调用方采用
 与持续真实调度仍分别验收。
+
+完整决策保留所选 Task 既有的 `resume_when`、`resume_ready` 与完整
+`resume_condition`；TurnEnvelope 将相同字段置于 `action.selected_todo`，纳入
+动作签名。原生 Host 输入同时保留该证明的仓库、事件身份、原事件时间与完整任务要求。
+这些是观察事实的传输，执行仍需正常当前准入；投影不重判满足，也不借用另一 Task 的
+证明。缺少这些字段的任务保持原形态，已保存 journal 保留原签名内容。
+`managed-step` 仍是只读控制器，不执行观察轮询。
 
 ## Completion dependency cycles / 完成依赖环
 

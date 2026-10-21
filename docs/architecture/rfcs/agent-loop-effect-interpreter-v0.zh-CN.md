@@ -337,6 +337,11 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 本切片只完成原生 CLI 接入；安装态 heartbeat 声明、App/Lark 调用方采用、持续真实调度、
 模型结果与以下三批收敛验收保持开放。
 
+同次捕获决策中的所选 Task 继续条件与满足状态，现在沿完整选择投影、签名 envelope
+到实际协议宿主输入完整保留。File/SQLite 验证区分不同仓库的同号 PR，保留原事件时间
+和长要求尾部，独立验证后续工作并拒绝证明篡改。只读 managed-step 与原 journal
+重放不新增观察或扣费。本批补齐事实交付遗漏，安装采用与模型结果仍另行验收。
+
 有界规划上下文现在保持内联，不再因短包预算压力而强制读取整份决策；既有 owner 的
 3 KiB 限制保留。共享 DSH/cloud adapter 传递签名内容，历史引用同时保留原捕获路由和
 哈希。thin renderer 仅在存在 `agent_context.detail_ref` 时要求能力补读，不能把也用于

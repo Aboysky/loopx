@@ -484,6 +484,15 @@ This is a native CLI adoption slice; installed heartbeat declarations,
 App/Lark caller adoption, sustained live scheduling, model outcomes and the
 three convergence acceptances remain open.
 
+The same captured decision now retains the selected Task's existing continuation
+condition and readiness through the full selection projection, signed envelope
+and actual protocol-host input. File/SQLite qualification distinguishes two
+repositories' identically numbered PRs, preserves the original event time and
+long requirement tail, validates subsequent work, and rejects proof tampering.
+Read-only managed-step and original-journal replay add no observation or debit.
+This closes that fact-delivery omission; installed adoption and model outcomes
+remain outside this qualification.
+
 Bounded planning context now remains inline instead of forcing a full-decision
 read under envelope budget pressure. Its existing owner retains the 3 KiB bound;
 the shared DSH/cloud adapter transports the signed contribution and, for saved
