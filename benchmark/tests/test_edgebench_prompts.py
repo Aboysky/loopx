@@ -10,7 +10,6 @@ import pytest
 
 from benchmark.edgebench.prompts import (
     blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
-    native_research_guidance,
 )
 
 
@@ -145,13 +144,20 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
     assert len(uploads) == 1  # Resume does not replace a live task context.
 
 
-def test_native_research_guidance_preserves_original_task_without_budget_injection():
-    query = "Original task: maximize A subject to B. Keep native acceptance and ranking."
+@pytest.mark.parametrize("query", [
+    "Original task: maximize A subject to B. Keep native acceptance and ranking.",
+    "Use an early diagnostic submission before implementing the remaining targets.",
+    "Run the task's required local validation before submitting.\n### Strategy\nTask-owned text.",
+])
+def test_native_context_preserves_task_owned_strategy_without_adding_one(query):
     options = dict(submission_cooldown=3600, eval_interval=0, internet=False,
                    selection="score_first", score_direction="maximize")
     policy = native_task_instructions(["solution.py"], **options)
     assert native_task_prompt(query, ["solution.py"], **options) == policy + "---\n\n" + query + "\n"
-    assert native_research_guidance() in policy
+    assert "adds no local-test pass requirement or prior-improvement requirement" in policy
+    assert "The task defines candidate validity and acceptance" in policy
+    assert "### Work Between Submissions" not in policy
+    assert "Continue researching" not in policy
     assert "total trial budget" not in policy
     assert "remaining time" not in policy
 
@@ -233,7 +239,7 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
             state = project / state
         from loopx.control_plane.goals.active_state_metadata import split_state_frontmatter
         assert split_state_frontmatter(state.read_text())[0]["objective"] == query
-        assert native_research_guidance() not in state.read_text()
+        assert policy not in state.read_text()
         assert remote.read_text() == prompt
         assert policy in (project / "AGENTS.md").read_text()
         packet = task_plan_packet(env | worker.runtime._worker_env(cwd=str(project)),
@@ -257,7 +263,7 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         assert core["objective"] == " ".join(query.split())
         assert core["objective_source"] == "active_state" and core["acceptance_contract"] is None
         assert worker.format_run_cmd(str(remote), internet=False, resume=True) == command
-        assert (project / "AGENTS.md").read_text().count(native_research_guidance()) == 1
+        assert (project / "AGENTS.md").read_text().count(policy) == 1
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import "
             "effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],
@@ -306,9 +312,9 @@ def test_native_candidate_prompt_describes_actual_feedback_and_preserves_objecti
     wrapper = text.removesuffix(query + "\n")
     for clause in ["**3600 seconds**", "first accepted submission", "not from result arrival",
                    "ties and regressions", "make a new submission", "without creating a new evaluation",
-                   "current promising candidate", "separate checkpoint", "every local proxy metric",
-                   "original objective", "hard constraints", "not necessarily your current files",
-                   "Do not idle", "not zero scores", f"`{selection}`", f"`{direction}`"]:
+                   "`candidate.py`", "`output.json`", "submission/round identity",
+                   "The task defines candidate validity and acceptance", "not necessarily your current files",
+                   "not zero scores", f"`{selection}`", f"`{direction}`"]:
         assert clause in wrapper
     assert "current best solution" not in wrapper
     assert ("NO internet access" in wrapper) is (not internet)
