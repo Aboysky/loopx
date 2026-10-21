@@ -557,6 +557,10 @@ def register_content_ops_commands(
     )
 
 
+def _render_json_packet(value: dict[str, object]) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+
+
 def handle_content_ops_command(
     args: argparse.Namespace,
     *,
@@ -569,10 +573,10 @@ def handle_content_ops_command(
             payload, renderer = issue_fix_result
         elif args.content_ops_command == "media":
             payload = handle_media_command(args)
-            renderer = lambda value: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+            renderer = _render_json_packet
         elif args.content_ops_command == "experience":
             payload = handle_experience_command(args)
-            renderer = lambda value: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+            renderer = _render_json_packet
         elif args.content_ops_command == "reference":
             if args.operation == "inventory":
                 if not args.goal_id or not args.store_id or not args.observed_at or args.library_json == "-":
@@ -588,7 +592,7 @@ def handle_content_ops_command(
                 payload = content_reference_operation(args.operation, request)
             if args.output_json:
                 write_reference_artifact(Path(args.output_json).expanduser(), payload)
-            renderer = lambda value: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+            renderer = _render_json_packet
         elif args.content_ops_command == "preview":
             payload = build_content_ops_preview_packet(generated_at=args.generated_at)
             renderer = render_content_ops_preview_markdown
