@@ -431,7 +431,11 @@ class RolloutCursor:
             path = root / (self.binding[:2] + ".json")
             if path.is_symlink() or path.stat().st_size > 8192:
                 return
-            wrapper = json.loads(path.read_bytes())
+            with path.open("rb") as handle:
+                raw_hint = handle.read(8192)
+                if os.fstat(handle.fileno()).st_size > 8192:
+                    return
+            wrapper = json.loads(raw_hint)
             body = wrapper["body"]
             encoded = json.dumps(body, sort_keys=True, separators=(",", ":"))
             if (

@@ -309,12 +309,16 @@ def test_every_cold_and_incremental_read_obeys_the_byte_budget(store, monkeypatc
     reads = [0]
 
     class Counted:
-        def __init__(self, stream):
+        def __init__(self, stream, *, host=True):
             self.stream = stream
+            self.host = host
 
         def read(self, count=-1):
+            if not self.host:
+                assert 0 <= count <= 8192, "Cache reads need their own explicit bound"
             value = self.stream.read(count)
-            reads[0] += len(value)
+            if self.host:
+                reads[0] += len(value)
             return value
 
         def __getattr__(self, key):
@@ -328,6 +332,8 @@ def test_every_cold_and_incremental_read_obeys_the_byte_budget(store, monkeypatc
 
     def opened(target, mode="r", *args, **kwargs):
         stream = original(target, mode, *args, **kwargs)
+        if target.parent == store[2] and mode == "rb":
+            return Counted(stream, host=False)
         return Counted(stream) if target == path and mode == "rb" else stream
 
     monkeypatch.setattr(Path, "open", opened)
