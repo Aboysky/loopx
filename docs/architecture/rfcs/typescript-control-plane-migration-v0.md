@@ -55,6 +55,17 @@ HTTP caller parity and complete default-SQLite CLI performance remain separate
 qualification gates. This source cutover does not certify R1–R3 or the complete
 asynchronous collaboration lifecycle.
 
+**Inbox CLI caller adoption.** The normal `manager-inbox` command family now
+uses the existing selected-command parser, shared dispatcher and executable-
+revision request scope. The full compatibility CLI reuses that same dispatcher;
+its duplicate Inbox branch is retired. Both paths retain the existing parser,
+handler, registry/runtime resolution and native-controller guard. A command
+resolves executable identity once while source records stay live reads under
+their existing locks; the next command resolves the current code again.
+Existing TypeScript semantic owners, bridge operations, receipt formats and
+Python provider IO are unchanged. This is Stage 3 caller adoption, not another
+leaf migration, a new result store or completion of R1–R3.
+
 R1–R3 also consume the typed kernel through the App, not only CLI settlement.
 The [App/inbox integration plan](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
 orders caller fixes, characterization, one complete async lifecycle cutover,
