@@ -1151,6 +1151,14 @@ Exact native session ID/history conformance qualifies continuity, not task
 quality or matched-budget gains; synthetic task success alone does not prove
 equivalence to interactive `$loopx` startup or planning effectiveness.
 
+The adapter prompt boundary now keeps default native EdgeBench wrappers focused
+on task, tool and evaluation context and removes the shared benchmark planning
+strategy prefix. Task-owned requirements and the Core first-delivery contract
+remain intact; optional native Goal continuation adds no prior-improvement
+submission requirement. This is a new-run behavior change to pin independently
+of feedback mode. Prompt delivery/readback qualifies the engineering boundary;
+earlier useful feedback and outcome gains remain unqualified E3 study questions.
+
 ### 11.3 Required delivery slice
 
 Every benchmark engineering PR or contributor task should identify a bounded
