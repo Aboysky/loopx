@@ -70,10 +70,10 @@ for (const kind of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" 
     head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the service", ["agent-a"], direction);
     await seedSnapshot(store, head);
     const result = await readCanonicalSnapshotFromStore(snapshotRequest(), store);
-    const contract = result.goal_acceptance_contract as JsonObject;
+    const contract = (result.metadata as JsonObject).goal_acceptance_contract as JsonObject;
     assert.equal((contract.goal_objective as JsonObject).objective, direction.objective);
     assert.equal(contract.criteria, undefined, "the Goal direction does not enable optional acceptance checks");
-    assert.deepEqual(result.goal_acceptance_work_guards, {});
+    assert.equal(result.goal_acceptance_work_guards, undefined);
   });
   test(`${kind}: UTF-8 byte pages retain records beyond the old 2 MiB RPC ceiling`, async t => {
     const {store} = await fixture(t, kind);
