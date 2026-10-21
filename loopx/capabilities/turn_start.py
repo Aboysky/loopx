@@ -6,8 +6,8 @@ fact validation and cadence stay with their existing TypeScript owners.
 from pathlib import Path
 from typing import Any
 
-from ..capability_hooks import dispatch_turn_start_hooks
-from ..todos.contract import normalize_required_capabilities
+from ..control_plane.capability_hooks import dispatch_turn_start_hooks
+from ..control_plane.todos.contract import normalize_required_capabilities
 
 
 def extend_turn_start_dispatch(dispatch: dict[str, Any], *, registry_path: Path,
@@ -15,8 +15,8 @@ def extend_turn_start_dispatch(dispatch: dict[str, Any], *, registry_path: Path,
                                available: Any, provider_options: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     if not agent_id:
         return dispatch
-    from ...capabilities.issue_fix.pr_wait_hook import turn_start_hook as dependencies
-    from ..agents.capability_memory import turn_start_hook as capability_memory
+    from .issue_fix.pr_wait_hook import turn_start_hook as dependencies
+    from ..control_plane.agents.capability_memory import turn_start_hook as capability_memory
 
     factories = [("issue-fix", dependencies)]
     if normalize_required_capabilities(available):

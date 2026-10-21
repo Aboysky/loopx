@@ -6,18 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import load_goal_from_registry
-from ...control_plane.agents.capability_gate import _evaluate
-from ...control_plane.agents.capability_memory import agent_capability_memory
+from ...control_plane.agents.capability_memory import (
+    agent_capability_memory, resolve_agent_capabilities,
+)
 from ...control_plane.capability_hooks import (
     TURN_START_HOOK_RESULT_SCHEMA_VERSION,
     TurnStartHookRegistration,
 )
-from ...control_plane.quota.goal_boundary import declared_available_capabilities
-from ...control_plane.todos.contract import normalize_required_capabilities
 from .pr_wait_reconcile import reconcile_pr_wait_dependencies
 
 
-HOOK_ID = "issue_fix.pr_wait_observation"
+PR_WAIT_OBSERVATION_HOOK_ID = "issue_fix.pr_wait_observation"
 
 
 def _bounded_readback(readback: dict[str, Any]) -> dict[str, Any]:
@@ -46,8 +45,13 @@ def _availability(registry_path: Path, runtime_root: Path, goal_id: str,
     goal = load_goal_from_registry(registry_path, goal_id)
     state = agent_capability_memory(registry_path=registry_path, runtime_root=runtime_root,
         goal_id=goal_id, agent_id=agent_id)
-    return _evaluate("availability", goal=declared_available_capabilities(goal),
-        runtime=normalize_required_capabilities(available), agent=state)
+    # Resolve from the same scoped owner as quota, with the successfully read
+    # state supplied explicitly; an unavailable permission source cannot fall
+    # back to an inherited grant for provider IO.
+    return resolve_agent_capabilities(status_payload={"registry": str(registry_path),
+        "runtime_root": str(runtime_root)}, goal_id=goal_id,
+        agent_identity={"agent_id": agent_id}, item=goal, project_asset={},
+        available=available, state=state)
 
 
 def turn_start_hook(*, registry_path: Path, runtime_root: Path, goal_id: str,
@@ -67,7 +71,7 @@ def turn_start_hook(*, registry_path: Path, runtime_root: Path, goal_id: str,
     def produce() -> dict[str, Any]:
         base = {
             "schema_version": TURN_START_HOOK_RESULT_SCHEMA_VERSION,
-            "hook_id": HOOK_ID, "capability_id": "issue-fix", "phase": "turn_start",
+            "hook_id": PR_WAIT_OBSERVATION_HOOK_ID, "capability_id": "issue-fix", "phase": "turn_start",
             "status": "not_applicable", "observation_count": 0,
             "agent_read_required": False, "external_reads_performed": False,
             "external_writes_performed": False, "local_private_state_mutated": False,
@@ -127,6 +131,6 @@ def turn_start_hook(*, registry_path: Path, runtime_root: Path, goal_id: str,
                 "local_private_state_mutated": written, "error_code": error,
                 "readback": _bounded_readback(readback)}
 
-    return TurnStartHookRegistration(hook_id=HOOK_ID, capability_id="issue-fix",
+    return TurnStartHookRegistration(hook_id=PR_WAIT_OBSERVATION_HOOK_ID, capability_id="issue-fix",
         requested_read_scope=("goal_agent_registration", "canonical_todos", "github_pr_metadata", "goal_event_log"),
         requested_write_scope=("goal_event_log",), producer=produce, max_result_bytes=64 * 1024)

@@ -186,7 +186,7 @@ def handle_turn_command(
                 turn_start_hook_dispatch = extend_cadence_turn_start_dispatch(
                     turn_start_hook_dispatch, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=args.goal_id, agent_id=args.agent_id)
-                from ..control_plane.capabilities.turn_start import (
+                from ..capabilities.turn_start import (
                     extend_turn_start_dispatch as extend_registered_capabilities,
                 )
 
@@ -316,7 +316,7 @@ def handle_turn_command(
                 # never run its command as an arbitrary host/shell adapter.
                 payload.update(mode="run_once", status="capability_action_required",
                                execute=bool(args.execute), executed=False)
-                from ..control_plane.capabilities.turn_start import attach_turn_start_effects
+                from ..capabilities.turn_start import attach_turn_start_effects
                 attach_turn_start_effects(payload, turn_start_hook_dispatch)
                 print_payload(payload, output_format(args), _render_loopx_turn_plan_markdown)
                 return 0
@@ -344,7 +344,7 @@ def handle_turn_command(
         payload = build_turn_error_payload(
             payload, exc, turn_command=args.turn_command,
         )
-    from ..control_plane.capabilities.turn_start import attach_turn_start_effects
+    from ..capabilities.turn_start import attach_turn_start_effects
     attach_turn_start_effects(payload, turn_start_hook_dispatch)
     renderer = (
         _render_loopx_turn_execution_markdown

@@ -73,7 +73,7 @@ def test_provider_shape_mismatch_is_not_misclassified_as_empty() -> None:
     # Validation happens after the provider was invoked. An invalid response
     # cannot certify that its declared local effects did not occur.
     assert dispatch["uncertain_local_effects"] is True
-    from loopx.control_plane.capabilities.turn_start import attach_turn_start_effects
+    from loopx.capabilities.turn_start import attach_turn_start_effects
     from loopx.cli_commands.turn_rendering import render_loopx_turn_plan_markdown
 
     payload = {"ok": True, "effects": {"state_written": False}, "boundary": {"read_only": True}}

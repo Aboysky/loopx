@@ -10,7 +10,7 @@ import pytest
 
 from loopx.capabilities.issue_fix import pr_lifecycle, pr_wait_reconcile
 from loopx.control_plane.agents.capability_memory import agent_capability_memory
-from loopx.control_plane.capabilities.turn_start import extend_turn_start_dispatch
+from loopx.capabilities.turn_start import extend_turn_start_dispatch
 from loopx.heartbeat_prequota import run_heartbeat_pre_quota
 from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from loopx.todos import add_goal_todo, list_goal_todos

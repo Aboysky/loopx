@@ -6,7 +6,7 @@ from typing import Any
 from .capabilities.issue_fix.pr_gate_reconcile import (
     reconcile_acknowledged_issue_fix_pr_reviews,
 )
-from .control_plane.capabilities.turn_start import extend_turn_start_dispatch
+from .capabilities.turn_start import extend_turn_start_dispatch
 from .history import load_registry
 from .paths import resolve_runtime_root
 
