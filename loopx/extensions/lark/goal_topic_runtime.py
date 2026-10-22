@@ -43,6 +43,7 @@ from .goal_channel_contracts import (
     normalize_lark_topic_event_rejection_reason,
 )
 from .goal_channel_targets import goal_channel_target_for_name
+from .goal_channel_transport import record_event_timing
 from .goal_topic_connections import decide_lark_topic_event
 from .goal_topic_dispatch import ProfileEventDispatch
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
@@ -65,13 +66,11 @@ from .manager_context import (
     sync_manager_context,
 )
 from .manager_reply_parts import (
-    deliver_manager_reply_after_length_failure,
-    manager_part_delivery_pending_result,
     manager_part_delivery_readback,
 )
 from .manager_reply_format import repair_manager_reply_text
 from .private_json import write_private_json_atomic
-from .outbound import LarkOutboundTextError, safe_lark_plain_text_fallback
+from .outbound import LarkOutboundTextError, present_lark_conversation_text
 from .inbox_reactions import (
     _create_reaction,
     _delete_reaction,
@@ -372,6 +371,23 @@ def _profile_event_lane(
 ) -> tuple[str, ...]:
     """Only serialize transport work; actual ingress re-reads its authority."""
 
+    private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
+    if isinstance(private_config, Mapping):
+        from .conversation_identity import lark_private_source
+
+        try:
+            source = lark_private_source(
+                provider_ref=private_config["provider_ref"], event=event
+            )
+        except (KeyError, TypeError, ValueError):
+            pass  # Malformed hints retain the conservative unmatched lane.
+        else:
+            # Native profiles bypass legacy Goal routing at admission too.
+            # Use the same App/chat/topic (or private sender) source shape for
+            # scheduling, never a grant or a persisted Session selection. Core
+            # still verifies the provider and acquires its fresh source fence.
+            return ("private." + source["source_ref"],)
+
     scoped, _status = _profile_event_route(
         profile=profile, snapshot=snapshot, event=event
     )
@@ -622,9 +638,14 @@ def stream_lark_goal_topic_profile(
     def handle_event(line: str) -> None:
         nonlocal event_count, replied_count, provider_ready
 
+        event = _event_payloads(line)[0]
+        message_id = str(event.get("message_id") or "")
+        record_event_timing(profile, message_id, "dispatch_started")
+        current_snapshot = snapshot_provider()
+        record_event_timing(profile, message_id, "dispatch_snapshot_ready")
         result = poll_lark_goal_topic_profile_once(
             profile=profile,
-            snapshot=snapshot_provider(),
+            snapshot=current_snapshot,
             runtime_root=runtime_root,
             answer=answer,
             consume_runner=lambda _args, payload=line: {
@@ -637,6 +658,7 @@ def stream_lark_goal_topic_profile(
             proposal_deliverer=proposal_deliverer,
             private_admitter=private_admitter,
         )
+        record_event_timing(profile, message_id, "dispatch_returned")
         with result_lock:
             failed = dispatch.failed
             if int(result.get("event_count") or 0) and not provider_ready:
@@ -711,12 +733,15 @@ def stream_lark_goal_topic_profile(
             # Batch-shaped provider records are split before scheduling, so an
             # unrelated conversation in a batch can progress independently too.
             for event in _event_payloads(line):
+                message_id = str(event.get("message_id") or "")
+                record_event_timing(profile, message_id, "received")
                 lane = _profile_event_lane(
                     profile=profile,
                     snapshot=snapshot_provider(),
                     event=event,
                     runtime_root=runtime_root,
                 )
+                record_event_timing(profile, message_id, "lane_ready")
                 if not dispatch.submit(lane, json.dumps(event, ensure_ascii=False)):
                     break
         stream_failed = False
@@ -1374,6 +1399,7 @@ def _process_lark_goal_topic_event(
         # owning unsafe markup, and a repaired markdown answer stays markdown
         # instead of degrading to plain text.
         reply_text, rich_text_repairs = repair_manager_reply_text(reply_text)
+        reply_text = present_lark_conversation_text(reply_text)
     if manager and delivery_state is None:
         assert delivery_path is not None
         delivery_state = _pending_manager_delivery(
@@ -1441,83 +1467,27 @@ def _process_lark_goal_topic_event(
                 content_format=content_format,
                 execute=True,
                 runner=reply_runner,
-                # A manager answer is bounded by the provider's request limit,
-                # not by the compact notification length: one answer is one
-                # message, and the bounded part sequence is the fallback for a
-                # body the provider itself cannot take.
+                # Ordinary answers use the provider capacity. The shared Inbox
+                # sender splits oversized rich replies without a text downgrade.
                 short_message_limit=None,
             )
         except LarkOutboundTextError:
             if not manager:
                 raise
-            # The rich body did not fit. Degrade presentation first, then split
-            # the degraded body: a persisted manager answer must be delivered in
-            # bounded parts instead of becoming `format_unrepresentable` with
-            # nothing on the channel.
-            try:
-                reply_text = safe_lark_plain_text_fallback(reply_text)
-                content_format = "text"
-                assert delivery_state is not None and delivery_path is not None
-                delivery_state.update(
-                    delivery_text=reply_text,
-                    delivery_digest=_manager_delivery_text_digest(reply_text),
-                    content_format=content_format,
-                    format_degraded=True,
-                    attempt_count=int(delivery_state.get("attempt_count") or 0) + 1,
-                    updated_at=datetime.now(timezone.utc).isoformat(),
-                )
-                _write_manager_delivery(delivery_path, delivery_state)
-                try:
-                    reply = reply_lark_event_inbox(
-                        project=root,
-                        config_path=config_path,
-                        message_id=message_id,
-                        text=reply_text,
-                        content_format=content_format,
-                        execute=True,
-                        runner=reply_runner,
-                    )
-                except LarkOutboundTextError:
-                    if not reply_text.strip():
-                        raise
-                    part_reply, part_failure = (
-                        deliver_manager_reply_after_length_failure(
-                            reply_text=reply_text,
-                            delivery_state=delivery_state,
-                            delivery_path=delivery_path,
-                            write_delivery=_write_manager_delivery,
-                            reply_runner=reply_runner,
-                            root=root,
-                            config_path=config_path,
-                            message_id=message_id,
-                        )
-                    )
-                    if part_failure:
-                        return manager_part_delivery_pending_result(
-                            reason=part_failure,
-                            delivery_state=delivery_state,
-                            goal_id=route["goal_id"],
-                            inbox_config_ref=config_ref,
-                        )
-                    reply = part_reply
-            except (LarkOutboundTextError, ValueError):
-                assert delivery_state is not None and delivery_path is not None
-                delivery_state.update(
-                    last_delivery_status="format_unrepresentable",
-                    updated_at=datetime.now(timezone.utc).isoformat(),
-                )
-                _write_manager_delivery(delivery_path, delivery_state)
-                return {
-                    "ok": False,
-                    "status": "reply_delivery_pending",
-                    "reason": "reply_format_invalid",
-                    "format_degraded": bool(delivery_state.get("format_degraded")),
-                    "goal_id": route["goal_id"],
-                    "inbox_config_ref": config_ref,
-                    "source_acknowledged": False,
-                }
+            # Length is handled by the shared rich-post splitter. Invalid
+            # presentation remains an explicit failure, never a text downgrade.
+            assert delivery_state is not None and delivery_path is not None
+            delivery_state.update(last_delivery_status="format_unrepresentable",
+                updated_at=datetime.now(timezone.utc).isoformat())
+            _write_manager_delivery(delivery_path, delivery_state)
+            return {"ok": False, "status": "reply_delivery_pending",
+                "reason": "reply_format_invalid", "format_degraded": False,
+                "goal_id": route["goal_id"], "inbox_config_ref": config_ref,
+                "source_acknowledged": False}
     if manager and reply.get("content_format") in {"markdown", "text"}:
         content_format = str(reply["content_format"])
+    if manager and delivery_state is not None:
+        delivery_state.update(manager_part_delivery_readback(reply))
     if not reply.get("ok"):
         if manager:
             assert delivery_state is not None and delivery_path is not None
@@ -1543,6 +1513,8 @@ def _process_lark_goal_topic_event(
                     "rich_text_repairs": list(
                         (delivery_state or {}).get("rich_text_repairs") or []
                     ),
+                    **manager_part_delivery_readback(reply),
+                    "delivery_notice_sent": reply.get("delivery_notice_sent") is True,
                 }
                 if manager
                 else {}

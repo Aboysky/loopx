@@ -249,10 +249,8 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                 # fact as a warning, so a fresh install is not a failed source.
                 allow_missing_registry=True,
                 runtime_root_override=self.server.runtime_root_override,
-                scan_roots=self.server.scan_roots,
                 limit=self.server.limit,
                 goal_id=goal_id,
-                include_public_boundary_scan=False,
                 include_zcode_goal_eligibility=not delivery_review,
                 include_task_graph=delivery_review,
                 activation_state_filter=activation_state_filter,
@@ -282,7 +280,9 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                 }
                 if linked is None:
                     attach_host_thread_activity(
-                        projection, observers=codex_thread_observers()
+                        projection, observers=codex_thread_observers(
+                            cache_root=self.server.runtime_root / "observation-cache" / "codex-activity",
+                        )
                     )
                     attach_host_delivery_windows(
                         projection,

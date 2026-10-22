@@ -187,16 +187,25 @@ def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
     # Default: one Goal that declares completion ends the worker (no continuation).
     calls = []
     def one_round(suffix, timeout):
-        calls.append((suffix, timeout)); tick(100); return "complete"
+        calls.append((suffix, timeout))
+        tick(100)
+        return "complete"
     assert native_goal_rounds(one_round, budget_seconds=1000, continue_after_complete=False, clock=lambda: clock[0]) == (1, "complete")
     assert calls == [("", 1000)]
     # Opt-in: completed Goals are followed by continuation Goals until the reserve.
-    clock[0] = 0; calls.clear()
+    clock[0] = 0
+    calls.clear()
     def completing(suffix, timeout):
-        calls.append(suffix[:40]); tick(400); return "complete"
+        calls.append(suffix)
+        tick(400)
+        return "complete"
     rounds, outcome = native_goal_rounds(completing, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0], reserve_seconds=300)
     assert (rounds, outcome) == (2, "complete")
     assert calls[0] == "" and calls[1].startswith("\n\nContinuation 1")
+    assert "600 seconds remain" in calls[1]
+    assert "original task under its existing requirements and evaluation rules" in calls[1]
+    assert "not by a prior improvement claim" in calls[1]
+    assert "submit only if it improves" not in calls[1]
     # A Goal still active at the budget edge is normal exhaustion, not a failure.
     clock[0] = 0
     def never_ends(suffix, timeout):
@@ -204,7 +213,7 @@ def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
     assert native_goal_rounds(never_ends, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "budget_exhausted")
     # A non-complete terminal status stops without continuation.
     clock[0] = 0
-    assert native_goal_rounds(lambda s, t: "cancelled", budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "stopped")
+    assert native_goal_rounds(lambda s, t: "cancelled", budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "cancelled")
 
 
 def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_copies(
@@ -229,6 +238,104 @@ def test_process_failure_is_not_reported_as_success(tmp_path):
     receipt = run_once(env)
     assert receipt["ok"] is False
     assert receipt["return_code"] == 7
+
+
+@pytest.mark.parametrize("code,expected", [("insufficient_quota", "quota_exhausted"),
+                                           ("model_at_capacity", "provider_capacity"),
+                                           ("unrecognized", "unknown")])
+def test_heartbeat_real_native_process_preserves_content_free_host_failure(tmp_path, monkeypatch, code, expected):
+    import benchmark.runtime.worker as worker
+    from tests.control_plane.test_benchmark_current_admission import _environment
+
+    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    event = {"type": "turn.failed", "error": {"code": code, "message": "PRIVATE-SENTINEL"}}
+    Path(env["CODEX_BIN"]).write_text(
+        f"#!{sys.executable}\nimport json,sys\n"
+        "print(json.dumps({'type':'thread.started','thread_id':'session-a'}))\n"
+        f"print(json.dumps({event!r}))\n"
+        "sys.stdin.read();sys.exit(1)\n")
+    receipt = run_once(env)
+    assert receipt["ok"] is False and receipt["return_code"] == 1
+    assert receipt["host_failure"]["kind"] == expected
+    assert "PRIVATE-SENTINEL" not in json.dumps(receipt)
+
+
+def test_host_retry_session_mismatch_refuses_native_process(tmp_path, monkeypatch):
+    import benchmark.runtime.worker as worker
+    import benchmark.runtime.sessions as sessions
+
+    env = worker_env(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    env.update(LOOPX_EXECUTION_MODE="heartbeat", LOOPX_SHARED_SKILLS=str(skills),
+               LOOPX_HOST_RETRY_SESSION_ID="original-session")
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    class Session:
+        session_id = "replacement-session"
+        def __init__(self, *a):
+            pass
+        def observe(self, path):
+            assert not path.exists()
+    monkeypatch.setattr(sessions, "BenchmarkSessionWake", Session)
+    with pytest.raises(ValueError, match="original Codex session"):
+        run_once(env)
+    assert not list((tmp_path / "logs/wakes").glob("*/stdout.jsonl"))
+
+
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_native_heartbeat_retry_uses_real_session_owner(tmp_path, monkeypatch, context):
+    from tests.control_plane.test_benchmark_current_admission import _environment
+    import benchmark.runtime.worker as worker
+
+    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    env["LOOPX_ITERATION_CONTEXT"] = context
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    arguments = tmp_path / "native-calls.jsonl"
+    Path(env["CODEX_BIN"]).write_text(f"#!{sys.executable}\n" + f"""
+import json,pathlib,sys
+with pathlib.Path({str(arguments)!r}).open('a') as log:
+    log.write(json.dumps(sys.argv[1:])+'\\n')
+print(json.dumps({{'type':'thread.started','thread_id':'original-native'}}))
+resuming = 'resume' in sys.argv
+print(json.dumps({{'type':'turn.completed'}} if resuming else
+                 {{'type':'turn.failed','error':{{'code':'model_at_capacity'}}}}))
+sys.stdin.read()
+sys.exit(0 if resuming else 1)
+""")
+    first = run_once(env)
+    assert first["host_failure"]["kind"] == "provider_capacity"
+    assert first["session"]["session_id"] == "original-native"
+    second = run_once({**env, "LOOPX_HOST_RETRY_SESSION_ID": "original-native"})
+    assert second["ok"] and second["session"]["action"] == "resume"
+    calls = [json.loads(line) for line in arguments.read_text().splitlines()]
+    assert "resume" not in calls[0]
+    assert calls[1][calls[1].index("resume") + 1:].count("original-native") == 1
+    # A valid but different expected binding cannot fork or invoke the Host.
+    with pytest.raises(ValueError, match="original Codex session"):
+        run_once({**env, "LOOPX_HOST_RETRY_SESSION_ID": "different-native"})
+    assert len(arguments.read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("tail", ['{"type":', '[]', '\ufffd', 'x' * 1_048_577])
+def test_partial_native_exchange_stays_unknown_even_after_transient_error(tmp_path, tail):
+    from benchmark.runtime.worker import heartbeat_host_failure
+    event = {"type": "turn.failed", "error": {"code": "model_at_capacity"}}
+    (tmp_path / "stdout.jsonl").write_text(json.dumps(event) + "\n" + tail)
+    (tmp_path / "stderr.log").write_text("")
+    failure = heartbeat_host_failure(tmp_path, {"ok": False})
+    assert failure["kind"] == "unknown" and failure["retryable"] is False
+
+
+def test_native_scheduler_enables_host_failure_guard_only_on_heartbeat():
+    from benchmark.runtime.scheduler import worker_command
+    base = {"LOOPX_CLI": "loopx", "LOOPX_REGISTRY": "/synthetic/registry.json",
+            "LOOPX_RUNTIME_ROOT": "/synthetic/runtime", "LOOPX_GOAL_ID": "goal",
+            "LOOPX_AGENT_ID": "agent"}
+    for mode in ["plain", "native-goal", "turn", "heartbeat"]:
+        args = worker_command({**base, "LOOPX_EXECUTION_MODE": mode}, python="python",
+                              source="/synthetic/source", state_file="/synthetic/state.json", host_timeout=100)
+        assert ("--wake-host-failure" in args) is (mode == "heartbeat")
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX worker resource inheritance")
@@ -532,7 +639,7 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
         # launching a model or mutating any active project.
         build_parser().parse_args(args)
         calls.append(args)
-        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value}}}
+        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value, "planning_horizon_goal": True}}}
 
     monkeypatch.setattr(agent, "_write_task_document", write_task)
     monkeypatch.setattr(agent, "_registry_exists", registry_exists)
@@ -549,7 +656,8 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
     configured = [args for args in calls if option in args]
     assert configured and all(args[args.index(option) + 1] == str(value)
                               for args in configured)
-    assert agent._replan_receipt() == {field: value}
+    assert agent._replan_receipt() == {field: value, "planning_horizon_goal": True}
+    assert all("--execution-planning-horizon-goal" in args for args in configured)
 
 
 def test_requested_stride_requires_configuration_readback_before_execution(tmp_path, monkeypatch):
@@ -567,7 +675,7 @@ def test_requested_stride_requires_configuration_readback_before_execution(tmp_p
 
     async def wrong_strategy(*args, **kwargs):
         return {"after": {"execution_profile": {
-            "replan_after_effective_turns": 6, "stride_strategy": "off",
+            "replan_after_effective_turns": 6, "stride_strategy": "off", "planning_horizon_goal": True,
         }}}
 
     monkeypatch.setattr(agent, "_registry_exists", prepared)
@@ -955,7 +1063,7 @@ raise SystemExit(1)
             extra_env={"FAKE_DIE": "1"})
 
 
-@pytest.mark.parametrize("requested,actual", [(True, False), (False, True), (None, True)])
+@pytest.mark.parametrize("requested,actual", [(True, False), (False, True), (None, False), (None, None), (None, 1)])
 def test_horizon_setting_must_match_restored_goal_before_work(tmp_path, monkeypatch, requested, actual):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex

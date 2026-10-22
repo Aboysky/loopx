@@ -11,6 +11,14 @@ use std::{
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+#[cfg(test)]
+#[path = "maintenance_transfer_tests.rs"]
+mod transfer_tests;
+
+#[cfg(test)]
+#[path = "maintenance_check_tests.rs"]
+mod check_tests;
+
 #[derive(Default)]
 pub struct Maintenance {
     busy: AtomicBool,
@@ -60,19 +68,27 @@ impl RuntimeRetry {
     }
 }
 impl Maintenance {
-    fn status_snapshot(&self) -> Value {
+    fn startup_snapshot(&self) -> Value {
         if self.incomplete_app_installation.load(Ordering::Acquire) {
             json!({"phase":"error", "details":{"code":"app_install_incomplete"}})
         } else {
-            let snapshot = self.snapshot.lock().unwrap().clone();
-            if snapshot["phase"] == "ready" && !self.busy.load(Ordering::Acquire) {
-                let background = self.background_update.lock().unwrap();
-                if !background.snapshot.is_null() {
-                    return background.snapshot.clone();
-                }
-            }
-            snapshot
+            self.snapshot.lock().unwrap().clone()
         }
+    }
+
+    fn status_snapshot(&self) -> Value {
+        let snapshot = self.startup_snapshot();
+        if !self.incomplete_app_installation.load(Ordering::Acquire)
+            && !self.busy.load(Ordering::Acquire)
+            && !self.manual_failure_pending.load(Ordering::Acquire)
+            && snapshot["phase"] != "restart_required"
+        {
+            let background = self.background_update.lock().unwrap();
+            if !background.snapshot.is_null() {
+                return background.snapshot.clone();
+            }
+        }
+        snapshot
     }
 
     fn admit_background_update(&self) -> Option<u64> {
@@ -90,6 +106,10 @@ impl Maintenance {
 
     fn cancel_background_update(&self) {
         self.automatic_update_checked.store(true, Ordering::Release);
+        self.supersede_update_observation();
+    }
+
+    fn supersede_update_observation(&self) {
         let mut background = self.background_update.lock().unwrap();
         background.generation += 1;
         background.snapshot = Value::Null;
@@ -146,6 +166,79 @@ impl Maintenance {
             self.publish_background(generation, "error", json!({"code":error,"channel":channel}));
         }
         result
+    }
+
+    async fn run_manual_check<T>(
+        &self,
+        channel: &str,
+        check: impl std::future::Future<Output = Result<Option<T>, String>>,
+        accept: impl FnOnce(Option<T>) -> Value,
+    ) -> Result<Value, String> {
+        let generation = {
+            // Reserve only admission. A read of the feed must not own service
+            // supervision or keep a qualified local workspace from starting.
+            // Wait for an existing install/start without reserving busy; the
+            // cancellation fence is changed only after that owner releases.
+            let _supervision = self.supervision.lock().await;
+            let _reservation = self.acquire()?;
+            allow_action(
+                self.snapshot.lock().unwrap()["phase"]
+                    .as_str()
+                    .unwrap_or("idle"),
+                "check",
+            )?;
+            self.cancel_background_update();
+            self.manual_failure_pending.store(false, Ordering::Release);
+            *self.pending.lock().unwrap() = None;
+            let mut background = self.background_update.lock().unwrap();
+            background.snapshot = json!({"phase":"checking","details":{
+                "channel":channel,"background":true
+            }});
+            background.generation
+        };
+        let result = check.await;
+        let mut background = self.background_update.lock().unwrap();
+        if background.generation != generation {
+            // A newer check or mutation owns the result. In particular a late
+            // feed must not replace the candidate selected by a newer action.
+            drop(background);
+            return Ok(self.status_snapshot());
+        }
+        match result {
+            Ok(update) => {
+                let phase = if update.is_some() {
+                    "available"
+                } else {
+                    "up_to_date"
+                };
+                // Candidate admission and its visible result share the same
+                // cancellation fence. This callback does no IO.
+                let mut details = accept(update);
+                details["background"] = true.into();
+                let value = json!({"phase":phase,"details":details});
+                background.snapshot = value.clone();
+                Ok(value)
+            }
+            Err(error) => {
+                let value = json!({"phase":"error","details":{
+                    "code":error,"channel":channel,"background":true
+                }});
+                *self.last_failure.lock().unwrap() = value.clone();
+                background.snapshot = value;
+                Err(error)
+            }
+        }
+    }
+
+    fn accept_checked_update(
+        &self,
+        channel: &str,
+        current_version: &str,
+        update: Option<Update>,
+    ) -> Value {
+        let details = json!({"channel":channel,"version":update.as_ref().map(|v| &v.version),"current_version":current_version});
+        *self.pending.lock().unwrap() = update.map(|update| (channel.to_owned(), update));
+        details
     }
 
     // Only a completed native replacement/verified restore can retire this
@@ -398,6 +491,21 @@ fn check_error(error: tauri_plugin_updater::Error) -> &'static str {
         _ => "update_check_failed",
     }
 }
+
+fn download_error(error: tauri_plugin_updater::Error) -> &'static str {
+    use tauri_plugin_updater::Error;
+    match error {
+        Error::Reqwest(error) if error.is_timeout() => "update_download_timeout",
+        Error::Reqwest(_) => "update_network_failed",
+        // The pinned updater uses Network for a non-success archive response.
+        // Do not expose its URL/status message or mislabel it as a bad signature.
+        Error::Network(_) => "update_download_failed",
+        Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
+            "update_signature_invalid"
+        }
+        _ => "update_download_or_signature_failed",
+    }
+}
 // Environment telemetry for the recovery diagnostics: coarse, non-PII facts
 // that separate "fresh Mac without a usable Python" from OS-specific defects.
 // No paths, environment variables or process output beyond the probed version.
@@ -476,8 +584,9 @@ pub fn desktop_update_status(app: AppHandle, state: State<'_, Maintenance>) -> V
     // Read mutable transaction state after the potentially blocking
     // diagnostics so this response cannot revive a superseded phase.
     let snapshot = state.status_snapshot();
+    let startup_state = state.startup_snapshot();
     let last_failure = state.last_failure.lock().unwrap().clone();
-    json!({"state": snapshot, "startup": startup, "last_failure": last_failure, "app_version": app_version, "runtime": runtime, "runtime_selection": runtime_selection, "rollback_available": rollback_available, "environment": environment})
+    json!({"state": snapshot, "startup_state": startup_state, "startup": startup, "last_failure": last_failure, "app_version": app_version, "runtime": runtime, "runtime_selection": runtime_selection, "rollback_available": rollback_available, "environment": environment})
 }
 #[tauri::command]
 pub async fn desktop_update(
@@ -502,6 +611,23 @@ pub async fn desktop_update(
         return Err("invalid_update_action".into());
     }
     let state = app.state::<Maintenance>();
+    if action == "check" {
+        // Keep the manual feed's existing deadline, independently of local
+        // service startup and the background archive transfer policy.
+        return state
+            .run_manual_check(
+                &channel,
+                find_update(&app, &channel, url, Duration::from_secs(45)),
+                |update| {
+                    state.accept_checked_update(
+                        &channel,
+                        &app.package_info().version.to_string(),
+                        update,
+                    )
+                },
+            )
+            .await;
+    }
     let _guard = state.acquire()?;
     state.cancel_background_update();
     // An explicit action takes priority over the next retry, while awaiting
@@ -520,8 +646,6 @@ pub async fn desktop_update(
         app.restart();
     }
     state.manual_failure_pending.store(false, Ordering::Release);
-    // A user-requested check may cross a slow release-feed redirect. It is
-    // asynchronous and should not inherit the optional startup check's budget.
     let outcome = perform(&app, &action, &channel, url, Duration::from_secs(45)).await;
     if let Err(error) = &outcome {
         state.publish_manual_failure(error, &channel);
@@ -529,8 +653,8 @@ pub async fn desktop_update(
     outcome
 }
 impl Maintenance {
-    // Keep a failed user operation and its retry controls until the next
-    // explicit action. An automatic feed failure still permits startup.
+    // Keep a failed install/recovery operation until the next explicit action.
+    // Feed reads use the independent nonblocking observation instead.
     fn publish_manual_failure(&self, code: &str, channel: &str) -> Value {
         self.manual_failure_pending.store(true, Ordering::Release);
         self.publish_failure(code, channel)
@@ -595,20 +719,21 @@ async fn perform(
         return Ok(state.publish("connecting", json!({})));
     }
     if action == "check" {
+        // The explicit CLI upgrade still checks and replaces the App in its
+        // existing exclusive transaction, before any service can be started.
         state.publish("checking", json!({"channel":channel}));
         *state.pending.lock().unwrap() = None;
         let update = find_update(app, channel, url, check_timeout).await?;
-        let details = json!({"channel":channel,"version":update.as_ref().map(|v| &v.version),"current_version":app.package_info().version.to_string()});
+        // This is the exclusive CLI-upgrade path. Freeze its candidate before
+        // an older nonblocking manual read can overwrite the pending Update.
+        state.supersede_update_observation();
         let phase = if update.is_some() {
             "available"
         } else {
             "up_to_date"
         };
-        *state.pending.lock().unwrap() = update.map(|mut update| {
-            // A quick availability check must not become the download budget.
-            update.timeout = Some(Duration::from_secs(30));
-            (channel.to_string(), update)
-        });
+        let details =
+            state.accept_checked_update(channel, &app.package_info().version.to_string(), update);
         return Ok(state.publish(phase, details));
     }
     if action == "rollback" {
@@ -654,19 +779,14 @@ async fn perform(
     let bytes = if let Some(cached) = cached {
         cached.bytes
     } else {
-        update
-            .download(
-                |chunk, total| {
-                    received += chunk as u64;
-                    state.publish(
-                        "downloading",
-                        json!({"received":received,"total":total,"version":update.version}),
-                    );
-                },
-                || {},
-            )
-            .await
-            .map_err(|_| "update_download_or_signature_failed")?
+        download_update(&update, |chunk, total| {
+            received += chunk as u64;
+            state.publish(
+                "downloading",
+                json!({"received":received,"total":total,"version":update.version}),
+            );
+        })
+        .await?
     };
     let target = update.version.clone();
     install_verified_app(app, target, move || {
@@ -696,14 +816,37 @@ fn updater_public_key(app: &AppHandle) -> Result<&str, String> {
         .ok_or_else(|| "update_unavailable".into())
 }
 
-async fn find_update(
-    app: &AppHandle,
+async fn download_update(
+    update: &Update,
+    on_chunk: impl FnMut(usize, Option<u64>),
+) -> Result<Vec<u8>, String> {
+    let mut update = update.clone();
+    // A release archive can take minutes while making steady progress. Keep
+    // a finite overall bound, separate from the feed's short request deadline
+    // and the client's per-read idle deadline. Both manual and background
+    // callers still use the native updater's signature verification.
+    update.timeout = Some(Duration::from_secs(30 * 60));
+    update
+        .download(on_chunk, || {})
+        .await
+        .map_err(|error| download_error(error).into())
+}
+
+async fn find_update<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     channel: &str,
     url: tauri::Url,
     timeout: Duration,
 ) -> Result<Option<Update>, String> {
     let channel = channel.to_owned();
-    app.updater_builder()
+    // The native updater retains this callback for both check and download.
+    // Enable the archive-only policy after check completes, so its connection
+    // and idle limits cannot shorten the feed's own request deadline. Each
+    // returned Update (and its clones) retains only this request's marker.
+    let archive_client = std::sync::Arc::new(AtomicBool::new(false));
+    let configure_archive = archive_client.clone();
+    let update = app
+        .updater_builder()
         .version_comparator(move |current, remote| {
             crate::prepared_update::is_newer(
                 &current.to_string(),
@@ -714,11 +857,22 @@ async fn find_update(
         .endpoints(vec![url])
         .map_err(|_| "update_unavailable")?
         .timeout(timeout)
+        .configure_client(move |client| {
+            if configure_archive.load(Ordering::Acquire) {
+                client
+                    .connect_timeout(Duration::from_secs(10))
+                    .read_timeout(Duration::from_secs(30))
+            } else {
+                client
+            }
+        })
         .build()
         .map_err(|_| "update_unavailable")?
         .check()
         .await
-        .map_err(|error| check_error(error).to_string())
+        .map_err(|error| check_error(error).to_string())?;
+    archive_client.store(true, Ordering::Release);
+    Ok(update)
 }
 
 async fn install_verified_app(
@@ -1037,6 +1191,7 @@ fn automatic_app_update(app: &AppHandle) {
         // happens before any App-owned service exists, never during a Turn.
         #[cfg(target_os = "macos")]
         {
+            let state = &*state;
             let result = tauri::async_runtime::block_on(state.run_automatic_update(
                 channel,
                 async {
@@ -1048,6 +1203,7 @@ fn automatic_app_update(app: &AppHandle) {
                     )
                 },
                 |prepared| async move {
+                    state.supersede_update_observation();
                     let target = prepared.version;
                     let version = target.clone();
                     install_verified_app(app, target, move || {
@@ -1128,14 +1284,13 @@ pub fn start_background_update(app: &AppHandle) {
             async {
                 find_update(&handle, channel, endpoint(channel)?, Duration::from_secs(30)).await
             },
-            |mut update| async {
-                update.timeout = Some(Duration::from_secs(30));
+            |update| async {
                 let mut received = 0u64;
-                let bytes = update.download(|chunk, total| {
+                let bytes = download_update(&update, |chunk, total| {
                     received += chunk as u64;
                     state.publish_background(generation, "downloading",
                         json!({"channel":channel,"version":update.version,"received":received,"total":total}));
-                }, || {}).await.map_err(|_| "update_download_or_signature_failed")?;
+                }).await?;
                 let root = prepared_directory(&handle)?;
                 let app = handle.clone();
                 tauri::async_runtime::spawn_blocking(move || {
@@ -1237,7 +1392,6 @@ pub fn recover_services(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn completed_manual_choice_prevents_a_delayed_background_start() {
         let state = std::sync::Arc::new(Maintenance::default());

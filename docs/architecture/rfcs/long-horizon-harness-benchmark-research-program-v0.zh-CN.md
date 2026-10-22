@@ -946,6 +946,17 @@ heartbeat、Turn 和 Goal 执行，并保留原生验证。合成 Harbor conform
 阻塞状态，并披露独立的规划会话；合成任务通过不能证明与交互式 `$loopx` 启动
 等价，也不能证明规划效果提升。
 
+当前 adapter 提示边界将默认 native EdgeBench wrapper 收敛到任务、工具和评测
+context，并移除共享 benchmark 规划策略前缀。保留简短的目标与完成条件提示：
+持续进行有价值的优化；实现、测试通过和提交本身不代表目标完成。不再重复通用的
+停止、预算耗尽或 blocker 提醒；任务自身要求和 Core 首次交付契约保持不变；可选 native Goal
+续跑不再额外要求提交前先证明改进。Native 提交提示在周期采样间隔为正或为零时
+都不包含周期采样说明；原间隔配置、host 采样与选择行为不变。保留手动/终态提交、
+结果与源码身份绑定和可恢复性提示。
+Blind 与 best-only 提示按已解析的 runner 间隔保留自动采样说明，不扩大各模式声明的反馈范围。
+这是新 run 的行为变化，须独立于反馈模式固定版本。提示交付和读回只验证工程边界；能否更早
+获得有用反馈、能否改善结果，仍是尚未验证的 E3 研究问题。
+
 ### 11.3 必需的 delivery slice
 
 每个 benchmark engineering PR 或 contributor task 都应声明一个有界 slice，包含：
@@ -1124,7 +1135,7 @@ promotion 或修改 LoopX default。
 | 2026-08-16 | 以当前 DeepSWE pilot 驱动 LoopX benchmark capability 设计；legacy code/research 只作为复用候选，并加入结构化反作弊与 authority-parity qualification。 |
 | 2026-08-23 | 增加工程 readiness 阶梯与有界 delivery-slice 规则，将仓库建设与 C0--C4 研究主张分开跟踪。 |
 | 2026-08-25 | 把 StartupBench、LoopsBench 与 WideSearch 加入 benchmark primer 与集成计划，作为第二组互补 trio；每个 benchmark 必须在原生 metric space 报告，且 benchmark 材料不得进入可复用的 LoopX state。 |
-| 2026-10-16 | 将[反馈优先观察](../../../deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md)归入历史报告；运行器源码子集与配置投影修复仍属 E0/E1，混合处理、中断和进行中的观察不关闭 E2/E3，也不分离单一规划效应。通用 guard 重入放宽待受影响调用方独立验证。 |
+| 2026-10-16 | 将[反馈优先观察](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md)归入历史报告；运行器源码子集与配置投影修复仍属 E0/E1，混合处理、中断和进行中的观察不关闭 E2/E3，也不分离单一规划效应。通用 guard 重入放宽待受影响调用方独立验证。 |
 
 ## 18. 参考资料
 
@@ -1148,7 +1159,7 @@ promotion 或修改 LoopX default。
 - [WideSearch 数据集](https://huggingface.co/datasets/ByteDance-Seed/WideSearch)
 - [Benchmark 研究工作区](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md)
 - [DeepSWE 研究实践](https://github.com/huangruiteng/loopx/blob/main/benchmark/deepswe/README.md)
-- [旧 Benchmark 归档](https://github.com/huangruiteng/loopx/blob/main/deprecate/benchmark-legacy/README.md)
+- [旧 Benchmark 历史](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
 - [长程 Agent 分层步幅控制 v0](./hierarchical-agent-stride-control-v0.zh-CN.md)
 - [研究型探索控制面 v0](./research-exploration-control-plane-v0.zh-CN.md)
 - [Human Attention Wishlist v0](./human-attention-wishlist-v0.zh-CN.md)

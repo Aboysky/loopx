@@ -1035,6 +1035,24 @@ running the command from another repository or one of its subdirectories.
 LoopX 已安装的 canary catalog 仍从自身可信 release root 运行。因此该命令也可从其他
 仓库或其子目录执行。
 
+Binary images are outside the public-boundary **text** scan. Premerge lists
+each changed raster image in `selection_inputs.visual_review_paths` and the
+existing `manual_holds`, including image-only changes outside documentation
+directories. Text checks can pass while the overall gate remains
+`manual_review_required`; this does not certify image privacy or permit merge.
+Inspect the exact revision's pixels, embedded metadata and source in the
+existing PR review, and retain public-safe first-screen evidence in the PR
+description. Do not add another presentation-confirmation round. Unknown
+binary formats and unreadable text remain scan failures; SVG remains text.
+`loopx check` itself retains its explicit-file, fail-closed text contract.
+
+二进制图片不在公开边界的**文本**扫描覆盖内。Premerge 把每张变更的位图同时列入
+`selection_inputs.visual_review_paths` 和既有 `manual_holds`；只改图片、图片位于文档
+目录之外也一样。文本检查可以通过，但整体仍为 `manual_review_required`，不认证图片
+隐私、不允许据此合并。沿既有 PR 评审检查准确版本的画面、嵌入元数据和来源，PR 描述
+保留公开安全的首屏证据，无需新增首屏确认轮次。未知二进制和不可读文本仍导致扫描
+失败，SVG 仍按文本扫描。`loopx check` 的显式文件失败关闭文本契约保持不变。
+
 The complete public sweep remains explicit and bounded:
 
 ```bash
@@ -1304,6 +1322,46 @@ spending or provider permissions and does not rewrite original failures as passe
 本轮依据相同 main/候选和完整矩阵保留当前工作、验收、必读项及完整命令路由，
 仅修正已超过的展示回归预算。时钟与生成回执元数据不作逐字节一致声明；每 Todo
 和固定增长、重复度、生产性能诊断及执行配额边界不变，原失败仍按失败记录保留。
+
+The cumulative-outcome guidance added 523 authored characters on the same
+`contract-fixture` / `worker-a` prompt workload, comparing
+`74dd179c44ba06dfa3c621d978c41dcd9a2f46f3` with
+`b9e60c59f3c367a63755d97f4595d9c2eef91947`. It preserves original requirements,
+inline acceptance reuse, direct-user refinement, milestone evidence review,
+batch writeback, unmet-outcome replanning and root stop/budget authority. These
+are distinct consumer decisions, not redundant copies. All four visible-Goal
+hosts and all four heartbeat modes retain the same line counts. For example,
+the Codex Goal body grew from 3,152 to 3,675 characters; the full heartbeat's
+normalized body grew from 12,285 to 12,808, exceeding its old 12,640 allowance.
+That original failure remains a failure.
+
+The matched current workload also covers zero and 320-character authored profile
+scopes with Reward Memory both disabled and enabled. The following values are
+normalized body characters, not JSON size, UTF-8 bytes, model tokens or transport
+limits. Only the exceeded mode budgets change; generated instructions and command
+routes remain byte-identical across this budget repair.
+
+| Mode / memory | No scope / 320-character scope | Previous / qualified ceiling |
+| --- | --- | --- |
+| Full / disabled | 12,388 / 12,688 | 12,000 / 12,800 |
+| Full / enabled | 12,808 / 13,108 | 12,640 / 13,440 |
+| Compact / disabled | 7,231 / 7,531 | 7,200 / 7,600 |
+| Compact / enabled | 7,486 / 7,786 | 7,840 / 8,240 |
+| Brief / disabled | 4,985 / 5,285 | 4,800 / 5,400 |
+| Brief / enabled | 5,240 / 5,540 | 5,440 / 6,040 |
+
+The disabled base budgets leave 112 / 69 / 115 characters above the measured
+full / compact / brief maximum. The fixed, feature-scoped 640-character Reward
+Memory allowance remains unchanged. Thin budgets, envelope limits, normalization,
+and the visible Goal host's existing 4,000-character limit remain unchanged; its
+obsolete 3,300-character test expectation now follows that existing host limit.
+Exact-limit and one-character-over cases still distinguish valid and overflowing
+bodies. No prompt clause, execution permission, quota, experiment threshold or
+model-compliance requirement changes.
+
+累计成果指引在相同输入上增加 523 字符；本次保留完整指令，仅按默认及 320 字符
+profile、memory 关闭和开启的实测结果调整受影响的展示回归预算。原超限失败保留，
+正文与命令逐字节不变；thin、信封、Goal 宿主硬边界及执行/费用权限不变。
 
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;

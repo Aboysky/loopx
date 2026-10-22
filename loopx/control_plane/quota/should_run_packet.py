@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from .effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
 from .effect_program import ReceiptBoundReplayPhase
@@ -39,6 +40,7 @@ from ..agents.agent_scope_frontier import (
 from ..goals.goal_frontier import (
     AUTONOMOUS_REPLAN_REQUIRED_MODE,
 )
+from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..quota.decision_summary import (
     quota_decision_agent_id,
     refine_quota_recommended_action,
@@ -150,6 +152,27 @@ from ._supporting_projections import (
     _attach_truthy_fields,
     _dict_field,
 )
+
+
+def reference_duplicate_fallback_guidance(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reference a CLI-only mirror through the existing legacy packet owner."""
+    fallback = payload.get("blocked_priority_fallback")
+    recommendation = payload.get("heartbeat_recommendation")
+    if not isinstance(fallback, dict) or not isinstance(recommendation, dict):
+        return payload
+    mirror = recommendation.get("blocked_priority_fallback")
+    if not isinstance(mirror, dict):
+        return payload
+    # Compare JSON types too: Python equality conflates False with 0.
+    if mirror is not fallback and (
+        json.dumps(mirror, sort_keys=True, ensure_ascii=False)
+        != json.dumps(fallback, sort_keys=True, ensure_ascii=False)
+    ):
+        return payload
+    recommendation = dict(recommendation)
+    recommendation.pop("blocked_priority_fallback")
+    recommendation["blocked_priority_fallback_ref"] = "$.blocked_priority_fallback"
+    return {**payload, "heartbeat_recommendation": recommendation}
 
 
 def _interaction_runtime_root(
@@ -814,7 +837,7 @@ def _planning_projections(
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
         source_status=prepared.status_payload,
-        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", False),
+        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", DEFAULT_PLANNING_HORIZON_GOAL),
         replan_selection_context=(
             {
                 "has_turn_identity": bool(turn_instance_id),

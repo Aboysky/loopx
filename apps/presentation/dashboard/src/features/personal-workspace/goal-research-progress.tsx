@@ -83,7 +83,7 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
   </section>;
 }
 
-export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelect, onCitation}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; error: string; zh: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; zh: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
   const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
   const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 0}).format(n);
@@ -98,9 +98,6 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
       <p>{p?.selection.exhaustive ? (zh ? "仅覆盖声明的固定分析范围，不等于覆盖全部研究。" : "Covers the declared fixed analysis scope, not necessarily the whole study.") : p?.selection.population_episodes == null ? (zh ? "定向抽样，全程覆盖未知。" : "Purposive sample; whole-run coverage is unknown.") : (zh ? "定向抽样，不代表全程。" : "Purposive sample, not the whole run.")}</p>
       <p>{zh ? "原生测量缺失时保持未采集；分析器判读不能补成实际收益。完整取样规则与版本在“来源与用量”中。" : "Missing native measurements remain uncaptured; judgments cannot supply realized utility. Full selection rules and revisions are under Sources and usage."}</p>
     </ContextHelp></div>{p ? <p className="research-progress-scope" data-pack-id={p.pack_id}>{number(p.episode_count)} {zh ? "个片段" : "episodes"} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}{result ? (zh ? " · 未校准" : " · Uncalibrated") : ""}</p> : null}</div>{packs.length > 1 ? <label>{zh ? "评估范围" : "Evaluation scope"}<select value={selectedId} onChange={e => onSelect(e.target.value)}>{packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}</select></label> : null}</header>
-    {error ? <p className="research-progress-warning" role="alert">{p
-      ? (zh ? "无法核对本次来源；已显示的值仅为上次读回。" : "The source could not be refreshed. Displayed values are from the last readback.")
-      : (zh ? "所选来源暂不可读，未显示其他范围的结果。" : "The selected source could not be read. No result from another scope is shown.")} {error}</p> : null}
     {p ? <>
       {p.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史分析：来源或方法已变化，不能当作当前判断。" : "Historical analysis: the source or method changed; these are not current judgments."}</p> : null}
       {p.native_outcomes ? <RetainedImprovement native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
@@ -121,16 +118,28 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
                 {unavailable ? <span className="research-effect-verdict">{unavailable}</span> : null}
                 {notes.length ? <small>{notes.join(" · ")}</small> : null}
               </summary>
-              <div className="research-effect-evidence"><p>{label[zh ? 2 : 3]}</p>
-                {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
-                {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
-                {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
+              <div className="research-effect-evidence">
+                <div className="research-effect-help"><span>{zh ? "逐项判读" : "Episode judgments"}</span><ContextHelp label={`${label[zh ? 0 : 1]} · ${zh ? "判读口径" : "Interpretation"}`}>
+                  <p>{label[zh ? 2 : 3]}</p>
+                  {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
+                  {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
+                  {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
+                </ContextHelp></div>
                 {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episode.question}</li>)}</ul></div> : null}
-                {assessments.map(assessment => <article key={assessment.episode_id}>
-                  <h4>{p.episodes?.find(episode => episode.id === assessment.episode_id)?.question ?? assessment.episode_id}</h4>
-                  <span>{verdictLabel(metric, assessment.verdict, zh)}</span><p>{assessment.reason}</p>
-                  <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
-                </article>)}
+                <div className="research-assessments">{assessments.map(assessment => {
+                  const episode = p.episodes?.find(item => item.id === assessment.episode_id);
+                  // Use the declared identity, not a guessed title extracted
+                  // from the question. The complete source wording stays below.
+                  return <details className="research-assessment" key={assessment.episode_id}>
+                    <summary><span className="research-assessment-name">{assessment.episode_id}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
+                    <div className="research-assessment-body">
+                      {episode ? <><p className="research-assessment-question">{result.episode_questions?.find(q => q.episode_id === episode.id)?.question ?? episode.question}</p>
+                        {result.episode_questions ? <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><p>{episode.question}</p></details> : null}</> : null}
+                      <p>{assessment.reason}</p>
+                      <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
+                    </div>
+                  </details>;
+                })}</div>
                 {!row?.eligible ? <p>{zh ? "所选片段没有此指标的适用判读；未记作零。" : "No eligible judgment for this metric in the selected episodes; not recorded as zero."}</p> : null}
               </div>
             </details>;
@@ -166,6 +175,6 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
             <dt>{zh ? "覆盖边界" : "Coverage limits"}</dt><dd>{zh ? "仅本次完整捕获；继承前缀、设置、原生评测、操作者及后续未完成轮不包含。金额与全研究总成本未知。" : "This complete capture only. Inherited prefixes, setup, native evaluation, operator work and later incomplete Turns are excluded. Dollar and total study costs are unknown."}</dd>
           </dl></> : null}
       </section></details>
-    </> : !error ? <p role="status">{zh ? "正在核对此范围的分析来源…" : "Checking analysis sources for this scope…"}</p> : null}
+    </> : null}
   </section>;
 }

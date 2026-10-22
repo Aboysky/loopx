@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import {reportDownloadScenario} from "./personal-workspace-browser/report-download.mjs";
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
+import {completedHistoryIsolationScenario} from "./personal-workspace-browser/completed-history-isolation.mjs";
 import {researchWorkerReadbackScenario} from "./personal-workspace-browser/research-worker-readback.mjs";
 import { zcodeGoalScenario } from "./personal-workspace-browser/zcode-goal.mjs";
 import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
@@ -67,6 +69,7 @@ import { teamEvidenceScenario } from "./personal-workspace-browser/team-evidence
 import { taskInspectorReturnScenario } from "./personal-workspace-browser/task-inspector-return.mjs";
 import { managedGoalResultsScenario } from "./personal-workspace-browser/managed-goal-results.mjs";
 import { researchResultsScenario } from "./personal-workspace-browser/research-results.mjs";
+import { researchModeScenario } from "./personal-workspace-browser/research-mode.mjs";
 import { researchHistoryScenario } from "./personal-workspace-browser/research-history.mjs";
 import { loopxModeScenario } from "./personal-workspace-browser/loopx-mode.mjs";
 import { progressiveLoadingScenario } from "./personal-workspace-browser/progressive-loading.mjs";
@@ -96,6 +99,7 @@ import { conversationStartupScenario } from "./personal-workspace-browser/conver
 import { chatTodoProposalScenario } from "./personal-workspace-browser/chat-todo-proposal.mjs";
 
 const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario, chatTodoProposalScenario];
+scenarioCatalog.push(reportDownloadScenario);
 scenarioCatalog.push(confirmedOperationsScenario);
 scenarioCatalog.push(proposalReadbackScopeScenario);
 scenarioCatalog.push(goalDeletionScenario);
@@ -122,6 +126,7 @@ scenarioCatalog.push(researchHistoryScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);
+scenarioCatalog.push(researchModeScenario);
 scenarioCatalog.push(zcodeGoalScenario);
 scenarioCatalog.push(goalWorkspaceM2Scenario);
 scenarioCatalog.push(goalWorkspaceCreateScenario);
@@ -138,6 +143,7 @@ scenarioCatalog.push(firstGoalHomeLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
+scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

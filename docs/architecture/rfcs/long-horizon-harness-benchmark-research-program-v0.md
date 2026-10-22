@@ -1151,6 +1151,22 @@ Exact native session ID/history conformance qualifies continuity, not task
 quality or matched-budget gains; synthetic task success alone does not prove
 equivalence to interactive `$loopx` startup or planning effectiveness.
 
+The adapter prompt boundary now keeps default native EdgeBench wrappers focused
+on task, tool and evaluation context and removes the shared benchmark planning
+strategy prefix. A brief objective/completion reminder preserves useful continued
+optimization; implementation, checks and submission alone do not establish
+completion. It omits the generic stop/budget/blocker reminder; task-owned requirements
+and the Core first-delivery contract remain intact; optional native Goal
+continuation adds no prior-improvement submission requirement. Native submission
+prompts omit periodic sampling explanations for both positive and zero intervals;
+the configured interval and host capture/selection behavior are unchanged.
+Manual/terminal submission, result/source identity and recovery guidance remain.
+Blind and best-only prompts retain the automatic-capture observation using the
+resolved runner interval, without granting feedback beyond their declared modes.
+This is a new-run behavior change to pin independently
+of feedback mode. Prompt delivery/readback qualifies the engineering boundary;
+earlier useful feedback and outcome gains remain unqualified E3 study questions.
+
 ### 11.3 Required delivery slice
 
 Every benchmark engineering PR or contributor task should identify a bounded
@@ -1356,7 +1372,7 @@ This is a living research RFC, not a frozen benchmark snapshot.
 | 2026-08-16 | Make the current DeepSWE pilot the design-driving practice for the LoopX benchmark capability; treat legacy code/research as candidate reuse and add structured anti-cheating and authority-parity qualification. |
 | 2026-08-23 | Add an engineering readiness ladder and bounded delivery-slice rules so repository construction is tracked separately from C0--C4 research claims. |
 | 2026-08-25 | Add StartupBench, LoopsBench, and WideSearch to the benchmark primer and integration plan as a second, complementary trio; require native metrics per benchmark and keep benchmark material out of reusable LoopX state. |
-| 2026-10-16 | Archive [feedback-first observations](../../../deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md) separately from active practice. Runner source-subset and configuration-projection corrections remain E0/E1 work; mixed-profile, interrupted and running observations do not close E2/E3 or isolate a planning effect. General guard re-entry relaxation is deferred pending affected-caller validation. |
+| 2026-10-16 | Archive [feedback-first observations](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md) separately from active practice. Runner source-subset and configuration-projection corrections remain E0/E1 work; mixed-profile, interrupted and running observations do not close E2/E3 or isolate a planning effect. General guard re-entry relaxation is deferred pending affected-caller validation. |
 
 ## 18. References
 
@@ -1380,7 +1396,7 @@ This is a living research RFC, not a frozen benchmark snapshot.
 - [WideSearch dataset](https://huggingface.co/datasets/ByteDance-Seed/WideSearch)
 - [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md)
 - [DeepSWE research practice](https://github.com/huangruiteng/loopx/blob/main/benchmark/deepswe/README.md)
-- [Legacy benchmark archive](https://github.com/huangruiteng/loopx/blob/main/deprecate/benchmark-legacy/README.md)
+- [Legacy benchmark history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
 - [Hierarchical Agent Stride Control v0](./hierarchical-agent-stride-control-v0.md)
 - [Research Exploration Control Plane v0](./research-exploration-control-plane-v0.md)
 - [Human Attention Wishlist v0](./human-attention-wishlist-v0.md)

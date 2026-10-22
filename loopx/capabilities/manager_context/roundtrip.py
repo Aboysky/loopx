@@ -24,6 +24,7 @@ from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
 )
+from ...control_plane.collaboration.source_policy_fence import source_policy_fence
 from ...control_plane.projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
@@ -301,9 +302,7 @@ def _hold_return_source_fence(root, route, effects):
     # Match the grant writer through transcript/provider publication. Owner-only
     # returns stay independent of source policy and create no policy storage.
     if conversation_scope(route)["kind"] == "external_audience":
-        effects.enter_context(
-            exclusive_file_lock((_root(root) / "policy.json").with_suffix(".lock"))
-        )
+        effects.enter_context(source_policy_fence(_root(root) / "policy.json"))
 
 
 @contextmanager

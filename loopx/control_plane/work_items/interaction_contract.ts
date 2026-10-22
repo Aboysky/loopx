@@ -384,11 +384,22 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   const prefix = requireNonEmptyString(request.command_prefix, "command_prefix");
   const goalArg = shellQuote(goalId);
   const add = (command: string, source: string, reason: string) => {
-    if (!reads.some(read => read.command === command)) reads.push({command, source, reason, ordering: "before_work"});
+    const existing = reads.find(read => read.command === command);
+    if (!existing) {
+      reads.push({command, source, reason, ordering: "before_work"});
+      return;
+    }
+    // One command is one read, but it may carry multiple independently
+    // applicable obligations. Merge guidance without duplicating replay.
+    const current = typeof existing.reason === "string" ? existing.reason : "";
+    if (!current) existing.reason = reason;
+    else if (!current.includes(reason)) existing.reason = `${current} ${reason}`;
   };
   const stateFile = readArgument(request.goal_state_file, "goal_state_file");
   if (stateFile) add(`cat -- ${shellQuote(stateFile)}`, "goal_state",
     "Read complete Goal intent, acceptance and stops. Exact Todo reads own task state/claims. Source failure or changed requirements require a fresh guard; summaries cannot replace this read.");
+  if (request.goal_objective_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
+    "goal_acceptance", "Use the canonical goal_objective before the older source text. Only if your adoption is missing/stale, review your own work, reconcile Todo/Vision changes, then use adopt-objective with your Agent id, exact revision/digest, own objective_work_digest and review_summary. New execution is held until your adoption. Other peers adopt independently; existing Turn settlement/release remains available. Preserve root acceptance, permissions and stops. Adopt once per objective revision, never per Turn or work/peer update. Reuse complete inline context without extra reads/writes.");
   if (checksPresent || request.goal_outcomes_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
     "goal_acceptance", request.goal_outcomes_present === true ? "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard." : "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.");
   const todoId = hasReplan ? null : selectedWorkTodoId(request);
@@ -426,6 +437,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const pending: JsonObject[] = [], sources: JsonObject[] = [], failures: JsonObject[] = [];
   let selectedTodoRef = false;
   let selectedTodoAuthority: string | null = null;
+  let selectedTodoTextVerified = false;
   for (const value of request.required_reads) {
     const read = requireJsonObject(value, "required read");
     const matches = results.filter(result => result.command === read.command);
@@ -455,7 +467,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
         && sourceMatchesSelection;
     }
     if (valid && read.source === "goal_acceptance") {
-      valid = (!!configuredGoalChecks(jsonObject(content!.goal_acceptance_contract)) || !!jsonObject(content!.goal_acceptance_contract)?.outcome_requirements);
+      valid = (!!configuredGoalChecks(jsonObject(content!.goal_acceptance_contract)) || !!jsonObject(content!.goal_acceptance_contract)?.outcome_requirements || !!jsonObject(content!.goal_acceptance_contract)?.goal_objective);
     }
     if (!valid) {
       pending.push(read);
@@ -472,6 +484,12 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       // full read instead of guessing which prose is current Goal authority.
       pending.push(read);
     } else {
+      if (read.source === "selected_todo" && typeof selectedTodoRecord?.text === "string") {
+        // Bind completion to the admitted full source, before body deduplication
+        // or display compaction. Provider-wide revisions also change for notes
+        // and unrelated work; those do not replace this task's requirements.
+        selectedTodoTextVerified = true;
+      }
       if (read.source === "selected_todo" && typeof selected.text === "string"
           && selectedTodoRecord?.text === selected.text
           && selectedTodoRecord?.todo_id === selected.todo_id) {
@@ -518,6 +536,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const includeUserTodos = users && !users.error_code
     && (!Array.isArray(users.todos) || users.todos.length > 0 || users.authority_read != null);
   return {required_reads: pending, work_context: {complete: failures.length === 0,
+    ...(selectedTodoTextVerified ? {selected_todo_text_verified: true} : {}),
     ...(selectedTodoRef ? {selected_todo_ref: "selected_todo"} : {}),
     ...(selectedTodoAuthority ? {selected_todo_authority: selectedTodoAuthority} : {}),
     ...(sources.length ? {sources} : {}),
