@@ -91,6 +91,13 @@ try {
   await page.locator(".personal-goal-link").first().click();
   await page.getByRole("button", {name: "Overview", exact: true}).click();
   const outcomes = page.locator(".goal-outcomes");
+  const expandAll = async () => {
+    const more = outcomes.locator(":scope > .goal-outcomes-more");
+    if (await more.getAttribute("aria-expanded") === "false") await more.click();
+  };
+  await expandAll();
+  const openingGroup = outcomes.locator(".goal-outcome-status-group").filter({has: page.getByText("Retain the approved introduction", {exact: true})}).first();
+  if (await openingGroup.getAttribute("open") === null) await openingGroup.locator(":scope > summary").click();
   await outcomes.locator(".goal-overview-criteria").getByText("Retain the approved introduction", {exact: true}).waitFor();
   await firstDelivery;
   assert.ok(deliverySnapshot?.acceptance, "Retain the real initial delivery snapshot before advancing the native owner");
@@ -217,6 +224,7 @@ try {
       goal_ref: {goal_id: "product-launch", goal_instance_id: "instance-a"}}};
   await refresh.click();
   await text.waitFor({state: "hidden"});
+  await expandAll();
   await region.getByText("Add a requirement", {exact: true}).click();
   await text.fill("This pending requirement belongs to the original lifetime");
   rejectRefinement = true;
@@ -269,6 +277,7 @@ try {
     goal_ref: {goal_id: "product-launch", goal_instance_id: "instance-b"}}};
   await refresh.click();
   await text.waitFor({state: "hidden"});
+  await expandAll();
   await region.getByText("Add a requirement", {exact: true}).click();
   assert.equal(await text.inputValue(), "", "A reused Goal/outcome id cannot inherit another lifetime's pending request");
   assert.equal(await rebase.count(), 0, "The old request cannot be rebased into the successor lifetime");
@@ -295,6 +304,9 @@ try {
   await page.getByLabel("Select control plane source", {exact: true}).click();
   await page.getByRole("option", {name: "Remote snapshot", exact: true}).click();
   await page.getByRole("heading", {name: "Remote handoff workspace", exact: true}).waitFor();
+  await expandAll();
+  const remoteGroup = outcomes.locator(".goal-outcome-status-group").first();
+  if (await remoteGroup.getAttribute("open") === null) await remoteGroup.locator(":scope > summary").click();
   await outcomes.getByText("Only this remote source declaration", {exact: true}).waitFor();
   assert.equal(await outcomes.getByText(newOutcome.objective, {exact: true}).count(), 0,
     "The same Goal id in a remote source cannot consume the local acceptance cache");
