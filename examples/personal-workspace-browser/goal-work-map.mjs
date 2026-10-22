@@ -198,7 +198,12 @@ export const goalWorkMapScenario = {
       await page.getByRole("button", { name: /关闭详情/ }).click();
 
       limits = { omitted_node_count: 3, topology_complete: false };
-      await page.getByRole("button", { name: "刷新快照", exact: true }).click();
+      const evidence = page.locator(".goal-overview-evidence");
+      if (await evidence.getAttribute("open") === null) {
+        await evidence.locator(":scope > summary").focus();
+        await page.keyboard.press("Enter");
+      }
+      await evidence.getByRole("button", { name: "刷新快照", exact: true }).click();
       await map.getByText("部分工作未出现在此地图中。").waitFor();
       assert.equal(await page.locator("[role=alert]", { hasText: "工作区状态已在此快照之后变化" }).count(), 0);
       assert.ok(reads.length <= 4, `Delivery review re-read ${reads.length} times`);
