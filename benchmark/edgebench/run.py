@@ -1,4 +1,8 @@
-"""Launch one native EdgeBench trial; run the judge with native `sforge serve`."""
+"""Launch a native trial; start its judge with benchmark.edgebench.serve.
+
+CLI source options: --sforge-repository, --sforge-ref, --sforge-revision.
+Defaults and the experiment-local source lock are owned by edgebench.source.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +17,11 @@ import signal
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from benchmark.edgebench.source import active_source_receipt, bootstrap
+
+if __name__ == "__main__":
+    bootstrap()  # Select SForge before any provider or adapter imports.
 
 from sforge.harness.benchmark import load_benchmark
 from sforge.harness.config import SForgeConfig
@@ -352,6 +361,7 @@ def main(argv=None):
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
+        "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
