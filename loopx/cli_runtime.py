@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
+from .cli_commands.summary_all_registration import GLOBAL_READ_COMMANDS
 from .paths import default_registry_path, global_registry_path, select_default_runtime_root
 
 
@@ -65,7 +66,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 )
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
-_SELECTED_COMMANDS = _STATUS_COMMANDS | {
+_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
@@ -263,6 +264,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.status_registration import register_status_commands
 
 		register_status_commands(subparsers, add_subcommand_format)
+	elif command in GLOBAL_READ_COMMANDS:
+		from .cli_commands.summary_all_registration import register_summary_all_command
+
+		register_summary_all_command(subparsers, add_subcommand_format)
 	elif command == "todo":
 		from .cli_commands.todo_registration import register_todo_command
 
@@ -406,6 +411,13 @@ def _dispatch_common_command(
 		from .capabilities.repository_change_window.cli import handle_repository_change_window_command
 
 		return handle_repository_change_window_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command in GLOBAL_READ_COMMANDS:
+		from .cli_commands.summary_all import handle_summary_all_command
+
+		return handle_summary_all_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)

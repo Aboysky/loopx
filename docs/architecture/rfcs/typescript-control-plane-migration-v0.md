@@ -34,6 +34,17 @@ and follow-up wire contracts, real runtime transport, installed callers and
 matched complete SQLite CLI performance must qualify independently before
 delivery. Fewer requests alone do not establish a performance gain.
 
+### Global read CLI caller adoption
+
+The existing five global read commands now use the selected parser and shared
+dispatcher. `summary_all_registration.py` owns their parser-only registration;
+the old registration import remains an alias. Full-parser compatibility callers
+use the same handler dispatch, and the old full-CLI branch is removed. Help and
+diagnostics retain the existing interface; accepted reads retain registry/runtime
+resolution, guards, formatting and typed owners. This adds no domain rule, bridge
+operation or data cache. Incremental qualification accounts for pending quota
+request-scope adoption separately rather than counting its gain again.
+
 ### Product conversations and asynchronous inbox
 
 **Bounded Goal portfolio reads.** `goal_portfolio.py` now joins the existing

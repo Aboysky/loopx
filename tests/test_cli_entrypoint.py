@@ -279,6 +279,11 @@ assert payload["groups"]
 		(["task-lease", "--help"], "loopx.cli_commands.task_lease", "loopx.cli_commands.task_lease"),
 		(["todo", "--help"], "loopx.cli_commands.todo_registration", "loopx.cli_commands.todo"),
 		(["delegation", "--help"], "loopx.cli_commands.delegation", "loopx.cli_commands.delegation"),
+		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-gates", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-todos", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-risks", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["turn", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 		(["turn", "run-once", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 	],
@@ -457,6 +462,9 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		["quota", "unknown-command"],
 		["--format", "unknown", "status"],
 	]
+	for command in ("goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks"):
+		argv_cases.extend([[command, "--help"], [command, "--unknown-option"], [command, "--limit", "invalid"]])
+	argv_cases.append(["goal-portfolio", "--manager-view", "unknown"])
 	selected = run_cli_batch("loopx.entrypoint", argv_cases)
 	full = run_cli_batch("loopx.cli", argv_cases)
 
@@ -849,3 +857,30 @@ def test_console_native_scheduler_followup_fails_closed_without_node(
 
     assert entrypoint.main() == 2
     assert "requires Node.js 22.22.3 or newer" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+	"goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks",
+])
+def test_global_read_preserves_empty_coverage_without_loading_full_cli(tmp_path, command):
+	registry, runtime, public = tmp_path / "registry.json", tmp_path / "runtime", tmp_path / "public"
+	runtime.mkdir()
+	public.mkdir()
+	registry.write_text(json.dumps({"goals": [], "common_runtime_root": str(runtime)}))
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", command]
+	if command != "goal-portfolio":
+		argv.extend(["--scan-path", str(public)])
+	before = registry.read_bytes()
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == 0, selected.stderr
+	assert full.returncode == 0, full.stderr
+	payload, original = json.loads(selected.stdout), json.loads(full.stdout)
+	assert payload["ok"] is True
+	for key in ("schema_version", "request", "summary", "coverage", "scope", "boundary", "omissions"):
+		assert payload.get(key) == original.get(key)
+	if command == "goal-portfolio":
+		assert payload["coverage"]["discovered"] == 0
+		assert payload["coverage"]["complete"] is False
+		assert payload["goals"] == []
+	assert registry.read_bytes() == before
