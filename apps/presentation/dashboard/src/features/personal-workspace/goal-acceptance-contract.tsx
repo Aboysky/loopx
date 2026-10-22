@@ -160,9 +160,6 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
     {compact || overview && !checksConfigured && !plan ? children : null}
     {outcomes}
     {compact ? <>
-      {overview && !contract?.outcome_requirements?.outcomes.length ? <p className="goal-overview-note">{contract !== undefined
-        ? (zh ? "成果核对默认可用；尚未配置自动检查。" : "Outcome review is available by default; no automated checks are configured.")
-        : (zh ? "此来源未提供自动检查命令（可选）。" : "This source has not provided automated check commands (optional).")}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
     </> : <section className={`delivery-acceptance-contract${overview ? " is-overview" : ""}`} aria-label={copy.title} aria-busy={busy}>
     <div className="delivery-acceptance-content">

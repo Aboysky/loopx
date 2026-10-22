@@ -101,7 +101,13 @@ try {
   await outcomes.locator(".goal-overview-criteria").getByText("Retain the approved introduction", {exact: true}).waitFor();
   await firstDelivery;
   assert.ok(deliverySnapshot?.acceptance, "Retain the real initial delivery snapshot before advancing the native owner");
+  const evidence = page.locator(".goal-overview-evidence");
+  assert.equal(await evidence.getAttribute("open"), null, "Secondary evidence starts collapsed without losing its reader");
+  await evidence.locator(":scope > summary").focus();
+  await page.keyboard.press("Enter");
+  await page.locator(".delivery-review-toolbar").waitFor({state: "visible"});
   assert.equal(await page.locator(".delivery-acceptance-contract").count(), 0, "Start on the default review path without automated checks");
+  assert.ok(await page.locator(".research-history").count() <= 1, "Overview updates retain one history reader");
   // The native owner can advance beyond the retained delivery snapshot. A
   // transient delivery read must not unmount a newer outcome and its request.
   const newOutcome = {outcome_id: outcomeId, owner_agent_id: "author", objective: "Deliver a useful handoff guide",
