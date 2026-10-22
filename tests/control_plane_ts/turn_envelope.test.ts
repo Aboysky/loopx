@@ -747,6 +747,22 @@ test("Goal horizon reuses only identical inline acceptance and keeps its source 
   assert.deepEqual((source.planning_horizon as JsonObject).core_goal,
     {objective: "Deliver the whole outcome", acceptance_contract: acceptance}, "compaction must not mutate full quota");
   const signature = turnEnvelopeActionSignatureDocument(envelope);
+  const compact = structuredClone(source);
+  (compact.planning_horizon as JsonObject).core_goal = {
+    objective: "Deliver the whole outcome",
+    acceptance_contract_ref: "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract",
+  };
+  const fromCli = buildTurnEnvelope({payload: compact, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  assert.deepEqual(turnEnvelopeActionSignatureDocument(fromCli), signature);
+  const compactChannel = (compact.interaction_contract as JsonObject).agent_channel as JsonObject;
+  for (const context of [{}, {sources: []}, {sources: [{source: "goal_acceptance", content: {}}]},
+    {sources: [{source: "unrelated", content: {goal_acceptance_contract: acceptance}}]},
+    {sources: [{source: "goal_acceptance", content: {status: "unavailable", goal_acceptance_contract: acceptance}}]}]) {
+    compactChannel.work_context = context;
+    assert.throws(() => buildTurnEnvelope({payload: compact, protocol_action_fields: protocolActionFields,
+      scheduler_execution_args: ""}), /Goal acceptance reference must resolve/);
+  }
   const changed = structuredClone(envelope);
   const row = ((changed.work_context as JsonObject).sources as JsonObject[])[0];
   (row.content as JsonObject).goal_acceptance_contract = {...acceptance, status: "accepted"};
