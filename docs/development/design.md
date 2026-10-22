@@ -180,13 +180,18 @@ Goal 统计集中在概览，完整工作放在任务，输出放在成果。阅
 Keep the selected view, time group and evidence focus on reload and browser
 Back/Forward. Keep scroll position across tabs. Scope every selection to its
 Goal and source; a same-named Goal from another source must not inherit it.
+While reading Research, choosing another Goal in the sidebar stays in Research.
+The destination loads its own evidence; Back restores the prior Goal's selection.
+Home and explicit task, conversation or output links keep their own destinations.
 Saved findings lead with readable observations, interpretations and decisions.
 Put references, applicability, revisions and full original text behind one
 expansion. Clamp repeated titles only in the selection list, never the selected
 finding's full content. Do not invent short titles or infer findings from prose.
 
 刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
-Goal 和来源隔离。结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
+Goal 和来源隔离。研究中从侧栏切换 Goal 仍停留在研究页，读取新 Goal 自身证据；
+返回恢复原 Goal 的选择。首页及任务、会话、成果的明确链接保留各自目的地。
+结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
 和完整原文按需展开。仅列表中的重复长标题可收起，选中后的正文须完整可读。
 
 ### Explanations On Demand
@@ -590,6 +595,18 @@ From top to bottom, one reading column with an optional right rail:
 4. **Owner rail.** What needs the owner sits beside the hero as a hairline
    list: glyph, the decision in owner language, relative age, an arrow that
    opens it in place. A quiet Goal shows no empty rail.
+   Do not repeat the same work in a permanently visible task rail. Overview
+   shows up to three compact tasks per responsible owner; the group summary
+   retains its task count and significant state, including blocked work.
+   Expand the remaining tasks in place or open All work for search, filters,
+   completed history and activity. Direct task links reveal their selected row.
+   Read-only acceptance observations begin as one disclosure with gap/guard
+   counts and an explicit partial or unknown state; full reasons, requirements
+   and evidence remain inside. Zero listed gaps never means Goal acceptance.
+   不要在常驻任务侧栏重复展示主栏的工作。概览每位负责人默认最多展示三条紧凑任务，
+   组摘要保留任务数和受阻等重要状态；其余任务就地展开，搜索、筛选、已完成历史与活动
+   从“全部工作”打开。任务直链自动展开选中行。只读验收观察默认折叠，摘要显示缺口、
+   限制数量及“部分观测”或“未知”；完整原因、要求与证据保留在正文，零缺口不等于验收通过。
 5. **Folded composer.** Reading views fold the composer to one line that
    expands on request; conversation views keep it open.
 
