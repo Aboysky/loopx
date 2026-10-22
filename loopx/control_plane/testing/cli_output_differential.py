@@ -804,6 +804,13 @@ def _continuation_instruction_migration(
                 and after.get(f"{clause}_after") is True)
 
     chars, lines = 0, 0
+    if (surface in {"quota_should_run", "loopx_turn_plan"}
+            and base.get("format") == candidate.get("format") == "json"
+            and migrated("objective_replan")):
+        # Matched crowded fixture: +729 after moving the ordinary read hint
+        # into the complete replan review. Once delivered, ordinary growth
+        # budgets resume. No line, shape, action or envelope-budget exception.
+        chars += 768
     if surface in {
         "quota_should_run", "loopx_turn_plan", "quota_should_run_all_detail",
         "quota_should_run_goal_boundary_detail", "quota_should_run_scheduler_detail",
