@@ -2,6 +2,8 @@
 
 <h1 align="center">LoopX 2.0</h1>
 
+<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="LoopX — #1 on GitHub Trending, tracked by Trendshift" width="220" height="48"></a>
+
 **Turn long-horizon goals into verifiable results.**
 
 A local-first control plane and research workbench for agents and teams.<br>
@@ -866,8 +868,6 @@ benchmark evidence, operator surface and IM integration, shared-goal cross-host
 coordination, and an explicitly staged architecture and research incubator.
 
 ## Star History
-
-<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
 <p align="center">
   <a href="https://github.com/loopx-project/loopx/stargazers"><img src="https://loopx-project.github.io/loopx/site-assets/star-history.svg" alt="LoopX GitHub star history from verified snapshots" width="800"></a><br>
