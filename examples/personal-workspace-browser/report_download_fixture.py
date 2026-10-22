@@ -6,8 +6,10 @@ import sys
 import tempfile
 import threading
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
-from test_managed_research_team import demo, fixture, canonical_tasks
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "managed-research-team"))
+import research_team as demo
+from synthetic_fixture import fixture
+from acceptance import canonical_tasks
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
 
