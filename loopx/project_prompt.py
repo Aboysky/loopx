@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,21 @@ CODEX_CLI_VISIBLE_SCHEDULER_CONTEXT = {
 
 def shell_arg(value: str) -> str:
     return shlex.quote(value)
+
+
+_SHELL_SAFE_ARGUMENT = re.compile(r"^[A-Za-z0-9_./-]+$")
+
+
+def _is_windows_host() -> bool:
+    return os.name == "nt"
+
+
+def shell_arg_for_host(value: str) -> str:
+    """Quote one argument for the shell that will run the generated command."""
+
+    if _is_windows_host() and not _SHELL_SAFE_ARGUMENT.fullmatch(value):
+        return "'" + value.replace("'", "''") + "'"
+    return shell_arg(value)
 
 
 def render_optional_cli_arg(flag: str, value: str | None) -> str:
@@ -75,21 +92,22 @@ def render_goal_start_bootstrap_command(
     display_name: str | None = None,
 ) -> str:
     objective = goal_text or "<exact /loopx goal text>"
-    lines = [
-        f"cd {shell_arg(project)}",
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} bootstrap \\",
-        "  --project . \\",
-        f"  --goal-id {shell_arg(goal_id)} \\",
-        f"  --objective {shell_arg(objective)} \\",
-        f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
-        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)}",
-    ]
+    command = (
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)}"
+        " bootstrap"
+        " --project ."
+        f" --goal-id {shell_arg_for_host(goal_id)}"
+        f" --objective {shell_arg_for_host(objective)}"
+        f" --adapter-kind {shell_arg_for_host(DEFAULT_HANDOFF_ADAPTER_KIND)}"
+    )
     if display_name:
-        lines.insert(-1, f"  --display-name {shell_arg(display_name)} \\")
+        command += f" --display-name {shell_arg_for_host(display_name)}"
+    command += (
+        f" --adapter-status {shell_arg_for_host(DEFAULT_HANDOFF_ADAPTER_STATUS)}"
+    )
     if fine_grained:
-        lines[-1] += " \\"
-        lines.append("  --fine-grained")
-    return "\n".join(lines)
+        command += " --fine-grained"
+    return "\n".join([f"cd {shell_arg_for_host(project)}", command])
 
 
 def render_register_agent_command(

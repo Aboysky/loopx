@@ -52,6 +52,7 @@ from .project_prompt import (
     render_quota_guard_command,
     render_refresh_state_command,
     shell_arg,
+    shell_arg_for_host,
 )
 from .paths import resolve_runtime_root
 from .registry import registry_goals, resolve_state_file
@@ -667,21 +668,19 @@ def _bootstrap_command(
     dry_run: bool,
     fine_grained: bool = False,
 ) -> str:
-    lines = [
-        f"cd {shell_arg(project)}",
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} bootstrap \\",
-        "  --project . \\",
-        f"  --goal-id {shell_arg(goal_id)} \\",
-        f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
-        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)}",
-    ]
+    command = (
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)}"
+        " bootstrap"
+        " --project ."
+        f" --goal-id {shell_arg_for_host(goal_id)}"
+        f" --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)}"
+        f" --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)}"
+    )
     if fine_grained:
-        lines[-1] += " \\"
-        lines.append("  --fine-grained")
+        command += " --fine-grained"
     if dry_run:
-        lines[-1] += " \\"
-        lines.append("  --dry-run")
-    return "\n".join(lines)
+        command += " --dry-run"
+    return "\n".join([f"cd {shell_arg_for_host(project)}", command])
 
 
 def _project_command(project: str, command: str) -> str:
