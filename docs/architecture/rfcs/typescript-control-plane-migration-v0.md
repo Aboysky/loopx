@@ -1783,6 +1783,15 @@ input/output independence unchanged.
 This is a bounded shared-codec cost repair, not a provider-format migration or
 qualification of sustained operation, CI capacity or release admission.
 
+Canonical Todo collection reads also share one `GoalAcceptanceRead` within the
+loaded provider head. Contract, oracle basis and work guards reuse the validated
+authority, Todo index and task decisions. Guard projection stays lazy so source
+identity and continuation checks retain their original precedence. Public
+standalone helpers start fresh, and returned containers remain independent.
+Every new provider head or continuation read creates a new scope. This adds no
+Python bridge, RPC, persisted cache or write authority; native-read measurements
+do not qualify full CLI latency, installed adoption or PostgreSQL operation.
+
 `as unknown as T` is permitted only as a named migration seam: its exact call
 site, upstream validator, negative boundary coverage, and removal owner must be
 visible in the cutover PR. A migrated domain cannot pass its promotion gate

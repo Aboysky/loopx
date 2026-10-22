@@ -1262,6 +1262,13 @@ TypeScript 类型在运行时会被擦除。因此 network/RPC payload、解析�
 检查与 schema validation、semantic invariant 分层负责。未经检查的
 `JSON.parse(...) as T` 不能建立控制面 authority。
 
+Canonical Todo 集合读取在同一个已加载 provider head 内共享 `GoalAcceptanceRead`。
+合同、oracle basis 和工作 guard 复用已验证的 authority、Todo 索引和任务判断。
+guard 保持惰性投影，保留来源 identity 与连续页检查的原拒绝顺序。公开独立 helper
+每次重新读取，返回的容器相互隔离。每个新 provider head 或连续页读取都建立新
+scope。不新增 Python bridge、RPC、持久化缓存或写权限；原生读取测量不证明
+完整 CLI 延迟、安装采用或 PostgreSQL 运行资格。
+
 `as unknown as T` 只允许作为具名迁移缝：cutover PR 必须明确其调用点、上游
 validator、负向边界覆盖和移除 owner。只要 public、持久化、RPC 或 extension
 输入仍通过未经验证的断言进入已迁 domain 的 semantic core，该 domain 就不能
