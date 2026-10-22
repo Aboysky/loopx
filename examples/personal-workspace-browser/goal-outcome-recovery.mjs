@@ -47,7 +47,7 @@ try {
   const remoteUrl = new URL("/remote-status.json", url).href;
   await waitForHttp(url);
   browser = await launchBrowser(loadPlaywright().chromium);
-  page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+  page = await browser.newPage({viewport: {width: 1440, height: 1000}, hasTouch: true});
   await page.clock.install();
   await mkdir(output, {recursive: true});
   page.on("pageerror", error => errors.push(error.message));
@@ -108,6 +108,11 @@ try {
   await page.setViewportSize({width: 390, height: 844});
   await page.screenshot({path: resolve(output, "default-narrow.png"), animations: "disabled"});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  const touchOutcome = outcomes.locator(".goal-outcome:visible").first().locator(".goal-outcome-disclosure");
+  await touchOutcome.locator(":scope > summary").tap();
+  assert.notEqual(await touchOutcome.getAttribute("open"), null, "A touch tap opens the complete outcome body");
+  await touchOutcome.locator(":scope > summary").tap();
+  assert.equal(await touchOutcome.getAttribute("open"), null, "The same touch target closes the outcome without a hover dependency");
   await page.setViewportSize({width: 1440, height: 1000});
   const expandAll = async () => {
     const more = outcomes.locator(":scope > .goal-outcomes-more");
