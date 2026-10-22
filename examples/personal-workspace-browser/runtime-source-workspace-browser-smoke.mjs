@@ -66,6 +66,7 @@ try {
   if (process.env.LOOPX_RUNTIME_READER_BEFORE === "1") {
     await page.screenshot({path:resolve(output,"before-desktop.png")});
   } else {
+    await page.locator(".personal-goal-tabs").getByRole("button", {name:"研究", exact:true}).click();
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     assert.equal(new URL(new URL(page.url()).searchParams.get("statusUrl")).searchParams.get("source_namespace"),new URL(catalog[0].status_url).searchParams.get("source_namespace"),"the initial relative entry binds its physical source before subsequent navigation");
     assert.equal(await page.getByText("运行来源 · 只读", {exact:true}).count(), 1);
@@ -84,6 +85,8 @@ try {
     await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"关系图",exact:true}).click();
     await page.locator(".research-history-node").filter({hasText:"Fresh route 0"}).waitFor();
     assert.equal(await page.locator(".research-history-node").filter({hasText:"Retained route"}).count(),0);
+    await page.goBack();
+    assert.equal(await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"时间线",exact:true}).getAttribute("aria-pressed"), "true", "Back restores the previous lens before leaving the source");
     await page.goBack();
     await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0","Back restores the original source-local selection");
@@ -123,6 +126,7 @@ try {
     await page.getByRole("button",{name:/Retained research/}).first().waitFor();
     await page.getByRole("button",{name:/Retained research/}).first().click();
     await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
+    await page.locator(".personal-goal-tabs").getByRole("button", {name:"研究", exact:true}).click();
     await writeFile(failFile, "unavailable");
     for (let attempt=0;attempt<40;attempt++) {
       if ((await fetch(catalog[1].status_url)).status === 503) break;

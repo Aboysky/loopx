@@ -114,6 +114,14 @@ if not (empty or sparse):
                 path.write_text(json.dumps(patch, ensure_ascii=False))
                 cli("refine", "--agent-id", "author", "--document", str(path), "--operation-id", f"experience-review-{index}",
                     "--expected-provider-revision", cli("inspect")["provider_revision"], "--execute")
+        # A real declaration change invalidates the earlier review basis.
+        # Reading it again must never make that historical review current.
+        path = root / "updated-recovery.json"
+        path.write_text(json.dumps({"outcome_id": "experience-0", "requirements": [{
+            "id": "recovery-later-requirement", "description": "后续补充的恢复要求也应保留，不能把旧版自查当作新版核验。"}],
+            "source": {"ref": "fixture:updated-recovery", "summary": "A later requirement changes the review basis"}}, ensure_ascii=False))
+        cli("refine", "--agent-id", "author", "--document", str(path), "--operation-id", "updated-recovery",
+            "--expected-provider-revision", cli("inspect")["provider_revision"], "--execute")
     path = root / "checks.json"
     path.write_text(json.dumps({"outcome_id": "product-tour", "criteria": [
         {"id": "tour-opening", "validation_argv": ["python3", "check-tour.py", "opening"]},

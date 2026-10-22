@@ -26,6 +26,16 @@ const selectedFromUrl = (goal: string): Selection => {
   return {nodes: day === null ? [...new Set(nodes.filter(Boolean))] : [], day};
 };
 
+const viewFromUrl = (goal: string) => {
+  const query = new URLSearchParams(window.location.search);
+  const sameGoal = !query.has("research_goal") || query.get("research_goal") === goal;
+  const phase = query.get("research_phase");
+  return {
+    lens: sameGoal && query.get("research_lens") === "graph" ? "graph" as const : "timeline" as const,
+    phase: sameGoal && phase !== null && /^[0-2]$/.test(phase) ? Number(phase) : null,
+  };
+};
+
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
 export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, readSourceUrl}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string}) {
@@ -38,9 +48,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const [selection, setSelection] = useState(() => selectedFromUrl(goalId));
   const [recordsOpen, setRecordsOpen] = useState(false);
   const [recordLimit, setRecordLimit] = useState(50);
-  const [lens, setLens] = useState<Lens>(() => new URLSearchParams(window.location.search).get("research_lens") === "graph" ? "graph" : "timeline");
-  const [phase, setPhase] = useState<number | null>(null);
-  useEffect(() => {setPhase(null);}, [goalId]);
+  const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
+  const [phase, setPhase] = useState<number | null>(() => viewFromUrl(goalId).phase);
   const presentationId = useId().replace(/:/g, "");
   const detail = useRef<HTMLDivElement>(null);
   const graph = useRef<HTMLDivElement>(null);
@@ -103,7 +112,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{stateLabel(event.status)} · {event.title}{event.summary ? ` — ${event.summary}` : ""}</span>{event.measurements ? <ExploreMeasurements measurements={event.measurements} zh={zh}/> : null}{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
 
   useEffect(() => {
-    const pop = () => setSelection(selectedFromUrl(goalId));
+    const pop = () => {
+      setSelection(selectedFromUrl(goalId));
+      const view = viewFromUrl(goalId); setLens(view.lens); setPhase(view.phase);
+    };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, [goalId]);
@@ -157,7 +169,16 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const grouped = useMemo(() => groupUnlinkedHistoryQuestions(value?.nodes ?? [], value?.edges ?? []), [value]);
   const layout = useMemo(() => layoutExploreHistory(grouped.nodes, value?.edges ?? []), [grouped, value]);
   const timeline = useMemo(() => value ? buildExploreTimeline(value.nodes, value.edges, value.events) : null, [value]);
-  const chooseLens = (next: Lens) => { setLens(next); const url = new URL(window.location.href); if (next === "graph") url.searchParams.set("research_lens", "graph"); else url.searchParams.delete("research_lens"); window.history.replaceState(window.history.state, "", url); };
+  const chooseView = (next: Lens, nextPhase: number | null) => {
+    setLens(next); setPhase(nextPhase);
+    const url = new URL(window.location.href);
+    url.searchParams.set("research_goal", goalId);
+    url.searchParams.set("research_lens", next);
+    if (nextPhase === null) url.searchParams.delete("research_phase");
+    else url.searchParams.set("research_phase", String(nextPhase));
+    if (next !== lens || nextPhase !== phase) window.history.pushState(null, "", url);
+  };
+  const chooseLens = (next: Lens) => chooseView(next, phase);
   const fullTime = (at: number) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false}).format(new Date(at));
   const dayTime = (at: number) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "numeric", day: "numeric"}).format(new Date(at));
   const positions = new Map(layout.map(item => [item.node.id, item]));
@@ -177,7 +198,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       else url.searchParams.set("research_node", next.nodes.length === 1 ? next.nodes[0]! : JSON.stringify(next.nodes));
       url.searchParams.set("research_goal", goalId);
     }
-    else url.searchParams.delete("research_goal");
+    else url.searchParams.set("research_goal", goalId);
     if (selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
     if (focus && (next.nodes.length || next.day !== null)) window.requestAnimationFrame(() => {
       const panel = detail.current;
@@ -185,7 +206,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     });
   };
   const choose = (id: string, focus = true) => select({nodes: id ? [id] : [], day: null}, focus);
-  if (!busy && !error && !read.events.length && !analysis.pack && !analysis.snapshot?.catalog.packs.length) return null;
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     <header className="research-history-heading"><div><div className="research-history-title"><h2>{copy.title}</h2><ContextHelp label={zh ? "历史范围与读图说明" : "History scope and reading guide"}>
       <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>
@@ -202,13 +222,14 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
+    {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
     <ResearchAnalysisStatus analysis={analysis}/>
     <ResearchProgressSummary analysis={analysis}/>
     <ResearchAnalysisPanel analysis={analysis}/>
     {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
     {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
       {lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
-        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={setPhase} onSelect={id => choose(id)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
+        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={id => choose(id)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
         <div className="research-history-stage" style={{width, height}}>
           <svg width={width} height={height} aria-hidden="true" className="research-history-edges">

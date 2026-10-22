@@ -654,3 +654,19 @@ background. Opening Chat or explicitly sending a message still prepares it
 through the existing session owner.
 
 ![快速导航：中文窄屏](../assets/personal-workspace/command-palette-narrow.png)
+
+### 保存团队报告原文 / Save a team report source
+
+在成果、对话或证据视图打开团队报告后，点击 **下载原文 / Download source**，
+保存当前显示版本的 UTF-8 原文。文件名包含版本摘要；Markdown、JSON 和文本保留
+相应扩展名，其他类型按文本保存。下载不会重新运行 Agent、核验或采用报告，也不会
+修改 Goal。它是所读版本的本地副本，不代表后续版本仍获验收；报告读取失败或失效时，
+先通过原有刷新/重试恢复可读内容。
+
+Open a team report in Results, conversation or evidence, then choose **Download source**
+to save the displayed version's exact UTF-8 source. The filename includes a version
+prefix. Markdown, JSON and text retain their extensions; other types download as text.
+Saving reuses the existing readback without running an Agent, invoking validation,
+recording adoption or changing the Goal. The file is a local copy of that version,
+not a promise of continuing acceptance. If the reader becomes unavailable, use its
+existing refresh/retry before downloading again.

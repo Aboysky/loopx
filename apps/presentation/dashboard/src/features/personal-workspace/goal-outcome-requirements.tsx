@@ -16,16 +16,10 @@ function stateLabels(zh: boolean) {
     stale: zh ? "需复查" : "Review needed", failed: zh ? "检查失败" : "Checks failed",
     partial: zh ? "部分检查" : "Partial checks", held: zh ? "关联待确认" : "Association held"};
 }
-function stateLabel(item: Requirement, fresh: boolean, zh: boolean) {
-  const label = item.status === "unverified" && item.agent_review?.basis_current
+function stateLabel(item: Requirement, zh: boolean) {
+  return item.status === "unverified" && item.agent_review?.basis_current
     ? {met: zh ? "自查满足 · 未独立核验" : "Agent reports met · unverified", unmet: zh ? "自查有缺口" : "Agent found gaps", uncertain: zh ? "自查尚不确定" : "Agent uncertain"}[item.agent_review.conclusion]
     : stateLabels(zh)[displayState(item)];
-  return fresh ? label : `${zh ? "历史" : "Recorded"} · ${label}`;
-}
-function requirementKey(outcome: OutcomeRequirements["outcomes"][number], requirement: Requirement): string {
-  // Native IDs are opaque and may contain colons. Keep both identities
-  // unambiguous instead of relying on a separator the vocabulary forbids.
-  return JSON.stringify([outcome.id, requirement.id]);
 }
 
 /** One native declaration/readback owner. The form only appends a requirement. */
@@ -42,40 +36,39 @@ export function GoalOutcomeRequirements({goalId, declaration, fresh, canManage, 
   const attention = rows.filter(({requirement}) => !["accepted", "unverified"].includes(displayState(requirement))
     || current && requirement.agent_review?.basis_current && requirement.agent_review.conclusion === "unmet")
     .sort((a, b) => stateOrder.indexOf(displayState(a.requirement)) - stateOrder.indexOf(displayState(b.requirement)));
-  const preview = attention.slice(0, 3);
-  const visible = new Set((all ? rows : preview).map(row => requirementKey(row.outcome, row.requirement)));
+  const preview = [...new Set([...attention.map(row => row.outcome.id), ...declaration.outcomes.map(outcome => outcome.id)])].slice(0, 3);
   const labels = stateLabels(zh);
   if (!declaration.outcomes.length) return null;
   return <section className={`goal-outcomes${all ? " is-expanded" : ""}`} aria-label={zh ? "支撑成果" : "Supporting outcomes"}>
     <header className="goal-outcomes-heading"><h4>{zh ? "支撑成果" : "Supporting outcomes"} <span>{declaration.outcomes.length}</span></h4>
       <ContextHelp label={zh ? "成果状态与范围" : "Outcome status and scope"}>
-        <p>{zh ? "数量统计要求，不代表 Goal 已完成。Agent 自查与独立检查分别记录；自查依据变化时显示需复查。完整要求、证据和来源可展开阅读。" : "Counts describe requirements, not Goal completion. Agent reviews and independent checks remain distinct; changed review bases need another review. Expand a requirement for its complete text, evidence and sources."}</p>
-        <p>{zh ? "默认显示最多三项需要处理的要求，按失败、关联待确认、需复查和部分检查排列，其余要求仍在全部列表。未配置自动检查不影响保留成果要求。" : "The preview shows up to three requirements needing attention: failed, held, changed or partial checks. All other requirements remain in the full list. Automated checks are optional."}</p>
+        <p>{zh ? "数量统计要求，不代表 Goal 已完成。Agent 自查与独立检查分别记录；自查依据变化仍需复查，重新读取不会使它通过。展开一项成果可读完整要求、证据与来源。" : "Counts describe requirements, not Goal completion. Agent reviews and independent checks remain distinct; changed review bases still need review, even after a fresh read. Expand an outcome for its complete requirements, evidence and sources."}</p>
+        <p>{zh ? "默认显示最多三项成果，优先列出有失败、关联待确认、需复查或自查缺口的成果。完整集合仍可展开，未配置自动检查不影响保留要求。" : "The preview shows up to three outcomes, prioritizing failed, held or changed checks and Agent-reported gaps. The complete collection remains available. Automated checks are optional."}</p>
       </ContextHelp>
     </header>
     <div className="goal-outcomes-counts" aria-label={zh ? "要求状态" : "Requirement states"}>
-      {!current ? <span role="status">{zh ? "记录待刷新" : "Refresh needed"}</span> : null}
+      {!current ? <span role="status">{declaration.current_lifetime ? (zh ? "上次读回" : "Last readback") : (zh ? "上一轮记录" : "Previous lifetime")}</span> : null}
       {counts.filter(item => item.count).map(item => <span key={item.state} className={`is-${current ? item.state : "recorded"}`}><strong>{item.count}</strong> {labels[item.state]}</span>)}
       {!rows.length ? <span>{zh ? "尚无要求" : "No requirements yet"}</span> : null}
     </div>
     {rows.length ? <div className="goal-outcomes-distribution" aria-hidden="true">{counts.filter(item => item.count).map(item => <i key={item.state} className={`is-${current ? item.state : "recorded"}`} style={{flexGrow: item.count}}/>)}</div> : null}
     <div id={listId} className="goal-outcomes-list">
-      {declaration.outcomes.map(outcome => <Outcome key={`${goalId}:${outcome.id}`} goalId={goalId} outcome={outcome}
-        fresh={current} canManage={canManage && declaration.current_lifetime} visible={visible} all={all}
+      {declaration.outcomes.map(outcome => <Outcome key={JSON.stringify([goalId, outcome.id])} goalId={goalId} outcome={outcome}
+        fresh={current} canManage={canManage && declaration.current_lifetime} shown={all || preview.includes(outcome.id)}
         revision={providerRevision} onRefresh={onRefresh} zh={zh}/>)}
     </div>
-    <button className="goal-outcomes-more" type="button" aria-expanded={all} aria-controls={listId} onClick={() => setAll(value => !value)}>
-      {all ? (zh ? "收起完整列表" : "Collapse full list") : (zh ? `查看全部 ${rows.length} 项要求` : `View all ${rows.length} requirements`)}<ChevronDown aria-hidden size={15}/>
-    </button>
+    {declaration.outcomes.length > preview.length ? <button className="goal-outcomes-more" type="button" aria-expanded={all} aria-controls={listId} onClick={() => setAll(value => !value)}>
+      {all ? (zh ? "收起完整列表" : "Collapse full list") : (zh ? `查看全部 ${declaration.outcomes.length} 项成果` : `View all ${declaration.outcomes.length} outcomes`)}<ChevronDown aria-hidden size={15}/>
+    </button> : null}
   </section>;
 }
-function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, visible, all}: {
+function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, shown}: {
   goalId: string; outcome: OutcomeRequirements["outcomes"][number]; fresh: boolean; canManage: boolean;
   revision: string | null; onRefresh: () => Promise<void>; zh: boolean;
-  visible: Set<string>; all: boolean;
+  shown: boolean;
 }) {
   const [text, setText] = useState("");
-  const [groupsOpen, setGroupsOpen] = useState<Partial<Record<Requirement["status"], boolean>>>({failed: true, held: true, stale: true, partial: true});
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState("");
   const [pending, setPending] = useState<Record<string, unknown> | null>(null);
   async function save() {
@@ -97,29 +90,30 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, vi
       await onRefresh();
     } finally {setBusy(false);}
   }
-  const shown = all || outcome.requirements.some(item => visible.has(requirementKey(outcome, item)));
-  return <article className="goal-outcome" hidden={!shown}>
-    <header><h5>{outcome.objective}</h5><span>{outcome.requirements.length} {zh ? "项要求" : "requirements"}</span></header>
-    {stateOrder.map(state => {
-      const requirements = outcome.requirements.filter(item => displayState(item) === state);
-      if (!requirements.length) return null;
-      const hasVisible = requirements.some(item => visible.has(requirementKey(outcome, item)));
-      return <details className="goal-outcome-status-group" key={state} hidden={!hasVisible} open={!all || groupsOpen[state] === true}
-        onToggle={event => {const open = event.currentTarget.open; if (all) setGroupsOpen(previous => ({...previous, [state]: open}));}}>
-        <summary hidden={!all}>{!fresh ? (zh ? "历史 · " : "Recorded · ") : ""}{stateLabels(zh)[state]} · {requirements.length}</summary>
-        <ul className="goal-overview-criteria goal-outcome-criteria">{requirements.map(requirement => <li key={requirement.id} hidden={!visible.has(requirementKey(outcome, requirement))}>
+  const counts = stateOrder.map(state => ({state, count: outcome.requirements.filter(item => displayState(item) === state).length}));
+  const gaps = outcome.requirements.filter(item => item.agent_review?.basis_current && item.agent_review.conclusion === "unmet").length;
+  return <article className="goal-outcome" hidden={!shown && !open && !text && !pending && !busy}>
+    <details className="goal-outcome-disclosure" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary aria-expanded={open}><ChevronDown aria-hidden size={15}/><h5>{outcome.objective}</h5>
+      <span className="goal-outcome-summary-states">
+        {busy || pending && !open ? <span role="status">{busy ? (zh ? "正在保存" : "Saving") : (zh ? "结果待确认" : "Result unconfirmed")}</span> : text && !open ? <span>{zh ? "未发送草稿" : "Unsent draft"}</span> : null}
+        {gaps ? <span>{zh ? `自查缺口 ${gaps}` : `${gaps} Agent-reported ${gaps === 1 ? "gap" : "gaps"}`}</span> : null}
+        {counts.filter(item => item.count).map(item => <span key={item.state} className={`is-${fresh ? item.state : "recorded"}`}>{stateLabels(zh)[item.state]} {item.count}</span>)}
+        {!outcome.requirements.length ? <span>{zh ? "尚无要求" : "No requirements yet"}</span> : null}
+      </span>
+    </summary>
+    <div className="goal-outcome-body">
+    <ul className="goal-overview-criteria goal-outcome-criteria">{stateOrder.flatMap(state => outcome.requirements.filter(item => displayState(item) === state)).map(requirement => <li key={requirement.id}>
           <RequirementRow requirement={requirement} fresh={fresh} zh={zh}/>
         </li>)}</ul>
-      </details>;
-    })}
-    <details hidden={!all}><summary>{zh ? "关联工作与来源" : "Linked work and sources"}</summary>
-      <p>{outcome.objective}</p><p>{outcome.owner_agent_id} · {zh ? "版本" : "Revision"} {outcome.revision}</p>
+    <details><summary>{zh ? "关联工作与来源" : "Linked work and sources"}</summary>
+      <p>{outcome.owner_agent_id} · {zh ? "版本" : "Revision"} {outcome.revision}</p>
       <ul>{outcome.work.map(work => <li key={work.todo_id}><code>{work.todo_id}</code> · {work.status}</li>)}</ul>
       {!outcome.work.length ? <p>{zh ? "尚未关联执行任务" : "No execution task linked"}</p> : null}
       <ul>{outcome.sources.map(source => <li key={source.ref}>{source.summary}</li>)}</ul>
     </details>
     {/* Keep an existing draft readable while its same-source write basis is unavailable. */}
-    {canManage || text || pending ? <details hidden={!all && !text && !pending}><summary>{zh ? "补充要求" : "Add a requirement"}</summary>
+    {canManage || text || pending ? <details><summary>{zh ? "补充要求" : "Add a requirement"}</summary>
       <form onSubmit={event => {event.preventDefault(); void save();}}>
         <label>{zh ? "新增要求（保留已有要求）" : "New requirement (earlier requirements stay)"}
           <textarea value={text} maxLength={512} disabled={busy || !!pending} onChange={event => setText(event.target.value)}/></label>
@@ -129,6 +123,8 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, vi
       </form>
     </details> : null}
     {notice ? <p role="status">{notice}</p> : null}
+    </div>
+    </details>
   </article>;
 }
 
@@ -136,7 +132,7 @@ function RequirementRow({requirement, fresh, zh}: {requirement: Requirement; fre
   const [open, setOpen] = useState(false);
   const review = requirement.agent_review;
   return <details className="goal-outcome-requirement" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary aria-expanded={open}><ChevronDown aria-hidden size={15}/><span>{requirement.description}</span><small className={`is-${fresh ? displayState(requirement) : "recorded"}`}>{stateLabel(requirement, fresh, zh)}</small></summary>
+    <summary aria-expanded={open}><ChevronDown aria-hidden size={15}/><span>{requirement.description}</span><small className={`is-${fresh ? displayState(requirement) : "recorded"}`}>{stateLabel(requirement, zh)}</small></summary>
     {review && (review.note.trim() || review.evidence_refs.length > 0) ? <div className="goal-outcome-evidence">
       <h6>{zh ? "上次 Agent 自查" : "Previous Agent review"} · {({met: zh ? "满足" : "Met", unmet: zh ? "有缺口" : "Unmet", uncertain: zh ? "不确定" : "Uncertain"})[review.conclusion]}</h6>
       {review.note.trim() ? <p>{review.note}</p> : null}

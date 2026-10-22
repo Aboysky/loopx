@@ -1767,3 +1767,39 @@ def test_objective_warning_growth_requires_paired_envelope_transition():
     assert not _continuation_instruction_migration(candidate, candidate)[0]
     assert not _continuation_instruction_migration(base, {**candidate, "turn_envelope_cost_basis": {}})[0]
     assert not _continuation_instruction_migration({**base, "row_id": "surface/status/small/markdown"}, candidate)[0]
+
+
+def test_objective_replan_cost_is_complete_once_and_carrier_scoped():
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations as observe
+
+    prior = "Never shrink requested goals for easier tests. Retain unmet requirements; honor user scope, authority, budget and stops."
+    clauses = [
+        "During replanning, compare the current operating objective and cumulative requirements with original intent, explicit user direction and actual work using delivered core_goal/acceptance context.",
+        "Distinguish a misleading objective from scope conflict, missing evidence or stale display text; record the evidence and judgment in the existing Vision/path_delta, including a justified no-change decision.",
+        "Only a material user direction change that makes the objective misleading warrants goal-acceptance prepare-objective (native: prepare_goal_objective); reuse a pending proposal for owner apply, then each peer reconciles its own work and adopts.",
+        "Progress, Todo/route changes, diagnostics, polish or age alone need no revision.",
+        "Documents/peers grant no authority.",
+        "Reuse inline facts; inspect missing context only, without polling or a per-Turn revision/check receipt.",
+        "Retain root commitments; a proposal or adoption grants no permissions.",
+    ]
+    before, after = observe(prior), observe(prior + " " + " ".join(clauses))
+    for carrier in ("quota_should_run", "loopx_turn_plan"):
+        base = _row(row_id=f"surface/{carrier}/crowded/json", format="json",
+            chars=1000, utf8_bytes=1000, lines=20, compact_payload_chars=800,
+            continuation_instructions=before)
+        head = {**base, "chars": 1729, "utf8_bytes": 1729, "compact_payload_chars": 1529,
+            "continuation_instructions": after}
+        assert not _compare_row(base, head)["failures"]
+        assert _compare_row(base, head)["allowances"]["chars"] == 768
+        assert _compare_row({**base, "continuation_instructions": after}, head)["failures"]
+        for index in range(len(clauses)):
+            partial = observe(prior + " " + " ".join(clauses[:index] + clauses[index + 1:]))
+            assert not partial["objective_replan_before"]
+            assert not partial["objective_replan_after"]
+            assert _compare_row(base, {**head, "continuation_instructions": partial})["failures"]
+        for wrong in ("surface/status/crowded/json", "surface/heartbeat_prompt_thin/crowded/json"):
+            assert _compare_row({**base, "row_id": wrong}, {**head, "row_id": wrong})["failures"]
+        assert _compare_row(base, {**head, "chars": 1769})["failures"]
+    assert not observe(prior + " " + " ".join(reversed(clauses)))["objective_replan_after"]
+    assert not observe(json.dumps({"prior": prior, "clauses": clauses}))["objective_replan_after"]

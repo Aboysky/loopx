@@ -114,13 +114,17 @@ Owner-facing state follows four rules:
   Show an unavailable or partial count honestly; put full current briefs,
   linked work, provenance and original conversations behind row expansion.
   A Goal's supporting outcomes need the same bounded reading hierarchy: show
-  requirement-state counts once, then at most three requirements needing attention
-  in the default overview. Group them by their declared outcome; keep failed,
-  held, changed and partial observations visible in the summary. Make the full
-  collection available in one expansion, including unverified and passing work.
-  Clamp long requirement text only in collapsed rows; expansion restores its
-  complete text and evidence. Explain Agent review versus independent checks once
-  at section level. Overview check details stay collapsed at every viewport;
+  requirement-state counts once, then at most three compact outcome rows in the
+  default overview, prioritizing declared failures, held or changed checks and
+  Agent-reported gaps. Each **whole outcome body** starts collapsed: its title
+  and meaningful states remain visible; expanding it reveals its requirements,
+  with individual rationale and evidence available in place. Collapsing only
+  evidence, status groups or a few requirement rows does not satisfy this rule.
+  Keep failed, held, changed, partial and unconfirmed-operation observations in
+  the summary. Make the full outcome collection available in one expansion,
+  including unverified and passing work. Clamp long text only in collapsed rows;
+  expansion restores it completely. Explain Agent review versus independent
+  checks once at section level. Overview check details stay collapsed at every viewport;
   an operation's consequences and actual failures remain visible.
 - **Owner language first.** Primary copy uses the owner's words. Protocol ids,
   gate kinds, preview mechanics and executor profiles belong in a collapsed
@@ -145,6 +149,50 @@ greeting, summaries, work list, and composer to one content frame. An overview
 board may be wider than a conversation's reading column. Keep ready-state
 runtime details alongside their model context, allow failures to expand, and
 size empty summaries to their content rather than filling large decorative cards.
+
+### Research Workspace / 研究工作台
+
+A Goal's research is a first-level peer of Overview, Tasks, Chat and Files.
+Overview answers what is moving and what needs attention. The tab itself is
+the research entry; add an Overview shortcut only when it carries a useful
+summary, not a second navigation label. Put complete history, timeline/graph, native measurements,
+analysis and the saved-finding reader in Research, bound to the original Goal
+and source. Opening or switching a view only reads; analysis and research
+execution keep their separate explicit actions and authority.
+
+研究与概览、任务、对话、成果并列。概览回答当前推进与待处理事项；页签本身就是研究
+入口，只有带来有用摘要时才增加概览快捷入口。完整历程、图表、原生测量、分析与
+结论阅读放在同一真实 Goal 的研究页。
+浏览和切换标签只读取，分析与启动研究仍遵循各自的明确操作及权限。
+
+Keep Goal-wide statistics in Overview, full work in Tasks, and outputs in
+Files. A reading tab starts with its content, not repeated counters or an
+expanded conversation composer. Reveal executor/model controls when the
+composer is open; preserve drafts and running-turn controls across views.
+Research enablement belongs beside the research navigation and must use the
+existing Goal configuration transaction. Explain its consequence on demand:
+configuration does not itself launch analysis, and disabling retains history.
+
+Goal 统计集中在概览，完整工作放在任务，输出放在成果。阅读页直接呈现内容，不重复
+堆叠统计条与展开的输入框。展开输入框时展示执行器与模型，跨页保留草稿和运行控制。
+研究模式入口使用现有 Goal 配置事务；按需解释开启不等于启动分析、关闭保留历史。
+
+Keep the selected view, time group and evidence focus on reload and browser
+Back/Forward. Keep scroll position across tabs. Scope every selection to its
+Goal and source; a same-named Goal from another source must not inherit it.
+While reading Research, choosing another Goal in the sidebar stays in Research.
+The destination loads its own evidence; Back restores the prior Goal's selection.
+Home and explicit task, conversation or output links keep their own destinations.
+Saved findings lead with readable observations, interpretations and decisions.
+Put references, applicability, revisions and full original text behind one
+expansion. Clamp repeated titles only in the selection list, never the selected
+finding's full content. Do not invent short titles or infer findings from prose.
+
+刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
+Goal 和来源隔离。研究中从侧栏切换 Goal 仍停留在研究页，读取新 Goal 自身证据；
+返回恢复原 Goal 的选择。首页及任务、会话、成果的明确链接保留各自目的地。
+结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
+和完整原文按需展开。仅列表中的重复长标题可收起，选中后的正文须完整可读。
 
 ### Explanations On Demand
 
@@ -181,6 +229,14 @@ independent-check explanation before the reader reaches the next main region.
 Keep the summary's actual verification state visible; open the chosen item in
 place, with its complete content and original evidence reachable. A disclosure
 must not duplicate the same content above and below its trigger.
+
+Read freshness and verification validity are different facts. Reuse the existing
+cached, coalesced read owner for quiet background updates; pause polling in the
+background and back off after read failures. Preserve scroll, open items and
+drafts across same-source updates. Show an unavailable read or historical source
+once for the affected region rather than repeating a refresh instruction on
+every row. A fresh read never validates a changed requirement or starts a check,
+model or worker; those operations retain their existing explicit controls.
 
 As data grows, preserve access to every item through the existing list,
 pagination or history, with honest coverage. Do not silently keep only recent
@@ -539,6 +595,18 @@ From top to bottom, one reading column with an optional right rail:
 4. **Owner rail.** What needs the owner sits beside the hero as a hairline
    list: glyph, the decision in owner language, relative age, an arrow that
    opens it in place. A quiet Goal shows no empty rail.
+   Do not repeat the same work in a permanently visible task rail. Overview
+   shows up to three compact tasks per responsible owner; the group summary
+   retains its task count and significant state, including blocked work.
+   Expand the remaining tasks in place or open All work for search, filters,
+   completed history and activity. Direct task links reveal their selected row.
+   Read-only acceptance observations begin as one disclosure with gap/guard
+   counts and an explicit partial or unknown state; full reasons, requirements
+   and evidence remain inside. Zero listed gaps never means Goal acceptance.
+   不要在常驻任务侧栏重复展示主栏的工作。概览每位负责人默认最多展示三条紧凑任务，
+   组摘要保留任务数和受阻等重要状态；其余任务就地展开，搜索、筛选、已完成历史与活动
+   从“全部工作”打开。任务直链自动展开选中行。只读验收观察默认折叠，摘要显示缺口、
+   限制数量及“部分观测”或“未知”；完整原因、要求与证据保留在正文，零缺口不等于验收通过。
 5. **Folded composer.** Reading views fold the composer to one line that
    expands on request; conversation views keep it open.
 

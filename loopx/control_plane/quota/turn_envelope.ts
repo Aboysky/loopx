@@ -833,10 +833,31 @@ function turnActionProjection(payload: JsonObject, protocolActionFields: JsonObj
   }
   const acceptance = object(core.acceptance_contract);
   const sources = object(projection.work_context).sources;
+  // The ordinary CLI can already reference its identical work-context copy.
+  // Relocate only this known carrier into the signed envelope. Never carry a
+  // full-decision JSON path into an envelope where that root does not exist.
+  if (!("acceptance_contract" in core) && "acceptance_contract_ref" in core) {
+    const match = typeof core.acceptance_contract_ref === "string"
+      ? /^\$\.interaction_contract\.agent_channel\.work_context\.sources\[(0|[1-9]\d*)\]\.content\.goal_acceptance_contract$/.exec(core.acceptance_contract_ref)
+      : null;
+    const index = match ? Number(match[1]) : -1;
+    const source = object(Array.isArray(sources) ? sources[index] : null);
+    const content = object(source.content);
+    if (!match || source.source !== "goal_acceptance"
+      || (content.status !== undefined && content.status !== "loaded")
+      || Object.keys(object(content.goal_acceptance_contract)).length === 0) {
+      throw new EffectRuntimeRequestError("Goal acceptance reference must resolve to complete inline work context");
+    }
+    action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+      ...core, acceptance_contract_ref: `$.work_context.sources[${index}].content.goal_acceptance_contract`,
+    }};
+    projection.action = action;
+  }
   if (Object.keys(acceptance).length > 0 && Array.isArray(sources)) {
     const index = sources.findIndex((value) => {
       const source = object(value);
       return source.source === "goal_acceptance"
+        && (object(source.content).status === undefined || object(source.content).status === "loaded")
         && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
     });
     if (index >= 0) {

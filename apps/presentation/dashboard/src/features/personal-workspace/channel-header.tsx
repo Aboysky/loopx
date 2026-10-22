@@ -46,6 +46,8 @@ export function ChannelHeader({
   workspaceGrantLabel,
   originalConversationTitle,
   requestInventory,
+  researchControl,
+  composerVisible = true,
 }: {
   agents: WorkspaceAgentOption[];
   agentWorkActive?: boolean;
@@ -56,6 +58,8 @@ export function ChannelHeader({
   workspaceGrantLabel?: string | null;
   originalConversationTitle?: string;
   requestInventory?: ReactNode;
+  researchControl?: ReactNode;
+  composerVisible?: boolean;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerChatOpen?: boolean;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
@@ -164,7 +168,7 @@ export function ChannelHeader({
 
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{selectedGoal?.title === readOnlySourceLabel ? null : readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
-  ) : <>
+  ) : selectedGoal && !composerVisible ? null : <>
     {ordinaryConversation ? <WorkspaceSelect
             ariaLabel={t("header.selectChatRuntime")}
             className="personal-agent-select"
@@ -282,9 +286,11 @@ export function ChannelHeader({
         <nav aria-label={t("header.goalView")} className="personal-goal-tabs">
           <button aria-current={selectedGoalTab === "overview" ? "page" : undefined} onClick={() => onSelectGoalTab("overview")} type="button">{t("header.overview")}</button>
           <button aria-current={selectedGoalTab === "tasks" ? "page" : undefined} onClick={() => onSelectGoalTab("tasks")} type="button">{t("header.tasks")}</button>
+          <button aria-current={selectedGoalTab === "research" ? "page" : undefined} onClick={() => onSelectGoalTab("research")} type="button">{t("header.research")}</button>
           <button aria-current={selectedGoalTab === "chat" ? "page" : undefined} onClick={() => onSelectGoalTab("chat")} type="button">{t("header.chat")}</button>
           <button aria-current={selectedGoalTab === "files" ? "page" : undefined} onClick={() => onSelectGoalTab("files")} type="button">{t("header.files")}</button>
         </nav>
+        {researchControl}
         {runtimeControl}
         </div>
       ) : !scopeUnavailable ? (

@@ -8,7 +8,6 @@ import { relativeTime } from "./goal-activity-view";
 import { goalAcceptanceContractCopy } from "./delivery-review-copy";
 import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
-import { GoalResearchHistory } from "./goal-research-history";
 import { GoalAcceptanceContractSection } from "./goal-acceptance-contract";
 import type { WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
@@ -29,15 +28,14 @@ function relativeLookLabel(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { month: "short", day: "numeric" }).format(then);
 }
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, readSourceUrl, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
-  readSourceUrl?: string;
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
   onOpenAgentConversation?: (agentId: string) => void;
   /** Material changes since the owner's last acknowledged look; null when none. */
   sinceYouLooked?: SinceYouLookedDelta | null; onMarkSeen?: () => void;
   railOpen: boolean; onCloseRail: () => void;
   review: DeliveryReviewRead; digest: GoalWorkspaceDigest;
   active: boolean; goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
-  selectedTodoId: string | null; board: ReactNode; results: ReactNode; historyRefreshRevision: number;
+  selectedTodoId: string | null; board: ReactNode; historyRefreshRevision: number;
   proposals: Record<string, WorkspaceActionPreview>; onPreview: (request: WorkspaceActionPreviewRequest) => Promise<WorkspaceActionPreview>;
   readOnly: boolean; onOpenDetails: () => void; onSelect: (selection: WorkspaceDrawerSelection | null) => void; onView: (view: WorkspaceGoalTab) => void;
 }) {
@@ -110,11 +108,10 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
-    {!readOnly || readSourceUrl ? <GoalResearchHistory key={goal.goalId} goalId={goal.goalId} readSourceUrl={readSourceUrl} active={active} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision}/> : null}
     <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
-      readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
+      readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board}
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
-    {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>
+    {readOnly ? <GoalAcceptanceObservationCard goal={goal} overview />
       : <OverviewDeliveryEvidence key={`delivery:${goal.goalId}`} review={review} zh={locale === "zh-CN"}>
         <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />
       </OverviewDeliveryEvidence>}
