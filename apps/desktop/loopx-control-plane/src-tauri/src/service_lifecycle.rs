@@ -62,11 +62,21 @@ impl ServiceLifecycle {
 
     /// Adopt a freshly started set. A start that raced the closing window or
     /// the App-update handoff is handed back so its caller stops the processes
-    /// it started instead of leaving a group this App no longer owns. A live
-    /// set also settles the restore a released handoff still owed.
+    /// it started instead of leaving a group this App no longer owns. A set
+    /// rejected by an active update handoff records the restore debt for the
+    /// stopped runtime; a live set settles the restore a released handoff
+    /// still owed.
     pub(crate) fn adopt(&self, services: ServiceSet) -> Result<(), ServiceSet> {
         let mut current = self.services();
-        if self.should_stop() || self.handoff_active() {
+        if self.should_stop() {
+            return Err(services);
+        }
+        if self.handoff_active() {
+            // The caller stops this late set instead of adopting it. Record
+            // that the active handoff reclaimed the runtime, so a failed
+            // installer launch still leaves the same restore debt as a set
+            // reclaimed through the ownership slot.
+            self.0.reclaimed.store(true, Ordering::Release);
             return Err(services);
         }
         self.0.reclaimed.store(false, Ordering::Release);
@@ -89,6 +99,10 @@ impl ServiceLifecycle {
     /// this window's runtime was reclaimed, and records that the supervisor
     /// owes the same runtime back while the failure stays on screen.
     pub(crate) fn release_update_handoff(&self) -> bool {
+        // Serialize the release with `adopt`: a late set that saw the active
+        // handoff must either be counted by this release or adopt cleanly
+        // after the handoff ended, never be stopped after the debt check.
+        let _current = self.services();
         self.0.handoff.store(false, Ordering::Release);
         let reclaimed = self.0.reclaimed.swap(false, Ordering::AcqRel);
         if reclaimed {
@@ -210,6 +224,37 @@ mod tests {
         assert!(!lifecycle.release_update_handoff());
         assert!(!lifecycle.restore_pending());
         assert!(lifecycle.services().is_none());
+    }
+
+    #[test]
+    fn a_late_start_rejected_by_the_handoff_still_owes_a_restore() {
+        let lifecycle = ServiceLifecycle::new();
+        assert!(!lifecycle.begin_update_handoff_with(|| {}));
+
+        // The supervisor started a set before the handoff parked it. `adopt`
+        // rejects it; the caller stops that set, and the release that follows
+        // must still record the runtime it reclaimed.
+        match lifecycle.adopt(owned_set_for_test(Vec::new())) {
+            Err(mut late) => late.stop(),
+            Ok(()) => panic!("an active handoff must not accept a late set"),
+        }
+        assert!(lifecycle.release_update_handoff());
+        assert!(lifecycle.restore_pending());
+    }
+
+    #[test]
+    fn a_late_start_after_the_handoff_released_adopts_and_settles() {
+        let lifecycle = ServiceLifecycle::new();
+        assert!(lifecycle.adopt(owned_set_for_test(Vec::new())).is_ok());
+        assert!(lifecycle.begin_update_handoff_with(|| {}));
+        assert!(lifecycle.release_update_handoff());
+        assert!(lifecycle.restore_pending());
+
+        // Once the handoff is released, a late set is no longer rejected; it
+        // settles the outstanding restore instead of creating a second one.
+        assert!(lifecycle.adopt(owned_set_for_test(Vec::new())).is_ok());
+        assert!(!lifecycle.restore_pending());
+        assert!(!lifecycle.release_update_handoff(), "one restore only");
     }
 
     #[test]
