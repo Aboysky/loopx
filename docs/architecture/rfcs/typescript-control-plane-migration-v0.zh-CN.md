@@ -49,6 +49,14 @@ finalize 重新取得 Goal lifetime guard，并在共享 request fence 内重读
 完整默认 SQLite CLI 性能仍是独立资格门。本次源码切换不证明 R1–R3 或完整异步协作
 生命周期已通过验收。
 
+**Inbox CLI 调用者接入。** 正常 `manager-inbox` 命令族现在使用既有按命令
+parser、共享 dispatcher 和 executable-revision 请求作用域。完整兼容 CLI
+复用同一个 dispatcher，旧 Inbox 重复分支已退役。两条路径保留既有 parser、
+handler、registry／runtime 解析和 native-controller guard。一次命令只解析一次
+可执行代码身份；源记录仍在原锁协议下实时读取，下一次命令重新解析当前代码。
+既有 TypeScript 语义 owner、桥接操作、回执格式和 Python provider IO 均不变。
+这是 Stage 3 调用者接入，不是新的叶子迁移、结果存储，也不证明 R1–R3 已完成。
+
 R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 [App/inbox 融合设计](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
 按调用者修复、行为刻画、完整异步生命周期切换、真实 adapter 恢复与旧代码删除推进。
