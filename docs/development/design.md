@@ -223,6 +223,13 @@ Choose a default treatment by the user's task, before choosing components:
 | Definitions, methodology and routine provenance | One named contextual entry for the related region | Shared help or existing details, without repeating it inside every row |
 | Failure, stale evidence, unknown result, missing permission or consequential cost | A concise marker at the affected item/action, including disagreement that changes trust | Cause, recovery instructions and full evidence |
 
+README product illustrations and evidence diagrams belong in the default reading
+flow, with concise captions and material evidence limits. Fold supporting
+explanations, setup instructions and source detail after the visual; do not hide
+the illustration inside those disclosures when simplifying the page.
+README 的产品配图与证据图应默认展示，并保留简短图注和必要的证据边界；详细解释、
+配置步骤与来源说明可在图后折叠，精简页面时不要把图一起隐藏。
+
 Repeated items must not default to a stack of full documents. For example, a
 supporting-outcome list must not render every requirement, Agent review and
 independent-check explanation before the reader reaches the next main region.
@@ -802,5 +809,14 @@ automated readability score or an additional owner approval.
 Record the before/after default view and a representative expanded/error state
 in the existing PR visual evidence, with the data/build boundary. State what
 became easier to find and which detail moved behind which existing entry.
+Read the expanded content as a document: check the main reading text's size,
+the repeated explanations across rows and regions, and whether values remain
+distinct from methods, hashes and provenance. A disclosure can reduce the
+default page while leaving its requested detail unreadable. For a responsive
+disclosure change, inspect that same expanded content at a narrow width too.
+Record those observations separately from data, folding and overflow assertions
+in the review capability's `outcome_impact.user_experience.visual_review`.
+Publish the concrete composition judgment and the unverified scope; passing
+functional checks alone cannot support a visual improvement claim.
 If the main task is still buried, the design review fails even when each
 component is accessible, every field is present and the automated checks pass.
