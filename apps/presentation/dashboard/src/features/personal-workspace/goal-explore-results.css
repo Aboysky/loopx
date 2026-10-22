@@ -2,6 +2,7 @@
 .research-saved-evidence { margin: 24px 0; border-top: 1px solid var(--pw-line); }
 .research-saved-evidence > summary { padding: 16px 0; min-height: 44px; cursor: pointer; }
 .goal-explore-results { width: 100%; padding: 24px 0; border: 0; border-radius: 0; }
+.goal-explore-results > p { font-size: var(--text-lead); line-height: var(--leading-prose); }
 .explore-reader-heading { display: flex; align-items: center; gap: 8px; }
 .goal-explore-results .goal-team-results-layout { grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); }
 .explore-finding-navigation { min-width: 0; align-self: start; }

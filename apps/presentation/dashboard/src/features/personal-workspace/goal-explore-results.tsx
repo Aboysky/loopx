@@ -43,14 +43,20 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
     setSelectedId(id);
     if (focusReader) window.requestAnimationFrame(() => {reader.current?.focus({preventScroll: true}); reader.current?.scrollIntoView({block: "nearest"});});
   };
+  const refresh = () => {
+    // A failed later page can have an expired snapshot. Restart its read scope
+    // rather than trapping the reader in retries of an unusable cursor.
+    if (error) setCursor(undefined);
+    setRevision(value => value + 1);
+  };
   return <section className="goal-team-results goal-explore-results" aria-label={zh ? "Explore 证据" : "Explore evidence"} aria-busy={busy}>
     <header><div className="explore-reader-heading"><h3>{zh ? "已保存的结论" : "Saved findings"}</h3>
       <ContextHelp label={zh ? "结论与关联说明" : "About findings and links"}>
         <p>{zh ? "来源记录的观察与结论，保存不代表已经验证或被后续决策采用。关联任务是原记录的显式关联。" : "Source-recorded observations and conclusions. Saving does not establish validation or adoption. Linked tasks are explicit source relationships."}</p>
       </ContextHelp></div>
-      <button type="button" disabled={busy} aria-label={zh ? "刷新证据" : "Refresh evidence"} onClick={() => setRevision(value => value + 1)}><RefreshCw size={16} aria-hidden/></button></header>
+      <button type="button" disabled={busy} aria-label={zh ? "刷新证据" : "Refresh evidence"} onClick={refresh}><RefreshCw size={16} aria-hidden/></button></header>
     {busy ? <p role="status">{zh ? "正在读取证据…" : "Reading evidence…"}</p> : null}
-    {error ? <p role="alert">{zh ? "无法核验此页证据；旧内容已清除。请刷新重试。" : "Cannot verify this evidence page; previous content was cleared. Refresh to retry."}</p> : null}
+    {error ? <p role="alert">{zh ? "无法读取此页证据。刷新可从首页重新读取。" : "Cannot read this evidence page. Refresh to restart from the first page."}</p> : null}
     {page && !page.items.length ? <p>{zh ? "尚无已保存的结论。" : "No saved findings yet."}</p> : null}
     {page && page.items.length > 0 ? <div className="goal-team-results-layout">
       <div className="explore-finding-navigation">

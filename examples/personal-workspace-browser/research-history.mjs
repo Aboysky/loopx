@@ -211,6 +211,7 @@ export const researchHistoryScenario = {
           if (query.get("view") === "findings") findingReads.push({goal: query.get("goal_id"), cursor: query.get("cursor")});
           if (unavailable) return route.fulfill({status: 503, json: {error: "Isolated history transport unavailable"}});
           const response = await fetchWorkspaceBackend(route, owner.base);
+          if (response.status() === 409) return route.fulfill({response});
           assert.equal(response.status(), 200);
           const value = await response.json();
           if (new URL(route.request().url()).searchParams.get("view") === "history") pages.push(value);
@@ -357,6 +358,24 @@ export const researchHistoryScenario = {
       await evidence.getByRole("button", {name:"下一页",exact:true}).click();
       await reader.waitFor();
       assert(findingReads.at(-1).cursor, "Exercise an actual later findings page");
+      const findingGoal = findingReads.at(-1).goal;
+      // Evict the saved snapshot through the production cache, without a timer
+      // or a mocked expiry response. Refresh must offer a usable recovery path.
+      for (let i = 0; i < 8; i++) {
+        const response = await fetch(`${owner.base}/api/chat/explore-results?goal_id=${encodeURIComponent(findingGoal)}&view=findings`);
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).goal_id, findingGoal);
+      }
+      await evidence.getByRole("button", {name: "刷新证据"}).click();
+      await evidence.getByRole("alert").waitFor();
+      assert.equal(await reader.count(), 0, "Expired evidence cannot remain visible as current");
+      await evidence.getByRole("button", {name: "刷新证据"}).click();
+      await reader.waitFor();
+      assert.equal(findingReads.at(-1).cursor, null, "Retry starts a new snapshot instead of replaying the expired cursor");
+      assert.equal(await reader.locator("h4").textContent(), selectedFinding);
+      await evidence.getByRole("button", {name: "下一页", exact: true}).click();
+      await reader.waitFor();
+      assert(findingReads.at(-1).cursor, "Recovered pagination still reaches later findings");
       const graphCapture = JSON.parse(await readFile(resolve(repoRoot,'apps/presentation/dashboard/src/data/fixtures/edgebench-graph-checkpoint-history.json')));
       const readsBeforeSwitch = findingReads.length;
       await page.locator('.personal-goal-link',{hasText:graphCapture.display_name}).click();
