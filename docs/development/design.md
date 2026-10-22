@@ -113,6 +113,15 @@ Owner-facing state follows four rules:
   requests still needing follow-up, not distinct tasks or accepted outcomes.
   Show an unavailable or partial count honestly; put full current briefs,
   linked work, provenance and original conversations behind row expansion.
+  A Goal's supporting outcomes need the same bounded reading hierarchy: show
+  requirement-state counts once, then at most three requirements needing attention
+  in the default overview. Group them by their declared outcome; keep failed,
+  held, changed and partial observations visible in the summary. Make the full
+  collection available in one expansion, including unverified and passing work.
+  Clamp long requirement text only in collapsed rows; expansion restores its
+  complete text and evidence. Explain Agent review versus independent checks once
+  at section level. Overview check details stay collapsed at every viewport;
+  an operation's consequences and actual failures remain visible.
 - **Owner language first.** Primary copy uses the owner's words. Protocol ids,
   gate kinds, preview mechanics and executor profiles belong in a collapsed
   diagnostics disclosure.
