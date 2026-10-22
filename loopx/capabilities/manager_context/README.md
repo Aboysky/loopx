@@ -572,8 +572,10 @@ code fences and table column headers continue across oversized blocks. The
 existing private Lark part-delivery journal retains the frozen plan and each
 provider locator. Recovery verifies known writes before continuing never-sent
 parts; unknown writes, changed intent or lost locators cannot be blindly resent.
-Attachments remain on the last concrete post. A composite provider receipt proves
-completion only after every part and required attachment readback has succeeded.
+Attachments remain on the last concrete post. The adapter marks a composite
+delivery complete only after every part and required attachment readback succeeds.
+An atomic link or table row that cannot fit one post remains an explicit delivery
+failure; it is never silently truncated or sent as plain text.
 Historical single-text receipts remain verify-only compatibility. Intentional
 text and identity-verified mention delivery keep their existing contracts.
 

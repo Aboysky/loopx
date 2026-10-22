@@ -698,3 +698,20 @@ def test_a_stall_notice_without_a_locator_survives_its_own_writeback(
         "attempt": LOCATOR_LESS_ATTEMPT
     }
     assert written[-1]["last_delivery_notice_status"] == "sent_unverified"
+
+
+def test_stall_notice_unknown_write_is_not_repeated(monkeypatch, delivery):
+    parts, _ = plan_manager_reply_parts(BODY)
+    state = _stalled_state(parts, stalls=3, sent=2)
+    writes = []
+    def unknown(**kwargs):
+        writes.append(kwargs["text"])
+        return {"ok": False, "reply_verified": False, "provider_write_attempted": True}
+    monkeypatch.setattr(parts_module, "reply_lark_event_inbox", unknown)
+    for _ in range(2):
+        result = parts_module.deliver_stall_notice(delivery_state=state,
+            delivery_path=delivery["tmp"] / "delivery.json", write_delivery=lambda *_: None,
+            reply_runner=object(), root=delivery["tmp"], config_path=delivery["tmp"] / "config.json",
+            message_id="om_fixture")
+        assert not result["reply_verified"]
+    assert len(writes) == 1

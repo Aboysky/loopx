@@ -9,7 +9,10 @@ from loopx.extensions.lark.inbox_reply import (
     reply_lark_event_inbox,
     verify_lark_inbox_reply,
 )
-from loopx.extensions.lark.outbound import LARK_POST_REQUEST_MAX_BYTES
+from loopx.extensions.lark.outbound import (
+    LARK_POST_REQUEST_MAX_BYTES,
+    LarkOutboundTextError,
+)
 from loopx.extensions.lark.presentation.markdown_parts import (
     split_lark_markdown_posts,
     post_request_bytes,
@@ -26,6 +29,7 @@ class RichProvider(ReplyRunner):
         self.unreadable = set()
         self.no_locator = False
         self.fail_after_write = False
+        self.ascii_wire = False
 
     def __call__(self, args):
         if "+messages-send" in args or "+messages-reply" in args:
@@ -38,7 +42,7 @@ class RichProvider(ReplyRunner):
             body = {
                 "msg_type": "post",
                 "content": json.dumps(
-                    content, ensure_ascii=False, separators=(",", ":")
+                    content, ensure_ascii=self.ascii_wire, separators=(",", ":")
                 ),
                 "uuid": args[args.index("--idempotency-key") + 1],
                 "receive_id": "oc_project_review",
@@ -135,8 +139,12 @@ def test_split_keeps_code_fences_tables_links_and_complete_data():
     assert sum(link in part for part in parts) == 1
 
 
-def test_real_entry_splits_rich_posts_and_recovers_only_unsent_parts(tmp_path):
+@pytest.mark.parametrize("escaped_unicode", [False, True])
+def test_real_entry_splits_rich_posts_and_recovers_only_unsent_parts(
+    tmp_path, escaped_unicode
+):
     provider = RichProvider()
+    provider.ascii_wire = escaped_unicode
     provider.unreadable.add("om_part_0")
     text = "## Findings\n\n" + "完整字段与来源。" * 6000
     attempts = []
@@ -307,3 +315,20 @@ def test_recovery_fences_unavailable_source_destination_or_journal(tmp_path, fau
         next(Path(args["project"]).glob("**/manager-delivery/parts/*.json")).unlink()
     assert not resume(args, attempts[0], resume_parts=True, **options)["reply_verified"]
     assert len(provider.sent) == 1
+
+
+def test_unexpected_preview_encoding_fails_without_recursing_or_text_fallback(tmp_path):
+    provider = RichProvider()
+
+    def html_escaped_preview(args):
+        result = provider(args)
+        if "--dry-run" in args:
+            value = json.loads(result["stdout"])
+            body = value["api"][0]["body"]
+            body["content"] = body["content"].replace("<", "\\u003c")
+            return {**result, "stdout": json.dumps(value)}
+        return result
+
+    with pytest.raises(LarkOutboundTextError, match="serialization"):
+        send(tmp_path, html_escaped_preview, "<" * 6000)
+    assert provider.sent == []

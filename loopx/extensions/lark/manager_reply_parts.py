@@ -358,6 +358,8 @@ def deliver_stall_notice(
         # here on, so the attempt that proved it is no longer needed.
         delivery_state.pop(PART_STALL_NOTICE_ATTEMPT_KEY, None)
         return reconciled
+    if delivery_state.get("delivery_part_stall_notice_started") is True:
+        return _locator_unavailable_result(reconciled_key="notice_reconciled")
     # The locator of the send being attempted now replaces any older one, so the
     # record always points at the most recent unconfirmed notice. This runs only
     # on the path that is about to call the provider, where the old record is
@@ -371,7 +373,9 @@ def deliver_stall_notice(
         delivery_state["updated_at"] = datetime.now(timezone.utc).isoformat()
         write_delivery(delivery_path, delivery_state)
 
-    return reply_lark_event_inbox(
+    delivery_state["delivery_part_stall_notice_started"] = True
+    write_delivery(delivery_path, delivery_state)
+    result = reply_lark_event_inbox(
         project=root,
         config_path=config_path,
         message_id=message_id,
@@ -382,6 +386,11 @@ def deliver_stall_notice(
         delivery_attempt_recorder=record_attempt,
         **dict(reply_options or {}),
     )
+    if (result.get("external_write_performed") is not True
+            and result.get("provider_write_attempted") is not True):
+        delivery_state.pop("delivery_part_stall_notice_started", None)
+    write_delivery(delivery_path, delivery_state)
+    return result
 
 
 def deliver_manager_reply_parts(

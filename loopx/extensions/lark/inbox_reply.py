@@ -23,6 +23,7 @@ from .presentation.markdown_post import (
 )
 
 from .outbound import (
+    LarkOutboundTextError,
     DEFAULT_LARK_TEXT_LIMIT,
     LARK_POST_REQUEST_MAX_BYTES,
     expected_lark_mention_identities,
@@ -558,8 +559,10 @@ def _deliver_lark_inbox_outbound(
                 from .post_delivery import deliver_post_parts
                 from .presentation.markdown_parts import split_lark_markdown_posts
 
+                parts = split_lark_markdown_posts(reply_text, call["body"])
+                if len(parts) < 2:
+                    raise LarkOutboundTextError("provider post serialization cannot fit the rich part plan")
                 if not execute:
-                    parts = split_lark_markdown_posts(reply_text, call["body"])
                     return {**_result(status="preview_ready", ok=True, execute=False,
                         receipt=receipt, placement=placement, format_preflight_passed=True,
                         provider_preview_performed=True, provider_preview_verified=True),

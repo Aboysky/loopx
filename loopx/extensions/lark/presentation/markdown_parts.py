@@ -15,7 +15,26 @@ def post_request_bytes(text: str, template: Mapping[str, Any]) -> int:
     content = json.loads(lark_markdown_post_content(text))
     authored = template.get("content", {})
     if isinstance(authored, str):
-        authored = json.loads(authored)
+        parsed = json.loads(authored)
+        # Preserve the provider preview's encoding and whitespace, including
+        # attachment merging. Escaped Unicode can cost twice its UTF-8 form.
+        old_text = parsed.get("zh_cn", {}).get("content", [[{}]])[0][0].get("text")
+        if isinstance(old_text, str):
+            new_text = content["zh_cn"]["content"][0][0]["text"]
+            for ascii_only in (False, True):
+                old_literal = json.dumps(old_text, ensure_ascii=ascii_only)
+                if old_literal in authored:
+                    replacement = json.dumps(new_text, ensure_ascii=ascii_only)
+                    body = {
+                        **template,
+                        "content": authored.replace(old_literal, replacement, 1),
+                    }
+                    return len(
+                        json.dumps(
+                            body, ensure_ascii=False, separators=(",", ":")
+                        ).encode("utf-8")
+                    )
+        authored = parsed
     if isinstance(authored, Mapping):
         content.update(
             {key: value for key, value in authored.items() if key != "zh_cn"}
