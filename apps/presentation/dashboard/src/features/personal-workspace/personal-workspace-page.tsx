@@ -1,3 +1,4 @@
+import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route";
 import {hasConfiguredGoalChecks} from "../../data/goal-acceptance-observation";
 import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
@@ -10,6 +11,7 @@ import type { ConversationHistoryStatus } from "../../data/use-conversation-hist
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { CollaborationCard } from "./collaboration-card";
+import {ConversationRequests} from "./conversation-requests";
 import {
   compileActionReviewPlan,
   isStaleActionFailure,
@@ -972,7 +974,8 @@ export function PersonalWorkspacePage({
   const selectionScope = `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${controlledGoalId === undefined ? localGoalId : controlledGoalId}`;
   const runtimeSourceUnavailable = statusSourceControl?.activeSource.kind === "runtime"
     && statusSourceControl.connectionState === "error";
-  const [selectionState, setSelectionState] = useState<{scope: string; value: WorkspaceDrawerSelection | null} | null>(null);
+  const [selectionState, setSelectionState] = useState<{scope: string; value: WorkspaceDrawerSelection | null} | null>(
+    () => ({scope: selectionScope, value: readSettingsRoute(new URL(window.location.href))}));
   const selection = selectionState?.scope === selectionScope ? selectionState.value : null;
   const currentSelectionScope = useRef({scope: selectionScope, generation: 0});
   if (currentSelectionScope.current.scope !== selectionScope) {
@@ -1174,9 +1177,17 @@ export function PersonalWorkspacePage({
     settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settingsFromModelMenuRef.current = returnToModel;
     setMobileSidebarOpen(false);
+    writeSettingsRoute(target);
     setSelection(target);
   }
+  useEffect(() => {
+    const restore = () => setSelectionState({scope: currentSelectionScope.current.scope,
+      value: readSettingsRoute(new URL(window.location.href))});
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
   function closeSettings() {
+    writeSettingsRoute(null, true);
     setSelection(null);
     window.requestAnimationFrame(() => {
       const target = settingsFromModelMenuRef.current
@@ -1186,7 +1197,7 @@ export function PersonalWorkspacePage({
       else document.querySelector<HTMLElement>(".personal-mobile-menu")?.focus({ preventScroll: true });
     });
   }
-  const settingsOpen = selection?.kind === "settings";
+  const settingsOpen = selection?.kind === "settings" && !readOnly;
   const managerProjectionId = selectedGoalId;
   const items = useMemo(() => {
     const heartbeatSchedules: WorkspaceTimelineItem[] = Object.values(proposals)
@@ -2492,18 +2503,21 @@ export function PersonalWorkspacePage({
     }, 1800);
   }
 
+  const settingsTarget = selection?.kind === "settings" ? selection : null;
   const settingsPage = settingsOpen ? (
     <Suspense fallback={<p className="personal-lazy-loading" role="status">{t("common.loading")}</p>}>
       <WorkspaceSettingsPage
+        scope={settingsTarget?.scope ?? (settingsTarget?.goalId ? "goal" : "machine")}
+        onNavigate={target => {writeSettingsRoute(target); setSelection(target);}}
         onOpenOriginalConversation={!readOnly && !rootGoalId && workspaceConversations?.onOpenOriginal ? target => {
           closeSettings(); workspaceConversations.onOpenOriginal!(target);
         } : undefined}
         callbacks={effectiveDrawerCallbacks}
-        focusGoalConnection={Boolean(selection?.kind === "settings" && selection.goalId)}
+        focusGoalConnection={Boolean(settingsTarget?.goalId && settingsTarget.tab === "lark")}
         goalNotifications={model.goalNotifications ?? []}
         goals={workspaceGoals}
-        initialGoalId={selection?.kind === "settings" ? selection.goalId ?? selectedGoalId : selectedGoalId}
-        initialTab={selection?.kind === "settings" ? selection.tab ?? (selectedGoalId ? "lark" : "steward") : "steward"}
+        initialGoalId={settingsTarget?.goalId}
+        initialTab={settingsTarget?.tab ?? (settingsTarget?.goalId ? "capabilities" : "steward")}
         onChanged={() => void refreshSettingsState()}
         onClose={closeSettings}
         onThemeChange={updateTheme}
@@ -2701,6 +2715,10 @@ export function PersonalWorkspacePage({
         <div className="personal-channel">
           <div>
           <ChannelHeader
+            requestInventory={!readOnly && !rootUnavailable && !runtimeSourceUnavailable && !selectedGoalId && !selectedWorkspaceRef
+              && (!originalConversation || originalConversation.source?.context_kind === "steward") ? <ConversationRequests
+                key={originalConversation?.session?.session_id ?? "owner"} sessionId={conversationSessionId} ownerFallback={!originalConversation}
+                refreshKey={`${managerMessages.length}:${managerMessages.at(-1)?.id ?? ""}:${Boolean(managerMessages.at(-1)?.pending)}`}/> : undefined}
             originalConversationTitle={originalConversation ? `${originalConversation.source?.app_ref ?? "Lark"} · ${originalTitle}` : undefined}
             agents={agents}
             scopeUnavailable={rootUnavailable}
