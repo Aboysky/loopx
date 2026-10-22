@@ -12,6 +12,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "heartbeat-flow-main-control"
 LONG_NEXT_ACTION_TAIL = "without truncating the final private-safe boundary sentence."
 EXPECTED_AGENT_TODO_ACTION = "[P1] Run one bounded heartbeat marker and validate the compact result."
@@ -162,6 +166,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -270,6 +275,7 @@ def write_monitor_fixture(root: Path) -> tuple[Path, Path, Path]:
     Path(progress_record["markdown_path"]).write_text("# Fixture Progress\n", encoding="utf-8")
     with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(progress_record) + "\n")
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -349,6 +355,7 @@ def write_external_evidence_fixture(
     Path(progress_record["markdown_path"]).write_text("# Fixture External Evidence Wait\n", encoding="utf-8")
     with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(progress_record) + "\n")
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -433,6 +440,7 @@ def write_external_monitor_advancement_fixture(root: Path) -> tuple[Path, Path, 
     Path(progress_record["markdown_path"]).write_text("# Fixture Running Benchmark Observation\n", encoding="utf-8")
     with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(progress_record) + "\n")
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -522,6 +530,7 @@ def write_scoped_future_external_monitor_fixture(root: Path) -> tuple[Path, Path
     )
     with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(progress_record) + "\n")
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -602,6 +611,7 @@ def write_operator_gate_fixture(root: Path) -> tuple[Path, Path, Path]:
     Path(progress_record["markdown_path"]).write_text("# Fixture Operator Gate\n", encoding="utf-8")
     with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(progress_record) + "\n")
+    import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 
@@ -720,7 +730,9 @@ def main() -> int:
         )
         assert follow_up["should_run"] is True, follow_up
         assert follow_up["state"] == "eligible", follow_up
-        assert follow_up["status"] == "state_refreshed", follow_up
+        # The imported open Todo owns the next action; refresh history remains
+        # evidence rather than replacing the canonical Todo's route status.
+        assert follow_up["status"] == "active_state_agent_todo", follow_up
         assert follow_up["quota"]["spent_slots"] == 1, follow_up
         assert follow_up["quota"]["allowed_slots"] == 2, follow_up
         assert follow_up["recommended_action"] == EXPECTED_AGENT_TODO_ACTION, follow_up
