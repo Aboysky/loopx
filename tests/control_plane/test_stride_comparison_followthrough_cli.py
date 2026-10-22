@@ -48,7 +48,7 @@ def test_current_source_replay_and_different_successor_do_not_certify_selected_w
     actor.probe(request, "retained")
 
     def guard(turn, todo=None):
-        return cli("quota", "should-run", *identity, "--codex-app", "--scan-path", str(project),
+        return cli("quota", "should-run", *identity, "--codex-app",
             "--turn-instance-id", turn, *(("--todo-id", todo) if todo else ()))
 
     turn = "comparison-a-plan-b-successor"
@@ -186,8 +186,8 @@ def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, mo
             "--status", "confirmed", "--tag", "writeback-result", "--evidence-ref", f"measured:scope-{index}",
             "--measurements-json", str(measurements))
     turn = "wide-page-review"
-    cli("quota", "should-run", *identity, "--codex-app", "--scan-path", str(project), "--turn-instance-id", turn)
-    guard = cli("quota", "should-run", *identity, "--codex-app", "--scan-path", str(project),
+    cli("quota", "should-run", *identity, "--codex-app", "--turn-instance-id", turn)
+    guard = cli("quota", "should-run", *identity, "--codex-app",
         "--turn-instance-id", turn, "--todo-id", fixture.TODO_ID)
     control = guard["replan_action_packet"]["stride_control"]
     page = cli("explore", "turn-context", *identity, "--todo-id", fixture.TODO_ID, "--result-limit", "20")

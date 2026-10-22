@@ -32,9 +32,6 @@ PrintPayload = Callable[
     None,
 ]
 FormatSelector = Callable[..., str]
-def _scan_roots(args: argparse.Namespace) -> list[Path]:
-    scan_roots = [Path(item).expanduser() for item in args.scan_path]
-    return scan_roots or [Path(args.scan_root).expanduser()]
 
 
 def handle_summary_all_command(
@@ -87,7 +84,6 @@ def handle_summary_all_command(
             payload = build_global_risks(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=_scan_roots(args),
                 agent_id=args.agent_id,
                 time_range=args.time_range,
                 limit=max(1, args.limit),
@@ -101,7 +97,6 @@ def handle_summary_all_command(
             payload = build_global_gates(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=_scan_roots(args),
                 agent_id=args.agent_id,
                 limit=max(1, args.limit),
             )
@@ -114,7 +109,6 @@ def handle_summary_all_command(
             payload = build_global_todos(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=_scan_roots(args),
                 agent_id=args.agent_id,
                 limit=max(1, args.limit),
             )
@@ -127,7 +121,6 @@ def handle_summary_all_command(
         payload = build_summary_all(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=_scan_roots(args),
             agent_id=args.agent_id,
             time_range=args.time_range,
             limit=max(1, args.limit),

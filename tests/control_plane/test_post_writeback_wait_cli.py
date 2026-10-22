@@ -151,8 +151,6 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
     )
     rc, admitted = run(*guard_args)
     assert rc == 0 and admitted["normal_delivery_allowed"], admitted
@@ -288,8 +286,6 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
         AGENT_ID,
         "--turn-instance-id",
         "independent-next-turn",
-        "--scan-path",
-        str(project),
     )
     assert rc == 0 and next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID, (
         next_turn

@@ -1042,7 +1042,7 @@ def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, 
     ))
     argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-            "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+            "--host", "codex-cli", "--project", str(project),
             "--codex-bin", str(binary), "--codex-model", "fixture-model",
             "--codex-reasoning-effort", "high", "--codex-sandbox", "read-only",
             "--no-global-sync", "--validation-command-json",
@@ -1516,8 +1516,6 @@ def test_quota_cli_projects_outer_controller_without_codex_app_action(
                 "outer_controller",
                 "--execution-mode",
                 "isolated_headless",
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -1552,8 +1550,6 @@ def test_quota_cli_without_scheduler_context_fails_closed(tmp_path: Path) -> Non
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -1595,8 +1591,6 @@ def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
                 "--agent-id",
                 "codex-fixture",
                 *profile_args,
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -1636,8 +1630,6 @@ def test_quota_cli_short_context_flags_preserve_all_typed_fields(
                 "agent_cli_loop",
                 "-M",
                 "interactive",
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -1705,8 +1697,6 @@ def test_turn_cli_consumes_live_state_without_writes(
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
-                "--scan-root",
-                str(project),
                 "--include-transaction-detail",
             ]
         )
@@ -1763,8 +1753,6 @@ def test_turn_cli_resolves_its_decision_through_the_shared_owner(
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -1799,8 +1787,6 @@ def test_turn_cli_projects_explicit_fresh_iteration_context(
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
-                "--scan-root",
-                str(project),
                 "--iteration-context",
                 "fresh",
                 "--include-transaction-detail",
@@ -1855,8 +1841,6 @@ def test_turn_cli_binds_advisory_primary_without_hiding_portfolio(
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -1886,7 +1870,7 @@ def test_turn_cli_explicit_todo_keeps_default_and_never_falls_back(tmp_path, sel
     with contextlib.redirect_stdout(output):
         code = cli_main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
                          "turn", "plan", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-                         "--scan-root", str(project), *(["--todo-id", selection] if selection else [])])
+                          *(["--todo-id", selection] if selection else [])])
     result = json.loads(output.getvalue())
     if selection == "todo_missing":
         assert code == 1
@@ -1909,7 +1893,7 @@ def test_turn_explicit_selection_cannot_retarget_resumption(tmp_path, extra):
     with contextlib.redirect_stdout(output):
         code = cli_main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
                          "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-                         "--project", str(project), "--scan-root", str(project), "--todo-id", "todo_fixture0002", *extra])
+                         "--project", str(project),  "--todo-id", "todo_fixture0002", *extra])
     assert code == 1
     assert "cannot retarget" in json.loads(output.getvalue())["error"]
 
@@ -1925,7 +1909,7 @@ def test_explicit_turn_todo_does_not_bypass_completion_or_actor_scope(tmp_path, 
     with contextlib.redirect_stdout(output):
         code = cli_main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
                          "turn", "plan", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-                         "--scan-root", str(project), "--todo-id", "todo_fixture0002"])
+                          "--todo-id", "todo_fixture0002"])
     result = json.loads(output.getvalue())
     assert code == 1, result
     assert "no alternate task" in result["error"]
@@ -1950,8 +1934,6 @@ def test_turn_cli_omits_transaction_detail_by_default(tmp_path: Path) -> None:
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -1983,8 +1965,6 @@ def test_turn_cli_requires_complete_resume_identity(tmp_path: Path) -> None:
                 "codex-fixture",
                 "--resume-goal-id",
                 "loopx-turn-fixture",
-                "--scan-root",
-                str(project),
             ]
         )
 
@@ -2093,8 +2073,6 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             json.dumps([sys.executable, "-c", host_script]),
             "--validation-command-json",
             json.dumps([sys.executable, "-c", validation_script]),
-            "--scan-root",
-            str(project),
             "--no-global-sync",
             "--execute",
         ]
@@ -2193,8 +2171,6 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
                 json.dumps([sys.executable, "-c", host_script]),
                 "--validation-command-json",
                 json.dumps([sys.executable, "-c", validation_script]),
-                "--scan-root",
-                str(project),
                 "--no-global-sync",
                 "--resume-turn-key",
                 payload["resume_turn_key"],
@@ -2228,7 +2204,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             "--agent-id", "codex-fixture", "--turn-instance-id", "next-cadence-fixture",
             "--project", str(host_project), "--host-command-json",
             json.dumps([sys.executable, "-c", host_script]), "--validation-command-json",
-            json.dumps([sys.executable, "-c", validation_script]), "--scan-root", str(project),
+            json.dumps([sys.executable, "-c", validation_script]),
             "--no-global-sync", "--execute",
         ])
     waiting = json.loads(next_output.getvalue())
@@ -2304,8 +2280,6 @@ def run_dsh_turn(**kwargs):
                     turn_instance_id,
                     "--iteration-context",
                     context,
-                    "--scan-root",
-                    str(project),
                     "--no-global-sync",
                     "--execute",
                 ]
@@ -2394,7 +2368,7 @@ def test_turn_run_once_cli_dsh_preserves_material_path_delta(
         "loopx-turn-fixture", "--agent-id", "codex-fixture", "--host", "dsh",
         "--project", str(host_project), "--dsh-runner", str(runner),
         "--validation-command-json", json.dumps([sys.executable, "-c", validator]),
-        "--execution-mode", "isolated-headless", "--scan-root", str(project),
+        "--execution-mode", "isolated-headless",
         "--no-global-sync", "--execute",
     ]
     output = io.StringIO()
@@ -2486,8 +2460,6 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
         json.dumps([sys.executable, "-c", host_script]),
         "--validation-command-json",
         json.dumps([sys.executable, "-c", validation_script]),
-        "--scan-root",
-        str(project),
         "--no-global-sync",
         "--execute",
     ]
@@ -2562,8 +2534,6 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
                 "outer_controller",
                 "--execution-mode",
                 "isolated-headless",
-                "--scan-root",
-                str(project),
             ]
         )
     next_plan = json.loads(next_plan_output.getvalue())
@@ -2745,8 +2715,6 @@ def _turn_run_once_completion_argv(
         json.dumps([sys.executable, "-c", host_script]),
         "--validation-command-json",
         json.dumps([sys.executable, "-c", validation_script]),
-        "--scan-root",
-        str(project),
         "--no-global-sync",
         "--execute",
     ]
@@ -3403,8 +3371,6 @@ raise SystemExit(0 if pathlib.Path("claimed-artifact.txt").is_file() else 9)
                 json.dumps([sys.executable, "-c", validation_script]),
                 "--validation-failure-kind",
                 "replan_required",
-                "--scan-root",
-                str(project),
                 "--no-global-sync",
                 "--execute",
             ]
@@ -3559,8 +3525,6 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
                         "import json, sys; json.load(sys.stdin)",
                     ]
                 ),
-                "--scan-root",
-                str(project),
                 "--no-global-sync",
                 "--execute",
             ]
@@ -3751,8 +3715,6 @@ def test_turn_run_once_host_wires_validated_reflection_post_settlement(
         str(project),
         "--validation-command-json",
         json.dumps([sys.executable, "-c", "pass"] if memory_path == "ordinary_validator" else [sys.executable, str(validator)]),
-        "--scan-root",
-        str(project),
         "--no-global-sync",
         "--execute",
     ]
@@ -3897,8 +3859,6 @@ def test_turn_run_once_cli_resumes_session_from_recoverable_failed_turn(
         "--host",
         "codex-cli",
         "--project",
-        str(project),
-        "--scan-root",
         str(project),
         "--no-global-sync",
         "--execute",

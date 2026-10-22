@@ -139,7 +139,7 @@ def test_public_quota_distinguishes_monitor_repair_from_generation_wait(
     before = state.read_bytes()
     assert (b"## Agent Todo" in before) == (provider is None)
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+        "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     condition = summary["resume_blocked_items"][0]["resume_condition"]
@@ -197,7 +197,7 @@ def test_public_quota_replans_completion_cycles_without_reassigning_work(
             state_path=state, provider=provider)
     before = state.read_bytes()
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+        "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     blocked = next(row for row in summary["resume_blocked_items"] if row["todo_id"] == "todo_alpha")
@@ -269,7 +269,7 @@ def test_public_quota_capacity_wait_uses_provider_after_cutover_without_display_
     for capabilities, count in [((), 0), (("--available-capability", "compiler"), 1)]:
         code, packet = run_json_cli_result(
             "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-            "--scan-path", str(tmp_path), *capabilities, registry_path=registry, runtime_root=runtime,
+             *capabilities, registry_path=registry, runtime_root=runtime,
         )
         assert code == 0, packet
         assert packet["agent_todo_summary"]["current_agent_deferred_resume_count"] == count
@@ -292,7 +292,7 @@ def test_canonical_todos_do_not_replace_a_missing_declared_goal_source(tmp_path,
 
     code, packet = run_json_cli_result(
         "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime,
+        registry_path=registry, runtime_root=runtime,
     )
 
     assert code == 1
@@ -305,7 +305,7 @@ def test_canonical_todos_do_not_replace_a_missing_declared_goal_source(tmp_path,
     state.write_bytes(prose)
     code, packet = run_json_cli_result(
         "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime,
+        registry_path=registry, runtime_root=runtime,
     )
     assert code == 0, packet
     assert packet["status_health_ok"] is True

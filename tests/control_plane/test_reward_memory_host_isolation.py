@@ -425,7 +425,7 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
             *host_args, "--project", str(project),
             "--iteration-context", "fresh", "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]),
-            "--scan-root", str(project), "--no-global-sync", "--execute"])
+             "--no-global-sync", "--execute"])
     result = json.loads(output.getvalue())
     assert code == 0, result
     observed = json.loads(capture.read_text())
@@ -468,7 +468,7 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
     status_output = io.StringIO()
     with contextlib.redirect_stdout(status_output):
         status_code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-            "status", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture", "--scan-root", str(project)])
+            "status", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture"])
     status = json.loads(status_output.getvalue())
     assert status_code == 0, status
     item = next(item for item in status["attention_queue"]["items"] if item.get("goal_id") == "loopx-turn-fixture")
