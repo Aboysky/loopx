@@ -16,6 +16,11 @@ from ..control_plane.runtime.public_safety import SECRET_LIKE_SURFACE_PATTERN
 from urllib.parse import parse_qsl, urlparse
 
 from ..file_lock import exclusive_file_lock
+# Public extension presentation utility; keep path classification single-owned.
+from ..public_safe_text import (
+    COMPACT_TOKEN_PATTERN as _ID_RE,
+    find_public_safe_local_path as find_public_safe_local_path,
+)
 from .runtime import (
     MAX_EXTENSION_RESPONSE_BYTES,
     _resolved_active_extension,
@@ -43,7 +48,6 @@ EXTENSION_PROJECTION_PUBLISH_RECEIPT_SCHEMA_VERSION = (
     "extension_projection_publish_receipt_v0"
 )
 
-_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _ANCHOR_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _MARKUP_RE = re.compile(r"<[^>]*>|javascript:", re.IGNORECASE)
 _LOCAL_PATH_RE = re.compile(
@@ -89,7 +93,11 @@ import importlib
 import json
 import sys
 
-request = json.load(sys.stdin)
+# The transport owner writes and reads UTF-8 bytes, and this helper runs under
+# `python -I`, which ignores PYTHONIOENCODING/PYTHONUTF8: its text streams fall
+# back to the host locale codec (`cp936` on a zh-CN Windows host), so the JSON
+# payload must be decoded and encoded as bytes here instead.
+request = json.loads(sys.stdin.buffer.read().decode("utf-8"))
 reference = request["reference"]
 module_name, attribute_name = reference.split(":", 1)
 try:
@@ -111,7 +119,9 @@ else:
                 "status": "rejected",
                 "error": str(exc)[:1000],
             }
-json.dump(response, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+sys.stdout.buffer.write(
+    json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+)
 """
 
 

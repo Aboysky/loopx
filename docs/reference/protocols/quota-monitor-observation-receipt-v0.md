@@ -19,19 +19,20 @@ advancement work remains active.
   `continuous_monitor` visible to the same Agent. Admission checks the Todo
   authority as well as the bounded decision projection, so a due monitor is
   not rejected merely because it falls outside the compact list.
-- Under a scoped User gate, an auxiliary observation is admitted only when the
+- Under a scoped User gate, a primary or auxiliary observation is admitted only when the
   existing typed dependency owner proves every addressed live gate independent
   of that exact Monitor. Overlapping, global, conflicting or unknown scopes
   fail closed. The CLI projection and effect admission use the same rule; the
   effect rechecks the current complete Todo snapshot, so a cached command cannot
-  bypass a newly blocking gate. New auxiliary provider plans also require a
+  bypass a newly blocking gate. A due Monitor work-lane projection alone cannot
+  override that dependency decision. New Monitor provider plans also require a
   commit-head dependency guard: canonical providers evaluate the same typed rule
   on the head used by the existing projection revision CAS; legacy observations
   evaluate it inside the existing Todo mutation lock. A blocking gate committed
   first prevents observation writeback, including changes after preflight.
   This dependency result grants no approval or lease. Exact committed receipts
   remain historical replay. Frozen plans predating the guard retain their
-  intended-effect identity, while any still-uncommitted auxiliary provider
+  intended-effect identity, while any still-uncommitted Monitor provider
   dispatch is upgraded to the current guard without rewriting its WAL. A receipt
   proves a historical outcome, never permission for a new mutation. Guarded canonical
   requests use `loopx_coordination_monitor_poll_request_v3`: an older receiver
@@ -48,6 +49,17 @@ advancement work remains active.
   replay that observation; changed content conflicts only with the same monitor
   identity; another due monitor receives an independent no-spend receipt.
   Shipped turn-only receipts remain replayable for their original monitor.
+- A target-only, turn-scoped executed retry retains the resolved Todo identity of an existing
+  poll transaction when that same active Monitor is no longer due. Current
+  target selection and the existing receipt path locate the operation; only the
+  typed transaction owner may verify its scope, fingerprint and frozen admission.
+  The transport rechecks that Todo-scoped operation's presence under the same
+  quota admission as the native receipt read. A prior no-effect abort cannot turn
+  this recovery route into a new poll. Committed replay and provider-committed
+  pending recovery grant no admission to a new not-due observation. Caller target, hash, intent and lease proof
+  remain unchanged. Explicit Todo retries and historical target-only wire shapes
+  retain their existing paths; current replacement selection is not evidence of
+  an archived Monitor's original identity.
 - A receipt-bound monitor remains strict: another monitor cannot be substituted
   for the Turn's settlement Todo. Multiple auxiliary receipts never change the
   already-bound settlement identity.
@@ -111,6 +123,49 @@ does not add a configuration switch, relax Monitor authority or retry external
 observations. Existing CLI/managed-Turn receipts provide the readback; no new
 frontend or Lark command/settings owner is introduced.
 
+### Legacy atomic observations and recovery
+
+For an unpromoted Goal, one locked atomic state replacement now stores the
+Monitor observation, both requested successor roles and its operation receipt.
+Retry the same `quota monitor-poll` invocation after a lost response. It returns
+the original successor IDs even if a task was renamed, completed or archived,
+or the Goal subsequently moved to canonical authority. Replaying an older poll
+after a later poll returns its original response without rewinding current state. Read them with
+`loopx todo list --goal-id "$GOAL" --todo-id "$TODO"`. Retained operation receipts
+remain outside the Todo sections so archival does not erase recovery identity.
+They include the original public mutation results, so retries preserve the
+business response as well as IDs. Receipts remain retained and increase the
+state file; this bounded recovery change does not qualify indefinite retention
+or sustained legacy polling.
+
+New pending provider plans freeze `legacy_batch_version: 1`. An older pending
+legacy operation without a business receipt stops for reconciliation: preserve
+its pending receipt and inspect the original Monitor and successor Todos;
+do not infer identity from text, delete the receipt or rerun known effects with
+a new identity. Canonical business receipts and completed quota receipts remain
+replayable without this marker. Drain pending batches before rolling back to a
+version without the atomic legacy adapter; do not disable writer fences.
+
+Fresh legacy batches share canonical Todo-create semantic-duplicate admission: same role/text with
+conflicting metadata is rejected before any business write. This replaces the
+old partial metadata upsert. Matching semantics reuse the existing Todo without
+rewriting its metadata; an omitted empty capabilities list is equivalent to
+`[]`, as in the existing public Todo contract. Current actor, User gate and source fences remain
+effective. The retained legacy `--next-claimed-by` option can assign a registered
+peer through its internal typed handoff policy; the observing actor is unchanged.
+Canonical Monitor and ordinary Todo create retain actor-owned claims. A fresh
+unknown owner is rejected before quota reservation or business writes. An exact
+committed receipt replays its frozen admission after registration changes; it
+grants no new adoption, lease or execution authority. No new frontend,
+Lark command or configuration switch is introduced.
+
+The nested Todo responses retain the public add/update fields. Dry-run write
+correctness and fresh shadow diagnostics describe one shared batch rather than
+three independent writes. Post-commit shadow diagnostics are not frozen into
+the business receipt. Before promotion, an ordinary retry drains any retained
+shadow outbox through its existing durable-readback recovery; after promotion,
+historical replay cannot project old legacy state into canonical authority.
+
 ### Canonical leased observations and recovery
 
 For a promoted Goal, an existing Monitor execution can supply its current lease
@@ -163,8 +218,19 @@ lease proof. Before downgrading to a version without this protocol, finish v1
 pending settlements; older binaries cannot interpret them. Never disable a
 writer fence to recover by writing an older Markdown projection.
 
-The bounded real-source rehearsal clones read-only source state and adds only
-synthetic records in disposable runtimes. It requires an isolated PostgreSQL URL:
+The bounded source rehearsal reads a stable Markdown snapshot, including
+unreferenced archives, and adds synthetic records only in disposable runtimes.
+Use a baseline that supports the same authority format and Monitor reactivation;
+all four arms must preserve the full source records and reach identical heads.
+The disposable cases use `soft_claim` for observation and `hard_lease` for
+execution. These fixture transitions do not qualify policy migration, whole-Goal
+recovery, or the contents of a selected canonical store. It requires an isolated
+PostgreSQL URL:
+
+有界演练读取稳定的 Markdown 快照，保留无依赖关系的完整归档；仅在临时运行目录添加
+合成记录。基线须支持相同的权威存储格式及 Monitor 重启语义，四组最终状态必须一致。
+观察使用 `soft_claim`，执行使用 `hard_lease`；样本内切换不证明实际策略迁移、完整
+Goal 恢复或已选 canonical 存储的内容验收。
 
 ```bash
 LOOPX_TEST_POSTGRES_URL="$DISPOSABLE_POSTGRES_URL" \
@@ -257,14 +323,15 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   的观察回执。准入同时检查 Todo 权威源与有界决策投影，不能仅因到期 monitor
   位于精简列表之外就拒绝它。
 - 存在 scoped User gate 时，仅当既有 typed 依赖 owner 证明所有面向该 Agent
-  的有效 gate 都与该精确 Monitor 独立，才允许辅助观察。重叠、全局、冲突或未知
+  的有效 gate 都与该精确 Monitor 独立，才允许主监控或辅助观察。重叠、全局、冲突或未知
   scope 均失败关闭。CLI 投影与 effect 准入复用同一规则；effect 按当前完整 Todo
-  快照重新核验，旧命令不能绕过新出现的阻塞 gate。新的辅助 provider plan 还
+  快照重新核验，旧命令不能绕过新出现的阻塞 gate。到期 Monitor 的 work-lane
+  投影本身不能覆盖该依赖结论。新的 Monitor provider plan 还
   强制提交时的依赖 guard：canonical provider 在既有 projection revision CAS
   所使用的同一个 head 上执行 typed 规则；legacy 观察在既有 Todo 写锁内核验。
   阻塞 gate 先提交时，包括 preflight 后的变更，不得写入观察。依赖结论不授予
   批准或租约。已提交回执仍按历史结果精确重放；引入 guard 前的冻结 plan 保留
-  原 effect 身份，仍未提交的辅助 provider dispatch 则升级到当前 guard，不改写
+  原 effect 身份，仍未提交的 Monitor provider dispatch 则升级到当前 guard，不改写
   其 WAL。回执证明历史结果，不授权新 mutation。带 guard 的 canonical 请求使用
   `loopx_coordination_monitor_poll_request_v3`；旧 receiver 拒绝该 schema，不能静默
   忽略必要的 gate 校验。不带 guard 的既有 caller 保持原请求与回执身份。
@@ -276,6 +343,14 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   `target_key` 摘要建立身份。精确重试只重放该观察；同一 monitor 下内容变化
   只与该 monitor 冲突；另一个到期 monitor 获得独立的不计费回执。已发布的
   Turn-only 旧回执仍可对原 monitor 重放。
+- 仅用 target 的 turn-scoped 执行重试，在同一个 active Monitor 已不再到期时保留已有 poll
+  事务解析出的 Todo 身份。当前 target 选择和既有回执路径只定位原操作；作用域、
+  指纹与冻结准入仍由 typed 事务 owner 校验。transport 在 native 回执读取的同一
+  quota admission 内重查 Todo-scoped 操作仍存在；之前的 no-effect abort 不能把
+  恢复路由转成新 poll。重放已提交操作或恢复 provider 已提交的 pending 操作，
+  不提供新的未到期观察准入。调用者的 target、hash、intent
+  和租约证明保持原样。显式 Todo 重试及历史 target-only wire 保留原路径；当前
+  replacement 选择不能证明已归档 Monitor 的原身份。
 - 若 heartbeat 本身绑定的是 monitor，仍保持严格身份，不能把另一个 monitor
   替换为本 Turn 的结算 Todo；多个辅助回执也绝不改变既有结算身份。
 - 辅助观察无变化后，原 advancement Todo 继续保持选中；若观察发生重大变化，
@@ -320,6 +395,38 @@ scoped-gate fallback 现在允许观察与 gate 独立的到期 Monitor，不再
 顺序均须保留一次主任务扣额、每个观察身份一个回执，以及当前到期／actor／租约
 准入。不新增配置开关、不放宽 Monitor 权限、不重新执行外部观察。CLI／managed
 Turn 复用现有回执读回；不另建前端或 Lark 命令／配置权威。
+
+### Legacy 原子观察与恢复
+
+未晋升 Goal 的 Monitor 观察、请求的两类 successor 和操作回执，现在在同一组锁内
+一次原子替换状态文件。响应丢失后重试相同的 `quota monitor-poll` 调用；即使任务
+后来被改名、完成或归档，或 Goal 已晋升，仍返回原 successor ID。后续观察已写入时，
+旧观察重放仍返回原响应，不回退当前状态。用
+`loopx todo list --goal-id "$GOAL" --todo-id "$TODO"` 读回任务。操作回执保留在
+Todo 区域外，归档不会删除恢复身份；保留回执会增加 legacy 状态文件的存储量。
+回执包含原公开 mutation 结果，重试同时保留业务响应与 ID。回执持续保留；本次
+有界恢复修复不代表无限保留或长期 legacy 轮询已通过验证。
+
+新 pending provider plan 冻结 `legacy_batch_version: 1`。旧 pending legacy 操作
+若没有不可变业务回执，就保留 pending 回执并要求核对原 Monitor 与 successor；
+不能从可变文本猜测身份、删除回执或换新 identity 重做已知效果。既有 canonical
+业务回执与已完成 quota 回执不依赖该字段，仍可重放。回滚到不支持原子 legacy
+适配器的版本前，应先完成 pending batch；不得关闭 writer fence 绕过恢复要求。
+
+新的 legacy batch 共享 canonical Todo-create 的语义去重判定：相同 role/text 的既有任务若
+元数据冲突，整笔写入前拒绝，替代原先的局部元数据更新。actor、User gate、源状态
+围栏保持生效。语义一致时复用既有 Todo，不重写元数据；缺省的空 capabilities
+列表与 `[]` 等价，沿用公开 Todo 契约。既有 legacy `--next-claimed-by` 通过内部
+类型化交接规则允许分配给已注册 peer，观察者 actor 保持不变；canonical Monitor
+及普通 Todo create 仍只允许 actor-owned claim。首次调用的未知 owner 在 quota
+预留及业务写入前拒绝。已提交回执按原 identity 重放冻结的准入，即使注册信息后来
+改变也不重做效果；重放不授予新接收确认、租约或执行权限。不增加前端、
+Lark 命令或配置开关。
+
+嵌套 Todo 响应保留公开 add/update 字段。dry-run 写入正确性和首次 shadow 诊断
+描述同一批次，不再表示三笔独立写入。提交后的 shadow 诊断不固化进业务回执。
+晋升前，普通重试通过现有持久读回恢复机制处理保留的 shadow outbox；晋升后，
+历史重放不能把旧 legacy 状态投影回 canonical authority。
 
 ### Canonical 带租约观察与恢复
 

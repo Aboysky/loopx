@@ -688,6 +688,20 @@ the live quota-backed queue item for the same `goal_id` when one exists, under
 `global_registry_shadow_findings`, so stale source shadows do not become a second
 quota health blocker while the fact remains visible in `global_registry.findings`.
 
+A Goal can therefore have both a health finding and a live read-model item in
+`attention_queue.items`. Match the required projection as well as `goal_id`:
+the first row for a Goal is not necessarily its Todo or Goal-channel view.
+When the declared Goal document is missing, available canonical Todo, lease and
+acceptance observations remain readable; the `state_file_missing` finding still
+blocks automatic delivery. Readback never reconstructs the document or replaces
+its intent and stop conditions. Restoring the document permits a fresh admission
+check; provider failure still refuses stale display fallback.
+
+同一个 Goal 可以同时有健康告警和权威状态的只读投影。读取 Todo 或 Goal channel
+时须同时匹配 `goal_id` 和所需投影字段，不能假定第一行就是该视图。Goal 文档缺失时，
+可用的 canonical Todo、lease 和验收仍可回读，但不授予自动执行，也不重建文档；恢复
+文档后重新准入，provider 不可用时继续拒绝旧显示数据回退。
+
 ## Contract Health
 
 `contract.ok=false` means the UI should show a blocking health state before
@@ -836,8 +850,14 @@ Item fields:
   compact per-goal policy projection for settings such as self-repair, and
   `stale_latest_run_warning`, a compact warning that the current active-state
   file appears newer or different from the latest run's captured state
-  projection. This warning is a repair hint, not a scheduler gate: consumers
-  should run `refresh-state` before trusting latest-run-derived routing, while
+  projection. Status automatically rebuilds ordinary stale refresh/progress routing after a
+  successful current-state Todo read, using the shared TypeScript attention
+  owner. Reconciled items use `source=active_state` and omit the warning;
+  no historical Run or settlement is rewritten. An unresolved historical
+  failure, outcome gap, unclassified result or owner gate, or an unavailable
+  current source, retains the warning.
+  This warning is a repair hint, not a scheduler gate: consumers must not trust
+  unreconciled latest-run-derived routing, while
   quota eligibility still comes from the quota guard. When orchestration mode
   is `multi_subagent`, project assets may also include `subagent_activity`, a
   compact child-run projection derived from run history. It records child run
@@ -935,10 +955,12 @@ Item fields:
   `project_asset.user_todos` projection keeps legacy `next` / `next_index`
   fields and may also include up to three unfinished `items` for thin workers
   that need more than the first open todo.
-- `agent_todos`: optional checkbox summary parsed from `## Agent Todo`,
-  `## Codex Todo`, or `## Project Agent Todo`. Agent-facing consumers may use
-  it to choose implementation work after gates and quota allow execution; it is
-  not a user approval signal. Status, quota, and review-packet projections
+- `agent_todos`: checkbox summary parsed from `## Agent Todo`,
+  `## Codex Todo`, or `## Project Agent Todo`. The section may be empty, but a
+  readable legacy state must include its heading; absence is
+  `state_incomplete`. Agent-facing consumers may use it to choose
+  implementation work after gates and quota allow execution; it is not a user
+  approval signal. Status, quota, and review-packet projections
   should preserve up to three unfinished agent todo items so short heartbeats do
   not confuse "first visible item" with the whole backlog. Todo summaries also
   expose `first_executable_items` for advancement-class work and
@@ -1099,6 +1121,14 @@ goal that is not present in the registry. Dashboard consumers should show this
 as controller work: register the goal if it is active, or archive the runtime
 record if it is old. Watch-only legacy records remain visible in run history
 without entering the queue.
+
+`status=state_incomplete` is emitted when a legacy Markdown active state is
+readable but lacks its required `## Agent Todo` heading (or an accepted alias).
+The item carries `state_incomplete` with the missing sections and repair
+guidance. The same condition makes `loopx todo list` return `ok=false` with
+`error_code=state_incomplete`; consumers must not interpret its zero Todos as a
+goal with no open work. Canonical provider authority is unaffected because this
+check applies only to the legacy Markdown fallback.
 
 `status=state_refreshed` is emitted for registered goals when the latest compact
 run came from `loopx refresh-state`. Dashboard consumers should show it
@@ -1286,7 +1316,12 @@ the legal choice boundary separate from the displayed suggestions;
 `suggestions_exhaustive=false` makes that distinction machine-readable.
 `selection_policy.decision_owner=agent` and
 `recommendation_role=default_not_binding` make the priority order advisory at
-this boundary rather than silently binding the first Todo.
+this boundary rather than silently binding the first Todo. A ready deferred
+higher-priority successor remains planning context, but neither removes an
+otherwise eligible open alternative nor vetoes its explicit selection. Default
+successor-replan recommendations remain available; the selected deferred Todo's
+own resume condition still applies. See the
+[planning-horizon decision boundary](reference/protocols/quota-planning-horizon-v0.md#agent-decision-authority).
 
 Version 2 adds the optional `continuation_hint` field to each
 `suggested_actions[]` item so an agent can see the candidate's next execution
@@ -1443,11 +1478,21 @@ that generic lifecycle hint before inventing local automation behavior:
 once, while `mapped_noop_if_unchanged` returns a quiet no-op without another
 dry-run or quota spend if no new instruction, evidence, todo, stale source, or
 safe handoff exists.
-When the payload includes `stale_latest_run_warning`, the current active-state
-projection has moved ahead of the latest run-history snapshot. Executors should
-repair the control-plane projection with a fresh state refresh before relying on
-latest-run status, review packets, or handoff fields, but the warning alone does
-not authorize production actions or override `should_run`.
+Status repairs ordinary snapshot drift on read, without an owner action or a
+new execution record. When `stale_latest_run_warning` remains, current-state
+reconciliation could not safely replace the historical route. Diagnose its
+source or unresolved gate before relying on latest-run routing or handoff.
+Reconciliation never grants permission, overrides `should_run`, fabricates
+progress or clears a historical failure or pending owner decision. The home
+running lane always requires observed execution, including for a Goal whose
+leading state is a repair request.
+Extensible legacy classification labels still use one conservative TypeScript
+presentation matcher, shared by reconciliation and the sidebar. For example,
+`runtime_error` remains a failure signal even alongside `outcome_progress`.
+Labels such as `error_recovery_completed` may also remain flagged; the matcher
+cannot establish success or grant admission. Its replacement belongs to the
+[TS migration's](architecture/rfcs/typescript-control-plane-migration-v0.md)
+normalized runtime-result contract, rather than a second per-consumer heuristic.
 When the payload includes `backlog_hygiene_warning`, the active state has
 multiple public-safe durable follow-up items in `Next Action` or
 `Operating Lessons` while the active `Agent Todo` checklist has no open item.
@@ -1851,11 +1896,22 @@ still observe every row by default. This is a caller filesystem optimization,
 independent of the Todo authority provider, not an index cache or a limit on
 decision history.
 
+An artifact that cannot be observed because its filesystem lookup fails (for
+example an overlong filename, permission denial or I/O error) has its existing
+availability flag set to `false`. This means availability was not confirmed,
+not that deletion was proven. The Run and its semantic evidence remain visible;
+the read does not rewrite the index or retain a negative result across requests.
+Errors reading the index itself still propagate.
+
 文件存在性是每次读取对返回记录的实时观测，不信任索引中保存的布尔值。先用完整索引
 完成去重、额度和语义历史归约，再检查近期记录、最新状态、Agent 窗口及保留语义证据
 的文件；即使 `--limit 0`，旧愿景、用户纠偏和有效阻塞重试也不会因此丢失。索引不变时，
 文件创建／删除仍在下次读取生效；底层完整索引接口默认保留逐条检查行为。这不改变
 File／SQLite 等 Todo provider 的权威，也不限制决策历史。
+
+若文件查询因文件名过长、权限不足或 I/O 错误而失败，对应可用性标记为 `false`，
+表示未确认可用，而非已证实删除。Run 及其语义证据仍保留；读取不会改写索引，
+也不会跨请求缓存失败结果。读取索引本身的错误仍会向上传递。
 
 On the `status`, `quota should-run`, and `history` read paths, relative
 `common_runtime_root` values, relative `--runtime-root` overrides, and relative
@@ -2282,6 +2338,13 @@ coverage; legacy runtime goals are extra. An unknown `--goal-id` is reported as
 `observed_at` and restamping `served_at` and staleness. Field semantics and
 the consumer rule are in the
 [projection envelope contract](reference/contracts/projection-envelope-contract.md).
+
+An unreadable optional cache (including invalid UTF-8 or malformed JSON) is a
+cache miss with `miss_reason=unreadable`, not a status-collection failure.
+`status` and `quota should-run` collect live source facts instead. Reading does
+not repair or delete the damaged cache; `--write-projection-cache` explicitly
+replaces it with the newly collected projection. Canonical source errors still
+retain their normal diagnostics and admission rules.
 
 ## Decision Freshness Summary
 

@@ -5,8 +5,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..control_plane.scheduler.provider_monitor_poll import (
-    require_monitor_poll_source_available,
+from ..control_plane.coordination.local_authority import (
+    read_canonical_todos_if_promoted,
 )
 from ..control_plane.quota.error_codes import QuotaCommandValidationError
 from ..control_plane.runtime.status_projection_cache import (
@@ -29,6 +29,7 @@ from ..control_plane.scheduler.state import (
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from ..turn_identity import mint_turn_instance_id, normalize_turn_instance_id
+from .quota_cache_freshness import cached_goal_projection_miss_reason
 from .quota_request import (
     QUOTA_COMMAND_DETAIL_SECTIONS,
     quota_detail_sections_from_args,
@@ -290,9 +291,10 @@ def prepare_quota_command_context(
         runtime_root_override=runtime_root_arg,
     )
     if command == "monitor-poll" and args.execute and (args.todo_id or args.target_key):
-        # Canonical availability precedes unrelated status/quota preparation.
-        # The eventual transaction repeats its fence check under the writer lock.
-        require_monitor_poll_source_available(
+        # A selected provider outage precedes unrelated status preparation.
+        # An unmigrated source may still recover its original quota transaction;
+        # fresh-work admission remains inside that transaction's source lock.
+        read_canonical_todos_if_promoted(
             runtime_root=runtime_root, goal_id=args.goal_id,
         )
     # Observation commands use the same scoped collector/cache as execution
@@ -322,13 +324,22 @@ def prepare_quota_command_context(
             status_payload is not None
             and command in QUOTA_SCHEDULER_COMMANDS
             and status_goal_id
-            and not cached_goal_run_index_is_current(
-                status_payload, runtime_root=runtime_root, goal_id=status_goal_id,
-            )
         ):
-            status_payload = None
-            cache_metadata["hit"] = False
-            cache_metadata["miss_reason"] = "run_index_changed"
+            if not cached_goal_run_index_is_current(
+                status_payload, runtime_root=runtime_root, goal_id=status_goal_id,
+            ):
+                status_payload = None
+                cache_metadata["hit"] = False
+                cache_metadata["miss_reason"] = "run_index_changed"
+            elif cache_miss_reason := cached_goal_projection_miss_reason(
+                status_payload,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=status_goal_id,
+            ):
+                status_payload = None
+                cache_metadata["hit"] = False
+                cache_metadata["miss_reason"] = cache_miss_reason
     if status_payload is None:
         collector = status_collector or collect_status
         status_payload = collector(

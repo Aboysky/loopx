@@ -15,7 +15,6 @@ from ..chat_server import (
     DEFAULT_CHAT_PORT,
     serve_chat,
 )
-from ..control_plane.reward_memory import reward_memory_goal_policy
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from ..dashboard_launcher import launch_dashboard, replace_existing_loopx_chat
 from ..execution_profile import execution_profile_turn_granularity
@@ -47,7 +46,7 @@ from .support_control_backup import (
     handle_backup_state_command,
     register_backup_state_command,
 )
-from .support_control_chat import register_chat_and_dashboard_commands
+from .support_control_chat import chat_server_options, register_chat_and_dashboard_commands
 from .support_control_chat_endpoint import (
     handle_chat_endpoint_command,
 )
@@ -81,6 +80,7 @@ FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
 SUPPORT_CONTROL_COMMANDS = {
+    "research-checkpoint",
     "configuration-backup",
     "automation-prompts",
     "backup-state",
@@ -93,6 +93,7 @@ SUPPORT_CONTROL_COMMANDS = {
     "promotion-readiness",
     "upgrade-plan",
     "update",
+    "upgrade",
     "registry",
     "registry-boundary",
     "serve-status",
@@ -107,6 +108,8 @@ def register_support_control_commands(
     from .automation_prompts import register_automation_prompts
     register_automation_prompts(subparsers, add_subcommand_format)
     register_backup_state_command(subparsers, add_subcommand_format)
+    from .research_checkpoint import register_research_checkpoint
+    register_research_checkpoint(subparsers, add_subcommand_format)
     from .configuration_backup import register_configuration_backup
     register_configuration_backup(subparsers, add_subcommand_format)
     register_heartbeat_control_commands(subparsers, add_subcommand_format)
@@ -244,6 +247,11 @@ def handle_support_control_command(
         return handle_configuration_backup(args, registry_path=registry_path,
             print_payload=print_payload, output_format=output_format)
 
+    if args.command == "research-checkpoint":
+        from .research_checkpoint import handle_research_checkpoint
+        return handle_research_checkpoint(args, registry_path=registry_path,
+            print_payload=print_payload, output_format=output_format)
+
     if args.command == "backup-state":
         return handle_backup_state_command(
             args,
@@ -278,6 +286,7 @@ def handle_support_control_command(
         active_state_source = None
         registered_agents = None
         effective_agent_id = args.agent_id
+        agent_registry_path = registry_path
         requested_runtime_profile = (
             SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value
             if args.codex_app
@@ -312,13 +321,6 @@ def handle_support_control_command(
                 if isinstance(registry_goal, dict)
                 else None
             )
-            reward_memory_policy = reward_memory_goal_policy(
-                registry_goal if isinstance(registry_goal, dict) else {}
-            )
-            reward_memory_enabled = bool(
-                reward_memory_policy["enabled"]
-                and reward_memory_policy["automation"].get("automatic_ingest") is True
-            )
             agent_profile = None
             if args.agent_id:
                 effective_agent_id = require_registered_agent_id(
@@ -329,6 +331,16 @@ def handle_support_control_command(
                 )
                 agent_profile = agent_profile_from_registry(
                     agent_registry_path, args.goal_id, effective_agent_id
+                )
+            reward_memory_enabled = False
+            if effective_agent_id is not None:
+                from ..capabilities.reward_memory.configuration import (
+                    reward_memory_automatic_ingest_for_agent,
+                )
+
+                reward_memory_enabled = reward_memory_automatic_ingest_for_agent(
+                    registry_goal if isinstance(registry_goal, dict) else {},
+                    effective_agent_id,
                 )
             explicit_scheduler_fields = (
                 args.host_surface,
@@ -368,6 +380,7 @@ def handle_support_control_command(
                 thin=bool(args.thin),
                 cli_bin=args.cli_bin,
                 runtime_root=args.runtime_root,
+                registry_path=agent_registry_path.resolve(),
                 agent_id=effective_agent_id,
                 agent_scopes=args.agent_scopes,
                 agent_profile=agent_profile,
@@ -386,6 +399,9 @@ def handle_support_control_command(
                 visible_goal_host=args.visible_goal_host,
                 turn_granularity=turn_granularity,
                 turn_instance_id=args.turn_instance_id,
+                decision_output_root=args.decision_output_root,
+                decision_handoff_socket=args.decision_handoff_socket,
+                turn_envelope=args.turn_envelope,
                 reward_memory_enabled=reward_memory_enabled,
             )
             if args.bootstrap and payload.get("ok"):
@@ -428,6 +444,7 @@ def handle_support_control_command(
                 thin=bool(args.thin),
                 cli_bin=args.cli_bin,
                 runtime_root=args.runtime_root,
+                registry_path=agent_registry_path.resolve(),
                 agent_id=effective_agent_id or args.agent_id,
                 agent_scopes=args.agent_scopes,
                 registered_agents=registered_agents,
@@ -611,41 +628,10 @@ def handle_support_control_command(
 
     if args.command == "chat":
         try:
-            chat_registry_path = (
-                explicit_global_registry(args.runtime_root, registry_path=registry_path)
-                if args.global_registry
-                else registry_path
-            )
-            scan_roots = [Path(item).expanduser() for item in args.scan_path]
-            if not scan_roots:
-                scan_roots = [Path(args.scan_root).expanduser()]
+            options = chat_server_options(args, registry_path=registry_path)
             if bool(getattr(args, "replace_existing_loopx_chat", False)):
                 replace_existing_loopx_chat(args.host, args.port)
-            serve_chat(
-                project_workspace_grant=args.project_workspace_grant,
-                registry_path=chat_registry_path,
-                runtime_root_override=args.runtime_root,
-                scan_roots=scan_roots,
-                limit=max(0, args.limit),
-                host=args.host,
-                port=args.port,
-                goal_id=args.goal_id,
-                codex_bin=args.codex_bin,
-                claude_bin=args.claude_bin,
-                kiro_cli_bin=getattr(args, "kiro_cli_bin", KIRO_CLI_BIN),
-                lark_cli_bin=args.lark_cli_bin,
-                startup_timeout_sec=max(0.1, float(args.startup_timeout_seconds)),
-                idle_timeout_sec=max(0.1, float(args.idle_timeout_seconds)),
-                hard_timeout_sec=max(0.1, float(args.hard_timeout_seconds)),
-                assets_dir=Path(args.assets_dir).expanduser()
-                if args.assets_dir
-                else None,
-                open_browser=not bool(args.no_open),
-                verbose=bool(args.verbose),
-                enable_goal_subagent_configuration=bool(
-                    args.enable_goal_subagent_configuration
-                ),
-            )
+            serve_chat(**options)
         except Exception as exc:
             payload = {
                 "ok": False,

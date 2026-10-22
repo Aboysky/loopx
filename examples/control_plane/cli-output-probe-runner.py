@@ -130,7 +130,26 @@ def _receipt_row(
             else []
         ),
         "next_action_basis_count": semantics.next_action_basis_count(payload),
+        "authoring_inputs": semantics.authoring_input_observations(text),
+        "continuation_instructions": semantics.continuation_instruction_observations(text),
+        "turn_budget_warning": "TurnEnvelope exceeds its performance target by " in text
+            and "Turn routing is unchanged." in text and "Review over-target sections:" in text,
     }
+
+
+def _link_turn_warning_basis(rows: list[dict]) -> list[dict]:
+    """The terse Markdown warning describes the paired JSON envelope's cost.
+
+    Reuse that measured semantic basis, never infer instruction presence from
+    a warning or grant it an unconditional output allowance.
+    """
+    by_id = {row["row_id"]: row for row in rows}
+    for row in rows:
+        if row["format"] == "markdown":
+            paired = by_id.get(row["row_id"].removesuffix("markdown") + "json")
+            if paired is not None:
+                row["turn_envelope_cost_basis"] = paired["continuation_instructions"]
+    return rows
 
 
 def _assert_output_contract(
@@ -236,7 +255,7 @@ def _default_rows(
                     )
     if enforce_budget:
         probe._assert_scenario_matrix(measurements)
-    return rows
+    return _link_turn_warning_basis(rows)
 
 
 def _variant_rows(
@@ -301,7 +320,7 @@ def _variant_rows(
                     text=text,
                 )
             )
-    return rows
+    return _link_turn_warning_basis(rows)
 
 
 def _blocking_gate_rows(
@@ -430,11 +449,20 @@ def main() -> int:
     args = parser.parse_args()
     _install_pytest_import_stub()
     probe = _load_module("loopx_cli_output_probe_fixture", args.test_source)
+    fixture_support = _load_module(
+        "loopx_cli_output_fixture_support",
+        Path(__file__).with_name("cli_output_fixture.py"),
+    )
+    # Scenario helpers also call this owner; historical test modules must not
+    # re-enter their old /tmp implementation from inside the shared outer root.
+    probe._stable_budget_fixture_root = fixture_support.stable_budget_fixture_root
     semantics = _load_module("loopx_cli_output_probe_semantics", args.semantics_source)
     if args.fixture_root.exists():
         shutil.rmtree(args.fixture_root)
     args.fixture_root.mkdir(parents=True)
-    with probe._stable_budget_fixture_root(args.fixture_root) as stable_root:
+    # Use one current root owner for both revisions. A historical test source
+    # may still assume /tmp exists on every Windows drive.
+    with fixture_support.stable_budget_fixture_root(args.fixture_root) as stable_root:
         rows = [
             *_default_rows(
                 probe, semantics, stable_root,

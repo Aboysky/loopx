@@ -41,27 +41,37 @@ def test_excluded_unclaimed_work_is_not_offered_to_the_agent(tmp_path):
     assert result["unclaimed_eligible_work"] == []
 
 
-def test_corrupt_legacy_lease_only_blocks_a_selected_claim(tmp_path):
+@pytest.mark.parametrize("lease_bytes", [b"{broken", b"\xff"],
+                         ids=["invalid-json", "invalid-utf8"])
+def test_corrupt_legacy_lease_only_blocks_a_selected_claim(tmp_path, lease_bytes):
     from loopx.control_plane.work_items.task_lease import task_lease_path
 
-    fixture = _write_fixture(tmp_path, todo_specs=_default_todo_specs())
+    specs = _default_todo_specs()
+    specs[2]["status"] = "open"
+    specs[2]["claimed_by"] = "agent-b"
+    fixture = _write_fixture(tmp_path, todo_specs=specs)
     for todo_id in ("todo_blocked", "todo_lane_a"):
         path = task_lease_path(runtime_root=fixture["runtime"], goal_id=GOAL_ID, todo_id=todo_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{broken")
+        path.write_bytes(lease_bytes)
         if todo_id == "todo_blocked":
             result = project_shared_goal_alignment(goal_id=GOAL_ID, agent_id="agent-a",
                 project=fixture["project"], registry_path=fixture["registry"], runtime_root=fixture["runtime"])
             assert result["frontier_counts"]["current_agent_claimed_advancement_count"] == 1
+            assert result["frontier_counts"]["other_agent_claimed_advancement_count"] == 1
         else:
             with pytest.raises(ValueError, match="cannot read selected claim lease"):
                 project_shared_goal_alignment(goal_id=GOAL_ID, agent_id="agent-a",
                     project=fixture["project"], registry_path=fixture["registry"], runtime_root=fixture["runtime"])
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("display", ["missing", "stale", "empty"])
-def test_promoted_alignment_does_not_use_the_display(tmp_path, display):
-    from canonical_authority_fixture import initialize_canonical_authority
+def test_promoted_alignment_does_not_use_the_display(tmp_path, monkeypatch, provider, display):
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
     fixture = _write_fixture(tmp_path, todo_specs=_default_todo_specs())
@@ -69,7 +79,7 @@ def test_promoted_alignment_does_not_use_the_display(tmp_path, display):
         "status": "open", "done": False, "text": "Canonical work", "task_class": "advancement_task",
         "archive_state": "active", "source_section": "Agent Todo", "index": 1}
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[record], handoff_mode="soft_claim")
-    initialize_canonical_authority(fixture["runtime"], GOAL_ID, projection, state_path=fixture["state_file"])
+    initialize_canonical_authority(fixture["runtime"], GOAL_ID, projection, state_path=fixture["state_file"], provider=provider)
     if display == "missing":
         fixture["state_file"].unlink()
     elif display == "empty":
@@ -77,6 +87,7 @@ def test_promoted_alignment_does_not_use_the_display(tmp_path, display):
     result = project_shared_goal_alignment(goal_id=GOAL_ID, agent_id="agent-a",
         project=fixture["project"], registry_path=fixture["registry"], runtime_root=fixture["runtime"])
     assert result["unclaimed_eligible_work"] == [{"todo_id": "todo_canonical", "claim_required_before_work": True}]
+    assert result["source_basis"]["todo_basis"]["source_authority"] == f"{provider}_v0"
     assert fixture["state_file"].exists() is (display != "missing")
 
 STATE_HEADER_LINES = [
@@ -364,6 +375,61 @@ def test_next_action_prose_never_changes_the_source_basis_digest(
     assert first["source_basis"]["source_basis_digest"] == (
         second["source_basis"]["source_basis_digest"]
     )
+
+
+def test_legacy_work_claim_changes_basis_without_a_timestamp_change(tmp_path):
+    paths = _write_fixture(tmp_path, todo_specs=_default_todo_specs())
+    arguments = dict(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"],
+                     registry_path=paths["registry"], runtime_root=paths["runtime"])
+    before = project_shared_goal_alignment(**arguments)
+    state = paths["state_file"].read_text(encoding="utf-8")
+    needle = "todo_id=todo_unclaimed "
+    assert needle in state
+    paths["state_file"].write_text(state.replace(needle, needle + "claimed_by=agent-b "),
+                                   encoding="utf-8")
+    after = project_shared_goal_alignment(**arguments)
+    assert before["unclaimed_eligible_work"]
+    assert after["unclaimed_eligible_work"] == []
+    assert before["source_basis"]["state_updated_at"] == after["source_basis"]["state_updated_at"]
+    assert before["source_basis"]["state_event_basis_sequence"] == after["source_basis"]["state_event_basis_sequence"] == 0
+    assert before["source_basis"]["source_basis_digest"] != after["source_basis"]["source_basis_digest"]
+
+
+def test_legacy_basis_binds_lease_epoch_but_not_observation_time(tmp_path):
+    from loopx.control_plane.work_items.task_lease import task_lease_path
+
+    lease = {"schema_version": "task_lease_v0", "status": "active",
+             "expires_at": "2099-01-01T00:00:00Z", "owner": "agent-a",
+             "lease_epoch": 1, "version": 1}
+    paths = _write_fixture(tmp_path, todo_specs=_default_todo_specs(),
+                           leases={"todo_lane_a": lease})
+    arguments = dict(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"],
+                     registry_path=paths["registry"], runtime_root=paths["runtime"])
+    before = project_shared_goal_alignment(**arguments)["source_basis"]
+    assert project_shared_goal_alignment(**arguments)["source_basis"] == before
+    state_bytes = paths["state_file"].read_bytes()
+    path = task_lease_path(runtime_root=paths["runtime"], goal_id=GOAL_ID, todo_id="todo_lane_a")
+    path.write_text(json.dumps({**lease, "lease_epoch": 2}), encoding="utf-8")
+    after = project_shared_goal_alignment(**arguments)["source_basis"]
+    assert before["source_basis_digest"] != after["source_basis_digest"]
+    assert before["state_updated_at"] == after["state_updated_at"]
+    assert paths["state_file"].read_bytes() == state_bytes
+
+
+def test_legacy_basis_ignores_display_order_of_identical_work(tmp_path):
+    specs = _default_todo_specs()
+    paths = _write_fixture(tmp_path, todo_specs=specs)
+    arguments = dict(goal_id=GOAL_ID, agent_id="agent-a", project=paths["project"],
+                     registry_path=paths["registry"], runtime_root=paths["runtime"])
+    before = project_shared_goal_alignment(**arguments)
+    state = paths["state_file"].read_text(encoding="utf-8")
+    blocks = state.split("\n- [")
+    assert len(blocks) == len(specs) + 1
+    paths["state_file"].write_text(blocks[0] + "\n- [" + "\n- [".join(reversed(blocks[1:])),
+                                   encoding="utf-8")
+    after = project_shared_goal_alignment(**arguments)
+    assert before["frontier_counts"] == after["frontier_counts"]
+    assert before["source_basis"] == after["source_basis"]
 
 
 def test_blocked_and_monitor_todos_stay_out_of_unclaimed_work(

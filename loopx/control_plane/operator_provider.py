@@ -43,7 +43,9 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
+from ..file_lock import exclusive_file_lock
 from ..paths import select_default_runtime_root
 from ..registry import atomic_write_json, read_json
 from .operator_credential import (
@@ -211,6 +213,11 @@ def _secure_write(path: Path, payload: dict[str, Any]) -> None:
     path.chmod(0o600)
 
 
+def _remove_operator_provider(path: Path) -> None:
+    if path.is_file():
+        path.unlink()
+
+
 def write_operator_provider(
     *,
     runtime_root: Path | None = None,
@@ -228,27 +235,29 @@ def write_operator_provider(
     credential the operator did not mean to touch.
     """
 
-    stored = read_operator_provider(runtime_root)
-    current: dict[str, Any] = dict(stored) if stored is not None else {
-        "schema_version": OPERATOR_PROVIDER_STORE_SCHEMA,
-        PROVIDER_KEY_FIELD: None,
-        BASE_URL_FIELD: None,
-    }
-    if clear_api_key:
-        current[PROVIDER_KEY_FIELD] = None
-    elif api_key is not None:
-        current[PROVIDER_KEY_FIELD] = api_key
-    if clear_base_url:
-        current[BASE_URL_FIELD] = None
-    elif base_url is not None:
-        current[BASE_URL_FIELD] = base_url
-    normalized = normalize_operator_provider(current)
-    if normalized[PROVIDER_KEY_FIELD] is None and normalized[BASE_URL_FIELD] is None:
-        # An empty record configures nothing, and leaving it behind would make
-        # "this machine has a credential" true for a file that carries no
-        # credential at all.
-        return clear_operator_provider(runtime_root, environ=environ)
-    _secure_write(operator_provider_store_path(runtime_root), normalized)
+    path = operator_provider_store_path(runtime_root)
+    with exclusive_file_lock(path, operation="write_operator_provider"):
+        stored = read_operator_provider(runtime_root)
+        current: dict[str, Any] = dict(stored) if stored is not None else {
+            "schema_version": OPERATOR_PROVIDER_STORE_SCHEMA,
+            PROVIDER_KEY_FIELD: None,
+            BASE_URL_FIELD: None,
+        }
+        if clear_api_key:
+            current[PROVIDER_KEY_FIELD] = None
+        elif api_key is not None:
+            current[PROVIDER_KEY_FIELD] = api_key
+        if clear_base_url:
+            current[BASE_URL_FIELD] = None
+        elif base_url is not None:
+            current[BASE_URL_FIELD] = base_url
+        normalized = normalize_operator_provider(current)
+        if normalized[PROVIDER_KEY_FIELD] is None and normalized[BASE_URL_FIELD] is None:
+            # An empty record configures nothing, and leaving it behind would
+            # make "this machine has a credential" read as configured.
+            _remove_operator_provider(path)
+        else:
+            _secure_write(path, normalized)
     return operator_provider_projection(runtime_root, environ=environ)
 
 
@@ -260,8 +269,8 @@ def clear_operator_provider(
     """Remove this machine's stored credential and return the readback."""
 
     path = operator_provider_store_path(runtime_root)
-    if path.is_file():
-        path.unlink()
+    with exclusive_file_lock(path, operation="clear_operator_provider"):
+        _remove_operator_provider(path)
     return operator_provider_projection(runtime_root, environ=environ)
 
 
@@ -446,6 +455,46 @@ def operator_provider_host_credential(
         for name in (OPERATOR_CREDENTIAL_ENV_VARS[0], OPERATOR_ENDPOINT_ENV_VAR)
         if resolved.get(name)
     }
+
+
+MESSAGES_COMPATIBILITY_OK = "ok"
+MESSAGES_COMPATIBILITY_MISSING = "endpoint_missing"
+MESSAGES_COMPATIBILITY_UNPARSABLE = "endpoint_unparsable"
+MESSAGES_COMPATIBILITY_PATH_REQUIRED = "compat_path_required"
+
+
+def messages_endpoint_compatibility(base_url: object) -> str:
+    """Classify one stored endpoint for a Messages-transport consumer.
+
+    The DeepSeek Messages provider resolves its request URL as
+    ``<base>/v1/messages``. A bare API root therefore answers 404 instead of
+    reaching the compatibility surface, and the failure surfaces far from the
+    configuration that caused it. Classify the stored value before a managed
+    host spends a model call:
+
+    - ``ok``: an HTTP(S) root that carries the provider's compatibility path
+      (for DeepSeek: ``/anthropic``);
+    - ``compat_path_required``: a valid root without that path;
+    - ``endpoint_unparsable``: not a usable HTTP(S) root;
+    - ``endpoint_missing``: nothing stored, so the runtime default applies.
+    """
+
+    text = str(base_url or "").strip()
+    if not text:
+        return MESSAGES_COMPATIBILITY_MISSING
+    parsed = urlsplit(text)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return MESSAGES_COMPATIBILITY_UNPARSABLE
+    if not parsed.path.rstrip("/").endswith("/anthropic"):
+        return MESSAGES_COMPATIBILITY_PATH_REQUIRED
+    return MESSAGES_COMPATIBILITY_OK
 
 
 __all__ = [

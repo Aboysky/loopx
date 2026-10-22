@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from loopx.cli import main
+from loopx.control_plane.goals.start_contract import (
+    build_goal_start_prompt,
+    goal_planner_contract,
+)
 from loopx.control_plane.goals.task_planning import build_task_planning_packet
 
 
@@ -52,6 +56,7 @@ def test_empty_frontier_plans_before_writes_without_starting_a_loop(bound_goal):
     assert [step["id"] for step in packet["ordered_steps"]] == [
         "plan_ranked_todos",
         "write_ordered_todos",
+        "read_back_authored_todos",
     ]
     assert packet["planner"]["required_before_todo_write"] is True
     assert packet["execution_handoff"] == {
@@ -82,8 +87,36 @@ def test_existing_plan_is_an_incremental_frontier_not_a_new_goal(bound_goal):
     assert [step["id"] for step in packet["ordered_steps"]] == [
         "compare_planned_todos_with_frontier",
         "apply_todo_delta",
+        "read_back_authored_todos",
     ]
     assert all(item["todo_id"] != "todo_peer" for item in packet["existing_todos"])
+
+
+@pytest.mark.parametrize("fine_grained", [False, True])
+def test_planning_scope_is_sufficient_to_start_without_exhaustive_decomposition(bound_goal, fine_grained):
+    registry = bound_goal["registry_path"]
+    contents = json.loads(registry.read_text())
+    if fine_grained:
+        contents["goals"][0]["execution_profile"] = {"turn_granularity": "fine"}
+        registry.write_text(json.dumps(contents))
+    packet = build_task_planning_packet(**bound_goal)
+    planner = packet["planner"]
+    assert planner == goal_planner_contract(fine_grained=fine_grained)
+    for clause in (
+        "minimum sufficient plan: next step and decisive validation",
+        "Diagnostics and feedback may come first to strengthen delivery",
+        "replan uncertain later work",
+        "no fixed-count filler or exhaustive decomposition",
+    ):
+        assert clause in planner["budget_policy"]
+    assert planner["profiles"]["clear_bounded_problem"][
+        "may_reuse_current_todo_when_it_already_represents_the_plan"] is True
+    assert planner["required_before_todo_write"] is True
+    assert packet["execution_handoff"]["requires_quota_guard"] is True
+    assert packet["execution_handoff"]["planning_is_advancement"] is False
+    assert "do not substitute them for the requested deliverable" in planner["first_delivery_guidance"]
+    assert "existing acceptance, feedback and authority limits" in planner["first_delivery_guidance"]
+    assert planner.get("maximum_runnable_todos_written_ahead") == (1 if fine_grained else None)
 
 
 def test_unknown_identity_rejected_without_creating_it(bound_goal):
@@ -136,6 +169,28 @@ def test_public_cli_returns_a_read_only_checkpoint_and_rejects_execution(bound_g
     packet = json.loads(output.getvalue())
     assert packet["read_only"] and packet["dry_run"]
     assert packet["runnable_todo_ids"] == []
+    quality = packet["planner"]["first_delivery_guidance"]
+    # Agent-consumed obligations must reach both public planning entrypoints;
+    # their presence is not a measurement of the resulting model quality.
+    for obligation in (
+        "strongest feasible approach",
+        "deliberately weak placeholder",
+        "quality, latency and full cost",
+        "existing acceptance, feedback and authority limits",
+    ):
+        assert obligation in quality
+    for fine_grained in (False, True):
+        assert goal_planner_contract(fine_grained=fine_grained)[
+            "first_delivery_guidance"
+        ] == quality
+        assert quality in build_goal_start_prompt(
+            goal_text=bound_goal["text"],
+            goal_id=bound_goal["goal_id"],
+            agent_id=bound_goal["agent_id"],
+            fine_grained=fine_grained,
+        )
+    assert packet["execution_handoff"]["spends_quota"] is False
+    assert packet["execution_handoff"]["requires_quota_guard"] is True
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         assert main(command + ["--execute"]) == 1

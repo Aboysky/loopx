@@ -4,9 +4,9 @@ import re
 from typing import Any
 
 from .control_plane.goals.goal_vision_policy import (
-    COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD,
     completed_todo_replan_threshold,
     normalize_completed_todo_replan_threshold,
+    normalize_effective_turn_replan_threshold,
 )
 from .control_plane.work_items.delivery_outcome import DeliveryOutcome
 
@@ -154,9 +154,26 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return profile
 
-    threshold = completed_todo_replan_threshold(value)
-    if threshold != COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD:
-        profile["replan_after_completed_todos"] = threshold
+    if "planning_horizon_goal" in value:
+        if not isinstance(value["planning_horizon_goal"], bool):
+            raise ValueError("planning_horizon_goal must be a boolean")
+        profile["planning_horizon_goal"] = value["planning_horizon_goal"]
+
+    if "stride_strategy" in value:
+        from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+        profile["stride_strategy"] = normalize_stride_strategy(value["stride_strategy"])
+
+    if "replan_after_effective_turns" in value and "replan_after_completed_todos" in value:
+        raise ValueError("choose one review cadence unit")
+    if "replan_after_effective_turns" in value:
+        profile["replan_after_effective_turns"] = normalize_effective_turn_replan_threshold(
+            value["replan_after_effective_turns"]
+        )
+
+    if "replan_after_completed_todos" in value:
+        # Retain explicit legacy-unit overrides, including five. Omitting one
+        # now means inheriting the settled-Turn default.
+        profile["replan_after_completed_todos"] = completed_todo_replan_threshold(value)
 
     if "turn_granularity" in value:
         turn_granularity = normalize_turn_granularity(value.get("turn_granularity"))
@@ -233,6 +250,12 @@ def apply_goal_execution_profile_change(
     turn_granularity: str | None,
     replan_after_completed_todos: int | None,
     clear_replan_after_completed_todos: bool,
+    replan_after_effective_turns: int | None = None,
+    clear_replan_after_effective_turns: bool = False,
+    stride_strategy: str | None = None,
+    clear_stride_strategy: bool = False,
+    planning_horizon_goal: bool | None = None,
+    clear_planning_horizon_goal: bool = False,
 ) -> None:
     if (
         clear_replan_after_completed_todos
@@ -242,14 +265,43 @@ def apply_goal_execution_profile_change(
             "--clear-execution-replan-after-todos cannot be combined with "
             "--execution-replan-after-todos"
         )
+    if replan_after_effective_turns is not None and (
+        replan_after_completed_todos is not None or clear_replan_after_effective_turns
+    ):
+        raise ValueError("choose one review cadence override or clear operation")
+    if stride_strategy is not None and clear_stride_strategy:
+        raise ValueError("choose a stride strategy override or clear operation")
+    if planning_horizon_goal is not None and clear_planning_horizon_goal:
+        raise ValueError("choose a planning horizon Goal override or clear operation")
     raw = goal.get("execution_profile")
     profile = dict(raw) if isinstance(raw, dict) else {}
     if (
-        turn_granularity is None
+        planning_horizon_goal is None
+        and not clear_planning_horizon_goal
+        and stride_strategy is None
+        and not clear_stride_strategy
+        and turn_granularity is None
         and replan_after_completed_todos is None
+        and replan_after_effective_turns is None
+        and not clear_replan_after_effective_turns
         and not (clear_replan_after_completed_todos and "replan_after_completed_todos" in profile)
     ):
         return
+    if clear_planning_horizon_goal:
+        profile.pop("planning_horizon_goal", None)
+    if planning_horizon_goal is not None:
+        profile["planning_horizon_goal"] = planning_horizon_goal
+    if clear_stride_strategy:
+        profile.pop("stride_strategy", None)
+    if stride_strategy is not None:
+        profile["stride_strategy"] = stride_strategy
+    if clear_replan_after_effective_turns or replan_after_completed_todos is not None:
+        profile.pop("replan_after_effective_turns", None)
+    if replan_after_completed_todos is not None:
+        profile["replan_after_completed_todos"] = replan_after_completed_todos
+    if replan_after_effective_turns is not None:
+        profile["replan_after_effective_turns"] = replan_after_effective_turns
+        profile.pop("replan_after_completed_todos", None)
     if clear_replan_after_completed_todos:
         profile.pop("replan_after_completed_todos", None)
     goal["execution_profile"] = configure_execution_profile(
@@ -356,4 +408,6 @@ def execution_profile_summary(profile: dict[str, Any] | None) -> str:
             f" replan_after_completed_todos={normalized['replan_after_completed_todos']}"
             if "replan_after_completed_todos" in normalized else ""
         )
+        + (f" replan_after_effective_turns={normalized['replan_after_effective_turns']}"
+           if "replan_after_effective_turns" in normalized else "")
     )

@@ -131,7 +131,7 @@ function successfulRunner(options: {
     if (args.at(-1) === '--version') {
       options.events?.push('probe')
       if (!cliAvailable) throw new LoopXCliError('missing', 'missing', false)
-      return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+      return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
     }
     if (args.includes('--install')) {
       options.events?.push('install-skills')
@@ -240,7 +240,7 @@ describe('/loopx-init implementation', () => {
     const runner: FileRunner = async (_file, args) => {
       calls.push([...args])
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('workflow-skills')) {
         if (args.includes('--install')) {
@@ -262,7 +262,7 @@ describe('/loopx-init implementation', () => {
     })
 
     expect(result).toEqual({
-      cliVersion: 'loopx 0.5.0',
+      cliVersion: 'loopx 1.2.4',
       cliInstalled: false,
       skillsInstalled: true,
       skillsChanged: false,
@@ -278,7 +278,7 @@ describe('/loopx-init implementation', () => {
     const runner: FileRunner = async (_file, args) => {
       calls.push([...args])
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       const operation = args.includes('--install') ? 'install' : 'inspect'
       return {
@@ -316,7 +316,7 @@ describe('/loopx-init implementation', () => {
       }
       if (args.at(-1) === '--version') {
         if (!installed) throw new LoopXCliError('missing', 'missing', false)
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('workflow-skills')) {
         const operation = args.includes('--install') ? 'install' : 'inspect'
@@ -364,7 +364,7 @@ describe('/loopx-init implementation', () => {
         if (file !== 'python3.13' || !installed) {
           throw new LoopXCliError('missing', 'missing', false)
         }
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('workflow-skills')) {
         const operation = args.includes('--install') ? 'install' : 'inspect'
@@ -399,7 +399,7 @@ describe('/loopx-init implementation', () => {
     ))).toBe(true)
     const pipCall = calls.find(call => call.args.slice(0, 3).join(' ') === '-m pip install')
     expect(pipCall?.args).toContain('--target')
-    expect(pipCall?.args.at(-1)).toBe('loopx>=0.5.4')
+    expect(pipCall?.args.at(-1)).toBe('loopx>=1.2.4')
     expect(pipCall?.args[pipCall.args.indexOf('--target') + 1]).toBe(
       '/fixture/runtime/site-packages',
     )
@@ -408,6 +408,69 @@ describe('/loopx-init implementation', () => {
     expect(workflowCalls.every(call => (
       call.args[call.args.indexOf('--cli-bin') + 1]
         === 'python3.13 /fixture/runtime/loopx_cli.py'
+    ))).toBe(true)
+  })
+
+  it('finds the interpreter a python.org Windows PATH registers', async () => {
+    // A python.org Windows install registers python.exe and no python3 name,
+    // and the host's python3 name can be the WindowsApps alias, which starts
+    // and exits 9009 without running Python.
+    const pythonPath = await mkdtemp(join(tmpdir(), 'loopx-windows-pythons-'))
+    onTestFinished(() => rm(pythonPath, { recursive: true, force: true }))
+    await writeFile(join(pythonPath, 'python.exe'), '# fixture executable\n')
+    const calls: Array<{ readonly file: string; readonly args: readonly string[] }> = []
+    let installed = false
+    const runner: FileRunner = async (file, args) => {
+      calls.push({ file, args: [...args] })
+      if (file === 'python3') {
+        return { exitCode: 9009, stdout: '', stderr: '' }
+      }
+      if (args[0] === '-c') {
+        return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      if (args.join(' ') === '-m pip --version') {
+        return { exitCode: 0, stdout: 'pip fixture', stderr: '' }
+      }
+      if (args.slice(0, 3).join(' ') === '-m pip install') {
+        installed = true
+        return { exitCode: 0, stdout: 'installed', stderr: '' }
+      }
+      if (args.at(-1) === '--version') {
+        if (!installed) throw new LoopXCliError('missing', 'missing', false)
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+      }
+      if (args.includes('workflow-skills')) {
+        const operation = args.includes('--install') ? 'install' : 'inspect'
+        return {
+          exitCode: 0,
+          stdout: workflowPayload(operation, false),
+          stderr: '',
+        }
+      }
+      throw new Error(`unexpected argv: ${file} ${args.join(' ')}`)
+    }
+
+    const result = await initializeLoopX({
+      runner,
+      env: { PATH: pythonPath },
+      skillsDir: '/fixture/skills',
+      runtimeDir: '/fixture/runtime',
+    })
+
+    expect(result.cliInstalled).toBe(true)
+    expect(calls.some(call => (
+      call.file === 'python3'
+      && call.args[0] === '-c'
+    ))).toBe(true)
+    const pipCall = calls.find(call => call.args.slice(0, 3).join(' ') === '-m pip install')
+    expect(pipCall?.file).toBe('python')
+    const workflowCalls = calls.filter(call => call.args.includes('workflow-skills'))
+    expect(workflowCalls.every(call => call.file === 'python')).toBe(true)
+    const cliBins = workflowCalls.map(call => call.args[call.args.indexOf('--cli-bin') + 1])
+    expect(cliBins.every(value => (
+      typeof value === 'string'
+      && value.startsWith('python ')
+      && value.includes('loopx_cli.py')
     ))).toBe(true)
   })
 
@@ -446,7 +509,7 @@ describe('/loopx-init implementation', () => {
         if (file !== 'python3.14' || !installed) {
           throw new LoopXCliError('missing', 'missing', false)
         }
-        return { exitCode: 0, stdout: 'loopx 0.5.3\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('workflow-skills')) {
         const operation = args.includes('--install') ? 'install' : 'inspect'
@@ -524,7 +587,7 @@ describe('/loopx-init implementation', () => {
       calls.push({ file, args: [...args] })
       if (args.at(-1) === '--version') {
         if (args[0] !== launcherPath) throw new LoopXCliError('missing', 'missing', false)
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('workflow-skills')) {
         const operation = args.includes('--install') ? 'install' : 'inspect'
@@ -558,9 +621,10 @@ describe('/loopx-init implementation', () => {
     }
   })
 
-  it('repairs an incompatible existing CLI before mutating skills', async () => {
+  it('upgrades a pre-1.2.4 CLI before inspecting or mutating skills', async () => {
     let upgraded = false
     let pipCalls = 0
+    let prematureWorkflowCalls = 0
     const runner: FileRunner = async (_file, args) => {
       if (args[0] === '-c') {
         return { exitCode: 0, stdout: '', stderr: '' }
@@ -569,7 +633,7 @@ describe('/loopx-init implementation', () => {
         return { exitCode: 0, stdout: 'pip fixture', stderr: '' }
       }
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.4.0\n', stderr: '' }
+        return { exitCode: 0, stdout: `loopx ${upgraded ? '1.2.4' : '1.2.3'}\n`, stderr: '' }
       }
       if (args.slice(0, 3).join(' ') === '-m pip install') {
         pipCalls += 1
@@ -578,6 +642,7 @@ describe('/loopx-init implementation', () => {
       }
       if (args.includes('workflow-skills')) {
         if (!upgraded) {
+          prematureWorkflowCalls += 1
           return {
             exitCode: 0,
             stdout: '{"ok":true,"schema_version":"old_workflow_schema"}',
@@ -597,6 +662,20 @@ describe('/loopx-init implementation', () => {
     const result = await initializeLoopX({ runner, skillsDir: '/fixture/skills' })
     expect(result.cliInstalled).toBe(true)
     expect(pipCalls).toBe(1)
+    expect(prematureWorkflowCalls).toBe(0)
+  })
+
+  it('fails an explicit old CLI before pip installation or skill mutation', async () => {
+    const calls: string[][] = []
+    await expect(initializeLoopX({
+      env: { LOOPX_BIN: 'explicit-old-loopx' },
+      runner: async (file, args) => {
+        expect(file).toBe('explicit-old-loopx')
+        calls.push([...args])
+        return { exitCode: 0, stdout: 'loopx 1.2.3\n', stderr: '' }
+      },
+    })).rejects.toMatchObject({ stage: 'probe', causeKind: 'incompatible' })
+    expect(calls).toEqual([['--version']])
   })
 
   it.each([
@@ -643,7 +722,7 @@ describe('/loopx-init implementation', () => {
   ) => {
     const runner: FileRunner = async (_file, args) => {
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         return {
@@ -663,7 +742,7 @@ describe('/loopx-init implementation', () => {
     let installCalls = 0
     const runner: FileRunner = async (_file, args) => {
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         installCalls += 1
@@ -694,7 +773,7 @@ describe('/loopx-init implementation', () => {
     let inspectCalls = 0
     const runner: FileRunner = async (_file, args) => {
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         return { exitCode: 0, stdout: workflowPayload('install'), stderr: '' }
@@ -727,7 +806,7 @@ describe('/loopx-init implementation', () => {
     let installCalls = 0
     const runner: FileRunner = async (_file, args) => {
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         installCalls += 1
@@ -786,7 +865,7 @@ describe('/loopx-init followups', () => {
     expect(calls.filter(args => args.includes('--install'))).toHaveLength(1)
     expect(harness.messages).toHaveLength(2)
     for (const message of harness.messages) {
-      expect(message.source).toEqual({ kind: 'plugin', plugin: initSource })
+      expect(message.source).toEqual({ kind: 'loopx-initialization', plugin: initSource })
       expect(message.source).not.toEqual({
         kind: 'plugin',
         plugin: 'dsh-loopx-plugin/driver',
@@ -853,7 +932,7 @@ describe('/loopx-init followups', () => {
     let installCalls = 0
     const runner: FileRunner = async (_file, args) => {
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         installCalls += 1
@@ -891,7 +970,7 @@ describe('/loopx-init followups', () => {
     let installCalls = 0
     const runner: FileRunner = async (_file, args) => {
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 0.5.0\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
       }
       if (args.includes('--install')) {
         installCalls += 1
@@ -934,7 +1013,7 @@ describe('/loopx-init followups', () => {
     expect(result).toEqual({
       kind: 'success',
       text: [
-        'LoopX ready (loopx 0.5.0).',
+        'LoopX ready (loopx 1.2.4).',
         'CLI already compatible.',
         'DSH LoopX skills installed or updated and verified.',
         'No DSH restart is required; use the `loopx` skill with your task.',

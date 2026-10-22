@@ -4,9 +4,42 @@ The content-ops capability is the product path for creator/operator workflows:
 public handles, private connector gates, source items, angle candidates, draft
 states, feedback signals, and publish gates.
 
-Current implementation remains preview-level. It is useful because it gives real
-connector and review surfaces a safe packet format before raw material is copied
-or published.
+Connector packets remain preview-level. Local item lifecycle, reference
+preparation and optional video composition have their own delivery boundaries;
+none grants publication authority.
+
+## Creation outcomes / 创作结果
+
+Start with the requested work: its audience, message, factual sources and desired
+form. Use the existing conversation and artifact preview/revision path with the
+host's authoring tools and reusable Content-Ops operations. HTML, games and
+mini-worlds can be standalone works, source material or scenes within a video;
+their mention does not require a new LoopX workbench or a fixed teaching model.
+Choose content, interaction, scene structure and visual style for the brief.
+Templates and renderer examples are starting points, not a universal composition.
+
+Use specialized host tools for custom editable scenes, animation or interactive
+projects when the brief needs them. Their rendered image/video assets can enter
+the existing source-bound composition path; retain the editable project with the
+deliverable. The optional renderer's supported scene kinds bound that renderer,
+not the creative methods available to the Agent. This guidance adds no new
+authoring command or runtime execution permission.
+
+Qualify a creation technique by using it in a real requested work, retaining the
+editable project and sources, and making a meaningful revision. When comparing
+video techniques, use the same factual brief and communication objective, allow
+each technique to shape the film, and review complete results for message,
+visuals, sound, pacing and full production cost. Keep mechanical checks, creative
+judgment, audience observations and untested claims distinct. Follow the shared
+[task-first delivery guide](../../../docs/development/frontend-delivery.md#task-first-delivery--从用户任务开始)
+for the frontend journey; artifact creation does not require its own editor.
+
+从用户要完成的作品出发，明确读者、表达目的、事实来源和作品形式。HTML、Game、
+Mini-World 既可独立交付，也可成为视频中的素材或镜头；按具体 brief 创作，保留
+可修改工程，通过实际作品及修改后的结果验收。复用已有对话和产物预览、反馈、
+修订入口。用同一事实与表达目标比较各项视频能力，允许各自发挥构图与叙事优势，
+同时审阅完整成片的表达、画面、声音、节奏与全部制作成本；机械检查、创意判断、
+观众证据和未验证项分别记录。
 
 The capability also ships a provider-neutral item lifecycle for real local
 operations queues. It preserves stable item identity, revision-bound approval,
@@ -29,6 +62,25 @@ or role-incomplete page sets. See
 
 ## Implemented Surface
 
+`loopx content-ops media` prepares source-bound private compositions and renders
+them through the optional local `loopx-media` extension. The packaged
+**Settings → Capabilities → a Goal → Content production** workbench renders,
+cancels and reads the same compositions, video, captions, transcript and source
+checks. It reuses existing layout tokens and content-item revision/approval,
+while keeping heavy image/audio/video computation in the optional distribution.
+See the [composition contract](../../../docs/reference/protocols/content-ops-media-v0.md)
+and [renderer installation and recovery](../../../packages/loopx-media/README.md).
+
+`loopx content-ops reference` reads an existing private source/style catalog,
+prepares version-checked capture/correction artifacts, retrieves topic/structure
+references, and prepares outlines with original credit and reuse conditions.
+The same TypeScript owner runs in the packaged **Content production → Source
+style references** workbench. Imports stay in browser page memory; downloads are private
+review artifacts. This preview does not write the original catalog or activate
+a source. Inventory reuses Material Lifecycle, while managed apply/rollback
+still requires that owner's qualified source provider. See
+[`content_ops_reference_v0`](../../../docs/reference/protocols/content-ops-reference-v0.md).
+
 | Layer | Current path |
 | --- | --- |
 | Capability module | `loopx/capabilities/content_ops/` |
@@ -49,6 +101,10 @@ or role-incomplete page sets. See
 - Provider delivery and readback receipts must match the approved revision and
   digest; the lifecycle helper performs no external write.
 - Layout acceptance never implies content approval or publishing authority.
+- JSON read from stdin (`-`) is refused before parsing above 16 MiB
+  (16,777,216 bytes); `--max-input-bytes N` sets a different positive limit on
+  the subcommand. The limit counts input bytes, not process memory, and does
+  not apply to JSON files.
 - Built-in cover pages require `0.82–0.94` meaningful vertical density; the
   template field is `density.role_overrides.cover`.
 - Built-in `page_sequence` defaults require a cover first, make it the density

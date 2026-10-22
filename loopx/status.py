@@ -131,6 +131,7 @@ from .control_plane.todos.active_state_todos import (
     active_state_todo_fields as _active_state_todo_fields_read_model,
 )
 from .control_plane.todos.active_state_todo_parser import (
+    active_state_incomplete_warning,
     parse_active_state_todos,
 )
 from .control_plane.work_items.attention_item import (
@@ -481,6 +482,7 @@ def autonomous_replan_obligation_from_runs(
     agent_todos: dict[str, Any] | None,
     agent_id: str | None = None,
     external_progress_review: dict[str, Any] | None = None,
+    effective_turn_cadence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     from .control_plane.status.autonomous_replan_projection import (
         autonomous_replan_obligation_from_runs as _autonomous_replan_obligation_from_runs,
@@ -491,6 +493,7 @@ def autonomous_replan_obligation_from_runs(
         agent_todos=agent_todos,
         agent_id=agent_id,
         external_progress_review=external_progress_review,
+        effective_turn_cadence=effective_turn_cadence,
     )
 
 
@@ -615,6 +618,7 @@ def project_post_handoff_history(
     for run, signal in zip(runs, projection["runs"], strict=True):
         compact = {field: run[field] for field in (
             "generated_at", "classification", "health_check", "json_exists", "markdown_exists",
+            "progress_scope",
         ) if field in run}
         compact.update({field: signal[field] for field in ("delivery_batch_scale", "delivery_turn_kind")})
         if signal.get("delivery_claim_conflicts"):
@@ -728,6 +732,7 @@ def active_state_todo_fields(
         rollout_event_log_path=rollout_event_log_path,
         max_todo_index_rollout_events_per_goal=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
         parse_active_state_todos=parse_active_state_todos,
+        active_state_incomplete_warning=active_state_incomplete_warning,
         parse_issue_meta_surface=parse_issue_meta_surface,
         backlog_hygiene_warning=backlog_hygiene_warning,
         completed_todo_archive_warning=completed_todo_archive_warning,
@@ -1155,6 +1160,7 @@ def build_attention_queue(
             source_registry_shadow_findings=SOURCE_REGISTRY_SHADOW_FINDINGS,
             monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
             external_progress_review_context=external_progress_review_context,
+            registry_path=registry_path,
         ),
         runtime_root=runtime_root,
         include_task_graph=include_task_graph,
@@ -1352,15 +1358,18 @@ def collect_status(
     include_task_graph: bool = False,
     goal_id: str | None = None,
     available_capabilities: Any = None,
-    include_public_boundary_scan: bool = True,
+    include_public_boundary_scan: bool = False,
     recent_run_limit: int | None = None,
     include_goal_subagent_configuration: bool = False,
+    include_zcode_goal_eligibility: bool = False,
     activation_state_filter: str | None = None,
     agent_lane_id: str | None = None,
+    allow_missing_registry: bool = False,
 ) -> dict[str, Any]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
             registry_path=registry_path,
+            allow_missing_registry=allow_missing_registry,
             runtime_root_override=runtime_root_override,
             scan_roots=scan_roots,
             limit=limit,
@@ -1372,6 +1381,7 @@ def collect_status(
             include_goal_subagent_configuration=(
                 include_goal_subagent_configuration
             ),
+            include_zcode_goal_eligibility=include_zcode_goal_eligibility,
             activation_state_filter=activation_state_filter,
             agent_lane_id=agent_lane_id,
             context=build_status_collection_context(),

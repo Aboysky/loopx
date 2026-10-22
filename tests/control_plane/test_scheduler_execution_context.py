@@ -22,7 +22,7 @@ from loopx.control_plane.scheduler.execution_context import (
 from loopx.control_plane.scheduler.automation_liveness import (
     build_automation_liveness,
 )
-from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
 from loopx.control_plane.testing.quota_fixtures import (
     quota_status_payload,
     quota_todo_item,
@@ -251,6 +251,8 @@ def test_scheduler_execution_context_decision_table(
 
 
 def test_partial_scheduler_context_fails_closed_without_app_action() -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
     hint = build_scheduler_hint(
         _active_payload(),
         scheduler_execution_context={"host_surface": "generic_cli"},
@@ -263,12 +265,32 @@ def test_partial_scheduler_context_fails_closed_without_app_action() -> None:
 
 
 def test_missing_scheduler_context_fails_closed() -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
     hint = build_scheduler_hint(_active_payload())
 
     assert hint["action"] == "repair_scheduler_execution_context"
     assert hint["execution_context"]["valid"] is False
     assert hint["codex_app"]["applicability"] == "blocked_invalid_context"
     assert hint["execution_phase"]["disposition"] == "contract_error"
+
+
+def test_valid_scheduler_context_requires_the_supplied_native_arbitration() -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
+    with pytest.raises(ValueError, match="scheduler arbitration must come from the interaction projection"):
+        build_scheduler_hint(_active_payload(), scheduler_execution_context=
+            scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"))
+
+
+@pytest.mark.parametrize("mode", ["goal_stopped", "quota_paused"])
+def test_explicit_shutdown_precedes_the_native_arbitration_requirement(mode: str) -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
+    hint = build_scheduler_hint({"heartbeat_recommendation": {"recommended_mode": mode}},
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"))
+    assert hint["cadence_class"] == mode
+    assert hint["app_automation"]["host_action"] == "pause_or_delete_current_heartbeat"
 
 
 def test_codex_app_runtime_profile_preserves_host_backoff_and_authority() -> None:
@@ -691,6 +713,26 @@ def test_goal_runtime_defer_uses_user_gate_deadline_before_monitors() -> None:
     assert hint["cold_path_detail"]["frontier_recheck"][
         "frontier_recheck_source"
     ] == "user_gate"
+
+
+def test_goal_runtime_recheck_uses_utc_instant_of_projected_deadlines(monkeypatch):
+    from loopx.control_plane.scheduler import scheduler_hint as module
+
+    now = datetime(2026, 8, 2, 6, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(module, "now_utc", lambda: now)
+    payload = _monitor_wait_payload()
+    for key, identity, due in [
+        ("agent_todo_summary", "earlier", "2026-08-02T14:01:00+08:00"),
+        ("user_todo_summary", "later", "2026-08-02T06:02:00Z"),
+    ]:
+        payload[key] = {"frontier_deadline": {"schema_version": "todo_frontier_deadline_v0",
+            "identity": identity, "source": "user_gate", "next_due_at": due, "candidate_count": 1}}
+    hint = build_scheduler_hint(payload, scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+        SchedulerRuntimeProfile.ARK_MANAGED_AGENT_GOAL))
+    continuation = hint["goal_runtime_continuation"]
+    assert continuation["disposition"] == "defer"
+    assert continuation["recheck_after_seconds"] == 60
+    assert continuation["recheck_source"] == "frontier_earliest_material_transition"
 
 
 def test_quota_human_gate_uses_future_user_gate_deadline_before_monitor() -> None:

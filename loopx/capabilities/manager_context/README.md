@@ -1,6 +1,10 @@
 # Manager context delivery
 
 Built-in capability for original intent delivery and receiver-owned replanning.
+The `manager-inbox` CLI uses the shared selected-command dispatcher and one
+executable-revision scope per command. It retains the existing handler and
+live source reads; it does not load the full compatibility CLI or cache request
+records between commands.
 The owner's local manager channel uses registered workers automatically.
 An external conversation requires a trusted operator's sender-bound policy in
 `<runtime-root>/.local/manager-context/policy.json`:
@@ -22,6 +26,65 @@ Missing policy, missing source, a wrong sender or malformed scope grants nothing
 Keep the policy private (0600); do not commit it. A read grant without a sender
 grant is insufficient. This does not grant remote delivery, evidence reads,
 worker launch, Todo/lease changes or protected operations.
+
+### Executing already bound work
+
+An operator may separately authorize an external audience to select existing
+governed task bindings. Add an `execution_bindings` list to that exact private
+`sources[channel]` row (retain its independently verified `sender_ids`):
+
+```json
+{"execution_bindings":[{"goal_id":"research","agent_id":"worker",
+  "requester_agent_id":"lead","binding_id":"review"}]}
+```
+
+The Goal must already point at its operator-owned `.loopx/config/` binding file
+through `loopx configure-goal --goal-id research --subagent-execution-config
+.loopx/config/delegations.json --execute`. Provision its real task, validation,
+registered requester, workspace and host using the existing
+[local delegation interface](../../../docs/reference/local-delegation.md).
+Neither registration, a sender grant, read access nor a context brief creates
+this execution grant. No task, role, profile or schedule is provisioned here.
+
+Chat exposes only the authorized Goal/Agent/binding/Todo identities in
+`context_execution.bindings`. For requested work covered by that current task,
+the model may select `execution_binding_id` in its semantic `context_handoff`.
+Assessment-only handoffs omit it. The host rechecks provider provenance, source
+revocation, active membership, Goal configuration, the original Turn and
+canonical preflight, then uses `Delegations.start`. Commands, roots, requester
+identity and host policy cannot come from the model. An unprobed runtime retains
+`runtime_unverified`; it may attempt the existing bounded execution, and is never
+reported as ready, running or complete. Known unavailability or refused task
+admission does not launch. Retry preserves `context-<original-receipt-id>` and
+does not resume, reset or replace a stopped/completed operation.
+
+The original brief and its field/encoded-byte limits remain unchanged. The trusted
+host binds the original inbox request in the existing operation identity and
+receiver bootstrap instructions, outside user-authored fields. Replay preserves
+that binding; it cannot substitute another request.
+
+The receiver independently reads/adopts the original inbox request and returns
+an audience-safe conclusion with the existing `manager-inbox report` path, in
+addition to its peer result. Launch submission, receiver conclusion, canonical
+acceptance and provider delivery remain separate evidence. The existing return
+service replies to the original conversation; it does not start another model
+thread. Plain inbox delivery leaves receiver activity unverified; it does not claim
+that execution has not started.
+The native postcondition entry retires only its exact operation-owned temporary
+host input before checking a clean delivery worktree; unrelated files and actual
+artifact changes still fail canonical validation. Validation recovery resumes the
+original Turn after its retained host result, without invoking the model again.
+An external conversation is not a native Goal wake owner. The typed wake owner
+settles that separate intent as `no_wake_owner`; the exact original inbox return
+still carries the receiver's conclusion, without a hidden Goal or retry loop.
+
+Remove that source's exact execution grant to prevent later launches/replays.
+Already launched work keeps its original lifecycle: inspect and stop its exact
+operation with `loopx delegation`, rather than assuming `/stop` of the manager
+also stops an independently governed worker. Existing private configuration and
+journals remain local. Automatic allocation of new tasks, operator UI discovery,
+general inbox activation, cross-host readiness and live result/stop presentation
+are still separate product work; this path only selects already configured work.
 
 The existing local operator commands preview, apply and verify exceptions:
 
@@ -53,8 +116,86 @@ external delivery, including future replay. Existing inbox records are retained.
 Provider ingress receipts bind message digest, channel and sender; a model cannot
 create or widen that provenance through its response.
 
-The existing worker turn-start hook exposes only a bounded pending count and
-required read command, without copying private content into status projections.
+Native steward private conversations record that provenance before the canonical
+Turn can start, using this App's independently verified opaque `operator_ref`.
+Use the exact Session channel `manager.external.native.<binding-ref>.<source-ref>`
+and that owner reference in the private source policy. The same read-scope and
+delivery-target commands accept this exact channel alongside legacy channels;
+partial channels and wildcards are rejected. Native admission and crash replay
+retain the original Session, request and message. An App's portfolio read grant
+alone does not grant context delivery, and inbox delivery does not launch a worker.
+Provenance uses the controller's resolved coordination runtime root when present,
+so a separate Chat store cannot split it from the recipient policy and inbox.
+The exact execution catalog and handoff dispatch use that same resolved root;
+private Session/Turn files remain in the existing Chat store.
+Controllers predating that root retain the existing Chat-parent layout.
+External on-demand context retries one invalidated local inventory snapshot when
+the exact Goal instances and current audience scope remain unchanged. This is
+a fresh read in the same Turn, without another model thread or request replay.
+Revocation, Goal replacement, missing authority and continued inventory churn
+remain unavailable; an accepted inbox request does not bypass these checks.
+Prompt-only contexts that collect remote evidence inline retain the original
+single collection and rejection behavior, including after a failed SSH read;
+recovery cannot reset their one-dial, total-time budget in the same Turn.
+Messages outside the shared inbox's source-context bounds remain intact in
+ordinary Chat, but cannot be handed off as inline context; use a scoped artifact
+for larger material. Image content is not transferred by this text ingress record.
+
+The worker turn-start hook supplies a compact **unfinished delegation agenda** in
+its private `work_context.sources[].content.unfinished_delegations` on every
+managed Turn. It includes incoming requests after read/adoption, sent peer work
+awaiting a result, conclusions awaiting original-route delivery, and peer results
+awaiting explicit requester consumption. The same read model is returned by
+`manager-inbox read`. Discovery/status hook receipts remain content-free; the
+private agenda contains current-purpose excerpts and explicit links, not source
+transcripts, result bodies or receiver rationale.
+
+Each item names its request, receiving/source Agent where recorded, current
+revision, related Todo ids and the remaining receipt step. Counts are request
+records (`count_unit=request`), not distinct tasks: follow-up requests can link
+to the same existing Todo. A completed Todo is
+not a returned answer; a queued conclusion is not delivered; delivery is not
+requester adoption or independent acceptance. A current cancellation is omitted
+only after its active publication reservation is gone. Failed reads and scan or
+prompt overflow remain explicit rather than becoming an empty queue.
+
+The App's steward header exposes the same unfinished-request classification in
+an in-place inventory. `GET /api/chat/request-inventory?session_id=<original-session>`
+reads requests from that exact conversation source, including earlier Sessions
+on its channel and this Chat host. Optional `view=history` retains concluded and
+cancelled requests; `offset` reads the next bounded page. Current binding and
+Goal visibility are checked before and after reading. Original-Chat delivery
+and explicit peer-return consumption remain different receipt paths. The list
+does not mark reads, accept work, start an Agent or certify an overall outcome.
+Unreadable/missing sources and incomplete scans keep counts visibly partial.
+
+管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
+工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
+项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+
+The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
+the full Inbox read or replace its requirements. Before acting, read the current
+brief and independently assess its authority, evidence and constraints. The
+agenda never changes priority, wakes an Agent, claims work, acknowledges a
+request, publishes a result or grants effects. It is collected by the existing
+LoopX quota/heartbeat Turn-start path; arbitrary host Turns that do not invoke
+that path are outside this integration. Frontend/Lark conversations retain their
+existing request and return views; no new screen or setting is introduced.
+
+The local Inbox read transaction now lives in
+`loopx/control_plane/collaboration/inbox_read.ts`. It reuses the typed receipt,
+Goal-instance, request-revision and agenda owners inside one runtime request.
+The Turn hook remains read-only. CLI/MCP reads record the supplied requests and
+peer-return read receipts; they do not adopt requests or consume peer results.
+Python releases the initial Goal lifetime guard for provider enrichment.
+Core Todo and workspace inputs retain their actual IO adapters and provider
+fences. The Host reacquires the Goal guard before native finalization.
+Operation-ticket observations retain their existing provider. Complete large
+pages use the shared private snapshot transport. Existing return-display file
+IO remains in its Python adapter. Existing storage addresses, source records and public
+response shapes remain compatible. Normal runtime IPC, installed HTTP journeys
+and complete CLI performance require separate qualification.
+
 Read and record a decision through the installed CLI:
 
 ```sh
@@ -68,6 +209,49 @@ completion. Later new evidence can generate a new decision through the ordinary
 worker planning workflow; do not overwrite the original receipt. This feature
 adds no periodic automation, forced wakeup, Todo priority or protected-operation
 permission. Existing private inbox records are retained when delivery is revoked.
+
+## Automatic owner task notifications
+
+An existing owner-only private steward can enable **Automatically notify new
+owner tasks** in Settings → Lark. This is an explicit, reversible notification
+setting; existing installations stay off until enabled. First enable baselines
+the current tasks without sending a historical burst. The ordinary steward
+service then discovers new and materially changed `user_action` / `user_gate`
+Todos in its current Goal scope, including subsequently registered Goals when
+the binding already authorizes all registered work. No Codex heartbeat, model
+Turn, hidden Goal, delegated worker or additional event consumer is involved.
+This notice grants no execution or decision authority and does not complete a
+Todo. Worker-result returns keep their separate existing delivery contract.
+
+Discovery reads every authorized Goal through the native Todo reader and
+restores exact source text before preparing a notice. A failed or incomplete
+read retains prior work; it cannot infer task removal. Completed, withdrawn,
+superseded or out-of-scope sources cancel unsent notices. A local typed planner
+owns subject identity, meaningful-content changes and reopening generations;
+this is a local notification journal, not another Todo authority.
+
+Notices preserve the complete authored task text, explanation, reason and
+evidence. Structured decision scopes stay in canonical change detection and
+authority checks instead of appearing as protocol JSON in the human message.
+Presentation updates do not rewrite frozen intents or resend unchanged tasks.
+
+The existing four-worker outbound pool reserves at most one slot for bounded
+notification reconciliation only when a notification setting is enabled;
+the default-off path retains all four reply slots and performs no Todo scan.
+Each durable per-binding outbox has a process
+fence. Before each send, Core rechecks the exact steward, App, owner, current
+scope and original private-message provenance. Settings cannot supply another
+destination. A frozen intent precedes the provider write; the independent
+readback must match the exact message, App, private Chat and complete text.
+Restart recovers an existing locator by reading it. A create without a returned
+locator remains unconfirmed and is never blindly repeated; only a proven
+pre-spawn failure permits up to three bounded attempts. Oversized complete
+notices fail visibly instead of silently truncating decision terms.
+
+The setting and content-free pending/unconfirmed/failure health are read back
+in the same settings panel. Disable remains local even when provider auth is
+down, pauses delivery and retains all frozen receipts. Re-enable preserves
+those receipts and discovers changes since the previous successful snapshot.
 
 ## Scoped project conversations
 
@@ -176,6 +360,20 @@ not a missing Agent; delivery still rechecks the existing authority. Stopped
 identities are available with `include_stopped=true` for historical questions.
 Unreadable/ambiguous inventory remains unknown, not an empty successful search.
 
+Each included row also exposes `registered_host_binding`: the existing binding
+owner's `outcome`, `candidate_count`, `address_shared` and `scope` for that Goal.
+The page does not expose host addresses or read host stores; `view=agent_route`
+remains the exact-identity, current-observation path. A registration or binding
+does not prove presence, execution readiness or delivery authority.
+
+Repeated role names alone do not require an owner question. The conversation's
+explicit identity corrections, established assignment, project and declared
+responsibilities guide recipient selection; binding metadata can support that
+context but cannot override an explicit identity or grant. Preserve both Goal
+and Agent identity. Forwarded requests retain their original speaker/addressee
+in the existing collaboration brief rather than redefining every “you” as the
+receiver. Clarify only competing interpretations that still change the action.
+
 The same query is available through the CLI and registered SSH evidence sources:
 
 ```sh
@@ -190,6 +388,31 @@ and Lark Codex conversations share the existing dynamic tool and evidence event
 path; this does not add a visible settings control or launch workers. Prompt-only
 adapters still have no interactive discovery tool. Live multi-worker adoption and
 original-conversation completion require separate qualification.
+
+Local owner managers read all registered Goals by default. A bounded Turn index
+is a summary, not an authorization list: on-demand Todo, delivery, Agent and
+portfolio reads use the current audience scope. Portfolio pagination selects the
+permitted registry page before collecting evidence, including Goals registered
+after the initial Turn. Goal conversations remain confined to their selected
+Goal; external conversations are rechecked before and after each read.
+
+New manager connections created in Settings → Lark default to **All registered
+Goals, including new ones**. This applies to the connection's authorized audience,
+including its group members. Existing connections retain their selected read
+scope. Edit the existing connection's **Goal evidence access** to opt into the
+live registered inventory or return to its selected scope. The UI reads back the
+actual policy and preserves failures; changing this read setting does not grant
+worker execution, publishing, context delivery or SSH access.
+
+The same policy is available through the existing trusted-local CLI. Omitted
+`--read-goal-scope` preserves the selected-list behavior of existing scripts;
+an empty selected list revokes the read grant. Old lists are not automatically
+widened during installation.
+
+```sh
+loopx manager-inbox configure-read-scope --channel-id manager.external.0123456789abcdef01234567 --read-goal-scope all_registered --execute
+loopx manager-inbox configure-read-scope --channel-id manager.external.0123456789abcdef01234567 --read-goal-scope selected --read-goal-id project-a --execute
+```
 
 Routine inspection excludes Goals explicitly stopped in Core, before status
 collection and detail reads. Coverage reports how many were skipped. Stale or
@@ -295,8 +518,11 @@ ordered by request id; restart without a cursor to find new requests sorted
 before the last position. Peer results retain their separate consumption flow
 and are not paginated by this cursor. `status --offset/--limit` remains separate.
 
-After `acknowledge`, the request remains in the turn-start hook until the worker
-publishes a conclusion. The worker uses `link` for canonical Todo/evidence lineage
+After `acknowledge`, the request remains visible until the answer obligation is
+resolved. `pending.items` retains its existing receipt-only semantics: it stops
+including a request once its conclusion exists. The separate unfinished agenda
+keeps undelivered conclusions visible, and keeps peer work until the requester
+explicitly consumes the current result. The worker uses `link` for canonical Todo/evidence lineage
 and `report` to publish the answer intended for the original audience:
 
 ```sh
@@ -308,12 +534,52 @@ loopx manager-inbox report --goal-id research --agent-id worker \
   --request-id <id> --phase conclusion --reply-text 'What was assessed or changed, what was validated, and what remains.'
 ```
 
+For a verified bound-owner App request, explicitly attach a file from the
+registered Goal workspace with the same result publication:
+
+```sh
+loopx manager-inbox report --goal-id research --agent-id worker \
+  --request-id <id> --reply-text 'The report is attached.' \
+  --attachment-ref reports/result.pdf
+```
+
+Scoped MCP workers use `return_result(..., attachment_refs=["reports/result.pdf"])`.
+Repeat the CLI flag for additional files: at most four, each nonempty and at most
+30 MiB, at most 60 MiB together. Paths must be relative, without symlink components;
+the host requires POSIX no-follow directory opens. An explicitly registered
+canonical project alias may supply the working copy; arbitrary working directories
+cannot replace the Goal workspace. Publication snapshots the bytes and binds name,
+relative ref, size and SHA-256 into the immutable result identity. Editing the
+workspace later does not change a queued file. Use a new stable update id for a
+changed artifact, rather than replacing an already committed result.
+
+The Lark return includes the authored Markdown and an attachment zone in one reply
+to the original private conversation. Upload, message delivery and downloaded-byte
+verification are separate facts. A failed verification preserves the sent-message
+locator; restart reads that message and never resends it or reconstructs missing
+resource records with a new upload. Missing upload scope, changed authority or
+unsupported transport remains an explicit delivery gap. A path mentioned only in
+text is not an attachment. This slice does not qualify local-Web file presentation,
+group disclosure, cross-host transfer or inline video playback. Installed live
+provider qualification remains separate from the synthetic transport regressions.
+Before downgrading to an older runtime that does not understand result files,
+pause the reply pump while any file-bearing result remains pending; an old
+text-only reader cannot certify attachment delivery. Retain the result snapshots
+and resource records for recovery by a compatible runtime.
+
 Each CLI/MCP read includes the recorded receiver decision and fresh Core work
 from explicit request links. `receiver_followthrough` separates assessment,
 accepted work, owed answers and unavailable evidence; it is advice, not a priority
 override. Scoped MCP workers use `link_work` to reuse their current Todo or opaque
 evidence IDs. An unrelated busy worker establishes no request progress, and a
 short answer needs no manufactured Todo. See the [shared collaboration boundary](../../control_plane/collaboration/README.md).
+
+CLI and MCP inbox reads reuse the shared conversation answer guidance: report text can return
+verbatim to the requester's conversation, so answer the original request at a
+proportionate depth. Routine execution bookkeeping belongs in the existing
+evidence records; requested detail and material gaps remain in the answer.
+This is authoring guidance, not a summary service or a delivery-time rewrite,
+and does not certify the quality of a receiver's result.
 
 For longer work, `--phase decision` optionally returns a meaningful intermediate
 update. A ready conclusion supersedes an unsent intermediate update. Do not send
@@ -351,6 +617,21 @@ It waits until the initial reply is acknowledged, revalidates authority before
 sending, and never retargets a closed/replaced conversation. An offline transport
 retries the persisted answer rather than rerunning the worker. Ambiguous external
 writes remain `verification_required` and are not blindly resent.
+
+Core-bound private stewards use their existing independently verified App/owner
+binding and original admitted source, without requiring a legacy Goal-channel
+binding. Sending and saved-attempt verification both revalidate the steward
+context, portfolio scope, source sender and canonical Session/Turn correlation.
+An opaque native request reference resolves its provider message only through
+those original correlation records; it is never used as a provider message id.
+Revocation or changed provenance blocks the return; a later conversation cannot
+receive it. The same Inbox and manager-context receipt owners handle delivery
+and recovery; ordinary private replies and legacy Goal-channel routes retain
+their existing behavior.
+When Chat storage and the coordination runtime are separate, original Inbox
+ACK lookup, provider preview/send and saved-attempt verification use the Chat
+transport's own project root. Grants and result receipts remain in the canonical
+coordination runtime; neither root is moved and path containment stays enforced.
 
 When the provider returned a trustworthy message locator before readback failed,
 the same background pump persists that private attempt and later performs a
@@ -402,6 +683,37 @@ this brief and live receiver/return facts in place. Compatible requests without
 a brief retain their existing shape and identity. A changed brief under the same
 ingress identity is a conflict, not a second delegation.
 
+Generated receiver guidance is delivery metadata, separate from that request
+content. Updating it in a release must not reject an otherwise identical saved
+request. Replay retains the original entry bytes, guidance, assessment and
+return history; message, brief and recipient identity conflicts still fail.
+
+The shared Chat handoff acknowledgment preserves the current audience-processed
+answer, including its Markdown, and appends receipt-backed delivery and execution
+status. It does not repeat the full brief or historical context after a substantive
+answer. A missing or blank answer uses the short user-facing preview:
+the exact recipient Agent, purpose, a bulleted result checklist (up to three
+items), execution boundaries (up to two items), and the return requirement.
+Each item has a visible text bound; omitted list items are counted. Selection
+evidence, historical context and internal operation identities stay in the full
+brief and diagnostic readback rather than flooding the ordinary conversation.
+The complete normalized brief is delivered unchanged, including every context,
+constraint and acceptance item. This is a presentation default change, not a
+lossy receiver handoff or a new public-safe projection.
+
+The acknowledgment distinguishes inbox delivery from governed execution
+submission. Delivery alone leaves receiver execution unverified; even a refused
+sender-side launch cannot prove that the receiver has not independently started.
+Model-authored prose cannot override those facts. This applies to the shared App,
+Goal and Lark handoff path; grants, dispatch, request identity and the automatic
+result-return path keep their existing owners.
+
+The packaged Chat [before](../../../docs/assets/handoff-ack/before.png) and
+[compact preview](../../../docs/assets/handoff-ack/after.png) views use a
+synthetic request and production context delivery, with a scripted model-protocol
+host. They demonstrate presentation and receipt handling, not real-model routing
+or receiver execution.
+
 Registered workers can ask another worker of the **same Goal on the same host**
 for help or independent review:
 
@@ -410,6 +722,24 @@ loopx manager-inbox request --goal-id allocation --agent-id builder \
   --peer-agent-id reviewer --operation-id review-round-1 \
   --brief-file review.json --parent-request-id <received-request-id>
 ```
+
+To inspect an original source by its saved request identity, including a concluded
+request, use the same registered Goal and receiving Agent:
+
+```sh
+loopx manager-inbox read --goal-id allocation --agent-id builder --request-id <received-request-id>
+```
+
+`--request-id` now selects that exact request instead of being silently ignored.
+It retains the full current brief, original ancestry and typed receipt state;
+reading a conclusion does not reopen its work or repeat its result. The read
+records only that request's receipt and does not deliver unrelated peer results.
+An unknown identity, another recipient or Goal lifetime fails without falling
+back to a pending page. Exact reads cannot use inbox cursors. Omit the option for
+the existing paged pending inbox, peer results and operation handoffs. These are
+trusted local inspection commands, not new source grants or execution authority.
+App/project dispatch, receiver adoption and original-conversation return retain
+their separate existing entrypoints and acceptance.
 
 In App and Goal conversations, the existing read tools expose the same bounded
 local observation without shell access: search `view=agents`, then read

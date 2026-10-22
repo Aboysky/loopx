@@ -65,6 +65,19 @@ def quota_action_signature_document(payload: Mapping[str, Any]) -> dict[str, Any
     )
 
 
+def turn_envelope_replan_settlement_identity(
+    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+) -> dict[str, Any] | None:
+    result = _turn_envelope_result("replan_settlement_identity", envelope=dict(envelope),
+                                   turn_instance_id=turn_instance_id)
+    identity = result.get("identity")
+    if identity is None:
+        return None
+    if not isinstance(identity, Mapping):
+        raise RuntimeError("TypeScript Turn settlement identity must be an object")
+    return dict(identity)
+
+
 def build_turn_envelope(
     payload: Mapping[str, Any],
     *,
@@ -88,4 +101,16 @@ def build_turn_envelope(
         scheduler_execution_args=scheduler_execution_args,
         **({"captured_decision_path": captured_decision_path}
            if captured_decision_path is not None else {}),
+    )
+
+
+def bind_turn_decision_capture(
+    payload: Mapping[str, Any], envelope: Mapping[str, Any], *,
+    captured_decision_path: str, turn_instance_id: str, turn_key: str,
+) -> dict[str, Any]:
+    """Validate and bind original native Turn evidence through the existing TS owner."""
+    return _turn_envelope_result(
+        "bind_capture", payload=dict(payload), envelope=dict(envelope),
+        captured_decision_path=captured_decision_path,
+        turn_instance_id=turn_instance_id, turn_key=turn_key,
     )

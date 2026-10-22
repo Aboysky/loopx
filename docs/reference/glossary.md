@@ -40,6 +40,15 @@ Outcome class of a delivered work item.
 - typescript: [`DELIVERY_OUTCOMES`](../../loopx/control_plane/work_items/delivery_outcome.ts).
 - Values / 值: `surface_only`, `outcome_gap`, `outcome_progress`, `primary_goal_outcome`.
 
+## delivery_turn_kind
+
+Why a delivery Turn counts: the kind of work the writeback performed, recorded beside delivery_outcome.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- python: [`DeliveryTurnKind`](../../loopx/control_plane/work_items/delivery_outcome.py).
+- typescript: [`DELIVERY_TURN_KINDS`](../../loopx/control_plane/work_items/delivery_history.ts).
+- Values / 值: `contract_only_preparation`, `compact_evidence`, `blocker_writeback`, `product_path_execution`, `outcome_gap`, `unknown`.
+
 ## delivery_workspace_identity_kind
 
 How a delivery workspace is identified.
@@ -112,15 +121,6 @@ Authority handoff mode between agents.
 - typescript: [`HANDOFF_MODES`](../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts).
 - Values / 值: `legacy`, `soft_claim`, `hard_lease`.
 
-## lease_action
-
-Authority-core lease mutation verb.
-
-- Tier / 层级: `kernel`; status / 状态: `legacy`.
-- python: [`LeaseAction`](../../loopx/control_plane/coordination/authority_core.py).
-- Values / 值: `acquire`, `renew`, `transfer`, `release`.
-- Compatibility only / 兼容保留: `acquire`, `release`, `renew`, `transfer`.
-
 ## loop_disposition
 
 Pure controller verdict for the outer loop after combining the last Turn receipt with the fresh route.
@@ -183,6 +183,7 @@ Typed failure class of a settlement step.
 - python: [`SettlementFailureKind`](../../loopx/control_plane/effect_program.py).
 - typescript: [`SETTLEMENT_FAILURE_KINDS`](../../loopx/control_plane/effect_program.ts).
 - Values / 值: `invalid_identity`, `receipt_missing`, `receipt_unbound`, `identity_mismatch`, `writeback_missing`, `writeback_rejected`, `quota_spend_rejected`, `terminal_closeout_rejected`, `cancelled`, `permission_denied`, `budget_rejected`, `effect_outcome_unknown`.
+- Compatibility only / 兼容保留: `cancelled`.
 
 ## settlement_step_kind
 
@@ -192,6 +193,22 @@ Effect-program settlement step executed for one Turn.
 - python: [`SettlementStepKind`](../../loopx/control_plane/effect_program.py).
 - typescript: [`SETTLEMENT_STEP_KINDS`](../../loopx/control_plane/effect_program.ts).
 - Values / 值: `validation`, `durable_writeback`, `quota_spend`, `terminal_closeout`.
+
+## state_recovery_component_state
+
+Offline owner-local readability of a component in an inert recovery audit; never execution or adoption authority.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`RECOVERY_COMPONENT_STATES`](../../loopx/control_plane/state_recovery_contract.ts).
+- Values / 值: `readable`, `historical_only`, `unknown`.
+
+## task_lease_lifecycle_operation
+
+Operation accepted by the shipped native lease lifecycle request decoder; acquisition has its own transaction.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`TASK_LEASE_LIFECYCLE_OPERATIONS`](../../loopx/control_plane/work_items/task_lease_lifecycle_request.ts).
+- Values / 值: `renew`, `transfer`, `release`, `terminal_verify`, `holder_verify`, `fence_close`.
 
 ## todo_completion_continuation
 

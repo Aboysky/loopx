@@ -464,6 +464,31 @@ function turnStartResult(overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("registered fact observations carry bounded readback without an unread message", () => {
+  const registration = turnStartRegistration({required_read: null, requested_write_scope: ["goal_event_log"]});
+  const result = turnStartResult({agent_read_required: false,
+    readback: {external_read_count: 2, state_written: true, summary_lines: ["Observed two dependencies."]}});
+  assert.deepEqual(validateTurnStartHookInvocation({registration, result}), result);
+  assert.throws(() => validateTurnStartHookInvocation({registration,
+    result: {...result, readback: {summary_lines: ["not\\nseparate instructions".replace("\\n", "\n")]}}}), /display budget/);
+  assert.throws(() => validateTurnStartHookInvocation({registration,
+    result: {...result, readback: {body: "x".repeat(17 * 1024)}}}), /budget/);
+  assert.throws(() => validateTurnStartHookInvocation({registration,
+    result: {...result, private_content_returned: true}}), /private provider content/);
+});
+
+test("failed observations retain uncertain effects only inside declared scope", () => {
+  const registration = turnStartRegistration({required_read: null, requested_write_scope: ["goal_event_log"]});
+  const result = turnStartResult({status: "failed", observation_count: 0, agent_read_required: false,
+    external_reads_performed: null, local_private_state_mutated: null,
+    error_code: "observation_response_lost", readback: {external_read_count: null, state_written: null}});
+  assert.deepEqual(validateTurnStartHookInvocation({registration, result}), result);
+  assert.throws(() => validateTurnStartHookInvocation({registration: {...registration, requested_write_scope: []}, result}), /undeclared local-private state/);
+  assert.throws(() => validateTurnStartHookInvocation({registration, result: {...result, external_writes_performed: null}}), /must be boolean/);
+  assert.throws(() => validateTurnStartHookInvocation({registration,
+    result: {...result, status: "observed", observation_count: 1, error_code: null}}), /must be boolean/);
+});
+
 test("turn-start read commands retain explicit routes with a bounded byte budget", () => {
   const read = {kind: "capability_intent", reason: "Read due report facts", ordering: "before_work"};
   const command = `loopx --registry /${"project/".repeat(35)}registry.json --runtime-root /${"runtime/".repeat(35)}state periodic-report consume-pending --goal-id example --agent-id reporter`;
@@ -592,4 +617,27 @@ test("turn-start empty, provider failure, and owner-private write scopes stay di
     result: turnStartResult({ external_writes_performed: true }),
   });
   assert.equal(reacted.external_writes_performed, true);
+});
+
+
+test("Explore settlement hint cannot inject a command or impose a work obligation", () => {
+  const reg = registration({hook_id: "explore.settlement_attachment", capability_id: "explore",
+    projection_slots: ["explore_result_attachment"], requested_read_scope: ["goal.explore_policy"]});
+  const result = {schema_version: INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,
+    hook_id: reg.hook_id, capability_id: "explore", phase: "interaction_projection",
+    status: "candidate", projection_slot: "explore_result_attachment", payload: {}};
+  const projected = validateInteractionProjectionHookInvocation({registration: reg, result});
+  const hint = projected.projection as Record<string, unknown>;
+  assert.equal(hint.required, false);
+  assert.equal(hint.option, "--explore-result-json <result.json>");
+  assert.equal(hint.inline_option, "--agent-vision-json <vision.json>");
+  assert.equal(hint.inline_field, "explore_result");
+  assert.equal(hint.attachment_schema, "explore_result_attachment_v0");
+  for (const payload of [{required: true}, {command: "run something"}, {guidance: "Always write"}]) {
+    assert.throws(() => validateInteractionProjectionHookInvocation({registration: reg,
+      result: {...result, payload}}), /presence must be empty/);
+  }
+  assert.throws(() => validateInteractionProjectionHookInvocation({
+    registration: {...reg, capability_id: "other"}, result: {...result, capability_id: "other"},
+  }), /owning capability/);
 });

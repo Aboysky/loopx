@@ -49,8 +49,8 @@ SURFACE_BUDGETS = {
         "owner": "heartbeat automation",
         "consumer": "wake and route one bounded turn",
         "cold_path": "quota should-run, status, or review-packet --handoff-only",
-        # Includes generator metadata and scoped commands, not just task_body.
-        # The independent 3,000-character thin body cap is checked separately.
+        # The shipped Agent projection, excluding generator-only diagnostics.
+        # The independent 3,600-character thin body cap is checked separately.
         "max_json_chars": 5_400,
         "max_nested_keys": 40,
         "max_top_level_keys": 30,
@@ -71,17 +71,29 @@ SURFACE_BUDGETS = {
         "cold_path": "status, history, or active state",
         # Codex keeps a lossless codex_app compatibility alias while the
         # provider-neutral app_automation packet becomes canonical.
-        # Pre-limit work counts add useful scope/completeness evidence; allow
-        # modest headroom after removing the redundant observed-row count.
-        "max_json_chars": 14_500,
-        "max_nested_keys": 360,
-        "max_top_level_keys": 52,
+        # Full Goal/selected-work read commands add necessary source continuity.
+        # One Agent-channel carrier avoids duplicating them in the CLI channel.
+        # The projection envelope adds the source freshness and goal coverage
+        # needed to trust this decision. On the same fixture, main/head measure
+        # 15,419/18,636 characters, 378/513 nested keys, and 52/53 top-level
+        # keys. Keep the complete typed envelope rather than dropping source
+        # facts that the consumer must inspect before it spends compute.
+        "max_json_chars": 20_500,
+        "max_nested_keys": 525,
+        "max_top_level_keys": 54,
     },
     "dashboard_status_json": {
         "owner": "operator dashboard",
         "consumer": "render first-screen operator state",
         "cold_path": "history, run artifacts, or project-local adapter output",
-        "max_json_chars": 22_500,
+        # Selected-work freshness added seven 95-character digest fields to
+        # this unchanged fixture (21,895 -> 22,560). Keep the internal source
+        # revisions: quota consumes this status projection before its own CLI
+        # compaction. The contract records why modest headroom is appropriate.
+        # The original longer temp root exposes 23,274 chars with unchanged
+        # 336 nested / 26 top-level keys. Preserve source revisions and full
+        # paths; 24k leaves 726 chars without widening structural guards.
+        "max_json_chars": 24_000,
         "max_nested_keys": 350,
         "max_top_level_keys": 27,
     },
@@ -416,18 +428,18 @@ def main() -> int:
                 runtime_profile="codex_app_heartbeat",
             )
         )
-        # Real automations normally bind an agent; the unbound fixture alone
-        # misses repeated identity/scope arguments in the generator envelope.
+        # Real automations normally bind an agent. Measure the same shipped
+        # projection for every fixture, including its identity/scope guidance.
         for binding in (
             {"agent_id": "worker-a"},
             {"agent_id": "worker-a", "agent_scopes": ["implementation", "review"]},
         ):
-            assert_surface("heartbeat_prompt_json", build_heartbeat_prompt(
+            assert_surface("heartbeat_prompt_json", project_heartbeat_agent_input(build_heartbeat_prompt(
                 goal_id=GOAL_ID,
                 thin=True,
                 runtime_profile="codex_app_heartbeat",
                 **binding,
-            ))
+            )))
 
         assert quota_payload["should_run"] is True, quota_payload
         reset_policy = quota_payload["scheduler_hint"]["reset_policy"]

@@ -1,13 +1,14 @@
 /** Explicit local execution bindings. Registration/messages alone grant no launch.
  * These are host observations; canonical task/Turn/acceptance remain authoritative. */
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
+import {requireInteger, requireJsonObject, requireStringArray} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
+import {acceptanceValidationEffects, goalAcceptanceTodoDigest, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import {PROJECTION_ENVELOPE_SEAL_REQUEST, sealProjectionEnvelope} from "../projection_envelope.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -62,9 +63,78 @@ export function delegationValidationPlan(params: JsonObject): JsonObject {
     basis_sha256: canonicalAuthoritySha256({todo_id: todo.todo_id, requirements, effects}),
     check_count: effects.length,
     pinned_file_count: effects.reduce((count, effect) => count
-      + (Array.isArray(effect.validation_files) ? effect.validation_files.length : 0), 0)};
-  return {todo_id: todo.todo_id, state: "ready", source, observation,
+      + (Array.isArray(effect.validation_files) ? effect.validation_files.length : 0), 0),
+    ...currentOracleChecks(basis, effects)};
+  // Reuse the acceptance owner's work classification. Scheduling/progress
+  // metadata and unrelated provider commits are not a new task declaration;
+  // current claim/lifecycle still fence this particular validation attempt.
+  const task_basis_sha256 = canonicalAuthoritySha256({work: goalAcceptanceTodoDigest(todo),
+    claimed_by: todo.claimed_by ?? null, role: todo.role ?? null,
+    status: todo.status, done: todo.done, archive_state: todo.archive_state ?? null});
+  return {todo_id: todo.todo_id, state: "ready", source, observation, task_basis_sha256,
     effects, canonical_done: todo.done === true && todo.status === "done"};
+}
+
+/** Consume only the acceptance owner's current exact-source observation. */
+function currentOracleChecks(basis: JsonObject, effects: JsonObject[]): JsonObject {
+  const contract = basis.goal_acceptance_contract as JsonObject | undefined;
+  if (!contract || !Array.isArray(contract.criteria) || !contract.criteria.some(raw => (raw as JsonObject).oracle)) return {};
+  const receipt = contract.verification as JsonObject | null;
+  const checks = (contract.criteria as JsonObject[]).flatMap(criterion => {
+    const oracle = criterion.oracle as JsonObject | undefined;
+    const result = (receipt?.results as JsonObject[] | undefined)?.find(row => row.criterion_id === criterion.id);
+    return oracle?.state === "current" && effects.some(effect => effect.criterion_id === criterion.id)
+      && result?.oracle_evidence ? [{criterion_id: criterion.id, ...result.oracle_evidence as JsonObject}] : [];
+  });
+  return {oracle_checks: checks};
+}
+
+/** Fresh host check observation, not an independent-verifier or persisted receipt.
+ * Host IO brackets the actual checks; only stable declared output versions return. */
+export function delegationCheckedArtifacts(params: JsonObject): JsonObject {
+  const binding = requireJsonObject(params.binding, "delegation binding");
+  const plan = requireJsonObject(params.plan, "current validation plan");
+  requireThat(plan.todo_id === binding.todo_id && plan.state === "ready" && plan.canonical_done === true,
+    "delegation requires current canonical completion");
+  const observation = requireJsonObject(plan.observation, "current validation observation");
+  requireThat((observation.source === "goal_acceptance" || observation.source === "todo_validation")
+    && typeof observation.basis_sha256 === "string" && BARE_SHA256_PATTERN.test(observation.basis_sha256)
+    && Number.isInteger(observation.check_count) && Number(observation.check_count) > 0
+    && Number.isInteger(observation.pinned_file_count) && Number(observation.pinned_file_count) >= 0,
+  "current validation basis required");
+  requireThat(typeof params.checked_at === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(params.checked_at)
+    && Number.isFinite(Date.parse(params.checked_at)), "host check time required");
+  const refs = binding.output_refs;
+  requireThat(Array.isArray(refs) && refs.length > 0
+    && refs.length <= 20 && new Set(refs).size === refs.length,
+  "declared output refs required");
+  const versions = (value: unknown) => {
+    requireThat(Array.isArray(value) && value.length === refs.length,
+      "declared output versions required");
+    const rows = value.map(item => {
+      const row = requireJsonObject(item, "output version");
+      requireThat(text(row.ref) && !row.ref.startsWith("/") && !row.ref.includes("\\")
+        && !row.ref.split("/").includes("..") && refs.includes(row.ref)
+        && typeof row.sha256 === "string" && BARE_SHA256_PATTERN.test(row.sha256),
+      "valid declared output version required");
+      return {ref: row.ref, sha256: row.sha256};
+    });
+    requireThat(new Set(rows.map(row => row.ref)).size === rows.length, "duplicate output version");
+    return rows.sort((a, b) => a.ref.localeCompare(b.ref));
+  };
+  const before = versions(params.before);
+  const after = versions(params.after);
+  requireThat(canonicalAuthoritySha256(before) === canonicalAuthoritySha256(after),
+    "delegation output changed during validation; recheck the original output");
+  return {source: observation.source, basis_sha256: observation.basis_sha256,
+    check_count: observation.check_count, pinned_file_count: observation.pinned_file_count,
+    checked_at: params.checked_at, output_versions: after,
+    ...(Array.isArray(observation.oracle_checks) ? {oracle_checks: observation.oracle_checks.filter(raw => {
+      const check = requireJsonObject(raw, "oracle execution evidence");
+      return Array.isArray(check.output_versions) && after.every(output => (check.output_versions as JsonObject[])
+        .some(row => row.ref === output.ref && row.sha256 === output.sha256));
+    })} : {})};
 }
 export function selectDelegationBinding(params: JsonObject): JsonObject {
   const config = requireJsonObject(params.config, "delegation configuration");
@@ -262,7 +332,15 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   const executor = requireJsonObject(preview.managed_executor, "selected executor");
   requireThat([true, false, null].includes(executor.available as boolean | null), "runtime availability required");
   requireThat(typeof route.would_invoke_host === "boolean", "Turn admission observation required");
-  const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id;
+  // Reuse the file-lock owner's liveness facts. These describe only the native
+  // Turn lane, never the presence/availability of an App or CLI conversation.
+  // Omission preserves earlier callers; an explicit unknown fails closed.
+  const lane = params.lane === undefined ? null : requireJsonObject(params.lane, "Turn lane observation");
+  if (lane !== null) requireThat(typeof lane.state === "string"
+    && ["live", "released", "dead", "absent", "foreign_host", "unreadable"].includes(lane.state),
+  "invalid Turn lane observation");
+  const laneBlocked = lane !== null && !["released", "dead", "absent"].includes(String(lane.state));
+  const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id && !laneBlocked;
   const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
   const acceptanceFacts = delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current);
   const pinned = acceptanceFacts.acceptance_ready;
@@ -275,12 +353,15 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     ...acceptanceFacts, authority_ready: true, authority_reason: null,
     authority_state: "promoted", authority_next_action: "none",
     promotion_from_surface_allowed: false,
+    ...(lane === null ? {} : {turn_lane: {scope: "native_turn_lane", state: lane.state}}),
+    ...(laneBlocked ? {reason: lane!.state === "live" ? "turn_lane_in_flight" : "turn_lane_state_unknown"} : {}),
     executor: {host: executor.executor, available: executor.available,
       reason: executor.unavailable_reason, profile: executor.execution_profile,
       ...(executor.operation_transport ? {operation_transport: executor.operation_transport} : {}),
       ...delegationRuntimeFacts(executor)},
     effects,
-    note: "Point-in-time preflight, not an execution permit or evidence of running work. "
+    note: (laneBlocked ? "Native Turn lane is busy or unknown; retain the request and inspect again after its holder settles or observation is restored. " : "")
+      + "Point-in-time preflight, not an execution permit or evidence of running work. "
       + "Start rechecks admission; inspect original operations before dispatching replacements. "
       + "Runtime probes have the selected executor's scope, not remote capacity guarantees.",
   };
@@ -330,6 +411,11 @@ export function delegationInventoryItem(params: JsonObject): JsonObject {
   if (observation.status === "accepted") {
     requireThat(Array.isArray(observation.artifacts) && observation.artifacts.length > 0,
       "accepted inventory requires current artifacts");
+    if (observation.current_use !== undefined) {
+      const use = requireJsonObject(observation.current_use, "delegation current use");
+      requireThat(use.state === "current" || use.state === "unavailable", "invalid delegation current use");
+      result.current_use = use;
+    }
     result.artifacts = observation.artifacts.map(value => {
       const artifact = requireJsonObject(value, "accepted artifact");
       requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
@@ -338,6 +424,63 @@ export function delegationInventoryItem(params: JsonObject): JsonObject {
     });
   }
   return result;
+}
+
+function inventoryPageItem(raw: unknown, recordId: string): JsonObject {
+  const entry = requireJsonObject(raw, "delegation page observation");
+  const record = requireJsonObject(entry.record, "delegation inventory record");
+  requireThat(record.record_id === recordId, "delegation inventory page identity mismatch");
+  try {
+    return delegationInventoryItem({record, observation: entry.observation});
+  } catch (error) {
+    // A malformed current observation cannot hide healthy siblings or imply acceptance.
+    if (error instanceof EffectRuntimeRequestError || error instanceof TypeError)
+      return delegationInventoryItem({record, observation: null});
+    throw error;
+  }
+}
+
+/** The lookahead address proves another page exists; its operation is not read. */
+export function delegationInventoryPage(params: JsonObject): JsonObject {
+  const query = delegationInventoryQuery(requireJsonObject(params.query, "delegation inventory query"));
+  const limit = Number(query.limit);
+  const recordIds = requireStringArray(params.record_ids, "delegation inventory addresses");
+  requireThat(recordIds.length <= limit + 1 && recordIds.every((id, index) =>
+    BARE_SHA256_PATTERN.test(id) && (query.cursor === null || id > String(query.cursor))
+    && (index === 0 || id > recordIds[index - 1]!)), "invalid delegation inventory page addresses");
+  const observations = params.observations;
+  requireThat(Array.isArray(observations) && observations.length === Math.min(limit, recordIds.length),
+    "delegation inventory page observations must match its addresses");
+  const items = observations.map((entry, index) => inventoryPageItem(entry, recordIds[index]!));
+  const facts = requireJsonObject(params.read_facts, "delegation inventory read facts");
+  const available = requireInteger(facts.available_count, "delegation inventory available_count");
+  requireThat(recordIds.length === Math.min(available, limit + 1),
+    "delegation inventory count does not match its page addresses");
+  const unavailable = items.filter(item => item.status === "unavailable").length;
+  const projectionEnvelope = sealProjectionEnvelope({
+    schema_version: PROJECTION_ENVELOPE_SEAL_REQUEST, projection: "delegation_inventory",
+    observed_at: facts.observed_at,
+    sources: [
+      {source_id: "delegation_directory", read_status: "read", last_read_at: facts.directory_read_at,
+        item_count: available},
+      {source_id: "delegation_operations", read_status: "read", last_read_at: facts.operations_read_at,
+        item_count: items.length, unreadable_count: unavailable},
+    ],
+    coverage: {scope: "requester_page", expected_count: items.length,
+      included_count: items.length - unavailable,
+      omitted: unavailable ? [{reason: "unavailable_operations", count: unavailable}] : [],
+      shown_count: items.length, available_count: available},
+  });
+  const more = recordIds.length > limit;
+  return {
+    schema_version: "loopx_delegation_inventory_v0", items, has_more: more,
+    next_cursor: more ? recordIds[limit - 1]! : null,
+    page_readback_complete: unavailable === 0,
+    projection_envelope: projectionEnvelope,
+    note: "Live requester-scoped page, not a snapshot or proof that the whole Goal is complete. "
+      + "Read original operations for full results; resume only when recovery is required. "
+      + "Restart paging to discover work added before the cursor. Listing starts no work.",
+  };
 }
 
 export function transitionDelegationObservation(params: JsonObject): JsonObject {
@@ -437,6 +580,16 @@ export function decideDelegationStop(params: JsonObject): DelegationStopStep {
   }
   return stopRecord("requested", operationFree ? executionPending
     : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement");
+}
+
+/** Same-operation recovery after an explicitly requested independent recheck.
+ * Admission supplies a qualified committed receipt and proves no Host reinvocation. */
+export function recoverRevalidatedDelegation(params: JsonObject): JsonObject {
+  requireThat(params.from === "rejected" && params.original_task_failure === true,
+    "revalidation recovery requires the original task failure");
+  requireThat(params.committed_progress === true && params.host_reinvoked === false,
+    "revalidation recovery requires committed progress without repeating Host work");
+  return {status: "turn_returned"};
 }
 
 /** Whether an accepted result may produce a wake intent at all.

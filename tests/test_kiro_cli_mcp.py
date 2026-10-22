@@ -21,6 +21,9 @@ from pathlib import Path
 import pytest
 
 from loopx import slash_command_install
+from loopx.control_plane.coordination.goal_storage_initialization import (
+    initialize_goal_storage_target,
+)
 from loopx.goal_mode_mcp import GoalModeMCPControlPlane
 from loopx.kiro_cli_goal_mode import (
     KIRO_CLI_MCP_CONFIG_SUBPATH,
@@ -62,11 +65,15 @@ def _write_project(
                 "goals": [
                     {
                         "id": GOAL_ID,
+                        "creation_operation_id": f"goal-create:{GOAL_ID}",
                         "domain": "harness_self_improvement",
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file.name,
-                        "adapter": {"kind": "harness_self_improvement"},
+                        "adapter": {
+                            "kind": "harness_self_improvement",
+                            "status": "connected-read-only",
+                        },
                         "quota": {
                             "compute": 1.0,
                             "window_hours": 24,
@@ -77,6 +84,11 @@ def _write_project(
                             # A different agent first: resolution must never
                             # fall back to registry order.
                             "registered_agents": [OTHER_AGENT_ID, AGENT_ID],
+                            "storage_target": {
+                                "schema_version": "loopx_new_goal_storage_target_v1",
+                                "provider": "file",
+                                "handoff_mode": "soft_claim",
+                            },
                             "thread_agent_bindings": (
                                 bindings
                                 if bindings is not None
@@ -95,6 +107,14 @@ def _write_project(
         ),
         encoding="utf-8",
     )
+    goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
+    initialized = initialize_goal_storage_target(
+        tmp_path / "runtime",
+        goal,
+        registry_path=registry,
+    )
+    assert initialized["authority_initialized"] is True
+    assert initialized["legacy_fallback_used"] is False
     return project, registry, state_file
 
 
@@ -181,10 +201,8 @@ def test_completion_through_the_kiro_server_settles_once_under_its_profile(
     gate = json.loads(control.should_run())
     assert gate["goal_id"] == GOAL_ID
     assert gate["agent_identity"]["agent_id"] == AGENT_ID
-    assert any(
-        f"--agent-id {AGENT_ID} --runtime-profile kiro_cli" in action
-        for action in gate["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    ), gate["interaction_contract"]["cli_channel"]
+    assert gate["should_run"] is True
+    assert gate["scheduler_hint"]["execution_context"]["host_surface"] == "kiro_cli"
 
     # The server refuses to act for an agent the session is not bound to.
     foreign = json.loads(control.claim_task(todo_id, OTHER_AGENT_ID))
@@ -220,6 +238,35 @@ def test_completion_through_the_kiro_server_settles_once_under_its_profile(
     todos = parse_active_state_todos(state_file.read_text(encoding="utf-8"))
     by_id = {str(item["todo_id"]): item for item in todos["agent_todos"]["items"]}
     assert by_id[todo_id]["status"] == "done"
+
+
+def test_completion_requires_a_connected_delivery_frontier(tmp_path: Path) -> None:
+    project, registry, state_file = _write_project(tmp_path)
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    document["goals"][0]["adapter"].pop("status")
+    registry.write_text(json.dumps(document), encoding="utf-8")
+    added = add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        role="agent",
+        text="Retain the unadmitted Kiro task.",
+        task_class="advancement_task",
+        claimed_by=AGENT_ID,
+    )
+    before = state_file.read_bytes()
+    control = GoalModeMCPControlPlane(
+        CONFIG, lambda: goal_context(project, {KIRO_CLI_SESSION_ID_ENV: SESSION_ID}),
+    )
+    control.command_prefix = lambda: [sys.executable, "-m", "loopx.cli"]
+    result = json.loads(control.complete_task(str(added["todo_id"]), AGENT_ID, "not admitted"))
+    assert result["ok"] is False and result["settlement_blocked_completion"] is True
+    assert result["settlement"]["failed_stage"] == "guard"
+    assert state_file.read_bytes() == before
+    code, status = _run_cli(
+        registry, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--runtime-profile", CONFIG.runtime_profile,
+    )
+    assert code == 0 and status["quota"]["spent_slots"] == 0
 
 
 def test_server_entrypoint_starts_as_a_standalone_script() -> None:

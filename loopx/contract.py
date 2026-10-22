@@ -4,7 +4,7 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,7 @@ from .control_plane.runtime.run_index_duplicates import (
 )
 from .control_plane.runtime.file_reads import iter_utf8_file_reads
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
+from .control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
 from .history import (
     RunHistoryAudit,
@@ -66,6 +67,9 @@ from .control_plane.todos.contract import (
 class LeakRule:
     pattern: re.Pattern[str]
     required_literals: tuple[str, ...]
+    # A rule match is evidence for review, not necessarily a secret. Keep
+    # severity with the existing classification rule, not the runtime gate.
+    blocking: bool = True
 
     def is_candidate(self, folded_text: str) -> bool:
         return any(literal in folded_text for literal in self.required_literals)
@@ -117,20 +121,28 @@ LEAK_RULES = {
             "author" + "ization:",
         ),
     ),
+    # The private roots take the host's own separator, so a Windows host
+    # writes the same path class natively with backslash separators. Allowing
+    # a run of separators also covers serialized text, where a JSON or source
+    # string literal escapes each backslash into two.
     "local_private_path": LeakRule(
         pattern=re.compile(
-            "("
-            + "/"
+            r"([\\/]+"
             + "Users"
-            + "/"
-            + r"[^/\s]+/(?:Documents|code"
+            + r"[\\/]+[^\\/\s]+[\\/]+(?:Documents|code"
             + "-"
-            + r"reading)|"
-            + "/ext"
-            + "_data/"
-            + ")"
+            + r"reading)|[\\/]+ext"
+            + "_data"
+            + r"[\\/]+)"
         ),
-        required_literals=("/" + "users/", "/ext" + "_data/"),
+        # Cheap necessary condition: every private root is followed by at
+        # least one separator, whatever the host or serialization chose.
+        required_literals=(
+            "users/",
+            "users\\",
+            "ext" + "_data/",
+            "ext" + "_data\\",
+        ),
     ),
     "internal_task_id": LeakRule(
         pattern=re.compile(r"\bt-" + r"20\d{12}-[a-z0-9]+\b"),
@@ -143,6 +155,7 @@ LEAK_RULES = {
             r"|\b192\.168\.\d+\.\d+\b"
         ),
         required_literals=("10.", "172.", "192.168."),
+        blocking=False,
     ),
 }
 LEAK_PATTERNS = {name: rule.pattern for name, rule in LEAK_RULES.items()}
@@ -193,6 +206,11 @@ CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._-]{20,}")
 CREDENTIAL_VARIABLE_REFERENCE_PATTERN = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)\]}]"
 )
+CREDENTIAL_BASIC_VARIABLE_REFERENCE_PATTERN = re.compile(
+    r"Basic\s+\{[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\}"
+    r"(?:\\[rnt])*[\"'`]?\s*$",
+    re.I,
+)
 
 
 def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
@@ -211,6 +229,10 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
     if CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN.match(value):
         return True
     if CREDENTIAL_PLACEHOLDER_PATTERN.match(value):
+        return True
+    # A whole Basic variable template contains no encoded credential. Anchoring
+    # the complete value keeps mixed templates and literal payloads blocked.
+    if CREDENTIAL_BASIC_VARIABLE_REFERENCE_PATTERN.fullmatch(value):
         return True
     if CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN.match(value):
         return False
@@ -253,7 +275,7 @@ LOCAL_PRIVATE_STATE_FILE_NAMES = {"ACTIVE_GOAL_STATE.md", "ACTIVE_GOAL_STATE.md.
 TERMINAL_TODO_STATUSES = {TODO_STATUS_DONE, TODO_STATUS_DEFERRED, "completed", "closed", "archived"}
 
 
-def _git_probe(path: Path) -> dict[str, Any]:
+def _git_worktree_root(path: Path) -> Path | None:
     path = path.resolve()
     target = path if path.is_dir() else path.parent
     try:
@@ -266,9 +288,15 @@ def _git_probe(path: Path) -> dict[str, Any]:
             check=True,
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return {"inside_worktree": False, "tracked": False, "ignored": False}
+        return None
+    return Path(root).resolve()
 
-    repo_root = Path(root).resolve()
+
+def _git_probe(path: Path) -> dict[str, Any]:
+    path = path.resolve()
+    repo_root = _git_worktree_root(path)
+    if repo_root is None:
+        return {"inside_worktree": False, "tracked": False, "ignored": False}
     try:
         rel_path = str(path.relative_to(repo_root))
     except ValueError:
@@ -308,7 +336,7 @@ def _is_local_private_state_path(path: Path, scan_root: Path) -> bool:
         relative = path.relative_to(scan_root)
     except ValueError:
         relative = path
-    parts = set(relative.parts)
+    parts = set(relative.parts) | {scan_root.name}
     return bool(parts & LOCAL_PRIVATE_STATE_PARTS) or path.name in LOCAL_PRIVATE_STATE_FILE_NAMES
 
 
@@ -505,11 +533,28 @@ def _todo_contract_diagnostics(
         if not state_file or not state_file.exists():
             continue
         try:
-            lines = state_file.read_text(encoding="utf-8").splitlines()
+            state_text = state_file.read_text(encoding="utf-8")
+            lines = state_text.splitlines()
         except (OSError, UnicodeError) as exc:
             add_error(
                 "active_state_read_failed",
                 f"{goal_id}: cannot read active state for todo contract check: {exc}",
+            )
+            continue
+        try:
+            state_incomplete = active_state_incomplete_warning(state_text)
+        except ValueError as exc:
+            add_error(
+                "active_state_read_failed",
+                f"{goal_id}: cannot parse active state for todo contract check: {exc}",
+            )
+            continue
+        if state_incomplete:
+            add_error(
+                "state_incomplete",
+                f"{goal_id}: active state is structurally incomplete; missing required "
+                f"Todo section(s): {', '.join(state_incomplete['missing_sections'])} "
+                f"(state_file={state_file}); {state_incomplete['recommended_action']}",
             )
             continue
 
@@ -807,20 +852,9 @@ def _active_state_projection_gap_warnings(
 
 def _tracked_scan_files(scan_root: Path) -> list[Path]:
     scan_root = scan_root.resolve()
-    target = scan_root if scan_root.is_dir() else scan_root.parent
-    try:
-        root = subprocess.run(
-            ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    repo_root = _git_worktree_root(scan_root)
+    if repo_root is None:
         return []
-
-    repo_root = Path(root).resolve()
     try:
         rel_root = str(scan_root.resolve().relative_to(repo_root.resolve()))
     except ValueError:
@@ -843,7 +877,10 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     for rel_path in tracked.stdout.split("\0"):
         if not rel_path:
             continue
-        path = (repo_root / rel_path).resolve()
+        path = repo_root / rel_path
+        if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
+            continue
+        path = path.resolve()
         if path.name.endswith(".local.json"):
             continue
         if path.is_file() and path.suffix in DEFAULT_SCAN_SUFFIXES:
@@ -851,12 +888,102 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     return files
 
 
-def iter_scan_files(scan_root: Path) -> list[Path]:
+def _directory_reason(error: OSError) -> str:
+    """Keep the reason short and free of the directory's own text.
+
+    `strerror` is the host's message and every exercised `os.walk`/`os.scandir`
+    failure carries one. Falling back to `str(error)` would append the absolute
+    path, so the fallback is the error class instead.
+    """
+    reason = str(error.strerror) if error.strerror else type(error).__name__
+    return reason[:120]
+
+
+def _record_unreadable_directory(
+    error: OSError,
+    scan_root: Path,
+    unreadable_directories: list[tuple[Path, str]],
+) -> None:
+    """Keep a directory whose contents could not be listed visible to the caller.
+
+    ``os.walk`` swallows a listing failure by default, so a scan that cannot
+    enter a directory contributes no file and reports the same clean boundary
+    as a tree that has nothing to find. The scan owner must be able to fail
+    closed on that, exactly like an unreadable file.
+    """
+    directory = Path(error.filename) if error.filename else scan_root
+    unreadable_directories.append((directory, _directory_reason(error)))
+
+
+def _unreadable_directory_label(
+    directory: Path, scan_roots: Mapping[Path, Path]
+) -> str:
+    """Name a directory relative to the outermost requested root that contains it.
+
+    Every requested root is a candidate, so a walk that started at an outer root
+    and one that started at the directory itself agree on the directory's name
+    instead of reporting the same directory twice under two labels.
+    """
+    containing = [root for root in scan_roots if directory.is_relative_to(root)]
+    if not containing:
+        return str(directory)
+    root = min(containing, key=lambda candidate: (len(candidate.parts), str(candidate)))
+    return str(directory.relative_to(scan_roots[root])) or "."
+
+
+def _unreadable_directory_labels(
+    unreadable_directories: list[tuple[Path, str]],
+    scan_roots: Mapping[Path, Path],
+) -> list[tuple[str, str]]:
+    """Pair each unreadable directory with the label its scan root renders.
+
+    The absolute directory stays the identity, so a repeated request for one
+    root and two distinct roots are told apart before the labels collapse.
+    """
+    return [
+        (_unreadable_directory_label(directory, scan_roots), reason)
+        for directory, reason in dict.fromkeys(unreadable_directories)
+    ]
+
+
+def _render_unreadable_directories(
+    unreadable_directories: list[tuple[str, str]],
+) -> list[str]:
+    """Render each unreadable directory once, numbering colliding labels."""
+    totals: dict[str, int] = {}
+    for label, _ in unreadable_directories:
+        totals[label] = totals.get(label, 0) + 1
+    seen: dict[str, int] = {}
+    rendered: list[str] = []
+    for label, reason in unreadable_directories:
+        seen[label] = seen.get(label, 0) + 1
+        suffix = f" ({seen[label]})" if totals[label] > 1 and seen[label] > 1 else ""
+        rendered.append(f"{label}{suffix}: {reason}")
+    return rendered
+
+
+def _probe_directory_listing(
+    directory: Path, unreadable_directories: list[tuple[Path, str]]
+) -> None:
+    try:
+        with os.scandir(directory):
+            pass
+    except OSError as error:
+        _record_unreadable_directory(error, directory, unreadable_directories)
+
+
+def iter_scan_files(
+    scan_root: Path, *, unreadable_directories: list[tuple[Path, str]] | None = None
+) -> list[Path]:
     scan_root = scan_root.resolve()
     if scan_root.is_file():
         return [scan_root]
     files: list[Path] = []
+    unreadable = unreadable_directories if unreadable_directories is not None else []
     tracked_files = _tracked_scan_files(scan_root)
+    # The root is probed even when dependency pruning skips the walk, so an
+    # unreadable scan target cannot pass because of how it was named.
+    _probe_directory_listing(scan_root, unreadable)
     root_parts = set(scan_root.parts)
     # Dependency pruning never overrides tracked repository ownership.
     if (
@@ -865,7 +992,10 @@ def iter_scan_files(scan_root: Path) -> list[Path]:
     ):
         return sorted(tracked_files)
 
-    for dir_path, dir_names, file_names in os.walk(scan_root):
+    for dir_path, dir_names, file_names in os.walk(
+        scan_root,
+        onerror=lambda error: _record_unreadable_directory(error, scan_root, unreadable),
+    ):
         current_dir = Path(dir_path)
         dir_names[:] = [
             name
@@ -875,7 +1005,10 @@ def iter_scan_files(scan_root: Path) -> list[Path]:
             and not os.path.isfile(current_dir / name / "pyvenv.cfg")
         ]
         for file_name in file_names:
-            path = (current_dir / file_name).resolve()
+            path = current_dir / file_name
+            if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
+                continue
+            path = path.resolve()
             if path.name.endswith(".local.json"):
                 continue
             if not path.is_file():
@@ -888,15 +1021,31 @@ def iter_scan_files(scan_root: Path) -> list[Path]:
 def scan_public_boundary(
     scan_roots: list[Path], *, registry: dict[str, Any] | None = None
 ) -> dict[str, Any]:
+    """Check selected outgoing content, preserving findings and unread inputs.
+
+    ``hits`` retains rule locations; ``blocking_hits`` excludes ambiguous IP
+    advisories. ``ok`` requires no blocker or unread input. It
+    never certifies an unrequested file, generated text or future publication.
+    """
     hits: list[str] = []
+    blocking_hits: list[str] = []
+    advisory_hits: list[str] = []
     allowed_hits: list[str] = []
     private_state_git_warnings: list[str] = []
     skipped_private_state_files: list[str] = []
     credential_reference_hits: list[str] = []
     unreadable_files: list[str] = []
+    unreadable_directories: list[tuple[Path, str]] = []
     missing_scan_roots: list[str] = []
     files: list[Path] = []
     file_roots: dict[Path, Path] = {}
+    directory_roots: dict[Path, Path] = {}
+    private_files: set[Path] = set()
+
+    def record_hit(hit: str, *, blocking: bool = True) -> None:
+        hits.append(hit)
+        (blocking_hits if blocking else advisory_hits).append(hit)
+
     for scan_root in scan_roots:
         resolved_scan_root = scan_root.resolve()
         if not resolved_scan_root.exists():
@@ -905,9 +1054,34 @@ def scan_public_boundary(
             missing_scan_roots.append(str(scan_root))
             continue
         display_root = resolved_scan_root.parent if resolved_scan_root.is_file() else resolved_scan_root
-        for file_path in iter_scan_files(resolved_scan_root):
+        # `file_roots` renders a file relative to the root that asked for it and
+        # is read for every hit, so an unreadable directory is labelled from its
+        # own map instead of adding a non-file key to that one.
+        directory_roots[resolved_scan_root] = display_root
+        classification_root = display_root
+        if set(resolved_scan_root.parts) & LOCAL_PRIVATE_STATE_PARTS:
+            # A narrow explicit input cannot erase private ancestry. A real
+            # worktree is its own namespace, even beneath a private parent;
+            # outside Git, retain the complete canonical ancestry.
+            classification_root = (
+                _git_worktree_root(resolved_scan_root) or Path(resolved_scan_root.anchor)
+            )
+        if _is_local_private_state_path(resolved_scan_root, classification_root):
+            # Explicit outgoing selection cannot turn an ignored private file
+            # or a pruned private directory into a successful empty scan.
+            record_hit(f"{rel_or_abs(resolved_scan_root, classification_root)}: local_private_state")
+            continue
+        for file_path in iter_scan_files(
+            resolved_scan_root, unreadable_directories=unreadable_directories
+        ):
             files.append(file_path)
-            file_roots[file_path] = display_root
+            if _is_local_private_state_path(file_path, classification_root):
+                private_files.add(file_path)
+            previous_root = file_roots.get(file_path)
+            if previous_root is None or (
+                len(display_root.parts), str(display_root)
+            ) < (len(previous_root.parts), str(previous_root)):
+                file_roots[file_path] = display_root
     files = sorted(set(files))
     policy = _public_boundary_policy(registry or {})
     private_file_git: dict[Path, dict[str, Any]] = {}
@@ -918,7 +1092,7 @@ def scan_public_boundary(
         # stay here, in the existing scan owner, not in the I/O adapter.
         for path in files:
             root = file_roots.get(path, path)
-            if _is_local_private_state_path(path, root):
+            if path in private_files:
                 git = _git_probe(path)
                 if not git.get("tracked"):
                     skipped_private_state_files.append(rel_or_abs(path, root))
@@ -928,16 +1102,19 @@ def scan_public_boundary(
                         )
                     continue
                 private_file_git[path] = git
+                record_hit(f"{rel_or_abs(path, root)}: local_private_state")
             yield path
 
     for read in iter_utf8_file_reads(public_files()):
         path = read.path
         root = file_roots.get(path, path)
         git: dict[str, Any] | None = private_file_git.pop(path, None)
-        if isinstance(read.error, UnicodeDecodeError):
-            continue
         if read.error is not None:
-            unreadable_files.append(f"{rel_or_abs(path, root)}: {read.error.strerror or read.error}")
+            detail = (
+                read.error.strerror or type(read.error).__name__
+                if isinstance(read.error, OSError) else "invalid UTF-8"
+            )
+            unreadable_files.append(f"{rel_or_abs(path, root)}: {detail}")
             continue
         text = read.text
         assert text is not None
@@ -959,7 +1136,7 @@ def scan_public_boundary(
                             and not resolved.startswith(_PUBLIC_NPM_REGISTRY_PREFIX)
                         ):
                             display_package = package_path or "<root>"
-                            hits.append(
+                            record_hit(
                                 f"{rel_or_abs(path, root)}: "
                                 "non_public_package_registry "
                                 f"({display_package})"
@@ -993,20 +1170,27 @@ def scan_public_boundary(
                     if git is not None and _hit_allowed_by_policy(name, git, policy):
                         allowed_hits.append(hit)
                     else:
-                        hits.append(hit)
+                        record_hit(hit, blocking=rule.blocking)
     return {
-        "ok": not hits,
+        "ok": not (blocking_hits or missing_scan_roots or unreadable_files or unreadable_directories),
         "scan_roots": [str(path) for path in scan_roots],
         "files": len(files),
         "scanned_files": len(files) - len(skipped_private_state_files),
         "skipped_private_state_files": skipped_private_state_files,
         "credential_reference_hits": credential_reference_hits,
         "unreadable_files": unreadable_files,
+        # Identity is the absolute directory, so two roots that each hold an
+        # unlistable `notes/` are both reported; colliding labels are numbered.
+        "unreadable_directories": _render_unreadable_directories(
+            _unreadable_directory_labels(unreadable_directories, directory_roots)
+        ),
         "missing_scan_roots": missing_scan_roots,
         "allowed_hits": allowed_hits,
         "private_state_git_warnings": private_state_git_warnings,
         "policy": policy,
         "hits": hits,
+        "blocking_hits": blocking_hits,
+        "warnings": advisory_hits + credential_reference_hits,
     }
 
 
@@ -1170,22 +1354,44 @@ def check_contract(
     if include_public_boundary_scan:
         boundary = scan_public_boundary(scan_roots, registry=registry)
         missing_scan_roots = [str(item) for item in boundary.get("missing_scan_roots") or []]
+        unreadable_directories = [
+            str(item) for item in boundary.get("unreadable_directories") or []
+        ]
+        unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
+        boundary_warnings = [str(item) for item in boundary.get("warnings") or []]
         public_boundary_scan = {
             "state": "completed",
-            "ok": bool(boundary.get("ok")) and not missing_scan_roots,
+            "ok": bool(boundary.get("ok")) and not (
+                missing_scan_roots or unreadable_directories or unreadable_files
+            ),
             "scanned_files": int(boundary.get("scanned_files") or 0),
             "missing_scan_roots": missing_scan_roots,
+            "unreadable_directories": unreadable_directories,
+            "unreadable_files": unreadable_files,
+            "warnings": boundary_warnings,
         }
         for missing_root in missing_scan_roots:
             add_global_error(
                 "public_boundary_scan_root_missing",
                 f"scan root does not exist: {missing_root}",
             )
-        if boundary.get("ok") and not missing_scan_roots:
-            checks.append(f"public boundary scan clean: {boundary.get('scanned_files')} files")
+        for unreadable_directory in unreadable_directories:
+            add_global_error(
+                "public_boundary_scan_directory_unreadable",
+                f"scan directory could not be listed: {unreadable_directory}",
+            )
+        for unreadable_file in unreadable_files:
+            add_global_error(
+                "public_boundary_scan_file_unreadable",
+                f"scan file could not be read: {unreadable_file}",
+            )
+        if public_boundary_scan["ok"]:
+            label = "completed with warnings" if boundary_warnings else "clean"
+            checks.append(f"public boundary scan {label}: {boundary.get('scanned_files')} files")
         else:
-            for hit in boundary.get("hits") or []:
+            for hit in boundary.get("blocking_hits", boundary.get("hits")) or []:
                 add_global_error("public_boundary_violation", str(hit))
+        warnings.extend(boundary_warnings)
         if boundary.get("skipped_private_state_files"):
             checks.append(
                 "private state scan skipped: "
@@ -1202,9 +1408,6 @@ def check_contract(
                 "credential references downgraded: "
                 f"{len(boundary.get('credential_reference_hits') or [])} non-literal hits"
             )
-        warnings.extend(
-            f"unreadable file skipped: {item}" for item in boundary.get("unreadable_files") or []
-        )
     else:
         public_boundary_scan = {
             "state": "deferred",

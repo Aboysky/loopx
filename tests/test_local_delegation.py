@@ -56,7 +56,7 @@ delegation = json.loads((workspace / 'DELEGATION.json').read_text())
 if not (root / 'skip-adoption').exists():
     acknowledge(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
     return_result(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
-print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'classification':'artifact_written', 'summary':'Fixture host supplied output for independent verification.', 'next_action':'Return verified evidence.'}, host_name='Fixture')))
+print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'classification':'artifact_written', 'summary':'Fixture host supplied output for independent verification.', 'next_action':'Return verified evidence.', 'work_evidence':['artifact:delegation-output'], 'validation_evidence':['check:independent-member-result']}, host_name='Fixture')))
 '''
 
 
@@ -202,6 +202,30 @@ def test_delegation_captures_goal_ref_after_registry_becomes_available(tmp_path,
     assert runner._caller_goal_ref() == captured
     assert runner._caller_goal_ref() == captured
     assert len(calls) == 1
+
+
+def test_canonical_stopped_goal_rejects_new_delegation_before_launch(
+    service, monkeypatch
+):
+    _, runner = service
+    registry = json.loads(runner.registry.read_text())
+    goal = registry["goals"][0]
+    goal.pop("status", None)
+    goal["activation"] = {
+        "schema_version": "loopx_goal_activation_v1",
+        "state": "stopped",
+        "updated_at": "2026-10-06T00:00:00Z",
+        "reason": "Owner stopped the Goal.",
+    }
+    runner.registry.write_text(json.dumps(registry))
+    launched = []
+    monkeypatch.setattr(runner, "_spawn", launched.append)
+
+    with pytest.raises(ValueError, match="stopped"):
+        runner.start("analysis", "canonical-stopped", brief())
+
+    assert launched == []
+    assert not runner.path("canonical-stopped").exists()
 
 
 def test_worker_waits_for_a_transient_status_probe(service, monkeypatch):
@@ -369,6 +393,7 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 assert not (root / "host-started").exists()
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError and json.loads(inventory.content[0].text)["items"] == []
+                assert json.loads(inventory.content[0].text)["projection_envelope"]["complete"]
                 assert "stop_delegation" in {tool.name for tool in (await session.list_tools()).tools}
                 result = await session.call_tool("start_delegation", {
                     "binding_id": "analysis", "operation_id": "analysis-1", "brief": brief()})
@@ -376,6 +401,7 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError
                 assert json.loads(inventory.content[0].text)["items"][0]["operation_id"] == "analysis-1"
+                assert json.loads(inventory.content[0].text)["projection_envelope"]["fresh"]
                 return json.loads(result.content[0].text)
         # Exiting the real stdio session closes the requesting MCP process.
     first = asyncio.run(disconnect_requester())
@@ -396,8 +422,13 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     # The fixture rule pins the validator, oracle module and source material.
     assert validation["check_count"] == 1 and validation["pinned_file_count"] == 3
     assert len(validation["basis_sha256"]) == 64
-    assert set(validation) == {"source", "check_count", "pinned_file_count", "basis_sha256"}
-    assert reconnected.read("analysis-1")["validation"] == validation
+    assert set(validation) == {"source", "check_count", "pinned_file_count", "basis_sha256", "checked_at", "output_versions"}
+    assert validation["checked_at"].endswith("Z")
+    assert validation["output_versions"] == [{"ref": row["ref"], "sha256": row["sha256"]} for row in result["artifacts"]]
+    fresh_validation = reconnected.read("analysis-1")["validation"]
+    assert fresh_validation["checked_at"] > validation["checked_at"]
+    assert {key: value for key, value in fresh_validation.items() if key != "checked_at"} == {
+        key: value for key, value in validation.items() if key != "checked_at"}
     assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
     assert not (root / "analyst" / "initial" / "DELEGATION.json").exists()
     assert demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
@@ -431,6 +462,66 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     output.write_text("{}")
     with pytest.raises(ValueError, match="acceptance rejected"):
         reconnected.read("analysis-1")
+
+
+def test_accepted_output_cannot_change_between_check_and_return(service, monkeypatch):
+    """Real owner checks; inject a writer at the subsequent artifact-read boundary."""
+    root, runner = service
+    runner.start("analysis", "analysis-1", brief())
+    assert wait(runner)["status"] == "accepted"
+    binding = runner._bound(_read(runner.path("analysis-1")))
+    output = root / "analyst" / "initial" / "output.json"
+    original = output.read_bytes()
+    validate = runner._validate
+
+    def change_after_checks(value):
+        checked = validate(value)  # Execute the real configured oracle first.
+        output.write_text("{}")
+        return checked
+
+    monkeypatch.setattr(runner, "_validate", change_after_checks)
+    try:
+        # _accepted also feeds the first journaled return, before a saved hash exists.
+        with pytest.raises(Exception, match="output changed during validation"):
+            runner._accepted(binding)
+    finally:
+        output.write_bytes(original)
+        monkeypatch.setattr(runner, "_validate", validate)
+    assert runner.read("analysis-1")["artifacts"][0]["text"] == original.decode()
+    assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
+
+
+def test_first_return_withholds_changed_output_and_recovers_same_operation(service, monkeypatch):
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _operation_id: None)
+    output = root / "analyst" / "initial" / "output.json"
+    original = output.read_bytes()
+    validate = runner._validate
+
+    def change_before_first_return(value):
+        checked = validate(value)
+        if checked["plan"]["canonical_done"]:
+            output.write_text("{}")
+        return checked
+
+    monkeypatch.setattr(runner, "_validate", change_before_first_return)
+    runner.start("analysis", "analysis-1", brief())
+    try:
+        runner.execute("analysis-1")
+        journal = _read(runner.path("analysis-1"))
+        assert journal["status"] != "accepted"
+        assert not journal.get("artifacts")
+        assert "output changed during validation" in journal["error"]
+    finally:
+        output.write_bytes(original)
+        monkeypatch.setattr(runner, "_validate", validate)
+    runner.resume("analysis-1")
+    runner.execute("analysis-1")
+    result = runner.read("analysis-1")
+    assert result["status"] == "accepted", result
+    assert result["artifacts"][0]["text"] == original.decode()
+    assert result["validation"]["output_versions"][0]["sha256"] == result["artifacts"][0]["sha256"]
+    assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
 
 
 def test_host_timeout_removes_private_delegation_bootstrap(service, monkeypatch):
@@ -971,10 +1062,13 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
     path = runner.path("analysis-platform")
     record = runner._host_process_record(path)
     record.parent.mkdir(parents=True, exist_ok=True)
+    # The caller may itself lead a live group; use a genuinely exited Host.
+    with subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True) as finished_host:
+        finished_host.wait(timeout=10)
     record.write_text(json.dumps({
         "schema_version": host_process_transport.HOST_PROCESS_RECORD_SCHEMA_VERSION,
         "host": lock_holder_host_label(), "supervises": "host", "supervision": "direct", "phase": "finished",
-        "bridge_pid": os.getpid(), "process_group": os.getpid(),
+        "bridge_pid": finished_host.pid, "process_group": finished_host.pid,
     }))
 
     # A persisted finished Host record still needs platform drain capability.

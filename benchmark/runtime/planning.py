@@ -3,8 +3,31 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
+
+
+def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
+    """Deliver the Core packet and explicitly selected observation tool context.
+
+    The worker calls this only for its explicit loopx-planned task entry. Core
+    Goal/CLI planning and plain native benchmark workers do not use this wrapper.
+    """
+    if "LOOPX_PLANNING_TIMEOUT_SEC" in env:
+        raise ValueError(
+            "Remove LOOPX_PLANNING_TIMEOUT_SEC; planning uses LOOPX_PHASE_DEADLINE_EPOCH"
+        )
+    key = "LOOPX_PHASE_DEADLINE_EPOCH"
+    if key in env:
+        value = float(env[key])
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{key} must be finite and positive")
+    from .research_probe import runtime_execution_guidance
+
+    return ("$loopx\n\n"
+            + runtime_execution_guidance(env)
+            + "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
 
 
 def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:
@@ -74,5 +97,4 @@ def validate_plan_readback(result: dict, before: dict, after: dict) -> dict:
         "agent_id": after["agent_id"],
         "state_readback_verified": True,
         "execution_owner": "caller",
-        "planning_session_reused_for_execution": False,
     }

@@ -23,32 +23,80 @@ const server = createServer(async (req, res) => {
 await new Promise((done) => server.listen(0, "127.0.0.1", done));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await launchBrowser(loadPlaywright().chromium);
+function deferred() {
+  let resolvePromise;
+  const promise = new Promise((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
 try {
   await mkdir(output, { recursive: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const calls = [];
   let nativeState = null;
   let nativeActionSettled = Promise.resolve();
-  let nativeRuntimeSelection;
+  let nativeActionDelayMs = 150;
+  let nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: true };
   let startupTiming = null;
   let failUpdate = false;
+  let fastInstallFailure = false;
+  let installFailureCode = "app_install_failed";
+  let rollbackAvailable = true;
   let checkFailure = null;
   let checkUpToDate = false;
   let statusFailure = false;
   let environmentTelemetry = null;
+  let delayedStatus = null;
+  function delayNextStatus(phase) {
+    delayedStatus = {
+      phase,
+      started: deferred(),
+      release: deferred(),
+      returned: deferred(),
+    };
+    return delayedStatus;
+  }
   await page.exposeFunction("nativeInvoke", async (command, args) => {
     if (command === "desktop_update_status") {
       if (statusFailure) throw new Error("Command desktop_update_status not allowed by ACL");
-      return { state: nativeState, runtime_selection: nativeRuntimeSelection, startup: startupTiming, app_version: "0.5.4", rollback_available: true, environment: environmentTelemetry };
+      const result = {
+        state: structuredClone(nativeState),
+        runtime_selection: structuredClone(nativeRuntimeSelection),
+        startup: structuredClone(startupTiming),
+        app_version: "0.5.4",
+        rollback_available: rollbackAvailable,
+        environment: structuredClone(environmentTelemetry),
+      };
+      if (delayedStatus && delayedStatus.phase === result.state?.phase) {
+        const request = delayedStatus;
+        delayedStatus = null;
+        request.started.resolve();
+        await request.release.promise;
+        request.returned.resolve();
+      }
+      return result;
     }
     calls.push({ command, args });
+    if (fastInstallFailure && args.action === "apply") {
+      rollbackAvailable = true;
+      nativeState = { phase: "error", details: { code: installFailureCode } };
+      throw installFailureCode;
+    }
     if (checkFailure && args.action === "check") return { phase: "error", details: { code: checkFailure } };
     if (checkUpToDate && args.action === "check") {
       nativeState = { phase: "up_to_date", details: { channel: args.channel } };
       return nativeState;
     }
     if (failUpdate) throw new Error("private diagnostic must not be displayed");
-    nativeActionSettled = new Promise((done) => setTimeout(done, 150)).then(() => {
+    nativeState = {
+      phase: args.action === "check" ? "checking" : args.action === "repair" ? "installing_runtime" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : args.action === "rollback" ? "installing_app" : args.action === "restart" ? "restart_required" : "downloading",
+      details: { version: "0.5.5", channel: args.channel },
+    };
+    nativeActionSettled = new Promise((done) => setTimeout(done, nativeActionDelayMs)).then(() => {
+      if (args.action === "forget_runtime_selection") {
+        nativeRuntimeSelection = { explicit: false, remembered: false, bundled_repair_available: true };
+      }
       nativeState = {
         phase: args.action === "check" ? "available" : ["align_runtime", "use_installed_runtime", "forget_runtime_selection"].includes(args.action) ? "connecting" : "restart_required",
         details: { version: "0.5.5", channel: args.channel },
@@ -58,7 +106,7 @@ try {
     return await nativeActionSettled;
   });
   await page.addInitScript(() => {
-    localStorage.setItem("loopx-pw-locale", "zh-CN");
+    if (!localStorage.getItem("loopx-pw-locale")) localStorage.setItem("loopx-pw-locale", "zh-CN");
     window.__TAURI__ = { core: { invoke: (...args) => window.nativeInvoke(...args) } };
   });
   await page.goto(`${origin}/chat/?statusUrl=/status.json`);
@@ -75,9 +123,23 @@ try {
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
   assert.deepEqual(calls.map((call) => call.args?.action), ["check"], "auto-check must not mutate installation");
   await page.screenshot({ path: resolve(output, "update-panel.png") });
+  nativeActionDelayMs = 1500;
+  const delayedWorkspaceStatus = delayNextStatus("downloading");
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await delayedWorkspaceStatus.started.promise;
+  await nativeActionSettled;
   await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).waitFor();
+  delayedWorkspaceStatus.release.resolve();
+  await delayedWorkspaceStatus.returned.promise;
+  await page.waitForTimeout(50);
+  assert.equal(await page.getByRole("button", { name: "更新并准备重启", exact: true }).count(), 0, "a delayed workspace status must not replace restart_required");
+  assert.equal(await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).count(), 1);
   assert.deepEqual(calls.map((call) => call.args?.action), ["check", "apply"]);
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).isEnabled(), false, "only restart may change native state after replacement");
+  await page.getByText("恢复上个版本", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), false);
+  nativeActionDelayMs = 150;
   await page.reload();
   await page.getByRole("button", { name: /重启完成更新/ }).waitFor();
   assert.deepEqual(calls.map((call) => call.args?.action), ["check", "apply"], "reload must recover native progress, not repeat install");
@@ -113,6 +175,150 @@ try {
   await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
 
   await nativeActionSettled;
+  // A fast failed install can create a verified rollback backup before the
+  // first progress poll. Recovery must be discoverable in this same window.
+  nativeState = { phase: "available", details: { channel: "stable", version: "0.5.5" } };
+  rollbackAvailable = false;
+  fastInstallFailure = true;
+  await page.reload();
+  await page.getByRole("button", { name: "有可用更新" }).click();
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByText("恢复上个版本", { exact: true }).count(), 0);
+  const beforeFailedInstall = calls.length;
+  await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await page.getByText("App 更新未完成，已确认当前版本完好。可继续使用或重新检查更新。").waitFor();
+  await page.getByText("恢复上个版本", { exact: true }).waitFor({ timeout: 2000 });
+  await page.getByText("恢复上个版本", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), true);
+  assert.deepEqual(calls.slice(beforeFailedInstall).map((call) => call.args.action), ["apply"], "readback must not repeat installation or automatically roll back");
+  await page.screenshot({ path: resolve(output, "update-fast-failure-recovery.png") });
+  // Actual replacement can remove the App before a second move fails.
+  // Preserve the native recovery code; a runtime-only repair cannot restore it.
+  installFailureCode = "app_install_incomplete";
+  nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: false };
+  await page.getByText("高级选项", { exact: true }).click();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await page.getByText(/App 安装未完成，当前版本可能不完整/).waitFor({ timeout: 2000 });
+  assert.equal(await page.getByRole("button", { name: "恢复上个版本", exact: true }).isVisible(), true, "an incomplete App exposes recovery without opening advanced controls");
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).count(), 0, "do not duplicate the same recovery action behind a second disclosure");
+  await page.getByText("高级选项", { exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
+  await page.getByText(/当前 App 无法重装运行时/).waitFor();
+  assert.equal(await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).count(), 0);
+  await page.screenshot({ path: resolve(output, "update-incomplete-recovery.png") });
+  installFailureCode = "app_install_failed";
+  nativeRuntimeSelection = { explicit: false, remembered: true, bundled_repair_available: true };
+  // A later action owns recovery metadata even if an earlier terminal read
+  // returns last. The stale backup observation must not revive its control.
+  const delayedRecoveryStatus = delayNextStatus("error");
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByRole("button", { name: "更新并准备重启", exact: true }).click();
+  await delayedRecoveryStatus.started.promise;
+  rollbackAvailable = false;
+  checkUpToDate = true;
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByText("当前通道暂无更新。", { exact: true }).waitFor();
+  await page.getByText("恢复上个版本", { exact: true }).waitFor({ state: "hidden" });
+  delayedRecoveryStatus.release.resolve();
+  await delayedRecoveryStatus.returned.promise;
+  await page.waitForTimeout(50);
+  assert.equal(await page.getByText("恢复上个版本", { exact: true }).count(), 0, "an older terminal read cannot replace current recovery metadata");
+  checkUpToDate = false;
+  fastInstallFailure = false;
+
+  nativeState = { phase: "error", details: { code: "update_download_or_signature_failed" } };
+  const beforeGeneralFailure = calls.length;
+  await page.reload();
+  await page.getByRole("button", { name: "更新需重试", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: /更新包下载或签名校验失败，尚未安装/ }).waitFor();
+  assert.equal(calls.length, beforeGeneralFailure, "unclassified native failures remain readable without effects");
+  await page.screenshot({ path: resolve(output, "update-generic-failure.png") });
+
+  // A read of a specific native transfer failure never retries installation.
+  // Only the owner's check action can discover a fresh signed candidate.
+  for (const [locale, retryLabel, applyLabel, code, message] of [
+    ["zh-CN", "更新需重试", "更新并准备重启", "update_download_timeout", /更新包下载超时，尚未安装/],
+    ["zh-CN", "更新需重试", "更新并准备重启", "update_signature_invalid", /更新包未通过签名校验，尚未安装/],
+    ["zh-CN", "更新需重试", "更新并准备重启", "update_download_failed", /更新服务器未能提供安装包，尚未安装/],
+    ["en", "Retry update", "Install update", "update_download_timeout", /update download timed out; nothing was installed/],
+    ["en", "Retry update", "Install update", "update_signature_invalid", /update package failed signature verification; nothing was installed/],
+    ["en", "Retry update", "Install update", "update_network_failed", /update request failed; nothing was installed/],
+  ]) {
+    nativeState = { phase: "error", details: { code } };
+    await page.evaluate((nextLocale) => localStorage.setItem("loopx-pw-locale", nextLocale), locale);
+    const beforeFailureRead = calls.length;
+    await page.reload();
+    await page.getByRole("button", { name: retryLabel, exact: true }).click();
+    await page.getByRole("status").filter({ hasText: message }).waitFor({ timeout: 2000 });
+    assert.equal(calls.length, beforeFailureRead, "reading a failure must not retry or install");
+    assert.equal(await page.getByRole("button", { name: applyLabel, exact: true }).count(), 0);
+    if (code === "update_signature_invalid" && locale === "zh-CN") {
+      await page.screenshot({ path: resolve(output, "update-signature-failure.png") });
+    }
+    const checkLabel = locale === "zh-CN" ? "检查更新" : "Check for updates";
+    await page.getByRole("button", { name: checkLabel, exact: true }).click();
+    await page.getByRole("button", { name: applyLabel, exact: true }).waitFor();
+    assert.deepEqual(calls.slice(beforeFailureRead).map((call) => call.args.action), ["check"]);
+  }
+  await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
+  nativeState = { phase: "error", details: { code: "update_download_timeout" } };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.getByRole("button", { name: "打开 Goal 导航" }).click();
+  await page.getByRole("button", { name: "更新需重试", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: /更新包下载超时，尚未安装/ }).waitFor();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: resolve(output, "update-download-timeout-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Restore failures retain the native cause instead of suggesting a Repair
+  // action that this independently managed runtime cannot perform.
+  nativeRuntimeSelection = { explicit: true, bundled_repair_available: false };
+  for (const [code, message] of [
+    ["backup_unavailable", /没有可验证的 App 备份，未执行恢复/],
+    ["backup_failed", /App 备份无法保存或未通过完整性校验/],
+    ["rollback_failed", /恢复 App 未完成，请保持窗口打开/],
+  ]) {
+    nativeState = { phase: "error", details: { code } };
+    const beforeRead = calls.length;
+    await page.reload();
+    await page.getByRole("button", { name: "更新需重试", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: message }).waitFor();
+    assert.equal(calls.length, beforeRead, "reading a failure must not repeat recovery effects");
+  }
+
+  // Ordinary startup and Forget reconnect services without installing updates.
+  // Readback must not invent an installation effect from those shared phases.
+  for (const [locale, update, connecting] of [
+    ["zh-CN", "更新 LoopX", "正在连接…"],
+    ["en", "Update LoopX", "Connecting…"],
+  ]) {
+    const beforeRead = calls.length;
+    await page.evaluate((value) => localStorage.setItem("loopx-pw-locale", value), locale);
+    nativeState = { phase: "ready", details: {} };
+    await page.reload();
+    await page.getByRole("button", { name: update, exact: true }).click();
+    const statusText = await page.locator(".personal-update-panel").getByRole("status").innerText();
+    await page.screenshot({ path: resolve(output, `update-ready-${locale}.png`) });
+    assert.doesNotMatch(statusText, /更新完成|update completed/i, "ready alone is not evidence of an update");
+    nativeState = { phase: "connecting", details: {} };
+    await page.reload();
+    await page.getByRole("button", { name: connecting, exact: true }).click();
+    assert.doesNotMatch(await page.locator(".personal-update-panel").getByRole("status").innerText(), /更新后|updated services/i);
+    assert.equal(calls.length, beforeRead, "reading startup phases must not request an update");
+  }
+  await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
+  nativeState = { phase: "ready", details: {} };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.getByRole("button", { name: "打开 Goal 导航", exact: true }).click();
+  await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
+  assert.equal(await page.locator(".personal-update-panel").getByRole("status").isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.screenshot({ path: resolve(output, "update-ready-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
   // The native owner decides whether Repair can maintain this installation.
   // The workspace consumes that projection rather than inferring from a path.
   nativeState = { phase: "ready", details: {} };
@@ -121,12 +327,16 @@ try {
   await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
   await page.getByText("高级选项", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
-  await page.getByText(/当前运行时由其他安装方式或启动参数管理/).waitFor();
+  await page.getByText(/当前 App 无法重装运行时/).waitFor();
   const beforeForget = calls.length;
   await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).click();
-  await page.getByText("正在连接更新后的服务…", { exact: true }).waitFor();
+  await page.getByText("正在连接本地服务…", { exact: true }).waitFor();
   assert.deepEqual(calls.slice(beforeForget).map((call) => call.args.action), ["forget_runtime_selection"]);
   await nativeActionSettled;
+  await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).waitFor({ state: "hidden" });
+  nativeState = { phase: "ready", details: {} };
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "修复当前版本" && !button.disabled));
+  assert.equal(await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).count(), 0, "cleared choice must be read back without reloading");
   nativeState = { phase: "ready", details: {} };
   nativeRuntimeSelection = { explicit: true, remembered: true, bundled_repair_available: false };
   await page.reload();
@@ -135,10 +345,23 @@ try {
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), false);
   assert.equal(await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).count(), 0, "forgetting a preference cannot clear an environment pin");
   nativeRuntimeSelection = undefined;
+  nativeState = { phase: "ready", details: {} };
+  rollbackAvailable = true;
+  nativeActionDelayMs = 1500;
+  await page.reload();
+  await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
+  await page.getByText("高级选项", { exact: true }).click();
+  await page.getByText("恢复上个版本", { exact: true }).click();
+  await page.getByRole("button", { name: "确认恢复上版", exact: true }).click();
+  assert.equal(await page.getByText("正在安装 App，请保持窗口打开。", { exact: true }).isVisible(), true, "rollback changes installed files; it is not a download");
+  await nativeActionSettled;
+  await page.locator(".personal-update-panel").getByRole("button", { name: "重启完成更新", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "确认恢复上版", exact: true }).isEnabled(), false);
+  nativeActionDelayMs = 150;
   nativeState = { phase: "idle", details: {} };
   await page.reload();
   await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
-  await page.getByText(/App 启动时会检查并安装当前通道/).waitFor();
+  await page.getByText(/先打开本地版本，更新在后台准备，下次打开时生效/).waitFor();
   await page.getByText("高级选项", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), true, "legacy native status retains its available repair action");
 
@@ -234,6 +457,19 @@ try {
   await page.locator("#update").click();
   await page.getByRole("button", { name: "更新并准备重启 / Install update" }).waitFor();
   assert.deepEqual(calls.at(-1).args, { action: "check", channel: "main" });
+  nativeActionDelayMs = 1500;
+  const applyCount = calls.filter((call) => call.args?.action === "apply").length;
+  const delayedBootStatus = delayNextStatus("downloading");
+  await page.locator("#update").click();
+  await delayedBootStatus.started.promise;
+  await nativeActionSettled;
+  await page.getByRole("button", { name: "重启完成更新 / Restart" }).waitFor();
+  delayedBootStatus.release.resolve();
+  await delayedBootStatus.returned.promise;
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator("#update").innerText(), "重启完成更新 / Restart", "a delayed boot status must not replace restart_required");
+  assert.equal(calls.filter((call) => call.args?.action === "apply").length, applyCount + 1, "the boot page must issue Apply once");
+  nativeActionDelayMs = 150;
   await page.reload();
   await page.getByText("恢复与更新 / Recovery & updates").click();
   await page.waitForFunction(() => document.querySelector("#channel").value === "main");
@@ -248,7 +484,7 @@ try {
   // its error projection (fresh Mac without Python 3.11+: installer exit 2),
   // not the pre-fix permanent loading shape. The projection is derived by the
   // page from desktop_update_status itself.
-  environmentTelemetry = { os_version: "26.5", arch: "aarch64", runtime_executable_found: false, python3_found: false, python3_version: null };
+  environmentTelemetry = { os_version: "26.5", arch: "aarch64", runtime_executable_found: false, python3_found: false, python3_version: null, node_found: null, node_version: null };
   nativeState = { phase: "error", details: { code: "runtime_install_exit_2" } };
   await page.reload();
   await page.waitForFunction(() => document.querySelector("main").dataset.state === "error");
@@ -275,6 +511,20 @@ try {
   nativeState = { phase: "runtime_required", details: { code: "runtime_setup_required" } };
   await page.waitForFunction(() => document.querySelector("main").dataset.state === "error" && document.querySelector("#status").innerText.includes("请修复当前版本，成功后重启"));
   environmentTelemetry = null;
+  const beforeBootFailures = calls.length;
+  for (const [code, message] of [
+    ["update_download_timeout", /更新包下载超时，尚未安装/],
+    ["update_signature_invalid", /更新包未通过签名校验，尚未安装/],
+  ]) {
+    nativeState = { phase: "error", details: { code } };
+    await page.locator("#update-status").filter({ hasText: message }).waitFor();
+    assert.match(await page.locator("#status").innerText(), message);
+    assert.equal(JSON.parse(await page.locator("#diagnostics").inputValue()).error_code, code);
+    assert.equal(await page.locator("#update").innerText(), "检查更新 / Check for updates");
+    assert.equal(await page.locator("#update").isEnabled(), true);
+    assert.equal(calls.length, beforeBootFailures, "boot failure readback cannot install or retry");
+    if (code === "update_download_timeout") await page.screenshot({ path: resolve(output, "startup-download-timeout.png") });
+  }
   // Production boot surface must expose native installation and service
   // stages even while recovery is collapsed; reload keeps native elapsed time.
   nativeState = { phase: "installing_runtime", details: {} };
@@ -292,6 +542,48 @@ try {
   await page.getByText(/启动用时较长/).waitFor();
   nativeState = { phase: "service_error", details: { code: "service_start_failed" } };
   await page.getByText("本地服务连接失败，正在等待重试", { exact: true }).waitFor();
+  // Background preparation observes native progress without disabling a
+  // user's explicit action or manufacturing an installation/restart effect.
+  const beforeBackground = calls.length;
+  nativeState = { phase: "downloading", details: { channel: "stable", version: "0.5.5", background: true, received: 40, total: 100 } };
+  await page.goto(`${origin}/chat/?statusUrl=/status.json`);
+  await page.getByRole("button", { name: "后台更新中" }).click();
+  assert.equal(await page.getByRole("button", { name: "检查更新", exact: true }).isEnabled(), true);
+  await page.getByText(/当前版本可继续使用/).waitFor();
+  assert.equal(calls.length, beforeBackground);
+  // A poll already in flight belongs to the old channel, even when it returns
+  // a prepared update after the user has selected another channel.
+  const delayedChannelStatus = delayNextStatus("available");
+  nativeState = { phase: "available", details: { channel: "stable", version: "0.5.5", background: true, prepared: true } };
+  await delayedChannelStatus.started.promise;
+  await page.getByText("高级选项", { exact: true }).click();
+  await page.getByRole("combobox", { name: "更新通道" }).selectOption("main");
+  delayedChannelStatus.release.resolve();
+  await delayedChannelStatus.returned.promise;
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  assert.equal(await page.getByRole("button", { name: "更新并准备重启", exact: true }).count(), 0, "an old-channel response cannot revive its install action");
+  assert.equal(await page.getByText("目标版本：0.5.5", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("combobox", { name: "更新通道" }).inputValue(), "main");
+  assert.equal(calls.length, beforeBackground, "selecting a channel never installs or checks by itself");
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByRole("button", { name: "更新并准备重启", exact: true }).waitFor();
+  assert.deepEqual(calls.slice(beforeBackground).map((call) => call.args?.action), ["check"]);
+  assert.equal(calls.at(-1).args.channel, "main");
+  nativeState = { phase: "available", details: { channel: "stable", version: "0.5.5", background: true, prepared: true } };
+  await page.reload();
+  await page.getByRole("button", { name: "更新已准备" }).click();
+  await page.getByText(/下次打开时自动安装/).waitFor();
+  await page.screenshot({ path: resolve(output, "background-prepared-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "打开 Goal 导航" }).click();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: resolve(output, "background-prepared-mobile.png") });
+  await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+  await page.reload();
+  await page.getByRole("button", { name: "Open Goal navigation" }).click();
+  await page.getByRole("button", { name: "Update prepared" }).click();
+  await page.getByText(/It installs on the next open/).waitFor();
+  assert.deepEqual(calls.slice(beforeBackground).map((call) => call.args?.action), ["check"]);
   console.log("desktop-update-browser-smoke: passed (confirmation, failure redaction, mobile, missing assets + reload, startup motion states, startup recovery, immediate terminal recovery, automatic startup presentation)");
 } finally {
   await browser.close();

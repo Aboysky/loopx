@@ -190,6 +190,13 @@ def test_real_chat_http_catalog_and_machine_write_boundary(tmp_path: Path) -> No
     ("namespace", "invalid_configuration", "replacement", "private_marker"),
     [
         (
+            "codex_chat",
+            {"schema_version": "codex_chat_machine_defaults_v0", "codex_profile": "/private-invalid-profile"},
+            {"schema_version": "codex_chat_machine_defaults_v0", "codex_profile": "codex-gpt",
+             "model": "gpt-6.1-sol", "reasoning_effort": "high", "service_tier": "fast"},
+            "/private-invalid-profile",
+        ),
+        (
             "manager_runtime",
             {
                 "schema_version": "manager_runtime_profile_v0",
@@ -333,6 +340,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
     assert response["status"] == "absent"
     assert response["available_namespaces"] == [
         "change_quality_qualification",
+        "codex_chat",
         "goal_storage",
         "manager_runtime",
         "periodic_report",
@@ -350,8 +358,11 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "timezone": "UTC",
     }
     assert namespace_catalog["todo_replan_cadence"]["configuration_template"] == {
-        "schema_version": "todo_replan_cadence_machine_defaults_v0",
-        "completed_todos": 5,
+        "schema_version": "todo_replan_cadence_machine_defaults_v2",
+        "count_unit": "effective_turns",
+        "count": 6,
+        "stride_strategy": "off",
+        "planning_horizon_goal": True,
     }
     assert namespace_catalog["change_quality_qualification"][
         "configuration_template"
@@ -368,7 +379,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
     }
     assert namespace_catalog["manager_runtime"]["configuration_template"] == {
         "schema_version": "manager_runtime_profile_v0",
-        "runtime_profile": "restricted",
+        "runtime_profile": "trusted_owner",
     }
     assert namespace_catalog["manager_runtime"]["documentation"]["path"] == (
         "docs/architecture/rfcs/manager-runtime-profile-v0.md"
@@ -433,7 +444,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     )
     # Machine-only capabilities are the ones a Goal cannot override: the
     # manager profile, steward executor and creation-time storage target.
-    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage"} == {
+    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage", "codex_chat"} == {
         feature["feature_id"] for feature in goal["features"]
     }
     assert machine["pull_request_review"]["available_scopes"] == ["machine", "goal"]
@@ -444,12 +455,12 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     assert [
         field["key"]
         for field in machine["pull_request_review"]["configuration_editor"]["fields"]
-    ] == ["wait_for_ci", "review_order"]
+    ] == ["wait_for_ci", "owner_logins", "review_order"]
     assert "multi_subagent" in machine
     for capability_id, item in machine.items():
         assert "current" not in item
         assert "commands" not in item
-        if capability_id in {"manager_runtime", "steward_executor", "goal_storage"}:
+        if capability_id in {"manager_runtime", "steward_executor", "goal_storage", "codex_chat"}:
             assert item["available_scopes"] == ["machine"]
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]

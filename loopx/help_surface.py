@@ -237,8 +237,11 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx upgrade-plan", "purpose": "Plan default heartbeat upgrade propagation."},
             {
-                "command": "loopx update [check|plan|apply]",
-                "purpose": "Inspect installation ownership, then explicitly apply archive updates.",
+                "command": "loopx update [check|plan|apply] / loopx upgrade",
+                "purpose": (
+                    "Inspect installation ownership, then explicitly apply archive updates, "
+                    "or run one command that upgrades the CLI and the installed macOS App."
+                ),
             },
             {
                 "command": "loopx project-skill --help",
@@ -331,6 +334,18 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
             },
             {
+                "command": "loopx goal-direction --help",
+                "purpose": "Inspect or explicitly configure a Goal material basis; writes require --execute.",
+            },
+            {
+                "command": "loopx zcode-goal --help",
+                "purpose": "Explicitly bind and inspect one managed ZCode CLI native Goal session.",
+            },
+            {
+                "command": "loopx research-checkpoint --help",
+                "purpose": "Explicitly capture, verify, or adopt a sealed checkpoint through current Goal and native Host owners.",
+            },
+            {
                 "command": "loopx promotion-readiness",
                 "purpose": "Record release-scoped canary readiness evidence in the shared runtime ledger.",
             },
@@ -369,6 +384,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "codex-cli-visible-local-driver-pilot",
         "codex-cli-visible-session-proof",
         "configure-goal",
+        "configuration-backup",
         "delegation",
         "content-ops",
         "decision-context",

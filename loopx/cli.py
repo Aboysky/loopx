@@ -23,7 +23,7 @@ from .capabilities.multi_subagent.cli import (
     register_native_child_commands, handle_native_child_command,
 )
 from .cli_commands.todo_continuation import register_todo_continuation, handle_todo_continuation
-from .cli_commands.manager_inbox import register_manager_inbox, handle_manager_inbox
+from .cli_commands.manager_inbox import register_manager_inbox
 from .cli_commands.delegation import register_delegation
 from .capabilities.content_ops.cli import (
     handle_content_ops_command,
@@ -73,7 +73,7 @@ from .capabilities.periodic_report.post_writeback_hook import (
     build_periodic_report_post_writeback_projection,
     periodic_report_post_writeback_hooks_for_goal,
 )
-from .control_plane.coordination.local_authority_shadow_adapter import (
+from .paths import (
     effective_runtime_root,
 )
 from .capabilities.semantic_preference.cli import (
@@ -121,7 +121,6 @@ from .cli_commands import (
     handle_review_batch_command,
     handle_registry_admin_command,
     handle_starter_command,
-    handle_summary_all_command,
     handle_support_control_command,
     handle_handoff_mode_command,
     handle_task_lease_command,
@@ -175,6 +174,7 @@ from .cli_commands import (
     register_worker_bridge_commands,
     register_workflow_skills_command,
 )
+from .cli_commands.zcode_goal import handle_zcode_goal_command, register_zcode_goal_command
 from .cli_commands.opencode2_goal_worker import (
     handle_opencode2_goal_worker_command,
     register_opencode2_goal_worker_command,
@@ -187,6 +187,7 @@ from .cli_commands.goal_acceptance import (
     handle_goal_acceptance_command,
     register_goal_acceptance_command,
 )
+from .cli_commands.goal_direction import register_goal_direction, handle_goal_direction
 from .cli_commands.goal_amendment_proposal import (
     handle_goal_amendment_proposal_command,
     register_goal_amendment_proposal_command,
@@ -281,6 +282,7 @@ def build_parser() -> LoopXArgumentParser:
     register_usage_ping_command(sub, add_subcommand_format)
 
     register_opencode2_goal_worker_command(sub)
+    register_zcode_goal_command(sub, add_subcommand_format)
 
     register_worker_bridge_commands(sub, add_subcommand_format)
 
@@ -381,6 +383,7 @@ def build_parser() -> LoopXArgumentParser:
     register_shared_goal_alignment_command(sub, add_subcommand_format)
     register_goal_acceptance_command(sub, add_subcommand_format)
     register_goal_amendment_proposal_command(sub, add_subcommand_format)
+    register_goal_direction(sub, add_subcommand_format)
     register_quota_command(sub)
 
     return parser
@@ -444,6 +447,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "usage-ping":
         return handle_usage_ping_command(args, print_payload)
+
+    if args.command == "zcode-goal":
+        return handle_zcode_goal_command(args, registry_path=registry_path, print_payload=print_payload, output_format=output_format)
 
     if args.command == "opencode2-goal-worker":
         return handle_opencode2_goal_worker_command(args, print_payload)
@@ -806,19 +812,6 @@ def main(argv: list[str] | None = None) -> int:
             print_payload, output_format,
         )
 
-    if args.command == "manager-inbox":
-        from .control_plane.projects.registry_codec import load_project_registry
-        from .paths import resolve_runtime_root
-
-        return handle_manager_inbox(
-            args,
-            registry_path,
-            resolve_runtime_root(
-                load_project_registry(registry_path),
-                args.runtime_root,
-                registry_path=registry_path,
-            ),
-        )
     lark_inbox_result = handle_lark_inbox_command(
         args,
         registry_path=registry_path,
@@ -828,16 +821,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if lark_inbox_result is not None:
         return lark_inbox_result
-
-    summary_all_result = handle_summary_all_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if summary_all_result is not None:
-        return summary_all_result
 
     pr_review_result = handle_pr_review_command(
         args,
@@ -950,6 +933,9 @@ def main(argv: list[str] | None = None) -> int:
     if shared_goal_alignment_result is not None:
         return shared_goal_alignment_result
 
+    direction_result = handle_goal_direction(args, registry_path=registry_path, output_format=output_format, print_payload=print_payload)
+    if direction_result is not None:
+        return direction_result
     goal_amendment_proposal_result = handle_goal_amendment_proposal_command(
         args,
         registry_path=registry_path,

@@ -30,10 +30,12 @@ MAX_SESSION_BINDING_CANDIDATES = 3
 MAX_WORKSPACE_SCOPES = 4
 STALE_CLAIM_THRESHOLD_HOURS = 36
 MATERIAL_LIFECYCLE_CAPABILITY = "material_lifecycle"
+LEASE_STATUS_UNAVAILABLE = "unavailable"
 
 _TODO_GROUP_LIST_KEYS = tuple(
     dict.fromkeys(
         (
+            "items",
             *TODO_SUMMARY_SOURCE_KEYS,
             "executable_backlog_items",
             "deferred_items",
@@ -80,7 +82,9 @@ def _todo_status(todo: dict[str, Any]) -> str:
 
 
 def _is_done(todo: dict[str, Any]) -> bool:
-    return bool(todo.get("done")) or _todo_status(todo) in {"done", "archive", "archived"}
+    # A deferred Todo can carry a checked legacy display flag. Explicit state
+    # wins; the checkbox fallback belongs only to rows without a status.
+    return _todo_status(todo) in {"done", "archive", "archived"}
 
 
 
@@ -232,6 +236,20 @@ def projected_agent_goals(
     return goals
 
 
+def registered_agent_ids(status_payload: dict[str, Any]) -> set[str]:
+    """Return the registered Agent ids, ignoring the display cap.
+
+    ``MAX_AGENT_ROWS`` bounds the published ``agents`` list; a scope question
+    such as "is this caller a registered Agent of the Goal?" must not inherit
+    that cap, so it reads this full set instead of the truncated rows. Only
+    ``coordination.registered_agents`` proves registration here: a Todo claim
+    is a work relationship that can outlive the registration, so claimant ids
+    the diagnostic rows carry are not members of this set.
+    """
+
+    return set(_registered_agents(status_payload))
+
+
 def _agent_material_frontiers(
     status_payload: dict[str, Any],
 ) -> dict[tuple[str, str], dict[str, Any]]:
@@ -314,35 +332,42 @@ def _iter_next_action_todo(
 
 def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
     queue = _as_dict(status_payload.get("attention_queue"))
+    todo_index = _as_dict(status_payload.get("todo_index"))
+    unavailable_goals = set(_as_list(todo_index.get("unavailable_goal_ids")))
+    unavailable_goals.update(
+        item.get("goal_id") for item in _as_list(queue.get("items"))
+        if isinstance(item, dict) and item.get("todo_source") == "unavailable"
+    )
+    candidates: list[dict[str, Any]] = []
+    hints: list[dict[str, Any]] = []
     for item in _as_list(queue.get("items")):
         if not isinstance(item, dict):
             continue
         goal_id = _compact(item.get("goal_id"), limit=180)
-        yield from _iter_next_action_todo(
+        hints.extend(_iter_next_action_todo(
             item,
             goal_id=goal_id,
             source="attention_queue.agent_lane_next_action",
-        )
+        ))
         group = _as_dict(item.get("agent_todos"))
-        yield from _iter_todo_group_items(
+        candidates.extend(_iter_todo_group_items(
             group,
             goal_id=goal_id,
             source="attention_queue.agent_todos",
-        )
+        ))
         project_asset = _as_dict(item.get("project_asset"))
-        yield from _iter_next_action_todo(
+        hints.extend(_iter_next_action_todo(
             project_asset,
             goal_id=goal_id,
             source="project_asset.agent_lane_next_action",
-        )
+        ))
         group = _as_dict(project_asset.get("agent_todos"))
-        yield from _iter_todo_group_items(
+        candidates.extend(_iter_todo_group_items(
             group,
             goal_id=goal_id,
             source="project_asset.agent_todos",
-        )
+        ))
 
-    todo_index = _as_dict(status_payload.get("todo_index"))
     for todo in _as_list(todo_index.get("items")):
         if (
             isinstance(todo, dict)
@@ -351,7 +376,25 @@ def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any
         ):
             row = dict(todo)
             row.setdefault("source", "todo_index")
-            yield row
+            candidates.append(row)
+
+    # Display text, ordinals and Next Action hints are not Task identity. Keep
+    # current source rows before their shorter aliases and historical hints;
+    # both management and its execution-facts reader consume this one view.
+    selected = {_todo_identity(todo): todo for todo in hints}
+    seen: set[tuple[str, str, str, str]] = set()
+    for row in [*candidates, *hints]:
+        if row.get("goal_id") in unavailable_goals:
+            continue
+        identity = _todo_identity(row)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        hint = selected.get(identity)
+        if hint and hint.get("selected_by"):
+            row = dict(row)
+            row.setdefault("selected_by", hint["selected_by"])
+        yield row
 
 
 def _todo_agent_id(todo: dict[str, Any]) -> str | None:
@@ -362,11 +405,12 @@ def _todo_agent_id(todo: dict[str, Any]) -> str | None:
 
 
 def _todo_identity(todo: dict[str, Any]) -> tuple[str, str, str, str]:
+    todo_id = str(todo.get("todo_id") or "").strip()
     return (
         str(todo.get("goal_id") or ""),
-        str(todo.get("todo_id") or ""),
-        str(todo.get("index") or ""),
-        str(todo.get("text") or todo.get("title") or ""),
+        todo_id,
+        "" if todo_id else str(todo.get("index") or ""),
+        "" if todo_id else str(todo.get("text") or todo.get("title") or ""),
     )
 
 
@@ -530,9 +574,9 @@ def _agent_state(
     1. blocked      — current todo is blocked or a blocker
     2. monitoring / waiting — monitor-only or non-open current work
     3. executing    — the Turn lane is live or a delegation worker holds its lock
-    4. unknown      — the lane holder cannot be checked here (foreign host or
-                      unreadable record), or an active lease has expired while
-                      nothing is live; consumers fail closed on it
+    4. unknown      — the lane or lease cannot be checked here, or an active
+                      lease has expired while nothing is live; consumers fail
+                      closed on it
     5. bound        — has session binding and active todo
     6. launchable   — has active todo, no session binding
     7. addressable  — has session binding but no active todo
@@ -563,7 +607,8 @@ def _agent_state(
         return WORKER_LIFECYCLE_STATE_EXECUTING
     lease = _as_dict(facts.get("lease"))
     if lane in EXECUTION_LANE_UNKNOWN_STATES or (
-        lease.get("status") == "active" and lease.get("expired") is True
+        lease.get("status") == LEASE_STATUS_UNAVAILABLE
+        or (lease.get("status") == "active" and lease.get("expired") is True)
     ):
         return WORKER_LIFECYCLE_STATE_UNKNOWN
 
@@ -681,6 +726,7 @@ def build_agent_management_projection(
     *,
     available_capabilities: Any = None,
     execution_facts: Any = None,
+    after_agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a read-only agent management view from a status payload.
 
@@ -692,9 +738,25 @@ def build_agent_management_projection(
     reads (Turn lane liveness, delegation worker lock, task lease). Without them
     no row can be `executing` or `unknown`: the projection then says what the
     durable state proves and nothing more.
+
+    ``after_agent_id`` selects one page of the projection's stable agent-id
+    ordering: only Agents sorting strictly after it become the source set, so a
+    caller whose rows are capped at ``MAX_AGENT_ROWS`` can continue past row 24.
+    The cursor is a position, not a membership claim. Without a cursor the
+    projection covers the whole registry exactly as before.
+
+    ``source_summary`` separates the two kinds of row: ``registered_agent_count``
+    counts the Goal's registrations, and ``diagnostic_agent_count`` (published
+    only when it is non-zero) counts the rows this view carries for a work
+    relationship alone. A Todo claimant is evidence, never a member, so it can
+    never grow the registered total.
     """
 
     rows_by_agent = _registered_agents(status_payload)
+    # Registration facts, remembered before Todo claims add their own rows: a
+    # claim is a work relationship that can outlive a registration, so the
+    # members of this Goal stay the ids the registry proves.
+    registered_ids = set(rows_by_agent)
     material_projection_enabled = MATERIAL_LIFECYCLE_CAPABILITY in set(
         normalize_required_capabilities(available_capabilities)
     )
@@ -713,15 +775,10 @@ def build_agent_management_projection(
     session_binding_candidates = _collect_session_binding_candidates(status_payload)
     facts_by_agent = execution_facts if isinstance(execution_facts, dict) else {}
 
-    seen_todos: set[tuple[str, str, str, str]] = set()
     for todo in _iter_status_todos(status_payload):
         agent_id = _todo_agent_id(todo)
         if not agent_id:
             continue
-        identity = _todo_identity(todo)
-        if identity in seen_todos:
-            continue
-        seen_todos.add(identity)
         row = rows_by_agent.setdefault(
             agent_id,
             {
@@ -736,8 +793,20 @@ def build_agent_management_projection(
             row["_goal_ids"].append(goal_id)
         row["_todos"].append(todo)
 
+    page_cursor = str(after_agent_id).strip() if after_agent_id else None
+
     agents: list[dict[str, Any]] = []
+    selected_agent_count = 0
     for agent_id, raw_row in sorted(rows_by_agent.items()):
+        if page_cursor is not None and agent_id <= page_cursor:
+            continue
+        selected_agent_count += 1
+        if len(agents) >= MAX_AGENT_ROWS:
+            # Without a cursor this page stops at the cap; with one, keep
+            # counting so a paging caller can tell whether more rows follow.
+            if page_cursor is None:
+                break
+            continue
         all_todos = _as_list(raw_row.get("_todos"))
         current = _select_current_todo(all_todos)
         blocked = _select_blocked_todo(all_todos)
@@ -821,17 +890,25 @@ def build_agent_management_projection(
                 if value not in (None, "", [], {})
             }
         )
-        if len(agents) >= MAX_AGENT_ROWS:
-            break
 
     source_summary: dict[str, Any] = {
-        "registered_agent_count": len(rows_by_agent),
+        "registered_agent_count": len(registered_ids),
         "projected_agent_count": len(agents),
         "todo_source": (
             "status.attention_queue + authoritative status.todo_index rows; "
             "event-only rollout receipts are evidence, not runtime work"
         ),
     }
+    diagnostic_agent_count = len(rows_by_agent) - len(registered_ids)
+    if diagnostic_agent_count:
+        # Rows carried only for a work relationship: visible evidence, never
+        # members, so a retained claim cannot grow the Goal's Agent total.
+        source_summary["diagnostic_agent_count"] = diagnostic_agent_count
+    if page_cursor is not None:
+        # The span this page reads, not the whole Goal: `registered_agent_count`
+        # still counts every registered Agent, so a paging caller can separate
+        # rows before the cursor from rows this page could not carry.
+        source_summary["selected_agent_count"] = selected_agent_count
     if material_frontiers:
         source_summary["material_frontier_count"] = len(material_frontiers)
     if isinstance(execution_facts, dict):

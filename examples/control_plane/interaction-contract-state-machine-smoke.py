@@ -23,6 +23,7 @@ from loopx.control_plane.work_items.execution_obligation import (  # noqa: E402
     build_execution_obligation,
 )
 from loopx.control_plane.work_items.interaction_contract import (  # noqa: E402
+    _build_interaction_contract_projection,
     build_interaction_contract,
     user_channel_action_required,
 )
@@ -182,16 +183,15 @@ def base_payload(
 
 
 def finalize(payload: dict[str, Any]) -> dict[str, Any]:
-    payload["interaction_contract"] = build_interaction_contract(
+    payload["interaction_contract"], arbitration = _build_interaction_contract_projection(
         payload,
+        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         scheduler_execution_context=APP_SCHEDULER_CONTEXT,
     )
     payload["scheduler_hint"] = build_scheduler_hint(
         payload,
         user_action_required=user_channel_action_required(payload),
-        agent_scope_frontier_actions=[
-            action.value for action in AgentScopeFrontierAction
-        ],
+        arbitration=arbitration,
         scheduler_execution_context=APP_SCHEDULER_CONTEXT,
     )
     return payload
@@ -589,7 +589,7 @@ def assert_successor_replan_is_validated_spend_path() -> None:
     assert any("spend-slot" in action for action in actions), actions
 
 
-def assert_required_reads_are_mirrored_into_execution_channels() -> None:
+def assert_required_reads_have_one_agent_execution_carrier() -> None:
     payload = base_payload(
         should_run=True,
         effective_action="normal_run",
@@ -602,12 +602,13 @@ def assert_required_reads_are_mirrored_into_execution_channels() -> None:
             "command": "  loopx evidence-log --goal-id interaction-state-machine-goal  ",
         }
     ]
-    # Reads are mirrored losslessly; the transport does not rewrite commands.
+    # Reads have one authoritative execution carrier. Commands stay verbatim;
+    # display compaction must not change quoted arguments.
     payload["required_reads"] = expected
     payload = finalize(payload)
     contract = payload["interaction_contract"]
     assert contract["agent_channel"]["required_reads"] == expected, contract
-    assert contract["cli_channel"]["required_reads"] == expected, contract
+    assert "required_reads" not in contract["cli_channel"], contract
     assert "required_reads" not in contract["user_channel"], contract
 
 
@@ -621,7 +622,7 @@ def main() -> int:
     assert_autonomous_replan_projects_accountable_settlement()
     assert_agent_scope_wait_is_quiet_noop()
     assert_successor_replan_is_validated_spend_path()
-    assert_required_reads_are_mirrored_into_execution_channels()
+    assert_required_reads_have_one_agent_execution_carrier()
     return 0
 
 

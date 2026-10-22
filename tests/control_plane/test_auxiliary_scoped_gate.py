@@ -21,6 +21,20 @@ from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
 def _scoped_fixture(tmp_path, monkeypatch, provider, route="source", *, with_gate=True):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, source = _write_fixture(tmp_path)
+    _append_newly_due_monitor(project, priority="P1", watch_only=True)
+    todos = list_goal_todos(registry_path=source, goal_id=GOAL_ID)["todos"]
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID,
+        todos=todos,
+        handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        projection,
+        state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
+        provider=provider,
+    )
     update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=TODO_ID,
         claimed_by=AGENT_ID, agent_id=AGENT_ID, priority="P0")
     gated = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="agent",
@@ -28,12 +42,12 @@ def _scoped_fixture(tmp_path, monkeypatch, provider, route="source", *, with_gat
     gate = (add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="user",
         text="Decide the gated work", task_class="user_gate", bound_agent=AGENT_ID,
         blocks_agent=AGENT_ID, unblocks_todo_id=gated["todo_id"], agent_id=AGENT_ID) if with_gate else None)
-    _append_newly_due_monitor(project, priority="P1", watch_only=True)
-    if provider != "legacy":
-        todos = list_goal_todos(registry_path=source, goal_id=GOAL_ID)["todos"]
-        projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, GOAL_ID, projection,
-            state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md", provider=provider)
+    if gate is not None:
+        gate = list_goal_todos(
+            registry_path=source,
+            goal_id=GOAL_ID,
+            todo_id=gate["todo_id"],
+        )["todo"]
     registry = source
     if route == "global":
         registry = runtime / "registry.global.json"
@@ -44,7 +58,7 @@ def _scoped_fixture(tmp_path, monkeypatch, provider, route="source", *, with_gat
     return project, runtime, source, registry, gate
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("route", ["source", "global"])
 @pytest.mark.parametrize("gate_change", ["none", "targets_monitor", "unknown_scope", "global_gate", "primary_blocked"])
 def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatch, provider, route, gate_change):
@@ -84,7 +98,14 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
                 blocks_agent=AGENT_ID, agent_id=AGENT_ID)
         rc, current = _run_cli(registry, runtime, *guard_args)
         if gate_change == "primary_blocked":
-            assert rc == 1 and current["error_code"] == "heartbeat_receipt_identity_conflict", current
+            # A blocked primary still owes its original Turn a no-spend
+            # closeout. Recovery is not renewed delivery or monitor admission.
+            assert rc == 0, current
+            assert current["effective_action"] == "unsettled_host_turn_recovery"
+            assert current["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+            assert current["execution_obligation"]["delivery_allowed"] is False
+            assert current["execution_obligation"]["contract_obligation"] == "close_bound_wait_without_spend"
+            assert "auxiliary_monitor_poll" not in current["interaction_contract"]["cli_channel"]
         else:
             assert rc == 0, current
             offered = current["interaction_contract"]["cli_channel"].get("auxiliary_monitor_poll", {})
@@ -95,8 +116,26 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
             else "monitor_poll_admission_rejected")
         assert rc == 1 and denied["error_code"] == expected, denied
         assert _spend_run_count(runtime) == 0
-        rows = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todos"]
-        assert rows[0].get("result_hash") is None
+        row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
+        assert row.get("result_hash") is None
+        if gate_change == "primary_blocked":
+            refresh_args = ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                "--todo-id", TODO_ID, "--turn-instance-id", turn,
+                "--classification", "blocked_primary_observation_denied",
+                "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_gap",
+                "--progress-result-class", "blocked", "--progress-blocker-id", "blocker:primary-unavailable",
+                "--progress-evidence-id", "evidence:auxiliary-observation-denied",
+                "--no-global-sync", "--suppress-external-sinks")
+            for replay in (False, True):
+                rc, closed = _run_cli(registry, runtime, *refresh_args, cwd=project)
+                assert rc == 0, closed
+                assert closed["settlement_progress"]["state"] == "settled"
+                assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+                if replay:
+                    assert closed["idempotent_replay"] is True
+            assert _spend_run_count(runtime) == 0
+            primary = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=TODO_ID)["todo"]
+            assert primary["status"] == "blocked"
         return
     rc, observed = emitted()
     assert rc == 0, observed
@@ -111,7 +150,7 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
     assert rc == 0 and after["selected_todo"]["todo_id"] == TODO_ID, after
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_gate_changed_after_preflight_cannot_commit_observation(tmp_path, monkeypatch, provider):
     from loopx.quota import record_quota_monitor_poll
     from loopx.status import collect_status
@@ -137,17 +176,13 @@ def test_gate_changed_after_preflight_cannot_commit_observation(tmp_path, monkey
             target_key="due-monitor-fixture", result_hash="commit-observation", cadence="30m",
             turn_instance_id=turn, receipt_bound_todo_id=TODO_ID,
             available_capabilities=["network", "external_evidence_poll"])
-    if provider == "legacy":
-        result = invoke()
-        assert result["ok"] is False and "current User gate dependencies" in result["reason"], result
-    else:
-        from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
-        with pytest.raises(LocalCoordinationAuthorityUnavailable, match="current User gate dependencies") as rejected:
-            invoke()
-        assert rejected.value.payload["no_effect"]["operation_id"]
+    rejected = invoke()
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == "monitor_poll_rejected"
+    assert "current User gate dependencies" in rejected["reason"]
 
-    rows = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todos"]
-    assert rows[0].get("result_hash") is None
+    row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
+    assert row.get("result_hash") is None
     assert _spend_run_count(runtime) == 0
 
     # A rejected effect can retry after the scoped gate is restored. After that
@@ -164,13 +199,12 @@ def test_gate_changed_after_preflight_cannot_commit_observation(tmp_path, monkey
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("business_committed", [False, True])
 def test_old_pending_plan_preserves_identity_but_not_new_write_authority(tmp_path, monkeypatch, provider, business_committed):
     from loopx.quota import record_quota_monitor_poll
     from loopx.status import collect_status
     from loopx.control_plane.quota import monitor_poll
-    from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
     project, runtime, source, registry, gate = _scoped_fixture(tmp_path, monkeypatch, provider)
     turn = "historical-auxiliary-plan-turn"
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -206,17 +240,16 @@ def test_old_pending_plan_preserves_identity_but_not_new_write_authority(tmp_pat
         assert recovered["ok"] is True, recovered
         assert invoke()["replayed"] is True
     else:
-        if provider == "legacy":
-            assert invoke()["ok"] is False
-        else:
-            with pytest.raises(LocalCoordinationAuthorityUnavailable, match="current User gate dependencies"):
-                invoke()
-        rows = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todos"]
-        assert rows[0].get("result_hash") is None
+        rejected = invoke()
+        assert rejected["ok"] is False
+        assert rejected["error_code"] == "monitor_poll_rejected"
+        assert "current User gate dependencies" in rejected["reason"]
+        row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
+        assert row.get("result_hash") is None
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_no_gate_auxiliary_command_retains_commit_and_replay_parity(tmp_path, monkeypatch, provider):
     project, runtime, _source, registry, _gate = _scoped_fixture(tmp_path, monkeypatch, provider, with_gate=False)
     turn = "auxiliary-no-gate-parity"

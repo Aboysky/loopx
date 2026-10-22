@@ -134,6 +134,26 @@ def test_inventory_scope_and_limits_are_not_an_attention_queue(tmp_path, reads):
     assert scoped["goals"][0]["host_id"] is None
 
 
+def test_portfolio_rows_project_exact_goal_instance_identity_only_when_requested(
+    tmp_path, reads
+):
+    path = registry(tmp_path, ("alpha",))
+    payload = json.loads(path.read_text())
+    payload["goals"][0]["goal_instance_id"] = "ginst_" + "a" * 32
+    path.write_text(json.dumps(payload))
+
+    default = portfolio.build_goal_portfolio(registry_path=path, now=NOW)
+    result = portfolio.build_goal_portfolio(
+        registry_path=path,
+        now=NOW,
+        include_goal_instance_id=True,
+    )
+
+    assert "goal_instance_id" not in default["goals"][0]
+    assert result["goals"][0]["goal_id"] == "alpha"
+    assert result["goals"][0]["goal_instance_id"] == "ginst_" + "a" * 32
+
+
 def test_quota_noise_does_not_evict_recorded_delivery(tmp_path, reads):
     result = portfolio.build_goal_portfolio(
         registry_path=registry(tmp_path, ("alpha",)), now=NOW
@@ -496,3 +516,42 @@ def test_activation_change_during_collection_is_not_silently_hidden(monkeypatch,
     assert result['coverage']['stopped_excluded'] == 0
     assert result['goals'][0]['activation_state'] == 'unknown'
     assert result['goals'][0]['quality'] == 'conflicting'
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_portfolio_resolves_code_once_per_read_and_keeps_registration_live(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.control_plane import effect_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    path, _, state = promoted_create_fixture(
+        tmp_path, provider=provider, registered_agents=["agent-a", "agent-b"],
+    )
+    source = json.loads(path.read_text())
+    source["goals"][0].update(domain="portfolio", adapter={"kind": "generic_project_goal_v0"})
+    path.write_text(json.dumps(source))
+    state_before = state.read_bytes()
+    fingerprints = []
+    fingerprint = effect_runtime._runtime_fingerprint
+
+    def observe_code_read():
+        revision = fingerprint()
+        fingerprints.append(revision)
+        return revision
+
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", observe_code_read)
+    first = portfolio.build_goal_portfolio(registry_path=path)
+    assert len(fingerprints) == 1, f"resolved code {len(fingerprints)} times"
+    assert [a["agent_id"] for a in first["goals"][0]["agents"]] == ["agent-a", "agent-b"]
+    source["goals"][0]["coordination"]["registered_agents"] = ["agent-b"]
+    path.write_text(json.dumps(source))
+    second = portfolio.build_goal_portfolio(registry_path=path)
+    assert len(fingerprints) == 2
+    assert [a["agent_id"] for a in second["goals"][0]["agents"]] == ["agent-b"]
+    assert second["inventory_revision"] != first["inventory_revision"]
+    assert second["goals"][0]["progress"] == "unknown"
+    assert state.read_bytes() == state_before

@@ -81,11 +81,17 @@ class CompletedTodoPages:
     ttl_seconds = 300
     max_cache_bytes = 16 * 1024 * 1024
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._snapshots = OrderedDict()
         self._lock = Lock()
 
     def page(self, *, scope, cursor, load):
+        # A slow source must not hold up unrelated cached pages.
+        if not cursor:
+            rows = load()
+            size = len(json.dumps(rows, ensure_ascii=False).encode("utf-8"))
+            if size > self.max_cache_bytes:
+                raise ValueError("history_snapshot_too_large")
         with self._lock:
             now = monotonic()
             for key, (created, _, _, _) in list(self._snapshots.items()):
@@ -101,10 +107,6 @@ class CompletedTodoPages:
                 except (ValueError, KeyError):
                     raise ValueError("history_cursor_expired") from None
             else:
-                rows = load()
-                size = len(json.dumps(rows, ensure_ascii=False).encode("utf-8"))
-                if size > self.max_cache_bytes:
-                    raise ValueError("history_snapshot_too_large")
                 key, offset = token_urlsafe(18), 0
                 while self._snapshots and (len(self._snapshots) >= self.max_snapshots or sum(snapshot[3] for snapshot in self._snapshots.values()) + size > self.max_cache_bytes):
                     self._snapshots.popitem(last=False)
@@ -178,7 +180,7 @@ class CompletedTodoRequestMixin:
     def _completed_todos(self) -> None:
         # This loopback-only workspace read preserves task text and evidence.
         # Select display fields without returning the authority's internal metadata.
-        from .todos import list_goal_todos
+        from .control_plane.todos.list_readback import list_goal_todos
 
         if not self._require_loopback_origin():
             return

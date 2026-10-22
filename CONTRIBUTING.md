@@ -184,11 +184,14 @@ touch, mention it in the PR instead of fixing it there.
 | --- | --- | --- | --- |
 | `python-tests.yml` | every PR | yes (`merge-gate`) | lint, mypy, sharded pytest, TypeScript core and coverage, minimum Node.js, Windows PowerShell, dashboard presentation |
 | `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` on contribution commits; verified GitHub-generated two-parent merges are exempt |
+| `ci-maintenance.yml` | closed or updated PR (`pull_request_target`, trusted base code only) | no | cancels obsolete Python qualification runs after rechecking the PR and source branch |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
 | `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
 | `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
 | `release-artifacts.yml` | `loopx/`, packaging, and lockfile paths | no | release identity and a release build from this source |
 | `ark-turn.yml` | Turn driver and collaboration paths | no | optional Ark Turn package, stdio MCP, and DSH parity |
+| `dsh-plugin.yml` | DSH plugin and distribution workflow paths | no | Linux/Windows package install and uninstall, typed host contracts, and Linux real LoopX/web runtime admission |
+| `dsh-plugin-publish.yml` | no (manual, published plugin tag) | no | merged release identity, immutable npm package publication, and distribution readback |
 | `frontstage-pages.yml` | README, dashboard, and chat bundle paths | no | public Pages build |
 | `desktop-release-artifacts.yml` | desktop app and dashboard paths | no | macOS and Windows desktop builds |
 | `desktop-updater.yml` | desktop app paths | no | desktop app build and updater feed |

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import nullcontext
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from heapq import merge
 from itertools import chain, islice
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_lock import exclusive_run_index_lock
+from .control_plane.presentation.goal_metadata import goal_parent_fields
 from .authority import goal_authority_registry_summary
 from .control_plane import compact_control_plane_policy
 from .control_plane.goals.activation import (
@@ -19,7 +20,10 @@ from .control_plane.goals.activation import (
     normalize_goal_activation_state,
 )
 from .control_plane.goals.legacy_event_source import LEGACY_TODO_EVENT_SOURCE_FIELDS
+from .control_plane.goals.path_resolution import resolve_goal_local_path
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
+from .control_plane.quota.host_poll_receipts import read_host_worker_observations
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
@@ -54,7 +58,11 @@ from .control_plane.runtime.time import chronology_key, now_local_iso
 from .doctor import PROMOTION_READINESS_CLASSIFICATIONS
 from .execution_profile import compact_execution_profile
 from .explore_graph import compact_explore_graph_policy
-from .paths import registry_project_root, resolve_runtime_root
+from .paths import (
+    registry_project_root,
+    resolve_runtime_root,
+    validate_goal_id_path_segment as validate_goal_id_path_segment,
+)
 from .presentation.markdown import (
     markdown_code,
     markdown_table_row,
@@ -69,7 +77,6 @@ STATUS_NEUTRAL_CLASSIFICATIONS = {
     QUOTA_MONITOR_POLL_CLASSIFICATION,
     *PROMOTION_READINESS_CLASSIFICATIONS,
 }
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 REGISTRY_STATUS_FIELDS = (
     "waiting_on",
     "attention_status",
@@ -78,6 +85,53 @@ REGISTRY_STATUS_FIELDS = (
     "next_handoff_condition",
     *LEGACY_TODO_EVENT_SOURCE_FIELDS,
 )
+
+
+def goal_registry_digest(goal: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        goal,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def host_worker_goal_observation_digest(goal: dict[str, Any], *, registry_path: Path) -> str | None:
+    """Bind a driver observation to its actual source Goal, not sync metadata.
+
+    A global row must still match the existing sanitizer/merge projection of
+    that source. Sync timestamps and consumed merge directives are incidental;
+    changed source routes, Goal lifetimes or configuration must not reuse the
+    old observation. This readback check never changes execution admission.
+    """
+    from .global_registry import preserve_attention_override, sanitize_goal_for_global
+
+    try:
+        selected_registry = registry_path.expanduser().resolve()
+        source_route = goal.get("source_registry")
+        source_registry, source_goal = selected_registry, goal
+        if source_route:
+            if not isinstance(source_route, str) or not Path(source_route).is_absolute():
+                return None
+            source_registry = Path(source_route).expanduser().resolve()
+            if source_registry != selected_registry:
+                candidates = [row for row in registry_goals(load_registry(source_registry))
+                              if row.get("id") == goal.get("id")]
+                if len(candidates) != 1:
+                    return None
+                source_goal = candidates[0]
+                # A global row has one owning source. Do not accept an
+                # unverified chain of projections as that source.
+                if source_goal.get("source_registry"):
+                    return None
+                expected = preserve_attention_override({}, sanitize_goal_for_global(
+                    source_goal, source_registry=source_registry, synced_at=""))
+                if preserve_attention_override({}, {**goal, "synced_at": ""}) != expected:
+                    return None
+        return goal_registry_digest({"source_registry": str(source_registry), "goal": source_goal})
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +206,27 @@ def reserve_unique_run_paths(runs_dir: Path, generated_at: str) -> tuple[Path, P
     return reserve_run_artifact_paths(runs_dir, run_file_stem(generated_at))
 
 
+def append_run_index_record(
+    index_path: Path,
+    record: dict[str, Any],
+    *,
+    allow_nan: bool = True,
+) -> None:
+    """Append one readable JSONL record after any unterminated final row."""
+
+    encoded = (
+        json.dumps(record, ensure_ascii=False, allow_nan=allow_nan).encode("utf-8")
+        + b"\n"
+    )
+    with index_path.open("a+b") as handle:
+        handle.seek(0, 2)
+        if handle.tell() > 0:
+            handle.seek(-1, 2)
+            if handle.read(1) != b"\n":
+                handle.write(b"\n")
+        handle.write(encoded)
+
+
 def write_reserved_run_artifacts(
     *,
     runs_dir: Path,
@@ -189,19 +264,7 @@ def write_reserved_run_artifacts(
             encoding="utf-8",
         )
         markdown_path.write_text(render_markdown(payload) + "\n", encoding="utf-8")
-        with index_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(index_record, ensure_ascii=False, allow_nan=False) + "\n")
-
-
-def validate_goal_id_path_segment(goal_id: str) -> str:
-    value = str(goal_id or "").strip()
-    if not value:
-        raise ValueError("goal id is required")
-    if value in {".", ".."} or "/" in value or "\\" in value:
-        raise ValueError("goal id must be a single path segment")
-    if Path(value).name != value:
-        raise ValueError("goal id must not include path traversal")
-    return value
+        append_run_index_record(index_path, index_record, allow_nan=False)
 
 
 def discover_goal_ids(
@@ -228,7 +291,13 @@ def _indexed_artifact_exists(value: Any, *, artifact_root: Path | None) -> bool:
     path = Path(text).expanduser()
     if not path.is_absolute() and artifact_root is not None:
         path = artifact_root / path
-    return path.exists()
+    try:
+        return path.exists()
+    except OSError:
+        # Availability is a best-effort observation, not run-index authority.
+        # Match pathlib's Python 3.14 behavior on older supported interpreters:
+        # inaccessible or invalid artifact paths must not hide durable history.
+        return False
 
 
 def _observe_run_artifacts(
@@ -345,11 +414,20 @@ def collect_history(
         runtime_root,
         registry=build_builtin_machine_configuration_registry(),
     )
+    registry_goal_rows = registry_goals(registry)
+    registry_goal_digests = {
+        str(goal.get("id")): goal_registry_digest(goal)
+        for goal in registry_goal_rows
+    }
+    registry_goal_meta = {
+        str(goal.get("id")): goal
+        for goal in registry_goal_rows
+    }
     goal_meta = {
         str(goal.get("id")): project_goal_with_builtin_machine_configuration(
             goal, machine_configuration
         )
-        for goal in registry_goals(registry)
+        for goal in registry_goal_rows
     }
     activation_filter = (
         normalize_goal_activation_state(activation_state_filter)
@@ -419,7 +497,15 @@ def collect_history(
         quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
         goal_record = {
             "id": current_goal_id,
+            **goal_parent_fields(meta),
             "activation_state": activation_state.value,
+            "registry_goal_digest": registry_goal_digests.get(current_goal_id),
+            "host_worker_observations": read_host_worker_observations(
+                meta, resolve_goal_local_path(meta.get("state_file"), meta, fallback_base=registry_path.parent),
+                registry_goal_digest=registry_goal_digests[current_goal_id], runtime_root=runtime_root,
+                source_goal_observation_digest=lambda: host_worker_goal_observation_digest(
+                    registry_goal_meta[current_goal_id], registry_path=registry_path),
+            ) if registry_member else None,
             "display_name": meta.get("display_name") if registry_member else None,
             "domain": meta.get("domain"),
             "status": meta.get("status") if registry_member else "legacy-runtime",

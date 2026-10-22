@@ -67,8 +67,19 @@ test("complete production-scale history preserves the conflict beyond display li
 
 test("batched relations preserve pair ordering and fail on unknown protocol operations", () => {
   const result = evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0", operation: "relations", gates: [gate], items: [item, {...item, required_decision_scopes: []}]});
-  assert.deepEqual(result.result, [[todoGateRelation(gate, item), todoGateRelation(gate, {...item, required_decision_scopes: []})]]);
+  const matrix = result.result as JsonObject[][];
+  assert.deepEqual(matrix.map(row => row.map(relation => relation.state)), [["gate_covers_action", "independent"]]);
+  assert.deepEqual(matrix.map(row => row.map(relation => relation.agent_todo_id)), [["todo_work", "todo_work"]]);
   assert.throws(() => evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0", operation: "approve"}), /unsupported/);
+});
+
+test("retired scalar transport operations fail closed while internal rules remain available", () => {
+  for (const operation of ["covers", "scope_relation", "exact_relation"]) {
+    assert.throws(() => evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0",
+      operation, gate_scope: scope, required_scope: scope, gate, item}), /unsupported decision scope operation/);
+  }
+  assert.equal(decisionScopeCovers(scope, scope), true);
+  assert.equal(todoGateRelation({...gate, unblocks_todo_id: "todo_other"}, item)?.state, "projection_repair_required");
 });
 
 
@@ -84,4 +95,18 @@ test("gate scope projection qualifies every addressed live dependency without gr
     {status: "done", done: true}, {archive_state: "archive"}, {is_gate: false}, {blocks_agent: "agent-b"},
   ]) assert.equal(project([{...independent, ...patch}]).state, "clear");
   assert.equal(project([{...independent, status: "blocked"}]).state, "independent");
+});
+
+test("an explicitly authored other scope is custom, never an unknown or cross-kind wildcard", () => {
+  const custom = {kind: "other", granularity: "action", scope_key: "study_conflict_review"};
+  assert.equal(decisionScopeCovers(custom, custom), true);
+  assert.equal(decisionScopeCovers(custom, {...custom, scope_key: "study_method_review"}), false);
+  const broad = {...custom, granularity: "global", scope_key: "*"};
+  assert.equal(decisionScopeCovers(broad, custom), true);
+  for (const kind of ["private_read", "write_scope", "resource", "production", "public_claim", "direction"]) {
+    assert.equal(decisionScopeCovers(broad, {...custom, kind}), false);
+    assert.equal(decisionScopeCovers({...broad, kind}, custom), false);
+  }
+  assert.equal(decisionScopeCovers({...broad, kind: "othre"}, custom), false);
+  assert.equal(decisionScopeCovers(broad, {...custom, kind: "othre"}), false);
 });

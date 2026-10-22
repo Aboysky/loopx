@@ -10,6 +10,7 @@ from typing import Any
 
 from ...chat_manager_details import read_manager_goal_details
 from ...chat_manager_history import read_manager_delivery_history
+from ...control_plane.effect_runtime import effect_runtime_result
 
 
 TOOL_NAME = "loopx_manager_read"
@@ -19,6 +20,9 @@ READ_TOOL = {
     "description": (
         "Read authorized LoopX Core evidence on demand: the global Goal portfolio, "
         "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. Use view=agent_route with exact goal_id and agent_id to observe an existing local host binding before asking the user for a task link. A readable route is not execution readiness or delivery authority. "
+        "For a current-work overview, start with the index's bounded Agent Todo summaries; "
+        "use view=portfolio for source and coverage, and view=todos for needed detail. "
+        "Delivery history answers past results, not live activity. "
         "Every portfolio row carries its Goal lifecycle readback: reached milestones with "
         "their evidence refs and the phase (starting/qualifying/waiting_owner/closing/closed), "
         "or a typed unavailable gap naming why it could not be derived. Use that to state where "
@@ -161,9 +165,50 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
     return rejected
 
 
+def agent_work_summary(agent: dict[str, Any]) -> dict[str, Any]:
+    """Keep the existing quota projection small; never infer live presence."""
+    verified = agent.get("source_verified") is True
+    todos = agent.get("todos", []) if verified else []
+    todos = [todo for todo in todos if isinstance(todo, dict)]
+    count = agent.get("todo_count_in_projection", len(todos))
+    count = max(count, len(todos)) if type(count) is int else len(todos)
+    selected: list[dict[str, Any]] = []
+    for todo in todos[:3]:
+        # The portfolio already normalizes/redacts these fields. Keep that
+        # vocabulary and order, without copying raw records or receipt bodies.
+        selected.append({
+            key: value[:240] if isinstance(value, str) else None
+            for key in ("todo_id", "title", "status", "priority", "claimed_by",
+                        "readiness", "next_safe_action")
+            if (value := todo.get(key)) is not None
+        })
+        if todo.get("content_truncated") is True or any(
+            isinstance(todo.get(key), str) and len(todo[key]) > 240 for key in selected[-1]
+        ):
+            selected[-1]["content_truncated"] = True
+    return {
+        "agent_id": agent.get("agent_id"),
+        "source_verified": verified,
+        "waiting_on": agent.get("waiting_on") if verified else None,
+        "owner_gate_ids": agent.get("owner_gate_ids", [])[:8] if verified else [],
+        "todo_count_in_projection": count if verified else None,
+        "todos_omitted": count - len(selected) if verified else None,
+        "todos": selected,
+    }
+
+
 def manager_index(context: dict[str, Any]) -> dict[str, Any]:
     """A small directory, never a second mutable progress store."""
     read_tool = CONTEXT_TOOL_NAME if context.get("scope") == "owner_goal" else TOOL_NAME
+    execution = context.get("context_execution")
+    # Only the prompt directory uses excerpts. The context and scoped reader
+    # retain complete records, source quality and the original authority.
+    goals = context.get("goals", [])
+    previews = effect_runtime_result(
+        "presentation.goal_attention.bound",
+        {"goals": [{"goal_id": row.get("goal_id"), "attention": row.get("attention")}
+                   for row in goals], "preview": True},
+    )["goals"]
     return {
         "schema_version": "manager_evidence_index_v1",
         "snapshot_id": context.get("snapshot_id"),
@@ -177,25 +222,47 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
         "goals": [
             {
                 "goal_id": row["goal_id"],
+                **(
+                    {"goal_instance_id": row["goal_instance_id"]}
+                    if row.get("goal_instance_id")
+                    else {}
+                ),
                 "description": row.get("description"),
                 "activation_state": row.get("activation_state", "unknown"),
                 "quality": row.get("quality"),
+                "source": {key: (row.get("source") or {}).get(key)
+                           for key in ("revision", "latest_recorded_at")},
+                "agent_coverage": row.get("agent_coverage"),
+                "agents": [agent_work_summary(agent) for agent in row.get("agents", [])],
                 "progress": row.get("progress"),
                 "lifecycle_phase": _lifecycle_phase(row.get("goal_lifecycle")),
-                "attention": row.get("attention") or {
+                "attention": preview.get("attention") or {
                     "status": "unavailable", "items": [], "reason": "goal_not_read",
                 },
                 "details": "use_" + read_tool,
             }
-            for row in context.get("goals", [])
+            for row, preview in zip(goals, previews, strict=True)
             if row.get("activation_state") != "stopped"
         ],
         "context_delegation": context.get("context_delegation"),
+        **({"context_execution": execution} if isinstance(execution, dict)
+           and (execution.get("bindings") or execution.get("available") is False) else {}),
         "evidence_sources": context.get("evidence_sources", [])[:12],
         "evidence_source_count": len(context.get("evidence_sources", [])),
         "agent_discovery": {"tool": read_tool, "view": "agents", "scope": "permitted_registry",
                             "independent_of_delivery_targets": True, "route_view": "agent_route"},
         "read_tool": read_tool,
+        "agent_work_note": (
+            "Agent Todos are bounded declared work from this portfolio snapshot, not live activity "
+            "or completed results. Respect each Goal's quality, recorded timestamp and Agent coverage. "
+            "An empty or unverified projection does not prove idle or stopped. For a current-work "
+            "question, answer the known overview first; read only missing or requested detail."
+        ),
+        "attention_note": (
+            "Attention is a directory preview, not complete decision terms or an action grant. "
+            "Resolve read_reference with the scoped read tool before deciding or acting; "
+            "details_omitted and content_truncated never prove complete evidence."
+        ),
     }
 
 
@@ -247,6 +314,63 @@ class ManagerInspection:
         from .ssh_evidence import sources
         return sources(self.runtime_root, self.channel_id, self.owner_scope, self.ssh_config_path)
 
+    def _registered_goals(self) -> list[dict[str, Any]]:
+        from ...history import decode_registry_snapshot
+        inventory = decode_registry_snapshot(self.registry_path, self.registry_path.read_bytes())["goals"]
+        if not isinstance(inventory, list) or any(not isinstance(g, dict) or not isinstance(g.get("id"), str) for g in inventory):
+            raise ValueError("Goal inventory is unreadable")
+        return inventory
+
+    def _goal_scope(self) -> list[str] | None:
+        ids = (self.discovery_scope() if self.discovery_scope else
+               None if self.owner_scope and self.context.get("scope") == "owner_global" else
+               [r["goal_id"] for r in self.context.get("goals", [])])
+        if ids is None:
+            if not (self.owner_scope and self.context.get("scope") == "owner_global"):
+                raise ValueError("current audience scope unavailable")
+        elif not isinstance(ids, list) or any(not isinstance(g, str) for g in ids):
+            raise ValueError("invalid audience scope")
+        return ids
+
+    def _portfolio(self, ids, goal_id, include_stopped, offset, limit):
+        from ...control_plane.goals.activation import goal_activation_state
+        from ...chat_manager_context import manager_turn_context
+        try:
+            inventory = self._registered_goals()
+            permitted = sorted({g["id"] for g in inventory if ids is None or g["id"] in ids})
+            if goal_id is not None:
+                permitted = [goal_id] if goal_id in permitted else []
+            elif not include_stopped:
+                stopped = set()
+                for g in inventory:
+                    if g["id"] not in permitted:
+                        continue
+                    try:
+                        if goal_activation_state(g).value == "stopped":
+                            stopped.add(g["id"])
+                    except ValueError:
+                        pass  # Unknown activation stays visible as a source gap.
+                permitted = [gid for gid in permitted if gid not in stopped]
+            selected = permitted[offset:offset + limit]
+            context = manager_turn_context(
+                self.registry_path,
+                {"channel_id": self.channel_id or ("manager" if self.owner_scope else "manager.external.inspection")},
+                self.runtime_root, authorized_goal_ids=ids, requested_goal_ids=selected,
+                include_stopped=include_stopped or goal_id is not None, include_details=False,
+            ) if selected else {"goals": [], "coverage": {"complete": True}}
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            return {"ok": False, "view": "portfolio", "error": "goal_inventory_unavailable"}
+        page = context.get("goals", [])
+        end = offset + len(selected)
+        return {"ok": True, "view": "portfolio", "goal_id": goal_id, "rows": page,
+                "offset": offset, "included": len(page), "matched": len(permitted),
+                "next_offset": end if end < len(permitted) else None,
+                "source": {"source": "goal_portfolio", "snapshot_id": context.get("snapshot_id"),
+                           "coverage": context.get("coverage")},
+                "unknown": bool(context.get("warnings")) or len(page) != len(selected),
+                "initial_snapshot_id": self.context.get("snapshot_id"),
+                "source_id": "local", "source_host": "local"}
+
     def read(self, tool: str, arguments: Any) -> dict[str, Any]:
         if tool not in {TOOL_NAME, CONTEXT_TOOL_NAME} or not isinstance(arguments, dict):
             return {"ok": False, "error": "unsupported_read_tool"}
@@ -292,19 +416,14 @@ class ManagerInspection:
                                  **({"runner": self.remote_runner} if self.remote_runner else {}))
             self.record(result)
             return result
+        try:
+            ids = self._goal_scope()
+        except ValueError:
+            return {"ok": False, "error": "authorization_changed"}
+        if goal_id is not None and ids is not None and goal_id not in ids:
+            return {"ok": False, "error": "goal_outside_available_scope"}
         if view in {"agents", "agent_route"}:
-            # The current audience scope is independent of bounded portfolio
-            # collection and the sender's narrower context-delivery grants.
-            ids = (self.discovery_scope() if self.discovery_scope else
-                   None if self.owner_scope and self.context.get("scope") == "owner_global" else
-                   [r["goal_id"] for r in self.context.get("goals", [])])
-            if ids is None and not (self.owner_scope and self.context.get("scope") == "owner_global"):
-                return {"ok": False, "error": "authorization_changed"}
-            if ids is not None and (not isinstance(ids, list) or any(not isinstance(g, str) for g in ids)):
-                return {"ok": False, "error": "authorization_changed"}
             if goal_id is not None:
-                if ids is not None and goal_id not in ids:
-                    return {"ok": False, "error": "goal_outside_available_scope"}
                 ids = [goal_id]
             if view == "agent_route":
                 from ...control_plane.collaboration.peer_host_route import resolve_peer_host_route
@@ -325,24 +444,23 @@ class ManagerInspection:
                 return {"ok": False, "error": "authorization_changed"}
             self.record(result)
             return result
-        goals = {r["goal_id"]: r for r in self.context.get("goals", [])}
-        if (goal_id is not None and goal_id not in goals) or (
-            view not in {"portfolio", "handoffs"} and not goal_id
-        ):
+        if view not in {"portfolio", "handoffs"} and not goal_id:
             return {"ok": False, "error": "goal_outside_available_scope"}
-        if not self.scope_valid():
-            return {"ok": False, "error": "authorization_changed"}
+        if view != "portfolio":
+            if ids is None:
+                try:
+                    ids = [g["id"] for g in self._registered_goals()]
+                except (OSError, ValueError, KeyError, TypeError):
+                    return {"ok": False, "error": "goal_inventory_unavailable"}
+            if goal_id is not None and goal_id not in ids:
+                return {"ok": False, "error": "goal_outside_available_scope"}
+        portfolio_unknown = False
         if view == "portfolio":
-            rows = list(goals.values()) if goal_id is None else [goals[goal_id]]
-            if goal_id is None and not include_stopped:
-                rows = [r for r in rows if r.get("activation_state") != "stopped"]
-            source = {
-                "source": "goal_portfolio",
-                "snapshot_id": self.context.get("snapshot_id"),
-                "coverage": self.context.get("coverage"),
-            }
-            page = rows[offset : offset + limit]
-            matched = len(rows)
+            result = self._portfolio(ids, goal_id, include_stopped, offset, limit)
+            if not result.get("ok"):
+                return result
+            page, source, matched = result["rows"], result["source"], result["matched"]
+            portfolio_unknown = result["unknown"]
         elif view == "handoffs":
             from .tracking import query
 
@@ -350,7 +468,7 @@ class ManagerInspection:
                 source = query(
                     self.runtime_root,
                     self.registry_path,
-                    goal_ids=[goal_id] if goal_id else list(goals),
+                    goal_ids=[goal_id] if goal_id else ids,
                     owner_scope=self.owner_scope,
                     channel_id=self.channel_id,
                     request_id=arguments.get("request_id"),
@@ -422,7 +540,7 @@ class ManagerInspection:
             "next_offset": end
             if isinstance(matched, int) and page and end < matched
             else None,
-            "unknown": matched is None
+            "unknown": matched is None or portfolio_unknown
             or (
                 view == "handoffs"
                 and (

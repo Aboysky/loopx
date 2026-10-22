@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..effect_program import ReceiptBoundMonitorPhase
+from ..progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_MONITOR,
@@ -33,7 +34,6 @@ PublicSafeText = Callable[..., str | None]
 ActionAlignment = Callable[[Any, Any], bool]
 TimestampParser = Callable[[Any], Any]
 AGENT_LANE_NEXT_ACTION_SCHEMA_VERSION = "agent_lane_next_action_v0"
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 
 
 def build_explicit_advancement_next_action(
@@ -496,6 +496,11 @@ def build_agent_lane_next_action(
                 if not claimed_by:
                     payload["claim_required_before_work"] = True
                 return payload
+            # The scoped gate selector is authoritative for this crossing. A
+            # ready deferred successor intentionally yields no delivery action
+            # so the frontier can project successor_replan_required. Falling
+            # through here could reselect the exact Todo covered by the gate.
+            return None
 
     candidate_sources: list[tuple[str, list[Any]]] = []
     # An empty projected list is authoritative; falling back would bypass the gate.

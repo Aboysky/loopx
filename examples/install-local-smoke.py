@@ -6,6 +6,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -50,6 +52,38 @@ def normal_turns_use_cli_interaction_contract(task_body: str) -> bool:
         ):
             return True
     return False
+
+
+def read_installed_workflow_skill(
+    skill: Path, *, references: set[str]
+) -> dict[str, str]:
+    """Read the installed entrypoint and its complete, self-contained procedures."""
+    skill_root = skill.parent.resolve()
+    documents = {"SKILL.md": skill.read_text(encoding="utf-8")}
+    linked_references = {
+        destination.split("#", 1)[0]
+        for destination in re.findall(
+            r"\[[^\]]+\]\((references/[^)]+)\)", documents["SKILL.md"]
+        )
+    }
+    assert linked_references == references, linked_references
+    assert {
+        path.relative_to(skill_root).as_posix()
+        for path in (skill_root / "references").rglob("*.md")
+    } == references
+    for relative in sorted(linked_references):
+        documents[relative] = (skill_root / relative).read_text(encoding="utf-8")
+    for relative, text in documents.items():
+        document = skill_root / relative
+        source = REPO_ROOT / "skills" / skill_root.name / relative
+        assert document.read_bytes() == source.read_bytes(), document
+        for destination in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
+            if "://" in destination or destination.startswith("#"):
+                continue
+            resource = (document.parent / destination.split("#", 1)[0]).resolve()
+            assert resource.is_relative_to(skill_root), (document, destination)
+            assert resource.is_file(), (document, destination)
+    return documents
 
 
 def source_git_commit(root: Path = REPO_ROOT) -> str:
@@ -304,7 +338,8 @@ def main() -> int:
         assert (release_root / "loopx" / "cli.py").is_file(), release_root
         repair = codex_home / "skills" / "loopx-self-repair" / "scripts" / "find_pattern.py"
         assert repair.with_name("lexical_retrieval.py").read_bytes() == (
-            release_root / "loopx" / "lexical_retrieval.py"
+            release_root / "loopx" / "capabilities" / "context_providers"
+            / "lexical_retrieval.py"
         ).read_bytes()
         repair_query = subprocess.run(
             [sys.executable, "-I", str(repair), "--query", "closeout recovery"],
@@ -402,13 +437,41 @@ def main() -> int:
         assert not (materialized_skill_ids & repo_only_skill_ids), sorted(
             materialized_skill_ids & repo_only_skill_ids
         )
-        skill_text = skill.read_text(encoding="utf-8")
-        compact_skill_text = " ".join(skill_text.split())
+        skill_documents = read_installed_workflow_skill(
+            skill,
+            references={
+                "references/start-and-connect.md",
+                "references/installation-and-diagnosis.md",
+                "references/autonomous-execution.md",
+                "references/heartbeat-hosts.md",
+                "references/handoff-and-feedback.md",
+                "references/materials-explore-quality.md",
+                "references/outcome-refinement.md",
+            },
+        )
+        compact_skill_text = " ".join(skill_documents["SKILL.md"].split())
+        for phrase in (
+            "Before autonomous work, read fresh admission",
+            "Read `goal_boundary` for allowed scope, guards, approvals and stop conditions",
+            "Quota, context, tools and installed skills do not grant write or spawn authority",
+            "Continue while useful in-scope work remains authorized",
+            "must not override an explicit no-spend stop",
+            "retain unsettled state and do not claim settlement is complete",
+            "If `should_run=false`, do not begin delivery unless the current guard explicitly admits a safe bypass",
+            "Execute projected monitor, recovery and owed settlement actions within their current contract",
+            "`notify=DONT_NOTIFY` cannot cancel `execution_obligation.must_attempt_work=true`",
+            "Recover failed or uncertain heartbeat receipts with the same current turn identity",
+            "If context is absent, disabled, or the read fails, preserve the existing single agent workflow",
+            "Never save an expanded static execution body",
+        ):
+            assert phrase in compact_skill_text, phrase
+        # Scenario obligations remain reachable after installation; they need
+        # not all be repeated in the always-loaded entrypoint.
+        complete_skill_text = " ".join(" ".join(skill_documents.values()).split())
         for phrase in (
             "Set Up Recurring Heartbeats",
             "loopx heartbeat-prompt",
-            "run a short steering audit before choosing work",
-            "at least three plausible next-action candidates",
+            "Run a short steering audit over relevant alternatives without a fixed candidate count",
             "continuation check",
             "compute quota separate from focus quota",
             "Register Project Authority And Material Sources",
@@ -434,10 +497,27 @@ def main() -> int:
             "Never default or upgrade a smaller/preparatory turn",
             "do not infer scale/outcome from the classification name",
         ):
-            assert phrase in compact_skill_text, phrase
-        assert "JSON output still keeps the full payload" not in compact_skill_text, compact_skill_text
+            assert phrase in complete_skill_text, phrase
+        for phrase in (
+            "Each wake reads the full fresh result and follows only its current `task_body` when `ok=true`",
+            "An unregistered or missing identity must fail closed before task execution or accounting",
+            "An old chat, trust setting, status or review command does not grant new execution authority",
+            "authorized private reads and recovery may continue",
+            "interaction_contract.cli_channel.settlement_plan.ordered_steps",
+            "use the current `next_cli_actions`",
+            "Accountable progress precedes its spend",
+            "The absence of an adapter run or an unchanged artifact does not waive settlement",
+            "never append another accountable progress record after spend",
+            "An already-settled heartbeat cannot claim or spend an independent successor with its old turn identity",
+        ):
+            assert phrase in complete_skill_text, phrase
+        assert "at least three plausible next-action candidates" not in complete_skill_text
+        assert "JSON output still keeps the full payload" not in complete_skill_text
         pr_review_skill = codex_home / "skills" / "loopx-pr-review" / "SKILL.md"
-        pr_review_text = " ".join(pr_review_skill.read_text(encoding="utf-8").split())
+        pr_review_documents = read_installed_workflow_skill(
+            pr_review_skill, references=set()
+        )
+        pr_review_text = " ".join(pr_review_documents["SKILL.md"].split())
         for phrase in (
             "keeps ordinary queue discovery open-only",
             "explicit `--state merged|all`",
@@ -453,6 +533,10 @@ def main() -> int:
             "formal `REQUEST_CHANGES`",
             "Read the published review back",
             "Merge routes through `loopx-pr-merge`",
+            "Read the packet's actual no-action reason",
+            "null action does not imply an existing conclusion",
+            "A reviewer alone has no authority to change another author's submission state",
+            "With `wait_for_ci=false`, never fetch, poll or wait for CI",
         ):
             assert phrase in pr_review_text, phrase
         assert "Do not use this skill to approve" not in pr_review_text, pr_review_text
@@ -809,7 +893,7 @@ def main() -> int:
         assert payload["ok"] is True, payload
         assert payload["schema_version"] == "heartbeat_agent_input_v1", payload
         expected_quota_guard = (
-            'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
+            f'loopx --registry {shlex.quote(str((home / ".loopx" / "registry.global.json").resolve()))} --format json '
             'quota should-run --goal-id installer-smoke-goal '
             '--turn-instance-id "${LOOPX_TURN:?}"'
         )
@@ -832,7 +916,9 @@ def main() -> int:
         )
         assert "```sh\nLOOPX_TURN=<current_time_iso>\n" in payload["task_body"], payload
         assert "not a command-prefix assignment" in payload["task_body"], payload
-        assert "guard; 2 stalls->replan" in payload["task_body"], payload
+        assert "obey projected replan/stop, never wake counts" in payload["task_body"], payload
+        assert "re-enter guard." in payload["task_body"], payload
+        assert "2 stalls->replan" not in payload["task_body"], payload
         assert "Exact monitor settlement=no refresh/spend" in payload["task_body"], payload
         assert "Admitted work: settlement_plan even if artifacts unchanged" in payload["task_body"], payload
         assert "no-change=surface_only/no spend" not in payload["task_body"], payload
@@ -860,8 +946,18 @@ def main() -> int:
         canary_payload = json.loads(canary_cli.stdout)
         assert canary_payload["cli_bin"] == "loopx-canary", canary_payload
         assert "loopx-canary doctor" in canary_payload["cli_preflight"], canary_payload
-        assert "loopx-canary --format json" in canary_payload["quota_guard_command"], canary_payload
-        assert "loopx-canary heartbeat-prompt --compact" in canary_payload["task_body"], canary_payload
+        guard_argv = shlex.split(canary_payload["quota_guard_command"])
+        assert guard_argv[0] == "loopx-canary", canary_payload
+        assert guard_argv[guard_argv.index("--format") + 1] == "json", canary_payload
+        assert guard_argv[guard_argv.index("--registry") + 1] == str(
+            (home / ".loopx" / "registry.global.json").resolve()
+        ), canary_payload
+        # Brief diagnostics expose only the selected generator. The task body
+        # still teaches the compact drill-down; do not resurrect its removed
+        # diagnostic alias to qualify the installed CLI.
+        assert "compact_prompt_command" not in canary_payload, canary_payload
+        assert canary_payload["brief_prompt_command"].startswith("loopx-canary "), canary_payload
+        assert "heartbeat-prompt --compact" in canary_payload["task_body"], canary_payload
         canary_task_body = canary_payload["task_body"]
         # Brief mode renders one bounded guard block: it deliberately omits the
         # accountable refresh/spend pair, which belongs to the full and compact

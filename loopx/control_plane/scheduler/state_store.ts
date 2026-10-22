@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import type { SourceReadStatus } from "../projection_envelope.ts";
 import {
   atomicWriteJson,
   withFileMutationLock,
@@ -75,6 +76,14 @@ export interface SchedulerStateLoadResult {
   operation: "load";
   path: string;
   state: JsonObject | null;
+  read_status: SchedulerStateReadStatus;
+}
+
+type SchedulerStateReadStatus = Extract<SourceReadStatus, "read" | "unreadable">;
+
+interface SchedulerStateReadResult {
+  state: JsonObject | null;
+  readStatus: SchedulerStateReadStatus;
 }
 
 interface SchedulerStateWriteResultBase {
@@ -498,11 +507,11 @@ function storeRequest(value: unknown, operation: "load" | "write"): {
   return { request, scope, path, legacyPath };
 }
 
-async function migrateLegacySchedulerState(
+async function migrateLegacySchedulerStateAtPathsUnderLock(
   scope: SchedulerScope,
   path: string,
   legacyPath: string,
-): Promise<JsonObject | null> {
+): Promise<SchedulerStateReadResult> {
   // Probe the legacy file before creating any directory or taking the legacy
   // lock. The legacy layout uses unbounded safeSegment labels, so an overlong
   // scope component can make the legacy path unaddressable (ENAMETOOLONG) or
@@ -513,54 +522,95 @@ async function migrateLegacySchedulerState(
     await readFile(legacyPath, "utf8");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENAMETOOLONG") return null;
+    if (code === "ENOENT" || code === "ENAMETOOLONG") {
+      return { state: null, readStatus: "read" };
+    }
     throw error;
   }
-  return await withFileMutationLock(legacyPath, async () =>
-    await withFileMutationLock(path, async () => {
-      try {
-        const current = normalizeSchedulerState(
-          JSON.parse(await readFile(path, "utf8")),
-          scope,
-        );
-        if (current) return current;
-      } catch {
-        // The canonical path is still absent or unusable; inspect legacy state.
-      }
-      let legacyState: JsonObject | null = null;
-      try {
-        legacyState = normalizeSchedulerState(
-          JSON.parse(await readFile(legacyPath, "utf8")),
-          scope,
-        );
-      } catch {
-        return null;
-      }
-      if (!legacyState) return null;
-      await atomicWriteJson(path, stableValue(legacyState) as JsonObject);
-      try {
-        await unlink(legacyPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      return legacyState;
-    })
+  return await withFileMutationLock(legacyPath, async () => {
+    try {
+      const current = normalizeSchedulerState(
+        JSON.parse(await readFile(path, "utf8")),
+        scope,
+      );
+      if (current) return { state: current, readStatus: "read" };
+    } catch {
+      // The canonical path is still absent or unusable; inspect legacy state.
+    }
+    let legacyState: JsonObject | null = null;
+    try {
+      legacyState = normalizeSchedulerState(
+        JSON.parse(await readFile(legacyPath, "utf8")),
+        scope,
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return {
+        state: null,
+        readStatus: code === "ENOENT" || code === "ENAMETOOLONG"
+          ? "read"
+          : "unreadable",
+      };
+    }
+    if (!legacyState) return { state: null, readStatus: "unreadable" };
+    await atomicWriteJson(path, stableValue(legacyState) as JsonObject);
+    try {
+      await unlink(legacyPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return { state: legacyState, readStatus: "read" };
+  });
+}
+
+async function migrateLegacySchedulerState(
+  scope: SchedulerScope,
+  path: string,
+  legacyPath: string,
+): Promise<SchedulerStateReadResult> {
+  return await withFileMutationLock(
+    path,
+    async () =>
+      await migrateLegacySchedulerStateAtPathsUnderLock(
+        scope,
+        path,
+        legacyPath,
+      ),
   );
+}
+
+export async function migrateLegacySchedulerStateUnderLock(
+  runtimeRoot: string,
+  scope: SchedulerScope,
+): Promise<JsonObject | null> {
+  const result = await migrateLegacySchedulerStateAtPathsUnderLock(
+    scope,
+    schedulerStatePath(runtimeRoot, scope),
+    legacySchedulerStatePath(runtimeRoot, scope),
+  );
+  return result.state;
 }
 
 async function readLegacySchedulerState(
   scope: SchedulerScope,
   legacyPath: string,
-): Promise<JsonObject | null> {
+): Promise<SchedulerStateReadResult> {
   try {
-    return normalizeSchedulerState(
+    const state = normalizeSchedulerState(
       JSON.parse(await readFile(legacyPath, "utf8")),
       scope,
     );
+    return {
+      state,
+      readStatus: state === null ? "unreadable" : "read",
+    };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENAMETOOLONG" || error instanceof SyntaxError) {
-      return null;
+    if (code === "ENOENT" || code === "ENAMETOOLONG") {
+      return { state: null, readStatus: "read" };
+    }
+    if (error instanceof SyntaxError) {
+      return { state: null, readStatus: "unreadable" };
     }
     throw error;
   }
@@ -571,13 +621,24 @@ export async function loadSchedulerState(
 ): Promise<SchedulerStateLoadResult> {
   const { request, scope, path, legacyPath } = storeRequest(value, "load");
   let state: JsonObject | null = null;
+  let readStatus: SchedulerStateReadStatus = "read";
   try {
     state = normalizeSchedulerState(JSON.parse(await readFile(path, "utf8")), scope);
+    if (state === null) readStatus = "unreadable";
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      state = request.migrate_legacy === false
-        ? await readLegacySchedulerState(scope, legacyPath)
-        : await migrateLegacySchedulerState(scope, path, legacyPath);
+      try {
+        const legacy = request.migrate_legacy === false
+          ? await readLegacySchedulerState(scope, legacyPath)
+          : await migrateLegacySchedulerState(scope, path, legacyPath);
+        state = legacy.state;
+        readStatus = legacy.readStatus;
+      } catch {
+        readStatus = "unreadable";
+        state = null;
+      }
+    } else {
+      readStatus = "unreadable";
     }
   }
   return {
@@ -585,6 +646,7 @@ export async function loadSchedulerState(
     operation: "load",
     path,
     state,
+    read_status: readStatus,
   };
 }
 

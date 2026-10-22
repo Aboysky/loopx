@@ -14,11 +14,43 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_isolated_script(script: str) -> subprocess.CompletedProcess[str]:
+def test_machine_json_keeps_values_capture_and_human_renderer(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from copy import deepcopy
+
+    from loopx.cli_runtime import print_payload
+    from loopx import usage_ping
+
+    payload = {
+        "ok": False,
+        "error": "保留空格、换行\n和 \\\" 引号",
+        "future": {"unknown": [None, True, 3, {"projection_ref": "$.future"}]},
+        "instruction": "Read before work. Continue when evidence is missing.",
+    }
+    original = deepcopy(payload)
+    captured = []
+    monkeypatch.setattr(usage_ping, "capture_result", lambda value: captured.append(deepcopy(value)))
+    print_payload(payload, "json", lambda _: pytest.fail("JSON cannot use Markdown"))
+    stdout = capsys.readouterr().out
+    assert json.loads(stdout) == original
+    assert stdout.count("\n") == 1  # Newlines in values remain JSON escapes.
+    assert "保留空格" in stdout
+    assert payload == original
+    assert captured == [original]
+
+    print_payload(payload, "markdown", lambda value: "Readable result\n" + value["error"])
+    assert capsys.readouterr().out == "Readable result\n" + original["error"] + "\n"
+    assert captured == [original, original]
+
+
+def run_isolated_script(
+    script: str, *, environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", script],
         cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        env={**os.environ, **(environment or {}), "PYTHONPATH": str(REPO_ROOT)},
         text=True,
         capture_output=True,
         check=False,
@@ -30,6 +62,7 @@ def run_cli_main(
 	argv: list[str],
 	*,
 	forbidden_modules: tuple[str, ...] = (),
+	environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
 	script = f"""
 import sys
@@ -42,10 +75,10 @@ try:
 except SystemExit as exc:
     exit_code = exc.code
 for forbidden_module in {forbidden_modules!r}:
-    assert forbidden_module not in sys.modules
+    assert forbidden_module not in sys.modules, "unexpected module import: " + forbidden_module
 raise SystemExit(exit_code)
 """
-	return run_isolated_script(script)
+	return run_isolated_script(script, environment=environment)
 
 
 def run_cli_batch(module: str, argv_cases: list[list[str]]) -> list[dict[str, object]]:
@@ -195,6 +228,41 @@ assert "loopx.cli" not in sys.modules
 	assert completed.returncode == 0, completed.stderr
 
 
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+def test_command_reference_does_not_require_default_runtime_route(
+	tmp_path: Path, module: str,
+) -> None:
+	home = tmp_path / "home"
+	for root in (home / ".loopx", home / ".codex" / "loopx"):
+		(root / "owned-state").mkdir(parents=True)
+	cwd = tmp_path / "cwd"
+	cwd.mkdir()
+	script = f"""
+import contextlib
+import io
+import json
+import os
+
+os.environ["HOME"] = {str(home)!r}
+os.environ["LOOPX_USAGE_PING"] = "0"
+os.chdir({str(cwd)!r})
+
+from {module} import main
+
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    exit_code = main(["commands", "--format", "json"])
+
+assert exit_code == 0
+payload = json.loads(output.getvalue())
+assert payload["schema_version"] == "loopx_command_reference_v0"
+assert payload["groups"]
+"""
+	completed = run_isolated_script(script)
+
+	assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
 	("argv", "registration_module", "handler_module"),
 	[
@@ -211,6 +279,11 @@ assert "loopx.cli" not in sys.modules
 		(["task-lease", "--help"], "loopx.cli_commands.task_lease", "loopx.cli_commands.task_lease"),
 		(["todo", "--help"], "loopx.cli_commands.todo_registration", "loopx.cli_commands.todo"),
 		(["delegation", "--help"], "loopx.cli_commands.delegation", "loopx.cli_commands.delegation"),
+		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-gates", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-todos", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-risks", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["turn", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 		(["turn", "run-once", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 	],
@@ -374,6 +447,11 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		["task-lease", "renew", "--goal-id", "goal", "--todo-id", "todo", "--expected-ver", "1"],
 		["task-lease", "renew", "--goal-id", "goal", "--todo-id", "todo", "--ttl-seconds", "not-a-number"],
 		["delegation", "--help"],
+		["manager-inbox", "--help"],
+		["manager-inbox", "unknown-action"],
+		["manager-inbox", "report", "--unknown-option"],
+		["manager-inbox", "report", "--request-revision", "not-an-integer"],
+		["manager-inbox", "acknowledge", "--decision", "unknown-decision"],
 		["turn", "--help"],
 		["turn", "run-once", "--help"],
 		["status", "--unknown-option"],
@@ -384,10 +462,53 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		["quota", "unknown-command"],
 		["--format", "unknown", "status"],
 	]
+	for command in ("goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks"):
+		argv_cases.extend([[command, "--help"], [command, "--unknown-option"], [command, "--limit", "invalid"]])
+	argv_cases.append(["goal-portfolio", "--manager-view", "unknown"])
 	selected = run_cli_batch("loopx.entrypoint", argv_cases)
 	full = run_cli_batch("loopx.cli", argv_cases)
 
 	assert selected == full
+
+
+@pytest.mark.parametrize("arguments", [
+	["acknowledge", "--request-id", "a" * 64, "--decision", "adopt", "--reason", "Checked the source"],
+	["report", "--request-id", "a" * 64, "--reply-text", "The evidence check passed."],
+])
+def test_selected_manager_inbox_refusals_match_without_loading_full_cli(tmp_path, arguments):
+	registry, runtime_root = write_command_fixture(tmp_path)
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root), "--format", "json",
+		"manager-inbox", *arguments, "--goal-id", "perf-goal", "--agent-id", "perf-agent"]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["ok"] is False
+
+
+def test_selected_manager_result_matches_full_replay_without_loading_full_cli(tmp_path):
+	from test_collaboration_goal_instance import _create_source_registry, _manager_request
+	from loopx.control_plane.collaboration.inbox import _root, acknowledge
+
+	registry = _create_source_registry(tmp_path)
+	_, _, receipt = _manager_request(tmp_path, registry)
+	rid = receipt["request_id"]
+	acknowledge(tmp_path, "delivery", "builder", rid, "adopt", "Checked the source",
+		registry=registry, caller_goal_ref=receipt["goal_ref"])
+	argv = ["--registry", str(registry), "--runtime-root", str(tmp_path), "--format", "json",
+		"manager-inbox", "report", "--goal-id", "delivery", "--agent-id", "builder",
+		"--request-id", rid, "--reply-text", "The independent evidence check passed."]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	path = _root(tmp_path) / "replies" / rid / "conclusion.json"
+	assert selected.returncode == 0, selected.stderr
+	committed = path.read_bytes()
+	full = run_cli_main("loopx.cli", argv)
+	assert full.returncode == 0, full.stderr
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["delivered"] is False
+	assert path.read_bytes() == committed
 
 
 @pytest.mark.parametrize("action", ["acquire", "renew", "transfer", "release", "inspect"])
@@ -472,17 +593,23 @@ def test_selected_task_lease_rejections_match_full_cli(tmp_path: Path, arguments
 
 @pytest.mark.parametrize("command", ["authority-archive", "extension", "slash-commands"])
 def test_selected_admin_preview_matches_full_cli_without_writes(
-	tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str,
+	tmp_path: Path, command: str,
 ) -> None:
+	parent_environment = os.environ.copy()
 	registry, runtime_root = write_command_fixture(tmp_path)
 	runtime_root.mkdir()
 	host_home = tmp_path / "host-home"
 	host_home.mkdir()
-	monkeypatch.setenv("HOME", str(host_home))
-	monkeypatch.setenv("CODEX_HOME", str(host_home / ".codex"))
-	monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime_root))
-	monkeypatch.setenv("LOOPX_REGISTRY", str(registry))
-	monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+	# Only the CLI subprocesses use this home. Existing worker threads must not
+	# discover it through a temporary change to the pytest process environment.
+	cli_environment = {
+		"HOME": str(host_home),
+		"USERPROFILE": str(host_home),
+		"CODEX_HOME": str(host_home / ".codex"),
+		"LOOPX_RUNTIME_ROOT": str(runtime_root),
+		"LOOPX_REGISTRY": str(registry),
+		"LOOPX_USAGE_PING": "0",
+	}
 	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root),
 		"--format", "json", command]
 	if command == "authority-archive":
@@ -494,12 +621,18 @@ def test_selected_admin_preview_matches_full_cli_without_writes(
 
 	before = {str(path.relative_to(tmp_path)): path.read_bytes()
 		for path in tmp_path.rglob("*") if path.is_file()}
-	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
-	full = run_cli_main("loopx.cli", argv)
+	selected = run_cli_main(
+		"loopx.entrypoint", argv, forbidden_modules=("loopx.cli",),
+		environment=cli_environment,
+	)
+	full = run_cli_main("loopx.cli", argv, environment=cli_environment)
 
 	assert selected.returncode == full.returncode == 0, (selected.stderr, full.stderr)
 	assert selected.stdout == full.stdout
 	assert selected.stderr == full.stderr == ""
+	assert {key: os.environ.get(key) for key in cli_environment} == {
+		key: parent_environment.get(key) for key in cli_environment
+	}
 	assert {str(path.relative_to(tmp_path)): path.read_bytes()
 		for path in tmp_path.rglob("*") if path.is_file()} == before
 	assert not list(host_home.iterdir())
@@ -642,6 +775,25 @@ def test_console_entrypoint_selects_only_receipt_bound_native_scheduler_followup
     )
 
 
+@pytest.mark.parametrize("observation", [
+    {"available": True, "rrule": "FREQ=MINUTELY;INTERVAL=3"},
+    {"available": False},
+])
+def test_native_scheduler_reads_host_instead_of_the_applied_claim(monkeypatch, observation) -> None:
+    from loopx import entrypoint, upgrade
+
+    monkeypatch.setattr(shutil, "which", lambda value: "/fixture/node")
+    seen = []
+    monkeypatch.setattr(upgrade, "resolve_codex_app_automation_rrule", lambda **kw: seen.append(kw) or observation)
+    args = ["quota", "scheduler-ack-current", "--goal-id", "goal", "--agent-id", "agent",
+            "--scheduler-host-facts-chunk", "facts", "--turn-instance-id", "turn",
+            "--host-match-observed", "--applied-rrule", "FREQ=MINUTELY;INTERVAL=30",
+            "--app-automation-current-rrule", "FREQ=MINUTELY;INTERVAL=30"]
+    native = entrypoint._native_scheduler_followup_argv(args)
+    assert seen == [{"goal_id": "goal", "agent_id": "agent"}]
+    assert native[-2:] == ["--app-automation-current-rrule", observation.get("rrule", "")]
+
+
 def test_explicit_main_argv_remains_an_in_process_compatibility_call(
     monkeypatch,
 ) -> None:
@@ -660,6 +812,25 @@ def test_explicit_main_argv_remains_an_in_process_compatibility_call(
 
     assert entrypoint.main(["--format", "json", "version"]) == 0
     assert seen == [["--format", "json", "version"]]
+
+
+def test_windows_native_scheduler_followup_preserves_child_exit_status(
+    monkeypatch, capfd,
+) -> None:
+    from loopx import entrypoint
+
+    native_argv = [
+        sys.executable, "-c",
+        "import sys; print('native refusal'); sys.exit(73)",
+    ]
+    with monkeypatch.context() as patch:
+        patch.setattr(entrypoint.os, "name", "nt")
+        patch.setattr(sys, "argv", ["loopx", "quota", "scheduler-ack-current"])
+        patch.setattr(entrypoint, "_native_scheduler_followup_argv", lambda _args: native_argv)
+        result = entrypoint.main()
+
+    assert result == 73
+    assert capfd.readouterr().out.strip() == "native refusal"
 
 
 def test_console_native_scheduler_followup_fails_closed_without_node(
@@ -686,3 +857,30 @@ def test_console_native_scheduler_followup_fails_closed_without_node(
 
     assert entrypoint.main() == 2
     assert "requires Node.js 22.22.3 or newer" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+	"goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks",
+])
+def test_global_read_preserves_empty_coverage_without_loading_full_cli(tmp_path, command):
+	registry, runtime, public = tmp_path / "registry.json", tmp_path / "runtime", tmp_path / "public"
+	runtime.mkdir()
+	public.mkdir()
+	registry.write_text(json.dumps({"goals": [], "common_runtime_root": str(runtime)}))
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", command]
+	if command != "goal-portfolio":
+		argv.extend(["--scan-path", str(public)])
+	before = registry.read_bytes()
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == 0, selected.stderr
+	assert full.returncode == 0, full.stderr
+	payload, original = json.loads(selected.stdout), json.loads(full.stdout)
+	assert payload["ok"] is True
+	for key in ("schema_version", "request", "summary", "coverage", "scope", "boundary", "omissions"):
+		assert payload.get(key) == original.get(key)
+	if command == "goal-portfolio":
+		assert payload["coverage"]["discovered"] == 0
+		assert payload["coverage"]["complete"] is False
+		assert payload["goals"] == []
+	assert registry.read_bytes() == before

@@ -8,9 +8,7 @@ from loopx.control_plane.coordination.authority_core import (
     CoordinationSnapshot,
     DecisionOutcome,
     HandoffMode,
-    LeaseAction,
     LeaseFence,
-    LeaseModeGateCommand,
     LeaseSnapshot,
     LifecycleGrant,
     OwnershipGate,
@@ -56,7 +54,7 @@ def lease(**overrides: object) -> LeaseSnapshot:
 
 def snapshot(**overrides: object) -> CoordinationSnapshot:
     values: dict[str, object] = {
-        "handoff_mode": HandoffMode.LEGACY,
+        "handoff_mode": HandoffMode.SOFT_CLAIM,
         "registered_agents": (AGENT_A, AGENT_B, ORCHESTRATOR),
         "todo": todo(),
     }
@@ -88,6 +86,63 @@ def terminal(
 
 
 @pytest.mark.parametrize("mode", list(HandoffMode))
+@pytest.mark.parametrize("action", list(TodoAction))
+@pytest.mark.parametrize("invalid", [lease(present=False), lease(status="released")])
+@pytest.mark.parametrize("target", [None, todo(), todo(status="done")])
+@pytest.mark.parametrize("actor", [AGENT_A, "unknown"])
+def test_contradictory_lease_rejection_precedes_missing_todo_authority_and_replay(
+    mode, action, invalid, target, actor
+):
+    state = snapshot(handoff_mode=mode, lease=invalid, todo=target)
+    # Snapshot corruption cannot become an ordinary actor denial or a replay.
+    result = decide(state, TodoMutationCommand(action=action, actor_agent_id=actor))
+    assert result.outcome is DecisionOutcome.REJECTED
+    assert result.code == "invalid_lease_snapshot"
+    assert result.next_snapshot is None
+    assert result.authority_mode is None
+    assert result.ownership_gate is OwnershipGate.NOT_REQUIRED
+    assert result.lease_fence is LeaseFence.NOT_REQUIRED
+    assert not result.idempotent
+
+
+@pytest.mark.parametrize("mode", list(HandoffMode))
+@pytest.mark.parametrize("action", list(TodoAction))
+def test_missing_todo_is_a_typed_refusal_before_actor_admission(mode, action):
+    result = decide(
+        snapshot(handoff_mode=mode, todo=None),
+        TodoMutationCommand(action=action, actor_agent_id="unknown"),
+    )
+    assert result.outcome is DecisionOutcome.REJECTED
+    assert result.code == "todo_not_found"
+    assert result.next_snapshot is None
+    assert result.authority_mode is None
+    assert not result.idempotent
+
+
+@pytest.mark.parametrize("mode", list(HandoffMode))
+@pytest.mark.parametrize(
+    "holder",
+    [None, lease(active=False, status="expired"), lease(active=False, status="released"), lease()],
+)
+def test_snapshot_guard_preserves_current_mode_edits_and_rejects_retired_mode(mode, holder):
+    state = snapshot(handoff_mode=mode, lease=holder)
+    result = decide(
+        state, TodoMutationCommand(action=TodoAction.UPDATE, actor_agent_id=AGENT_A)
+    )
+    if mode is HandoffMode.LEGACY:
+        assert result.outcome is DecisionOutcome.REJECTED
+        assert result.code == "handoff_mode_retired"
+        assert result.next_snapshot is None
+        assert result.authority_mode is None
+        assert result.lease_fence is LeaseFence.NOT_REQUIRED
+        return
+    assert result.outcome is DecisionOutcome.APPLY
+    assert result.next_snapshot.todo == state.todo
+    assert result.next_snapshot.lease == holder
+    assert result.lease_fence is LeaseFence.NOT_REQUIRED
+
+
+@pytest.mark.parametrize("mode", list(HandoffMode))
 @pytest.mark.parametrize("ownership", [False, True])
 def test_update_authority_keeps_claim_neutral_edits_separate_from_ownership(
     mode, ownership
@@ -100,7 +155,13 @@ def test_update_authority_keeps_claim_neutral_edits_separate_from_ownership(
         ownership_mutation=ownership,
     )
     result = decide(state, command)
-    if mode is HandoffMode.HARD_LEASE and ownership:
+    if mode is HandoffMode.LEGACY:
+        assert result.outcome is DecisionOutcome.REJECTED
+        assert result.code == "handoff_mode_retired"
+        assert result.next_snapshot is None
+        assert result.authority_mode is None
+    elif mode is HandoffMode.HARD_LEASE and ownership:
+        assert result.outcome is DecisionOutcome.REJECTED
         assert result.code == "handoff_mode_requires_lease"
         assert result.next_snapshot is None
     else:
@@ -248,7 +309,8 @@ def test_exact_user_gate_override_requires_the_exact_linked_scope() -> None:
 @pytest.mark.parametrize(
     ("mode", "current_lease", "expected", "gate"),
     [
-        (HandoffMode.LEGACY, None, DecisionOutcome.APPLY, OwnershipGate.NOT_REQUIRED),
+        (HandoffMode.LEGACY, None, DecisionOutcome.REJECTED, OwnershipGate.NOT_REQUIRED),
+        (HandoffMode.LEGACY, lease(), DecisionOutcome.REJECTED, OwnershipGate.NOT_REQUIRED),
         (
             HandoffMode.SOFT_CLAIM,
             None,
@@ -269,7 +331,7 @@ def test_exact_user_gate_override_requires_the_exact_linked_scope() -> None:
         ),
     ],
 )
-def test_ownership_handoff_preserves_the_three_modes(
+def test_ownership_handoff_accepts_current_modes_and_rejects_retired_mode(
     mode: HandoffMode,
     current_lease: LeaseSnapshot | None,
     expected: DecisionOutcome,
@@ -278,6 +340,10 @@ def test_ownership_handoff_preserves_the_three_modes(
     plan = decide(snapshot(handoff_mode=mode, lease=current_lease), claim())
     assert plan.outcome is expected
     assert plan.ownership_gate is gate
+    if mode is HandoffMode.LEGACY:
+        assert plan.code == "handoff_mode_retired"
+        assert plan.next_snapshot is None
+        assert plan.authority_mode is None
 
 
 def test_delegated_hard_lease_ownership_change_uses_the_only_override() -> None:
@@ -308,9 +374,20 @@ def test_delegated_hard_lease_ownership_change_uses_the_only_override() -> None:
 
 @pytest.mark.parametrize("action", [TodoAction.COMPLETE, TodoAction.SUPERSEDE])
 def test_terminal_verbs_share_one_lease_fence(action: TodoAction) -> None:
-    legacy = decide(snapshot(), terminal(action))
-    assert legacy.outcome is DecisionOutcome.APPLY
-    assert legacy.lease_fence is LeaseFence.NOT_REQUIRED
+    soft = decide(snapshot(), terminal(action))
+    assert soft.outcome is DecisionOutcome.APPLY
+    assert soft.lease_fence is LeaseFence.NOT_REQUIRED
+
+    for current_lease in (None, lease()):
+        retired = decide(
+            snapshot(handoff_mode=HandoffMode.LEGACY, lease=current_lease),
+            terminal(action),
+        )
+        assert retired.outcome is DecisionOutcome.REJECTED
+        assert retired.code == "handoff_mode_retired"
+        assert retired.next_snapshot is None
+        assert retired.authority_mode is None
+        assert retired.lease_fence is LeaseFence.NOT_REQUIRED
 
     hard_missing = decide(
         snapshot(handoff_mode=HandoffMode.HARD_LEASE),
@@ -357,15 +434,19 @@ def test_exact_user_gate_can_plan_auto_acquire_but_never_displaces_a_live_lease(
     assert foreign_live.code == "lease_fence_required"
 
 
-def test_mode_gate_is_explicit_instead_of_a_synthetic_lease_command() -> None:
-    state = snapshot(handoff_mode=HandoffMode.SOFT_CLAIM)
-    for action in (LeaseAction.ACQUIRE, LeaseAction.RENEW, LeaseAction.TRANSFER):
-        plan = decide(state, LeaseModeGateCommand(action=action))
-        assert plan.outcome is DecisionOutcome.REJECTED
-        assert plan.code == "handoff_mode_forbids_lease"
+@pytest.mark.parametrize("symbol", ["LeaseAction", "LeaseModeGateCommand", "CoordinationCommand"])
+def test_retired_private_lease_input_is_absent(symbol) -> None:
+    import importlib
 
-    release = decide(state, LeaseModeGateCommand(action=LeaseAction.RELEASE))
-    assert release.outcome is DecisionOutcome.APPLY
+    module = "loopx.control_plane.coordination.authority_core"
+    assert not hasattr(importlib.import_module(module), symbol)
+    with pytest.raises(ImportError):
+        exec(f"from {module} import {symbol}")
+
+
+def test_todo_bridge_rejects_commands_outside_its_live_boundary() -> None:
+    with pytest.raises(TypeError, match="unsupported coordination command"):
+        decide(snapshot(), object())
 
 
 def test_core_has_no_storage_or_receipt_version_domain() -> None:

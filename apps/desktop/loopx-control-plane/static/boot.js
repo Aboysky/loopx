@@ -6,6 +6,7 @@ const pageStarted = performance.now();
 let lastTiming = null;
 let timingObservedAt = pageStarted;
 let bootState = null;
+let observedEnvironment = null;
 function renderStartup(result) {
   const state = result?.state;
   bootState = state;
@@ -67,9 +68,12 @@ const updateStatus = document.querySelector("#update-status");
 const forgetSelection = document.querySelector("#forget-selection");
 let nextAction = "check";
 let working = false;
+let actionInFlight = false;
+let statusGeneration = 0;
 let channelInitialized = false;
 let runtimeExplicit = false;
 let bundledRepairAvailable = true;
+const updateWorkingPhases = ["checking","downloading","installing_app","installing_runtime","connecting"];
 document.querySelector("#retry").onclick = () => location.reload();
 channel.onchange = () => { channelInitialized = true; render({phase:"idle"}); };
 const labels = {
@@ -108,18 +112,26 @@ const errors = {
   update_feed_invalid: "更新源格式异常。请稍后重新检查。",
   update_platform_unavailable: "此通道尚无适用于本机的更新包。",
   update_check_timeout: "检查更新超时。请稍后重试。",
-  update_network_failed: "无法连接更新服务器。请检查网络后重试。",
+  update_network_failed: "更新网络请求失败，尚未安装。请检查连接后重试。",
+  update_download_timeout: "更新包下载超时，尚未安装。请检查网络后重试。",
+  update_download_failed: "更新服务器未能提供安装包，尚未安装。请重新检查更新。",
+  update_signature_invalid: "更新包未通过签名校验，尚未安装。请重新检查更新。",
   update_download_or_signature_failed: "更新包下载或签名校验失败，尚未安装。请重新检查更新。",
   app_install_failed: "App 安装未能完成，本次更新未生效；已确认当前版本完好且运行时可用，可直接重启继续使用，或重新检查更新后再试。",
   app_install_incomplete: "App 安装中断，且无法确认当前版本是否完整，请勿直接重启。请在恢复与更新面板还原上一版本（或重新安装）后再试。",
   runtime_pairing_required: "旧版本未能自动选择可用组件。请检查 App 更新，或通过恢复入口重新连接。",
-  backup_failed: "无法备份当前版本，更新已停止。请检查磁盘空间后重试。",
+  backup_unavailable: "没有可验证的 App 备份，未执行恢复。请重新安装完整 App；当前窗口仍可保留。",
+  backup_failed: "App 备份无法保存或未通过完整性校验，替换已停止。请检查磁盘空间与权限，或重新安装完整 App。",
+  rollback_failed: "恢复 App 未完成，请保持窗口打开。可重试恢复；若仍失败，请重新安装完整 App。",
 };
 function codeText(code, phase) {
   if (runtimeExplicit && ["runtime_identity_unavailable", "runtime_selection_explicit"].includes(code)) {
     return "启动参数 LOOPX_BIN 固定了当前运行时。请通过该安装方式修复它，或移除、修正 LOOPX_BIN 后重新打开 App；清除记住的选择不会改变此参数。";
   }
   if (typeof code === "string" && /^runtime_install_exit_(\d+|signal)$/.test(code)) {
+    if (code === "runtime_install_exit_1" && observedEnvironment?.node_found === false) {
+      return "安装程序退出（1）；App 的启动环境未找到 Node.js。请启用受支持的 Node.js 后点击「修复当前版本」。";
+    }
     // Exit 2 from install-local.sh is its "no usable Python 3.11+" gate; the
     // same exit can technically be a usage error, so the wording stays
     // probabilistic and points at the repair action.
@@ -133,13 +145,14 @@ function codeText(code, phase) {
 function render(state) {
   if (!state?.phase) return state;
   if (state.phase === "available" && state.details?.channel !== channel.value) state = {phase:"idle"};
-  working = ["checking","downloading","installing_app","installing_runtime","connecting"].includes(state.phase);
-  update.disabled = working;
-  repair.disabled = working || state.phase === "restart_required" || runtimeExplicit || !bundledRepairAvailable;
+  working = updateWorkingPhases.includes(state.phase);
+  const controlsDisabled = working || actionInFlight;
+  update.disabled = controlsDisabled;
+  repair.disabled = controlsDisabled || state.phase === "restart_required" || runtimeExplicit || !bundledRepairAvailable;
   if (state.details?.bundled_repair_available === false) repair.disabled = true;
-  forgetSelection.disabled = working || state.phase === "restart_required";
-  rollback.disabled = working || state.phase === "restart_required";
-  channel.disabled = working || state.phase === "restart_required";
+  forgetSelection.disabled = controlsDisabled || state.phase === "restart_required";
+  rollback.disabled = controlsDisabled || state.phase === "restart_required";
+  channel.disabled = controlsDisabled || state.phase === "restart_required";
   nextAction = state.phase === "available" ? "apply" : state.phase === "restart_required" ? "restart" : "check";
   update.textContent = nextAction === "apply" ? "更新并准备重启 / Install update" : nextAction === "restart" ? "重启完成更新 / Restart" : "检查更新 / Check for updates";
   updateStatus.textContent = codeText(state.details?.code, state.phase);
@@ -162,10 +175,14 @@ function safeEnvironment(result) {
     runtime_executable_found: flag(environment.runtime_executable_found),
     python3_found: flag(environment.python3_found),
     python3_version: text(environment.python3_version),
+    node_found: flag(environment.node_found),
+    node_version: text(environment.node_version),
   };
 }
 function renderDiagnostics(result) {
-  const failure = result.last_failure ?? result.state;
+  observedEnvironment = safeEnvironment(result);
+  const startupFailure = ["error", "runtime_required", "runtime_pairing_required", "service_error"].includes(result.startup_state?.phase) ? result.startup_state : null;
+  const failure = startupFailure ?? result.last_failure ?? result.state;
   const text = JSON.stringify({
     schema_version: "desktop_recovery_diagnostics_v2",
     failure_phase: ["error", "runtime_required", "runtime_pairing_required", "service_error"].includes(failure?.phase) ? failure.phase : null,
@@ -186,17 +203,24 @@ document.querySelector("#copy-diagnostics").onclick = async () => {
     document.querySelector("#copy-status").textContent = "请按 ⌘C / Ctrl+C 复制已选中的诊断。";
   }
 };
-async function invokeUpdate(action) {
+async function run(action) {
+  if (working || actionInFlight) return;
+  actionInFlight = true;
+  statusGeneration++;
   // Match the phase the backend publishes for each action (rollback restores
   // the previous app; restart keeps the required-restart state) instead of
   // previewing a download that is not happening.
   render({phase: action === "check" ? "checking" : action === "repair" || action === "align_runtime" ? "installing_runtime" : action === "forget_runtime_selection" ? "connecting" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : "downloading"});
-  try { return render(await window.__TAURI__.core.invoke("desktop_update", {action,channel:channel.value})); }
-  catch (error) { return render({phase:"error", details:{code: safeCode(error)}}); }
-}
-async function run(action) {
-  if (working) return;
-  return invokeUpdate(action);
+  try {
+    const result = await window.__TAURI__.core.invoke("desktop_update", {action,channel:channel.value});
+    statusGeneration++;
+    actionInFlight = false;
+    return render(result);
+  } catch (error) {
+    statusGeneration++;
+    actionInFlight = false;
+    return render({phase:"error", details:{code: safeCode(error)}});
+  }
 }
 update.onclick = () => run(nextAction);
 repair.onclick = () => run("repair");
@@ -214,8 +238,11 @@ let terminalRounds = 0;
 let escalated = false;
 async function refresh() {
   if (!window.__TAURI__) { renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}}); return; }
+  const generation = ++statusGeneration;
   try {
     const result = await window.__TAURI__.core.invoke("desktop_update_status");
+    if (generation !== statusGeneration) return;
+    if (actionInFlight && result.state?.phase && !updateWorkingPhases.includes(result.state.phase)) return;
     if (!channelInitialized) {
       channel.value = result.state?.details?.channel ?? (result.app_version?.includes("-main.") ? "main" : "stable");
       channelInitialized = true;
@@ -226,9 +253,14 @@ async function refresh() {
     forgetSelection.hidden = result.runtime_selection?.explicit === true || (result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code));
     renderDiagnostics(result);
     render(result.state);
-    renderStartup(result);
-    escalateFromSnapshot(result.state);
-  } catch { renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}}); }
+    const startup = Object.hasOwn(result, "startup_state") ? result.startup_state : result.state;
+    renderStartup({...result, state:startup});
+    escalateFromSnapshot(startup);
+  } catch {
+    if (generation === statusGeneration && !actionInFlight) {
+      renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}});
+    }
+  }
 }
 function escalateFromSnapshot(state) {
   const terminal = TERMINAL_PHASES.includes(state?.phase);

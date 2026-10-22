@@ -283,6 +283,7 @@ M7 只有在至少产生一个下列最终 effect 时才有理由存在：
 - 默认 Codex App / CLI quota 路径构建一份 typed settlement plan，把 validation、durable writeback、quota spend 和 conditional terminal closeout 绑定到原始 turn effect identity。final `no_followup` 是 spend 后 effect；普通 successor completion 仍属于 Todo lifecycle（#3016、#3033、#3034）。
 - 隔离 turn driver 通过自己的 callback executor 消费同一套 plan、identity、receipt、failure、replay 和 short-circuit algebra（#3020、#3023）；terminal closeout 单独写入 journal，因此 closeout 失败只重试 closeout，不重复 writeback/spend；loop controller 从已提交 receipt chain 派生 continuation，不再维护第二份 settlement truth（#3024）。
 - Task-lease acquire 是第一个有界采用该 algebra 的非 Turn 核心路径。adapter 把 validation 绑定到现有原子 lease write；纯 eligibility、conflict、file-lock 和 CAS 规则仍由 task-lease bounded context 持有（#3091、#3095）。
+- quota spend 的 callback 失败使用可选事实 `quota_rejection_action`，只有配额准入本身拒绝扣费时才从既有 effective-action owner 复制该值。TypeScript 结算 owner 将 `throttled_skip` 映射到 `budget_rejected`；嵌套 quota 快照不构成这项事实，writeback 和 terminal 拒绝保留各自的失败类型。值缺失、格式错误或未知时保留 `quota_spend_rejected`，即使说明文字包含 "budget"。这改变此前依赖文本的诊断分类，不改变准入、扣费或重试权限。已保存的失败回执保持原样读取；新 callback 不得依赖文案要求预算分类。
 - Scheduler apply、ACK、failure writeback 和 cadence 仍是 agent-owned settlement 之外的数据化 host handoff。
 - `interpret_quota_should_run_packet` 与 `interpret_turn_result_packet` 继续作为 packet lens；`EffectProgram` 和 `effect_program_from_ordered_steps` 继续为 bootstrap 与本地 scheduler construction 提供兼容的 ordered-step reader。
 - Outcome-continuity wait 已按因果关系判断。没有 material trigger 和 fresh evidence-linked path decision 的 `unchanged_with_reason` checkpoint，不能清除更早的 material checkpoint 或五条 Todo 完成长链 gap。这是有意的 qualification 行为，不是 watch-ACK 集成回归（#2998、#3009、#3022）。
@@ -296,6 +297,14 @@ M7 只有在至少产生一个下列最终 effect 时才有理由存在：
 
 配额收尾适配现在消费 TS readback 按回执归约的结算进度，不再独立把存在 spend run 当作已结算。正常刷新、重放和扣款响应共享该投影；可执行命令绑定原 Agent 和路由。补回执复用现有幂等 writer。这是有界的 M7.4 接入，没有增加共享 executor 或 authority store，也不证明 Todo 终态或 Goal 验收完成。
 
+此前宿主 Turn 的恢复由 guard 与 settlement readback 共享的 TS candidate owner
+决定。重入 Turn 只能依赖同一准入回执历史中首次记录早于自己的 Turn；后来 Turn
+不能阻断前序恢复，晚到重放或绑定升级不改变这个顺序。不以 Turn 编号或墙钟作为
+排序授权。持久身份冲突仍 fail closed，新 Turn 仍须处理全部未结算回合。
+真实 File/SQLite CLI 覆盖旧任务受阻后另一 Turn 已准入、旧任务重开、恢复原绑定、
+检查失败无扣费收尾，以及后继重放只扣费一次。这修复本机恢复循环；安装态宿主
+和更广协作资格仍须独立验收。
+
 R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity、带条件的步骤顺序和
 宿主交接。签名覆盖 v5 能检测计划被删除或修改；没有计划的输入保留原覆盖版本。
 真实 CLI 验证覆盖提前扣额度被拒绝、原 Turn 写回和结算一次，以及幂等重放。
@@ -303,9 +312,247 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 尚未验收，8 KiB 目标和交付时增长检查保持不变。见
 [TurnEnvelope](../../reference/protocols/turn-envelope-v0.md)。
 
-现有 R5 CLI 支持在展示投影前显式保存完整决策（`quota should-run --decision-output-dir`，要求明确 Turn id）。每次调用使用新的私有目录；读取观察不重跑 guard，选择 Todo 或变更 lease 后仍须重新准入。Python 仅适配文件传输，复用共享决策与 TypeScript envelope owner。本阶段解决显式调用方遭遇输出截断后的读回，不代表 worker 已采用、normal/replan 上下文自动选择或模型效率已验收。参见 [TurnEnvelope 捕获契约](../../reference/protocols/turn-envelope-v0.md)。
+共享结算命令 renderer 现在在生成的步骤子命令前加入全局 JSON 输出选项，包含
+写回后的恢复命令。App heartbeat、外部 CLI 和 visible Goal 无需由调用者补插
+参数；真实 CLI 测试覆盖完整包/短包一致、写回前拒绝和重放只扣费一次。这是
+传输修正，不代表 R5 模型上下文效率已验收，也不改变类型化结算规则。
+
+现有 R5 CLI 保存完整决策后再投影短包；每次 guard 使用独立私有目录，补读不重跑准入。默认关闭的 heartbeat renderer/shared worker 接入现已覆盖明确的 host-owned Turn：同轮选择保留捕获入口，真实 CLI 验证重入和一次结算。Python 仅适配文件与命令传输，复用 TypeScript 决策 owner。原生 Goal 自动 begin-Turn、安装态 App/Lark/UI、模型 token/IO 与决策质量仍未验收；不据此变更现有实验。参见 [TurnEnvelope 捕获契约](../../reference/protocols/turn-envelope-v0.md)。
 
 ### 还缺什么
+
+#### Heartbeat 与 TurnEnvelope 收敛
+
+沿用既有 M7.4 与 roadmap S2/S3/S6/S8，统一 heartbeat 和 Turn host 消费的
+**执行事实**，宿主效果的所有权仍分别保留。现有大 quota packet 与小 TurnEnvelope
+都不是仅凭大小就合理的目标形态。可选 memory 参与事实现进入一个有界、签名覆盖的
+envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat/App 或模型收益
+已验收。
+
+memory 参与现由能力层组合的选择后上下文 hook 注册接入 native Turn 和执行中的
+quota/heartbeat guard。Codex、DSH、generic CLI 传输相同的有界上下文、指导与可选
+结果字段；绑定和模式判断归能力，adapter 只保留宿主格式。TypeScript 限制贡献，拒绝
+替换权限／核心结果字段，复用既有 governing 签名文档及来源读回绑定上下文。只增加
+原捕获的定位信息不使未变决策失效；actor、权限、配置读回或贡献变化则丢弃可选上下文。
+
+通用 Python 贡献 IO 与既有注册和 dispatcher 共同归属
+`loopx.control_plane.capability_hooks`，不再保留平行的 Python Turn-context 模块。
+校验与来源绑定继续调用 TypeScript decoder，宿主 adapter 消费同一份 hook 投影。
+
+注册的 `PostSettlement` callback 在独立精确反思证明和可记账 writeback/spend 后调用
+既有 ingest owner，手动宿主的 sidecar adapter 也使用同一注册。`post_writeback` 继续
+无副作用；逐 hook 回执保留已完成工作，只恢复结果不确定的其他 hook，provider owner
+继续负责写入去重与对账。终态重放保留原 journal 与回执，从原 owner 回读的恢复结果
+通过 `post_settlement_recovery` 返回，不重新结算。File/SQLite 原生宿主及隔离 provider 用例只资格源码路径；
+安装态 App/Lark、模型收益、完整成本及以下三项收敛验收仍开放。
+
+注册前 journal 的恢复保留已准入的有界反思及独立验证 digest，不改写原 plan、不重启
+Host／validator，也不为新工作激活旧输入。provider 效果仍由当前 ingest 策略及原结算
+owner 决定，缓存内容本身不授予写入权限。
+
+PR 依赖观察现复用既有注册 TurnStart 生命周期，由执行性 quota guard、原生 Turn
+与兼容 prequota 共用。权限来自 typed Goal／Agent capability owner，包括已记住的
+宿主观察与撤销；已有授权时不必逐命令补 flag。能力自有诊断使 PR 业务规则留在 core
+Turn 之外；完整源 TS 计划、合并事实 owner 与正常执行准入仍为原权威。Goal 内
+single-flight 与每项依赖的持久节奏避免并发／到期读取重复。File/SQLite 验证覆盖业务
+额度暂停／停止、full/thin heartbeat 生成命令、跨入口观察、撤销、不确定效果、provider
+失败后的无关独立校验工作及原 journal 重放。App/Lark 共用上下文后端只消费 canonical
+就绪状态，不轮询。plan、只读／status／上下文、缺少权限与恢复路径均不添加观察。
+安装态执行器采用、既有真实 owner 的合法恢复、持续调度、模型结果与以下三批收敛验收
+仍开放。安装态 memory 生命周期采用仍单独验收；post-writeback hook 继续无效果。
+
+同次捕获决策中的所选 Task 继续条件与满足状态，现在沿完整选择投影、签名 envelope
+到实际协议宿主输入完整保留。File/SQLite 验证区分不同仓库的同号 PR，保留原事件时间
+和长要求尾部，独立验证后续工作并拒绝证明篡改。只读 managed-step 与原 journal
+重放不新增观察或扣费。本批补齐事实交付遗漏，安装采用与模型结果仍另行验收。
+
+有界规划上下文现在保持内联，不再因短包预算压力而强制读取整份决策；既有 owner 的
+3 KiB 限制保留。共享 DSH/cloud adapter 传递签名内容，历史引用同时保留原捕获路由和
+哈希。thin renderer 仅在存在 `agent_context.detail_ref` 时要求能力补读，不能把也用于
+完整上下文的 `delivery=projected` 当作省略标志。原始来源与实际 Host 输入 oracle 通过
+File/SQLite CLI 和无模型 DSH 子进程覆盖开启／关闭、历史引用及签名拒绝。8 KiB 警告
+保持；选择默认形态前须计算 packet 与必要补读／源 IO。真实模型行为、安装采用及以下
+三项验收仍未完成。
+
+真实绑定的重规划暴露了共享 Host adapter 的另一处遗漏：保留了泛化动作，却丢失
+签名 replan packet 及其证据路由。DSH/cloud adapter 现在同时传递两者，保留既有
+完整 Goal 必读和同次捕获的 replan context。File/SQLite 从选择到重规划的资格验证
+通过仅使用协议 fixture 的 runner 核对实际 DSH provider 输入、签名篡改拒绝及来源／
+状态未变，不调用模型。写回、quota 和 scheduler 仍归外层 Turn executor；普通请求
+保持原输入。本切片只验证该传输边界，安装采用、后续模型决策、完整成本及以下三项
+验收仍未完成。
+
+第一批收敛的当前源码路径核对：
+
+| 执行事实 | 既有 owner／投影 | 保留的边界 |
+|---|---|---|
+| Goal/Agent/Todo 身份 | quota 选择及回执；envelope actor、selected Todo 和签名结算身份 | 捕获身份与写入时校验仍必要；展示身份不授予执行权 |
+| 完整要求 | Agent channel 权威 work context 与剩余必读；有效 Todo、验收及 scoped User 义务，完整 Goal 保留渐进式全文读取 | 注册 reader 在两种传输中满足当前任务读取；来源失败会阻止依赖它的交付，真实模型采用和打包宿主旅程仍待验收 |
+| 能力拒绝 | 既有 quota `capability_gate_v0`；短包保留精确 `required`/`missing` 数组与源中历史字段 | 修复事实遗漏，不改变就绪策略或能力开启 |
+| 选择／claim／lease | selected Todo、action portfolio 及当前所属事务 | 短包归属不是新鲜 lease；保留捕获源并在所属写入入口复核 |
+| replan／Goal 收尾 | replan action packet 与既有 TS capsule 保留完整、有序 audit 步骤/指导、当前 judge（收尾评估） 及证据与非证明条件 | 同一捕获的 File/SQLite 决策验证条款保留与签名突变；完整证据仍走有权限的详情。宿主/模型采用仍开放；Todo 完成不证明 Goal 完成 |
+| 结算／scheduler | 完整 typed 结算计划及显式宿主调度投影；省略的调度 argv 引用同一捕获的完整决策 | 此投影退役未绑定的详情命令。实际宿主读回、过期写入拒绝与一次恢复仍待宿主采用验收 |
+| 可选 memory | 核验后的 boundary 参与事实及新鲜宿主绑定 | 关闭／recall／ingest／失效／provider 失败隔离持续保留；传输等价不是模型收益 |
+
+边界投影现完整保留范围、审批、守卫和停止条款，不再套用显示裁剪。共享 DSH／云端
+candidate 适配器也传递此前遗漏的签名限制，原范围／workspace 兼容字段各保留一份。
+独立来源 oracle、真实 File/SQLite CLI 和仅使用协议 fixture 的 Host 子进程能复现旧
+遗漏，并验证完整传递、篡改拒绝和不扣费回放。这只修复一个既有调用族的边界交付，
+不新增执行规则 owner。保留 8 KiB 警告，披露恢复条款的成本；live 模型行为、安装态
+采用和完整成本仍须在推广前分别验收。
+
+能力事实修复归既有 TS read-model owner。真实捕获的 File/SQLite 决策覆盖拒绝及
+准入，包含关闭、仅 recall、仅 ingest 与配置失效。新投影签名覆盖这些保留事实，
+不重写历史签名、不增覆盖版本、准入规则或 Python 策略。宿主 provider 失败和
+结算另有覆盖，仍不证明安装态 App 收敛或模型成本。以下三项继续按各自验收保持
+未完成；这份核对不授权批量删除剩余 Python IO adapter。
+
+接续 audit 投影还保留每个有序 closeout 步骤和完整当前 judge（收尾评估）。旧 capsule 在签名前就
+遗漏这些字段，并把接续指导截成 48 字符。捕获的 File/SQLite 工作和 replan 路径现在
+保留这些条款，修改步骤、顺序或 judge 后拒绝签名等价。既有 8 KiB 诊断阈值不变，
+必需文本可以超出并警告。这只关闭传输遗漏，不代表三项收敛验收通过，也不授权退役仍
+活跃的 Python/host adapter。
+
+沿 capsule 追到实际共享 Host 输入又暴露一处丢失：DSH／云端只传递其中的
+unavailable-context 字段，签名有效的 audit 没有到达 provider。适配器现传递既有
+audit 及原捕获路由／哈希。真实 File/SQLite 普通工作与 replan 捕获通过无模型 DSH
+子进程验证有序义务、继续执行的 judge、非证明条件、签名拒绝及来源／状态未变。
+同次核对还发现工作资格丢失：capsule 过滤了成果底线／退化规则，该 Host 又遗漏整份
+既有 execution profile。typed 投影现完整保留，Host 直接传递。携带该 profile 的新
+material result 返回公开安全的 typed `work_evidence` 与 `validation_evidence`
+数组，并保留实际 delivery scale／outcome；外层 executor 验证并保留两组证据及分类。
+原生来源 oracle 和签名篡改覆盖这些规则。两种契约都不存在的 prompt 保持原输入，旧
+journal replay 保持可读；所有状态、quota 和 scheduler 效果仍归外层 executor。本批
+只验证该调用方的条款交付，不证明模型遵守、安装采用或完整成本收益。应计入恢复要求
+的成本；旧的不完整输入不能作为已验收的效率基线。
+
+完整 execution profile 在原有 96 行公开 CLI 夹具中，令普通 Turn plan 增加
+138–142 个 JSON 字符／UTF-8 字节，不增加行数。原 base/head 差分超过 64／70
+字符和 128 字节增长额度，仍按原失败保留。仅当旧四字段 profile 补齐成果底线和
+退化字段、签名覆盖不变且无其他 JSON 结构变化时，给予一次性 160 字符／字节额度。
+已经完整、只补部分或无关变化均不适用。绝对预算、行数、夹具人口、完整来源／Host
+条款验证及生产 8 KiB 诊断保持。本结果说明必要展示成本，不代表模型 token 或效率收益。
+
+统一工作上下文现在由既有 TS interaction owner 选择并满足必读，注册的 Python
+adapter 核验来源，在普通 heartbeat/quota 与签名 envelope 中返回完整当前任务来源，
+无需启用 TurnEnvelope。混合 Goal 文件仍必须经渐进式路径全文读取，不能按历史标题
+裁剪后冒充原始目标。未支持的来源保留必读命令，来源失败或变化会阻止依赖它的交付。
+一份 Agent carrier 保留明确空列表、完整要求尾部及 hook 身份；精确 Todo 返回一份
+完整源记录，概览仍有界。真实 legacy/File/SQLite CLI 覆盖源丢失、长要求尾部、
+scoped gate、恢复和签名内容篡改。见[工作上下文契约](../../reference/required-work-context.md)。
+这是普通上下文交付默认值的变化，不是 transport 默认值的变化；模型结果、安装态
+App/Lark 旅程及整体效率仍单独验收，保留尚有真实调用方的 Python IO adapter。
+
+no-write model-behavior 安全适配器现在识别原生 scheduler 在 ACK/failure
+命令前绑定的 `--registry`／`--runtime-root` 路由前缀。验证走真实 binder 和
+TurnEnvelope 投影，不能只用未绑定的合成 argv。适配器只为递归保密扫描解码
+有界 wire：路由值、解码后的扩展及无关 alias 仍被扫描，原 packet 和 wire
+原样传递。未知或损坏前缀、hint 与命令不匹配继续拒绝。这修复传输误拒绝，
+不改变 scheduler 准入、执行授权、默认值或宿主效果；打包后的传输验证不代表
+live 模型结果、App 采用或以下三项收敛验收完成。
+
+完整要求交付（#5844）、完整收尾条款（#6337）和原始 Host 决策捕获（#6350）的
+源码修复已合入。保留这些成果；它们的完成不关闭 M7.4、R5 或下列三条验收线。
+后续沿既有 owner 和 checkpoint 按此顺序推进：
+
+| Todo | 可观察结果与决定性验收 |
+|---|---|
+| 核对 heartbeat 与 TurnEnvelope 的执行和上下文要求 | 同一捕获的权威决策保留 actor/Goal/Todo、必读全文、claim/lease、选择、replan/收尾、带条件结算和 scheduler 所有权。删除渲染分支前列明遗漏与重复事实。覆盖可选能力关闭、仅 recall、仅 ingest、绑定失效和 provider 失败；私有详情只经有权限的引用访问。 |
+| 在真实宿主 renderer 采用同一 typed 投影 | heartbeat full/thin 与 Turn host 消费同一执行事实及同 Turn 捕获/详情入口；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
+| 核验上下文形态及迁移默认 | 将相同的正常、replan、等待/恢复与可选能力负载同时对照当前完整和短包路径，测量载荷/model token、详情 IO、延迟、资源增长、遗漏、决策与结果质量。数据丢失、重复效果、身份和结算错误保持硬约束；保留受支持的已保存 prompt/回执与可逆 rollout，根据证据再改预算或默认。 |
+
+原生 Turn detail 采用现持久化真实 `run-once` producer 的完整 observation，由既有 TS
+envelope owner 将 Host 请求绑定到它。真实 File/SQLite CLI 检查实际 subprocess 输入，
+改变 canonical Todo 来源，验证原详情、重试和无效果 replay；模型 provider 是协议
+fixture。只读规划与可选 quota capture 默认值不变，原生执行 Turn 现保留私有 capture
+证据。证据缺失或不匹配拒绝再次调用 Host；legacy 缓存结果恢复与终态读回保留原 receipt。
+这只关闭 producer 到 detail 的传输缺口。真实模型、打包 App/Lark、后续 authority 检查
+及其余收敛矩阵仍独立验收，本切片不退役任何 Python 投影。
+
+共享 Host 结果适配器现在保留所提供文本，交给既有 Turn 校验器，而不通过截短使
+候选通过。超限后续行动原本可能丢失末尾审批约束却仍获接受。JSON 布尔值、数字和
+容器也保留原类型，交给同一校验器拒绝；false/零不能消失到
+稀疏字段默认值，旧 null/省略的可选文本仍按缺省处理。明确提供的交付规模与结果
+现在也保留原值及 JSON 类型，只有省略元数据时才沿用稀疏默认值。此前声明的
+`surface_only`、不满足条件的 `outcome_gap` 或非法值都会变成 `outcome_progress`，
+绕过既有拒绝并记入 quota 扣费。共享 prompt 使用既有交付词汇。原生 File/SQLite
+测试保留合法规模历史。新材料结果也在任务验证或效果准备前复用既有结算规则：
+`surface_only` 与 `outcome_gap` 返回 typed `validation_failed`，不留下 prepared
+写回。此前词汇合法但不满足结算条件的结果会进入 refresh-state，抛出通用 CLI
+错误，留下反复遭遇同一拒绝的 in-progress prepared 写回。Host 合同不携带 typed
+blocker observation；普通 CLI 的阻塞结算保持原行为。历史缓存结果仍走 provider
+读回／恢复，覆盖 provider 返回 unknown 后读到 committed receipt，不重启 Host 或
+重复写回；此处没有新增结算策略。
+File/SQLite 原生 CLI
+和实际 DSH 子进程验证任务校验、写回、扣费、ACK 前的拒绝、失败结果重放，以及
+修正后的新 Turn 只结算一次。边界长度的合法结果保持原行为。这只证明结果传输
+正确性，不证明模型采用、撤销 Host 已执行工作或关闭原三批收敛验收。
+
+首个普通 CLI 整合将完全相同的
+`heartbeat_recommendation.blocked_priority_fallback` 副本替换为
+`blocked_priority_fallback_ref="$.blocked_priority_fallback"`。根字段的完整事实、
+通知、执行义务和原始 capture 保留；不同副本继续保留，包括 Boolean 与数字的差异。
+既有 `--include-detail agent-todos` 视图保留原副本。真实 File/SQLite CLI 覆盖同次
+捕获的动作维度及无扣费重放。原始 source hash 本就区分不同渲染；本批不改变签名
+覆盖，也不让渲染视图替代原始 capture。
+旧字段访问保留在既有 packet owner；CLI 调用其投影函数，不增加待迁移的旧字段消费者。
+
+验收上下文 adapter 现在对已选定工作复用既有精确 Todo 读取，保留完整 Goal 验收依据
+和累计 outcome，避免再次搬运无关任务的关联观察及选定 Todo 正文。真实 File/SQLite
+CLI 与 DSH 协议输入覆盖已配置检查、仅声明 outcome 两种情形；无选定工作的读取
+仍返回原列表。这只验证局部 IO 边界，不能替代真实模型收益、安装采用或整轮成本。
+
+下一步先调查获准真实 Goal 的活跃工作、peer/replan、等待/恢复和可选能力形态，
+将每条保留义务映射到共享 typed owner 与实际消费者，再完成一族调用方迁移，最后
+退役其旧投影。用同次捕获决策比较 full/thin heartbeat 与 Turn，将必需详情补读、
+token、序列化/IO、延迟及资源增长一并计入。此次移除副本的字节节省只证明该渲染
+差异；模型质量、完整成本、安装态 App/Lark 采用和迁移默认仍需独立证据。真实私有
+来源不进入公开 fixture 或 checkpoint。
+
+此前成本切片已复现回归预算缺口，不能归因于 fixture alias，也不授权删掉
+必需上下文。`aa87cc019` 与 `fc411c878` 使用相同公共 CLI fixture、临时 alias
+和命令参数，实际 JSON stdout 测量如下：
+
+| 公共负载／入口 | base 字符 | candidate 字符 | base 紧凑 JSON | candidate 紧凑 JSON |
+|---|---:|---:|---:|---:|
+| 36 Todo／1 Agent／12 run，`turn plan` | 16,115 | 17,403 | 12,112 | 13,145 |
+| 1 Todo／1 Agent／1 run，开启 multi-subagent 的 `quota should-run --turn-envelope` | 10,990 | 11,661 | 8,892 | 9,464 |
+| 36 Todo／1 Agent／12 run，`heartbeat-prompt --thin` | 3,122 | 3,122 | 3,069 | 3,069 |
+
+crowded Turn 的增长包括 envelope 内 484 个紧凑字符，以及新增 hook-dispatch
+诊断的 510 个紧凑字符。envelope 现在说明哪些 hook 观察到空上下文、清除其缓存，
+并区分已满足的 pre-work 读取和后续 action 的新鲜来源要求；这些指令和签名观测
+有实际决策价值。hook 诊断另有副作用披露职责，移动或删除前须核验真实消费者。
+pretty-print 开销单独计量，不等于 token、延迟或模型质量结果。
+
+按原检查，crowded `turn plan` 超过 16,000 字符上限，开启
+multi-subagent 的 runner 超过 9,000 字符 envelope 上限。后者因嵌套 fixture
+路径在 base/candidate 分别输出 11,291／11,961 字符，与表中的路径负载不同。
+历史 base 已失败；原检查下的失败结果保持。
+
+当前源码资格另列。已合并的
+`a855a547e7a3fc4f9b5c3e02e1ea73cf0f591f95` 校准既有回归检查，同口径负载与
+有界余量见[预算决策指南](../../development/testing-and-quality.md#budget-failure-decisions)。
+在 `0cd547b0c442a5c0ec7f608827b02dce7aeb0aac` 独立重跑真实 CLI，candidate
+执行全部预算检查，96 行均通过；与不可变
+`2244b96f1e2e5c90bef43ae4c140c0994bfcc07a` 的既有语义差分两侧各 96 行，
+无 candidate-only 行或待复核变化。fixture 保留 1/36/18 个 Todo、1/12/12 个
+run、完整命令路由、开启 multi-subagent 及 blocking gate。crowded Turn 输出
+16,250 字符，上限 17,000；开启后的 envelope 为 11,426，上限 12,000；thin
+JSON 仍为 3,122。既有 runner 测试仍拒绝真实 stdout 膨胀，不改写路径或缩减负载。
+
+消费者审计保留两种 hook 视图：typed envelope 签名覆盖不可用上下文、hook 坐标
+和依赖动作的新鲜度；live Turn adapter 另读 hook 结果，通过 `effects` 与
+`boundary` 披露本机状态写入。把诊断当重复上下文删除会丢失副作用披露。紧凑
+序列化仅单列格式开销节省，不证明新的宿主传输资格。当前源码回归覆盖 File/SQLite
+偏好、空／失败 hook 的缓存失效、可选能力关闭隔离、所选要求与后续读取。本批
+关闭有界源码预算缺口；M7.4 仍未完成，packaged host 采用、模型 token／IO／延迟／
+结果证据及可逆 transport 默认决策继续保留。执行 quota、wire 限制和冻结的
+promotion 条件不变，不声称运行成本下降。
+
+不引入通用 executor，也不降低验收门槛来让短包通过。保留未满足要求，分别记录
+传输等价、安装态宿主采用和有效模型结果。见
+[当前 envelope 契约](../../reference/protocols/turn-envelope-v0.md#optional-memory-participation)。
 
 - 通用共享 executor 被有意保留为空。当前 adapter 共享 plan/receipt algebra，却拥有不同的执行边界，因此 M7.3 应以 no-follow-up 关闭，而不是用推测性 framework 填充。
 - 常规 LoopX 核心路径仍需逐条做有界采用判断。只有当路径包含多步 external effect、单一稳定 identity、durable receipt、replay 要求，并且变更能删除重复 settlement truth 时，才应该使用这套 algebra。

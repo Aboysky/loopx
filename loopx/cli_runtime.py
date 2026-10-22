@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
+from .cli_commands.summary_all_registration import GLOBAL_READ_COMMANDS
 from .paths import default_registry_path, global_registry_path, select_default_runtime_root
 
 
@@ -40,6 +41,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"codex-cli-visible-driver-run",
 		"codex-cli-visible-driver-plan",
 		"codex-cli-visible-session-proof",
+		"commands",
 		"demo",
 		"doctor",
 		"first-run-report",
@@ -64,9 +66,10 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 )
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
-_SELECTED_COMMANDS = _STATUS_COMMANDS | {
+_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
-	"authority-archive", "extension", "slash-commands",
+	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+	"manager-inbox",
 }
 
 
@@ -95,7 +98,9 @@ def print_payload(
 	from .usage_ping import capture_result
 	capture_result(payload)
 	if fmt == "json":
-		print(json.dumps(payload, ensure_ascii=False, indent=2))
+		# JSON is the machine contract; retain every value and remove only
+		# presentation whitespace. Human-readable output remains Markdown.
+		print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 	else:
 		print(markdown_renderer(payload))
 
@@ -174,6 +179,35 @@ def resolve_cli_registry(
 	if project_register_uses_default_registry:
 		registry_path = Path(args.knowledge_root).expanduser() / ".loopx" / "registry.json"
 	if (
+		args.command == "resolve-agent-thread"
+		and not registry_was_configured
+		and not registry_path.exists()
+	):
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
+		from .project_alias import resolve_canonical_project_alias
+
+		alias = resolve_canonical_project_alias(
+			Path.cwd(), global_registry=global_registry_path(runtime_root)
+		)
+		source_registry = alias.get("source_registry")
+		canonical_project = alias.get("canonical_project")
+		if alias.get("applied") and source_registry and canonical_project:
+			source_path = Path(str(source_registry)).expanduser().resolve()
+			expected_path = (
+				Path(str(canonical_project)).expanduser().resolve()
+				/ ".loopx"
+				/ "registry.json"
+			)
+			if source_path == expected_path and source_path.is_file():
+				registry_path = source_path
+	if (
 		args.command not in _REGISTRY_OPTIONAL_COMMANDS
 		and not (args.command == "canary" and not getattr(args, "goal_id", None))
 		and not project_register_uses_default_registry
@@ -230,6 +264,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.status_registration import register_status_commands
 
 		register_status_commands(subparsers, add_subcommand_format)
+	elif command in GLOBAL_READ_COMMANDS:
+		from .cli_commands.summary_all_registration import register_summary_all_command
+
+		register_summary_all_command(subparsers, add_subcommand_format)
 	elif command == "todo":
 		from .cli_commands.todo_registration import register_todo_command
 
@@ -254,10 +292,18 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.turn_registration import register_turn_commands
 
 		register_turn_commands(subparsers, add_subcommand_format)
+	elif command == "manager-inbox":
+		from .cli_commands.manager_inbox import register_manager_inbox
+
+		register_manager_inbox(subparsers, add_subcommand_format)
 	elif command == "authority-archive":
 		from .cli_commands.authority_archive import register_authority_archive_command
 
 		register_authority_archive_command(subparsers, add_subcommand_format)
+	elif command == "coordination-shadow":
+		from .cli_commands.coordination_shadow import register_coordination_shadow_command
+
+		register_coordination_shadow_command(subparsers, add_subcommand_format)
 	elif command == "extension":
 		from .cli_commands.extension import register_extension_commands
 
@@ -285,6 +331,14 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "manager-inbox":
+		from .cli_commands.manager_inbox import handle_manager_inbox
+		from .control_plane.projects.registry_codec import load_project_registry
+		from .paths import resolve_runtime_root
+
+		return handle_manager_inbox(args, registry_path, resolve_runtime_root(
+			load_project_registry(registry_path), args.runtime_root, registry_path=registry_path,
+		))
 	if args.command == "task-lease":
 		from .cli_commands.task_lease import handle_task_lease_command
 
@@ -296,6 +350,13 @@ def _dispatch_common_command(
 		from .cli_commands.authority_archive import handle_authority_archive_command
 
 		return handle_authority_archive_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "coordination-shadow":
+		from .cli_commands.coordination_shadow import handle_coordination_shadow_command
+
+		return handle_coordination_shadow_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
@@ -328,7 +389,7 @@ def _dispatch_common_command(
 		return 0
 	if args.command == "delegation":
 		from .cli_commands.delegation import handle_delegation
-		from .control_plane.coordination.local_authority_shadow_adapter import (
+		from .paths import (
 			effective_runtime_root,
 		)
 
@@ -350,6 +411,13 @@ def _dispatch_common_command(
 		from .capabilities.repository_change_window.cli import handle_repository_change_window_command
 
 		return handle_repository_change_window_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command in GLOBAL_READ_COMMANDS:
+		from .cli_commands.summary_all import handle_summary_all_command
+
+		return handle_summary_all_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
@@ -393,13 +461,25 @@ def _dispatch_common_command(
 			print_payload=print_payload,
 		)
 	if args.command == "todo":
+		if args.todo_command == "list":
+			from .cli_commands.todo_list import handle_todo_list_command
+			from .cli_rollout import append_cli_rollout_event
+
+			return handle_todo_list_command(
+				args,
+				registry_path=registry_path,
+				runtime_root_arg=args.runtime_root,
+				format_name=output_format(args),
+				print_payload=print_payload,
+				append_cli_rollout_event=append_cli_rollout_event,
+			)
 		from .capabilities.periodic_report.post_writeback_hook import (
 			build_periodic_report_post_writeback_projection,
 			periodic_report_post_writeback_hooks_for_goal,
 		)
 		from .cli_commands.todo import handle_todo_command
 		from .cli_rollout import append_cli_rollout_event
-		from .control_plane.coordination.local_authority_shadow_adapter import (
+		from .paths import (
 			effective_runtime_root,
 		)
 

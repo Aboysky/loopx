@@ -20,6 +20,24 @@ Python 保留历史解码、指纹及 obligation 呈现；删除被替代的触�
 组装、frontier 结算及完整捕获资格仍有各自归属。没有加入模型观察器、provider
 切换、前端配置项或可选 capability。
 
+## 基于回执的证据展示修复
+
+Replan 证据消费者原先可能为工作及其 quota 扣记各重复一次相同接续。既有 TypeScript
+work-item owner 现使用限定作用域的 settlement 与 spend receipt 事实去重。Python
+传递身份及完整文本摘要，不分类资格。新增事实不进入公开历史行 hash，已投递的 history
+reference 因此仍解析到原不可变记录。
+
+归约要求完整 Goal/Agent/Todo/Turn/effect 身份、实际类型化 progress observation 及
+完整接续都匹配。每个合并 occurrence 都须有自己的匹配，且对应工作须在展示窗口内保留。
+不同 health 仍可见；不同 outcome、缺失或不支持的 receipt、身份不匹配和不同接续尾部
+保留原展示。raw count、负向覆盖与 obligation identity 不变，不新增共享词汇、能力、
+store 或权限。
+
+验收使用临时真实 File/SQLite quota CLI fixture、不可变 history-reference CLI
+读回、inline/snapshot 对等和类型化负例。本修复减少消费侧重复；完整历史仍有
+O(history) 传输与处理成本，并增加身份字节。不证明已安装采用、模型 token/时间效果、
+整项任务有效性或剩余 T3/provider 资格。
+
 ## 长历史传输修复
 
 此前 600 行演练不足以证明长期运行的 Goal。即使去掉正文，所有紧凑事实仍随历史
@@ -43,3 +61,37 @@ state 重用。既有同 UID runtime 是信任边界，不是远端上传服务�
 O(history) 内存/时间成本。后续 S7/R7 容量切片应测量 bridge 字节、峰值内存和
 p95 结算时间，再以完整历史为 oracle 验收 checkpoint/cursor 归约，覆盖较旧 ACK、
 缺失归属和 Turn 去重。不能为使结算成功而归档/截断历史或提高阈值。
+
+## 有效 Turn 复核节奏：验收进行中
+
+同一个 open Todo 跨越多轮已结算工作时，按已完成 Todo 数触发可能长期延后复核。
+降低历史运行记录阈值不能解决它：有 classification 的记录不等于已接受的结算。
+候选实现复用 work-item 历史归约器，对每次投影的一份不可变快照调用 quota
+结算读取 owner；Python 只传递显式节奏及来源，不解释回执。
+
+Goal 显式选项使用独立的 `replan_after_effective_turns` 字段，既有完成 Todo
+配置保持原单位。隔离的真实 CLI 验证覆盖 open Todo 连续结算、未扣记写回不计数、
+扣记缺少回执不计数、有效负证据计数，以及 quota/写回义务 ID 一致。
+peer ACK 和重试仍由既有历史 owner 处理；未启用新选项的调用保持旧行为。
+
+候选配置在既有 cadence capability 内扩展了带显式计数单位的机器 v1 schema；
+读取 v0 时保留原存储与单位。打包后的中英文设备/Goal 编辑器已通过真实、锁定 revision
+的 handler，覆盖旧值回读、v1 迁移、非法输入不写入、Goal 覆盖及清除后恢复继承，
+并检查窄屏和键盘焦点。共享浏览器 fixture 在接收写入前声明并验证隔离的同步目标；
+仅设置 HTTP server runtime 不足以隔离源 registry 的路由。
+
+exact-source 读取复用既有 quota admission，并借用外层 refresh 锁；过期实例的
+ACK 不能清空当前实例计数，缺失或过期 admission 会被拒绝。这只验收共享读取
+边界，不表示新增 source-session 产品入口。
+
+合成批量测试暴露了每次显式读取前重复过滤全量历史的成本，V8 剖析将其定位到
+quota readback owner。先复用既有 Turn 索引再过滤，消除了重复扫描；最新 Turn
+推断仍读取完整的 owner 历史。同输入 1,000 Turn 热态样本从 177–195 ms 降为
+13–19 ms；这些本地样本不代表全量 p95，也不证明求解分数提升。
+
+Harbor/SForge 现可通过既有 Goal CLI 传递显式有效 Turn 节律，并在执行前核对
+持久化的单位及数值。适配器复用一处配置/回执映射，Python 不增加计数决策源。
+隔离真实 CLI 的 bootstrap、覆盖、回滚已通过；适配器检查覆盖旧默认值、
+不支持的 profile 和错误单位读回。完整 provider 安装执行、维护者合并及匹配
+效果实验仍待验收，活动实验保持冻结。SForge planned task entry 是另一项尚未
+闭合的适配器流程。

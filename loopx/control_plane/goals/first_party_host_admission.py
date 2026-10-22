@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -10,12 +10,15 @@ from ...file_lock import (
     cross_runtime_lock_witness,
     exclusive_cross_runtime_file_lock,
 )
+from ..coordination.shadow_management import runtime_artifact_lock_target
 from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
+    project_registry_transaction,
 )
 from ..effect_program import TurnProviderStepKind
+from .activation import goal_activation_state
 from .source_session_registry_state import (
     exact_goal_ref,
     guard_path,
@@ -68,6 +71,27 @@ class FirstPartyHostTurnEffectAdmission:
             journal_path=self.journal_path,
         )
 
+    @contextmanager
+    def _runtime_artifact_lifetime(self, *, operation: str) -> Iterator[None]:
+        path = self.journal_path.expanduser().resolve()
+        turns_dir = path.parent
+        goal_dir = turns_dir.parent
+        goals_dir = goal_dir.parent
+        if (
+            turns_dir.name != "turns"
+            or goal_dir.name != self.goal_admission.goal_id
+            or goals_dir.name != "goals"
+        ):
+            raise FirstPartyHostRuntimeRejected("journal_path_mismatch")
+        with exclusive_cross_runtime_file_lock(
+            runtime_artifact_lock_target(
+                goals_dir.parent,
+                self.goal_admission.goal_id,
+            ),
+            operation=operation,
+        ):
+            yield
+
     def prepare(
         self,
         step_kind: TurnProviderStepKind,
@@ -75,13 +99,16 @@ class FirstPartyHostTurnEffectAdmission:
         persist_journal: JournalPersist,
     ) -> None:
         try:
-            prepare_source_turn_effect(
-                registry_path=self.goal_admission.registry_path,
-                goal_id=self.goal_admission.goal_id,
-                effect=self._effect(step_kind, effect_ref),
-                source_admission=self.goal_admission.source_journal_admission_locked,
-                persist_journal=persist_journal,
-            )
+            with self._runtime_artifact_lifetime(
+                operation="source_turn_effect_runtime_artifact_admit",
+            ):
+                prepare_source_turn_effect(
+                    registry_path=self.goal_admission.registry_path,
+                    goal_id=self.goal_admission.goal_id,
+                    effect=self._effect(step_kind, effect_ref),
+                    source_admission=self.goal_admission.source_journal_admission_locked,
+                    persist_journal=persist_journal,
+                )
         except SourceTurnEffectRejected as exc:
             raise FirstPartyHostRuntimeRejected(exc.code) from exc
 
@@ -100,13 +127,16 @@ class FirstPartyHostTurnEffectAdmission:
         persist_journal: JournalPersist,
     ) -> None:
         try:
-            release_source_turn_effect(
-                registry_path=self.goal_admission.registry_path,
-                goal_id=self.goal_admission.goal_id,
-                effect=self._effect(step_kind, effect_ref),
-                source_admission=self.goal_admission.source_journal_admission_locked,
-                persist_journal=persist_journal,
-            )
+            with self._runtime_artifact_lifetime(
+                operation="source_turn_effect_runtime_artifact_release",
+            ):
+                release_source_turn_effect(
+                    registry_path=self.goal_admission.registry_path,
+                    goal_id=self.goal_admission.goal_id,
+                    effect=self._effect(step_kind, effect_ref),
+                    source_admission=self.goal_admission.source_journal_admission_locked,
+                    persist_journal=persist_journal,
+                )
         except SourceTurnEffectRejected as exc:
             raise FirstPartyHostRuntimeRejected(exc.code) from exc
 
@@ -147,10 +177,18 @@ def source_goal_authority(registry_path: Path, goal_id: str) -> dict[str, Any]:
     if len(matches) != 1:
         return {"kind": "absent"}
     goal = matches[0]
+    try:
+        activation_state = goal_activation_state(goal).value
+    except ValueError:
+        return {"kind": "unavailable", "reason": "goal_activation_unreadable"}
     goal_ref = {"goal_id": goal.get("id")}
     if "goal_instance_id" in goal:
         goal_ref["goal_instance_id"] = goal.get("goal_instance_id")
-    return {"kind": "present", "goal_ref": goal_ref}
+    return {
+        "kind": "present",
+        "goal_ref": goal_ref,
+        "activation_state": activation_state,
+    }
 
 
 def capture_first_party_host_goal_ref(
@@ -191,6 +229,43 @@ def capture_first_party_host_goal_ref(
         )
 
 
+def _legacy_launch_authority(registry: Mapping[str, Any], goal_id: str) -> dict[str, Any]:
+    goals = registry.get("goals")
+    if (registry.get("profile_id") == SOURCE_SESSION_PROFILE_ID or not isinstance(goals, list)
+            or any(not isinstance(goal, Mapping) for goal in goals)):
+        return {"kind": "unavailable"}
+    matches = [goal for goal in goals if goal.get("id") == goal_id]
+    if len(matches) != 1:
+        return {"kind": "absent"}
+    goal = matches[0]
+    try:
+        activation = goal_activation_state(goal).value
+    except ValueError:
+        return {"kind": "unavailable"}
+    return {"kind": "present", "goal_id": goal_id, "activation_state": activation,
+            "registration_status": goal.get("status", "active")}
+
+
+def _legacy_source_registry(
+    registry: Mapping[str, Any], goal_id: str, requested_registry: Path,
+) -> Path | None:
+    goals = registry.get("goals")
+    if not isinstance(goals, list):
+        return None
+    matches = [goal for goal in goals if isinstance(goal, Mapping) and goal.get("id") == goal_id]
+    if len(matches) != 1:
+        return None
+    source = matches[0].get("source_registry")
+    if source is None or source == "":
+        return None
+    if not isinstance(source, str) or not source.strip():
+        raise FirstPartyHostRuntimeRejected("goal_authority_unavailable")
+    resolved = Path(source.strip()).expanduser().resolve()
+    if resolved == requested_registry:
+        raise FirstPartyHostRuntimeRejected("goal_authority_unavailable")
+    return resolved
+
+
 @dataclass(frozen=True, slots=True)
 class FirstPartyHostGoalAdmission:
     """Keep exact Host-state I/O inside one source Goal lifetime guard."""
@@ -199,6 +274,9 @@ class FirstPartyHostGoalAdmission:
     goal_id: str
     planned_goal_ref: object | None
     source_profile: bool
+    legacy_registry_witness: Mapping[str, str] | None = None
+    legacy_source_admission: FirstPartyHostGoalAdmission | None = None
+    launch_decision_reader: Callable[[Path], Mapping[str, Any]] | None = None
 
     @classmethod
     def for_plan(
@@ -207,31 +285,105 @@ class FirstPartyHostGoalAdmission:
         registry_path: Path,
         goal_id: str,
         planned_goal_ref: object | None,
+        capture_launch_authority: bool = True,
     ) -> FirstPartyHostGoalAdmission:
         requested_registry = registry_path.expanduser().resolve()
         require_goal_id(goal_id)
         source_profile = planned_goal_ref is not None
+        legacy_registry_witness = None
+        legacy_source_admission = None
         if not source_profile and requested_registry.is_file():
             source_profile = (
                 load_project_registry(requested_registry).get("profile_id")
                 == SOURCE_SESSION_PROFILE_ID
             )
+            if not source_profile and capture_launch_authority:
+                with project_registry_transaction(
+                    requested_registry, operation="first_party_host_launch_capture",
+                ) as transaction:
+                    legacy_registry_witness = transaction.source_read_witness()
+                    source_registry = _legacy_source_registry(
+                        transaction.payload_copy(), goal_id, requested_registry,
+                    )
+                if source_registry is not None:
+                    try:
+                        with project_registry_transaction(
+                            source_registry, operation="first_party_host_launch_source_capture",
+                        ) as transaction:
+                            # The existing source route names its owning project,
+                            # not another mirror. Reject cycles/chains before any
+                            # nested lifetime lock, including a self reference.
+                            if _legacy_source_registry(transaction.payload_copy(), goal_id, source_registry) is not None:
+                                raise FirstPartyHostRuntimeRejected("goal_authority_unavailable")
+                            legacy_source_admission = cls(
+                                registry_path=source_registry, goal_id=goal_id,
+                                planned_goal_ref=None, source_profile=False,
+                                legacy_registry_witness=transaction.source_read_witness(),
+                            )
+                    except (OSError, TypeError, ValueError) as exc:
+                        raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
         return cls(
             registry_path=requested_registry,
             goal_id=goal_id,
             planned_goal_ref=planned_goal_ref,
             source_profile=source_profile,
+            legacy_registry_witness=legacy_registry_witness,
+            legacy_source_admission=legacy_source_admission,
         )
+
+    @classmethod
+    def launch_scope_for_plan(
+        cls, *, admission: FirstPartyHostGoalAdmission | None,
+        registry_path: Path | None, goal_id: str, planned_goal_ref: object | None,
+    ) -> Callable[[str], AbstractContextManager[None]]:
+        """Capture once, then reuse the same admission at each native boundary.
+
+        A provided Turn admission keeps its quota/health reader. Legacy callers
+        capture their original registry witness here; callers without a registry
+        retain their existing unmanaged transport without inventing authority.
+        """
+        if admission is None and registry_path is not None:
+            admission = cls.for_plan(registry_path=registry_path, goal_id=goal_id,
+                                     planned_goal_ref=planned_goal_ref)
+
+        def scope(operation: str) -> AbstractContextManager[None]:
+            return admission.launch_lifetime(operation=operation) if admission is not None else nullcontext()
+
+        return scope
 
     @property
     def enabled(self) -> bool:
         return self.source_profile
+
+    def with_launch_decision(
+        self, reader: Callable[[Path], Mapping[str, Any]],
+    ) -> FirstPartyHostGoalAdmission:
+        """Bind a legacy Turn's existing read-only quota owner to launch.
+
+        Source and mirror must each read their own current authority. The
+        reader retains the original Turn/Todo/settlement identity; it cannot
+        replace the plan or issue a receipt while checking it.
+        """
+        if self.source_profile:
+            # The lifecycle-only profile has its existing exact lifetime seam;
+            # runtime admission rejects it before business/Host execution.
+            # Its quota reader takes index -> source locks and cannot be
+            # nested inside that lifetime's source guard.
+            return self
+        return replace(
+            self, launch_decision_reader=reader,
+            legacy_source_admission=(self.legacy_source_admission.with_launch_decision(reader)
+                if self.legacy_source_admission is not None else None),
+        )
 
     def _decision(
         self,
         operation: str,
         *,
         host_state: Mapping[str, Any] | None = None,
+        launch_authority: Mapping[str, Any] | None = None,
+        registry_witness: Mapping[str, str] | None = None,
+        launch_decision: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         decision = effect_runtime_result(
             "goal.first_party_host_runtime.decide",
@@ -241,11 +393,15 @@ class FirstPartyHostGoalAdmission:
                 ),
                 "operation": operation,
                 "planned_goal_ref": self.planned_goal_ref,
-                "authority": source_goal_authority(
+                "authority": dict(launch_authority) if launch_authority is not None else source_goal_authority(
                     self.registry_path,
                     self.goal_id,
                 ),
                 **({"host_state": host_state} if host_state is not None else {}),
+                **({"launch_decision": dict(launch_decision)} if launch_decision is not None else {}),
+                **({"goal_id": self.goal_id, "registry_path": str(self.registry_path),
+                    "planned_registry_witness": self.legacy_registry_witness,
+                    "registry_witness": dict(registry_witness)} if registry_witness is not None else {}),
             },
         )
         if not isinstance(decision, dict):
@@ -294,8 +450,57 @@ class FirstPartyHostGoalAdmission:
             self._decision("require_current")
 
     @contextmanager
+    def current_lifetime(self, *, operation: str) -> Iterator[None]:
+        """Keep a source-session side effect inside its planned Goal lifetime."""
+
+        if not self.source_profile:
+            yield
+            return
+        with exclusive_cross_runtime_file_lock(
+            guard_path(self.registry_path, self.goal_id),
+            operation=operation,
+        ):
+            self._decision("require_current")
+            yield
+
+    @contextmanager
+    def launch_lifetime(self, *, operation: str) -> Iterator[None]:
+        """Recheck the original launch authority under its existing writer lock.
+
+        Legacy registries have no exact Goal instance identity. Their original
+        byte witness can reject stale admission without promoting an alias to
+        one; a changed registry requires a fresh plan. A caller with the original
+        Turn binding supplies its full current admission check. This lifecycle
+        witness alone does not certify quota/health. Hold only through dispatch.
+        """
+        if self.source_profile:
+            with self.current_lifetime(operation=operation):
+                yield
+            return
+        with ExitStack() as scope:
+            if self.legacy_source_admission is not None:
+                # Activation writes source then global projection under these
+                # same locks. A failed mirror sync must not hide a source stop.
+                scope.enter_context(self.legacy_source_admission.launch_lifetime(operation=operation))
+            try:
+                transaction = scope.enter_context(project_registry_transaction(
+                    self.registry_path, operation=operation,
+                ))
+            except (OSError, TypeError, ValueError) as exc:
+                raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
+            self._decision(
+                "launch", launch_authority=_legacy_launch_authority(transaction.payload_copy(), self.goal_id),
+                registry_witness=transaction.source_read_witness(),
+                launch_decision=(self.launch_decision_reader(self.registry_path)
+                    if self.launch_decision_reader is not None else None),
+            )
+            yield
+
+    @contextmanager
     def source_journal_admission(
         self,
+        *,
+        runtime_root: Path,
     ) -> Iterator[dict[str, Any] | None]:
         """Hand one journal mutation to the TS owner under the source guard."""
 
@@ -304,10 +509,17 @@ class FirstPartyHostGoalAdmission:
             return
         target = guard_path(self.registry_path, self.goal_id)
         with exclusive_cross_runtime_file_lock(
-            target,
-            operation="first_party_host_journal_commit",
+            runtime_artifact_lock_target(
+                runtime_root.expanduser().resolve(),
+                self.goal_id,
+            ),
+            operation="first_party_host_journal_runtime_artifact_guard",
         ):
-            yield self.source_journal_admission_locked()
+            with exclusive_cross_runtime_file_lock(
+                target,
+                operation="first_party_host_journal_commit",
+            ):
+                yield self.source_journal_admission_locked()
 
     def source_journal_admission_locked(self) -> dict[str, Any]:
         """Build a TS handoff while the caller holds this Goal's source guard."""

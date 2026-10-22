@@ -42,7 +42,6 @@ import {
   createGoalLoop,
   hasAbortedAssistantMessage,
   piThreadId,
-  soleThreadBindingCandidate,
   sessionKey,
 } from "./pi-goal-loop-runtime.mjs";
 
@@ -88,7 +87,8 @@ type StartGoalPacket = {
   ok?: boolean;
   goal_id?: unknown;
   project?: unknown;
-  project_connection?: { registry?: unknown };
+  project_connection?: { registry?: unknown; connection_state?: unknown };
+  recommended_next_step?: { kind?: unknown; summary?: unknown };
   host_loop_activation?: {
     activation_allowed?: unknown;
     agent_id?: unknown;
@@ -118,6 +118,36 @@ function parseJsonObject(stdout: string): StartGoalPacket | null {
   } catch {
     return null;
   }
+}
+
+// A widget is a fixed-height area near the editor, so a long packet preview has
+// to be summarized into a few clamped lines; the full text stays in the
+// `loopx-packet` session entry.
+const STATUS_WIDGET_LINE_MAX = 96;
+
+function widgetLine(text: string): string {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  return value.length > STATUS_WIDGET_LINE_MAX
+    ? `${value.slice(0, STATUS_WIDGET_LINE_MAX - 1)}…`
+    : value;
+}
+
+function buildLoopxStatusWidget(packet: StartGoalPacket | null): string[] | undefined {
+  if (!packet) return undefined;
+  const connection = packet.project_connection || {};
+  const next = packet.recommended_next_step || {};
+  const project = typeof packet.project === "string" ? packet.project : "";
+  const goalId = typeof packet.goal_id === "string" ? packet.goal_id : "";
+  const state = typeof connection.connection_state === "string" ? connection.connection_state : "";
+  const nextText =
+    typeof next.summary === "string" ? next.summary : typeof next.kind === "string" ? next.kind : "";
+  return [
+    widgetLine(`LoopX · ${goalId || "(no goal id)"}`),
+    widgetLine(
+      `state: ${state || "unknown"}${project ? ` · ${project.split("/").filter(Boolean).pop()}` : ""}`,
+    ),
+    widgetLine(`next: ${nextText || "-"}`),
+  ];
 }
 
 function buildPiSessionAuthority(packet: StartGoalPacket): PiSessionAuthority {
@@ -297,8 +327,13 @@ export default function (pi: ExtensionAPI) {
         }
       }
       const display = typeof packet?.message === "string" ? packet.message : stdout;
-      ctx.ui.setWidget("loopx", display.split("\n").slice(0, 24));
-      ctx.ui.notify("LoopX packet ready (widget above the editor).", "info");
+      // The packet preview is a long multi-section document. A widget is a
+      // fixed-height area near the editor, so dumping the preview into it gets
+      // chopped mid-sentence and covers the working indicator. Show a compact
+      // status summary and keep the full text in the session entry instead.
+      const status = buildLoopxStatusWidget(packet);
+      if (status) ctx.ui.setWidget("loopx", status, { placement: "belowEditor" });
+      ctx.ui.notify("LoopX packet ready (status widget below the editor).", "info");
       pi.appendEntry("loopx-packet", { text: display });
     } catch (error) {
       ctx.ui.notify(
@@ -314,64 +349,31 @@ export default function (pi: ExtensionAPI) {
     store: ReturnType<typeof createBindingStore>,
     ctx: ExtensionContext,
   ) => {
-    const threadId = piThreadId(ctx.sessionManager.getSessionFile());
+    // A status widget from an earlier /loopx preview would otherwise keep
+    // floating while the guided start packet renders its own summary.
+    ctx.ui.setWidget("loopx", undefined);
     try {
-      const startGoalArgs = (): string[] => [
-        "--format",
-        "json",
-        "start-goal",
-        "--guided",
-        "--project",
-        ".",
-        "--goal-text",
-        trimmed,
-        "--host-surface",
-        "pi",
-        // Pi is the only host surface LoopX cannot identify on its own: the CLI
-        // has no "pi" entry in HOST_THREAD_ID_ENV and does not read PI_SESSION_ID.
-        // Forward the stable per-session thread id so the identity gate resolves
-        // this lane instead of always asking for a selection.
-        ...(threadId ? ["--thread-id", threadId] : []),
-        "--available-capability",
-        TASK_LEASE_CAPABILITY,
-      ];
-      let packet = parseJsonObject(await runLoopxCli(startGoalArgs(), ctx.cwd));
+      const threadId = piThreadId(ctx.sessionManager.getSessionFile());
+      const stdout = await runLoopxCli(
+        [
+          "--format",
+          "json",
+          "start-goal",
+          "--guided",
+          "--project",
+          ".",
+          "--goal-text",
+          trimmed,
+          "--host-surface",
+          "pi",
+          ...(threadId ? ["--thread-id", threadId] : []),
+          "--available-capability",
+          TASK_LEASE_CAPABILITY,
+        ],
+        ctx.cwd,
+      );
+      const packet = parseJsonObject(stdout);
       if (!packet) throw new Error("LoopX start-goal returned a non-JSON packet");
-      // A resolvable thread id is necessary but not sufficient: the gate also
-      // requires that thread to own a lane. When the gate offers exactly one
-      // candidate, bind it through the documented CLI and re-read once; anything
-      // else keeps the original selection packet for the user to resolve.
-      if (threadId && packetNeedsHostSelection(packet)) {
-        const candidate = soleThreadBindingCandidate(packet);
-        if (candidate) {
-          try {
-            await runLoopxCli(
-              [
-                "--format",
-                "json",
-                "bind-agent-thread",
-                "--goal-id",
-                candidate.goalId,
-                "--thread-id",
-                threadId,
-                "--host-surface",
-                "pi",
-                "--agent-id",
-                candidate.agentId,
-                "--execute",
-              ],
-              ctx.cwd,
-            );
-            const rebound = parseJsonObject(await runLoopxCli(startGoalArgs(), ctx.cwd));
-            if (rebound) packet = rebound;
-          } catch (error) {
-            ctx.ui.notify(
-              `LoopX thread binding failed: ${(error as Error)?.message || String(error)}`,
-              "warning",
-            );
-          }
-        }
-      }
       let authority: PiSessionAuthority | null = null;
       if (!packetNeedsHostSelection(packet)) {
         authority = establishSessionAuthority(key, packet);
@@ -617,8 +619,11 @@ export default function (pi: ExtensionAPI) {
     await loop.interrupt(key);
   });
 
-  // User-driven prompts pause the auto loop; only prompts we injected for the
-  // same goal keep auto-resume armed.
+  // Every prompt that is not this loop's own injected task body is the owner
+  // taking the wheel and pauses the loop; the pause itself carries the reason.
+  // Pi compacts before it emits before_agent_start for a submitted prompt, so a
+  // preceding compaction says nothing about who submitted that prompt and is not
+  // used to exempt one.
   pi.on("before_agent_start", async (event, ctx) => {
     const { key } = bindContext(ctx);
     await loop.userPrompt(key, String(event.prompt || ""));
@@ -628,7 +633,8 @@ export default function (pi: ExtensionAPI) {
   // extension instance. Every timer is cancelled and an in-flight quota probe
   // returns to the runtime's disposed guard, so the old session cannot send a
   // follow-up or reschedule past this boundary.
-  pi.on("session_shutdown", async (_event, _ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    ctx.ui.setWidget("loopx", undefined);
     loop.dispose();
   });
 }

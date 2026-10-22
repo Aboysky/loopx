@@ -2,6 +2,45 @@
 
 状态：受支持的 optional capability；harness 执行契约默认关闭。
 
+普通结果写回可附带可选 `execution_observation`（`explore_execution_observation_v0`）：
+候选 SHA-256、输入版本、计划/实际方法标识、改向原因、实测耗时/上限、搜索次数、
+结束原因与证据引用。未测量项显式为 null；版本和引用必须与所属 finding 一致。
+已释放结果的 `result_ref` 必须有匹配的 `result_candidate_sha256`。该记录是来源证据，
+不认证执行真实性或收益；finding、replan 和既有研究历程详情保留相同信息，缺省仍兼容
+旧事件。参见[本地探针生产路径](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md)。
+
+## 量化结论
+
+普通结果附件可附带 `measurements`，保存到既有节点所属的 finding。关系图和
+研究历程详情保留分数；`explore turn-context` 将有界的 `measurement_feedback`
+交给下一轮。手动记录使用 `explore finding --node <id> --evidence-ref result:a
+--measurements-json measurements.json`，文件包含一至八项：
+
+```json
+[{"metric":"quality","value":8,"unit":"points","higher_is_better":true,
+  "comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+  "evaluation_ref":"evaluator:v1","candidate_ref":"candidate:a","evidence_ref":"result:a"}]
+```
+
+结果引用必须属于 finding 的 `evidence_refs`；普通附件还要求相同 `input_revision`。
+每个受评测候选使用新 finding id，仅纠正同一结论时复用 id。未测量显式记为 `null`，
+零分和负分仍为有效测量。
+
+只有节点、指标、单位、方向、比较范围、输入版本和评测器全部一致时才比较。
+任务、模型或资源预算、评测条件改变时，生产者必须更换比较范围；原生评测与本地
+代理指标分别记录。Explore 校验声明的比较键，不认证声明真实性。它在上下文裁剪前
+计算最近记录的测量、历史最佳候选及来源、相对先前最佳的方向归一化改善幅度。
+最近记录按源日志追加顺序确定；时间相同或事后回填不改变此顺序，序号仅从日志
+派生，不另行持久化。
+纠正结论会在比较中替换旧版本，原始版本仍可在历史中读取；计数表示记录数，
+不表示独立试验次数。反馈分页复用 `--result-limit`（1..20，默认 3）、
+`--result-offset`、`--result-revision` 和可选的 `--result-node` 过滤。
+沿 `measurement_feedback_page.next_command` 读取其余组，同一节点的多个指标或条件
+也可完整翻页。共同 revision 绑定全部比较来源，包含手动 finding；来源变化须从头读取。
+下一轮指导使用这些反馈排查退步、回看更好候选，再决定是否
+重复尝试。best 不代表当前保留版本、因果收益、验收通过或执行授权；是否实际采用
+并产生收益，仍需后续工作和证据确认。自动分支排序保持原有行为。
+
 ## 概览
 
 LoopX Explore 是面向长程探索目标（软件研究、安全攻击面测绘、领域调研）的受支持、默认关闭的可选能力。它把“到处看看”变成有界、可观测、有门控的流程，包含三根支柱：
@@ -101,6 +140,82 @@ loopx explore graph \
 `loopx explore presentation --goal-id <id>` 从一份 canonical 结果投影构建展示包。它始终包含完整的 `canonical` 视图和带源节点 lineage 的派生 `executive` 视图。两个视图携带相同的无时间戳 `source_digest` 和基于事件的 `source_revision`。executive 视图选择活跃与决策标记节点、代表性反证邻域、实质性一跳关系与祖先；它不独立存储事实。
 
 展示包基于多个咨询信号推荐 `presentation_mode=canonical_only|dual_view`，而不是单一节点数阈值。当前 reason codes：`low_decision_density`、`excessive_terminal_branches`、`deep_decision_path`、`readability_check_failed`。静态图形形状可估算可读性风险（包括过度扁平的根拓扑）；调用方可额外提供重叠、文本溢出或异常画布扩张的渲染器观测。canonical 与 executive 视图都使用自上而下的证据时间线：稳定源顺序从顶部开始，有界 epoch 增加导航，后续证据向下扩展 board 而不是加宽第一层。每个原始 canonical 节点与边仍然存在。这些信号与布局选择只控制展示，绝不允许 canonical 截断。
+
+## 普通工作结果写回
+
+在 evidence 或 planning 模式，已绑定 Todo 的普通写回步骤通过能力 hook 提示
+可选 `explore_result` 附件。把验证后的结构化结果放入现有
+`--agent-vision-json` 的顶层 `explore_result` 字段，或使用
+`--explore-result-json <result.json>`。捕获可复用证据是可选行为，不是结算义务；
+普通工作无需附件，off 模式不增加附件提示或证据要求。
+
+在实质实验结论或路线变化时，在**同一次结果写回**里维护原问题，不另开历史整理轮次。
+复用稳定 `node_id` 与逐字一致的 question/applicability；完整附件和 path-delta 附件均可加：
+
+```json
+{
+  "question_update": {"status": "resolved"},
+  "relations": [{
+    "to_node": "uniform-estimate",
+    "edge_type": "depends_on",
+    "summary": "迁移该结果需要已单独建立的一致估计。"
+  }]
+}
+```
+
+这只是已填附件的可选片段。有限问题的答案为失败时，也可 `resolved`，同时保留
+finding 的 `refuted`。明确停止路线才 `dead_end`；未决工作保留 `open/exploring`。
+`blocked` 必须在 question_update 中说明 `blocked_reason`。答案、适用限制与下一判别
+沿用现有 interpretation/path_delta；finding 标签与分数不自动决定问题状态。
+
+既有问题仅其记录 owner 可通过此入口维护；原题目、范围、parent、tags、证据与全部
+findings 保留。最多四条关系从当前问题指向本 Goal 已有节点，复用原关系类型；拒绝
+自连、重复、悬空及 depends_on/subtopic_of 循环。先后发生不证明依赖或收益，不修改其他节点。
+问题、finding 与关系由原日志锁一次追加；并发图漂移会拒绝本批并要求重试。
+Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次只补缺失关联，不覆盖后来的问题状态。
+
+省略两字段保持原行为：新问题为 open，后续 finding 不改变状态。新证据需要时显式重开；
+旧 open 事件重放不能重开。下轮 turn-context 在完整作用域 finding 旁显示当前
+`question_status`、阻塞原因与最多三条关联；省略数量、过长手工关系摘要的截断会披露，
+状态/关系变化使旧分页修订失效。原 graph/presentation 继续消费相同持久节点/边形状，
+不新增远端 sink 写入，也不要求普通工作做整理。
+
+对于 **`hard_lease` 下仍开放的 Todo**，让任务租约保持有效，直到
+`refresh-state` 与图/Todo 关联交付返回 `explore_result_delivery.ok=true` 后再释放。
+提前释放会让附件预检在主写回提交前拒绝；重试前重新进入正常的
+准入/claim/lease 路径。`hard_lease` 下已完成 Todo 仅保留增量关联证据的既有例外：原 owner
+可使用保留的已释放租约 key 和当前版本，但不因此获得重新执行或其他编辑权限。
+已成功交付的精确重放只做读回，无需新租约；未完成交付仍需适用的 claim/lease
+证明。这些规则不会让捕获变成必做步骤，也不会自动获取 claim 或续租。
+
+图或关联交付失败时，主写回可能已经提交；以返回的
+`explore_result_delivery.retryable=true` 为准，重放**同一条** refresh 命令完成交付，
+不要通过更改附件重写原 Turn。用 `loopx explore turn-context --goal-id <id>
+--agent-id <agent>` 与 `loopx explore summary --goal-id <id>` 读回；读到证据不证明
+模型已经采纳。Todo 持久关联不再受八条上限约束，增量写入与精确读取保留全部
+有效且去重的节点 ID。每轮紧凑视图对每个分支只展示最多八条请求/未知 ID，
+并给出明确省略数；`plan_command` 现在调用 `todo-branch-plan` 展开同一 Todo
+审计，不再跳到不同的 worker 分组计划。带版本的结果分页
+可读取全部作用域结论。展示预算不删除关联、不漏算负面证据风险，也不阻塞
+合法写回。变化只涉及启用后的证据捕获及显式 Todo 关联编辑；普通工作与
+能力关闭时的 hook 行为保持不变。完整附件与作用域规则见[英文契约](README.md#results-from-ordinary-work-writeback)。
+
+每张 comparison card 保留该结果页中全部已关联结论，复用最多20条的分页上限。
+显式扩大 `--result-limit` 后，第4条及之后显示的结论也可绑定到
+`selected_candidate`；写回仍重放相同分页并核对精确来源摘要。默认三条视图与
+独立的卡片数量上限保持不变。较大的结果页不授予执行权限，也不证明选题质量。
+
+`explore turn-context --goal-id <id> --agent-id <agent> --todo-id <todo-id>`
+按当前开放、归自己认领或尚未认领任务的 canonical 问题关联，优先展示其结论与量化反馈，
+不再只跟随独立分支规划器的建议。quota 与 managed turn 自动传入显式选择的任务。
+每个相关问题仍优先保留一条范围反证；其它结果继续分页可读，缺少关联不代表没有证据。
+该读取不启用能力、不修改规划分数、任务准入、claim/lease、配额或图谱。
+
+任务范围的 `result_page` 多携带 `todo_id`，后续命令也保留它。引用该页时，将它和
+`revision/offset/limit` 一同复制到原 `explore_review.result_pages`；主 review revision
+仍引用原有全局 basis。写回从同一可信来源重放任务关联与精确页面，不替换已准入的
+复盘上下文。关联变化、任务缺失/关闭或改由他人认领时，旧页面失效，应重新读取。
+未指定任务的全局读取和引用保持原行为；来源正确不证明模型已采用或效果提升。
 
 ## 可选 Todo 分支规划
 

@@ -5,6 +5,24 @@ LoopX's optional Lark provider receives messages through a long-lived
 periodic heartbeat is a separate work trigger. Installation or a healthy
 listener alone does not qualify an interactive conversation.
 
+For a bounded latency investigation, the existing Chat service can opt into
+local JSON stage observations with `LOOPX_LARK_EVENT_TIMING=1`. Its normal stdout
+then records receive, lane/snapshot, admission, control-source read, Core
+recovery and outbound-source/delivery boundaries. Correlation is a SHA-256 of
+the local profile and provider message ID; neither input, source content,
+identity fields, credentials nor provider output is printed. The records are
+disabled by default and are not admission, success or delivery receipts.
+Diagnostic sink failures do not fail message handling. Remove the environment
+setting after collecting the bounded sample.
+
+Compare monotonic timestamps within the same process lifetime for elapsed
+time; wall timestamps only help correlate existing local evidence. `received`
+means that Python decoded the consumer frame, not the provider's send time.
+These observations cannot independently prove upstream queueing or clock
+agreement. A missing returned marker can indicate a failed or interrupted
+stage. Preserve canonical source, Stop target, provider readback and physical
+process evidence when testing the actual end-to-end Stop budget.
+
 For separate assistant and steward Apps, follow the
 [owner-controlled Bot handoff](owner-controlled-bots.md). App setup, live product
 qualification and optional state inheritance remain separate outcomes.
@@ -79,6 +97,79 @@ and authenticated user responses; it must not add a second task ledger,
 approval store, scheduler or model-execution authority. Missing evidence is not
 permission to restart a request in a fresh model thread, elevate host policy
 or acknowledge work as completed.
+
+Markdown post presentation uses the existing shared inbox formatter. At a
+closing strong-emphasis boundary, trailing punctuation can move outside the
+bold span when followed by a word or non-ASCII symbol, including a fullwidth
+separator. This preserves visible text and the canonical answer; code, link
+destinations and ambiguous delimiter runs remain opaque. Preview and readback
+verify the same normalized post. This is provider compatibility, not a new
+Markdown parser or a change to Session, grants or result authority. Live
+rendering still needs the actual provider journey; formatter tests alone do
+not qualify it.
+
+Private DM result reconciliation uses the existing Chat store's terminal-state
+owner, including `timed_out`, for ordinary replies and commission results.
+Timeouts return an explicit failure and the original conversation's recovery
+controls. Provider readback still gates delivery: restarting the transport or
+redelivering the source reconciles the saved attempt without another send or
+model execution. Synthetic host/provider checks cover idle/hard DM timeouts
+and an injected commission timeout; a live-provider recovery drill remains
+part of the switch gate below.
+
+Failed private project and steward replies now present Core's classified error
+instead of the generic "failed or expired" instruction to send `/status`.
+Explicit app-server transport error variants become `upstream_transport_failure`.
+If an older host terminates with an unclassified error after a persisted typed
+`responseStreamDisconnected` retry, the reply reports that observed retry history;
+the terminal error remains unclassified. Arbitrary upstream prose is neither
+published nor used to guess policy, authentication or expiry. Partial answers
+remain incomplete, and the original Session and request are retained. This is
+error presentation, not automatic model replay or proof that an effect did not
+run; effect-aware recovery remains Core-owned. The existing model-capacity
+recovery guidance is unchanged.
+
+### Native reply references
+
+New ordinary replies in bound private conversations and group topics carry the
+referenced provider message through the existing shared TypeScript context
+projection. This changes the native input from a bare follow-up to the bounded
+reference plus the current request. The authenticated current envelope must
+match its source ancestry; another conversation, deleted content and unreadable
+references cannot supply quoted text. Visible posts/cards omit callback data.
+Missing or truncated context stays explicit, and quotes grant no authority.
+
+Controls are still selected from the current message alone; they add no parent
+lookup. The transport freezes a new ordinary reply's input before Core admission.
+Duplicate events reuse it, including after the parent changes; already admitted
+pre-upgrade requests retain their original input. Core still freshly checks
+bindings, grants and the original return route. Source/provider regression tests
+do not establish installed model interpretation or completion of a user approval.
+
+### Private-message progress
+
+Private project and steward conversations present the original Turn's persisted
+`agent.phase` and filtered `answer.delta` events in one Bot-owned Markdown post.
+The existing delivery pump coalesces changes with a minimum two-second interval;
+provider latency can lengthen that interval. No timer invents activity. Thinking
+text, command arguments and tool output are excluded; only coarse observed work
+and the visible answer are presented. A draft shows at most the latest 6,000
+characters and clearly says it is provisional.
+
+The canonical terminal answer replaces that post without the draft limit. Stop,
+timeout and failure replace the partial answer with the actual terminal outcome.
+A commission's first native Turn uses the same presenter and original audience.
+Updates freshly verify the App, source and target chat, preview the exact post,
+and read it back before delivery/ACK. A lost edit acknowledgement is reconciled
+on the same message ID. Event cursors and provider attempts stay in the existing
+private delivery journal; they do not start another model Turn or listener.
+
+This Python code is provider presentation: Core still owns the Session, Turn,
+event stream, grants and result. It adds no shared state protocol or execution
+authority. Synthetic native-host/provider tests cover incremental presentation,
+coalescing, restart/replay, lost acknowledgement, exact stop, cleanup recovery,
+full final answers and App/audience isolation. Live installed-provider streaming
+and its latency remain separate qualification steps under S5/S10 and RFC A22/A23.
 
 ## Qualification before switching
 

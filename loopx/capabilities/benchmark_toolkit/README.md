@@ -406,12 +406,86 @@ arguments, observations, sensitive values, input paths, task text, verifier outp
 or trajectory content. Invalid private input returns a generic fail-closed error so
 JSON parser details cannot echo private data.
 
+Some benchmarks expose a case-scoped submission API to the solver through task-owned
+environment variables. When that access is part of the task contract, declare the
+exact namespace and variable names in the integrity policy instead of waiving the
+credential scanner:
+
+```json
+{
+  "schema_version": "benchmark_integrity_policy_v0",
+  "policy_id": "fixture-task-submission",
+  "task_environment_access": {
+    "schema_version": "benchmark_task_environment_access_v0",
+    "authorization_id": "fixture-task-submission-v1",
+    "authorization_sha256": "<sha256-of-immutable-task-authorization>",
+    "authority": "benchmark_task",
+    "purpose": "task_submission",
+    "namespace": "TASKCAP_",
+    "variable_names": ["TASKCAP_JUDGE_URL", "TASKCAP_TOKEN"]
+  }
+}
+```
+
+This contract authorizes only the runner-owned
+`benchmark_task_environment_read` typed operation. Its request and result must bind
+the authorization id and digest and carry the same non-empty subset of declared
+variable names. Shell `env`, `printenv`, and filtered enumeration remain credential
+probes: even an absolute executable path can be replaced by an exported shell
+function. The runner must still attest `provider_credential_shell_excluded=true`; an
+undeclared name, mismatched typed result, provider credential value, or missing
+isolation attestation remains disqualifying. The receipt publishes only the
+authorization id and digest, purpose, counts and a digest of sorted variable names.
+Raw names and values remain in the private trajectory. The declaration must be
+derived from the immutable benchmark task contract; the toolkit validates its bounded
+shape but does not grant that task authority. Because this is a qualification-time
+task permission, it is excluded from the digest of the run-admitted evaluation policy.
+The private trajectory records this exact request/result shape:
+
+```json
+{
+  "function_name": "benchmark_task_environment_read",
+  "arguments": {
+    "schema_version": "benchmark_task_environment_read_v0",
+    "authorization_id": "fixture-task-submission-v1",
+    "authorization_sha256": "<sha256-of-immutable-task-authorization>",
+    "variable_names": ["TASKCAP_TOKEN"]
+  },
+  "observation": {
+    "schema_version": "benchmark_task_environment_read_result_v0",
+    "authorization_id": "fixture-task-submission-v1",
+    "authorization_sha256": "<sha256-of-immutable-task-authorization>",
+    "values": {"TASKCAP_TOKEN": "<private-task-value>"}
+  }
+}
+```
+
+The default protocol remains blind: the verifier starts after the agent and official
+feedback is hidden. A benchmark that intentionally returns periodic evaluation during
+solving must preregister an `evaluation_protocol` in the integrity policy with
+`feedback=declared`, `timing=during_solving`, and exact channels plus output kinds.
+For that policy only, qualification replaces the two blind-protocol attestations with
+`evaluation_protocol_enforced`, `evaluation_log_complete`, and
+`verifier_started_after_submission`. The private runner evidence must bind the exact
+policy and trajectory digests, prove strictly ordered submissions and declared
+deliveries, and show a complete acknowledged feedback transport. At most the final
+submission may finish evaluation after the solver ends, and it cannot deliver feedback
+back into the solving phase. If that is the only submission, the complete evidence has
+an explicit empty `deliveries` list and integer `intent_count=ack_count=0`; submission
+request/response acknowledgements and their record digests are still required. Empty
+deliveries never excuse missing feedback for evaluations completed during solving.
+The public evidence digest binds both the protocol log and
+the feedback transport; the receipt otherwise contains only digests and
+submission/delivery counts. A prose claim that feedback was expected, an unbound score
+log, an undeclared channel, or an incomplete transport does not relax the blind default.
+
 Qualification rejects a run when it detects any of the following:
 
 - post-run agent confirmation that restricted answer, out-of-scope task-source,
   hidden-test, verifier, other-trial, or controller-private material was both
   disclosed and causally used during solving or validation;
-- host escape, credential probing or exposure, or shell network access;
+- host escape, credential probing outside an exact task-environment contract,
+  credential exposure, or shell network access;
 - malformed or incomplete ATIF tool evidence;
 - missing runner authority or any required runtime isolation attestation.
 
@@ -914,10 +988,29 @@ silently pooled. Unknown fields and path-like references fail closed.
 Every non-baseline row names an exact `comparison_anchor_run_id`. Standard control
 or treatment rows anchor to a baseline. Explore rows use `diagnostic_only` claim
 scope and may anchor to the baseline or fixed standard arm they are examining.
+Run identity is `(benchmark_id, study_id, case_id, run_id)`; an anchor inherits
+the candidate's benchmark, study, and case. Run ids may be reused across those
+scopes. Duplicate full identities must be reconciled before board readback.
+Study provenance and case insights bind to this same identity. Dashboard run
+links retain the case; a legacy run-id-only link resolves only when unambiguous.
 Matched comparisons require compatible benchmark, study, case, model, primary
 metric, comparison protocol, score countability, and treatment fidelity. Exact
 protocol revisions remain visible as a warning even when a declared comparison
 protocol says an older credible score remains semantically comparable.
+
+Metric comparisons preserve the raw `delta` (candidate value minus baseline
+value). When both metrics have positive totals, `delta_rate` determines improvement
+and the dashboard's largest eligible contrast; Markdown and dashboard labels show
+this change in percentage points (`pp`). Scalar metrics use the raw delta.
+Units, improvement direction, and the presence of a denominator must agree.
+A mismatch, zero denominator, or non-finite difference retains the endpoint values
+with `comparison_unavailable_reason`, without a delta or direction. An unavailable
+primary metric excludes the matched pair; an unavailable auxiliary metric does
+not invalidate an otherwise eligible primary comparison. Optional unit and
+direction metadata may remain absent on both sides of historical board rows.
+Factorial interactions use the same scale across all four cells and retain the
+existing fixed-total requirement for their primary metric. The study dashboard
+does not rank a mixture of scalar and ratio contrasts against one another.
 
 Full post-run analysis stays in private `benchmark_case_insight_v0` storage. The
 board records only its compact status or handle, so reading the board cannot widen
@@ -1373,3 +1466,11 @@ for source archaeology only.
 Immutable experiment snapshots follow the canonical
 [archive placement rules](../../../benchmark/README.md#archive-placement),
 which permit explicitly identified, inert snapshots in `benchmark/`.
+
+## Evidence-bound trajectory analysis
+
+The opt-in [trajectory assessment producer](../../../docs/reference/trajectory-assessment.md)
+uses a declared evidence pack to produce source-linked, uncalibrated episode
+assessments. Preview is read-only; explicit execution invokes the local Codex
+account. It does not run benchmark solvers, alter scores or write Explore facts.
+The packaged Goal-view analysis journey remains a separate integration acceptance.

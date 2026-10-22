@@ -178,13 +178,24 @@ def register_quota_command(
             "The default full decision remains unchanged."
         ),
     )
-    quota_parser.add_argument(
+    capture_group = quota_parser.add_mutually_exclusive_group()
+    capture_group.add_argument(
         "--decision-output-dir",
         help=(
             "For turn-scoped quota should-run, create a new private directory and "
             "save the complete decided JSON as decision.json before display projection. "
             "Use a unique directory per invocation; reading it never reruns the guard."
         ),
+    )
+    capture_group.add_argument(
+        "--decision-output-root",
+        help="Create a unique private decision directory below this existing root on every guard invocation.",
+    )
+    quota_parser.add_argument(
+        "--decision-handoff-socket",
+        help=("Opt-in local Host rendezvous before printing a captured should-run decision. "
+              "Requires a capture destination and a same-user Unix socket in a private directory. "
+              "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
     )
     quota_parser.add_argument(
         "--turn-instance-id",
@@ -314,13 +325,13 @@ def register_quota_command(
     quota_parser.add_argument(
         "--scan-root",
         default=default_public_scan_root(),
-        help="Public files to scan for obvious private material. Defaults to the LoopX install root.",
+        help="Compatibility scope metadata; quota defers public scans. Use loopx check for outgoing content.",
     )
     quota_parser.add_argument(
         "--scan-path",
         action="append",
         default=[],
-        help="Specific public file or directory to scan. Repeatable. Overrides --scan-root when set.",
+        help="Compatibility scope metadata. Repeatable; does not request a public scan.",
     )
     quota_parser.add_argument(
         "--use-projection-cache",

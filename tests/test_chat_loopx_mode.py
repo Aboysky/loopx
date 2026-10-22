@@ -9,7 +9,7 @@ import pytest
 from loopx.chat_loopx_mode import TOOL
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
-from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from test_chat_project_coordination import project  # noqa: F401
 
 
@@ -67,18 +67,16 @@ def mode(project, monkeypatch):  # noqa: F811
 
     def submit(**kwargs):
         calls.append(kwargs)
-        turn, created = store.create_turn(
+        accepted = store.accept_managed_turn(
             kwargs["session_id"],
             client_turn_id=kwargs["client_turn_id"],
             message=kwargs["message"],
+            attachments=kwargs.get("attachments"),
+            origin=kwargs.get("origin", "web"),
+            loopx_execution=kwargs.get("loopx_execution", False),
+            loopx_request=kwargs.get("loopx_request"),
         )
-        store.update_turn(
-            kwargs["session_id"],
-            turn["turn_id"],
-            loopx_execution=True,
-            loopx_request=kwargs["loopx_request"],
-        )
-        return turn, created
+        return accepted.turn, accepted.created
 
     monkeypatch.setattr(controller, "submit_turn", submit)
     return controller.loopx_mode, session["session_id"], repo, settings, calls
@@ -149,6 +147,26 @@ def test_goal_registry_is_the_execution_config_owner(mode):
                 "execution_config": ".loopx/config/other.json",
             },
         )
+
+
+def test_canonical_stopped_goal_rejects_start_before_turn_creation(mode):
+    service, _, _, settings, calls = mode
+    registry = service.controller.registry_path
+    payload = json.loads(registry.read_text())
+    goal = next(item for item in payload["goals"] if item["id"] == "research")
+    goal.pop("status", None)
+    goal["activation"] = {
+        "schema_version": "loopx_goal_activation_v1",
+        "state": "stopped",
+        "updated_at": "2026-10-06T00:00:00Z",
+        "reason": "Owner stopped the Goal.",
+    }
+    registry.write_text(json.dumps(payload))
+
+    with pytest.raises(EffectRuntimeRejected, match="stopped"):
+        apply(mode, "start", settings=settings)
+
+    assert calls == []
 
 
 def test_unfinished_legacy_session_can_resume_until_goal_config_is_migrated(mode):
@@ -335,6 +353,7 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         inventory = adapter.session.read_tool_handler(TOOL["name"], {"action": "operations"})
         assert inventory["ok"] and inventory["items"] == []
         assert inventory["page_readback_complete"] and not inventory["has_more"]
+        assert inventory["projection_envelope"]["fresh"] and inventory["projection_envelope"]["complete"]
         invalid = adapter.session.read_tool_handler(TOOL["name"], {"action": "operations", "operation_id": "one"})
         assert invalid["error"] == "collaboration_request_rejected"
 
@@ -350,6 +369,16 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         assert decisions == [(settings["agent_id"], "source", "consumer")]
         assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
                                      "consumer_operation_id": "consumer", "binding_id": "other"})["error"] == "collaboration_request_rejected"
+
+        revalidations = []
+        def revalidate(bound, operation):
+            revalidations.append((bound.agent_id, operation))
+            return {"operation_id": operation}
+        monkeypatch.setattr(Delegations, "revalidate", revalidate)
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original"})["ok"]
+        assert revalidations == [(settings["agent_id"], "original")]
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original",
+                                     "binding_id": "other"})["error"] == "collaboration_request_rejected"
 
         # Pause persists before attempting potentially slow provider interruption.
         def interrupt(**_):
@@ -367,6 +396,8 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
                                      "consumer_operation_id": "consumer"})["error"] == "conversation_execution_inactive"
         assert len(decisions) == 1
+        assert handler(TOOL["name"], {"action": "revalidate", "operation_id": "original"})["error"] == "conversation_execution_inactive"
+        assert len(revalidations) == 1
         with pytest.raises(Exception, match="active conversation execution"):
             apply(mode, "message", delivery_mode="queue", message="After pause")
         assert adapter.session.read_tool_handler("loopx_context_read", {}) == {
@@ -496,6 +527,27 @@ def test_pause_cannot_enable_mode_and_ordinary_turn_is_not_execution(mode):
     assert service.store.load_turn(sid, ordinary["turn_id"])["status"] == "queued"
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_preparation_is_advertised_only_in_explicit_loopx_toolset(mode, monkeypatch, enabled):
+    from loopx.chat_runtime import CodexAppServerAdapter
+
+    service, sid, repo, _, _ = mode
+    captured, adapter = [], object()
+    monkeypatch.setattr(CodexAppServerAdapter, "start", lambda **kw: captured.append(kw) or adapter)
+    assert service.controller._start_adapter(agent_id="codex", work_dir=repo,
+        goal_id="research", objective="Check the delivery", project_coordination=True,
+        loopx_tools=enabled) is adapter
+    tools = {tool["name"]: tool for tool in captured[0]["dynamic_tools"]}
+    assert "loopx_context_read" in tools
+    assert (TOOL["name"] in tools) is enabled
+    if enabled:
+        schema = tools[TOOL["name"]]["inputSchema"]
+        assert "prepare_check" in schema["properties"]["action"]["enum"]
+        assert "document" in schema["properties"]
+        assert not {"goal_id", "agent_id", "runtime_root"} & schema["properties"].keys()
+    assert not service.snapshot(sid)["enabled"]
+
+
 def test_owner_team_readback_is_configured_scoped_and_does_not_start_a_turn(mode):
     service, sid, _, settings, calls = mode
     with pytest.raises(ValueError):
@@ -504,6 +556,7 @@ def test_owner_team_readback_is_configured_scoped_and_does_not_start_a_turn(mode
     before = service.store.load_session(sid)
     result = service.read_team(sid, {"operation": "operations"})
     assert result["items"] == [] and result["page_readback_complete"]
+    assert result["projection_envelope"]["coverage"]["scope"] == "requester_page"
     assert service.store.load_session(sid) == before
     assert calls == []
     with pytest.raises(ValueError, match="invalid team readback"):

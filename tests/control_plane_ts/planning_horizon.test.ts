@@ -58,8 +58,51 @@ function request(overrides: Record<string, unknown> = {}) {
       source_context_todo_count: legacy.source_context_todo_count,
     }),
     acceptance_gaps: legacy.acceptance_gaps,
+    ...(overrides.goal_facts === undefined ? {} : {goal_facts: overrides.goal_facts}),
   };
 }
+
+test("one local task still carries the original Goal and separately scoped acceptance", () => {
+  const objective = "Deliver the whole accepted outcome. ".repeat(20) + "Preserve the final constraint.";
+  const result = projectQuotaPlanningHorizon(request({goal_facts: {
+    active_state_objective: objective,
+    registry_objective: "Older registered objective",
+    goal_read_action: "cat -- 'source with spaces/ACTIVE_GOAL_STATE.md'",
+    acceptance_contract: {objective: "Validate this slice only", scope: {kind: "selected_work"}},
+  }}));
+  assert.deepEqual(result?.core_goal, {
+    objective, objective_source: "active_state", objective_missing: false,
+    read_action: "cat -- 'source with spaces/ACTIVE_GOAL_STATE.md'",
+    acceptance_contract: {objective: "Validate this slice only", scope: {kind: "selected_work"}},
+  });
+  assert.equal(result?.selected_todo_id, "todo_regression_gate");
+  assert.equal((result?.selection_contract as Record<string, unknown>).horizon_changes_selection, false);
+  assert.equal((result?.work_items as unknown[]).length, 1);
+  assert.throws(() => projectQuotaPlanningHorizon(request({goal_facts: {active_state_objective: 42}})));
+  assert.deepEqual(projectQuotaPlanningHorizon(request({goal_facts: {}}))?.core_goal, {
+    objective: null, objective_source: null, objective_missing: true, acceptance_contract: null,
+  });
+});
+
+test("Goal context exposes a bounded flat backlog without requiring declared dependencies", () => {
+  const selected = todo("todo_selected001", 1, "P0");
+  const alternatives = Array.from({length: 8}, (_, i) => todo(`todo_alternative${i}`, i + 2, "P1"));
+  const inputs = {selected_todo: selected, candidates: [selected, ...alternatives],
+    runnable_todo_ids: [selected.todo_id, ...alternatives.map(item => item.todo_id)],
+    source_context_todo_count: 9};
+  assert.equal(projectQuotaPlanningHorizon(request(inputs)), null);
+  const result = projectQuotaPlanningHorizon(request({...inputs,
+    goal_facts: {active_state_objective: "Complete the accepted outcome."}}));
+  assert.equal((result?.core_goal as Record<string, unknown>).objective, "Complete the accepted outcome.");
+  const items = result?.work_items as Array<Record<string, unknown>>;
+  assert.equal(items.length, 5);
+  assert.equal(items[0].todo_id, selected.todo_id);
+  assert.equal(items[4].todo_id, alternatives[3].todo_id);
+  const completeness = result?.completeness as Record<string, unknown>;
+  assert.equal(completeness.omitted_candidate_todo_count, 4);
+  assert.equal(completeness.complete, false);
+  assert.ok((result?.detail_refs as Record<string, unknown>).full_todo_list);
+});
 
 test("planning horizon preserves the typed strategic chain around local selected work", () => {
   const facts = todo("todo_facts_source", 1, "P0", {

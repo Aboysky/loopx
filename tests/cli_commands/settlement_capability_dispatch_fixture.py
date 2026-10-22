@@ -50,6 +50,10 @@ def write_periodic_report_registry(project: Path, runtime: Path) -> Path:
                         "id": GOAL_ID,
                         "repo": str(project),
                         "state_file": "goal.md",
+                        "coordination": {
+                            "agent_model": "peer_v1",
+                            "registered_agents": [AGENT_ID],
+                        },
                         "control_plane": {
                             "periodic_report": {
                                 "enabled": True,
@@ -191,7 +195,13 @@ def complete_todo_via_cli(
     journal_capabilities: list[str],
     write_state: Callable[[Path], None],
 ) -> tuple[dict[str, object], Path, Path]:
-    """Run the real todo complete dispatch and return payload plus paths."""
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+    from loopx.todos import list_goal_todos
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+    )
 
     project = tmp_path / "repo"
     project.mkdir()
@@ -199,9 +209,29 @@ def complete_todo_via_cli(
     runtime.mkdir()
     write_state(project)
     registry_path = write_periodic_report_registry(project, runtime)
+    todos = list_goal_todos(registry_path=registry_path, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
+        ),
+        state_path=project / "goal.md",
+        provider="file",
+    )
     write_successor_run_history(runtime)
     write_turn_heartbeat_receipt(runtime)
     write_turn_journal(runtime, observed=journal_capabilities)
+
+    captured = run_todo_completion_via_cli(registry_path, runtime)
+    return captured, registry_path, runtime
+
+
+def run_todo_completion_via_cli(
+    registry_path: Path,
+    runtime: Path,
+) -> dict[str, object]:
+    """Run todo completion against an existing settlement fixture."""
 
     args = build_parser().parse_args(
         [
@@ -235,6 +265,6 @@ def complete_todo_via_cli(
             build_periodic_report_post_writeback_projection
         ),
     )
-    assert exit_code == 0
+    assert exit_code == 0, captured
     assert captured.get("ok") is True, captured
-    return captured, registry_path, runtime
+    return captured

@@ -6,13 +6,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..capabilities.agent_turn_recall import (
-    run_configured_agent_turn_recall_fail_open,
-)
+from ..capabilities.turn_context import attach_turn_context
 from ..capabilities.reward_memory.codex_app_outcome import (
     stage_codex_app_turn_outcome_candidate_fail_open,
-    run_staged_codex_app_turn_outcome_ingest_fail_open,
 )
+from ..capabilities.reward_memory.turn_hooks import run_staged_memory_settlement
 from ..control_plane.quota.settlement import read_heartbeat_settlement
 
 
@@ -90,17 +88,20 @@ def attach_reward_memory_ingest_after_spend(
         registry_path=registry_path,
         goal_ref=goal_ref,
     )
-    identity = readback.identity.value if readback else None
-    writeback_event = readback.writeback_event if readback else None
+    if readback is None:
+        return
+    identity = readback.identity.value
+    writeback_event = readback.writeback_event
     details_value = (
         writeback_event.get("details") if isinstance(writeback_event, Mapping) else None
     )
     details: Mapping[str, Any] = details_value if isinstance(details_value, Mapping) else {}
     candidate_id = str(details.get("reward_memory_candidate_id") or "").strip()
-    if not candidate_id or identity is None or not identity.todo_id:
+    if (identity is None or not identity.todo_id
+            or readback.writeback.failure is not None or readback.spend.failure is not None):
         return
-    payload["reward_memory_ingest"] = (
-        run_staged_codex_app_turn_outcome_ingest_fail_open(
+    result = (
+        run_staged_memory_settlement(
             registry_path=registry_path,
             goal_id=identity.goal_id,
             agent_id=identity.agent_id,
@@ -108,10 +109,13 @@ def attach_reward_memory_ingest_after_spend(
             turn_instance_id=identity.turn_instance_id,
             effect_id=identity.effect_id,
             candidate_id=candidate_id,
+            runtime_root=runtime_root,
             writeback_appended=readback.writeback.failure is None,
             spend_appended=readback.spend.failure is None,
         )
     )
+    if result is not None:
+        payload["reward_memory_ingest"] = result
 
 
 def attach_reward_memory_recall_after_should_run(
@@ -133,11 +137,11 @@ def attach_reward_memory_recall_after_should_run(
         or heartbeat_receipt.get("status") not in {"committed", "replayed"}
     ):
         return
-    payload["reward_memory_recall"] = run_configured_agent_turn_recall_fail_open(
+    attach_turn_context(
+        payload,
         registry_path=registry_path,
         goal_id=goal_id,
         agent_id=agent_id,
-        quota_decision=payload,
+        decision=payload,
         turn_instance_id=heartbeat_turn_id,
-        execute=True,
     )

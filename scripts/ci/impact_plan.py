@@ -11,7 +11,7 @@ import subprocess
 SCHEMA = "loopx_ci_job_plan_v1"
 ROOT_DOCS = {"README.md", "README.zh-CN.md", "CHANGELOG.md", "CONTRIBUTING.md"}
 POLICY_PATHS = ("scripts/ci/impact_plan.py", "scripts/ci/review_gate.py", ".github/workflows/python-tests.yml")
-OUTPUTS = ("core_tests", "python_tests", "stage2c_tests", "presentation_tests")
+OUTPUTS = ("core_tests", "backend_tests", "python_tests", "stage2c_tests", "presentation_tests")
 PRESENTATION_ROOTS = ("apps/presentation/dashboard/src/", "apps/presentation/dashboard/public/", "loopx/web/chat/")
 PRESENTATION_SUFFIXES = {".ts", ".tsx", ".js", ".mjs", ".css", ".html", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff", ".woff2"}
 
@@ -28,7 +28,7 @@ def is_document(path: str) -> bool:
 
 def candidate(changes: list[Change], *, pull_request: bool = True) -> tuple[str, str]:
     if not pull_request:
-        return "full", "main and manual runs retain full qualification"
+        return "full", "non-PR runs retain full qualification"
     if not changes:
         return "full", "empty or unavailable diff is not an exemption"
     for change in changes:
@@ -39,14 +39,14 @@ def candidate(changes: list[Change], *, pull_request: bool = True) -> tuple[str,
     if not code:
         return "docs", "documentation only; existing runtime exemption"
     if all(item.path.startswith(PRESENTATION_ROOTS) and PurePosixPath(item.path).suffix in PRESENTATION_SUFFIXES for item in code):
-        return "presentation", "client-only source/assets; retain frontend build/browser and common checks"
+        return "presentation", "client-only source/assets; retain frontend type-check, build and browser checks"
     return "full", "runtime, prompts, tests, dependencies, build policy or unknown paths may affect backend behavior"
 
 
 def job_flags(kind: str, *, presentation: bool = False) -> dict[str, bool]:
     if kind not in {"docs", "presentation", "full"}:
         raise ValueError("unknown CI change kind")
-    return {"core_tests": kind != "docs", "python_tests": kind == "full",
+    return {"core_tests": kind != "docs", "backend_tests": kind == "full", "python_tests": kind == "full",
             "stage2c_tests": kind == "full", "presentation_tests": kind == "presentation" or presentation}
 
 
@@ -78,6 +78,25 @@ def trusted_policy(base: str, head: str) -> bool:
     return True
 
 
+def declared_python_shards(checkout_sha: str) -> int:
+    # Only classification needs the parser already installed in the changes
+    # job. Aggregate verification must remain usable with the standard library.
+    import yaml
+
+    workflow = yaml.load(git("show", f"{checkout_sha}:{POLICY_PATHS[-1]}"), Loader=yaml.BaseLoader)
+    message = "test-shard.strategy.matrix must declare only a static contiguous shard axis [1..N]"
+    try:
+        matrix = workflow["jobs"]["test-shard"]["strategy"]["matrix"]
+    except (KeyError, TypeError):
+        raise ValueError(message) from None
+    if not isinstance(matrix, dict) or set(matrix) != {"shard"}:
+        raise ValueError(message)
+    shards = matrix["shard"]
+    if not isinstance(shards, list) or not shards or shards != [str(i) for i in range(1, len(shards) + 1)]:
+        raise ValueError(message)
+    return len(shards)
+
+
 def plan(base: str, head: str, *, pull_request: bool = True, force_full: bool = False) -> dict:
     base_sha, head_sha = revision(base), revision(head)
     merge_base = git("merge-base", base_sha, head_sha).decode().strip()
@@ -96,12 +115,13 @@ def plan(base: str, head: str, *, pull_request: bool = True, force_full: bool = 
     elif kind == "presentation" and not trusted_policy(base_sha, head_sha):
         kind, reason = "full", "presentation exemption policy is not already trusted on the target branch"
     flags = job_flags(kind, presentation=presentation or policy_change)
+    checkout_sha = revision("HEAD")
     return {"schema_version": SCHEMA, "base_sha": base_sha, "head_sha": head_sha,
-            "merge_base_sha": merge_base, "checkout_sha": revision("HEAD"), "change_kind": kind,
+            "merge_base_sha": merge_base, "checkout_sha": checkout_sha, "change_kind": kind,
             "force_full": force_full, "reason": reason, **flags,
             "changes": [{"status": item.status, "path": item.path} for item in changes],
             "coverage_scope": "full Python suite" if flags["python_tests"] else "no Python coverage claim",
-            "python_shards": 4 if flags["python_tests"] else 0}
+            "python_shards": declared_python_shards(checkout_sha) if flags["python_tests"] else 0}
 
 
 def write_plan(packet: dict, output: str) -> None:

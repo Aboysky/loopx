@@ -5,11 +5,13 @@ import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthoritySha256} from "./authority_store_codec.ts";
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
-import {prepareCoordinationProjectionCommit} from "./coordination_projection.ts";
+import {indexCoordinationProjection, prepareCoordinationProjectionCommit} from "./coordination_projection.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {decideTaskLeaseAcquire, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {acquisitionFacts, currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
+import {goalObjectiveWorkGuard} from "../goals/goal_objective.ts";
+import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeGoalId, normalizeTodoId, normalizeOwner, normalizeIdempotencyKey,
   normalizeWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
   TaskLeaseAcquireError} from "../work_items/task_lease_acquire.ts";
@@ -79,18 +81,26 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
     const decision = decideTaskLeaseAcquire({handoff_mode: mode!, registered_agents: input.registered_agents,
       ...facts, command: input});
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
-      return failed(decision.code, `canonical task lease acquire rejected: ${decision.code}`, {
+      return failed(decision.code, decision.code === "handoff_mode_retired"
+        ? "Legacy ownership cannot grant new execution; release retained leases and review handoff-mode plan-migration/migrate before acquiring again."
+        : `canonical task lease acquire rejected: ${decision.code}`, {
         ...(decision.code === "write_scope_conflict" ? {recommended_action:
           "Coordinate shared writes with the listed holders. For isolated code edits, use your own separate Git worktree and acquire with --write-worktree; file overlaps become integration advisories. A known same-checkout collision remains rejected. Never take over a foreign lease or use code-edit mode for shared runtime state."} : {}),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(facts.current),
         ...(facts.todo ? {todo_status: facts.todo.status, claimed_by: facts.todo.claimed_by, excluded_agents: [...facts.todo.excluded_agents]} : {}),
         ...(decision.conflict_indexes.length ? {conflicts: decision.conflict_indexes.map(i => facts.other_leases[i])} : {})});
     }
+    const objective = decision.outcome === "apply" ? goalObjectiveWorkGuard(head.head, input.owner) : null;
+    if (objective !== null) return failed(String(objective.reason_code), String(objective.reason), {goal_objective_guard: objective});
     const acceptance = acceptanceWorkGuard(head.head, input.goal_id, input.todo_id);
     if (acceptance !== null && !acceptance.allowed) {
       return failed(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
         {goal_acceptance_guard: acceptance});
     }
+    const dependency = todoExecutionDependencyRejection(
+      indexCoordinationProjection(head.head, input.goal_id).todos, input.todo_id, input.now);
+    if (dependency !== null) return failed(dependency.code, dependency.reason,
+      {resume_condition: dependency.condition});
     const changed = decision.outcome === "apply";
     const lease = changed ? materializeTaskLeaseAcquire(input, input, decision, input.now) : facts.current;
     if (!lease) throw new AuthorityStoreProtocolError("accepted acquire lacks a lease");

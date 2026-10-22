@@ -12,6 +12,7 @@ from ...authority import validate_public_safe_text
 from ...file_lock import LockAcquireTimeoutError, exclusive_file_lock
 from ...runtime import validate_goal_id_path_segment
 from ..effect_runtime import EffectRuntimeConflict
+from ..quota.spend_commit import QuotaRunIndexConflict
 from ..effect_program import (
     SettlementStepKind,
     interpret_turn_result_packet,
@@ -23,7 +24,10 @@ from ..goals.first_party_host_admission import (
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
-from ..work_items.delivery_outcome import require_delivery_outcome
+from ..work_items.delivery_outcome import (
+    explain_turn_scoped_settlement_gap,
+    require_delivery_outcome,
+)
 from . import subagent_execution_topology as subagent
 from .command_validation import (
     TaskValidator,
@@ -53,7 +57,9 @@ from .recovery import (
     build_turn_recovery_audit,
     require_turn_recovery_continuation,
 )
-from .post_settlement import PostSettlement, run_post_settlement_callback
+from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
+from ..capability_hooks import capability_result_fields, project_turn_context
+from ..reward_memory import reward_memory_automation_enabled
 from .session_recovery import (
     SessionBindingResolver,
     build_host_recovery_record,
@@ -65,6 +71,7 @@ from .settlement import (
     TurnSettlementJournalAdapter,
     execute_turn_driver_settlement,
     invoke_result_effect,
+    invoke_turn_effect,
     terminal_closeout_requirement,
     turn_settlement_failure_outcome,
     turn_settlement_outcome,
@@ -89,6 +96,7 @@ LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION = "loopx_turn_journal_inspection_v1
 LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION = "loopx_turn_task_validation_v0"
 HOST_RESULT_MAX_BYTES = 12_000
 HOST_AGENT_VISION_JSON_MAX_CHARS = 3_200
+HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS = 4_096
 HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS = 2_400
 HOST_PATH_DELTA_MODES = {"", "unchanged", "material_replan"}
 HOST_RESULT_TEXT_LIMITS = (
@@ -98,6 +106,10 @@ HOST_RESULT_TEXT_LIMITS = (
     ("vision_unchanged_reason", 240),
     ("summary", 400),
 )
+HOST_RESULT_EVIDENCE_LIMITS = {
+    "work_evidence": (8, 240, 1_200),
+    "validation_evidence": (8, 240, 1_200),
+}
 MATERIAL_HOST_RESULT_KINDS = {
     LoopXTurnResultKind.VALIDATED_PROGRESS,
     LoopXTurnResultKind.VALIDATED_COMPLETION,
@@ -117,8 +129,10 @@ HOST_RESULT_FIELDS = {
     "vision_unchanged_reason",
     "path_delta_mode",
     "agent_vision_json",
+    "progress_observation_json",
     "summary",
     "reward_memory_reflection_json",
+    *HOST_RESULT_EVIDENCE_LIMITS,
 }
 
 
@@ -130,6 +144,7 @@ Spend = Callable[..., dict[str, Any]]
 Scheduler = Callable[[dict[str, Any]], dict[str, Any]]
 HostRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
 JournalPersist = Callable[[Mapping[str, Any]], None]
+
 
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -157,9 +172,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     goal_ref = plan.get("goal_ref")
     if isinstance(goal_ref, Mapping):
         request["goal_ref"] = dict(goal_ref)
-    reward_memory_recall = plan.get("reward_memory_recall")
-    if isinstance(reward_memory_recall, Mapping):
-        request["reward_memory_recall"] = dict(reward_memory_recall)
+    request.update(project_turn_context(plan))
     request.update(subagent.subagent_host_request_projection(plan))
     from ...extensions.codex_native_child import configured_native_child_limit
 
@@ -176,7 +189,13 @@ def _bounded_public_text(
     required: bool,
     errors: list[str],
 ) -> str | None:
-    text = str(result.get(field) or "").strip()
+    value = result.get(field)
+    # Missing/null legacy optional text remains absent. Other JSON types must
+    # not acquire instruction meaning through Python string coercion.
+    if value is not None and not isinstance(value, str):
+        errors.append(f"{field} must be a string")
+        return None
+    text = (value or "").strip()
     if required and not text:
         errors.append(f"{field} is required")
         return None
@@ -193,17 +212,73 @@ def _bounded_public_text(
     return text
 
 
+def _bounded_public_evidence(
+    result: Mapping[str, Any],
+    field: str,
+    *,
+    required: bool,
+    errors: list[str],
+) -> list[str] | None:
+    max_items, max_item_chars, max_total_chars = HOST_RESULT_EVIDENCE_LIMITS[field]
+    raw = result.get(field)
+    if raw is None:
+        if required:
+            errors.append(
+                f"{field} is required for a material host result carrying "
+                "execution_profile"
+            )
+        return None
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        errors.append(f"{field} must be an array of strings")
+        return None
+    evidence = [item.strip() for item in raw]
+    if not evidence or any(not item for item in evidence):
+        errors.append(f"{field} must contain 1-{max_items} non-empty strings")
+        return None
+    if len(evidence) > max_items:
+        errors.append(f"{field} must contain at most {max_items} items")
+        return None
+    if any(len(item) > max_item_chars for item in evidence):
+        errors.append(
+            f"{field} items must contain at most {max_item_chars} characters"
+        )
+        return None
+    if sum(len(item) for item in evidence) > max_total_chars:
+        errors.append(
+            f"{field} must contain at most {max_total_chars} characters total"
+        )
+        return None
+    for index, item in enumerate(evidence):
+        try:
+            validate_public_safe_text(f"host_result.{field}[{index}]", item)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return None
+    return evidence
+
+
 def _normalize_host_path_delta(
     plan: Mapping[str, Any],
     result: Mapping[str, Any],
     *,
     unchanged_reason: str,
     errors: list[str],
+    from_journal: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
-    path_delta_mode = str(result.get("path_delta_mode") or "").strip()
+    raw_path_delta_mode = result.get("path_delta_mode")
+    path_delta_mode = ""
+    if raw_path_delta_mode is None and "path_delta_mode" in result:
+        errors.append("path_delta_mode must be a string")
+    elif raw_path_delta_mode is not None and not isinstance(raw_path_delta_mode, str):
+        path_delta_mode = ""
+        errors.append("path_delta_mode must be a string")
+    else:
+        path_delta_mode = str(raw_path_delta_mode or "").strip()
     raw_agent_vision = result.get("agent_vision_json")
     if raw_agent_vision is None:
         agent_vision_json = ""
+        if "agent_vision_json" in result:
+            errors.append("agent_vision_json must be a JSON string")
     elif isinstance(raw_agent_vision, str):
         agent_vision_json = raw_agent_vision.strip()
     else:
@@ -218,7 +293,25 @@ def _normalize_host_path_delta(
         errors.append("path_delta_mode must be unchanged or material_replan")
 
     agent_vision: dict[str, Any] | None = None
-    if agent_vision_json:
+    if from_journal and "agent_vision" in result:
+        # The journal stores the typed owner's decoded packet. Revalidate it
+        # through that same owner, without treating derived budget diagnostics
+        # as a new Host wire string or widening the untrusted Host protocol.
+        try:
+            if "agent_vision_json" in result:
+                raise ValueError("cached vision cannot carry both packet forms")
+            packet = result["agent_vision"]
+            if not isinstance(packet, dict):
+                raise TypeError("cached agent_vision must be a JSON object")
+            envelope = plan.get("turn_envelope") or {}
+            agent_vision = normalize_goal_vision_packet(
+                packet,
+                goal_id=str(envelope.get("goal_id") or ""),
+                agent_id=str(envelope.get("agent_id") or "") or None,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(f"invalid cached agent_vision: {exc}")
+    elif agent_vision_json:
         if len(agent_vision_json) > HOST_AGENT_VISION_JSON_MAX_CHARS:
             errors.append(
                 "agent_vision_json exceeds "
@@ -239,7 +332,7 @@ def _normalize_host_path_delta(
                     goal_id=str(envelope.get("goal_id") or ""),
                     agent_id=str(envelope.get("agent_id") or "") or None,
                 )
-            except (json.JSONDecodeError, ValueError) as exc:
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 errors.append(f"invalid agent_vision_json: {exc}")
 
     if path_delta_mode == "material_replan":
@@ -269,10 +362,25 @@ def validate_loopx_turn_host_result(
     value: Mapping[str, Any],
     *,
     completion_lifecycle_configured: bool = False,
+    from_journal: bool = False,
 ) -> dict[str, Any]:
     result = dict(value)
     errors: list[str] = []
-    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan)
+    optional_fields = capability_result_fields(project_turn_context(plan))
+    if (
+        from_journal
+        and "turn_context_contributions" not in plan
+        and reward_memory_automation_enabled(plan, operation="automatic_ingest")
+    ):
+        # Pre-registration journals already admitted this bounded wire field.
+        # Preserve the cached result that independent validation attested;
+        # never reconstruct context, activate a Host, or change ingest policy.
+        optional_fields["reward_memory_reflection_json"] = {
+            "type": "string", "maxLength": HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
+        }
+    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan) | set(optional_fields)
+    if from_journal:
+        allowed_fields = allowed_fields | {"agent_vision", "progress_observation"}
     unknown = sorted(set(result) - allowed_fields)
     if unknown:
         errors.append("unsupported host result fields: " + ", ".join(unknown))
@@ -323,21 +431,35 @@ def validate_loopx_turn_host_result(
         )
         if text:
             normalized[field] = text
-    reflection_json = _bounded_public_text(
-        result,
-        "reward_memory_reflection_json",
-        limit=HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
-        required=False,
-        errors=errors,
-    )
-    if reflection_json:
-        if material:
-            normalized["reward_memory_reflection_json"] = reflection_json
-        else:
-            errors.append(
-                "non-material host results cannot declare a reward memory reflection"
-            )
+    # Old/custom hosts may still return this field. Ignore it while disabled:
+    # ordinary work must not gain a memory validation gate or retain the content.
+    for field, descriptor in optional_fields.items():
+        text = _bounded_public_text(
+            result, field, limit=descriptor["maxLength"], required=False, errors=errors,
+        )
+        if text:
+            if material:
+                normalized[field] = text
+            else:
+                errors.append("non-material host results cannot declare optional capability results")
+    progress_observation = None
     if material:
+        raw_progress = result.get("progress_observation_json", "")
+        try:
+            from ..work_items.progress_observation import normalize_progress_observation
+
+            if from_journal and "progress_observation" in result:
+                if "progress_observation_json" in result:
+                    raise ValueError("cached progress observation cannot also supply JSON")
+                progress_observation = normalize_progress_observation(result["progress_observation"])
+            elif not isinstance(raw_progress, str):
+                raise ValueError("progress_observation_json must be a JSON string")
+            elif raw_progress.strip():
+                if len(raw_progress) > HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS:
+                    raise ValueError("progress_observation_json exceeds the Host result limit")
+                progress_observation = normalize_progress_observation(json.loads(raw_progress))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"invalid progress observation: {exc}")
         try:
             normalized["delivery_batch_scale"] = require_delivery_batch_scale(
                 result.get("delivery_batch_scale")
@@ -348,8 +470,28 @@ def validate_loopx_turn_host_result(
             normalized["delivery_outcome"] = require_delivery_outcome(
                 result.get("delivery_outcome")
             ).value
+            if not from_journal:
+                # Observation transport does not add a no-spend Host closeout.
+                # Refuse new candidates before preparing an impossible write.
+                # Saved results retain provider readback/recovery: an effect
+                # may already have committed under an older producer.
+                settlement_gap = explain_turn_scoped_settlement_gap(
+                    normalized["delivery_outcome"], None,
+                )
+                if settlement_gap:
+                    errors.append(settlement_gap)
         except ValueError as exc:
             errors.append(str(exc))
+
+        for field in HOST_RESULT_EVIDENCE_LIMITS:
+            evidence = _bounded_public_evidence(
+                result,
+                field,
+                required=False,
+                errors=errors,
+            )
+            if evidence is not None:
+                normalized[field] = evidence
 
         unchanged_reason = str(normalized.get("vision_unchanged_reason") or "")
         path_delta_mode, agent_vision = _normalize_host_path_delta(
@@ -357,6 +499,7 @@ def validate_loopx_turn_host_result(
             result,
             unchanged_reason=unchanged_reason,
             errors=errors,
+            from_journal=from_journal,
         )
         if (
             path_delta_mode == "material_replan"
@@ -372,15 +515,21 @@ def validate_loopx_turn_host_result(
     elif (
         str(result.get("path_delta_mode") or "").strip()
         or str(result.get("agent_vision_json") or "").strip()
+        or (from_journal and "agent_vision" in result)
+        or ("progress_observation_json" in result and result["progress_observation_json"] != "")
+        or (from_journal and "progress_observation" in result)
+        or any(field in result for field in HOST_RESULT_EVIDENCE_LIMITS)
     ):
         errors.append(
-            "wait and user_action_required results cannot declare a path delta"
+            "non-material host results cannot declare path_delta_mode or "
+            "agent_vision_json, progress observation, or work/validation evidence"
         )
     if subagent.subagent_execution_topology(plan) is not None:
         subagent.observe_subagent_host_result(plan, result, normalized, errors)
     return {
         "ok": not errors,
-        "result": normalized,
+        "result": (normalized if progress_observation is None else
+                   {**normalized, "progress_observation": progress_observation}),
         "errors": errors,
     }
 
@@ -793,6 +942,7 @@ def _host_result_stage(
     usage_goal_id: str = "",
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
+    from_journal = "typed_result" in completed_phases
     result = (
         journal.get("host_result")
         if isinstance(journal.get("host_result"), dict)
@@ -871,6 +1021,7 @@ def _host_result_stage(
         plan,
         result or {},
         completion_lifecycle_configured=completion_lifecycle_configured,
+        from_journal=from_journal,
     )
     if not validation.get("ok"):
         failure = _host_failure(
@@ -1106,6 +1257,20 @@ def _typed_settlement_stage(
             return invoke_result_effect(completion_writeback, result, effect_ref)
         return invoke_result_effect(writeback, result, effect_ref)
 
+    def spend_effect(effect_ref: str) -> Mapping[str, Any]:
+        try:
+            return invoke_turn_effect(spend, effect_ref)
+        except QuotaRunIndexConflict as exc:
+            # A failed run-index precondition proves this spend did not commit.
+            # Project it as a settlement rejection; ambiguous provider errors
+            # must remain prepared for readback and recovery.
+            return {
+                "ok": False,
+                "appended": False,
+                "reason": str(exc),
+                "reason_code": exc.reason_code,
+            }
+
     journal_adapter = TurnSettlementJournalAdapter(
         journal=journal,
         effects=effects,
@@ -1144,7 +1309,7 @@ def _typed_settlement_stage(
             else None
         ),
         writeback=writeback_effect,
-        spend=spend,
+        spend=spend_effect,
         checkpoint=journal_adapter.checkpoint,
         committed_effect_id=_journal_committed_effect_id(journal),
         terminal_closeout_required=terminal_closeout_required,
@@ -1279,6 +1444,8 @@ def run_loopx_turn_once(
     timeout_seconds: float | None,
     execute: bool,
     retry_failed: bool = False,
+    decision_capture_payload: Mapping[str, Any] | None = None,
+    require_decision_capture: bool = False,
     task_validator: TaskValidator | None = None,
     writeback: Writeback | None = None,
     completion_writeback: CompletionWriteback | None = None,
@@ -1354,7 +1521,9 @@ def run_loopx_turn_once(
             _write_journal(journal_path, snapshot)
             return
         try:
-            with goal_admission.source_journal_admission() as source_admission:
+            with goal_admission.source_journal_admission(
+                runtime_root=runtime_root,
+            ) as source_admission:
                 if source_admission is None:
                     raise RuntimeError("source journal admission was not produced")
                 _write_journal(
@@ -1410,6 +1579,9 @@ def run_loopx_turn_once(
                     replayed=True,
                     effects=empty_effects,
                 )
+                payload.update(recover_post_settlement(
+                    plan=plan, post_settlement=post_settlement, journal=journal,
+                ))
                 payload["recovery"] = build_turn_recovery_audit(
                     recovery_decision,
                     journal,
@@ -1437,6 +1609,17 @@ def run_loopx_turn_once(
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
+        if require_decision_capture and needs_host:
+            from .decision_capture import prepare_turn_decision_capture
+
+            original_plan = journal["plan"] if journal is not None else plan
+            plan = prepare_turn_decision_capture(
+                original_plan, journal_path=journal_path,
+                decision=decision_capture_payload, existing_journal=journal is not None,
+            )
+            # Preserve any session recovery adjustment; only the original
+            # observation replaces the fresh request's context.
+            request = {**request, "turn_envelope": plan["turn_envelope"]}
         admission = None
         if needs_host and admit_start is not None:
             admission = admit_start(

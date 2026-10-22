@@ -43,6 +43,7 @@ from .goal_channel_contracts import (
     normalize_lark_topic_event_rejection_reason,
 )
 from .goal_channel_targets import goal_channel_target_for_name
+from .goal_channel_transport import record_event_timing
 from .goal_topic_connections import decide_lark_topic_event
 from .goal_topic_dispatch import ProfileEventDispatch
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
@@ -372,6 +373,23 @@ def _profile_event_lane(
 ) -> tuple[str, ...]:
     """Only serialize transport work; actual ingress re-reads its authority."""
 
+    private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
+    if isinstance(private_config, Mapping):
+        from .conversation_identity import lark_private_source
+
+        try:
+            source = lark_private_source(
+                provider_ref=private_config["provider_ref"], event=event
+            )
+        except (KeyError, TypeError, ValueError):
+            pass  # Malformed hints retain the conservative unmatched lane.
+        else:
+            # Native profiles bypass legacy Goal routing at admission too.
+            # Use the same App/chat/topic (or private sender) source shape for
+            # scheduling, never a grant or a persisted Session selection. Core
+            # still verifies the provider and acquires its fresh source fence.
+            return ("private." + source["source_ref"],)
+
     scoped, _status = _profile_event_route(
         profile=profile, snapshot=snapshot, event=event
     )
@@ -572,6 +590,23 @@ def stream_lark_goal_topic_profile(
                 if callback_stream is not None:
                     callback_stream.terminate()
                 return
+            if dispatch.failed:
+                # A worker can fail while stdout waits indefinitely for the
+                # next event. Unblock that reader so close drains active work
+                # and raises into the existing service retry owner. Do not set
+                # stop: failure must not become a requested, non-retrying exit.
+                try:
+                    with result_lock:
+                        if health_sink is not None:
+                            health_sink(
+                                {"status": "failed", "error_code": "lark_event_listener_failed"}
+                            )
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    if callback_stream is not None:
+                        callback_stream.terminate()
+                return
             if callback_stream is not None and callback_stream.disconnected():
                 callback_disconnected.set()
                 if process.poll() is None:
@@ -596,7 +631,6 @@ def stream_lark_goal_topic_profile(
         name=f"loopx-lark-stop-{profile}",
         daemon=True,
     )
-    watcher.start()
     event_count = 0
     replied_count = 0
     provider_ready = False
@@ -606,9 +640,14 @@ def stream_lark_goal_topic_profile(
     def handle_event(line: str) -> None:
         nonlocal event_count, replied_count, provider_ready
 
+        event = _event_payloads(line)[0]
+        message_id = str(event.get("message_id") or "")
+        record_event_timing(profile, message_id, "dispatch_started")
+        current_snapshot = snapshot_provider()
+        record_event_timing(profile, message_id, "dispatch_snapshot_ready")
         result = poll_lark_goal_topic_profile_once(
             profile=profile,
-            snapshot=snapshot_provider(),
+            snapshot=current_snapshot,
             runtime_root=runtime_root,
             answer=answer,
             consume_runner=lambda _args, payload=line: {
@@ -621,13 +660,15 @@ def stream_lark_goal_topic_profile(
             proposal_deliverer=proposal_deliverer,
             private_admitter=private_admitter,
         )
+        record_event_timing(profile, message_id, "dispatch_returned")
         with result_lock:
+            failed = dispatch.failed
             if int(result.get("event_count") or 0) and not provider_ready:
                 # A provider event is stronger readiness evidence than a
                 # diagnostic marker and protects compatibility with providers
                 # that omit the marker while still emitting the typed stream.
                 provider_ready = True
-                if health_sink is not None:
+                if health_sink is not None and not failed:
                     health_sink({"status": "listening", "error_code": None})
             event_count += int(result.get("event_count") or 0)
             replied_count += int(result.get("replied_count") or 0)
@@ -636,8 +677,10 @@ def stream_lark_goal_topic_profile(
                 reasons = list(result.get("event_reasons") or [])
                 health_sink(
                     {
-                        "status": "listening",
-                        "error_code": None,
+                        "status": "failed" if failed else "listening",
+                        "error_code": (
+                            "lark_event_listener_failed" if failed else None
+                        ),
                         "event_count": int(result.get("event_count") or 0),
                         "replied_count": int(result.get("replied_count") or 0),
                         "last_event_status": str(statuses[-1]) if statuses else None,
@@ -662,6 +705,7 @@ def stream_lark_goal_topic_profile(
                 )
 
     dispatch = ProfileEventDispatch(handle_event, stop)
+    watcher.start()
     stream_failed = True
     try:
         stdout = process.stdout
@@ -677,9 +721,10 @@ def stream_lark_goal_topic_profile(
                 break
             stripped = line.strip()
             if stripped.startswith(_EVENT_READY_PREFIX):
-                provider_ready = True
-                if health_sink is not None:
-                    health_sink({"status": "listening", "error_code": None})
+                with result_lock:
+                    provider_ready = True
+                    if health_sink is not None and not dispatch.failed:
+                        health_sink({"status": "listening", "error_code": None})
                 continue
             if stripped.startswith("[event] exited "):
                 match = _EVENT_EXIT_REASON.search(stripped)
@@ -690,12 +735,15 @@ def stream_lark_goal_topic_profile(
             # Batch-shaped provider records are split before scheduling, so an
             # unrelated conversation in a batch can progress independently too.
             for event in _event_payloads(line):
+                message_id = str(event.get("message_id") or "")
+                record_event_timing(profile, message_id, "received")
                 lane = _profile_event_lane(
                     profile=profile,
                     snapshot=snapshot_provider(),
                     event=event,
                     runtime_root=runtime_root,
                 )
+                record_event_timing(profile, message_id, "lane_ready")
                 if not dispatch.submit(lane, json.dumps(event, ensure_ascii=False)):
                     break
         stream_failed = False

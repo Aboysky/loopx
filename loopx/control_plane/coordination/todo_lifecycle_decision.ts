@@ -27,7 +27,7 @@ export const COORDINATION_TERMINAL_FENCE_REQUEST_SCHEMA =
   "loopx_coordination_terminal_fence_request_v0";
 export const COORDINATION_TERMINAL_FENCE_RESULT_SCHEMA =
   "loopx_coordination_terminal_fence_result_v0";
-import {HANDOFF_MODES, type HandoffMode} from "./handoff_mode_policy.ts";
+import {HANDOFF_MODES, retiredHandoffModeRejection, type HandoffMode} from "./handoff_mode_policy.ts";
 const OUTCOMES = ["approve", "reject", "cancel"] as const;
 const AUTHORITY_ACTIONS = ["complete", "reassign", "supersede", "update"] as const;
 const EXECUTOR_RECLAIM_ACTION = "reclaim";
@@ -79,7 +79,7 @@ interface LifecycleDecisionRequest {
   readonly command: LifecycleCommand;
   readonly handoff_mode: HandoffMode;
   readonly registered_agents: readonly string[];
-  readonly lifecycle_grants: readonly LifecycleGrant[];
+  readonly resolve_lifecycle_grants: () => readonly LifecycleGrant[];
   readonly todo: TodoFact;
   readonly decision_target: TodoFact | null;
   readonly lease: LeaseFact | null;
@@ -233,7 +233,7 @@ function lifecycleGrants(
       agent_id: agentId,
       actions: [...new Set(actions)],
       requires_reason: requireBoolean(
-        grant.requires_reason,
+        grant.requires_reason === undefined ? true : grant.requires_reason,
         `lifecycle_grants[${index}].requires_reason`,
       ),
     };
@@ -262,7 +262,8 @@ function executorReclaimGrant(request: JsonObject, actor: string | null): Lifecy
   return [{agent_id: agent, actions: [EXECUTOR_RECLAIM_ACTION], requires_reason: false}];
 }
 
-function decodeRequest(value: unknown, kind: "terminal" | "mutation" = "terminal"): LifecycleDecisionRequest {
+function decodeRequest(value: unknown, kind: "terminal" | "mutation" = "terminal"):
+    LifecycleDecisionRequest | CoordinationTodoTerminalDecisionResult {
   const request = requireJsonObject(value, "Todo terminal decision request");
   requireStringLiteral(
     request.schema_version,
@@ -275,15 +276,23 @@ function decodeRequest(value: unknown, kind: "terminal" | "mutation" = "terminal
   );
   const actor = optionalAgent(request.actor_agent_id, "actor_agent_id");
   const internalReclaim = kind === "mutation" && request.authority_action === EXECUTOR_RECLAIM_ACTION;
+  // The executor-only action is never a public delegation, even if unused.
+  if (!internalReclaim && Array.isArray(request.lifecycle_grants) &&
+      request.lifecycle_grants.some(grant => grant !== null && typeof grant === "object" &&
+        Array.isArray(grant.actions) && grant.actions.some((action: unknown) =>
+          typeof action === "string" && action.trim().toLowerCase() === EXECUTOR_RECLAIM_ACTION))) {
+    throw new EffectRuntimeRequestError("executor reclaim is not a public lifecycle grant");
+  }
+  const reclaimGrants = internalReclaim ? executorReclaimGrant(request, actor) : null;
   const outcome = kind === "terminal" ? optionalString(request.decision_outcome, "decision_outcome") : null;
-  return {
+  const decoded = {
     command: requireStringLiteral(request.command,
       kind === "terminal" ? COMMANDS : MUTATION_COMMANDS, "command"),
     handoff_mode: requireStringLiteral(request.handoff_mode, HANDOFF_MODES, "handoff_mode"),
     registered_agents: registeredAgents,
-    lifecycle_grants: internalReclaim ? executorReclaimGrant(request, actor)
-      : lifecycleGrants(request.lifecycle_grants ?? [], registeredAgents),
-    todo: todoFact(request.todo, "todo"),
+    resolve_lifecycle_grants: () => reclaimGrants ??
+      lifecycleGrants(request.lifecycle_grants ?? [], registeredAgents),
+    todo: request.todo === null ? null : todoFact(request.todo, "todo"),
     decision_target: kind !== "terminal" || request.decision_target === null || request.decision_target === undefined
       ? null
       : todoFact(request.decision_target, "decision_target"),
@@ -316,6 +325,13 @@ function decodeRequest(value: unknown, kind: "terminal" | "mutation" = "terminal
     ownership_mutation: kind === "mutation"
       ? requireBoolean(request.ownership_mutation, "ownership_mutation") : false,
   };
+  // Decode the wire first. For normalized snapshots these refusals precede
+  // actor admission and terminal replay, including on direct native calls.
+  if (decoded.lease?.active && (!decoded.lease.present || decoded.lease.status === "released")) {
+    return result("rejected", "invalid_lease_snapshot");
+  }
+  if (decoded.todo === null) return result("rejected", "todo_not_found");
+  return {...decoded, todo: decoded.todo};
 }
 
 function scopeKey(scope: DecisionScope): string {
@@ -369,6 +385,8 @@ function authority(request: LifecycleDecisionRequest):
   | { mode: string; ownershipGate: CoordinationTodoTerminalDecisionResult["ownership_gate"] }
   | CoordinationTodoTerminalDecisionResult {
   const { todo, actor_agent_id: actor, registered_agents: registered } = request;
+  const retired = retiredHandoffModeRejection(request.handoff_mode);
+  if (retired !== null) return result("rejected", retired);
   if (registered.length <= 1) {
     if (actor !== null) {
       const rejection = registeredTodoMutationRejection(todo, actor, registered);
@@ -387,7 +405,9 @@ function authority(request: LifecycleDecisionRequest):
   const rejection = registeredTodoMutationRejection(todo, actor, registered);
   if (rejection !== null && rejection !== "claim_owner_mismatch") return result("rejected", rejection);
   if (rejection === "claim_owner_mismatch") {
-    const grant = request.lifecycle_grants.find((candidate) => candidate.agent_id === actor);
+    // Delegation is consulted only after ordinary actor/owner authorization.
+    // Unrelated invalid grants cannot disable the owner or exact user gate.
+    const grant = request.resolve_lifecycle_grants().find((candidate) => candidate.agent_id === actor);
     if (grant === undefined) return result("rejected", "claim_owner_mismatch");
     if (!grant.actions.includes(request.authority_action)) {
       return result("rejected", "delegation_action_not_granted");
@@ -425,6 +445,8 @@ function terminalFence(
   authorityMode: string | null,
   requireActiveWhenFenceSupplied = true,
 ): CoordinationTodoTerminalDecisionResult {
+  const retired = retiredHandoffModeRejection(request.handoff_mode);
+  if (retired !== null) return result("rejected", retired);
   const lease = request.lease;
   const timeActive = lease !== null && lease.present && lease.active;
   const effective = timeActive && ownerEligible(request, lease.owner);
@@ -548,6 +570,7 @@ export function evaluateCoordinationTodoTerminalDecision(
   value: unknown,
 ): CoordinationTodoTerminalDecisionResult {
   const request = decodeRequest(value);
+  if ("outcome" in request) return request;
   const authorityResult = authority(request);
   if ("outcome" in authorityResult) return authorityResult;
   if (request.todo.status === "done") {
@@ -581,6 +604,9 @@ export function evaluateTodoOwnershipGate(value: unknown): JsonObject {
 /** Claim/update admission only: this neither edits arbitrary fields nor releases a lease. */
 export function evaluateCoordinationTodoMutationDecision(value: unknown): JsonObject {
   const request = decodeRequest(value, "mutation");
+  if ("outcome" in request) {
+    return {...request, schema_version: COORDINATION_TODO_MUTATION_DECISION_RESULT_SCHEMA};
+  }
   const decided = authority(request);
   if ("outcome" in decided) {
     return { ...decided, schema_version: COORDINATION_TODO_MUTATION_DECISION_RESULT_SCHEMA };

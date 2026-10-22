@@ -47,7 +47,16 @@ def check_board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         )
         check()
 
-    return run, board, tmp_path
+    # Negative controls target a disposable row rather than a real task that
+    # legitimately disappears when delivered. The default run still checks
+    # the untouched production board against the real RFC generator.
+    first_row = smoke["contributor_board_claimable_rows"](board)[0]
+    fixture_row = (
+        "| GH-C9999 | [RFC](../architecture/rfcs/goal-direction-baseline-v0.md) "
+        "| Synthetic admission gap. Exit: preserve canonical admission. "
+        "| Focused admission negative controls | Available |"
+    )
+    return run, board.replace(first_row, fixture_row, 1), tmp_path
 
 
 def edit_row(
@@ -58,7 +67,7 @@ def edit_row(
     task_id: str | None = None,
     gap: str | None = None,
 ) -> str:
-    line = next(line for line in board.splitlines() if line.startswith("| GH-C89b |"))
+    line = next(line for line in board.splitlines() if line.startswith("| GH-C9999 |"))
     cells = [cell.strip() for cell in line.strip("|").split("|")]
     for index, value in ((0, task_id), (1, anchor), (2, gap), (4, status)):
         if value is not None:
@@ -122,10 +131,10 @@ def test_inactive_or_unmerged_design_cannot_be_available(
 ) -> None:
     run, board, root = check_board
     path = root / "docs/architecture/rfcs/goal-direction-baseline-v0.md"
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     changed = re.sub(r"(?<=RFC status:\*\* )[^\n]+", state, text, count=1)
     assert changed != text
-    path.write_text(changed)
+    path.write_text(changed, encoding="utf-8")
     with pytest.raises(AssertionError, match="not an Accepted claimable design"):
         run(board)
 

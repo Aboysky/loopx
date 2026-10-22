@@ -9,8 +9,8 @@ whether a safe fallback may continue, or whether the projection itself needs
 repair.
 
 This contract turns the interaction catalog's Decision Scope Model into a
-machine-facing schema. It does not implement the runtime migration by itself;
-CLI/state/status/quota consumers should use this shape as the migration target.
+machine-facing schema. The shared TypeScript decision-dependency owner evaluates
+it for status/quota; Python adapters normalize inputs and validate responses.
 
 ## Fields
 
@@ -26,6 +26,31 @@ Attached to a user todo, operator gate, or controller decision.
 | `decision_id` | no | Stable todo/gate/run id when the decision already exists. |
 | `expires_at` | no | Optional ISO timestamp for temporary authority. |
 | `reason_summary` | no | Public-safe one-line reason shown in status/UI. |
+
+### Choosing `kind=other`
+
+Choose a named kind whenever it describes the decision. `other` is an explicit
+custom decision category for an owner-defined approval that none of the six
+named kinds describes. It is not an unknown-input fallback, uncertainty marker,
+or shortcut around a named permission boundary. An author who cannot identify
+the decision should clarify the requirement instead of guessing `other`.
+
+Describe what the owner must decide in the existing Todo text, and use a stable,
+public-safe `scope_key` for that decision on both the user gate and its dependent
+Agent work. For example, an owner-required approval of a study's conflict-of-interest
+declaration may use `other:action:study_conflict_review`. Reading private data,
+spending resources, changing direction and publishing the study still require
+their named kinds; this custom approval covers none of them. Another custom
+review, `other:action:study_method_review`, remains a different scope key.
+
+The existing key/granularity, recipient and exact-target rules still apply.
+`other:global:*` remains an explicit broad **other-kind** scope; it cannot cover
+`private_read`, `write_scope`, `resource`, `production`, `public_claim` or
+`direction`. Broad scopes require the same owner declaration as all other kinds.
+An unrecognized kind, including a misspelling such as `othre`, rejects at the
+input boundary. Matching describes a dependency; actual approval consumption
+continues through the existing linked-gate completion or standing-receipt owner.
+No new metadata, automatic classifier or permission is introduced.
 
 ### `required_decision_scopes`
 
@@ -109,6 +134,19 @@ comparison and notification behavior.
 ```
 
 ## Status And Quota Rules
+
+### Typed transport boundary
+
+The internal `todo.decision_scope.evaluate` transport retains `consistency`,
+`standing`, `relation`, `relations`, `fallback`, and `gate_scopes`. The unused
+scalar operations `covers`, `scope_relation`, and `exact_relation`, and their
+Python adapters, have been removed; those operation requests fail explicitly.
+The underlying TypeScript coverage and exact-target rules remain part of the
+combined evaluation, including rejection of conflicting exact targets.
+
+This retirement changes an internal transport surface, not Todo metadata,
+user-facing CLI operations, provider defaults, permissions, or approval
+consumption. Existing input codecs and response schema/cardinality checks remain.
 
 Status and quota should read decision scopes in this order:
 

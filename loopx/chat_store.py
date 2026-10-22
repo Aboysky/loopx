@@ -14,18 +14,28 @@ from typing import Any
 import uuid
 from weakref import WeakValueDictionary
 
-from .chat import require_matching_replay, resolve_attached_completion_replay
+from .chat import (
+    require_matching_message_replay,
+    resolve_attached_completion_replay,
+)
 from .capabilities.steward_executor.allocation import (
     normalize_manager_executor_allocation,
 )
+from .capabilities.native_chat.model_settings import (
+    MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id, normalize_session_model_settings,
+)
 from .chat_event_cache import ChatEventCache
-from .chat_ingress import ChatIngressStore
+from .chat_ingress import (
+    ChatIngressStore,
+    SESSION_QUEUE_MAX_PENDING as SESSION_QUEUE_MAX_PENDING,
+    SESSION_QUEUE_TTL_SECONDS as SESSION_QUEUE_TTL_SECONDS,
+)
 from .control_plane.chat_turn_acceptance import (
     CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA,
     AcceptedManagedTurn,
     plan_managed_turn_acceptance,
 )
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_file_lock, write_json_atomic
 
 
 CHAT_STORE_SCHEMA_VERSION = "loopx_chat_store_v1"
@@ -40,8 +50,6 @@ RESUMABLE_SESSION_STATES = {"ready", "busy", "stale", "resuming"}
 TERMINAL_TURN_STATES = {"completed", "interrupted", "timed_out", "failed"}
 TERMINAL_EVENT_KINDS = {"turn.completed", "turn.failed", "turn.interrupted"}
 REPLAY_ONLY_EVENT_KINDS = {"answer.delta", "assistant.delta", "agent.phase", "turn.activity"}
-SESSION_QUEUE_MAX_PENDING = 20
-SESSION_QUEUE_TTL_SECONDS = 3600
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 
@@ -79,19 +87,31 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl(
+    path: Path, *, raise_on_error: bool = False, strict: bool = False,
+) -> list[dict[str, Any]]:
     try:
         lines = path.read_bytes().split(b"\n")
+    except FileNotFoundError:
+        return []
     except OSError:
+        if raise_on_error:
+            raise
         return []
     rows: list[dict[str, Any]] = []
     for line in lines:
+        if not line.strip():
+            continue
         try:
             item = json.loads(line)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            if strict:
+                raise ValueError("invalid Chat journal record") from exc
             continue
         if isinstance(item, dict):
             rows.append(item)
+        elif strict:
+            raise ValueError("invalid Chat journal record")
     return rows
 
 
@@ -103,16 +123,15 @@ def _session_channel(payload: dict[str, Any]) -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any], *, preserve_mode: bool = False) -> None:
-    previous_mode = path.stat().st_mode & 0o777 if preserve_mode and path.exists() else 0o600
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with temporary.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, previous_mode)
-    os.replace(temporary, path)
+    write_json_atomic(
+        path,
+        payload,
+        mode=0o600,
+        preserve_mode=preserve_mode,
+        directory_mode=0o700,
+        separators=(",", ":"),
+        indent=None,
+    )
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
@@ -194,7 +213,7 @@ class ChatSessionStore(ChatIngressStore):
         self._session_locks: WeakValueDictionary[str, threading.Lock] = WeakValueDictionary()
         self._event_lock = threading.RLock()
         self._event_cache = ChatEventCache(self._event_lock)
-        self._event_pending: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._event_pending: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
         self._event_flush_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = WeakValueDictionary()
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
@@ -218,6 +237,9 @@ class ChatSessionStore(ChatIngressStore):
 
     def _turn_path(self, session_id: str, turn_id: str) -> Path:
         return self._session_dir(session_id) / "turns" / f"{_opaque_id(turn_id, field='turn_id')}.json"
+
+    def turn_execution_lock_path(self, session_id: str, turn_id: str) -> Path:
+        return self._turn_path(session_id, turn_id).with_suffix(".execution")
 
     def _event_path(self, session_id: str, turn_id: str) -> Path:
         return self._session_dir(session_id) / "turns" / f"{_opaque_id(turn_id, field='turn_id')}.events.jsonl"
@@ -247,6 +269,12 @@ class ChatSessionStore(ChatIngressStore):
         codex_home: str | None = None,
         project_context: dict[str, Any] | None = None,
         steward_context: dict[str, Any] | None = None,
+        agent_model_id: str | None = None,
+        requested_agent_model_id: str | None | object = _MODEL_SELECTION_UNSET,
+        requested_agent_reasoning_effort: str | None | object = _MODEL_SELECTION_UNSET,
+        codex_chat_configuration: dict[str, Any] | None = None,
+        agent_reasoning_effort: str | None = None,
+        agent_service_tier: str | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         token = _opaque_id(session_id or uuid.uuid4().hex, field="session_id")
@@ -294,6 +322,15 @@ class ChatSessionStore(ChatIngressStore):
             field="executor_endpoint_id",
         )
         normalized_adapter_kind = _opaque_id(adapter_kind, field="adapter_kind")
+        model_settings = normalize_session_model_settings(
+            model=agent_model_id, effort=agent_reasoning_effort, tier=agent_service_tier,
+            requested_model=requested_agent_model_id, requested_effort=requested_agent_reasoning_effort,
+        )
+        if codex_chat_configuration is not None:
+            from .capabilities.native_chat.machine_defaults import normalize_codex_chat_defaults
+            if agent_id != "codex" or normalized_mode != CHAT_SESSION_MODE_MANAGED:
+                raise ValueError("Codex defaults require a managed Codex Session")
+            codex_chat_configuration = normalize_codex_chat_defaults(codex_chat_configuration)
         normalized_upstream_thread_id = _upstream_id(upstream_thread_id)
         normalized_upstream_mode = _opaque_id(upstream_mode, field="upstream_mode")
         normalized_channel_id = _opaque_id(
@@ -320,6 +357,8 @@ class ChatSessionStore(ChatIngressStore):
                 else {}
             ),
             "agent_id": normalized_agent_id,
+            **model_settings,
+            **({"codex_chat_configuration": codex_chat_configuration} if codex_chat_configuration is not None else {}),
             "executor_endpoint_id": normalized_executor_endpoint_id,
             "adapter_kind": normalized_adapter_kind,
             "upstream_thread_id": normalized_upstream_thread_id,
@@ -344,6 +383,45 @@ class ChatSessionStore(ChatIngressStore):
         payload = _read_json(self._session_path(session_id))
         return payload if payload.get("schema_version") == CHAT_SESSION_SCHEMA_VERSION else None
 
+    def reserve_loopx_outcome_request(
+        self, session_id: str, *, turn_id: str, operation_id: str,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Pin one host envelope before dispatch, including across later Turns.
+
+        This is private transport provenance, not an acceptance receipt. The
+        caller must revalidate current admission and replay at the canonical
+        owner; a saved request cannot establish that the write committed.
+        """
+        if self.load_session(session_id) is None:
+            raise KeyError("chat session was not found")
+        request_digest = hashlib.sha256(json.dumps(
+            request, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+            allow_nan=False,
+        ).encode()).hexdigest()
+        operation_key = hashlib.sha256(operation_id.encode()).hexdigest()
+        path = self._session_dir(session_id) / "outcome-requests" / f"{operation_key}.json"
+        with exclusive_file_lock(path, agent_id="loopx-chat", operation="reserve_outcome_request"):
+            if path.exists():
+                existing = _read_json(path)
+                if (existing.get("session_id") != session_id
+                        or existing.get("operation_id") != operation_id
+                        or existing.get("request_sha256") != request_digest
+                        or not isinstance(existing.get("source_ref"), str)
+                        or not existing["source_ref"]):
+                    raise ValueError("outcome refinement operation identity conflict")
+                return existing
+            scope = hashlib.sha256(json.dumps([session_id, operation_id]).encode()).hexdigest()[:16]
+            payload = {
+                "session_id": session_id,
+                "operation_id": operation_id,
+                "request_sha256": request_digest,
+                "request": request,
+                "source_ref": f"turn:{_opaque_id(turn_id, field='turn_id')}:{scope}",
+            }
+            _atomic_write_json(path, payload)
+            return payload
+
     def update_session(self, session_id: str, **changes: Any) -> dict[str, Any]:
         path = self._session_path(session_id)
         with self._session_lock(session_id):
@@ -364,6 +442,7 @@ class ChatSessionStore(ChatIngressStore):
                     "upstream_mode",
                     "codex_home",
                     "manager_context_version",
+                    "upstream_context_history",
                     "coordination_context_version",
                     "external_conversation_binding_id",
                     "loopx_mode",
@@ -378,11 +457,24 @@ class ChatSessionStore(ChatIngressStore):
                     "manager_runtime_standing_grant",
                     "manager_runtime_tool_classes",
                     "manager_executor_allocation",
+                    "agent_model_id",
+                    "agent_reasoning_effort", "agent_service_tier",
                     "goal_id",
                 }
                 unknown = set(changes) - allowed
                 if unknown:
                     raise ValueError(f"unsupported chat session fields: {sorted(unknown)}")
+                if "upstream_context_history" in changes:
+                    history = changes["upstream_context_history"]
+                    previous = payload.get("upstream_context_history") or []
+                    if not isinstance(history, list) or history[:len(previous)] != previous:
+                        raise ValueError("native context provenance must preserve its prior prefix")
+                    for item in history:
+                        if (not isinstance(item, dict) or set(item) != {"thread_id", "manager_context_version"}
+                                or item["manager_context_version"] is not None and (
+                                    type(item["manager_context_version"]) is not int or item["manager_context_version"] < 0)):
+                            raise ValueError("invalid native context provenance")
+                        _opaque_id(item["thread_id"], field="upstream_thread_id")
                 if "external_conversation_binding_id" in changes:
                     identity = _opaque_id(changes["external_conversation_binding_id"], field="external_conversation_binding_id")
                     if payload.get("session_mode") != CHAT_SESSION_MODE_ATTACHED or payload.get("external_conversation_binding_id") not in {None, identity}:
@@ -398,6 +490,11 @@ class ChatSessionStore(ChatIngressStore):
                         raise ValueError("only the owner manager may migrate to global identity")
                 if "upstream_thread_id" in changes:
                     changes["upstream_thread_id"] = _upstream_id(changes["upstream_thread_id"])
+                if "agent_model_id" in changes:
+                    changes["agent_model_id"] = normalize_agent_model_id(changes["agent_model_id"]) if changes["agent_model_id"] else None
+                for key in ("agent_reasoning_effort", "agent_service_tier"):
+                    if key in changes:
+                        changes[key] = normalize_agent_model_id(changes[key]) if changes[key] else None
                 if "upstream_mode" in changes:
                     changes["upstream_mode"] = _opaque_id(changes["upstream_mode"], field="upstream_mode")
                 if "manager_authorization_scope_id" in changes:
@@ -586,6 +683,12 @@ class ChatSessionStore(ChatIngressStore):
         agent_id: str,
         channel_id: str | None = None,
     ) -> dict[str, Any] | None:
+        """Return the newest resumable session row on one explicit channel.
+
+        Omitting ``channel_id`` pins the exact ``goal.<goal_id>`` channel:
+        a single namespace key, not a search over that goal's recorded
+        conversations. Use ``list_sessions`` for intentional discovery.
+        """
         candidates = self.resumable_session_candidates(
             goal_id=goal_id,
             agent_id=agent_id,
@@ -600,7 +703,12 @@ class ChatSessionStore(ChatIngressStore):
         agent_id: str,
         channel_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return matching storage facts without deciding Goal identity."""
+        """Return matching storage facts without deciding Goal identity.
+
+        Omitting ``channel_id`` pins the exact ``goal.<goal_id>`` channel:
+        a single namespace key, not a search over that goal's recorded
+        conversations. Use ``list_sessions`` for intentional discovery.
+        """
 
         return [
             candidate
@@ -619,7 +727,14 @@ class ChatSessionStore(ChatIngressStore):
         agent_id: str,
         channel_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return matching Session records without lifecycle filtering."""
+        """Return matching Session records without lifecycle filtering.
+
+        Omitting ``channel_id`` pins the exact ``goal.<goal_id>`` channel:
+        a single namespace key, not a search over that goal's recorded
+        conversations. Use ``list_sessions`` for intentional discovery.
+        Raises ``ValueError`` when ``channel_id`` and ``goal_id`` are both
+        omitted.
+        """
 
         if goal_id is None and channel_id is None:
             raise ValueError("channel_id is required when goal_id is omitted")
@@ -669,6 +784,11 @@ class ChatSessionStore(ChatIngressStore):
         message_id: str | None = None,
         goal_draft: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Append a message, or return an identical explicit-ID retry.
+
+        Reusing an explicit ``message_id`` with a different semantic payload
+        raises ``ValueError``. Generated timestamps do not affect identity.
+        """
         session_dir = self._session_dir(session_id)
         path = session_dir / "messages.jsonl"
         payload = {
@@ -689,6 +809,10 @@ class ChatSessionStore(ChatIngressStore):
             if message_id:
                 for existing in _read_jsonl(path):
                     if existing.get("message_id") == payload["message_id"]:
+                        require_matching_message_replay(
+                            existing,
+                            payload,
+                        )
                         return existing
             _append_jsonl(path, payload)
         return payload
@@ -701,7 +825,14 @@ class ChatSessionStore(ChatIngressStore):
         session_id: str,
         *,
         turn_id: str | None = None,
+        include_accepted_queued: bool = False,
     ) -> dict[str, Any] | None:
+        """Read the original request; acceptance/dispatch stays with its TS owner.
+
+        Session restoration may also replay a fully accepted active request
+        which is still queued. Interrupt recovery retains the prepared-only
+        default and cannot turn a terminal request into new work.
+        """
         session_token = _opaque_id(session_id, field="session_id")
         turn_token = (
             _opaque_id(turn_id, field="turn_id")
@@ -715,6 +846,8 @@ class ChatSessionStore(ChatIngressStore):
                 agent_id="loopx-chat",
                 operation="read_prepared_managed_chat_turn",
             ):
+                session = self.load_session(session_token)
+                active_id = (session or {}).get("active_turn_id")
                 prepared = [
                     payload
                     for path in (
@@ -723,7 +856,11 @@ class ChatSessionStore(ChatIngressStore):
                     if (
                         payload := _read_json(path)
                     ).get("schema_version") == CHAT_TURN_SCHEMA_VERSION
-                    and "_acceptance" in payload
+                    and ("_acceptance" in payload or (
+                        include_accepted_queued
+                        and payload.get("turn_id") == active_id
+                        and payload.get("status") == "queued"
+                    ))
                     and (
                         (
                             turn_token is not None
@@ -744,21 +881,25 @@ class ChatSessionStore(ChatIngressStore):
                     )
                 turn = prepared[0]
                 acceptance = turn.get("_acceptance")
-                if (
-                    not isinstance(acceptance, dict)
-                    or acceptance.get("schema_version")
-                    != CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA
-                    or acceptance.get("phase") != "prepared"
-                    or not isinstance(turn.get("message"), str)
-                    or not isinstance(
-                        acceptance.get("display_message"),
-                        str,
-                    )
-                ):
-                    raise ValueError(
-                        "chat turn acceptance state is inconsistent"
-                    )
-                attachments = acceptance.get("attachments")
+                if acceptance is None:
+                    # Sealed acceptance keeps attachments/display text in its
+                    # committed transcript. Submit verifies its digests again.
+                    messages = [message for message in self.messages(session_token)
+                        if message.get("turn_id") == turn.get("turn_id")
+                        and message.get("role") == "user"]
+                    if len(messages) != 1:
+                        raise ValueError("chat turn acceptance state is inconsistent")
+                    attachments = messages[0].get("attachments")
+                    display_message = messages[0].get("text")
+                else:
+                    if (not isinstance(acceptance, dict)
+                        or acceptance.get("schema_version") != CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA
+                        or acceptance.get("phase") != "prepared"):
+                        raise ValueError("chat turn acceptance state is inconsistent")
+                    attachments = acceptance.get("attachments")
+                    display_message = acceptance.get("display_message")
+                if not isinstance(turn.get("message"), str) or not isinstance(display_message, str):
+                    raise ValueError("chat turn acceptance state is inconsistent")
                 if attachments is not None and (
                     not isinstance(attachments, list)
                     or any(
@@ -792,7 +933,7 @@ class ChatSessionStore(ChatIngressStore):
                         turn.get("origin"),
                         field="origin",
                     ),
-                    "display_message": acceptance["display_message"],
+                    "display_message": display_message,
                     "loopx_execution": loopx_execution,
                     "loopx_request": loopx_request,
                 }
@@ -1023,111 +1164,6 @@ class ChatSessionStore(ChatIngressStore):
                     dispatch_reason=plan.dispatch_reason,
                 )
 
-    def create_queued_turn(
-        self,
-        session_id: str,
-        *,
-        client_turn_id: str,
-        message: str,
-        goal_instance_id: str | None = None,
-        ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
-        origin: str = "external",
-        external_agent_target: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], bool]:
-        """Persist one bounded follow-up without replacing the active Turn."""
-
-        client_id = _opaque_id(client_turn_id, field="client_turn_id")
-        session_path = self._session_path(session_id)
-        with self._session_lock(session_id):
-            with exclusive_file_lock(
-                session_path,
-                agent_id="loopx-chat",
-                operation="create_chat_queued_turn",
-            ):
-                existing = self.turn_for_client(session_id, client_id)
-                if existing is not None:
-                    require_matching_replay(
-                        existing,
-                        identity="client_turn_id",
-                        request={
-                            "message": str(message),
-                            "origin": _opaque_id(origin, field="origin"),
-                            "external_agent_target": external_agent_target,
-                        },
-                    )
-                    return existing, False
-                session = self.load_session(session_id)
-                if session is None or session.get("status") == "closed":
-                    raise KeyError("chat session was not found")
-                now = datetime.now(timezone.utc)
-                queued = [
-                    turn
-                    for turn in self.queued_turns(session_id)
-                    if (_instant(turn.get("expires_at")) or now + timedelta(seconds=1)) > now
-                ]
-                if len(queued) >= SESSION_QUEUE_MAX_PENDING:
-                    raise RuntimeError("session_queue_full")
-                turn_id = uuid.uuid4().hex
-                now_text = now.isoformat().replace("+00:00", "Z")
-                payload = {
-                    "schema_version": CHAT_TURN_SCHEMA_VERSION,
-                    "turn_id": turn_id,
-                    "session_id": session_id,
-                    **(
-                        {
-                            "goal_instance_id": _opaque_id(
-                                goal_instance_id,
-                                field="goal_instance_id",
-                            )
-                        }
-                        if goal_instance_id is not None
-                        else {}
-                    ),
-                    "client_turn_id": client_id,
-                    "status": "queued",
-                    **({"external_agent_target": external_agent_target} if external_agent_target is not None else {}),
-                    "message": str(message),
-                    "origin": _opaque_id(origin, field="origin"),
-                    "upstream_turn_id": None,
-                    "response": None,
-                    "error_code": None,
-                    "error": None,
-                    "created_at": now_text,
-                    "expires_at": (now + timedelta(seconds=max(1, ttl_seconds)))
-                    .isoformat()
-                    .replace("+00:00", "Z"),
-                    "started_at": None,
-                    "first_event_at": None,
-                    "completed_at": None,
-                    "last_activity_at": now_text,
-                    "delta_count": 0,
-                    "sse_reconnect_count": 0,
-                }
-                path = self._turn_path(session_id, turn_id)
-                _atomic_write_json(path, payload)
-                os.chmod(path, 0o600)
-                session.update(
-                    {
-                        "last_activity_at": now_text,
-                        "updated_at": utc_now(),
-                    }
-                )
-                _atomic_write_json(session_path, session, preserve_mode=True)
-            self.append_message(
-                session_id,
-                role="user",
-                text=message,
-                turn_id=turn_id,
-                origin=origin,
-            )
-            self.append_event(
-                session_id,
-                turn_id,
-                kind="turn.queued",
-                payload={"delivery_mode": "session_queue"},
-            )
-            return payload, True
-
     def queued_turns(self, session_id: str) -> list[dict[str, Any]]:
         session = self.load_session(session_id)
         if session is None:
@@ -1255,6 +1291,7 @@ class ChatSessionStore(ChatIngressStore):
                         raise ValueError(
                             "queued Turn Goal instance does not match its Session"
                         )
+                    self._recover_queued_turn_input(session_id, turn)
                     if host_claim_id:
                         now_text = utc_now()
                         turn.update(
@@ -1684,7 +1721,7 @@ class ChatSessionStore(ChatIngressStore):
             "payload": payload,
         }
         with self._event_lock:
-            self._event_pending.setdefault(key, []).append(event)
+            self._event_pending.setdefault(key, []).append((event, uuid.uuid4().hex))
         if not buffered:
             self.flush_events(session_id, turn_id)
         return event
@@ -1703,24 +1740,79 @@ class ChatSessionStore(ChatIngressStore):
                     return flushed
                 try:
                     with exclusive_file_lock(path, agent_id="loopx-chat", operation="append_chat_events"):
-                        rows = self._event_rows_locked(session_id, turn_id)
-                        # Allocate after the last persisted sequence and append under the
-                        # same file lock: row order stays strictly increasing by sequence.
-                        # Compaction preserves this order but may leave sequence gaps.
-                        sequence = int(rows[-1].get("sequence") or 0) if rows else 0
-                        for event in pending:
-                            sequence += 1
-                            event["event_id"] = str(sequence)
-                            event["sequence"] = sequence
-                        _append_jsonl_rows(path, pending)
-                        if any(row["kind"] in TERMINAL_EVENT_KINDS for row in pending):
-                            self._event_cache.drop(key)
-                        else:
-                            self._event_cache.put(key, self._event_revision(path), [*rows, *pending])
+                        append_started = False
+                        try:
+                            uncertain = any("sequence" in event for event, _ in pending)
+                            rows = (
+                                _read_jsonl(path, raise_on_error=True)
+                                if uncertain
+                                else self._event_rows_locked(session_id, turn_id)
+                            )
+                            # A failed append may already have persisted all or part of
+                            # its batch. Match only this store's stable append ids; two
+                            # otherwise identical events are still separate writes.
+                            durable = (
+                                {
+                                    row["_append_id"]: row
+                                    for row in rows
+                                    if isinstance(row.get("_append_id"), str)
+                                }
+                                if uncertain
+                                else {}
+                            )
+                            # Allocate after the last persisted sequence under the same
+                            # file lock. Compaction may leave gaps; another writer may
+                            # have appended after a partial failed batch.
+                            sequence = int(rows[-1].get("sequence") or 0) if rows else 0
+                            to_append: list[dict[str, Any]] = []
+                            for event, append_id in pending:
+                                committed = durable.get(append_id)
+                                if committed is not None:
+                                    event["event_id"] = committed["event_id"]
+                                    event["sequence"] = committed["sequence"]
+                                    continue
+                                sequence += 1
+                                event["event_id"] = str(sequence)
+                                event["sequence"] = sequence
+                                to_append.append({**event, "_append_id": append_id})
+                            append_started = True
+                            _append_jsonl_rows(path, to_append)
+                            if any(event["kind"] in TERMINAL_EVENT_KINDS for event, _ in pending):
+                                self._event_cache.drop(key)
+                            else:
+                                self._event_cache.put(key, self._event_revision(path), [*rows, *to_append])
+                        except Exception:
+                            if not append_started:
+                                raise
+                            # Confirm visible writes before releasing the file lock:
+                            # another store may compact old events before our retry.
+                            try:
+                                written = {
+                                    row["_append_id"]: row
+                                    for row in _read_jsonl(path, raise_on_error=True)
+                                    if isinstance(row.get("_append_id"), str)
+                                }
+                            except OSError:
+                                pass  # Keep all uncertain events for a later retry.
+                            else:
+                                remaining = []
+                                for event, append_id in pending:
+                                    committed = written.get(append_id)
+                                    if committed is None:
+                                        remaining.append((event, append_id))
+                                    else:
+                                        event["event_id"] = committed["event_id"]
+                                        event["sequence"] = committed["sequence"]
+                                pending = remaining
+                            raise
                 except Exception:
+                    self._event_cache.drop(key)
                     with self._event_lock:
                         later = self._event_pending.get(key, [])
-                        self._event_pending[key] = [*pending, *later]
+                        if pending or later:
+                            self._event_pending[key] = [*pending, *later]
+                        else:
+                            self._event_pending.pop(key, None)
                     raise
                 flushed += len(pending)
 
@@ -1743,7 +1835,10 @@ class ChatSessionStore(ChatIngressStore):
         result = rows[start:]
         if rows and rows[-1].get("kind") in TERMINAL_EVENT_KINDS:
             self._event_cache.retain_terminal(key, rows)
-        return result
+        return [
+            {field: value for field, value in row.items() if field != "_append_id"}
+            for row in result
+        ]
 
     def compact_completed_events(self, *, older_than_hours: float = 24.0) -> int:
         """Drop replay-only deltas after the durable final message is old enough."""
@@ -1794,6 +1889,8 @@ class ChatSessionStore(ChatIngressStore):
             key: payload.get(key)
             for key in (
                 "session_id", "goal_id", "agent_id", "adapter_kind", "status",
+                "agent_model_id",
+                "agent_reasoning_effort", "agent_service_tier",
                 "active_turn_id", "last_error_code", "created_at", "updated_at", "last_activity_at",
             )
         } | {

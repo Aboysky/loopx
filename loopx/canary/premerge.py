@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..contract import scan_public_boundary
-from .planner import REPO_ROOT
+from .planner import REPO_ROOT, resolve_canary_catalog_path
 from .runner import build_canary_smoke_suite_run
 
 
@@ -16,6 +16,14 @@ PREMERGE_VALIDATION_SUMMARY_SCHEMA_VERSION = "premerge_validation_summary_v0"
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 PREMERGE_TIERS = {"quick", "standard", "deep"}
+
+# These paths need the existing exact-head visual/publication review. This is
+# local premerge coverage classification, not a public-boundary allowlist:
+# every matching file keeps the overall merge gate held, including image-only
+# changes. SVG remains text-scanned. Unknown binary formats still fail closed.
+_VISUAL_REVIEW_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".avif",
+})
 
 CONTROL_PLANE_TOKENS = (
     "loopx/control_plane/",
@@ -153,6 +161,15 @@ def _empty_smoke_suite_run(
     )
 
 
+def _visual_review_paths(changed_files: list[str], repo_root: Path) -> list[str]:
+    return [
+        path for path in _dedupe(changed_files)
+        if Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
+        and (repo_root / path).is_file()
+        and not (repo_root / path).is_symlink()
+    ]
+
+
 def _public_boundary_changed_files_run(
     *,
     changed_files: list[str],
@@ -160,25 +177,30 @@ def _public_boundary_changed_files_run(
     timeout_seconds: float,
     repo_root: Path = REPO_ROOT,
 ) -> dict[str, Any]:
+    visual_paths = _visual_review_paths(changed_files, repo_root)
+    visual_files = {(repo_root / path).resolve() for path in visual_paths}
     existing_paths = [
         (repo_root / path).resolve()
         for path in _dedupe(changed_files)
-        if (repo_root / path).exists()
+        if (repo_root / path).exists() and (repo_root / path).resolve() not in visual_files
     ]
     display_paths: list[str] = []
     for path in existing_paths:
         try:
-            display_paths.append(str(path.relative_to(repo_root.resolve())))
+            display_paths.append(path.relative_to(repo_root.resolve()).as_posix())
         except ValueError:
             display_paths.append(str(path))
     display_argv = ["loopx", "check"]
-    for path in display_paths:
-        display_argv.extend(["--scan-path", path])
+    for display_path in display_paths:
+        display_argv.extend(["--scan-path", display_path])
     check: dict[str, Any] = {
         "source": "premerge_public_boundary",
         "tier": "default",
         "command": " ".join(display_argv),
-        "reason": "scans changed public-boundary files for private material",
+        "reason": (
+            "scans changed text for private material; binary images require visual review"
+            if visual_paths else "scans changed public-boundary files for private material"
+        ),
         "normalized": {
             "ok": True,
             "display_argv": display_argv,
@@ -191,31 +213,49 @@ def _public_boundary_changed_files_run(
         if not existing_paths:
             check.update(
                 {
-                    "status": "skipped_no_existing_files",
+                    "status": "skipped_no_text_files" if visual_paths else "skipped_no_existing_files",
                     "ok": True,
                     "duration_seconds": 0.0,
-                    "stdout_tail": "no existing changed public-boundary files to scan",
+                    "stdout_tail": (
+                        "no changed text files; binary images require visual review"
+                        if visual_paths else "no existing changed public-boundary files to scan"
+                    ),
                 }
             )
         else:
             boundary = scan_public_boundary(existing_paths, registry={})
             hits = [str(item) for item in boundary.get("hits") or []]
+            # A directory this scan could not list is an unscanned input, not a
+            # clean one, so the check fails closed like a recorded hit.
+            unreadable_directories = [
+                str(item) for item in boundary.get("unreadable_directories") or []
+            ]
+            unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
+            missing_roots = [str(item) for item in boundary.get("missing_scan_roots") or []]
+            warnings = [str(item) for item in boundary.get("warnings") or []]
+            complete_ok = bool(boundary.get("ok")) and not (
+                unreadable_directories or unreadable_files or missing_roots
+            )
+            label = "completed with warnings" if warnings else "clean"
             check.update(
                 {
-                    "status": "passed" if boundary.get("ok") else "failed",
-                    "ok": bool(boundary.get("ok")),
+                    "status": "passed" if complete_ok else "failed",
+                    "ok": complete_ok,
                     "duration_seconds": round(time.monotonic() - started, 3),
                     "stdout_tail": (
-                        f"public boundary scan clean: {boundary.get('scanned_files')} files"
-                        if boundary.get("ok")
+                        f"public boundary scan {label}: {boundary.get('scanned_files')} files"
+                        if complete_ok
                         else ""
                     ),
-                    "stderr_tail": "\n".join(hits)[-800:] if hits else "",
+                    "stderr_tail": "\n".join(dict.fromkeys(
+                        hits + warnings + unreadable_files + unreadable_directories + missing_roots
+                    ))[-800:],
                     "boundary": {
                         "scanned_files": boundary.get("scanned_files"),
                         "skipped_private_state_files": boundary.get("skipped_private_state_files"),
                         "allowed_hits": boundary.get("allowed_hits"),
                         "hit_count": len(hits),
+                        "unreadable_directory_count": len(unreadable_directories),
                     },
                 }
             )
@@ -225,6 +265,11 @@ def _public_boundary_changed_files_run(
         timeout_seconds=timeout_seconds,
         selected_checks=[check],
         note=(
+            "Premerge public-boundary validation scans the changed public text files "
+            "directly. The full fresh-directory contract smoke remains available "
+            "through the canary catalog/profile suites. Binary images require the "
+            "existing exact-head visual review; text success does not qualify them."
+            if visual_paths else
             "Premerge public-boundary validation scans the changed public files "
             "directly. The full fresh-directory contract smoke remains available "
             "through the canary catalog/profile suites."
@@ -236,6 +281,8 @@ def _public_boundary_changed_files_run(
         "changed_files": list(changed_files),
         "scan_paths": display_paths,
     }
+    if visual_paths:
+        payload["selection_inputs"]["visual_review_paths"] = visual_paths
     return payload
 
 
@@ -301,8 +348,22 @@ def classify_premerge_surfaces(
         mark("extension_runtime", "extension-runtime")
     if any(_path_matches(path, DOC_CONTENT_TOKENS) for path in files):
         mark("docs_project_content", "docs-project-content-ops")
-    if any(_path_matches(path, PUBLIC_BOUNDARY_TOKENS) for path in files):
+    if any(
+        _path_matches(path, PUBLIC_BOUNDARY_TOKENS)
+        or Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
+        for path in files
+    ):
         mark("public_boundary")
+    for path in _visual_review_paths(files, repo_root):
+        manual_holds.append({
+            "kind": "visual_evidence",
+            "path": path,
+            "reason": (
+                f"{path}: binary image is outside text-scan coverage; inspect pixels, "
+                "metadata and source for private material in the existing exact-head "
+                "PR review. This hold is not a passing privacy check or merge authority."
+            ),
+        })
     if any(_path_matches(path, BENCHMARK_SENSITIVE_TOKENS) for path in files):
         mark("benchmark_sensitive")
         manual_holds.append(
@@ -345,7 +406,7 @@ def _display_argv(argv: list[str], *, repo_root: Path = REPO_ROOT) -> list[str]:
     for index, value in enumerate(displayed[1:], start=1):
         path = Path(value)
         try:
-            displayed[index] = str(path.resolve().relative_to(repo_root.resolve()))
+            displayed[index] = path.resolve().relative_to(repo_root.resolve()).as_posix()
         except (OSError, ValueError):
             displayed[index] = value
     return displayed
@@ -483,6 +544,17 @@ def _diff_hygiene_checks(
             "checks unstaged changes not yet committed",
         ),
     ]
+    rfc_checker = "scripts/check_rfc_bilingual.py"
+    checker_registered = (repo_root / rfc_checker).is_file() or subprocess.run(
+        ["git", "cat-file", "-e", f"{base}:{rfc_checker}"],
+        cwd=repo_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    ).returncode == 0
+    if checker_registered:
+        specs.append((
+            "rfc_bilingual_diff",
+            [sys.executable, rfc_checker, "--base", base, "--head", "HEAD"],
+            "requires both existing RFC mirrors in the committed PR diff before merge",
+        ))
     checks: list[dict[str, Any]] = []
     for index, (check_id, argv, reason) in enumerate(specs, start=1):
         checks.append(
@@ -621,11 +693,8 @@ def _gate_status(
 
 
 def _check_command(check: dict[str, Any]) -> str:
-    normalized = (
-        check.get("normalized")
-        if isinstance(check.get("normalized"), dict)
-        else {}
-    )
+    normalized_value = check.get('normalized')
+    normalized = normalized_value if isinstance(normalized_value, dict) else {}
     display_argv = normalized.get("display_argv")
     if isinstance(display_argv, list) and display_argv:
         return " ".join(str(part) for part in display_argv)
@@ -717,12 +786,10 @@ def apply_change_quality_verification(
         verification.get("enforcement_applied")
         and verification.get("ok") is False
     )
-    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
-    summary = (
-        payload.get("validation_summary")
-        if isinstance(payload.get("validation_summary"), dict)
-        else {}
-    )
+    gate_value = payload.get('gate')
+    gate = gate_value if isinstance(gate_value, dict) else {}
+    summary_value = payload.get('validation_summary')
+    summary = summary_value if isinstance(summary_value, dict) else {}
     gate["quality_receipt_failure_count"] = 1 if enforced_failure else 0
     summary["policy_failure_count"] = 1 if enforced_failure else 0
     if enforced_failure:
@@ -830,9 +897,12 @@ def build_premerge_validation_gate(
     include_deep_checks: bool | None = None,
     progress_callback: ProgressCallback | None = None,
     repo_root: Path | None = None,
+    catalog_path: Path | None = None,
 ) -> dict[str, Any]:
     target_repo_root = (repo_root or REPO_ROOT).resolve()
     files = _dedupe(list(changed_files or []))
+    if files:
+        catalog_path = resolve_canary_catalog_path(catalog_path, repo_root=target_repo_root)
     classification = classify_premerge_surfaces(files, repo_root=target_repo_root)
     limits = _tier_limits(tier)
     include_deep = bool(limits["deep"] if include_deep_checks is None else include_deep_checks)
@@ -874,6 +944,7 @@ def build_premerge_validation_gate(
     if module_colocation is not None:
         direct_checks.append(module_colocation)
 
+    catalog_run: dict[str, Any]
     if files:
         catalog_progress = _section_progress_callback(
             progress_callback,
@@ -886,6 +957,8 @@ def build_premerge_validation_gate(
         )
         catalog_run = build_canary_smoke_suite_run(
             suite="catalog-plan",
+            repo_root=target_repo_root,
+            catalog_path=catalog_path,
             changed_files=files,
             include_deep_checks=include_deep,
             max_checks_per_family=3,
@@ -905,10 +978,12 @@ def build_premerge_validation_gate(
             executed_check_count=catalog_run.get("executed_check_count"),
             failure_count=catalog_run.get("failure_count"),
         )
-        catalog_run = downgrade_inherited_baseline_failures(
+        adjusted_catalog_run = downgrade_inherited_baseline_failures(
             catalog_run,
             changed_files=files,
         )
+        assert adjusted_catalog_run is not None  # A dictionary input retains a result.
+        catalog_run = adjusted_catalog_run
     else:
         catalog_run = _empty_smoke_suite_run(
             suite="catalog-plan",
@@ -940,6 +1015,8 @@ def build_premerge_validation_gate(
         )
         risk_profile_run = build_canary_smoke_suite_run(
             suite="default-public",
+            repo_root=target_repo_root,
+            catalog_path=catalog_path,
             profiles=risk_profiles,
             include_deep_checks=include_deep,
             limit=profile_limit,
@@ -1094,12 +1171,10 @@ def _emit_section_progress(
 
 
 def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
-    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
-    classification = (
-        payload.get("classification")
-        if isinstance(payload.get("classification"), dict)
-        else {}
-    )
+    gate_value = payload.get('gate')
+    gate = gate_value if isinstance(gate_value, dict) else {}
+    classification_value = payload.get('classification')
+    classification = classification_value if isinstance(classification_value, dict) else {}
     lines = [
         "# Pre-Merge Validation Gate",
         "",
@@ -1152,11 +1227,8 @@ def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
         for check in run.get("selected_checks", [])[:12]:
             if not isinstance(check, dict):
                 continue
-            normalized = (
-                check.get("normalized")
-                if isinstance(check.get("normalized"), dict)
-                else {}
-            )
+            normalized_value = check.get('normalized')
+            normalized = normalized_value if isinstance(normalized_value, dict) else {}
             command = " ".join(str(part) for part in normalized.get("display_argv") or [])
             lines.append(f"- `{check.get('status') or 'ready'}` {command or check.get('command')}")
             if check.get("advisory_reason"):
@@ -1172,11 +1244,8 @@ def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
         else None
     )
     if quality is not None:
-        evidence = (
-            quality.get("pr_evidence")
-            if isinstance(quality.get("pr_evidence"), dict)
-            else {}
-        )
+        evidence_value = quality.get('pr_evidence')
+        evidence = evidence_value if isinstance(evidence_value, dict) else {}
         lines.extend(
             [
                 "",

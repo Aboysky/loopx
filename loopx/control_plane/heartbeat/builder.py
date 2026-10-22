@@ -38,6 +38,7 @@ from .budget import (
     build_interface_budget,
 )
 from .host import (
+    resolve_heartbeat_capture_root,
     resolve_exact_heartbeat_turn_identity,
     uses_ark_managed_agent_goal_host,
     uses_native_goal_host_loop,
@@ -133,6 +134,7 @@ def _heartbeat_regeneration_commands(
     *,
     cli_bin: str,
     runtime_root: str | Path | None,
+    registry_path: str | Path | None,
     goal_id: str,
     active_state_arg: str,
     agent_args: str,
@@ -147,6 +149,7 @@ def _heartbeat_regeneration_commands(
     command_prefix = render_cli_command_prefix(
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
     )
     return tuple(
         f"{command_prefix} heartbeat-prompt --{mode}{suffix}"
@@ -159,6 +162,7 @@ def _heartbeat_prompt_commands(
     goal_id: str,
     cli_bin: str,
     runtime_root: str | Path | None,
+    registry_path: str | Path | None,
     normalized_agent_id: str | None,
     normalized_available_capabilities: tuple[str, ...],
     task_body_available_capabilities: tuple[str, ...],
@@ -170,11 +174,15 @@ def _heartbeat_prompt_commands(
     agent_args: str,
     capability_args: str,
     turn_identity_arg: str,
+    decision_output_root: Path | None,
+    decision_handoff_socket: str | None,
+    turn_envelope: bool,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
         goal_id,
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
         agent_id=normalized_agent_id,
         available_capabilities=normalized_available_capabilities,
         runtime_profile=runtime_profile,
@@ -190,6 +198,7 @@ def _heartbeat_prompt_commands(
         ),
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
         agent_id=normalized_agent_id,
         available_capabilities=normalized_available_capabilities,
     )
@@ -200,6 +209,7 @@ def _heartbeat_prompt_commands(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry_path,
             agent_id=normalized_agent_id,
             available_capabilities=task_body_available_capabilities,
             runtime_profile=runtime_profile,
@@ -210,6 +220,7 @@ def _heartbeat_prompt_commands(
             source=VISIBLE_GOAL_SLOT_SPEND_SOURCE,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry_path,
             agent_id=normalized_agent_id,
         )
     scheduler_args = render_scheduler_execution_args(
@@ -224,6 +235,7 @@ def _heartbeat_prompt_commands(
     ) = _heartbeat_regeneration_commands(
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
         goal_id=goal_id,
         active_state_arg=active_state_arg,
         agent_args=agent_args,
@@ -232,14 +244,14 @@ def _heartbeat_prompt_commands(
         turn_identity_arg=turn_identity_arg,
     )
     pr_review_pre_quota_command = (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} "
         f"heartbeat-prequota -g {shlex.quote(goal_id)} "
         f"-a {shlex.quote(normalized_agent_id)}"
         if normalized_agent_id
         and "external_evidence_poll" in normalized_available_capabilities
         else None
     )
-    return {
+    commands = {
         "quota_guard_command": quota_guard_command,
         "quota_spend_command": quota_spend_command,
         "task_body_quota_guard_command": task_body_quota_guard_command,
@@ -248,12 +260,14 @@ def _heartbeat_prompt_commands(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry_path,
             agent_id=normalized_agent_id,
         ),
         "progress_refresh_state_command": render_accountable_progress_refresh_command(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry_path,
             agent_id=normalized_agent_id,
         ),
         "pr_review_pre_quota_command": pr_review_pre_quota_command,
@@ -262,6 +276,15 @@ def _heartbeat_prompt_commands(
         "brief_prompt_command": brief_prompt_command,
         "thin_prompt_command": thin_prompt_command,
     }
+    if decision_output_root is not None:
+        capture_arg = " --decision-output-root " + shlex.quote(str(decision_output_root))
+        if decision_handoff_socket is not None:
+            capture_arg += " --decision-handoff-socket " + shlex.quote(decision_handoff_socket)
+        display_arg = " --turn-envelope" if turn_envelope else ""
+        for key in ("quota_guard_command", "task_body_quota_guard_command"):
+            commands[key] = str(commands[key]) + display_arg + capture_arg
+        commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + display_arg + capture_arg
+    return commands
 
 
 def build_heartbeat_prompt(
@@ -278,6 +301,7 @@ def build_heartbeat_prompt(
     thin: bool = False,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     agent_scopes: list[str] | tuple[str, ...] | None = None,
     agent_profile: dict[str, Any] | None = None,
@@ -289,6 +313,9 @@ def build_heartbeat_prompt(
     turn_granularity: str | None = None,
     turn_instance_id: str | None = None,
     reward_memory_enabled: bool = True,
+    decision_output_root: str | Path | None = None,
+    decision_handoff_socket: str | None = None,
+    turn_envelope: bool = False,
 ) -> dict[str, Any]:
     if not (full or compact or brief or thin):
         thin = True
@@ -345,6 +372,14 @@ def build_heartbeat_prompt(
         agent_id=normalized_agent_id,
         runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
+    )
+    decision_output_root = resolve_heartbeat_capture_root(
+        decision_output_root,
+        thin=thin, full=full, compact=compact, brief=brief,
+        native_goal_host=native_goal_host,
+        turn_instance_id=normalized_turn_instance_id,
+        decision_handoff_socket=decision_handoff_socket,
+        turn_envelope=turn_envelope,
     )
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:
@@ -419,6 +454,7 @@ def build_heartbeat_prompt(
         goal_id=goal_id,
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
         normalized_agent_id=normalized_agent_id,
         normalized_available_capabilities=normalized_available_capabilities,
         task_body_available_capabilities=task_body_available_capabilities,
@@ -430,6 +466,9 @@ def build_heartbeat_prompt(
         agent_args=agent_args,
         capability_args=capability_args,
         turn_identity_arg=turn_identity_arg,
+        decision_output_root=decision_output_root,
+        decision_handoff_socket=decision_handoff_socket,
+        turn_envelope=turn_envelope,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)
     task_body_renderer = _select_task_body_renderer(
@@ -465,11 +504,13 @@ def build_heartbeat_prompt(
         compact_prompt_command=str(commands["compact_prompt_command"]),
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
+        **({"captured_envelope": True} if turn_envelope else {}),
         **reward_memory_rule_kwargs,
     )
     task_body = bind_exact_turn_settlement_task_body(
         task_body,
         turn_instance_id=normalized_turn_instance_id,
+        captured_envelope=turn_envelope,
     )
     if fine_grained:
         task_body = f"{task_body}\n\n{FINE_GRAINED_TURN_RULE}"
@@ -542,11 +583,13 @@ def build_heartbeat_prompt(
             task_body=task_body,
             goal_id=goal_id,
             active_state=active_state_text,
+            registry_path=str(registry_path) if registry_path is not None else None,
             full=full,
             compact=compact,
             brief=brief,
             thin=thin,
             native_goal_host=native_goal_host,
+            captured_envelope=turn_envelope,
         ),
         "task_body": task_body,
     }
@@ -556,6 +599,13 @@ def build_heartbeat_prompt(
         payload["turn_granularity"] = TURN_GRANULARITY_FINE
         payload["turn_mode"] = "fine_grained"
     payload["agent_model"] = AgentRuntimeModel.PEER_V1.value
+    return _prune_prompt_metadata(payload, thin=thin, brief=brief)
+
+
+def _prune_prompt_metadata(
+    payload: dict[str, Any], *, thin: bool, brief: bool,
+) -> dict[str, Any]:
+    """Trim redundant transport metadata without changing the authored task body."""
     if thin:
         payload.pop("compact_prompt_command", None)
         payload.pop("brief_prompt_command", None)
@@ -573,6 +623,16 @@ def build_heartbeat_prompt(
         ):
             if not payload.get(key):
                 payload.pop(key, None)
+    elif brief:
+        # The brief task body already embeds its compact-detail command. Keep
+        # only the selected brief command as top-level regeneration metadata;
+        # repeating the other mode commands can exceed the registered output
+        # budget when the CLI/runtime paths are long.
+        payload.pop("expanded_prompt_command", None)
+        payload.pop("compact_prompt_command", None)
+        payload.pop("thin_prompt_command", None)
+        if payload.get("pr_review_pre_quota_command") is None:
+            payload.pop("pr_review_pre_quota_command", None)
     return payload
 def build_heartbeat_prompt_error_payload(
     *,
@@ -587,6 +647,7 @@ def build_heartbeat_prompt_error_payload(
     thin: bool = False,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     agent_scopes: list[str] | tuple[str, ...] | None = None,
     registered_agents: list[str] | tuple[str, ...] | None = None,
@@ -617,6 +678,7 @@ def build_heartbeat_prompt_error_payload(
     command_prefix = render_cli_command_prefix(
         cli_bin=cli_bin,
         runtime_root=runtime_root,
+        registry_path=registry_path,
     )
     expanded_prompt_command = f"{command_prefix} heartbeat-prompt --full --goal-id {goal_id}{active_state_arg}{agent_args}{capability_args}"
     compact_prompt_command = f"{command_prefix} heartbeat-prompt --compact --goal-id {goal_id}{active_state_arg}{agent_args}{capability_args}"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import stat
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 
 import pytest
 
@@ -28,6 +30,7 @@ from loopx.control_plane.operator_provider import (
     operator_provider_store_path,
     write_operator_provider,
 )
+from loopx.control_plane import operator_provider as operator_provider_module
 from loopx.control_plane.turn_driver.host_binding import selected_turn_host
 
 KEY = "sk-operator-provider-fixture-key"
@@ -134,6 +137,60 @@ def test_an_update_merges_one_field_without_clearing_the_other(tmp_path):
     assert cleared[BASE_URL_FIELD]["value"] == BASE_URL
 
 
+def test_concurrent_partial_updates_preserve_both_credential_fields(
+    tmp_path, monkeypatch
+):
+    write_operator_provider(
+        runtime_root=tmp_path,
+        api_key=KEY,
+        base_url=BASE_URL,
+        environ={},
+    )
+    real_read = operator_provider_module.read_operator_provider
+    arrivals_lock = Lock()
+    release_reads = Event()
+    arrivals = 0
+
+    def synchronized_read(runtime_root=None):
+        nonlocal arrivals
+        state = real_read(runtime_root)
+        with arrivals_lock:
+            arrivals += 1
+            if arrivals == 2:
+                release_reads.set()
+        # On the fixed path, the first writer waits here while holding the
+        # file lock; the second then reads the first writer's saved state.
+        # Without the lock, both callers load the same old record.
+        release_reads.wait(timeout=0.5)
+        return state
+
+    monkeypatch.setattr(
+        operator_provider_module, "read_operator_provider", synchronized_read
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        key_update = executor.submit(
+            write_operator_provider,
+            runtime_root=tmp_path,
+            api_key=OTHER_KEY,
+            environ={},
+        )
+        endpoint_update = executor.submit(
+            write_operator_provider,
+            runtime_root=tmp_path,
+            base_url="https://updated.example.invalid/v1",
+            environ={},
+        )
+        assert key_update.result()[PROVIDER_KEY_FIELD]["configured"] is True
+        assert endpoint_update.result()[BASE_URL_FIELD]["value"] == (
+            "https://updated.example.invalid/v1"
+        )
+
+    final = real_read(tmp_path)
+    assert final[PROVIDER_KEY_FIELD] == OTHER_KEY
+    assert final[BASE_URL_FIELD] == "https://updated.example.invalid/v1"
+
+
 def test_clearing_the_last_field_removes_the_record(tmp_path):
     write_operator_provider(runtime_root=tmp_path, api_key=KEY)
 
@@ -210,3 +267,62 @@ def test_a_stored_credential_selects_the_managed_default_turn_host(tmp_path):
 
     assert without == ("codex-cli", "no_operator_credential")
     assert with_stored == ("dsh", "operator_credential")
+
+
+def test_messages_endpoint_compatibility_classification() -> None:
+    from loopx.control_plane.operator_provider import messages_endpoint_compatibility
+
+    assert (
+        messages_endpoint_compatibility("https://api.deepseek.com/anthropic")
+        == "ok"
+    )
+    assert (
+        messages_endpoint_compatibility("https://api.deepseek.com/anthropic/")
+        == "ok"
+    )
+    # A bare root reaches <root>/v1/messages, which the provider answers 404.
+    assert messages_endpoint_compatibility("https://api.deepseek.com") == "compat_path_required"
+    assert messages_endpoint_compatibility("https://api.deepseek.com/v1") == "compat_path_required"
+    assert messages_endpoint_compatibility("") == "endpoint_missing"
+    for garbage in ("not a url", "ftp://api.deepseek.com/anthropic", "https://user:secret@host/anthropic"):
+        assert messages_endpoint_compatibility(garbage) == "endpoint_unparsable"
+
+
+def test_managed_dsh_host_refuses_a_bare_messages_root(tmp_path) -> None:
+    from argparse import Namespace
+
+    import pytest
+
+    from loopx.cli_commands.turn_dsh_host import build_dsh_operation_host_runner
+
+    args = Namespace(
+        dsh_provider="deepseek-official",
+        dsh_model="deepseek-flash",
+        dsh_reasoning_effort="high",
+        dsh_home=None,
+        dsh_max_tokens=None,
+        dsh_operation_module=str(tmp_path / "operation.mjs"),
+        dsh_runtime_bin=None,
+        dsh_cordis=None,
+        timeout_seconds=None,
+        operation_request_file=None,
+        operation_request_sha256=None,
+        codex_operation_source_route_json=None,
+        codex_confirmed_operation_id=None,
+    )
+    environ = {
+        "DEEPSEEK_API_KEY": "synthetic-key",
+        "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+    }
+    with pytest.raises(ValueError) as exc_info:
+        build_dsh_operation_host_runner(
+            args,
+            runtime_root=tmp_path,
+            registry_path=tmp_path / "registry.json",
+            workspace=tmp_path,
+            environ=environ,
+            goal_admission=None,
+        )
+    message = str(exc_info.value)
+    assert "compat_path_required" in message and "/anthropic" in message
+    assert "synthetic-key" not in message

@@ -19,6 +19,7 @@ from .error_codes import HeartbeatReceiptIdentityConflictError
 from .heartbeat_receipt import (
     heartbeat_receipt_view,
     upgrade_identityless_heartbeat_receipt,
+    requalify_bound_heartbeat_receipt,
 )
 from .settlement import (
     attach_settlement_progress,
@@ -40,7 +41,7 @@ def reconcile_existing_heartbeat_receipt(
     existing: dict[str, object],
     goal_ref: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str, bool, str]:
-    """Bind an identity-less same-turn receipt without changing a bound receipt."""
+    """Bind or qualify same-Turn work without replacing its settlement identity."""
 
     receipt = existing
     receipt_status = "replayed"
@@ -109,6 +110,20 @@ def reconcile_existing_heartbeat_receipt(
                         "current="
                         f"{rollout_todo_id or rollout_replan_obligation_id}"
                     )
+                rollout_details = quota_rollout_details(payload, args,
+                    todo_id=rollout_todo_id, replan_obligation_id=rollout_replan_obligation_id)
+                rollout_details["settlement_effect_id"] = expected_effect_id
+                receipt, qualified = requalify_bound_heartbeat_receipt(
+                    runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+                    turn_instance_id=turn_instance_id, todo_id=rollout_todo_id,
+                    replan_obligation_id=rollout_replan_obligation_id,
+                    status=str(payload.get("effective_action") or payload.get("decision") or "should-run"),
+                    details=rollout_details,
+                    registry_path=Path(str(payload["registry"])) if payload.get("registry") else None,
+                    goal_ref=goal_ref,
+                )
+                if qualified:
+                    receipt_status, receipt_appended = "upgraded", True
         else:
             rollout_details = quota_rollout_details(
                 payload,
@@ -379,6 +394,15 @@ def quota_rollout_details(
         "quiet_noop_allowed": bool(agent_channel.get("quiet_noop_allowed")),
         "closeout_required": closeout_required,
     }
+    replan_packet = payload.get("replan_action_packet")
+    receipt = payload.get("heartbeat_receipt")
+    capability_guard = (replan_packet.get("capability_guard") if isinstance(replan_packet, Mapping) else None) or (
+        receipt.get("semantic_replan_capability_guard") if isinstance(receipt, Mapping) else None
+    )
+    if isinstance(capability_guard, Mapping):
+        details["semantic_replan_capability_id"] = capability_guard["capability_id"]
+        details["semantic_replan_gap_id"] = capability_guard["gap_id"]
+        details["semantic_replan_frontier_revision"] = capability_guard["frontier_revision"]
     cli_channel = interaction.get("cli_channel")
     if isinstance(cli_channel, Mapping) and cli_channel.get("quota_spend_source"):
         details["quota_spend_source"] = cli_channel["quota_spend_source"]

@@ -22,6 +22,21 @@ test("execution is explicit and preserves native lifecycle/allowance", () => {
   assert.throws(() => planChatMode({...input, operation: "resume", native: {status: "active"}}), /paused/);
 });
 
+test("owner adoption records completed work without execution or allowance changes", () => {
+  const adoption = {...input, operation: "adopt", settings: {agent_id: "lead"}};
+  for (const loopx_mode of [{enabled: false}, {enabled: true, paused: true}, {enabled: true}]) {
+    assert.deepEqual(planChatMode({...adoption, session: {...session, loopx_mode, active_turn_id: "running"}}),
+      {operation: "adopt"});
+  }
+  assert.throws(() => planChatMode({...adoption, goal_active: false}), /stopped/);
+  assert.throws(() => planChatMode({...adoption, execution_binding_valid: false}), /bindings/);
+  assert.throws(() => planChatMode({...adoption, registered_agents: []}), /registered/);
+  for (const change of [{channel_id: "manager"}, {session_mode: "attached_host"}, {agent_id: "other"}]) {
+    assert.throws(() => planChatMode({...adoption, session: {...session, ...change}}), /local managed/);
+  }
+  assert.throws(() => planChatMode({...adoption, origin: "host"}), /local managed/);
+});
+
 test("neither registration nor a role name grants execution", () => {
   for (const changes of [
     {origin: "external"}, {goal_active: false}, {execution_binding_valid: false},
@@ -95,16 +110,22 @@ test("a host wake reuses the resume facts and returns a typed outcome, never an 
   assert.throws(() => planChatMode({...input, origin: "host"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "web"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "external"}), /local managed/);
-  assert.throws(() => planChatMode({...wake, session: {...enabled, channel_id: "manager"}}));
+  for (const changes of [{channel_id: "manager"}, {channel_id: "manager.external.test"},
+    {session_mode: "attached_host"}, {agent_id: "other"}]) {
+    assert.deepEqual(planChatMode({...wake, session: {...enabled, ...changes}}),
+      {operation: "wake", state: "refused", reason: "no_wake_owner"});
+  }
 });
 
 test("only a provider-dispatched wake Turn is dispatch evidence; a queued or merely starting one is replayed", () => {
   const own = {turn_id: "wake-turn", loopx_execution: true, operation: "wake", intent_id: intent.intent_id};
-  const queued = {...own, status: "queued", started_at: null};
+  const queued = {...own, status: "queued", started_at: null, request_matches: true};
   // Queued, not started: replay the same Turn; its own active id does not block it.
   const replay = planChatMode({...wake, wake_turn: queued, session: {...enabled, active_turn_id: "wake-turn"}});
   assert.equal(replay.state, "admitted");
   assert.equal(replay.dispatch, "replay");
+  assert.deepEqual(planChatMode({...wake, wake_turn: {...queued, request_matches: false}}),
+    {operation: "wake", state: "refused", reason: "wake_identity_conflict"});
   // The replay keeps every boundary of a new wake.
   const held: [JsonObject, string, string][] = [
     [{session: {...enabled, active_turn_id: "wake-turn", loopx_mode: {enabled: true, paused: true}}}, "pending", "lead_paused"],

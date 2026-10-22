@@ -669,7 +669,9 @@ def test_cached_host_result_cannot_resume_after_goal_recreation(
     )
 
     def write_source_journal() -> None:
-        with admission.source_journal_admission() as source_admission:
+        with admission.source_journal_admission(
+            runtime_root=runtime_root,
+        ) as source_admission:
             assert source_admission is not None
             turn_executor._write_journal(
                 path,
@@ -710,15 +712,67 @@ def test_cached_host_result_cannot_resume_after_goal_recreation(
     assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
 
 
-def test_host_result_requires_bounded_public_material_fields() -> None:
+@pytest.mark.parametrize("field", ["raw_trajectory", "agent_vision"])
+def test_host_result_requires_bounded_public_material_fields(field: str) -> None:
     plan = _plan()
     result = _host_result(plan)
-    result["raw_trajectory"] = "not allowed"
+    result[field] = "not allowed"
 
     validation = validate_loopx_turn_host_result(plan, result)
 
     assert validation["ok"] is False
     assert "unsupported host result fields" in " ".join(validation["errors"])
+
+
+@pytest.mark.parametrize("kind", [
+    "validated_progress", "validated_completion", "repair_required", "replan_required",
+])
+@pytest.mark.parametrize("outcome", ["surface_only", "outcome_gap"])
+def test_new_material_host_result_requires_qualifying_settlement(kind: str, outcome: str) -> None:
+    plan = _plan()
+    result = {**_host_result(plan), "result_kind": kind, "delivery_outcome": outcome}
+
+    validation = validate_loopx_turn_host_result(
+        plan, result, completion_lifecycle_configured=True,
+    )
+
+    assert validation["ok"] is False
+    assert outcome in " ".join(validation["errors"])
+    assert validation["result"]["delivery_outcome"] == outcome
+
+
+@pytest.mark.parametrize("packet, expected_error", [
+    (None, "cached agent_vision must be a JSON object"),
+    ([], "cached agent_vision must be a JSON object"),
+    ("not an object", "cached agent_vision must be a JSON object"),
+    ({"vision_patch": {"acceptance_summary": "x" * 421}}, "acceptance_summary"),
+])
+def test_cached_host_result_revalidates_decoded_vision(
+    packet: object, expected_error: str,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan)
+    result.update(result_kind="replan_required", path_delta_mode="material_replan",
+                  agent_vision=packet)
+    result.pop("vision_unchanged_reason", None)
+
+    validation = validate_loopx_turn_host_result(plan, result, from_journal=True)
+
+    assert validation["ok"] is False
+    assert expected_error in " ".join(validation["errors"])
+
+
+def test_cached_host_result_rejects_conflicting_vision_forms() -> None:
+    plan = _plan()
+    result = _host_result(plan)
+    result.update(result_kind="replan_required", path_delta_mode="material_replan",
+                  agent_vision={}, agent_vision_json="{}")
+    result.pop("vision_unchanged_reason", None)
+
+    validation = validate_loopx_turn_host_result(plan, result, from_journal=True)
+
+    assert validation["ok"] is False
+    assert "cached vision cannot carry both packet forms" in " ".join(validation["errors"])
 
 
 def test_child_receipt_schema_excludes_registered_peer_authority() -> None:
@@ -1059,7 +1113,7 @@ def test_enabled_host_result_rejects_receipt_local_path() -> None:
         (
             "evidence_refs",
             ["file:/tmp/private-result.json"],
-            "opaque 1-192 character public-safe reference",
+            "contains a local path",
         ),
     ],
 )
@@ -1182,9 +1236,11 @@ def test_managed_start_waits_before_host_and_replay_needs_no_new_admission(
     assert denied["admission"]["next_eligible_at_ms"] == 9000
     assert denied["effects"]["host_invoked"] is False
     assert calls == {"host": 0, "admit": 1, "writeback": 0, "spend": 0, "scheduler": 0}
-    assert not list(
-        (tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json")
-    )
+    # Lock-holder metadata is not a committed Turn journal on Windows.
+    assert not turn_journal_path(
+        tmp_path / "runtime", goal_id="fixture-goal",
+        turn_key=str(plan["transaction"]["turn_key"]),
+    ).exists()
 
     def allow(_identity: object) -> dict[str, object]:
         calls["admit"] += 1
@@ -1316,11 +1372,15 @@ def test_reserved_managed_start_recovers_after_death_before_the_first_journal_wr
     assert [
         (row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)
     ] == [("reserved", f"{turn_key}:1")]
-    assert not list((runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json"))
+    assert not [
+        path
+        for path in (runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json")
+        if not path.name.endswith(".lock.holder.json")
+    ]
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 1))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
@@ -1366,7 +1426,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 1))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
@@ -1826,9 +1886,11 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(
     assert resumed["route"] == stored["plan"]["route"]
 
 
+@pytest.mark.parametrize("saved_outcome", ["outcome_progress", "surface_only", "outcome_gap"])
 def test_provider_can_commit_before_its_journal_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    saved_outcome: str,
 ) -> None:
     plan = _plan()
     calls = {"writeback": 0, "spend": 0, "scheduler": 0}
@@ -1884,6 +1946,33 @@ def test_provider_can_commit_before_its_journal_checkpoint(
     assert prepared["effect_ref"] in provider_records
 
     monkeypatch.setattr(turn_executor, "_write_journal", write_journal)
+    # Model metadata accepted by a historical producer. A new candidate gate
+    # cannot erase this unresolved provider commit or replace its saved result.
+    journal["host_result"]["delivery_outcome"] = saved_outcome
+    write_journal(
+        turn_journal_path(
+            tmp_path / "runtime", goal_id="fixture-goal", turn_key=journal["turn_key"],
+        ),
+        journal,
+    )
+    unresolved = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: pytest.fail("host must not run during recovery"),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        writeback_resolver=lambda _effect_ref: {"kind": "unknown", "reason": "provider unavailable"},
+        spend=spend,
+        scheduler=scheduler,
+    )
+    assert unresolved["result_kind"] == "writeback_failed"
+    assert unresolved["receipt"]["failed_phase"] == "durable_writeback"
+    assert _journal(tmp_path / "runtime")["effect_attempts"]["durable_writeback"] == prepared
+    assert calls == {"writeback": 1, "spend": 0, "scheduler": 0}
     resumed = run_loopx_turn_once(
         plan,
         host_runner=lambda _request: pytest.fail("host must not run during recovery"),
@@ -1898,6 +1987,7 @@ def test_provider_can_commit_before_its_journal_checkpoint(
             "kind": "committed",
             "payload": provider_records[effect_ref],
         },
+        retry_failed=True,
         spend=spend,
         scheduler=scheduler,
     )
@@ -1905,6 +1995,7 @@ def test_provider_can_commit_before_its_journal_checkpoint(
     assert resumed["status"] == "committed"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
     assert "effect_attempts" not in _journal(tmp_path / "runtime")
+    assert _journal(tmp_path / "runtime")["host_result"]["delivery_outcome"] == saved_outcome
 
 
 def test_recreation_waits_for_admitted_provider_checkpoint(
@@ -3705,9 +3796,75 @@ def test_permission_denial_during_spend_preserves_writeback_and_resumes(
     assert calls == {"host": 1, "writeback": 1, "spend": 2}
 
 
-def test_budget_rejection_is_typed_and_retry_does_not_repeat_writeback(
+def test_quota_run_index_conflict_is_audited_and_retry_keeps_completed_work(
     tmp_path: Path,
 ) -> None:
+    from loopx.control_plane.quota.spend_commit import QuotaRunIndexConflict
+
+    plan = _plan()
+    calls = {"host": 0, "writeback": 0, "spend": 0}
+
+    def host(_request: dict[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    def writeback(_result: dict[str, object]) -> dict[str, object]:
+        calls["writeback"] += 1
+        return {"ok": True, "appended": True}
+
+    def conflicting_spend() -> dict[str, object]:
+        calls["spend"] += 1
+        raise QuotaRunIndexConflict(
+            "quota run index compare-and-swap precondition failed"
+        )
+
+    common = {
+        "host_runner": host,
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "scheduler": lambda _spend: {"completed": True, "acknowledged": True},
+    }
+    failed = run_loopx_turn_once(plan, spend=conflicting_spend, **common)
+
+    assert failed["result_kind"] == "quota_spend_failed"
+    assert failed["receipt"]["failed_phase"] == "quota_spend"
+    assert failed["settlement_result"]["failure"]["kind"] == "quota_spend_rejected"
+    assert [
+        receipt["step_kind"] for receipt in failed["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback"]
+    assert _journal(tmp_path / "runtime")["status"] == "failed"
+
+    replayed = run_loopx_turn_once(
+        plan,
+        spend=lambda: pytest.fail("failed replay must not call the provider"),
+        **common,
+    )
+    assert replayed["settlement_result"] == failed["settlement_result"]
+
+    recovered = run_loopx_turn_once(
+        plan,
+        spend=lambda: (
+            calls.__setitem__("spend", calls["spend"] + 1)
+            or {"ok": True, "appended": True}
+        ),
+        retry_failed=True,
+        **common,
+    )
+    assert recovered["status"] == "committed"
+    assert calls == {"host": 1, "writeback": 1, "spend": 2}
+
+
+def test_quota_admission_rejection_is_typed_and_retry_does_not_repeat_writeback(
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.testing.quota_fixtures import quota_status_payload, quota_todo_item
+    from loopx.quota import spend_quota_slot
+
     plan = _plan()
     calls = {"host": 0, "writeback": 0, "spend": 0}
 
@@ -3721,11 +3878,12 @@ def test_budget_rejection_is_typed_and_retry_does_not_repeat_writeback(
 
     def reject_budget() -> dict[str, object]:
         calls["spend"] += 1
-        return {
-            "ok": False,
-            "appended": False,
-            "reason": "quota budget rejected",
-        }
+        status = quota_status_payload(
+            goal_id="fixture-goal", status="active", recommended_action="continue",
+            quota_state="throttled", quota_extra={"spent_slots": 10, "allowed_slots": 10},
+            agent_todo_items=[quota_todo_item(todo_id="todo_fixture", title="Deliver a result")],
+        )
+        return spend_quota_slot(status, goal_id="fixture-goal", source="adapter", execute=True)
 
     common = {
         "host_runner": host,
@@ -3749,6 +3907,14 @@ def test_budget_rejection_is_typed_and_retry_does_not_repeat_writeback(
     ] == ["validation", "durable_writeback"]
     assert failed["effects"]["state_written"] is True
     assert failed["effects"]["quota_spent"] is False
+
+    # Stored failure kinds remain historical facts, even if a later callback
+    # would return a differently worded refusal. Replay runs no provider.
+    replayed = run_loopx_turn_once(
+        plan, spend=lambda: pytest.fail("failed replay must not call the provider"), **common,
+    )
+    assert replayed["settlement_result"] == failed["settlement_result"]
+    assert calls == {"host": 1, "writeback": 1, "spend": 1}
 
     recovered = run_loopx_turn_once(
         plan,

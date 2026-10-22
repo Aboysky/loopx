@@ -11,6 +11,9 @@ import {productionScaleLeaseAcquisitionFixture} from "./production_scale_coordin
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {evaluateCanonicalTaskLeaseProof} from "../../loopx/control_plane/coordination/task_lease_proof.ts";
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {continuationExecutionAuthority} from "../../loopx/control_plane/coordination/continuation_adoption.ts";
+import {updateGoalObjective} from "../../loopx/control_plane/goals/acceptance_authority.ts";
+import {goalObjectiveWorkDigest, readGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 
 async function loaded(store: AuthorityStore) {
   const result = await store.loadAuthority();
@@ -37,7 +40,102 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
     return {store, contender, request, seed, fixture};
   }
 
+  test(`${provider}: an objective revision preserves in-flight recovery but holds new execution until own adoption`, async t => {
+    const {store, contender, request} = await setup(t);
+    const started = await acquire(store, request);
+    assert.equal(started.status, "applied");
+    const before = await loaded(store);
+    const common = {goal_id: request.goal_id, registered_agents: request.registered_agents,
+      source_objective: {registry_objective: "Bootstrap the service"}};
+    assert.equal((await updateGoalObjective(store, {...common, operation: "revise-objective", actor_agent_id: null,
+      operation_id: "revise-current-objective", expected_provider_revision: before.provider_revision,
+      document: {objective: "Maintain and recover the service", reason: "The bootstrap milestone is complete", source_ref: "owner:direction"}})).status, "applied");
+    const replay = await acquire(contender, request);
+    assert.deepEqual(replay.original_receipt, started.original_receipt, "revision does not revoke the in-flight execution's recovery proof");
+    assert.equal((await mutate(store, {...request, operation: "renew", expected_version: 1})).status, "applied");
+    const released = await mutate(store, {...request, operation: "release", expected_version: 2, ttl_seconds: null});
+    assert.equal(released.status, "applied");
+    const releasedVersion = Number((released.lease as JsonObject).version);
+    const next = {...request, idempotency_key: "new-execution", expected_version: releasedVersion};
+    const held = await acquire(contender, next);
+    assert.equal(held.reason_code, "goal_objective_review_required");
+    assert.ok(request.ttl_seconds !== null);
+    const claim = await executeCoordinationTodoClaim(contender, {goal_id: request.goal_id, todo_id: request.todo_id,
+      claimed_by: request.owner, actor_agent_id: request.owner, expected_role: "agent", registered_agents: request.registered_agents,
+      operation_id: "claim-after-revision", dry_run: false, now: request.now,
+      lease_request: {idempotency_key: "new-claim", expected_version: releasedVersion, ttl_seconds: request.ttl_seconds}});
+    assert.equal(claim.reason_code, "goal_objective_review_required");
+    const pending = await loaded(store), revision = readGoalObjective(pending.head)!.revisions.at(-1)!;
+    assert.equal((await updateGoalObjective(store, {...common, operation: "adopt-objective", actor_agent_id: request.owner,
+      operation_id: "adopt-current-objective", expected_provider_revision: pending.provider_revision,
+      document: {revision: revision.revision, digest: revision.digest, work_digest: goalObjectiveWorkDigest(pending.head, request.owner),
+        review_summary: "Reviewed existing work; this Todo remains the next delivery."}})).status, "applied");
+    assert.equal((await acquire(contender, next)).status, "applied", "one peer can continue without waiting for the whole team");
+  });
+
   for (const schema of ["native", "legacy"] as const) {
+    test(`${provider} ${schema} User action history cannot grant execution and exact release remains available`, async t => {
+      const {store, contender, request} = await setup(t, schema);
+      const first = await acquire(store, request);
+      assert.equal(first.status, "applied");
+      const renewal = {...request, operation: "renew" as const, expected_version: 1};
+      const renewed = await mutate(store, renewal);
+      assert.equal(renewed.status, "applied");
+      const before = await loaded(store);
+      const prior = (before.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+      // Model retained old authority without using today's mutation owner to
+      // manufacture the invalid history. Its receipts remain immutable facts.
+      const action: JsonObject = {...prior, role: "user", task_class: "user_action", bound_agent: "agent-a"};
+      delete action.claimed_by;
+      if (schema === "legacy") action.source_section = "User Todo";
+      assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+        expected_provider_revision: before.provider_revision, operation_id: "retained-user-action-history",
+        projection: before.head, mutations: [{kind: "todo_upsert", todo: action, clear_fields: ["claimed_by"]}]}))).status, "applied");
+      const retained = await loaded(store);
+      const replay = await acquire(contender, request);
+      assert.equal(replay.reason_code, "todo_not_executable");
+      assert.deepEqual(replay.original_receipt, first.original_receipt);
+      assert.equal(evaluateCanonicalTaskLeaseProof({todo: action, lease: renewed.lease as JsonObject,
+        handoff_mode: "hard_lease", actor_agent_id: "agent-a", registered_agents: request.registered_agents,
+        lease_idempotency_key: request.idempotency_key, lease_expected_version: 2, now: request.now}).code,
+      "todo_not_executable");
+      const historicalRenewal = await mutate(contender, renewal);
+      assert.equal(historicalRenewal.status, "replayed");
+      assert.deepEqual(historicalRenewal.original_receipt, renewed.original_receipt);
+      assert.equal((await mutate(store, {...renewal, expected_version: 2})).reason_code, "todo_not_executable");
+      assert.equal((await mutate(store, {...request, operation: "transfer", expected_version: 2,
+        new_owner: "agent-b", new_idempotency_key: "action-transfer"})).reason_code, "todo_not_executable");
+      assert.deepEqual(await loaded(store), retained);
+      const release = {...request, operation: "release" as const, expected_version: 2,
+        registered_agents: [], ttl_seconds: null};
+      const released = await mutate(store, release);
+      assert.equal(released.status, "applied");
+      assert.equal((released.lease as JsonObject).status, "released");
+      assert.equal((released.lease as JsonObject).version, 2);
+      const afterRelease = await loaded(store);
+      assert.equal((await mutate(contender, release)).status, "replayed");
+      assert.deepEqual(await loaded(store), afterRelease);
+    });
+    test(`${provider} ${schema} completion wait fences acquire and atomic claim, then archived completion releases the wait`, async t => {
+      const {store, contender, request, fixture} = await setup(t, schema, (p, target, prerequisite) => {
+        (p.todos as JsonObject[]).find(row => row.todo_id === target)!.resume_when = `todo_done:${prerequisite}`;
+      });
+      const before = await loaded(store);
+      assert.equal((await acquire(store, request)).reason_code, "todo_dependency_pending");
+      const claim = {goal_id: request.goal_id, todo_id: request.todo_id,
+        claimed_by: request.owner, actor_agent_id: request.owner, expected_role: "agent" as const,
+        registered_agents: request.registered_agents, operation_id: "waiting-atomic-claim",
+        lease_request: {idempotency_key: "waiting-atomic", expected_version: 0, ttl_seconds: 600},
+        dry_run: false, now: request.now};
+      assert.equal((await executeCoordinationTodoClaim(store, claim)).reason_code, "todo_dependency_pending");
+      assert.deepEqual(await loaded(store), before);
+      const prerequisite = (before.head.todos as JsonObject[]).find(row => row.todo_id === fixture.acquisition.conflict_todo_id)!;
+      const done = {...prerequisite, status: "done", done: true, archive_state: "archive"};
+      assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+        expected_provider_revision: before.provider_revision, operation_id: "prerequisite-archived-complete",
+        projection: before.head, mutations: [{kind: "todo_upsert", todo: done}]}))).status, "applied");
+      assert.equal((await acquire(contender, request)).status, "applied");
+    });
     test(`${provider} ${schema} acquire, current-proof replay, handover and new execution`, async t => {
       const {store, contender, request, seed} = await setup(t, schema);
       const first = await acquire(store, request);
@@ -76,6 +174,55 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
       assert.deepEqual((final.head.leases as JsonObject[]).filter(l => l.todo_id !== request.todo_id), seed.leases);
     });
   }
+
+  for (const waitKind of ["completion", "future_date"] as const) test(`${provider} retained acquisition receipt and renewal lose current authority after a new ${waitKind} wait`, async t => {
+    const {store, contender, request, fixture} = await setup(t);
+    const first = await acquire(store, request);
+    assert.equal(first.status, "applied");
+    const renewal = {...request, operation: "renew" as const, expected_version: 1};
+    assert.equal((await mutate(store, renewal)).status, "applied");
+    const head = await loaded(store);
+    const todo = (head.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+      expected_provider_revision: head.provider_revision, operation_id: `new-${waitKind}-wait`,
+      projection: head.head, mutations: [{kind: "todo_upsert", todo: {...todo,
+        resume_when: waitKind === "completion"
+          ? `todo_done:${fixture.acquisition.conflict_todo_id}`
+          : "resume_at:2026-09-13T10:05:00.001Z"}}]}))).status, "applied");
+    const waiting = await loaded(store);
+    const replay = await acquire(contender, request);
+    assert.equal(replay.reason_code, "todo_dependency_pending");
+    assert.deepEqual(replay.original_receipt, first.original_receipt);
+    assert.equal((await mutate(store, renewal)).reason_code, "todo_dependency_pending");
+    assert.equal((await mutate(store, {...request, operation: "renew", expected_version: 2})).reason_code,
+      "todo_dependency_pending");
+    assert.equal((await mutate(store, {...request, operation: "transfer", expected_version: 2,
+      new_owner: "agent-b", new_idempotency_key: "waiting-transfer"})).reason_code, "todo_dependency_pending");
+    assert.deepEqual(await loaded(store), waiting);
+    assert.equal((await mutate(store, {...request, operation: "release", expected_version: 2,
+      ttl_seconds: null})).status, "applied");
+  });
+
+  for (const waitKind of ["completion", "future_date"] as const) test(`${provider} continuation proof follows the current ${waitKind} wait`, async t => {
+    const {store, request, fixture} = await setup(t);
+    const currentRequest = {...request, now: new Date()};
+    const first = await acquire(store, currentRequest);
+    assert.equal(first.status, "applied");
+    const execution = (head: JsonObject) => continuationExecutionAuthority(head, {goal_id: request.goal_id,
+      todo_id: request.todo_id, agent_id: request.owner, registered_agents: request.registered_agents,
+      proof: {idempotency_key: request.idempotency_key, expected_version: 1}});
+    const before = await loaded(store);
+    assert.equal(execution(before.head).allowed, true);
+    const todo = (before.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+      expected_provider_revision: before.provider_revision, operation_id: `continuation-add-${waitKind}-wait`,
+      projection: before.head, mutations: [{kind: "todo_upsert", todo: {...todo,
+        resume_when: waitKind === "completion"
+          ? `todo_done:${fixture.acquisition.conflict_todo_id}`
+          : "resume_at:2099-01-01T00:00:00Z"}}]}))).status, "applied");
+    const waiting = await loaded(store);
+    assert.deepEqual(execution(waiting.head), {allowed: false, reason_code: "todo_dependency_pending"});
+  });
 
   test(`${provider} lost acquire response recovers once and changed intent stays rejected`, async t => {
     const {store, contender, request} = await setup(t);

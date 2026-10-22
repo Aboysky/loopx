@@ -14,6 +14,7 @@ from ...state_refresh import now_local
 from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityUnavailable,
+    raise_canonical_write_failure,
     read_canonical_todos_if_promoted,
 )
 from ..effect_runtime import (
@@ -45,12 +46,10 @@ def create_canonical_todo_if_promoted(
     claimed_by: str | None, metadata: dict[str, Any], dry_run: bool,
     project: Path | None = None, state_file: Path | None = None,
     operation_id: str | None = None,
-) -> dict[str, Any] | None:
-    canonical = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root, goal_id=goal_id
-    )
-    if canonical is None:
-        return None
+    expected_provider_revision: str | None = None,
+) -> dict[str, Any]:
+    # The native writer guard selects the route under the same maintenance
+    # lock as provider open and commit. A separate source read grants nothing.
     if operation_id is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", operation_id):
         raise ValueError("operation_id must be a non-empty public-safe token")
     operation_id = operation_id if operation_id is not None else f"todo-create:{uuid4().hex}"
@@ -100,7 +99,10 @@ def create_canonical_todo_if_promoted(
         result = effect_runtime_result(
             "coordination.local_authority.todo_create",
             {
-                "schema_version": "loopx_local_coordination_todo_create_request_v1",
+                "schema_version": ("loopx_local_coordination_todo_create_request_v2"
+                    if expected_provider_revision is not None else "loopx_local_coordination_todo_create_request_v1"),
+                **({"expected_provider_revision": expected_provider_revision}
+                    if expected_provider_revision is not None else {}),
                 "runtime_root": str(runtime_root.resolve()),
                 "goal_id": goal_id,
                 "todo": todo,
@@ -128,6 +130,30 @@ def create_canonical_todo_if_promoted(
         or result.get("legacy_fallback_used") is not False
     ):
         payload = result if isinstance(result, dict) else {}
+        raise_canonical_write_failure(
+            payload,
+            goal_id=goal_id,
+            operation="todo_create",
+        )
+        if (
+            payload.get("status") == "missing"
+            and payload.get("source_authority") in LOCAL_AUTHORITY_SOURCES
+            and payload.get("decision_read_from_provider") is True
+            and payload.get("legacy_fallback_used") is False
+        ):
+            unavailable_payload = dict(payload)
+            unavailable_payload["recovery"] = {
+                "action": "restore_canonical_authority",
+                "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
+                "goal_id": goal_id,
+                "legacy_markdown_fallback_allowed": False,
+                "retry_after": "canonical_provider_readback_loaded",
+            }
+            raise LocalCoordinationAuthorityUnavailable(
+                "canonical Todo authority is unavailable",
+                code="local_authority_todo_list_unavailable",
+                payload=unavailable_payload,
+            )
         raise LocalCoordinationAuthorityUnavailable(
             str(payload.get("reason") or "canonical Todo create failed; reread before retry"),
             code=str(payload.get("reason_code") or payload.get("conflict_kind")

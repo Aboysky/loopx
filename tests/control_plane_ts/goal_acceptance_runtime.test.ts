@@ -1,3 +1,4 @@
+import {compileActionReviewPlan} from "../../loopx/control_plane/presentation/action_review_plan.ts";
 import assert from "node:assert/strict";
 import {randomUUID} from "node:crypto";
 import {mkdtemp, rm} from "node:fs/promises";
@@ -6,19 +7,21 @@ import {join} from "node:path";
 import test, {type TestContext} from "node:test";
 import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import type {HandoffMode} from "../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {configureGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
-import {acceptanceWorkGuard, goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance,
+import {acceptanceWorkGuard, goalAcceptanceTodoDigest, goalAcceptanceWorkDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance,
   projectGoalAcceptanceWorkGuards} from "../../loopx/control_plane/goals/acceptance_contract.ts";
+import {reviseGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
 import {executeCoordinationTodoTerminalLifecycle, type CoordinationTodoTerminalLifecycleInput} from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
-import {listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
+import {canonicalTodoCollection, listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 
 const now = new Date("2026-09-17T12:00:00Z");
 const todo = (extra: JsonObject = {}): JsonObject => ({schema_version: "todo_domain_record_v0",
@@ -35,7 +38,7 @@ function acceptance(records: JsonObject[], bound = true): JsonObject {
 }
 function projection(records: JsonObject[], state?: JsonObject): JsonObject {
   records = [...records].sort((a, b) => String(a.todo_id).localeCompare(String(b.todo_id)));
-  return {goal_id: "goal-a", handoff_mode: "legacy", todos: records, leases: [],
+  return {goal_id: "goal-a", handoff_mode: "soft_claim", todos: records, leases: [],
     todo_read_model: coordinationTodoReadModel(records, "loopx_todo_domain_read_record_v0"),
     unrelated_extension: {value: "retained"}, ...(state ? {goal_acceptance: state} : {})};
 }
@@ -64,7 +67,7 @@ async function replace(store: AuthorityStore, head: JsonObject, operation_id: st
   assert.equal((await store.commitAuthority({operation_id, expected_provider_revision: current.provider_revision,
     next_projection: head, events: [], receipts: []})).status, "applied");
 }
-async function seeded(t: TestContext, provider: string, state: "bound" | "unbound" | "off", extra: JsonObject = {}) {
+async function seeded(t: TestContext, provider: string, state: "bound" | "unbound" | "off", extra: JsonObject = {}, mode: HandoffMode = "soft_claim") {
   const root = await mkdtemp(join(tmpdir(), "loopx-acceptance-runtime-"));
   t.after(() => rm(root, {recursive: true, force: true}));
   let store: AuthorityStore;
@@ -80,7 +83,8 @@ async function seeded(t: TestContext, provider: string, state: "bound" | "unboun
     store = new PostgreSqlAuthorityStore(database, {tenant_id: `acceptance-${randomUUID()}`, goal_id: "goal-a"});
   } else store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   const records = [todo(extra)];
-  const head = projection(records, state === "off" ? undefined : acceptance(records, state === "bound"));
+  const head = {...projection(records, state === "off" ? undefined : acceptance(records, state === "bound")),
+    handoff_mode: mode};
   assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
     next_projection: head, events: [], receipts: []})).status, "applied");
   return {store, root, head};
@@ -104,6 +108,9 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
     assert.equal(plan.status, "execute_validation");
     assert.equal((plan.validation_effect as JsonObject).validation_label, "ordinary-check");
     assert.deepEqual(plan.goal_acceptance_validation_effects ?? [], []);
+    // Lease admission is exercised with hard_lease; soft_claim intentionally has no lease grant.
+    const current = await loaded(store);
+    await replace(store, {...current.head, handoff_mode: "hard_lease"}, "require-leased-execution");
     assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).status, "applied");
     assert.equal(acceptanceWorkGuard((await loaded(store)).head, "goal-a", "todo_probe")?.allowed, false);
   });
@@ -123,8 +130,11 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
     const before = await loaded(store);
     assert.equal((await executeCoordinationTodoClaim(store, {...claim, actor_agent_id: "intruder"})).reason_code, "actor_not_registered");
     assert.equal((await executeCoordinationTodoClaim(store, claim)).reason_code, "goal_acceptance_unbound");
-    assert.equal((await executeCanonicalTaskLeaseAcquire(store, {...acquire, owner: "intruder"})).reason_code, "owner_not_registered");
-    assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).reason_code, "goal_acceptance_unbound");
+    const leased = await seeded(t, provider, "unbound", {}, "hard_lease");
+    const leaseBefore = await loaded(leased.store);
+    assert.equal((await executeCanonicalTaskLeaseAcquire(leased.store, {...acquire, owner: "intruder"})).reason_code, "owner_not_registered");
+    assert.equal((await executeCanonicalTaskLeaseAcquire(leased.store, acquire)).reason_code, "goal_acceptance_unbound");
+    assert.deepEqual(await loaded(leased.store), leaseBefore);
     assert.equal((await executeCoordinationTodoTerminalLifecycle(store, terminal)).reason_code, "goal_acceptance_unbound");
     assert.deepEqual(await loaded(store), before);
     assert.equal((await store.readReceipt("complete")).status, "missing");
@@ -164,7 +174,7 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
   });
 
   test(`${provider}: acquisition replay checks current acceptance after current lease proof`, async t => {
-    const {store} = await seeded(t, provider, "bound");
+    const {store} = await seeded(t, provider, "bound", {}, "hard_lease");
     assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).status, "applied");
     const current = await loaded(store);
     await replace(store, {...current.head, goal_acceptance: acceptance(current.head.todos as JsonObject[], false)}, "unbind");
@@ -314,6 +324,55 @@ test("collection guard projection reuses one acceptance and Todo snapshot", () =
   assert.ok(elapsedMs < 1_000, `150 Todo guards should remain a bounded collection read, got ${elapsedMs}ms`);
 });
 
+test("collection projections do not expose shared mutable acceptance verdicts", () => {
+  const records = [todo()];
+  const head = projection(records, acceptance(records));
+  const before = structuredClone(head);
+  const collection = canonicalTodoCollection(head, "goal-a", false);
+  const expected = projectGoalAcceptanceWorkGuards(head, "goal-a", ["todo_work"]);
+  const guards = collection.projectWorkGuards(["todo_work"]);
+  (guards.todo_work.criterion_ids as string[]).push("foreign-criterion");
+  ((collection.acceptance.tasks as JsonObject[])[0].criterion_ids as string[]).push("foreign-contract");
+  (collection.acceptance.non_goals as string[]).push("foreign-non-goal");
+  assert.deepEqual(collection.projectWorkGuards(["todo_work"]), expected);
+  assert.deepEqual(projectGoalAcceptance(head, "goal-a"), projectGoalAcceptance(before, "goal-a"));
+  assert.deepEqual(head, before);
+});
+
+test("collection validation keeps acceptance errors ahead of malformed Todo data", () => {
+  const records = [todo()];
+  const head = projection(records, {...acceptance(records), digest: "invalid"});
+  head.todos = [{todo_id: "invalid"}];
+  assert.throws(() => canonicalTodoCollection(head, "goal-a", false), /acceptance contract digest mismatch/);
+  delete head.goal_acceptance;
+  assert.throws(() => canonicalTodoCollection(head, "goal-a", false));
+  assert.deepEqual(projectGoalAcceptanceWorkGuards(head, "goal-a", []), {});
+});
+
+test("collection preserves objective-only reads and invalidates verification after an objective revision", () => {
+  const records = [todo()];
+  const head = projection(records);
+  const direction = {objective: "Maintain the delivered service", reason: "Bootstrap is complete", source_ref: "message:owner"};
+  head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the service", ["agent-a"], direction);
+  const objective = canonicalTodoCollection(head, "goal-a", false).acceptance.goal_objective as JsonObject;
+  assert.equal(objective.objective, direction.objective, "an objective is visible without optional acceptance checks");
+  for (const scope of [undefined, {kind: "selected_work" as const, todo_ids: ["todo_work"]}]) {
+    const state = acceptance(records);
+    const document = normalizeGoalAcceptanceDocument({...state.document as JsonObject, ...(scope ? {scope} : {})});
+    head.goal_acceptance = {...state, document, digest: canonicalAuthoritySha256(document)};
+    const configured = head.goal_acceptance as JsonObject;
+    configured.verification = {operation_id: "verified", contract_revision: 1, contract_digest: configured.digest,
+      work_digest: goalAcceptanceWorkDigest(head, "goal-a", scope),
+      todo_id: null, results: [{criterion_id: "criterion-a", passed: true, exit_code: 0}]};
+    assert.equal(canonicalTodoCollection(head, "goal-a", false).acceptance.status, "accepted");
+    const changed = structuredClone(head);
+    changed.goal_objective = reviseGoalObjective(changed, null, "Bootstrap the service", ["agent-a"],
+      {...direction, objective: "Maintain the service and its recovery path"});
+    assert.equal(canonicalTodoCollection(changed, "goal-a", false).acceptance.status, "stale");
+    assert.equal(canonicalTodoCollection(head, "goal-a", false).acceptance.status, "accepted", "the prior snapshot stays independent");
+  }
+});
+
 test("completion plans both validators and rejects a combined budget exceeding 29 seconds", async t => {
   const declaration = {validation_command: null, validation_command_argv: ["true"],
     validation_label: "caller-check", validation_timeout_seconds: null};
@@ -392,4 +451,19 @@ test("a competing commit cannot separate acceptance evidence from Todo completio
   assert.equal(result.status, "conflict");
   assert.equal(((await loaded(store)).head.todos as JsonObject[])[0]!.done, false);
   assert.equal((await store.readReceipt("complete")).status, "missing");
+});
+
+
+test("prepared check review requires its exact Goal and local command effect", () => {
+  const proposal = {schema_version: "loopx_chat_action_proposal_v1", action_kind: "goal.acceptance.check",
+    status: "preview_ready", proposal_id: "proposal", expected_state_fingerprint: "current-basis",
+    permission_classification: "local_command_execution", normalized_parameters: {goal_id: "goal", document: {}},
+    context: {kind: "goal", goal_id: "goal"}, available_transitions: ["apply", "cancel"]};
+  assert.equal(compileActionReviewPlan(proposal).canApply, true);
+  for (const changed of [{permission_classification: "durable_write"},
+      {context: {kind: "goal", goal_id: "other"}}, {normalized_parameters: {goal_id: "goal"}},
+      {gate: {kind: "authority"}, status: "gated"}, {status: "stale"}]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...changed}).canApply, false);
+  }
+  assert.equal(compileActionReviewPlan({...proposal, status: "applied", receipt: {projection_verified: true}}).canApply, false);
 });

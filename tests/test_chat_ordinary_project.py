@@ -23,6 +23,16 @@ def ordinary(tmp_path, monkeypatch):
     source = source.replace('    method = request.get("method")',
         f'    with open({str(capture)!r}, "a") as output:\n        output.write(json.dumps(request) + "\\n")\n'
         '    method = request.get("method")')
+    source = source.replace('    elif method in {"thread/start", "thread/resume"}:',
+        '    elif method == "config/read":\n'
+        '        import pathlib\n'
+        '        config = pathlib.Path(request["params"]["cwd"]) / "effective-config.json"\n'
+        '        result = {"config": json.loads(config.read_text()) if config.exists() else {}}\n'
+        '    elif method in {"thread/start", "thread/resume"}:')
+    source = source.replace('        result = {"thread": {"id": "durable-thread"}}',
+        '        result = {"thread": {"id": "durable-thread"},\n'
+        '                  "model": request["params"].get("model", "old-model"),\n'
+        '                  "reasoningEffort": request["params"].get("config", {}).get("model_reasoning_effort", "xhigh")}')
     fake = tmp_path / "codex"
     fake.write_text(source)
     fake.chmod(0o700)
@@ -60,6 +70,8 @@ def test_http_ordinary_project_continues_native_session_without_goal_or_portfoli
     assert status == 200 and len(projects["projects"]) == 1
     project = projects["projects"][0]
     assert project["title"] == "notes" and "workspace_path" not in project
+    # The same root is offered to the Goal form by its creation reference.
+    assert project["goal_workspace_ref"].startswith("workspace-")
     body = {"context_kind": "project", "project_ref": project["project_ref"]}
     status, opened = request("/api/chat/sessions", body)
     assert status == 201, opened
@@ -87,6 +99,10 @@ def test_http_ordinary_project_continues_native_session_without_goal_or_portfoli
     assert len([row for row in requests if row.get("method") == "turn/start"]) == 2
     assert not any(row.get("method", "").startswith("thread/goal") for row in requests)
     assert "Fresh Core evidence" not in capture.read_text() and "None:" not in capture.read_text()
+    # The real host context gets answer guidance even on the structured-output
+    # project lane, which does not use the older Chat review prompt.
+    assert "A simple question needs no report template" in capture.read_text()
+    assert "Preserve requested substantive detail" in capture.read_text()
     assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
 
 
@@ -106,6 +122,138 @@ def test_project_grants_cannot_be_forged_widened_or_reused_after_revocation(ordi
     assert store.turn_for_client(sid, "revoked") is None
     with pytest.raises(ValueError):
         store.create_session(goal_id=None, agent_id="codex", adapter_kind="codex_app_server", upstream_thread_id="forged")
+
+
+def test_project_configuration_change_reaches_resumed_native_turn(ordinary):
+    store, runtime, contexts, request, capture, fake, workspace = ordinary
+    ref = contexts.available()[0]["project_ref"]
+    _, opened = request("/api/chat/sessions", {"context_kind": "project", "project_ref": ref})
+    sid = opened["session_id"]
+    original = store.load_session(sid)["upstream_thread_id"]
+    assert runtime.adapters[sid].session.reasoning_effort == "xhigh"
+    runtime.close()
+    # Independent host observation changes between processes. The original
+    # thread still reports xhigh unless the adapter applies that observation.
+    (workspace / "effective-config.json").write_text(json.dumps({
+        "model": "current-project-model", "model_reasoning_effort": "high",
+        "sandbox_mode": "danger-full-access",
+    }))
+    restarted = ChatRuntimeController(store=ChatSessionStore(store.root.parent),
+        codex_bin=str(fake), project_contexts=contexts)
+    try:
+        resumed, was_resumed = restarted.open_session(goal_id=None, agent_id="codex",
+            work_dir=workspace, objective="continue", mode="resume_latest", project_ref=ref)
+        assert was_resumed and resumed["session_id"] == sid
+        assert resumed["upstream_thread_id"] == original
+        turn, _ = restarted.submit_turn(session_id=sid, client_turn_id="after-config-change",
+            message="Continue the original request.", work_dir=workspace, objective="continue")
+        assert restarted.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+    finally:
+        restarted.close()
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(r.get("method") == "thread/start" for r in requests) == 1
+    resume = next(r for r in requests if r.get("method") == "thread/resume")["params"]
+    assert resume["threadId"] == original and resume["sandbox"] == "read-only"
+    turn = next(r for r in requests if r.get("method") == "turn/start")["params"]
+    assert turn["threadId"] == original
+    assert turn["model"] == "current-project-model" and turn["effort"] == "high"
+    assert len(store.list_sessions()) == 1 and store.load_session(sid)["goal_id"] is None
+
+
+@pytest.mark.parametrize("messages", [
+    ("Read the linked source and collect it using the project skill.", "Keep the previous source and correct its summary."),
+    ("Organize this document in the existing notes.", "Preserve the original text and verify your edits."),
+])
+def test_writable_project_turns_use_project_skills_without_manager_work_selection(ordinary, messages):
+    from loopx.chat_agent import CHAT_REVIEW_CLOSE_TAG, CHAT_REVIEW_OPEN_TAG
+
+    store, runtime, contexts, request, capture, _, workspace = ordinary
+    contexts.workspace_grant = "workspace_write"
+    ref = contexts.available()[0]["project_ref"]
+    status, opened = request("/api/chat/sessions", {"context_kind": "project", "project_ref": ref})
+    assert status == 201
+    sid = opened["session_id"]
+    for index, message in enumerate(messages):
+        status, accepted = request(f"/api/chat/sessions/{sid}/turns", {"message": message, "client_turn_id": f"project-{index}"})
+        assert status == 202, accepted
+        assert runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)["status"] == "completed"
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    starts = [row for row in requests if row.get("method") == "thread/start"]
+    turns = [row for row in requests if row.get("method") == "turn/start"]
+    assert len(starts) == 1 and starts[0]["params"]["sandbox"] == "workspace-write"
+    assert len(turns) == 2 and len({row["params"]["threadId"] for row in turns}) == 1
+    for turn, message in zip(turns, messages):
+        prompt = turn["params"]["input"][0]["text"]
+        assert "project's AGENTS.md and applicable skills" in prompt
+        assert "Use applicable skills and permitted tools" in prompt
+        assert "existing typed owners" in prompt and "public/private rules" in prompt
+        assert "do not create a hidden Goal" in prompt
+        assert "supplied Goal directory" not in prompt
+        assert "Before preparing a new Goal" not in prompt
+        assert "context_delegation catalog" not in prompt
+        assert "A protected_action is only an untrusted proposal" in prompt
+        assert prompt.endswith(f"Operator user message:\n{message}")
+        envelope = json.loads(prompt.split(CHAT_REVIEW_OPEN_TAG, 1)[1].split(CHAT_REVIEW_CLOSE_TAG, 1)[0])
+        assert envelope["schema_version"] == "loopx_chat_agent_response_v0"
+        assert envelope["message"] == ""
+        assert envelope["proposals"] == []
+        assert all(envelope[field] is None for field in ("protected_action", "goal_draft", "context_handoff", "gate"))
+    session = store.load_session(sid)
+    assert session["goal_id"] is None and session.get("manager_runtime") is None
+    assert session["project_context"]["grant"] == "workspace_write"
+    assert len(store.list_sessions()) == 1
+    assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
+@pytest.mark.parametrize("grant", ["workspace_read", "workspace_write"])
+def test_workspace_only_rejects_other_executor_before_session_creation(ordinary, monkeypatch, grant):
+    store, runtime, contexts, request, _, _, _ = ordinary
+    contexts.filesystem_scope, contexts.workspace_grant = "workspace_only", grant
+    monkeypatch.setattr("loopx.chat_endpoint_catalog.shutil.which",
+        lambda executable: executable if executable == "kiro-cli" else None)
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **_: pytest.fail("must reject before starting a host"))
+    status, result = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"], "agent_id": "kiro-cli",
+    })
+    assert status == 400 and "workspace-only" in result.get("error", "")
+    assert store.list_sessions() == []
+
+
+def test_read_only_project_rejects_executor_with_workspace_write_scope(ordinary, monkeypatch):
+    store, runtime, contexts, request, _, _, _ = ordinary
+
+    class FakeWriteScopedAdapter:
+        upstream_thread_id = "write-scoped-project-agent"
+
+        def close_session(self):
+            pass
+
+    monkeypatch.setattr(
+        "loopx.chat_endpoint_catalog.shutil.which",
+        lambda executable: executable if executable == "kiro-cli" else None,
+    )
+    kiro_capability = next(row for row in runtime.capabilities() if row["agent_id"] == "kiro-cli")
+    assert kiro_capability["trust_scope"] == "workspace_write"
+    runtime._start_adapter = lambda **_: FakeWriteScopedAdapter()
+    project_ref = contexts.available()[0]["project_ref"]
+    status, result = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": project_ref, "agent_id": "kiro-cli",
+    })
+
+    assert status == 400, result
+    assert "read-only" in result.get("error", "").lower()
+    assert store.latest_session(goal_id=None, agent_id="kiro-cli", channel_id=f"project.{project_ref}") is None
+
+    project_context = contexts.available()[0]
+    legacy = store.create_session(
+        goal_id=None, agent_id="kiro-cli", adapter_kind="acp",
+        upstream_thread_id="pre-guard-write-scoped-session",
+        channel_id=f"project.{project_ref}", project_context=project_context,
+    )
+    status, result = request(
+        f"/api/chat/sessions/{legacy['session_id']}/turns",
+        {"message": "read this workspace", "client_turn_id": "must-not-be-accepted"},
+    )
+    assert status == 400, result
+    assert store.turn_for_client(legacy["session_id"], "must-not-be-accepted") is None
 
 
 def test_retargeted_symlink_does_not_rebind_a_project_grant(tmp_path):
@@ -135,8 +283,11 @@ def test_default_project_host_grant_is_write_and_read_only_launch_is_enforced(or
     _, opened = request("/api/chat/sessions", {"context_kind": "project", "project_ref": projects["projects"][0]["project_ref"]})
     assert opened["goal_id"] is None
     assert runtime.adapters[opened["session_id"]].session.sandbox == "workspace-write"
-    row = json.loads(capture.read_text().splitlines()[-1])
-    assert row["method"] == "thread/start" and row["params"]["sandbox"] == "workspace-write"
+    # Native thread naming may follow startup; verify the permission-bearing
+    # request itself rather than assuming it is the last transport operation.
+    starts = [row for line in capture.read_text().splitlines()
+              if (row := json.loads(line)).get("method") == "thread/start"]
+    assert len(starts) == 1 and starts[0]["params"]["sandbox"] == "workspace-write"
     proof = {"transport_ref": "notes-app", "provider_ref": "c" * 24, "operator_ref": "d" * 24, "verified": True}
     bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=lambda _: proof)
     contexts.conversation_bindings = bindings

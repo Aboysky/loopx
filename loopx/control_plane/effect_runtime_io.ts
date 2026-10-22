@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
+import {
+  closeSync,
+  fstatSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  writeFileSync,
+} from "node:fs";
+import { mkdir, open, readFile, rename, rm, rmdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
@@ -312,9 +321,12 @@ export async function acquireFileMutationLock(
   const token = randomUUID();
   const deadline = Date.now() + timeoutMs;
   let retriedAfterReclaim = false;
+  let contended = false;
   while (true) {
+    let opened = false;
     try {
       const handle = await open(lockPath, "wx", 0o600);
+      opened = true;
       let identity: CreatedFileIdentity | null = null;
       try {
         try {
@@ -355,17 +367,26 @@ export async function acquireFileMutationLock(
       }
       return { targetPath, lockPath, token };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const reclaimed = await reclaimStaleMutationLock(lockPath);
-      // Removing a dead owner is progress, not waiting for a live owner. Allow
-      // one immediate acquisition even for a zero-wait caller. Bound the retry
-      // so repeated replacement cannot extend that caller's lock budget.
-      if (reclaimed && !retriedAfterReclaim) {
-        retriedAfterReclaim = true;
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new EffectRuntimeLockTimeoutError();
+      const code = (error as NodeJS.ErrnoException).code;
+      // Windows may deny exclusive creation while a contended lock is pending
+      // deletion. Retry only the unopened pathname within the original budget;
+      // initial permission errors and failures after creation remain fatal.
+      if (!opened && contended && process.platform === "win32" && code === "EPERM") {
+        if (Date.now() >= deadline) throw error;
+      } else {
+        if (code !== "EEXIST") throw error;
+        if (!opened) contended = true;
+        const reclaimed = await reclaimStaleMutationLock(lockPath);
+        // Removing a dead owner is progress, not waiting for a live owner. Allow
+        // one immediate acquisition even for a zero-wait caller. Bound the retry
+        // so repeated replacement cannot extend that caller's lock budget.
+        if (reclaimed && !retriedAfterReclaim) {
+          retriedAfterReclaim = true;
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new EffectRuntimeLockTimeoutError();
+        }
       }
       await new Promise((resolve) =>
         setTimeout(
@@ -475,6 +496,19 @@ export async function atomicWriteText(
   await atomicWriteTextFile(path, content);
 }
 
+/** Publish a complete staged directory without replacing an existing target.
+ * Callers own source validation, staging cleanup and content durability.
+ */
+export async function publishNewDirectory(staging: string, destination: string): Promise<void> {
+  if (process.platform === "win32") await rename(staging, destination);
+  else {
+    // POSIX rename can replace an empty directory; reserve the name first.
+    await mkdir(destination, {mode: 0o700});
+    try {await rename(staging, destination);}
+    catch (error) {await rmdir(destination); throw error;}
+  }
+}
+
 export async function atomicWriteJson(
   path: string,
   payload: JsonObject,
@@ -487,12 +521,38 @@ export async function appendJsonLine(
   payload: JsonObject,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const handle = await open(path, "a", 0o600);
+  const handle = await open(path, "a+", 0o600);
   try {
+    const { size } = await handle.stat();
+    if (size > 0) {
+      const finalByte = new Uint8Array(1);
+      await handle.read(finalByte, 0, 1, size - 1);
+      if (finalByte[0] !== 0x0a) await handle.writeFile("\n", "utf8");
+    }
     await handle.writeFile(`${JSON.stringify(payload)}\n`, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
+  }
+}
+
+export function appendJsonLineSync(
+  path: string,
+  payload: JsonObject,
+): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fd = openSync(path, "a+", 0o600);
+  try {
+    const { size } = fstatSync(fd);
+    if (size > 0) {
+      const finalByte = Buffer.alloc(1);
+      readSync(fd, finalByte, 0, 1, size - 1);
+      if (finalByte[0] !== 0x0a) writeFileSync(fd, "\n", "utf8");
+    }
+    writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 

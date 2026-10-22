@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
+import { reconcileGoalAttention } from "../../loopx/control_plane/presentation/goal_attention.ts";
 
 // Execution is shown only from session-owner facts; open Todos, quota eligibility and bound host threads stay "queued".
-function taskSession(goalId, sessionId, activeTurnId, lastActivityAt, host = null) {
+function taskSession(goalId, sessionId, activeTurnId, lastActivityAt, host = null, mode = host ? "attached_host" : "managed_runtime") {
   return {
-    ...(host ? { session_mode: "attached_host", host_surface: host } : { session_mode: "managed" }),
+    session_mode: mode,
+    ...(host ? { host_surface: host } : {}),
     session_id: sessionId, goal_id: goalId, agent_id: "codex", adapter_kind: "codex",
     channel_id: `task.${sessionId}`, status: activeTurnId ? "busy" : "ready", active_turn_id: activeTurnId,
     last_error_code: null, created_at: lastActivityAt, updated_at: lastActivityAt, last_activity_at: lastActivityAt, resumable: true,
@@ -57,6 +59,22 @@ async function lane(page, key) {
     text: await section.innerText(),
     title: await section.locator("header span").innerText(),
   };
+}
+
+/** Whether the leading `prefix` of a row's status line is fully visible at the sidebar width. */
+async function leadVisible(row, prefix) {
+  return row.locator("small").evaluate((element, lead) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node && !node.textContent.includes(lead)) node = walker.nextNode();
+    if (!node) return false;
+    const start = node.textContent.indexOf(lead);
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + lead.length);
+    const clip = (node.parentElement.closest(".personal-goal-row-activity-copy") || element).getBoundingClientRect();
+    return range.getBoundingClientRect().right <= clip.right + 0.5;
+  }, prefix);
 }
 
 /** Brief tiles that escape their container, so a new bucket cannot break the row. */
@@ -141,10 +159,10 @@ export const goalActivityScenario = {
       );
       await page.screenshot({ path: resolve(outputDir, "goal-activity-sidebar.png"), animations: "disabled" });
       await running.locator(".personal-goal-link").click();
-      await page.locator(".personal-channel-activity", { hasText: "执行中" }).waitFor();
+      await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "执行中" }).first().waitFor();
       await page.screenshot({ path: resolve(outputDir, "goal-activity-running-goal.png"), animations: "disabled" });
       await queued.locator(".personal-goal-link").click();
-      await page.locator(".personal-channel-activity", { hasText: "已安排" }).waitFor();
+      await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "已安排" }).first().waitFor();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: resolve(outputDir, "goal-activity-mobile.png"), animations: "disabled" });
       coverageEntries.push(...await live.close());
@@ -186,6 +204,98 @@ export const goalActivityScenario = {
       throw error;
     }
 
+    // A lane's missing record is coverage, not a verdict that the Goal stopped.
+    // Completed activity, open execution and cadence misses retain their own
+    // clocks and reasons. This uses the packaged status projection unchanged.
+    const gaps = await openWorkspacePage(browser, url, {
+      collectCoverage,
+      beforeGoto: api => {
+        api.hostThreadActivity = {
+          "product-release": {completeness: "complete", threads: [
+            {...thread("turn_open", minutesAgo(1)), agent_id: "worker-active", delivery_window: {state: "fresh"}},
+            {...thread("unknown", null), agent_id: "worker-unknown", reason: "no_turn_marker", delivery_window: {state: "missing", reason: "no_observation"}},
+            {...thread("idle", minutesAgo(90)), agent_id: "worker-older", delivery_window: {state: "stale", age_hours: 1.5}},
+          ]},
+          "research-monitor": {completeness: "complete", threads: ["unsupported_host", "thread_not_found", "store_unavailable", "record_unrecognized"].map((reason, i) => ({
+            ...thread("unknown", null), agent_id: `unreadable-${i}`, reason,
+            delivery_window: {state: "missing", reason: "no_observation"},
+          }))},
+          "multi-agent-projection": {completeness: "complete", threads: [{...thread("idle", minutesAgo(1)), delivery_window: {state: "fresh"}}]},
+        };
+      },
+    });
+    try {
+      const {api, page} = gaps;
+      const running = await goalRow(page, "Product Release");
+      await running.locator("small", {hasText: "执行中"}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "goal-activity-observation-first.png"), animations: "disabled"});
+      assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
+      assert.match(await running.locator("small").innerText(), /缺口 2/);
+      assert.doesNotMatch(await running.locator("small").innerText(), /未观察到活动|worker-|预期时间窗/);
+      assert.ok(await leadVisible(running, "执行中"), "The leading execution fact survives the gap badge");
+      const help = running.getByRole("button", {name: "活动观测 · Product Release", exact: true});
+      const selectedBeforeHelp = new URL(page.url()).searchParams.get("goalId");
+      await help.hover();
+      const bubble = page.getByRole("tooltip").filter({hasText: "worker-active"});
+      await bubble.waitFor({state: "visible"});
+      await bubble.hover();
+      assert.match(await bubble.innerText(), /worker-unknown[\s\S]*没有回合开始或结束标记/);
+      assert.match(await bubble.innerText(), /worker-older[\s\S]*最近回合已结束[\s\S]*1.5 小时/);
+      await page.keyboard.press("Escape");
+      await bubble.waitFor({state: "hidden"});
+      await help.focus();
+      await bubble.waitFor({state: "visible"});
+      await page.keyboard.press("Escape");
+      assert.equal(await help.evaluate(element => element === document.activeElement), true);
+      assert.equal(new URL(page.url()).searchParams.get("goalId"), selectedBeforeHelp, "Help never navigates or starts work");
+      const unavailable = await goalRow(page, "Research Monitor");
+      const unknownState = unavailable.locator("small");
+      assert.equal(await unknownState.innerText(), "状态不可读");
+      assert.equal(await unavailable.locator(".personal-goal-window-badge").count(), 0, "An all-unknown status is stated once");
+      assert.equal(await unknownState.evaluate(element => {
+        const probe = document.createElement("span"); probe.style.color = "var(--pw-muted)"; element.append(probe);
+        const neutral = getComputedStyle(element).color === getComputedStyle(probe).color; probe.remove(); return neutral;
+      }), true, "Missing observation has a neutral color");
+      assert.equal(await unavailable.locator(".personal-goal-mark.is-live").count(), 0);
+      await unavailable.getByRole("button", {name: "活动观测 · Research Monitor", exact: true}).click();
+      const unknownHelp = page.getByRole("tooltip").filter({hasText: "unreadable-0"});
+      await unknownHelp.waitFor({state: "visible"});
+      assert.match(await unknownHelp.innerText(), /尚不提供本机活动观测/);
+      assert.match(await unknownHelp.innerText(), /未找到绑定的线程/);
+      assert.match(await unknownHelp.innerText(), /无法读取宿主的本机记录/);
+      assert.match(await unknownHelp.innerText(), /无法识别宿主记录格式/);
+      await page.keyboard.press("Escape");
+      assert.doesNotMatch(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /执行中|观测缺口|状态不可读/,
+        "Another Goal's completed activity stays isolated");
+      await page.screenshot({path: resolve(outputDir, "goal-activity-observation-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.locator(".personal-mobile-menu").click();
+      assert.ok(await leadVisible(running, "执行中"));
+      await help.click();
+      await bubble.waitFor({state: "visible"});
+      const bounds = await bubble.boundingBox();
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390, "The same disclosure fits the narrow sidebar");
+      await page.screenshot({path: resolve(outputDir, "goal-activity-observation-mobile.png"), animations: "disabled"});
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+      await page.setViewportSize({width: 1512, height: 982});
+      await page.reload({waitUntil: "networkidle"});
+      const englishRunning = await goalRow(page, "Product Release");
+      assert.match(await englishRunning.locator("small").innerText(), /^Running[\s\S]*gaps · 2/);
+      await englishRunning.getByRole("button", {name: "Observed activity · Product Release", exact: true}).click();
+      assert.match(await page.getByRole("tooltip").filter({hasText: "worker-unknown"}).innerText(), /Execution remains unknown/);
+      await page.keyboard.press("Escape");
+      api.hostThreadActivity["product-release"] = {completeness: "complete", threads: [thread("idle", minutesAgo(1))]};
+      await page.reload({waitUntil: "networkidle"});
+      const recovered = await goalRow(page, "Product Release");
+      await recovered.locator(".personal-goal-window-badge").waitFor({state: "hidden"});
+      assert.doesNotMatch(await recovered.locator("small").innerText(), /Running|state unavailable|gaps/);
+      assert.equal(await recovered.locator(".personal-goal-window-badge, .personal-goal-mark.is-live").count(), 0,
+        "A refreshed complete ended-turn observation clears the old gap without inventing execution");
+    } finally {
+      coverageEntries.push(...await gaps.close());
+    }
+
     for (const completeness of ["incomplete", undefined, "unrecognized"]) {
       const partial = await openWorkspacePage(browser, url, {
         collectCoverage,
@@ -200,7 +310,7 @@ export const goalActivityScenario = {
       try {
         const { api, page } = partial;
         const queued = await goalRow(page, "Multi Agent Projection");
-        await queued.locator("small", { hasText: "执行情况以宿主为准" }).waitFor({ timeout: 15_000 });
+        await queued.locator("small", { hasText: "状态不可读" }).waitFor({ timeout: 15_000 });
         assert.doesNotMatch(await queued.locator("small").innerText(), /线程空闲|执行中/, "A partial or legacy sample cannot prove every bound thread idle");
         assert.match(await (await goalRow(page, "Product Release")).locator("small").innerText(), /^执行中/, "A positive open-turn observation remains usable with partial coverage");
         assert.doesNotMatch(await (await goalRow(page, "Research Monitor")).locator("small").innerText(), /线程空闲|执行中/, "An unrecognized record never becomes idle or running");
@@ -220,6 +330,47 @@ export const goalActivityScenario = {
         await partial.close();
         throw error;
       }
+    }
+
+    // Pair the packaged presentation with the same typed reconciliation rule
+    // exercised through real File/SQLite status reads in the integration suite.
+    const repair = await openWorkspacePage(browser, url, {
+      collectCoverage,
+      beforeGoto: (api) => {
+        api.transformStatus = (payload) => {
+          const failed = payload.attention_queue.items.find(item => item.goal_id === "product-release");
+          const failure = {goal_id: "product-release", status: "runtime_error", severity: "action",
+            waiting_on: "codex", source: "latest_run", recommended_action: "Retry the failed worker"};
+          if (failed) Object.assign(failed, failure);
+          else payload.attention_queue.items.push(failure);
+          const current = payload.attention_queue.items.find(item => item.goal_id === "progress-projection");
+          if (current) {
+            const rebuilt = reconcileGoalAttention({
+              item: {...current, source: "latest_run", recommended_action: "Obsolete routing"},
+              active_state_item: {...current, source: "active_state", status: "active_state_agent_todo", waiting_on: "codex"},
+              warning: {requires_refresh_state: true},
+              historical_run: {delivery_outcome: "outcome_progress"},
+            });
+            Object.assign(current, rebuilt.item);
+            delete current.stale_latest_run_warning;
+          }
+          return payload;
+        };
+      },
+    });
+    try {
+      const { page } = repair;
+      const failed = await goalRow(page, "Product Release");
+      await failed.locator("small", {hasText: "需修复"}).waitFor();
+      assert.equal(await page.getByTestId("personal-home-lane-running")
+        .locator(".personal-home-goal-card").filter({hasText: "Product Release"}).count(), 0,
+      "A repair request without observed execution never counts as running");
+      assert.match((await lane(page, "scheduled")).text, /Product Release/);
+      assert.doesNotMatch(await (await goalRow(page, "Progress Projection")).innerText(), /需修复|refresh-state/,
+        "A rebuilt projection asks the user for no technical repair");
+      await page.screenshot({path: resolve(outputDir, "goal-activity-auto-repair.png"), animations: "disabled"});
+    } finally {
+      coverageEntries.push(...await repair.close());
     }
 
     // The same rule must hold for the English copy: the title, count and rows
@@ -256,6 +407,54 @@ export const goalActivityScenario = {
     } catch (error) {
       await english.page.screenshot({ path: resolve(outputDir, "goal-activity-english-failed.png") });
       await english.close();
+      throw error;
+    }
+
+    // A turn whose session mode is missing or outside the backend's closed set
+    // is not managed execution and not a host claim: it is named as unknown,
+    // never live, and the brief does not claim that nothing is running.
+    const unrecognized = await openWorkspacePage(browser, url, {
+      collectCoverage,
+      beforeGoto: (_api, page) => {
+        const recent = new Date(Date.now() - 2 * 60_000).toISOString();
+        page.__loopxRuntime.sessions.set("activity-unknown-mode", taskSession("progress-projection", "activity-unknown-mode", "turn-unknown-mode", recent, "codex-app", "cloud_runtime"));
+        const { session_mode: _omitted, ...missingMode } = taskSession("research-monitor", "activity-missing-mode", "turn-missing-mode", recent);
+        page.__loopxRuntime.sessions.set("activity-missing-mode", missingMode);
+      },
+    });
+    try {
+      const { page } = unrecognized;
+      for (const title of ["Progress Projection", "Research Monitor"]) {
+        const row = await goalRow(page, title);
+        await row.locator("small", { hasText: "执行方式未知" }).waitFor({ timeout: 15_000 });
+        assert.match(await row.locator("small").innerText(), /^执行方式未知 · 回合未结束/, `${title}: an unrecognized mode is named, not read as managed`);
+        assert.doesNotMatch(await row.locator("small").innerText(), /执行中|宿主已领取|Codex App 宿主/, `${title}: neither managed execution nor a host claim`);
+        assert.ok(await leadVisible(row, "执行方式未知"), `${title}: the unknown mode survives sidebar truncation`);
+      }
+      assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 0, "An unrecognized mode is never live");
+      const runningTile = await briefTile(page, "running");
+      assert.equal(runningTile.count, 0, "An unrecognized mode never counts as running");
+      assert.match(runningTile.text, /没有可确认的执行 · 2 个 Goal 执行方式未知/, "The empty running tile discloses the open turns");
+      assert.equal(await page.getByTestId("personal-brief-claimed").count(), 0, "An unrecognized mode never counts as a host claim");
+      assert.equal(await page.getByTestId("personal-home-lane-running").count(), 0, "An unrecognized mode never enters the running lane");
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized.png"), animations: "disabled" });
+      await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+      await page.reload({ waitUntil: "networkidle" });
+      const englishRow = await goalRow(page, "Progress Projection");
+      await englishRow.locator("small", { hasText: "Mode unknown" }).waitFor({ timeout: 15_000 });
+      assert.match(await englishRow.locator("small").innerText(), /^Mode unknown · turn open/);
+      assert.ok(await leadVisible(englishRow, "Mode unknown"), "The English unknown mode survives sidebar truncation");
+      assert.match(await page.getByTestId("personal-brief-running").innerText(), /No verified run · 2 Goal\(s\) with unknown execution mode/);
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-english.png"), animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await briefTileOverflow(page), 0, "The disclosed empty state fits the 390px mobile width");
+      await page.locator(".personal-mobile-menu").click();
+      assert.ok(await leadVisible(await goalRow(page, "Progress Projection"), "Mode unknown"), "The unknown mode survives truncation in the mobile navigation");
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-mobile.png"), animations: "disabled" });
+      coverageEntries.push(...await unrecognized.close());
+    } catch (error) {
+      await unrecognized.page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-failed.png") });
+      await unrecognized.close();
       throw error;
     }
 

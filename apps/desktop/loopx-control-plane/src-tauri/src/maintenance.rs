@@ -11,6 +11,14 @@ use std::{
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+#[cfg(test)]
+#[path = "maintenance_transfer_tests.rs"]
+mod transfer_tests;
+
+#[cfg(test)]
+#[path = "maintenance_check_tests.rs"]
+mod check_tests;
+
 #[derive(Default)]
 pub struct Maintenance {
     busy: AtomicBool,
@@ -25,8 +33,18 @@ pub struct Maintenance {
     phase_started: Mutex<Option<Instant>>,
     separately_managed_runtime: AtomicBool,
     automatic_update_checked: AtomicBool,
+    prepared_update_checked: AtomicBool,
+    background_update: Mutex<BackgroundUpdate>,
     incomplete_app_installation: AtomicBool,
     manual_failure_pending: AtomicBool,
+    upgrade_request: std::sync::OnceLock<Option<crate::upgrade_request::UpgradeRequest>>,
+}
+
+#[derive(Default)]
+struct BackgroundUpdate {
+    generation: u64,
+    snapshot: Value,
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 #[derive(Default)]
@@ -50,12 +68,177 @@ impl RuntimeRetry {
     }
 }
 impl Maintenance {
-    fn status_snapshot(&self) -> Value {
+    fn startup_snapshot(&self) -> Value {
         if self.incomplete_app_installation.load(Ordering::Acquire) {
             json!({"phase":"error", "details":{"code":"app_install_incomplete"}})
         } else {
             self.snapshot.lock().unwrap().clone()
         }
+    }
+
+    fn status_snapshot(&self) -> Value {
+        let snapshot = self.startup_snapshot();
+        if !self.incomplete_app_installation.load(Ordering::Acquire)
+            && !self.busy.load(Ordering::Acquire)
+            && !self.manual_failure_pending.load(Ordering::Acquire)
+            && snapshot["phase"] != "restart_required"
+        {
+            let background = self.background_update.lock().unwrap();
+            if !background.snapshot.is_null() {
+                return background.snapshot.clone();
+            }
+        }
+        snapshot
+    }
+
+    fn admit_background_update(&self) -> Option<u64> {
+        // Admission and its generation must share the cancellation lock. A
+        // starter paused before admission cannot adopt a manual action's new
+        // generation after that action has already completed.
+        let background = self.background_update.lock().unwrap();
+        if self.busy.load(Ordering::Acquire)
+            || self.automatic_update_checked.swap(true, Ordering::AcqRel)
+        {
+            return None;
+        }
+        Some(background.generation)
+    }
+
+    fn cancel_background_update(&self) {
+        self.automatic_update_checked.store(true, Ordering::Release);
+        self.supersede_update_observation();
+    }
+
+    fn supersede_update_observation(&self) {
+        let mut background = self.background_update.lock().unwrap();
+        background.generation += 1;
+        background.snapshot = Value::Null;
+        if let Some(task) = background.task.take() {
+            task.abort();
+        }
+    }
+
+    fn publish_background(&self, generation: u64, phase: &str, mut details: Value) -> bool {
+        let mut background = self.background_update.lock().unwrap();
+        if background.generation != generation || self.busy.load(Ordering::Acquire) {
+            return false;
+        }
+        details["background"] = true.into();
+        let value = json!({"phase":phase, "details":details});
+        if phase == "error" {
+            *self.last_failure.lock().unwrap() = value.clone();
+        }
+        background.snapshot = value;
+        true
+    }
+
+    async fn run_background_update<T, Check, Prepare, PrepareFuture>(
+        &self,
+        generation: u64,
+        channel: &str,
+        check: Check,
+        prepare: Prepare,
+    ) -> Result<(), String>
+    where
+        Check: std::future::Future<Output = Result<Option<T>, String>>,
+        Prepare: FnOnce(T) -> PrepareFuture,
+        PrepareFuture: std::future::Future<Output = Result<Value, String>>,
+    {
+        // Network IO never owns `busy` or `supervision`. Its separate snapshot
+        // cannot block startup, child recovery or the next explicit action.
+        if !self.publish_background(generation, "checking", json!({"channel":channel})) {
+            return Ok(());
+        }
+        let result: Result<(), String> = async {
+            if let Some(update) = check.await? {
+                if !self.publish_background(generation, "downloading", json!({"channel":channel})) {
+                    return Ok(());
+                }
+                let details = prepare(update).await?;
+                self.publish_background(generation, "available", details);
+            } else {
+                self.publish_background(generation, "up_to_date", json!({"channel":channel}));
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = &result {
+            self.publish_background(generation, "error", json!({"code":error,"channel":channel}));
+        }
+        result
+    }
+
+    async fn run_manual_check<T>(
+        &self,
+        channel: &str,
+        check: impl std::future::Future<Output = Result<Option<T>, String>>,
+        accept: impl FnOnce(Option<T>) -> Value,
+    ) -> Result<Value, String> {
+        let generation = {
+            // Reserve only admission. A read of the feed must not own service
+            // supervision or keep a qualified local workspace from starting.
+            // Wait for an existing install/start without reserving busy; the
+            // cancellation fence is changed only after that owner releases.
+            let _supervision = self.supervision.lock().await;
+            let _reservation = self.acquire()?;
+            allow_action(
+                self.snapshot.lock().unwrap()["phase"]
+                    .as_str()
+                    .unwrap_or("idle"),
+                "check",
+            )?;
+            self.cancel_background_update();
+            self.manual_failure_pending.store(false, Ordering::Release);
+            *self.pending.lock().unwrap() = None;
+            let mut background = self.background_update.lock().unwrap();
+            background.snapshot = json!({"phase":"checking","details":{
+                "channel":channel,"background":true
+            }});
+            background.generation
+        };
+        let result = check.await;
+        let mut background = self.background_update.lock().unwrap();
+        if background.generation != generation {
+            // A newer check or mutation owns the result. In particular a late
+            // feed must not replace the candidate selected by a newer action.
+            drop(background);
+            return Ok(self.status_snapshot());
+        }
+        match result {
+            Ok(update) => {
+                let phase = if update.is_some() {
+                    "available"
+                } else {
+                    "up_to_date"
+                };
+                // Candidate admission and its visible result share the same
+                // cancellation fence. This callback does no IO.
+                let mut details = accept(update);
+                details["background"] = true.into();
+                let value = json!({"phase":phase,"details":details});
+                background.snapshot = value.clone();
+                Ok(value)
+            }
+            Err(error) => {
+                let value = json!({"phase":"error","details":{
+                    "code":error,"channel":channel,"background":true
+                }});
+                *self.last_failure.lock().unwrap() = value.clone();
+                background.snapshot = value;
+                Err(error)
+            }
+        }
+    }
+
+    fn accept_checked_update(
+        &self,
+        channel: &str,
+        current_version: &str,
+        update: Option<Update>,
+    ) -> Value {
+        let details = json!({"channel":channel,"version":update.as_ref().map(|v| &v.version),"current_version":current_version});
+        *self.pending.lock().unwrap() = update.map(|update| (channel.to_owned(), update));
+        details
     }
 
     // Only a completed native replacement/verified restore can retire this
@@ -72,6 +255,75 @@ impl Maintenance {
             .map_err(|_| "update_busy")?;
         Ok(BusyGuard(&self.busy))
     }
+
+    async fn run_automatic_update<T, Check, Apply, ApplyFuture, Restart>(
+        &self,
+        channel: &str,
+        check: Check,
+        apply: Apply,
+        restart: Restart,
+    ) -> Result<Option<()>, String>
+    where
+        Check: std::future::Future<Output = Result<Option<T>, String>>,
+        Apply: FnOnce(T) -> ApplyFuture,
+        ApplyFuture: std::future::Future<Output = Result<(), String>>,
+        Restart: FnOnce(),
+    {
+        if self.busy.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        // Automatic startup work owns supervision, while an explicit action
+        // reserves `busy` and waits here instead of failing with update_busy.
+        let Ok(_supervision) = self.supervision.try_lock() else {
+            return Ok(None);
+        };
+        if self.busy.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let result: Result<(), String> = async {
+            if let Some(update) = check.await? {
+                if self.busy.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                apply(update).await?;
+                // Installation cannot be interrupted. Once it finishes, either
+                // an admitted manual request reads restart_required or this
+                // transaction reserves the non-returning restart atomically.
+                let Ok(_restart_reservation) = self.acquire() else {
+                    return Ok(());
+                };
+                restart();
+            }
+            Ok(())
+        }
+        .await;
+        // A queued explicit action must become the final snapshot writer.
+        if let Err(error) = &result {
+            let details = self.failure_details(error, channel);
+            // A rejected prepared archive has not replaced the running App.
+            // app_install_failed additionally certifies the previous target,
+            // qualified runtime and retired journal. Keep its diagnostics,
+            // but do not tell the boot page startup has stopped while local
+            // service startup is about to continue. Unknown/incomplete and
+            // explicit-operation failures retain their recovery boundary.
+            if self.prepared_update_checked.load(Ordering::Acquire)
+                && matches!(
+                    error.as_str(),
+                    "update_download_or_signature_failed" | "app_install_failed"
+                )
+                && !self.incomplete_app_installation.load(Ordering::Acquire)
+                && !self.manual_failure_pending.load(Ordering::Acquire)
+                && !self.busy.load(Ordering::Acquire)
+            {
+                *self.last_failure.lock().unwrap() = json!({"phase":"error","details":details});
+                self.publish("connecting", json!({}));
+            } else {
+                self.publish("error", details);
+            }
+        }
+        result.map(Some)
+    }
+
     fn publish(&self, phase: &str, details: Value) -> Value {
         let value = json!({"phase": phase, "details": details});
         // The pairing decision belongs with the other blocked states: the
@@ -94,6 +346,10 @@ impl Maintenance {
             }
         }
         *snapshot = value.clone();
+        drop(snapshot);
+        if let Some(Some(request)) = self.upgrade_request.get() {
+            request.publish(phase, &value["details"]);
+        }
         value
     }
 
@@ -180,6 +436,25 @@ impl Maintenance {
             }
         }
     }
+
+    // Recovering an already-qualified private child does not select/install a
+    // runtime or change the update transaction. In particular a failed Check
+    // or a pending available update must remain visible while services heal.
+    fn recover_connected<T>(&self, recover: impl FnOnce() -> T) -> Option<T> {
+        if self.busy.load(Ordering::Acquire)
+            || self.incomplete_app_installation.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let _guard = self.supervision.try_lock().ok()?;
+        if self.busy.load(Ordering::Acquire)
+            || self.incomplete_app_installation.load(Ordering::Acquire)
+            || self.snapshot.lock().unwrap()["phase"] == "restart_required"
+        {
+            return None;
+        }
+        Some(recover())
+    }
 }
 struct BusyGuard<'a>(&'a AtomicBool);
 impl Drop for BusyGuard<'_> {
@@ -216,6 +491,21 @@ fn check_error(error: tauri_plugin_updater::Error) -> &'static str {
         _ => "update_check_failed",
     }
 }
+
+fn download_error(error: tauri_plugin_updater::Error) -> &'static str {
+    use tauri_plugin_updater::Error;
+    match error {
+        Error::Reqwest(error) if error.is_timeout() => "update_download_timeout",
+        Error::Reqwest(_) => "update_network_failed",
+        // The pinned updater uses Network for a non-success archive response.
+        // Do not expose its URL/status message or mislabel it as a bad signature.
+        Error::Network(_) => "update_download_failed",
+        Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
+            "update_signature_invalid"
+        }
+        _ => "update_download_or_signature_failed",
+    }
+}
 // Environment telemetry for the recovery diagnostics: coarse, non-PII facts
 // that separate "fresh Mac without a usable Python" from OS-specific defects.
 // No paths, environment variables or process output beyond the probed version.
@@ -226,6 +516,7 @@ fn compose_environment(
     arch: &str,
     runtime_executable_found: bool,
     python3: (bool, Option<String>),
+    node: (bool, Option<String>),
 ) -> Value {
     json!({
         "os_version": os_version,
@@ -233,6 +524,8 @@ fn compose_environment(
         "runtime_executable_found": runtime_executable_found,
         "python3_found": python3.0,
         "python3_version": python3.1,
+        "node_found": node.0,
+        "node_version": node.1,
     })
 }
 
@@ -260,13 +553,12 @@ fn detect_environment() -> Value {
         std::env::consts::ARCH,
         runtime_executable_found,
         crate::services::python3_environment(),
+        crate::services::node_environment(),
     )
 }
 
 #[tauri::command]
 pub fn desktop_update_status(app: AppHandle, state: State<'_, Maintenance>) -> Value {
-    let snapshot = state.status_snapshot();
-    let last_failure = state.last_failure.lock().unwrap().clone();
     // Probing spawns bounded sub-processes; the boot page polls every second,
     // so serve the cached block and refresh at most every ENVIRONMENT_TTL.
     let environment = {
@@ -278,7 +570,23 @@ pub fn desktop_update_status(app: AppHandle, state: State<'_, Maintenance>) -> V
         cache.as_ref().expect("refreshed above").1.clone()
     };
     let selection = crate::runtime_selection::selected(&app).ok();
-    json!({"state": snapshot, "startup": state.startup_timing(), "last_failure": last_failure, "app_version": app.package_info().version.to_string(), "runtime": bundled_runtime::identity(&app).ok(), "runtime_selection":{"explicit":selection.as_ref().is_some_and(|selected| selected.environment_override), "remembered":selection.as_ref().is_some_and(|selected| selected.explicit), "bundled_repair_available":selection.is_some() && !state.separately_managed_runtime.load(Ordering::Acquire)}, "rollback_available": crate::update_backup::available(&app), "environment": environment})
+    let runtime = bundled_runtime::identity(&app).ok();
+    let runtime_selection = json!({
+        "explicit": selection.as_ref().is_some_and(|selected| selected.environment_override),
+        "remembered": selection.as_ref().is_some_and(|selected| selected.explicit),
+        "bundled_repair_available": selection.is_some()
+            && bundled_runtime::repair_resources_available(&app)
+            && !state.separately_managed_runtime.load(Ordering::Acquire),
+    });
+    let rollback_available = crate::update_backup::available(&app);
+    let app_version = app.package_info().version.to_string();
+    let startup = state.startup_timing();
+    // Read mutable transaction state after the potentially blocking
+    // diagnostics so this response cannot revive a superseded phase.
+    let snapshot = state.status_snapshot();
+    let startup_state = state.startup_snapshot();
+    let last_failure = state.last_failure.lock().unwrap().clone();
+    json!({"state": snapshot, "startup_state": startup_state, "startup": startup, "last_failure": last_failure, "app_version": app_version, "runtime": runtime, "runtime_selection": runtime_selection, "rollback_available": rollback_available, "environment": environment})
 }
 #[tauri::command]
 pub async fn desktop_update(
@@ -303,7 +611,25 @@ pub async fn desktop_update(
         return Err("invalid_update_action".into());
     }
     let state = app.state::<Maintenance>();
+    if action == "check" {
+        // Keep the manual feed's existing deadline, independently of local
+        // service startup and the background archive transfer policy.
+        return state
+            .run_manual_check(
+                &channel,
+                find_update(&app, &channel, url, Duration::from_secs(45)),
+                |update| {
+                    state.accept_checked_update(
+                        &channel,
+                        &app.package_info().version.to_string(),
+                        update,
+                    )
+                },
+            )
+            .await;
+    }
     let _guard = state.acquire()?;
+    state.cancel_background_update();
     // An explicit action takes priority over the next retry, while awaiting
     // the current bounded service attempt instead of failing with update_busy.
     let _supervision = state.supervision.lock().await;
@@ -320,15 +646,15 @@ pub async fn desktop_update(
         app.restart();
     }
     state.manual_failure_pending.store(false, Ordering::Release);
-    let outcome = perform(&app, &action, &channel, url).await;
+    let outcome = perform(&app, &action, &channel, url, Duration::from_secs(45)).await;
     if let Err(error) = &outcome {
         state.publish_manual_failure(error, &channel);
     }
     outcome
 }
 impl Maintenance {
-    // Keep a failed user operation and its retry controls until the next
-    // explicit action. An automatic feed failure still permits startup.
+    // Keep a failed install/recovery operation until the next explicit action.
+    // Feed reads use the independent nonblocking observation instead.
     fn publish_manual_failure(&self, code: &str, channel: &str) -> Value {
         self.manual_failure_pending.store(true, Ordering::Release);
         self.publish_failure(code, channel)
@@ -337,6 +663,10 @@ impl Maintenance {
     // App-install failures discard the stale continuation journal (see
     // perform); surface that in the failure diagnostics exactly once.
     fn publish_failure(&self, code: &str, channel: &str) -> Value {
+        self.publish("error", self.failure_details(code, channel))
+    }
+
+    fn failure_details(&self, code: &str, channel: &str) -> Value {
         let mut details = json!({"code": code, "channel": channel});
         if code == "app_install_failed" {
             details["journal_discarded"] = self
@@ -344,7 +674,7 @@ impl Maintenance {
                 .swap(false, Ordering::AcqRel)
                 .into();
         }
-        self.publish("error", details)
+        details
     }
 }
 // Bounded reinstall of this App's bundled snapshot. Persist the qualified
@@ -359,10 +689,11 @@ async fn reinstall_bundled_runtime(app: &AppHandle) -> Result<Value, String> {
     }
     state.publish("installing_runtime", json!({}));
     let handle = app.clone();
-    let executable =
-        tauri::async_runtime::spawn_blocking(move || bundled_runtime::install_private(&handle))
-            .await
-            .map_err(|_| "runtime_install_failed".to_string())??;
+    let executable = tauri::async_runtime::spawn_blocking(move || {
+        bundled_runtime::install_private(&handle, &selection.executable)
+    })
+    .await
+    .map_err(|_| "runtime_install_failed".to_string())??;
     crate::runtime_selection::remember(
         app,
         &crate::runtime_selection::Selection {
@@ -380,6 +711,7 @@ async fn perform(
     action: &str,
     channel: &str,
     url: tauri::Url,
+    check_timeout: Duration,
 ) -> Result<Value, String> {
     let state = app.state::<Maintenance>();
     if action == "forget_runtime_selection" {
@@ -387,40 +719,28 @@ async fn perform(
         return Ok(state.publish("connecting", json!({})));
     }
     if action == "check" {
+        // The explicit CLI upgrade still checks and replaces the App in its
+        // existing exclusive transaction, before any service can be started.
         state.publish("checking", json!({"channel":channel}));
         *state.pending.lock().unwrap() = None;
-        let main_channel = channel == "main";
-        let update = app
-            .updater_builder()
-            .version_comparator(move |current, remote| {
-                if main_channel && !current.pre.as_str().starts_with("main.") {
-                    remote.version.pre.as_str().starts_with("main.")
-                } else {
-                    remote.version > current
-                }
-            })
-            .endpoints(vec![url])
-            .map_err(|_| "update_unavailable")?
-            .timeout(Duration::from_secs(3))
-            .build()
-            .map_err(|_| "update_unavailable")?
-            .check()
-            .await
-            .map_err(check_error)?;
-        let details = json!({"channel":channel,"version":update.as_ref().map(|v| &v.version),"current_version":app.package_info().version.to_string()});
+        let update = find_update(app, channel, url, check_timeout).await?;
+        // This is the exclusive CLI-upgrade path. Freeze its candidate before
+        // an older nonblocking manual read can overwrite the pending Update.
+        state.supersede_update_observation();
         let phase = if update.is_some() {
             "available"
         } else {
             "up_to_date"
         };
-        *state.pending.lock().unwrap() = update.map(|mut update| {
-            // A quick availability check must not become the download budget.
-            update.timeout = Some(Duration::from_secs(30));
-            (channel.to_string(), update)
-        });
+        let details =
+            state.accept_checked_update(channel, &app.package_info().version.to_string(), update);
         return Ok(state.publish(phase, details));
     }
     if action == "rollback" {
+        // A requested rollback must not silently reapply the prepared newer
+        // App on its next open. Optional cache failure never gates a runtime
+        // repair or an update check; only this conflicting replacement needs it.
+        crate::prepared_update::clear(&prepared_directory(app)?)?;
         state.publish("installing_app", json!({}));
         let handle = app.clone();
         tauri::async_runtime::spawn_blocking(move || crate::update_backup::restore(&handle))
@@ -447,36 +767,135 @@ async fn perform(
         .ok_or("update_check_required")?;
     state.publish("downloading", json!({"version":update.version}));
     let mut received = 0u64;
-    let bytes = update
-        .download(
-            |chunk, total| {
-                received += chunk as u64;
-                state.publish(
-                    "downloading",
-                    json!({"received":received,"total":total,"version":update.version}),
-                );
-            },
-            || {},
-        )
+    let cached = crate::prepared_update::load(
+        &prepared_directory(app)?,
+        &app.package_info().version.to_string(),
+        channel,
+        updater_public_key(app)?,
+    )
+    .ok()
+    .flatten()
+    .filter(|cached| cached.version == update.version && cached.signature == update.signature);
+    let bytes = if let Some(cached) = cached {
+        cached.bytes
+    } else {
+        download_update(&update, |chunk, total| {
+            received += chunk as u64;
+            state.publish(
+                "downloading",
+                json!({"received":received,"total":total,"version":update.version}),
+            );
+        })
+        .await?
+    };
+    let target = update.version.clone();
+    install_verified_app(app, target, move || {
+        #[cfg(target_os = "macos")]
+        return crate::macos_update::install(&update, &bytes);
+        #[cfg(not(target_os = "macos"))]
+        update
+            .install(bytes)
+            .map_err(|_| "app_install_failed".into())
+    })
+    .await
+}
+
+fn prepared_directory(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|root| root.join("prepared-app-update"))
+        .map_err(|_| "update_unavailable".into())
+}
+
+fn updater_public_key(app: &AppHandle) -> Result<&str, String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|v| v["pubkey"].as_str())
+        .ok_or_else(|| "update_unavailable".into())
+}
+
+async fn download_update(
+    update: &Update,
+    on_chunk: impl FnMut(usize, Option<u64>),
+) -> Result<Vec<u8>, String> {
+    let mut update = update.clone();
+    // A release archive can take minutes while making steady progress. Keep
+    // a finite overall bound, separate from the feed's short request deadline
+    // and the client's per-read idle deadline. Both manual and background
+    // callers still use the native updater's signature verification.
+    update.timeout = Some(Duration::from_secs(30 * 60));
+    update
+        .download(on_chunk, || {})
         .await
-        .map_err(|_| "update_download_or_signature_failed")?;
+        .map_err(|error| download_error(error).into())
+}
+
+async fn find_update<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    url: tauri::Url,
+    timeout: Duration,
+) -> Result<Option<Update>, String> {
+    let channel = channel.to_owned();
+    // The native updater retains this callback for both check and download.
+    // Enable the archive-only policy after check completes, so its connection
+    // and idle limits cannot shorten the feed's own request deadline. Each
+    // returned Update (and its clones) retains only this request's marker.
+    let archive_client = std::sync::Arc::new(AtomicBool::new(false));
+    let configure_archive = archive_client.clone();
+    let update = app
+        .updater_builder()
+        .version_comparator(move |current, remote| {
+            crate::prepared_update::is_newer(
+                &current.to_string(),
+                &remote.version.to_string(),
+                &channel,
+            )
+        })
+        .endpoints(vec![url])
+        .map_err(|_| "update_unavailable")?
+        .timeout(timeout)
+        .configure_client(move |client| {
+            if configure_archive.load(Ordering::Acquire) {
+                client
+                    .connect_timeout(Duration::from_secs(10))
+                    .read_timeout(Duration::from_secs(30))
+            } else {
+                client
+            }
+        })
+        .build()
+        .map_err(|_| "update_unavailable")?
+        .check()
+        .await
+        .map_err(|error| check_error(error).to_string())?;
+    archive_client.store(true, Ordering::Release);
+    Ok(update)
+}
+
+async fn install_verified_app(
+    app: &AppHandle,
+    target: String,
+    install: impl FnOnce() -> Result<(), String> + Send + 'static,
+) -> Result<Value, String> {
+    let state = app.state::<Maintenance>();
     // Archive signature is now verified. Persist continuation before replacement.
-    state.publish("installing_app", json!({"version":update.version}));
+    state.publish("installing_app", json!({"version":target}));
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || crate::update_backup::prepare(&handle))
         .await
         .map_err(|_| "backup_failed")??;
     // After restart, freshness coordination prepares the App-owned runtime
     // only when it is newer; it cannot reassign the system CLI's owner.
-    let target = update.version.clone();
     // A JoinError (task panic/cancellation) is an unknown-state failure just
     // like an install error: both must clear the same verification below, so
     // neither returns ahead of the recovery decision.
-    let installed: Result<(), String> =
-        tauri::async_runtime::spawn_blocking(move || update.install(bytes))
-            .await
-            .map_err(|_| "app_install_failed".to_string())
-            .and_then(|result| result.map_err(|_| "app_install_failed".to_string()));
+    let installed: Result<(), String> = tauri::async_runtime::spawn_blocking(install)
+        .await
+        .map_err(|_| "app_install_failed".to_string())
+        .and_then(|result| result);
     if installed.is_err() {
         // The pinned macOS installer renames the old App away before moving
         // the new one in, so a failed install does not by itself prove the
@@ -491,6 +910,11 @@ async fn perform(
             || bundled_runtime::discard_journal(app),
         )
         .into());
+    }
+    // Replacement already committed. A disposable-cache cleanup failure must
+    // not turn the installed result into a failed operation or strand restart.
+    if let Ok(root) = prepared_directory(app) {
+        let _ = crate::prepared_update::clear(&root);
     }
     *state.pending.lock().unwrap() = None;
     Ok(state.complete_app_replacement(json!({"version":target})))
@@ -609,11 +1033,11 @@ fn runtime_state_publishes_own_phase(error: &str) -> bool {
 }
 
 fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, String> {
+    use crate::runtime_ancestry::compare_official_commits;
     use crate::runtime_selection::{
-        compare_official_commits, compare_runtimes, is_private_runtime, prefer_current_bundle,
-        Selection,
+        is_private_runtime, prefer_current_bundle, prefer_discovered_runtime,
+        same_release_installation, Selection,
     };
-    use std::cmp::Ordering as VersionOrder;
     let mut selection = crate::runtime_selection::selected(app)?;
     let mut installed = crate::services::runtime_identity_for_executable(&selection.executable);
     if cfg!(dev) || !cfg!(target_os = "macos") {
@@ -625,12 +1049,14 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     let state = app.state::<Maintenance>();
     let _guard = state.acquire()?;
     let bundled = bundled_runtime::identity(app)?;
-    let candidate = json!({"package_version":app.package_info().version.to_string(), "source_revision":bundled["source_revision"]});
+    let candidate =
+        crate::runtime_selection::bundled_runtime_candidate(app.package_info(), &bundled)?;
     let private_executable = bundled_runtime::private_executable(app)?;
     // Only a launch-time developer override pins a runtime. Ordinary launches
     // reconcile discovery, a previous choice, and the App-owned installation.
     if !selection.environment_override {
         let mut candidates = crate::services::discovered_loopx_executables();
+        let default_executable = candidates.first().cloned();
         candidates.push(private_executable.to_string_lossy().into_owned());
         for executable in candidates {
             if executable == selection.executable {
@@ -649,12 +1075,19 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
                             compare_official_commits,
                         )
                     } else {
-                        compare_runtimes(
+                        prefer_discovered_runtime(
                             app.package_info(),
                             current,
                             &identity,
+                            default_executable.as_ref() == Some(&executable)
+                                && same_release_installation(
+                                    &selection.executable,
+                                    current,
+                                    &executable,
+                                    &identity,
+                                ),
                             compare_official_commits,
-                        ) == Some(VersionOrder::Less)
+                        )
                     }
                 });
                 if replace {
@@ -687,7 +1120,10 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     if newer_bundle && !selection.environment_override {
         let mut prepared = None;
         let result = state.prepare_runtime(Instant::now(), || {
-            prepared = Some(bundled_runtime::install_private(app)?);
+            prepared = Some(bundled_runtime::install_private(
+                app,
+                &selection.executable,
+            )?);
             Ok(())
         });
         match result {
@@ -735,39 +1171,177 @@ fn automatic_app_update(app: &AppHandle) {
     if cfg!(dev)
         || !cfg!(target_os = "macos")
         || app.config().identifier != "io.loopx.control-plane"
-        || state.automatic_update_checked.swap(true, Ordering::AcqRel)
     {
         return;
     }
-    let channel = if app.package_info().version.pre.as_str().starts_with("main.") {
+    let request = state.upgrade_request.get().and_then(Option::as_ref);
+    let channel = if let Some(request) = request {
+        request.channel.as_str()
+    } else if app.package_info().version.pre.as_str().starts_with("main.") {
         "main"
     } else {
         "stable"
     };
-    let result: Result<(), String> = tauri::async_runtime::block_on(async {
-        let _guard = state.acquire()?;
-        let url = endpoint(channel)?;
-        let checked = perform(app, "check", channel, url.clone()).await?;
-        if checked["phase"] == "available" {
-            perform(app, "apply", channel, url).await?;
-            app.restart();
+    if request.is_none() {
+        if state.prepared_update_checked.swap(true, Ordering::AcqRel) {
+            return;
         }
-        Ok(())
-    });
+        // Ordinary launch consumes only an already prepared local archive.
+        // No network request precedes the usable local runtime. Installation
+        // happens before any App-owned service exists, never during a Turn.
+        #[cfg(target_os = "macos")]
+        {
+            let state = &*state;
+            let result = tauri::async_runtime::block_on(state.run_automatic_update(
+                channel,
+                async {
+                    crate::prepared_update::load(
+                        &prepared_directory(app)?,
+                        &app.package_info().version.to_string(),
+                        channel,
+                        updater_public_key(app)?,
+                    )
+                },
+                |prepared| async move {
+                    state.supersede_update_observation();
+                    let target = prepared.version;
+                    let version = target.clone();
+                    install_verified_app(app, target, move || {
+                        crate::macos_update::install_prepared(&version, &prepared.bytes)
+                    })
+                    .await?;
+                    Ok(())
+                },
+                || app.restart(),
+            ));
+            if let Err(error) = result {
+                eprintln!("LoopX prepared App update deferred: {error}");
+            }
+        }
+        return;
+    }
+    if state.automatic_update_checked.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    // A CLI-requested upgrade is an explicit operation, not an ordinary open.
+    // Preserve its requested channel and exact service-ready return contract.
+    let result: Result<Option<()>, String> =
+        tauri::async_runtime::block_on(state.run_automatic_update(
+            channel,
+            async {
+                let url = endpoint(channel)?;
+                // Keep the optional feed lookup on the startup path bounded.
+                let checked = perform(
+                    app,
+                    "check",
+                    channel,
+                    url.clone(),
+                    Duration::from_secs(if request.is_some() { 30 } else { 3 }),
+                )
+                .await?;
+                Ok((checked["phase"] == "available").then_some(url))
+            },
+            |url| async move {
+                perform(app, "apply", channel, url, Duration::from_secs(3)).await?;
+                Ok(())
+            },
+            || app.restart(),
+        ));
     if let Err(error) = result {
-        state.publish_failure(&error, channel);
         eprintln!("LoopX automatic App update deferred: {error}");
     }
     // An unavailable feed/signature never certifies freshness or prevents use
     // of the installed App. Diagnostics retain the failed check.
 }
 
-pub fn start_services(app: &AppHandle) -> Result<Option<crate::services::ServiceSet>, String> {
+pub fn start_background_update(app: &AppHandle) {
+    let state = app.state::<Maintenance>();
+    if cfg!(dev)
+        || !cfg!(target_os = "macos")
+        || app.config().identifier != "io.loopx.control-plane"
+        || state.upgrade_request.get().is_some_and(Option::is_some)
+    {
+        return;
+    }
+    let Some(generation) = state.admit_background_update() else {
+        return;
+    };
+    let handle = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let state = handle.state::<Maintenance>();
+        let channel = if handle
+            .package_info()
+            .version
+            .pre
+            .as_str()
+            .starts_with("main.")
+        {
+            "main"
+        } else {
+            "stable"
+        };
+        let result = state.run_background_update(generation, channel,
+            async {
+                find_update(&handle, channel, endpoint(channel)?, Duration::from_secs(30)).await
+            },
+            |update| async {
+                let mut received = 0u64;
+                let bytes = download_update(&update, |chunk, total| {
+                    received += chunk as u64;
+                    state.publish_background(generation, "downloading",
+                        json!({"channel":channel,"version":update.version,"received":received,"total":total}));
+                }).await?;
+                let root = prepared_directory(&handle)?;
+                let app = handle.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let state = app.state::<Maintenance>();
+                    let background = state.background_update.lock().unwrap();
+                    if background.generation != generation || state.busy.load(Ordering::Acquire) {
+                        return Err("update_busy".into());
+                    }
+                    crate::prepared_update::save(&root, channel, &update.version, &update.signature, &bytes)?;
+                    let details = json!({"channel":channel,"version":update.version,"prepared":true});
+                    *state.pending.lock().unwrap() = Some((channel.into(), update));
+                    Ok(details)
+                }).await.map_err(|_| "update_download_or_signature_failed".to_string())?
+            }
+        ).await;
+        if let Err(error) = result {
+            eprintln!("LoopX background App update deferred: {error}");
+        }
+    });
+    let mut background = state.background_update.lock().unwrap();
+    if background.generation == generation {
+        background.task = Some(task);
+    } else {
+        task.abort();
+    }
+}
+
+pub fn start_services(
+    app: &AppHandle,
+    endpoints: &crate::service_endpoints::ServiceEndpoints,
+) -> Result<Option<crate::services::ServiceSet>, String> {
+    app.state::<Maintenance>().upgrade_request.get_or_init(|| {
+        let args = std::env::args().collect::<Vec<_>>();
+        if !args
+            .iter()
+            .any(|arg| arg.starts_with("--loopx-upgrade-request="))
+        {
+            return None;
+        }
+        crate::upgrade_request::UpgradeRequest::from_args(
+            &args,
+            app.path().app_local_data_dir().ok()?,
+            app.package_info().version.to_string(),
+            bundled_runtime::identity(app).ok()?["source_revision"].clone(),
+        )
+    });
     app.state::<Maintenance>()
         .startup_started
         .get_or_init(Instant::now);
     automatic_app_update(app);
-    app.state::<Maintenance>().reconcile_services(|| {
+    let result = app.state::<Maintenance>().reconcile_services(|| {
         let runtime = match resume_runtime(app) {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -783,22 +1357,240 @@ pub fn start_services(app: &AppHandle) -> Result<Option<crate::services::Service
                 return Err(error);
             }
         };
-        crate::services::ServiceSet::start(&runtime, |pending| {
+        crate::services::ServiceSet::start(&runtime, endpoints, |pending| {
             let service = crate::services::ServiceKind::pending_label(pending);
             app.state::<Maintenance>()
                 .publish("connecting", json!({"service":service}));
         })
         .map_err(|e| e.to_string())
-    })
+    });
+    if let Ok(Some(services)) = &result {
+        if let Some(Some(request)) = app.state::<Maintenance>().upgrade_request.get() {
+            request.services_ready(services.runtime_identity());
+        }
+    }
+    result
 }
 
 pub fn reconnect_requested(app: &AppHandle) -> bool {
     app.state::<Maintenance>().snapshot.lock().unwrap()["phase"] == "connecting"
 }
 
+pub fn recover_services(
+    app: &AppHandle,
+    services: &mut crate::services::ServiceSet,
+    endpoints: &crate::service_endpoints::ServiceEndpoints,
+) {
+    let result = app
+        .state::<Maintenance>()
+        .recover_connected(|| services.recover_exited(endpoints, Instant::now()));
+    if let Some(Err(error)) = result {
+        eprintln!("LoopX owned service recovery deferred: {error}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_manual_choice_prevents_a_delayed_background_start() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker_state = state.clone();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            worker_state.admit_background_update()
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        {
+            let _manual = state.acquire().unwrap();
+            state.cancel_background_update();
+            state.publish("available", json!({"channel":"main","version":"1.1.0"}));
+        }
+        release_tx.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), None);
+        assert_eq!(state.status_snapshot()["details"]["channel"], "main");
+    }
+
+    #[test]
+    fn manual_choice_invalidates_admitted_but_not_yet_started_background_io() {
+        let state = Maintenance::default();
+        let generation = state.admit_background_update().unwrap();
+        assert_eq!(state.admit_background_update(), None);
+        {
+            let _manual = state.acquire().unwrap();
+            state.cancel_background_update();
+            state.publish("available", json!({"channel":"main","version":"1.1.0"}));
+        }
+        tauri::async_runtime::block_on(state.run_background_update(
+            generation,
+            "stable",
+            async { panic!("cancelled startup must not query the feed") },
+            |_: ()| async { panic!("cancelled startup must not prepare an update") },
+        ))
+        .unwrap();
+        assert_eq!(state.status_snapshot()["details"]["channel"], "main");
+        assert!(state.background_update.lock().unwrap().snapshot.is_null());
+    }
+
+    #[test]
+    fn busy_background_admission_preserves_the_later_startup_attempt() {
+        let state = Maintenance::default();
+        {
+            let _busy = state.acquire().unwrap();
+            assert_eq!(state.admit_background_update(), None);
+        }
+        assert!(state.admit_background_update().is_some());
+        assert_eq!(state.admit_background_update(), None);
+    }
+
+    #[test]
+    fn blocked_background_io_cannot_hold_service_recovery_or_manual_admission() {
+        for block_check in [true, false] {
+            let state = std::sync::Arc::new(Maintenance::default());
+            assert_eq!(state.reconcile_services(|| Ok(1)).unwrap(), Some(1));
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let worker_state = state.clone();
+            let worker = std::thread::spawn(move || {
+                let (check_release, prepare_release) = if block_check {
+                    (Some(release_rx), None)
+                } else {
+                    (None, Some(release_rx))
+                };
+                let prepare_started = started_tx.clone();
+                tauri::async_runtime::block_on(worker_state.run_background_update(
+                    0,
+                    "stable",
+                    async move {
+                        if let Some(release) = check_release {
+                            started_tx.send(()).unwrap();
+                            release.recv_timeout(Duration::from_secs(5)).unwrap();
+                        }
+                        Ok(Some(()))
+                    },
+                    |_| async move {
+                        if let Some(release) = prepare_release {
+                            prepare_started.send(()).unwrap();
+                            release.recv_timeout(Duration::from_secs(5)).unwrap();
+                        }
+                        Ok(json!({"channel":"stable","prepared":true}))
+                    },
+                ))
+                .unwrap();
+            });
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            // These operations must complete while the network future is
+            // still held, rather than relying on a wall-clock speed threshold.
+            assert_eq!(state.recover_connected(|| 2), Some(2));
+            assert_eq!(state.reconcile_services(|| Ok(3)).unwrap(), Some(3));
+            {
+                let _manual = state.acquire().unwrap();
+                let _supervision = state
+                    .supervision
+                    .try_lock()
+                    .expect("background owns no supervisor lock");
+                state.cancel_background_update();
+                state.publish(
+                    "available",
+                    json!({"channel":"main","version":"new manual choice"}),
+                );
+            }
+            release_tx.send(()).unwrap();
+            worker.join().unwrap();
+            assert_eq!(state.status_snapshot()["details"]["channel"], "main");
+            assert!(!state.status_snapshot()["details"]["prepared"]
+                .as_bool()
+                .unwrap_or(false));
+        }
+    }
+
+    #[test]
+    fn prepared_background_update_is_visible_without_becoming_a_service_gate() {
+        let state = Maintenance::default();
+        state.reconcile_services(|| Ok(())).unwrap();
+        tauri::async_runtime::block_on(state.run_background_update(
+            0,
+            "stable",
+            async { Ok(Some(())) },
+            |_| async { Ok(json!({"channel":"stable","version":"1.1.0","prepared":true})) },
+        ))
+        .unwrap();
+        assert_eq!(state.status_snapshot()["phase"], "available");
+        assert_eq!(state.status_snapshot()["details"]["background"], true);
+        assert_eq!(state.snapshot.lock().unwrap()["phase"], "ready");
+        assert_eq!(state.reconcile_services(|| Ok(4)).unwrap(), Some(4));
+        assert_eq!(state.recover_connected(|| 5), Some(5));
+    }
+
+    #[test]
+    fn background_failure_retains_evidence_but_not_a_runtime_failure_latch() {
+        let state = Maintenance::default();
+        state.reconcile_services(|| Ok(())).unwrap();
+        let result = tauri::async_runtime::block_on(state.run_background_update(
+            0,
+            "stable",
+            async { Err::<Option<()>, String>("update_download_or_signature_failed".into()) },
+            |_| async { panic!("failed check cannot prepare an update") },
+        ));
+        assert!(result.is_err());
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "update_download_or_signature_failed"
+        );
+        assert!(!state.manual_failure_pending.load(Ordering::Acquire));
+        assert_eq!(state.reconcile_services(|| Ok(6)).unwrap(), Some(6));
+        assert_eq!(state.recover_connected(|| 7), Some(7));
+    }
+
+    fn finish_queued_manual_after_automatic_failure(
+        manual: impl FnOnce(&Maintenance) + Send + 'static,
+    ) -> std::sync::Arc<Maintenance> {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (automatic_started_tx, automatic_started_rx) = std::sync::mpsc::channel();
+        let (manual_admitted_tx, manual_admitted_rx) = std::sync::mpsc::channel();
+        let (release_automatic_tx, release_automatic_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async move {
+                    automatic_started_tx.send(()).unwrap();
+                    release_automatic_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    Err::<Option<()>, String>("update_check_failed".into())
+                },
+                |_| async { Ok(()) },
+                || {},
+            ))
+            .unwrap_err()
+        });
+        automatic_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let manual_state = std::sync::Arc::clone(&state);
+        let explicit = std::thread::spawn(move || {
+            let _manual = manual_state.acquire().unwrap();
+            manual_admitted_tx.send(()).unwrap();
+            tauri::async_runtime::block_on(async {
+                let _supervision = manual_state.supervision.lock().await;
+                manual(&manual_state);
+            });
+        });
+        manual_admitted_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        release_automatic_tx.send(()).unwrap();
+
+        assert_eq!(automatic.join().unwrap(), "update_check_failed");
+        explicit.join().unwrap();
+        state
+    }
+
     #[test]
     fn automatic_preparation_is_bounded_and_recovery_reuses_the_supervisor() {
         let state = Maintenance::default();
@@ -903,6 +1695,348 @@ mod tests {
         }));
         assert!(state.acquire().is_ok());
     }
+
+    #[test]
+    fn queued_manual_success_supersedes_automatic_failure() {
+        let state = finish_queued_manual_after_automatic_failure(|state| {
+            state.manual_failure_pending.store(false, Ordering::Release);
+            state.publish("available", json!({"version":"1.3.1"}));
+        });
+
+        assert_eq!(state.snapshot.lock().unwrap()["phase"], "available");
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "update_check_failed"
+        );
+        assert!(!state.manual_failure_pending.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn queued_manual_failure_supersedes_automatic_failure() {
+        let state = finish_queued_manual_after_automatic_failure(|state| {
+            state.manual_failure_pending.store(false, Ordering::Release);
+            state.publish_manual_failure("runtime_install_exit_23", "stable");
+        });
+
+        assert_eq!(
+            state.snapshot.lock().unwrap()["details"]["code"],
+            "runtime_install_exit_23"
+        );
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "runtime_install_exit_23"
+        );
+        assert!(state.manual_failure_pending.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn automatic_failure_is_published_before_supervision_is_released() {
+        let state = Maintenance::default();
+        let error = tauri::async_runtime::block_on(state.run_automatic_update(
+            "stable",
+            async { Err::<Option<()>, String>("update_check_failed".into()) },
+            |_| async { Ok(()) },
+            || {},
+        ))
+        .unwrap_err();
+
+        assert_eq!(error, "update_check_failed");
+        assert_eq!(
+            state.snapshot.lock().unwrap()["details"]["code"],
+            "update_check_failed"
+        );
+    }
+
+    #[test]
+    fn rejected_prepared_update_keeps_diagnostics_without_false_boot_stop() {
+        for (usable, discard_ok, prepared) in [
+            (true, true, true),
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            let state = Maintenance::default();
+            state
+                .prepared_update_checked
+                .store(prepared, Ordering::Release);
+            let code = finalize_install_failure(&state, usable, || {
+                if discard_ok {
+                    Ok(true)
+                } else {
+                    Err("update_state_unavailable".into())
+                }
+            });
+            let result = tauri::async_runtime::block_on(state.run_automatic_update(
+                "stable",
+                async { Err::<Option<()>, String>(code.into()) },
+                |_| async { panic!("rejected update cannot apply") },
+                || panic!("rejected update cannot restart"),
+            ));
+            assert_eq!(result.unwrap_err(), code);
+            assert_eq!(state.last_failure.lock().unwrap()["details"]["code"], code);
+            if usable && discard_ok && prepared {
+                assert_eq!(state.status_snapshot()["phase"], "connecting");
+                assert_eq!(
+                    state.last_failure.lock().unwrap()["details"]["journal_discarded"],
+                    true
+                );
+                assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
+            } else {
+                assert_eq!(state.status_snapshot()["phase"], "error");
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_signature_rejection_is_optional_but_unknown_failures_are_not() {
+        for (code, phase) in [
+            ("update_download_or_signature_failed", "connecting"),
+            ("backup_failed", "error"),
+        ] {
+            let state = Maintenance::default();
+            state.prepared_update_checked.store(true, Ordering::Release);
+            let error = tauri::async_runtime::block_on(state.run_automatic_update(
+                "stable",
+                async { Err::<Option<()>, String>(code.into()) },
+                |_| async { panic!("rejected cache cannot install") },
+                || panic!("rejected cache cannot restart"),
+            ))
+            .unwrap_err();
+            assert_eq!(error, code);
+            assert_eq!(state.status_snapshot()["phase"], phase);
+            assert_eq!(state.last_failure.lock().unwrap()["details"]["code"], code);
+        }
+    }
+
+    #[test]
+    fn automatic_update_yields_to_an_admitted_manual_action() {
+        let state = Maintenance::default();
+        let _manual = state.acquire().unwrap();
+        let ran = std::cell::Cell::new(false);
+        let result = tauri::async_runtime::block_on(state.run_automatic_update(
+            "stable",
+            async {
+                ran.set(true);
+                Ok(None::<()>)
+            },
+            |_| async { Ok(()) },
+            || {},
+        ))
+        .unwrap();
+        assert!(result.is_none());
+        assert!(!ran.get(), "automatic update must yield to explicit work");
+    }
+
+    #[test]
+    fn queued_manual_before_available_update_preempts_automatic_install() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let applied = std::sync::Arc::new(AtomicBool::new(false));
+        let restarted = std::sync::Arc::new(AtomicBool::new(false));
+        let (check_started_tx, check_started_rx) = std::sync::mpsc::channel();
+        let (release_check_tx, release_check_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let automatic_applied = std::sync::Arc::clone(&applied);
+        let automatic_restarted = std::sync::Arc::clone(&restarted);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async move {
+                    check_started_tx.send(()).unwrap();
+                    release_check_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    Ok(Some(()))
+                },
+                move |_| async move {
+                    automatic_applied.store(true, Ordering::Release);
+                    Ok(())
+                },
+                move || automatic_restarted.store(true, Ordering::Release),
+            ))
+            .unwrap()
+        });
+        check_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_check_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), Some(()));
+        assert!(
+            !applied.load(Ordering::Acquire),
+            "an admitted manual request must run before automatic installation"
+        );
+        assert!(!restarted.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn queued_manual_during_install_reads_restart_required_before_restart() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let restarted = std::sync::Arc::new(AtomicBool::new(false));
+        let (install_started_tx, install_started_rx) = std::sync::mpsc::channel();
+        let (release_install_tx, release_install_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let install_state = std::sync::Arc::clone(&state);
+        let automatic_restarted = std::sync::Arc::clone(&restarted);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async { Ok(Some(())) },
+                move |_| async move {
+                    install_started_tx.send(()).unwrap();
+                    release_install_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    install_state.complete_app_replacement(json!({"version":"1.3.1"}));
+                    Ok(())
+                },
+                move || automatic_restarted.store(true, Ordering::Release),
+            ))
+            .unwrap()
+        });
+        install_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_install_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), Some(()));
+        assert_eq!(state.status_snapshot()["phase"], "restart_required");
+        tauri::async_runtime::block_on(async {
+            let _supervision = state.supervision.lock().await;
+            assert_eq!(
+                allow_action(
+                    state.snapshot.lock().unwrap()["phase"]
+                        .as_str()
+                        .unwrap_or("idle"),
+                    "repair",
+                ),
+                Err("restart_required".into())
+            );
+        });
+        assert!(
+            !restarted.load(Ordering::Acquire),
+            "automatic restart must not discard an admitted manual response"
+        );
+    }
+
+    #[test]
+    fn queued_manual_runs_after_automatic_check_finds_no_update() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (check_started_tx, check_started_rx) = std::sync::mpsc::channel();
+        let (release_check_tx, release_check_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let check_state = std::sync::Arc::clone(&state);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async move {
+                    check_started_tx.send(()).unwrap();
+                    release_check_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    check_state.publish("up_to_date", json!({"channel":"stable"}));
+                    Ok(None::<()>)
+                },
+                |_| async { panic!("no update must not install") },
+                || panic!("no update must not restart"),
+            ))
+            .unwrap()
+        });
+        check_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_check_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), Some(()));
+        let manual_result = tauri::async_runtime::block_on(async {
+            let _supervision = state.supervision.lock().await;
+            allow_action(
+                state.snapshot.lock().unwrap()["phase"]
+                    .as_str()
+                    .unwrap_or("idle"),
+                "check",
+            )?;
+            Ok::<Value, String>(state.publish("available", json!({"version":"1.3.1"})))
+        })
+        .unwrap();
+        assert_eq!(manual_result["phase"], "available");
+        assert_eq!(state.status_snapshot(), manual_result);
+    }
+
+    #[test]
+    fn queued_manual_result_supersedes_automatic_install_failure() {
+        let state = std::sync::Arc::new(Maintenance::default());
+        let (install_started_tx, install_started_rx) = std::sync::mpsc::channel();
+        let (release_install_tx, release_install_rx) = std::sync::mpsc::channel();
+        let automatic_state = std::sync::Arc::clone(&state);
+        let automatic = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(automatic_state.run_automatic_update(
+                "stable",
+                async { Ok(Some(())) },
+                move |_| async move {
+                    install_started_tx.send(()).unwrap();
+                    release_install_rx
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                    Err("app_install_failed".into())
+                },
+                || panic!("a failed install must not restart"),
+            ))
+            .unwrap_err()
+        });
+        install_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+
+        let _manual = state.acquire().expect("manual request admitted");
+        release_install_tx.send(()).unwrap();
+        assert_eq!(automatic.join().unwrap(), "app_install_failed");
+        assert_eq!(
+            state.last_failure.lock().unwrap()["details"]["code"],
+            "app_install_failed"
+        );
+        let manual_result = tauri::async_runtime::block_on(async {
+            let _supervision = state.supervision.lock().await;
+            state.manual_failure_pending.store(false, Ordering::Release);
+            state.publish("connecting", json!({}))
+        });
+        assert_eq!(manual_result["phase"], "connecting");
+        assert_eq!(state.status_snapshot(), manual_result);
+    }
+
+    #[test]
+    fn automatic_install_restarts_when_no_manual_request_is_pending() {
+        let state = Maintenance::default();
+        let restarted = AtomicBool::new(false);
+        let result = tauri::async_runtime::block_on(state.run_automatic_update(
+            "stable",
+            async { Ok(Some(())) },
+            |_| async {
+                state.complete_app_replacement(json!({"version":"1.3.1"}));
+                Ok(())
+            },
+            || {
+                assert_eq!(
+                    state.acquire().err().as_deref(),
+                    Some("update_busy"),
+                    "automatic restart reservation rejects a late manual request"
+                );
+                restarted.store(true, Ordering::Release);
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(result, Some(()));
+        assert!(restarted.load(Ordering::Acquire));
+        assert_eq!(state.status_snapshot()["phase"], "restart_required");
+        assert!(
+            state.acquire().is_ok(),
+            "test restart returned and released"
+        );
+    }
+
     #[test]
     fn replaced_app_requires_restart_before_another_transaction() {
         for action in ["check", "apply", "repair", "align_runtime", "rollback"] {
@@ -931,19 +2065,22 @@ mod tests {
             "aarch64",
             false,
             (true, Some("3.9.6".to_string())),
+            (false, None),
         );
         assert_eq!(environment["os_version"], "26.5");
         assert_eq!(environment["arch"], "aarch64");
         assert_eq!(environment["runtime_executable_found"], false);
         assert_eq!(environment["python3_found"], true);
         assert_eq!(environment["python3_version"], "3.9.6");
+        assert_eq!(environment["node_found"], false);
+        assert_eq!(environment["node_version"], Value::Null);
         // The fresh-Mac signature: no Homebrew/CLT python3 answers a version
         // probe, and the runtime executable has never been installed.
-        let fresh = compose_environment(None, "aarch64", false, (false, None));
+        let fresh = compose_environment(None, "aarch64", false, (false, None), (false, None));
         assert_eq!(fresh["os_version"], Value::Null);
         assert_eq!(fresh["python3_found"], false);
         assert_eq!(fresh["python3_version"], Value::Null);
-        // The block carries exactly the five diagnostic keys — no paths,
+        // The block carries only coarse diagnostic keys — no paths,
         // environment variables or free-form output can join it.
         let keys: Vec<&str> = environment
             .as_object()
@@ -955,6 +2092,8 @@ mod tests {
             keys,
             [
                 "arch",
+                "node_found",
+                "node_version",
                 "os_version",
                 "python3_found",
                 "python3_version",
@@ -1065,6 +2204,49 @@ mod tests {
             None
         );
         assert_eq!(state.snapshot.lock().unwrap()["phase"], "restart_required");
+    }
+
+    #[test]
+    fn connected_child_recovery_preserves_update_failure_and_available_choice() {
+        let state = Maintenance::default();
+        let failure = state.publish_manual_failure("update_network_failed", "stable");
+        assert_eq!(state.recover_connected(|| "recovered"), Some("recovered"));
+        assert_eq!(state.status_snapshot(), failure);
+        assert_eq!(*state.last_failure.lock().unwrap(), failure);
+        assert!(state.manual_failure_pending.load(Ordering::Acquire));
+        let available = state.publish("available", json!({"version":"1.4.2"}));
+        assert_eq!(state.recover_connected(|| true), Some(true));
+        assert_eq!(state.status_snapshot(), available);
+    }
+
+    #[test]
+    fn connected_child_recovery_cannot_race_maintenance_or_restart_damaged_app() {
+        let state = Maintenance::default();
+        let manual = state.acquire().unwrap();
+        assert_eq!(
+            state.recover_connected(|| panic!("manual action owns supervision")),
+            None::<()>
+        );
+        drop(manual);
+        let automatic = state.supervision.try_lock().unwrap();
+        assert_eq!(
+            state.recover_connected(|| panic!("automatic action owns supervision")),
+            None::<()>
+        );
+        drop(automatic);
+        state.publish("restart_required", json!({}));
+        assert_eq!(
+            state.recover_connected(|| panic!("replacement requires restart")),
+            None::<()>
+        );
+        state.publish("ready", json!({}));
+        state
+            .incomplete_app_installation
+            .store(true, Ordering::Release);
+        assert_eq!(
+            state.recover_connected(|| panic!("damaged App must not restart services")),
+            None::<()>
+        );
     }
 
     #[test]
