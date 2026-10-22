@@ -226,23 +226,26 @@ evaluation rules in the startup prompt and workspace `AGENTS.md`. The wrapper no
 longer prescribes incremental implementation or a best-validated-candidate
 workflow. A brief objective/completion reminder retains continued optimization:
 implementation, passing checks and submission alone do not complete the objective.
-Useful in-scope improvements remain the goal within the budget, task acceptance
-and explicit stopping conditions. This does not force budget consumption after
-completion or a genuine blocker. The wrapper adds no local-test pass or
+Useful in-scope improvements remain the goal. The wrapper does not repeat a
+generic stop/budget/blocker reminder; the original task and runner still own
+those boundaries. The wrapper adds no local-test pass or
 prior-improvement prerequisite for submission; task-owned requirements still
 apply. New LoopX Goals retain the original `agent_query` as their objective,
 including references to task files. Existing Goals and restored checkpoints keep
 their captured objective.
 
-Submission paths are also the host's capture input. With periodic automatic
-evaluation enabled, the host reads those paths independently of manual submissions
-and without waiting for edits or local tests to finish. The prompt therefore keeps
-the requirement to leave a runnable candidate there and save completed changes
-promptly; partial writes can be captured and fail evaluation. With interval zero,
-the prompt explicitly reports periodic evaluation as disabled. Both modes retain
-on-disk manual/terminal capture, recoverable best-candidate and result/source
-identity guidance. A runnable sampled candidate need not pass every local check
-or demonstrate an improvement before evaluation.
+Native submission prompts omit the host's periodic sampling explanation, both
+when the interval is positive and when it is zero. The interval still reaches
+the runner unchanged; it no longer changes the native prompt. Host capture and
+selection behavior are unchanged. The prompt retains on-disk manual/terminal
+submission, recoverable candidate and result/source identity guidance without
+adding a local-test pass or prior-improvement requirement.
+
+Blind and best-only prompts still describe automatic capture using the resolved
+runner interval: positive intervals name the independent on-disk sampling and
+runnable-candidate requirement; zero reports periodic evaluation as disabled.
+The shared observation describes capture, not feedback access. Blind exposes no
+official feedback; best-only retains its strictly improving snapshot channel.
 
 Shared `loopx-planned` entry also drops the adapter's research-strategy prefix.
 The product planning packet, including Core first-delivery guidance, is unchanged

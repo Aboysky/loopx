@@ -10,13 +10,12 @@ from pathlib import PurePosixPath
 
 
 def native_research_guidance() -> str:
-    """Keep the task's optimization objective and stopping boundaries explicit."""
+    """Keep the task's optimization objective explicit."""
     return (
         "Continue pursuing the original task objective under its acceptance and ranking rules. "
         "Implementation, passing checks, and submission are milestones; they do not by "
         "themselves establish completion. For optimization tasks, continue seeking useful "
-        "improvements while budget remains and further in-scope progress is feasible. "
-        "Respect explicit stop instructions, budget exhaustion, and genuine blockers."
+        "improvements while budget remains and further in-scope progress is feasible."
     )
 
 
@@ -61,19 +60,12 @@ def checkpoint_research_instructions(request: dict, workspace: str) -> str:
 def native_task_instructions(submit_paths: list[str], *,
                              submission_cooldown: int, eval_interval: int, internet: bool,
                              selection: str, score_direction: str) -> str:
-    """Describe native tools, feedback and rules without prescribing a strategy."""
+    """Describe native tools, feedback and rules without prescribing a strategy.
+
+    Accept the existing native policy bundle, including ``eval_interval``, but
+    keep the host's automatic sampling policy out of the agent instructions.
+    """
     paths = ", ".join(f"`{path}`" for path in submit_paths)
-    observation = (
-        "The host periodically samples the submitted paths from disk "
-        f"(configured interval: {eval_interval} seconds), independently of manual submissions. "
-        "It does not wait for editing or local validation to finish. Keep a runnable "
-        "candidate at these paths and write completed changes to disk promptly; missing, "
-        "broken, or partially updated files can be sampled and fail evaluation. "
-        "These automatic results are hidden from you and may participate in native final selection."
-        if eval_interval > 0 else
-        "Periodic automatic evaluation is disabled. Native terminal evaluation and "
-        "final selection still follow the task's rules."
-    )
     network = ("" if internet else
         "### Network Environment\n\n"
         "**This environment has NO internet access.** Only the judge server and AI API "
@@ -120,7 +112,6 @@ def native_task_instructions(submit_paths: list[str], *,
         "to its source version before adopting or restoring it. "
         "The task defines candidate validity and acceptance. This wrapper adds no "
         "local-test pass requirement or prior-improvement requirement for submission.\n\n"
-        f"{observation}\n\n"
         "### Objective and Completion\n\n"
         f"{native_research_guidance()}\n\n"
         "### Scoring\n\n"
@@ -141,18 +132,35 @@ def native_task_prompt(original_query: str, submit_paths: list[str], *,
     return instructions + f"---\n\n{original_query}\n"
 
 
-def blind_task_prompt(original_query: str, submit_paths: list[str]) -> str:
+def _automatic_evaluation_observation(eval_interval: int) -> str:
+    """Describe host capture for feedback modes without active submissions."""
+    if eval_interval == 0:
+        return (
+            "Periodic automatic evaluation is disabled. Native terminal evaluation and "
+            "final selection still follow the task's rules."
+        )
+    return (
+        "The host periodically samples the submitted paths from disk "
+        f"(configured interval: {eval_interval} seconds), independently of manual submissions. "
+        "It does not wait for editing or local validation to finish. Keep a runnable "
+        "candidate at these paths and write completed changes to disk promptly; missing, "
+        "broken, or partially updated files can be sampled and fail evaluation. "
+        "Automatic results may participate in the task's final selection."
+    )
+
+
+def blind_task_prompt(original_query: str, submit_paths: list[str], *, eval_interval: int) -> str:
     """Retain the native optimization contract without exposing host evaluation.
 
     The task owns grading and final selection. The agent chooses its current
     best version from local evidence; it cannot discover which version the
     hidden evaluator ranks highest.
     """
-    return _local_task_prompt(original_query, submit_paths)
+    return _local_task_prompt(original_query, submit_paths, eval_interval=eval_interval)
 
 
-def _local_task_prompt(original_query, submit_paths, *, intro=(
-        "External evaluation and evaluation feedback are unavailable."), checks=(
+def _local_task_prompt(original_query, submit_paths, *, eval_interval: int, intro=(
+        "You cannot submit evaluations or access official evaluation feedback."), checks=(
         "Official scores and per-test diagnostics are unavailable.")):
     paths = ", ".join(f"`{path}`" for path in submit_paths)
     return (
@@ -168,6 +176,7 @@ def _local_task_prompt(original_query, submit_paths, *, intro=(
         "**Keep these files in a compilable/runnable state at all times.** "
         "Write changes to disk promptly and ensure the submitted files always "
         "represent your current best solution, judged from available local evidence.\n"
+        f"\n{_automatic_evaluation_observation(eval_interval)}\n"
         "\n### Network Environment\n\n"
         "**This environment has NO internet access.** "
         "Only the AI API is reachable. "
@@ -186,10 +195,10 @@ def _local_task_prompt(original_query, submit_paths, *, intro=(
     )
 
 
-def best_only_task_prompt(original_query: str, submit_paths: list[str]) -> str:
+def best_only_task_prompt(original_query: str, submit_paths: list[str], *, eval_interval: int) -> str:
     """Local work plus complete official results for strict native improvements."""
     # Build the wrapper without rewriting any task-owned query or instructions.
-    local = _local_task_prompt("", submit_paths,
+    local = _local_task_prompt("", submit_paths, eval_interval=eval_interval,
         intro="External evaluation is automatic; only strictly improving snapshots return official feedback.",
         checks="The complete official result is available only for a strictly improving snapshot; continue local checks.",
     ).removesuffix("---\n\n\n")
