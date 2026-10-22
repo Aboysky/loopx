@@ -36,4 +36,3 @@ def fixture(root: Path) -> dict:
     (root / "lead").mkdir(exist_ok=True)
     (root / "lead" / "report.json").write_bytes(encoded(report))
     return report
-
