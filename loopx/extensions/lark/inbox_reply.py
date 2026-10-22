@@ -17,6 +17,7 @@ from .event_inbox import (
 )
 from .inbox_reactions import complete_lark_event_inbox_reactions
 from .presentation.markdown_post import (
+    lark_markdown_plain_text,
     lark_markdown_post_content,
     lark_markdown_preview_matches,
     lark_markdown_readback_matches,
@@ -555,14 +556,18 @@ def _deliver_lark_inbox_outbound(
             if markdown and body_bytes > LARK_POST_REQUEST_MAX_BYTES:
                 if attachment_keys:
                     raise ValueError("result file post exceeds the provider message bound")
-                # No write has occurred. Preserve the full answer via the existing
-                # larger text transport rather than truncate or retry after send.
+                # No write has occurred. Keep every field readable on the larger
+                # text transport, rather than expose raw Markdown table syntax.
                 result = _deliver_lark_inbox_outbound(
                     project=project, config_path=config_path, message_id=message_id,
-                    text=text, content_format="text", execute=execute,
+                    text=lark_markdown_plain_text(text), content_format="text", execute=execute,
                     provider_preflight=provider_preflight, runner=runner, before_send=before_send,
                     source_membership_verifier=source_membership_verifier,
+                    source_authority_verifier=source_authority_verifier,
+                    overlap_source_preflight=overlap_source_preflight,
                     delivery_attempt_recorder=delivery_attempt_recorder,
+                    short_message_limit=short_message_limit,
+                    finalize_reactions=finalize_reactions,
                 )
                 result.update(content_format="text", format_fallback="post_size_limit")
                 return result
@@ -881,12 +886,17 @@ def verify_lark_inbox_reply(
     profile = str(reply_config.get("sender_profile") or "")
     chat_id = str(reply_config.get("chat_id") or "")
     preview = None
-    for content_format in (("markdown",) if attachment_keys else ("markdown", "text")):
+    candidates = [(text, "markdown")]
+    if not attachment_keys:
+        # Retain verification of historical raw-text sends as well as the new
+        # readable fallback. A recovery only reads its recorded provider locator.
+        candidates.extend(((text, "text"), (lark_markdown_plain_text(text), "text")))
+    for candidate_text, content_format in candidates:
         candidate = reply_lark_event_inbox(
             project=project,
             config_path=config_path,
             message_id=message_id,
-            text=text,
+            text=candidate_text,
             content_format=content_format,
             execute=False,
             runner=runner,
@@ -899,6 +909,7 @@ def verify_lark_inbox_reply(
             == _intent_digest(profile, chat_id, receipt)
         ):
             preview = candidate
+            expected_text = candidate_text
             break
     if preview is None:
         return {
@@ -922,7 +933,7 @@ def verify_lark_inbox_reply(
             "blocker": "provider_verification_unavailable",
         }
     markdown = preview.get("content_format") == "markdown"
-    reply_text = normalize_lark_outbound_text(text, limit=None, preserve_format=markdown)
+    reply_text = normalize_lark_outbound_text(expected_text, limit=None, preserve_format=markdown)
     bot_aliases, mention_error = _verified_mention_aliases(
         runner=runner, base=base, chat_id=chat_id, reply_text=reply_text
     )

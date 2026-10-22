@@ -562,6 +562,12 @@ unsupported transport remains an explicit delivery gap. A path mentioned only in
 text is not an attachment. This slice does not qualify local-Web file presentation,
 group disclosure, cross-host transfer or inline video playback. Installed live
 provider qualification remains separate from the synthetic transport regressions.
+For a text-only result exceeding the provider's rich-post byte limit, the existing
+text fallback renders table cells with their column labels and removes paired
+strong markers and heading prefixes. It retains all values and links, keeps the
+authored Markdown in the source record, and verifies the rendered text on recovery
+without resending. Historical raw-text receipts remain readable. File-bearing
+posts still reject an oversized request rather than dropping their attachments.
 Before downgrading to an older runtime that does not understand result files,
 pause the reply pump while any file-bearing result remains pending; an old
 text-only reader cannot certify attachment delivery. Retain the result snapshots
