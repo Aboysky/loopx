@@ -46,7 +46,7 @@ def normalize_lark_markdown_emphasis(text: str) -> str:
     return "".join(lines)
 
 
-def _normalize_strong_line(line: str) -> str:
+def _normalize_strong_line(line: str, *, plain: bool = False) -> str:
     edits: list[tuple[int, int, str]] = []
     opening: int | None = None
     ticks = 0
@@ -97,6 +97,11 @@ def _normalize_strong_line(line: str) -> str:
             if end < len(line) and not line[end].isspace():
                 opening = end
         elif cursor > opening and not line[cursor - 1].isspace():
+            if plain:
+                edits.extend(((opening - 2, opening, ""), (cursor, end, "")))
+                opening = None
+                cursor = end
+                continue
             suffix = cursor
             while (
                 suffix > max(opening, opaque_end)
@@ -127,6 +132,95 @@ def _normalize_strong_line(line: str) -> str:
         cursor = end
     chunks.append(line[cursor:])
     return "".join(chunks)
+
+
+def _table_cells(line: str) -> list[str]:
+    """Read display cells without splitting escaped pipes or inline code."""
+    cells: list[str] = []
+    cell: list[str] = []
+    ticks = 0
+    cursor = 0
+    line = line.strip()
+    while cursor < len(line):
+        char = line[cursor]
+        if char == "\\" and cursor + 1 < len(line):
+            cell.extend(line[cursor : cursor + 2])
+            cursor += 2
+            continue
+        if char == "`":
+            end = cursor + 1
+            while end < len(line) and line[end] == "`":
+                end += 1
+            size = end - cursor
+            ticks = size if not ticks else 0 if size == ticks else ticks
+            cell.append(line[cursor:end])
+            cursor = end
+            continue
+        if char == "|" and not ticks:
+            cells.append("".join(cell).strip())
+            cell = []
+        else:
+            cell.append(char)
+        cursor += 1
+    cells.append("".join(cell).strip())
+    if line.startswith("|"):
+        cells.pop(0)
+    if line.endswith("|") and not ticks and not line.endswith("\\|"):
+        cells.pop()
+    return cells
+
+
+def lark_markdown_plain_text(text: str) -> str:
+    """Keep an oversized post readable on the existing text transport.
+
+    Only presentation syntax changes: table cells retain their column labels,
+    paired strong markers and heading prefixes disappear, and code, URLs,
+    escapes and unmatched markers remain authored. This neither follows links
+    nor creates mention nodes. The original Markdown stays in its source record.
+    """
+    lines = text.splitlines()
+    rendered: list[str] = []
+    fence: tuple[str, int] | None = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence is not None:
+            rendered.append(line)
+            if (
+                match
+                and match[1][0] == fence[0]
+                and len(match[1]) >= fence[1]
+                and not line[match.end() :].strip()
+            ):
+                fence = None
+        elif match:
+            fence = (match[1][0], len(match[1]))
+            rendered.append(line)
+        elif (
+            index + 2 < len(lines)
+            and "|" in line
+            and (separators := _table_cells(lines[index + 1]))
+            and all(re.fullmatch(r":?-{3,}:?", cell) for cell in separators)
+            and len(separators) == len(_table_cells(line))
+            and "|" in lines[index + 2]
+            and len(_table_cells(lines[index + 2])) == len(separators)
+        ):
+            headers = _table_cells(line)
+            index += 2
+            while index < len(lines) and "|" in lines[index] and lines[index].strip():
+                cells = _table_cells(lines[index])
+                if len(cells) != len(headers):
+                    break  # Leave malformed/unrecognized rows intact.
+                for header, value in zip(headers, cells):
+                    rendered.append(_normalize_strong_line(f"{header}：{value}", plain=True))
+                rendered.append("")
+                index += 1
+            continue
+        else:
+            rendered.append(_normalize_strong_line(re.sub(r"^ {0,3}#{1,6} +", "", line), plain=True))
+        index += 1
+    return "\n".join(rendered).strip()
 
 
 def lark_markdown_post_content(text: str) -> str:
