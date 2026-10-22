@@ -58,7 +58,7 @@ def shell_arg_for_host(value: str) -> str:
 def render_optional_cli_arg(flag: str, value: str | None) -> str:
     if not value:
         return ""
-    return f" {flag} {shell_arg(value)}"
+    return f" {flag} {shell_arg_for_host(value)}"
 
 
 def render_cli_command_prefix(
@@ -67,11 +67,11 @@ def render_cli_command_prefix(
     runtime_root: str | Path | None = None,
     registry_path: str | Path | None = None,
 ) -> str:
-    prefix = shell_arg(cli_bin)
+    prefix = shell_arg_for_host(cli_bin)
     if runtime_root is not None:
-        prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
+        prefix += f" --runtime-root {shell_arg_for_host(str(runtime_root))}"
     if registry_path is not None:
-        prefix += f" --registry {shell_arg(str(registry_path))}"
+        prefix += f" --registry {shell_arg_for_host(str(registry_path))}"
     return prefix
 
 
@@ -119,8 +119,8 @@ def render_register_agent_command(
 ) -> str:
     return (
         f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
-        f"register-agent --goal-id {shell_arg(goal_id)} "
-        f"--agent-id {shell_arg(agent_id)} --require-new"
+        f"register-agent --goal-id {shell_arg_for_host(goal_id)} "
+        f"--agent-id {shell_arg_for_host(agent_id)} --require-new"
     )
 
 
@@ -133,7 +133,7 @@ def shell_arg_or_placeholder(value: str) -> str:
 
 def render_available_capability_args(values: Any) -> str:
     return "".join(
-        f" --available-capability {shell_arg(capability)}"
+        f" --available-capability {shell_arg_for_host(capability)}"
         for capability in normalize_required_capabilities(values)
     )
 
