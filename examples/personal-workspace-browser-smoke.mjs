@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {reportDownloadScenario} from "./personal-workspace-browser/report-download.mjs";
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
 import {completedHistoryIsolationScenario} from "./personal-workspace-browser/completed-history-isolation.mjs";
 import {researchWorkerReadbackScenario} from "./personal-workspace-browser/research-worker-readback.mjs";
@@ -97,6 +98,7 @@ import { conversationStartupScenario } from "./personal-workspace-browser/conver
 import { chatTodoProposalScenario } from "./personal-workspace-browser/chat-todo-proposal.mjs";
 
 const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario, chatTodoProposalScenario];
+scenarioCatalog.push(reportDownloadScenario);
 scenarioCatalog.push(confirmedOperationsScenario);
 scenarioCatalog.push(proposalReadbackScopeScenario);
 scenarioCatalog.push(goalDeletionScenario);
