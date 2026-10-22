@@ -1563,6 +1563,10 @@ the transport neither truncates history nor creates a Python decision or new
 authority. Missing, changed, non-private or over-64-MiB files fail closed.
 After a handler may have committed, an unverifiable response stays ambiguous
 and requires exact receipt readback, never automatic mutation retry.
+Both inline and private-file responses apply this rule to invalid encoding,
+JSON value limits and excessive nesting. A decoder failure cannot enter the
+pre-send startup retry path or erase possible durable acceptance; it reports
+`runtime_response_ambiguous` through the existing transport adapter.
 
 Source read and read/check reduction now compose inside one TypeScript request.
 Both context reading and commit preflight use one checkpoint request instead of
