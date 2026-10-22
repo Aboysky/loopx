@@ -9,7 +9,7 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
-import {refineGoalOutcome} from "../../loopx/control_plane/goals/outcome_requirements.ts";
+import {refineGoalOutcome, GoalOutcomeValidationError} from "../../loopx/control_plane/goals/outcome_requirements.ts";
 import {inspectGoalAcceptance, refineGoalAcceptanceOutcome} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 
@@ -114,4 +114,127 @@ for (const provider of ["file", "sqlite", "postgresql"] as const) test(`${provid
       assert.deepEqual(row.sources, original.find(o => o.id === row.id)!.sources);
     }
   }
+});
+
+const original = authorityProjectionFixture(goal, [], [], "native");
+function declared() {
+  return refineGoalOutcome(original, goal, null, "author", {
+    outcome_id: "report", owner_agent_id: "author", objective: "Retain the complete result",
+    requirements: Array.from({length: 32}, (_, i) => ({id: `r${i}`, description: "保留证据😀".repeat(60)})),
+    source: {ref: "message:original", summary: "Synthetic original request"},
+  });
+}
+
+test("the independent review budget accepts its exact UTF-8 boundary and diagnoses growth", () => {
+  const state = declared(), head = {...original, goal_outcomes: state};
+  const before = structuredClone(head);
+  const review = state.outcomes[0].requirements.map(r => ({id: r.id, conclusion: "uncertain",
+    evidence_refs: Array.from({length: 8}, () => "e"), note: "保留证据😀"}));
+  // Construct the candidate independently: the digest has fixed width, not an
+  // asserted value copied from production. Fill legal reference fields to the
+  // frozen byte boundary; character count is deliberately not the oracle.
+  const candidate = {...state, revision: 2, outcomes: [{...state.outcomes[0], revision: 2,
+    review: {basis_digest: "0".repeat(64), items: review}}]};
+  const declaration = {...candidate, outcomes: candidate.outcomes.map(({review: _review, ...row}) => row)};
+  let remaining = 131072 - (bytes(candidate) - bytes(declaration));
+  assert.ok(remaining > 0);
+  for (const item of review) for (let i = 0; i < item.evidence_refs.length && remaining > 0; i++) {
+    const added = Math.min(1023, remaining);
+    item.evidence_refs[i] += "x".repeat(added); remaining -= added;
+  }
+  assert.equal(remaining, 0);
+  const exact = refineGoalOutcome(head, goal, null, "author", {outcome_id: "report", review});
+  assert.equal(bytes(exact) - bytes(declaration), 131072);
+  assert.ok(JSON.stringify(exact).length - JSON.stringify(declaration).length < 131072);
+  review[0].note += "😀";
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "report", review}), error => {
+    assert.ok(error instanceof GoalOutcomeValidationError);
+    assert.match(error.message, /candidate 131076 UTF-8 bytes/);
+    assert.match(error.message, /outcome review capacity exceeded/);
+    assert.match(error.message, /retained 0, limit 131072/);
+    assert.match(error.message, /all outcomes in the Goal, not the source count/);
+    assert.ok(!error.message.includes("Synthetic original request"));
+    return true;
+  });
+  assert.deepEqual(head, before);
+  assert.equal(refineGoalOutcome(head, goal, null, "author", {outcome_id: "report", review: review.map(item => ({...item,
+    evidence_refs: ["artifact:full-report"], note: "Further validation needed"}))}).outcomes[0].sources.length, 1);
+});
+
+test("the aggregate limit counts other outcomes while the source-count limit remains distinct", () => {
+  let state = declared();
+  for (let i = 0; i < 63; i++) state = refineGoalOutcome({...original, goal_outcomes: state}, goal, null, "author", {
+    outcome_id: "report", source: {ref: `message:origin-${i}`, summary: "Retained original provenance"}});
+  const head = {...original, goal_outcomes: state};
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "report",
+    source: {ref: "message:overflow", summary: "Additional request"}}), /outcome source capacity reached/);
+  // Individually fitting reviews still share the Goal's review allowance.
+  const large = {...state.outcomes[0], id: "another", sources: [{ref: "message:another", summary: "Another request"}]};
+  const combined = {...original, goal_outcomes: {...state, outcomes: [...state.outcomes, large]}};
+  const review = large.requirements.map(r => ({id: r.id, conclusion: "uncertain", evidence_refs: ["e".repeat(1024), "f".repeat(1024)], note: "n".repeat(512)}));
+  assert.ok(refineGoalOutcome({...original, goal_outcomes: {...state, outcomes: [large]}}, goal, null, "author", {outcome_id: "another", review}));
+  const first = refineGoalOutcome(combined, goal, null, "author", {outcome_id: "report", review});
+  assert.throws(() => refineGoalOutcome({...original, goal_outcomes: first}, goal, null, "author", {outcome_id: "another", review}), error => {
+    assert.ok(error instanceof GoalOutcomeValidationError);
+    assert.match(error.message, /outcome review capacity exceeded/);
+    assert.match(error.message, /all outcomes in the Goal/);
+    const retained = bytes(first) - bytes({...first, outcomes: first.outcomes.map(({review: _review, ...row}) => row)});
+    assert.ok(retained > 0 && error.message.includes(`retained ${retained}, limit 131072`));
+    return true;
+  });
+});
+
+// The shared owner must reject before any real PostgreSQL transaction commits.
+// Run with the existing isolated integration database, never an active Goal.
+test("postgresql: rejected capacity update retains state and recovers once", {skip: !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+  const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2});
+  t.after(() => pool.end());
+  const database = {connect: async () => {
+    const client = await pool.connect();
+    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
+      release: () => client.release()};
+  }};
+  await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
+  const store = new PostgreSqlAuthorityStore(database, {tenant_id: `capacity-${randomUUID()}`, goal_id: goal});
+  const state = declared();
+  await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+    next_projection: {...original, goal_outcomes: state}, events: [], receipts: []});
+  const before = await store.loadAuthority();
+  assert.equal(before.status, "loaded");
+  if (before.status !== "loaded") throw new Error("synthetic authority unavailable");
+  const review = state.outcomes[0].requirements.map(r => ({id: r.id, conclusion: "uncertain",
+    evidence_refs: Array.from({length: 8}, () => "e".repeat(500)), note: "n".repeat(512)}));
+  const request = {goal_id: goal, actor_agent_id: "author", operation_id: "review",
+    expected_provider_revision: before.provider_revision, refinement: {outcome_id: "report", review}};
+  await assert.rejects(() => refineGoalAcceptanceOutcome(store, request), /all outcomes in the Goal/);
+  assert.deepEqual(await store.loadAuthority(), before);
+  for (const item of review) {item.evidence_refs = ["artifact:full-report"]; item.note = "Further validation needed";}
+  assert.equal((await refineGoalAcceptanceOutcome(store, request)).status, "applied");
+  const after = await store.loadAuthority();
+  assert.equal(after.status, "loaded");
+  if (after.status !== "loaded") throw new Error("synthetic authority unavailable");
+  assert.deepEqual(after.head.goal_outcomes.outcomes[0].requirements, state.outcomes[0].requirements);
+  assert.deepEqual(after.head.goal_outcomes.outcomes[0].sources, state.outcomes[0].sources);
+  assert.equal((await refineGoalAcceptanceOutcome(store, request)).status, "replayed");
+  assert.deepEqual(await store.loadAuthority(), after);
+});
+
+
+test("declaration boundary diagnostics do not suggest reducing the separate review envelope", () => {
+  const head = crowded(), before = structuredClone(head);
+  const source = {ref: "exact-boundary", summary: "x"};
+  const probe = refineGoalOutcome(head, goal, null, "author", {outcome_id: "outcome-0", source});
+  source.summary += "x".repeat(131072 - bytes(probe));
+  const exact = refineGoalOutcome(head, goal, null, "author", {outcome_id: "outcome-0", source});
+  assert.equal(bytes(exact), 131072);
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {
+    outcome_id: "outcome-0", source: {...source, summary: source.summary + "😀"},
+  }), error => {
+    assert.ok(error instanceof GoalOutcomeValidationError);
+    assert.match(error.message, /outcome declaration capacity exceeded: candidate 131076 UTF-8 bytes, retained 131000, limit 131072/);
+    assert.match(error.message, /Shortening reviews cannot reduce this declaration budget/);
+    assert.ok(!error.message.includes("Compact only proposed review"));
+    return true;
+  });
+  assert.deepEqual(head, before);
 });
