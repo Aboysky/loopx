@@ -275,13 +275,21 @@ export const researchHistoryScenario = {
       const checkpoints=[];
       for(const [file,label] of [['edgebench-graph-checkpoint-history.json','graph'],['edgebench-ad-checkpoint-history.json','ad']]) {
         const other=JSON.parse(await readFile(resolve(repoRoot,'apps/presentation/dashboard/src/data/fixtures',file)));
+        const previousUrl = page.url();
+        const previousSelection = selectedNodes();
         pages.length=0;
         await page.locator('.personal-goal-link',{hasText:other.display_name}).click();
-        await tabs.getByRole("button", {name: "研究", exact: true}).click();
+        assert.equal(new URL(page.url()).searchParams.get('view'), 'research', 'Comparing Goals must keep the research reading context');
         await history.getByRole('status').filter({hasText:`${other.events.length} / ${other.events.length}`}).waitFor();
         assert.deepEqual(pages.flatMap(value=>value.items).map(row=>row.event_id),other.events.map(row=>row.event_id),`${label}: all original pages, without cross-Goal records`);
         assert.equal(await history.locator('.research-history-detail').count(),0, 'A different Goal must not adopt the prior evidence selection');
         assert.equal(await history.locator('.research-route').count(),0);
+        await page.goBack();
+        assert.equal(page.url(), previousUrl, 'Back restores the prior Goal and its own evidence URL');
+        assert.deepEqual(selectedNodes(), previousSelection);
+        await page.goForward();
+        await history.getByRole('status').filter({hasText:`${other.events.length} / ${other.events.length}`}).waitFor();
+        assert.equal(await history.locator('.research-history-detail').count(),0);
         await history.evaluate(element=>element.scrollIntoView({block:'start'}));
         await page.screenshot({path:resolve(outputDir,`research-history-${label}-timeline.png`),animations:'disabled'});
         await history.locator('.research-unlinked-days button').first().click();

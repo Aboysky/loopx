@@ -180,13 +180,18 @@ Goal 统计集中在概览，完整工作放在任务，输出放在成果。阅
 Keep the selected view, time group and evidence focus on reload and browser
 Back/Forward. Keep scroll position across tabs. Scope every selection to its
 Goal and source; a same-named Goal from another source must not inherit it.
+While reading Research, choosing another Goal in the sidebar stays in Research.
+The destination loads its own evidence; Back restores the prior Goal's selection.
+Home and explicit task, conversation or output links keep their own destinations.
 Saved findings lead with readable observations, interpretations and decisions.
 Put references, applicability, revisions and full original text behind one
 expansion. Clamp repeated titles only in the selection list, never the selected
 finding's full content. Do not invent short titles or infer findings from prose.
 
 刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
-Goal 和来源隔离。结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
+Goal 和来源隔离。研究中从侧栏切换 Goal 仍停留在研究页，读取新 Goal 自身证据；
+返回恢复原 Goal 的选择。首页及任务、会话、成果的明确链接保留各自目的地。
+结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
 和完整原文按需展开。仅列表中的重复长标题可收起，选中后的正文须完整可读。
 
 ### Explanations On Demand
