@@ -557,6 +557,19 @@ observation"). Reduced motion stops the arc; the ring and core still read live.
 
 ### States that are designed, not defaulted
 
+- **Empty or sparse Goal overview** keeps the same content frame and clear
+  hierarchy as a populated one. Use the existing Goal identity as the anchor;
+  show available current work directly instead of hiding the main content
+  behind a disclosure while absence messages fill the page. Keep a genuinely
+  missing declared objective as one concise source-status line, without
+  inventing it from tasks or an Agent summary. An unconfigured optional check
+  belongs in the existing Goal information/configuration detail, not a primary
+  empty-state paragraph. Failed reads, unavailable authority and consequential
+  restrictions remain visible. Align information/history entries with their
+  region and use readable labels; retain long native identities in detail.
+  Let the region shrink to its useful content, without decorative filler or
+  turning a read-only source into a setup task. A known empty state and an
+  unobserved source remain different states.
 - **Loading** holds the final geometry with a quiet skeleton; a region does
   not collapse to one spinner and then jump.
 - **Region failure** is one announced line (icon, plain cause, how to retry)
@@ -678,6 +691,9 @@ automated readability score or an additional owner approval.
       Chinese/English text and mixed verified, unverified, stale and failed
       items. The larger case stays scannable; no item, exception or later page
       section disappears to make the screenshot cleaner.
+- [ ] Also inspect empty, sparse and source-unavailable views. Their composition
+      still has a clear anchor; optional setup omissions do not dominate, useful
+      current work stays visible, and real source gaps remain identifiable.
 - [ ] Open a representative item and read its complete requirements, rationale
       and evidence once. Check keyboard/touch access, delayed loading, closing
       and return to the same item. Long content remains readable when expanded.
