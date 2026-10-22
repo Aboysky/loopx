@@ -93,6 +93,8 @@ const CANONICAL_CONSUMERS = [
   "control_plane/agents/supervisor_event_append.ts",
   "control_plane/capabilities/change_quality_validation.ts",
   "control_plane/capabilities/content_media.ts",
+  "control_plane/capabilities/content_media_generation.ts",
+  "control_plane/capabilities/content_media_image.ts",
   "control_plane/capabilities/explore_execution_observation.ts",
   "control_plane/capabilities/explore_result_page.ts",
   "control_plane/capabilities/external_evidence.ts",
