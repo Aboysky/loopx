@@ -18,6 +18,31 @@ The older [`deepseek-harness` connector](deepseek-harness-connector.md) remains
 a separate headless Turn adapter. The native plugin uses the
 `deepseek-harness-native` host surface and does not replace that connector.
 
+## Route Decision
+
+Treat the two DSH paths as different execution carriers over one LoopX
+contract, not as competing implementations to collapse into one transport:
+
+| Path | Primary use | Session and wakeup owner | Frontend |
+| --- | --- | --- | --- |
+| `dsh-loopx-plugin` | Person-driven work in a DSH Session | DSH Session; optional same-session Driver after an exact `loopx` skill invocation | DSH Web/Desktop GoalBar and native skills |
+| LoopX Turn on DSH | Headless, bounded, quota-governed work selected without a person present | LoopX Turn and the outer scheduler | LoopX App/CLI executor readback, artifacts and Todo settlement |
+
+Do not duplicate the LoopX control plane inside DSH. Both routes must converge
+on the same Goal, Agent, selected Todo, Turn identity, task packet, validator,
+writeback and settlement semantics. DSH owns model calls, tools, provider
+retries and raw Session storage in both routes; LoopX owns durable decisions
+and work authority.
+
+Research and polish disproportionately toward the plugin route for the
+user-facing "work with LoopX from DSH" journey. Keep Turn-on-DSH as the
+headless automation path and invest in it where unattended continuation,
+turn-bound validation or App-visible executor readiness is the required
+outcome. A practical allocation is roughly 60% plugin user journey, 25% shared
+conformance and result contracts, and 15% managed-Turn setup and recovery.
+That ratio should move only after measured user use shows unattended Turns are
+the primary DSH workload.
+
 ## Authority Boundary
 
 | Owner | Responsibilities |

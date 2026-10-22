@@ -115,6 +115,20 @@ Driver to evaluate only when that exact live Session already contains typed
 `Pause` stops the Goal and retires only future queued/scheduled continuation;
 it does not abort a claimed or running turn.
 
+To start DSH from a terminal with this machine's stored LoopX provider
+credential without placing the value in argv, shell history, or output:
+
+```bash
+loopx dsh-launch web
+```
+
+Use `--dsh-home <path>` to isolate profile and Session state,
+`--dsh-agents-home <path>` to isolate installed skills, and `--dsh-bin <path>`
+when `dsh` is not on `PATH`. Arguments after `--` are passed to DSH unchanged.
+The launcher resolves the same write-only machine credential used by the
+managed executor, then replaces itself with DSH so the credential exists only
+in the child process environment.
+
 Maintainers can validate the built and packed surfaces with:
 
 ```bash
@@ -499,9 +513,9 @@ source and never satisfy a Driver reservation.
 
 Check `dsh --version` before choosing an artifact. The current source accepts
 DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
-qualified 0.1.7-rc.2 and 0.2.0-rc.2 candidates. It excludes earlier 0.2 candidates,
-0.2.1 alpha builds and other, unqualified prerelease tuples. A stable-version
-range alone does not admit every prerelease.
+qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2 candidates. It
+excludes earlier 0.2 candidates, stable 0.2.1, and other unqualified prerelease
+tuples. A stable-version range alone does not admit every prerelease.
 The immutable beta.6 download above is the published package. Building this
 checkout also produces version beta.6, but the local artifact is not the
 published release asset.

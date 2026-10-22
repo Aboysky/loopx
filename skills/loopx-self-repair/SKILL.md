@@ -153,6 +153,11 @@ replan, or terminal closeout must return to the strict semantic checkpoint.
 - Do not let fallback work hide the primary blocker. When a higher-priority
   path is gated but safe fallback is valid, report both the concrete gate and
   the fallback progress.
+- Do not mistake visibility for ownership. Another peer's lane, unfinished
+  report, or apparently idle work is diagnostic context unless this actor holds
+  the matching claim/lease or receives an explicit handoff/adoption. Prefer
+  independent verification or a non-conflicting contribution; never repair an
+  ownership problem by taking over the owner's work.
 - Do not equate bounded work with a small operation. If turns repeatedly stop
   after setup or surface-only edits, check whether a verifiable result could
   have been reached within scope and budget. Repair the premature stop, not by
