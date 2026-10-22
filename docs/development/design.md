@@ -146,6 +146,31 @@ board may be wider than a conversation's reading column. Keep ready-state
 runtime details alongside their model context, allow failures to expand, and
 size empty summaries to their content rather than filling large decorative cards.
 
+### Research Workspace / 研究工作台
+
+A Goal's research is a first-level peer of Overview, Tasks, Chat and Files.
+Overview answers what is moving and what needs attention; keep its research
+entry compact. Put complete history, timeline/graph, native measurements,
+analysis and the saved-finding reader in Research, bound to the original Goal
+and source. Opening or switching a view only reads; analysis and research
+execution keep their separate explicit actions and authority.
+
+研究与概览、任务、对话、成果并列。概览回答当前推进与待处理事项，只保留简短研究
+入口；完整历程、图表、原生测量、分析与结论阅读放在同一真实 Goal 的研究页。
+浏览和切换标签只读取，分析与启动研究仍遵循各自的明确操作及权限。
+
+Keep the selected view, time group and evidence focus on reload and browser
+Back/Forward. Keep scroll position across tabs. Scope every selection to its
+Goal and source; a same-named Goal from another source must not inherit it.
+Saved findings lead with readable observations, interpretations and decisions.
+Put references, applicability, revisions and full original text behind one
+expansion. Clamp repeated titles only in the selection list, never the selected
+finding's full content. Do not invent short titles or infer findings from prose.
+
+刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
+Goal 和来源隔离。结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
+和完整原文按需展开。仅列表中的重复长标题可收起，选中后的正文须完整可读。
+
 ### Explanations On Demand
 
 Make layout explain the interface before adding secondary copy. Hierarchy,

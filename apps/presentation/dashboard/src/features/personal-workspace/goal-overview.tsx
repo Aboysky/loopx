@@ -8,7 +8,6 @@ import { relativeTime } from "./goal-activity-view";
 import { goalAcceptanceContractCopy } from "./delivery-review-copy";
 import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
-import { GoalResearchHistory } from "./goal-research-history";
 import { GoalAcceptanceContractSection } from "./goal-acceptance-contract";
 import type { WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
@@ -29,8 +28,7 @@ function relativeLookLabel(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { month: "short", day: "numeric" }).format(then);
 }
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, readSourceUrl, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
-  readSourceUrl?: string;
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
   onOpenAgentConversation?: (agentId: string) => void;
   /** Material changes since the owner's last acknowledged look; null when none. */
   sinceYouLooked?: SinceYouLookedDelta | null; onMarkSeen?: () => void;
@@ -110,7 +108,9 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
-    {!readOnly || readSourceUrl ? <GoalResearchHistory key={goal.goalId} goalId={goal.goalId} readSourceUrl={readSourceUrl} active={active} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision}/> : null}
+    <button type="button" className="goal-overview-research-entry" onClick={() => onView("research")}>
+      <span><strong>{t("header.research")}</strong><span>{locale === "zh-CN" ? "历程、结果与分析" : "History, results and analysis"}</span></span><ArrowRight size={18} aria-hidden/>
+    </button>
     <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
       readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>

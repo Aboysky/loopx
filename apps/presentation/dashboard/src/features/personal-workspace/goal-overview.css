@@ -212,3 +212,12 @@
 .goal-overview-evidence[open] > summary::before { content: "▾"; }
 .goal-overview-evidence > summary small { color: var(--pw-muted); font-size: var(--text-caption); font-weight: 400; }
 .goal-overview-evidence > summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
+
+.goal-overview .goal-overview-research-entry {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  width: 100%; min-height: 56px; padding: 16px 0; margin: 16px 0;
+  text-align: start; color: var(--pw-text); border-block: 1px solid var(--pw-line);
+}
+.goal-overview .goal-overview-research-entry > span { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 20px; }
+.goal-overview .goal-overview-research-entry > span > span { color: var(--pw-muted); font-size: var(--text-body); }
+.goal-overview .goal-overview-research-entry:hover { color: var(--pw-blue-ink); }
