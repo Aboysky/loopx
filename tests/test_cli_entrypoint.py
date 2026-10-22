@@ -75,7 +75,7 @@ try:
 except SystemExit as exc:
     exit_code = exc.code
 for forbidden_module in {forbidden_modules!r}:
-    assert forbidden_module not in sys.modules
+    assert forbidden_module not in sys.modules, "unexpected module import: " + forbidden_module
 raise SystemExit(exit_code)
 """
 	return run_isolated_script(script, environment=environment)
@@ -447,6 +447,11 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		["task-lease", "renew", "--goal-id", "goal", "--todo-id", "todo", "--expected-ver", "1"],
 		["task-lease", "renew", "--goal-id", "goal", "--todo-id", "todo", "--ttl-seconds", "not-a-number"],
 		["delegation", "--help"],
+		["manager-inbox", "--help"],
+		["manager-inbox", "unknown-action"],
+		["manager-inbox", "report", "--unknown-option"],
+		["manager-inbox", "report", "--request-revision", "not-an-integer"],
+		["manager-inbox", "acknowledge", "--decision", "unknown-decision"],
 		["turn", "--help"],
 		["turn", "run-once", "--help"],
 		["status", "--unknown-option"],
@@ -464,6 +469,46 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	full = run_cli_batch("loopx.cli", argv_cases)
 
 	assert selected == full
+
+
+@pytest.mark.parametrize("arguments", [
+	["acknowledge", "--request-id", "a" * 64, "--decision", "adopt", "--reason", "Checked the source"],
+	["report", "--request-id", "a" * 64, "--reply-text", "The evidence check passed."],
+])
+def test_selected_manager_inbox_refusals_match_without_loading_full_cli(tmp_path, arguments):
+	registry, runtime_root = write_command_fixture(tmp_path)
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root), "--format", "json",
+		"manager-inbox", *arguments, "--goal-id", "perf-goal", "--agent-id", "perf-agent"]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["ok"] is False
+
+
+def test_selected_manager_result_matches_full_replay_without_loading_full_cli(tmp_path):
+	from test_collaboration_goal_instance import _create_source_registry, _manager_request
+	from loopx.control_plane.collaboration.inbox import _root, acknowledge
+
+	registry = _create_source_registry(tmp_path)
+	_, _, receipt = _manager_request(tmp_path, registry)
+	rid = receipt["request_id"]
+	acknowledge(tmp_path, "delivery", "builder", rid, "adopt", "Checked the source",
+		registry=registry, caller_goal_ref=receipt["goal_ref"])
+	argv = ["--registry", str(registry), "--runtime-root", str(tmp_path), "--format", "json",
+		"manager-inbox", "report", "--goal-id", "delivery", "--agent-id", "builder",
+		"--request-id", rid, "--reply-text", "The independent evidence check passed."]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	path = _root(tmp_path) / "replies" / rid / "conclusion.json"
+	assert selected.returncode == 0, selected.stderr
+	committed = path.read_bytes()
+	full = run_cli_main("loopx.cli", argv)
+	assert full.returncode == 0, full.stderr
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["delivered"] is False
+	assert path.read_bytes() == committed
 
 
 @pytest.mark.parametrize("action", ["acquire", "renew", "transfer", "release", "inspect"])

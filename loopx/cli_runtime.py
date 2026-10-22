@@ -69,6 +69,7 @@ _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
 _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+	"manager-inbox",
 }
 
 
@@ -291,6 +292,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.turn_registration import register_turn_commands
 
 		register_turn_commands(subparsers, add_subcommand_format)
+	elif command == "manager-inbox":
+		from .cli_commands.manager_inbox import register_manager_inbox
+
+		register_manager_inbox(subparsers, add_subcommand_format)
 	elif command == "authority-archive":
 		from .cli_commands.authority_archive import register_authority_archive_command
 
@@ -326,6 +331,14 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "manager-inbox":
+		from .cli_commands.manager_inbox import handle_manager_inbox
+		from .control_plane.projects.registry_codec import load_project_registry
+		from .paths import resolve_runtime_root
+
+		return handle_manager_inbox(args, registry_path, resolve_runtime_root(
+			load_project_registry(registry_path), args.runtime_root, registry_path=registry_path,
+		))
 	if args.command == "task-lease":
 		from .cli_commands.task_lease import handle_task_lease_command
 

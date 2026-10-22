@@ -23,7 +23,7 @@ from .capabilities.multi_subagent.cli import (
     register_native_child_commands, handle_native_child_command,
 )
 from .cli_commands.todo_continuation import register_todo_continuation, handle_todo_continuation
-from .cli_commands.manager_inbox import register_manager_inbox, handle_manager_inbox
+from .cli_commands.manager_inbox import register_manager_inbox
 from .cli_commands.delegation import register_delegation
 from .capabilities.content_ops.cli import (
     handle_content_ops_command,
@@ -812,19 +812,6 @@ def main(argv: list[str] | None = None) -> int:
             print_payload, output_format,
         )
 
-    if args.command == "manager-inbox":
-        from .control_plane.projects.registry_codec import load_project_registry
-        from .paths import resolve_runtime_root
-
-        return handle_manager_inbox(
-            args,
-            registry_path,
-            resolve_runtime_root(
-                load_project_registry(registry_path),
-                args.runtime_root,
-                registry_path=registry_path,
-            ),
-        )
     lark_inbox_result = handle_lark_inbox_command(
         args,
         registry_path=registry_path,
