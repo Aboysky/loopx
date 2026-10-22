@@ -329,6 +329,27 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat/App 或模型收益
 已验收。
 
+memory 参与现由能力层组合的选择后上下文 hook 注册接入 native Turn 和执行中的
+quota/heartbeat guard。Codex、DSH、generic CLI 传输相同的有界上下文、指导与可选
+结果字段；绑定和模式判断归能力，adapter 只保留宿主格式。TypeScript 限制贡献，拒绝
+替换权限／核心结果字段，复用既有 governing 签名文档及来源读回绑定上下文。只增加
+原捕获的定位信息不使未变决策失效；actor、权限、配置读回或贡献变化则丢弃可选上下文。
+
+通用 Python 贡献 IO 与既有注册和 dispatcher 共同归属
+`loopx.control_plane.capability_hooks`，不再保留平行的 Python Turn-context 模块。
+校验与来源绑定继续调用 TypeScript decoder，宿主 adapter 消费同一份 hook 投影。
+
+注册的 `PostSettlement` callback 在独立精确反思证明和可记账 writeback/spend 后调用
+既有 ingest owner，手动宿主的 sidecar adapter 也使用同一注册。`post_writeback` 继续
+无副作用；逐 hook 回执保留已完成工作，只恢复结果不确定的其他 hook，provider owner
+继续负责写入去重与对账。终态重放保留原 journal 与回执，从原 owner 回读的恢复结果
+通过 `post_settlement_recovery` 返回，不重新结算。File/SQLite 原生宿主及隔离 provider 用例只资格源码路径；
+安装态 App/Lark、模型收益、完整成本及以下三项收敛验收仍开放。
+
+注册前 journal 的恢复保留已准入的有界反思及独立验证 digest，不改写原 plan、不重启
+Host／validator，也不为新工作激活旧输入。provider 效果仍由当前 ingest 策略及原结算
+owner 决定，缓存内容本身不授予写入权限。
+
 PR 依赖观察现复用既有注册 TurnStart 生命周期，由执行性 quota guard、原生 Turn
 与兼容 prequota 共用。权限来自 typed Goal／Agent capability owner，包括已记住的
 宿主观察与撤销；已有授权时不必逐命令补 flag。能力自有诊断使 PR 业务规则留在 core
@@ -338,7 +359,7 @@ single-flight 与每项依赖的持久节奏避免并发／到期读取重复。
 失败后的无关独立校验工作及原 journal 重放。App/Lark 共用上下文后端只消费 canonical
 就绪状态，不轮询。plan、只读／status／上下文、缺少权限与恢复路径均不添加观察。
 安装态执行器采用、既有真实 owner 的合法恢复、持续调度、模型结果与以下三批收敛验收
-仍开放。通用 memory 生命周期接入是另一项未完成边界；post-writeback hook 继续无效果。
+仍开放。安装态 memory 生命周期采用仍单独验收；post-writeback hook 继续无效果。
 
 同次捕获决策中的所选 Task 继续条件与满足状态，现在沿完整选择投影、签名 envelope
 到实际协议宿主输入完整保留。File/SQLite 验证区分不同仓库的同号 PR，保留原事件时间

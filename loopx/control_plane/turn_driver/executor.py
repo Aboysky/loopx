@@ -57,7 +57,9 @@ from .recovery import (
     build_turn_recovery_audit,
     require_turn_recovery_continuation,
 )
-from .post_settlement import PostSettlement, run_post_settlement_callback
+from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
+from ..capability_hooks import capability_result_fields, project_turn_context
+from ..reward_memory import reward_memory_automation_enabled
 from .session_recovery import (
     SessionBindingResolver,
     build_host_recovery_record,
@@ -144,41 +146,6 @@ HostRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
 JournalPersist = Callable[[Mapping[str, Any]], None]
 
 
-def reward_memory_automation_enabled(
-    payload: Mapping[str, Any] | None, *, operation: str,
-) -> bool:
-    """Project verified capability automation into the host IO contract.
-
-    The experiment resolver owns enablement, config/receipt verification and
-    provider policy. A recall packet's presence or old context is not opt-in.
-    """
-    if not isinstance(payload, Mapping):
-        return False
-    recall = payload.get("reward_memory_recall")
-    if not isinstance(recall, Mapping):
-        return False
-    experiment = recall.get("experiment")
-    envelope = payload.get("turn_envelope")
-    if not isinstance(experiment, Mapping) or not isinstance(envelope, Mapping):
-        return False
-    boundary = envelope.get("boundary")
-    capabilities = boundary.get("capabilities") if isinstance(boundary, Mapping) else None
-    memory = capabilities.get("reward_memory") if isinstance(capabilities, Mapping) else None
-    return (
-        isinstance(memory, Mapping)
-        and memory.get(operation) is True
-        # Recall resolves the binding again after admission. A stale envelope
-        # must not resurrect a now unavailable or disabled binding.
-        and experiment.get("enabled") is True
-        and experiment.get("available") is True
-        and experiment.get("configured_for_agent") is True
-        and bool(envelope.get("goal_id"))
-        and experiment.get("goal_id") == envelope.get("goal_id")
-        and bool(envelope.get("agent_id"))
-        and experiment.get("agent_id") == envelope.get("agent_id")
-        and experiment.get(operation) is True
-    )
-
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     transaction = (
@@ -205,13 +172,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     goal_ref = plan.get("goal_ref")
     if isinstance(goal_ref, Mapping):
         request["goal_ref"] = dict(goal_ref)
-    reward_memory_recall = plan.get("reward_memory_recall")
-    recall_enabled = reward_memory_automation_enabled(plan, operation="automatic_recall")
-    ingest_enabled = reward_memory_automation_enabled(plan, operation="automatic_ingest")
-    if isinstance(reward_memory_recall, Mapping) and (recall_enabled or ingest_enabled):
-        request["reward_memory_recall"] = dict(reward_memory_recall)
-        if not recall_enabled:
-            request["reward_memory_recall"]["context"] = None
+    request.update(project_turn_context(plan))
     request.update(subagent.subagent_host_request_projection(plan))
     from ...extensions.codex_native_child import configured_native_child_limit
 
@@ -405,7 +366,19 @@ def validate_loopx_turn_host_result(
 ) -> dict[str, Any]:
     result = dict(value)
     errors: list[str] = []
-    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan)
+    optional_fields = capability_result_fields(project_turn_context(plan))
+    if (
+        from_journal
+        and "turn_context_contributions" not in plan
+        and reward_memory_automation_enabled(plan, operation="automatic_ingest")
+    ):
+        # Pre-registration journals already admitted this bounded wire field.
+        # Preserve the cached result that independent validation attested;
+        # never reconstruct context, activate a Host, or change ingest policy.
+        optional_fields["reward_memory_reflection_json"] = {
+            "type": "string", "maxLength": HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
+        }
+    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan) | set(optional_fields)
     if from_journal:
         allowed_fields = allowed_fields | {"agent_vision", "progress_observation"}
     unknown = sorted(set(result) - allowed_fields)
@@ -460,24 +433,15 @@ def validate_loopx_turn_host_result(
             normalized[field] = text
     # Old/custom hosts may still return this field. Ignore it while disabled:
     # ordinary work must not gain a memory validation gate or retain the content.
-    reflection_json = (
-        _bounded_public_text(
-            result,
-            "reward_memory_reflection_json",
-            limit=HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
-            required=False,
-            errors=errors,
+    for field, descriptor in optional_fields.items():
+        text = _bounded_public_text(
+            result, field, limit=descriptor["maxLength"], required=False, errors=errors,
         )
-        if reward_memory_automation_enabled(plan, operation="automatic_ingest")
-        else None
-    )
-    if reflection_json:
-        if material:
-            normalized["reward_memory_reflection_json"] = reflection_json
-        else:
-            errors.append(
-                "non-material host results cannot declare a reward memory reflection"
-            )
+        if text:
+            if material:
+                normalized[field] = text
+            else:
+                errors.append("non-material host results cannot declare optional capability results")
     progress_observation = None
     if material:
         raw_progress = result.get("progress_observation_json", "")
@@ -1615,6 +1579,9 @@ def run_loopx_turn_once(
                     replayed=True,
                     effects=empty_effects,
                 )
+                payload.update(recover_post_settlement(
+                    plan=plan, post_settlement=post_settlement, journal=journal,
+                ))
                 payload["recovery"] = build_turn_recovery_audit(
                     recovery_decision,
                     journal,

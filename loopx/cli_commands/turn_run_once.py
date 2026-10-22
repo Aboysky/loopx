@@ -9,9 +9,7 @@ from typing import Any
 from ..capabilities.explore.composition_frontier import (
     project_live_explore_composition_frontier,
 )
-from ..capabilities.reward_memory import (
-    run_configured_turn_outcome_ingest_fail_open,
-)
+from ..capabilities.turn_context import configured_post_settlement
 from ..cli_rollout import append_cli_rollout_event
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.goals.first_party_host_admission import (
@@ -870,22 +868,6 @@ def execute_turn_run_once(
                     args, workspace=project, environ=operator_environ,
                 )
 
-        def post_settlement_reward_memory(
-            plan: Mapping[str, Any],
-            result: Mapping[str, Any],
-            settlement_evidence: Mapping[str, Any],
-        ) -> Mapping[str, Any]:
-            transaction = plan.get("transaction")
-            transaction = transaction if isinstance(transaction, Mapping) else {}
-            return run_configured_turn_outcome_ingest_fail_open(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                turn_key=str(transaction.get("turn_key") or ""),
-                host_result=result,
-                settlement_evidence=settlement_evidence,
-            )
-
         def on_managed_start_admitted() -> None:
             replan_packet = stable_envelope.get("replan_action_packet")
             capability_guard = (
@@ -937,11 +919,9 @@ def execute_turn_run_once(
                 terminal_closeout_resolver if args.execute else None
             ),
             scheduler=scheduler if args.execute else None,
-            post_settlement=(
-                post_settlement_reward_memory
-                if args.execute and args.host == "codex-cli"
-                else None
-            ),
+            post_settlement=(configured_post_settlement(
+                payload, registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
+            ) if args.execute else None),
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,

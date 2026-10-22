@@ -15,7 +15,10 @@ from ..quota.turn_envelope import turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
-from .executor import HOST_RESULT_EVIDENCE_LIMITS
+from ..capability_hooks import capability_result_fields, host_context_projection
+from .executor import (
+    HOST_RESULT_EVIDENCE_LIMITS,
+)
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
 LOOPX_TURN_RESULT_SCHEMA = "loopx_turn_result_v0"
@@ -134,6 +137,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         # its binding; this adapter neither reads it nor re-enters admission.
         authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
         authority["action_signature"] = signature
+    authority.update(host_context_projection(request))
     return authority
 
 
@@ -412,6 +416,10 @@ def build_result(
         if field in candidate:
             # Preserve the structured executor input verbatim. The executor
             # owns type, size, JSON and semantic validation.
+            result[field] = candidate[field]
+    for field in capability_result_fields(request):
+        if field in candidate:
+            # Preserve optional values verbatim for the owning validator.
             result[field] = candidate[field]
     for field in HOST_RESULT_EVIDENCE_LIMITS:
         if field in candidate:
