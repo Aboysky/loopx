@@ -1,10 +1,38 @@
 import {useEffect, useRef, useState} from "react";
-import {RefreshCw} from "lucide-react";
-import {fetchExploreResults, type ExploreResultPage} from "../../data/chat";
+import {ChevronRight, RefreshCw} from "lucide-react";
+import {fetchExploreResults, readTodoRequest, type ExploreResultPage} from "../../data/chat";
 import {parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {ExploreMeasurements} from "./explore-measurements";
 import {ContextHelp} from "./context-help";
 import "./goal-explore-results.css";
+
+function LinkedFindingTask({goalId, todo, statuses, zh, readSourceUrl}: {
+  goalId: string; todo: ExploreResultPage["items"][number]["linked_todos"][number]; statuses: Record<string, string>; zh: boolean; readSourceUrl?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const [detail, setDetail] = useState<Awaited<ReturnType<typeof readTodoRequest>> | null>(null);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    if (!expanded) return;
+    const controller = new AbortController();
+    setDetail(null); setError(false);
+    void readTodoRequest(goalId, todo.todo_id, controller.signal, undefined, readSourceUrl).then(value => {
+      if (!controller.signal.aborted) setDetail(value);
+    }, () => {if (!controller.signal.aborted) setError(true);});
+    return () => controller.abort();
+  }, [expanded, revision, goalId, todo.todo_id, readSourceUrl]);
+  return <details onToggle={event => {
+    setExpanded(event.currentTarget.open); setDetail(null); setError(false);
+  }}>
+    <summary><ChevronRight size={16} aria-hidden/><span><strong>{todo.text}</strong>
+      <small>{statuses[detail?.status ?? todo.status] ?? detail?.status ?? todo.status} · {todo.claimed_by || "—"}</small></span></summary>
+    {expanded ? detail ? <><p className="explore-finding-raw">{detail.text}</p><code>{todo.todo_id}</code></>
+      : error ? <div role="alert"><p>{zh ? "无法读取完整任务。" : "Cannot read the complete task."}</p>
+        <button type="button" onClick={() => setRevision(value => value + 1)}>{zh ? "重试" : "Retry"}</button></div>
+      : <p role="status">{zh ? "正在读取完整任务…" : "Reading the complete task…"}</p> : null}
+  </details>;
+}
 
 /** Saved evidence remains readable after Explore is disabled. No execution here. */
 export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {goalId: string; zh: boolean; active?: boolean; readSourceUrl?: string}) {
@@ -101,8 +129,8 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
         </details>
         <details className="explore-reader-details"><summary>{zh ? "关联任务" : "Linked tasks"} · {selected.linked_todos_available === false ? "—" : selected.linked_todos.length}</summary>
           {selected.linked_todos_available === false ? <p>{zh ? "此来源暂不提供完整的任务关联读取。" : "Complete task associations are not available from this source."}</p> : selected.linked_todos.length ? <ul className="explore-linked-tasks">{selected.linked_todos.map(todo => <li key={todo.todo_id}>
-            <details><summary><span>{todo.text}</span><small>{statuses[todo.status] ?? todo.status} · {todo.claimed_by || "—"}</small></summary>
-              <p>{todo.text}</p><code>{todo.todo_id}</code></details>
+            <LinkedFindingTask key={JSON.stringify([goalId, readSourceUrl, todo.todo_id])} goalId={goalId} todo={todo}
+              statuses={statuses} zh={zh} readSourceUrl={readSourceUrl}/>
           </li>)}</ul> : <p>{zh ? "当前及已完成任务中未找到关联。" : "No links found in current or completed tasks."}</p>}
         </details>
       </div> : null}
