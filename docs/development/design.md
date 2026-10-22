@@ -149,15 +149,29 @@ size empty summaries to their content rather than filling large decorative cards
 ### Research Workspace / 研究工作台
 
 A Goal's research is a first-level peer of Overview, Tasks, Chat and Files.
-Overview answers what is moving and what needs attention; keep its research
-entry compact. Put complete history, timeline/graph, native measurements,
+Overview answers what is moving and what needs attention. The tab itself is
+the research entry; add an Overview shortcut only when it carries a useful
+summary, not a second navigation label. Put complete history, timeline/graph, native measurements,
 analysis and the saved-finding reader in Research, bound to the original Goal
 and source. Opening or switching a view only reads; analysis and research
 execution keep their separate explicit actions and authority.
 
-研究与概览、任务、对话、成果并列。概览回答当前推进与待处理事项，只保留简短研究
-入口；完整历程、图表、原生测量、分析与结论阅读放在同一真实 Goal 的研究页。
+研究与概览、任务、对话、成果并列。概览回答当前推进与待处理事项；页签本身就是研究
+入口，只有带来有用摘要时才增加概览快捷入口。完整历程、图表、原生测量、分析与
+结论阅读放在同一真实 Goal 的研究页。
 浏览和切换标签只读取，分析与启动研究仍遵循各自的明确操作及权限。
+
+Keep Goal-wide statistics in Overview, full work in Tasks, and outputs in
+Files. A reading tab starts with its content, not repeated counters or an
+expanded conversation composer. Reveal executor/model controls when the
+composer is open; preserve drafts and running-turn controls across views.
+Research enablement belongs beside the research navigation and must use the
+existing Goal configuration transaction. Explain its consequence on demand:
+configuration does not itself launch analysis, and disabling retains history.
+
+Goal 统计集中在概览，完整工作放在任务，输出放在成果。阅读页直接呈现内容，不重复
+堆叠统计条与展开的输入框。展开输入框时展示执行器与模型，跨页保留草稿和运行控制。
+研究模式入口使用现有 Goal 配置事务；按需解释开启不等于启动分析、关闭保留历史。
 
 Keep the selected view, time group and evidence focus on reload and browser
 Back/Forward. Keep scroll position across tabs. Scope every selection to its

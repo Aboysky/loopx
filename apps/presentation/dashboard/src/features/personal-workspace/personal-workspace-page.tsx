@@ -57,6 +57,7 @@ import { monitorScheduleReadback } from "./monitor-readback";
 import {GoalAgentWorkPage} from "./goal-agent-work-page";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
+import { GoalResearchMode } from "./goal-research-mode";
 import { GoalResearchWorkbench } from "./goal-research-workbench";
 import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
 import { GoalVitals, GoalVitalsSkeleton, type GoalVitalRegion } from "./goal-masthead";
@@ -317,7 +318,6 @@ function GoalOutputsView({
   localResults,
   researchApi,
   production,
-  compact = false,
 }: {
   active: boolean;
   items: Array<Extract<WorkspaceTimelineItem, { kind: "output" }>>;
@@ -328,7 +328,6 @@ function GoalOutputsView({
   localResults: boolean;
   researchApi?: GoalResearchApi;
   production?: ReactNode;
-  compact?: boolean;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [teamSnapshot, setTeamSnapshot] = useState<LoopXModeSnapshot | null>(null);
@@ -354,7 +353,7 @@ function GoalOutputsView({
     && teamSnapshot?.settings.agent_id && teamSnapshot?.settings.execution_config);
   return (
     <>
-      {items.length > 0 || reportState?.loading || reportState?.error || !production ? <section className={`personal-object-list personal-files-list${compact && !items.length && !reportState?.loading && !reportState?.error ? " is-empty" : ""}`} data-testid="personal-goal-outputs">
+      {items.length > 0 || reportState?.loading || reportState?.error || !production ? <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
         <header><strong>{t("files.title")}</strong>{!teamConfigured && !production ? <span>{items.length}</span> : null}</header>
         {reportState?.loading ? (
           <p className="personal-object-list-state" role="status"><RefreshCw className="is-spinning" size={14} />{t("files.loadingReports")}</p>
@@ -378,11 +377,11 @@ function GoalOutputsView({
             ].filter(Boolean).join(" · ")}</small>
           </button>
         ))}
-        {localResults && !production ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} hideEmpty={compact} /> : null}
+        {localResults && !production ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} /> : null}
       </section> : null}
       {production}
       {production && localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} hideEmpty /> : null}
-      {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} hideEmpty={compact} /> : null}
+      {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} /> : null}
       {active && teamSessionId && !teamSnapshot && !teamError ? <p className="personal-object-list-state" role="status">{t("files.checkingTeam")}</p> : null}
       {active && teamSessionId && teamError ? <p className="personal-object-list-state is-error" role="alert">{t("files.teamLoadFailed")} <button type="button" onClick={() => setTeamRefresh(value => value + 1)}>{t("startup.retry")}</button></p> : null}
       {active && teamConfigured && teamSessionId ? <GoalTeamResults sessionId={teamSessionId} zh={locale === "zh-CN"} refreshKey={JSON.stringify(teamSnapshot?.deliveries ?? [])} /> : null}
@@ -1352,7 +1351,7 @@ export function PersonalWorkspacePage({
     composerRef.current?.focus();
     composerRef.current?.scrollIntoView({ block: "nearest" });
   }
-  const composerCollapsed = Boolean(selectedGoal) && (selectedGoalTab === "overview" || selectedGoalTab === "research") && !overviewComposerOpen
+  const composerCollapsed = Boolean(selectedGoal) && selectedGoalTab !== "chat" && !overviewComposerOpen
     && !composer.trim() && !actionDraft && !imageAttachments.length && !imageAttachmentError && !sending && !conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
@@ -2671,8 +2670,8 @@ export function PersonalWorkspacePage({
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     userTodos={model.userTodos}
                   />) : null;
-  const goalResults = (active: boolean, compact = false) => selectedGoal ? (<GoalOutputsView
-                    active={active} compact={compact}
+  const goalResults = (active: boolean) => selectedGoal ? (<GoalOutputsView
+                    active={active}
                     items={items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "output" }> => item.kind === "output")}
                     onSelect={setSelection}
                     reportState={model.periodicReports}
@@ -2791,6 +2790,8 @@ export function PersonalWorkspacePage({
             readOnlySourceLabel={readOnly ? sourceGoal?.sourceAccess?.label ?? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={runtimeSourceUnavailable ? null : selectedGoal}
             selectedGoalTab={selectedGoalTab}
+            composerVisible={!composerCollapsed}
+            researchControl={selectedGoal && !selectedGoal.loadState && !readOnly && !runtimeSourceUnavailable && selectedGoalTab === "research" ? <GoalResearchMode key={selectionScope} goalId={selectedGoal.goalId} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} onSettings={() => openSettings({goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities"})}/> : undefined}
             goalLifecycleBusy={selectedGoal ? lifecycleBusyGoalIds.has(selectedGoal.goalId) : false}
             onOpenWorkspace={() => selectGoal(null)}
             onRequestGoalLifecycle={selectedGoal && (!readOnly || callbacks.onExecuteGoalLifecycle)
@@ -2803,8 +2804,8 @@ export function PersonalWorkspacePage({
               {statusSourceControl.errorMessage ? <details><summary>{t("source.failureDetails")}</summary><p>{statusSourceControl.errorMessage}</p></details> : null}</div>
             {callbacks.onRefresh ? <button disabled={refreshState === "loading"} type="button" onClick={() => void refreshWorkspace()}>{t("startup.retry")}</button> : null}
           </section> : null}
-          {!runtimeSourceUnavailable && selectedGoal && !selectedGoal.loadState && !agentWorkActive && selectedGoalTab !== "research" ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
-            : !runtimeSourceUnavailable && selectedGoal?.loadState === "loading" && selectedGoalTab !== "research" ? <GoalVitalsSkeleton /> : null}
+          {!runtimeSourceUnavailable && selectedGoal && !selectedGoal.loadState && !agentWorkActive && selectedGoalTab === "overview" ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
+            : !runtimeSourceUnavailable && selectedGoal?.loadState === "loading" && selectedGoalTab === "overview" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
@@ -2858,7 +2859,7 @@ export function PersonalWorkspacePage({
                   overview: <GoalOverview sinceYouLooked={sinceYouLooked?.goalId === selectedGoal.goalId ? sinceYouLooked.delta : null} onMarkSeen={markSeen} onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
-                    board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview", true)}
+                    board={taskBoard(!settingsOpen && selectedGoalTab === "overview")}
                     historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   research: !readOnly || researchReadSourceUrl
@@ -3064,7 +3065,7 @@ export function PersonalWorkspacePage({
                 onPaste={handleComposerPaste}
                 placeholder={locale === "zh-CN" ? "输入消息…" : "Write a message…"}
                 ref={composerRef}
-                autoFocus={overviewComposerOpen && selectedGoalTab === "overview"}
+                autoFocus={overviewComposerOpen && selectedGoalTab !== "chat"}
                 rows={1}
                 value={composer}
               />

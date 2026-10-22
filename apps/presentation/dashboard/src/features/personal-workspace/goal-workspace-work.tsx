@@ -61,13 +61,13 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
   </div>;
 }
 
-export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoId, onSelect, board, map, results,
+export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoId, onSelect, board, map,
   readOnly, active, historyRefreshRevision, proposals, onPreview, railOpen, onCloseRail, onOpenAgentConversation}: {
   onOpenAgentConversation?: (agentId: string) => void;
   railOpen: boolean; onCloseRail: () => void;
   goal: WorkspaceGoal; digest: GoalWorkspaceDigest; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
   selectedTodoId: string | null; onSelect: (selection: WorkspaceDrawerSelection) => void;
-  board: ReactNode; map: ReactNode; results: ReactNode; readOnly: boolean; active: boolean; historyRefreshRevision: number;
+  board: ReactNode; map: ReactNode; readOnly: boolean; active: boolean; historyRefreshRevision: number;
   proposals: Record<string, WorkspaceActionPreview>; onPreview: (request: WorkspaceActionPreviewRequest) => Promise<WorkspaceActionPreview>;
 }) {
   const {locale, t} = useWorkspaceI18n();
@@ -170,7 +170,6 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
         {visited.has("board") ? <div hidden={lens !== "board"}>{board}</div> : null}
         {visited.has("map") ? <div hidden={lens !== "map"}>{map}</div> : null}
       </section>
-      <section className="goal-workspace-results" aria-label={zh ? "成果" : "Results"}><h2>{zh ? "成果" : "Results"}</h2>{results}</section>
     </div>
     {!quietWork || railOpen ? compactRail ? <dialog className="goal-work-rail-dialog" aria-label={zh ? "全部工作" : "All work"} ref={dialog} onCancel={event => {event.preventDefault(); onCloseRail();}}>
       <button type="button" className="goal-work-rail-close" onClick={onCloseRail}>{zh ? "关闭全部工作" : "Close all work"}</button>

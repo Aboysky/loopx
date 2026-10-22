@@ -68,6 +68,7 @@ import { teamEvidenceScenario } from "./personal-workspace-browser/team-evidence
 import { taskInspectorReturnScenario } from "./personal-workspace-browser/task-inspector-return.mjs";
 import { managedGoalResultsScenario } from "./personal-workspace-browser/managed-goal-results.mjs";
 import { researchResultsScenario } from "./personal-workspace-browser/research-results.mjs";
+import { researchModeScenario } from "./personal-workspace-browser/research-mode.mjs";
 import { researchHistoryScenario } from "./personal-workspace-browser/research-history.mjs";
 import { loopxModeScenario } from "./personal-workspace-browser/loopx-mode.mjs";
 import { progressiveLoadingScenario } from "./personal-workspace-browser/progressive-loading.mjs";
@@ -123,6 +124,7 @@ scenarioCatalog.push(researchHistoryScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);
+scenarioCatalog.push(researchModeScenario);
 scenarioCatalog.push(zcodeGoalScenario);
 scenarioCatalog.push(goalWorkspaceM2Scenario);
 scenarioCatalog.push(goalWorkspaceCreateScenario);

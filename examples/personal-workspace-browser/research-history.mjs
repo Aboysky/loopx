@@ -214,7 +214,7 @@ export const researchHistoryScenario = {
       const tabs = page.getByRole("navigation", {name: "Goal 视图"});
       assert.equal(pages.length, 0, "Overview must not fetch full research history");
       assert.equal(await page.locator(".research-history").count(), 0, "Research is not a second long section in Overview");
-      await page.locator(".goal-overview-research-entry").click();
+      await page.locator(".personal-goal-tabs").getByRole("button", {name: "研究", exact: true}).click();
       assert.equal(new URL(page.url()).searchParams.get("view"), "research");
       const history = page.getByRole("region", {name: "研究历程", exact: true});
       await history.getByRole("status").filter({hasText: "76 / 76"}).waitFor();
@@ -812,6 +812,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const comparisonCitation = rows.first().getByRole('button', {name: /source.*行 1–2/});
       await comparisonCitation.click();
       await citedOriginal.waitFor(); await citedOriginal.press('Escape');
+      await page.waitForFunction(element => element === document.activeElement, await comparisonCitation.elementHandle());
       assert.equal(await comparisonCitation.evaluate(element => element === document.activeElement), true,
         'Returning from original evidence restores the exact expanded row');
       await firstRow.press('Enter');
