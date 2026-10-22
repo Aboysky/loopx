@@ -71,8 +71,21 @@ not authorize a purpose outside those commitments. Changing those commitments
 requires their existing governed authority or a new Goal lifetime. Outcome
 refinement remains append-only; it cannot silently rewrite a requirement.
 
-The normal conversation guidance directs an Agent to prepare a revision when
-explicit user direction invalidates the recorded objective. The native
+Replanning is the primary semantic review point. Its existing planning guidance
+compares the current operating objective and cumulative requirements with the
+original intent, explicit user direction and actual work, reusing delivered
+`core_goal`/acceptance context. The Agent distinguishes a misleading objective
+from a scope conflict, missing evidence or stale display text, and records the
+evidence and judgment in its existing Vision/`path_delta`. A justified no-change
+decision is valid; review does not require a revision, a new per-Turn receipt or
+another poll. Scope conflicts do not authorize rewriting earlier commitments;
+missing evidence remains unresolved, and display drift belongs to its projection
+owner. This is semantic Agent guidance, not a prose classifier or a new admission
+gate. The existing typed authority, stop and replan-discharge rules remain.
+
+Ordinary conversation keeps the callable API without proactively directing a
+revision. When a material user direction change makes the recorded objective
+misleading, preparation retains the existing owner-review boundary. The native
 `loopx_collaboration` tool exposes `prepare_goal_objective`, and fixes its
 Goal/Agent/source Turn instead of accepting caller-supplied routing. Preparation
 uses the existing `goal.update` review/apply channel, with no Goal effect.
@@ -125,8 +138,8 @@ bind the prospective objective digest, so unrelated work/peer writes need no
 new review; changed objective/source/lifetime still invalidates that review.
 
 No revision is inferred from age or installed automatically on upgrade.
-Unchanged Goals retain their existing execution rules; the additional general
-guidance is conditional on an actual user correction. After adoption, ordinary
+Unchanged Goals retain their existing execution rules; semantic review runs at
+replanning, while a revision still needs an actual material user correction. After adoption, ordinary
 Turns do not require another acknowledgement. Stored revision history is bounded
 and never silently pruned. Before adoption, revert the code if necessary; after
 records exist, retain readers and admission fences, and roll back intent with a
@@ -140,6 +153,16 @@ recognize stale semantics. Model adherence, installed-host adoption, live Lark
 delivery and matched benchmark benefit remain separate qualification. Lark
 conversation workers reuse the native tool contract; this change does not
 rename topics, send messages or introduce a separate amendment authority.
+
+The same ordinary/vision-gap host fixtures measure 2,921 guidance bytes versus
+1,984 before this placement change. All earlier review/continuation clauses are
+retained. The guidance-only regression ceiling is 3,000 bytes instead of 2,000;
+the 8 KiB envelope warning and transport/execution budgets are unchanged. The
+ordinary fixture remains within that envelope (6,842 → 7,779 bytes); the existing
+oversized vision fixture remains disclosed (20,211 → 21,148). Ordinary work reads
+drop the proactive revision hint, and conversation retains tool availability and
+applied-revision adoption. These measurements establish delivery cost, not model
+adherence or a long-horizon benefit.
 
 The bound Agent distinguishes a direct human request from heartbeat instructions,
 quoted documents, tool results and peer messages using the actual host context.

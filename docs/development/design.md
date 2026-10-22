@@ -114,13 +114,17 @@ Owner-facing state follows four rules:
   Show an unavailable or partial count honestly; put full current briefs,
   linked work, provenance and original conversations behind row expansion.
   A Goal's supporting outcomes need the same bounded reading hierarchy: show
-  requirement-state counts once, then at most three requirements needing attention
-  in the default overview. Group them by their declared outcome; keep failed,
-  held, changed and partial observations visible in the summary. Make the full
-  collection available in one expansion, including unverified and passing work.
-  Clamp long requirement text only in collapsed rows; expansion restores its
-  complete text and evidence. Explain Agent review versus independent checks once
-  at section level. Overview check details stay collapsed at every viewport;
+  requirement-state counts once, then at most three compact outcome rows in the
+  default overview, prioritizing declared failures, held or changed checks and
+  Agent-reported gaps. Each **whole outcome body** starts collapsed: its title
+  and meaningful states remain visible; expanding it reveals its requirements,
+  with individual rationale and evidence available in place. Collapsing only
+  evidence, status groups or a few requirement rows does not satisfy this rule.
+  Keep failed, held, changed, partial and unconfirmed-operation observations in
+  the summary. Make the full outcome collection available in one expansion,
+  including unverified and passing work. Clamp long text only in collapsed rows;
+  expansion restores it completely. Explain Agent review versus independent
+  checks once at section level. Overview check details stay collapsed at every viewport;
   an operation's consequences and actual failures remain visible.
 - **Owner language first.** Primary copy uses the owner's words. Protocol ids,
   gate kinds, preview mechanics and executor profiles belong in a collapsed
@@ -220,6 +224,14 @@ independent-check explanation before the reader reaches the next main region.
 Keep the summary's actual verification state visible; open the chosen item in
 place, with its complete content and original evidence reachable. A disclosure
 must not duplicate the same content above and below its trigger.
+
+Read freshness and verification validity are different facts. Reuse the existing
+cached, coalesced read owner for quiet background updates; pause polling in the
+background and back off after read failures. Preserve scroll, open items and
+drafts across same-source updates. Show an unavailable read or historical source
+once for the affected region rather than repeating a refresh instruction on
+every row. A fresh read never validates a changed requirement or starts a check,
+model or worker; those operations retain their existing explicit controls.
 
 As data grows, preserve access to every item through the existing list,
 pagination or history, with honest coverage. Do not silently keep only recent

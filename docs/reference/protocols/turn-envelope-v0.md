@@ -244,6 +244,30 @@ Ordinary product heartbeat consumes current task/acceptance/User sources from
 carrier; the CLI channel carries transitions. TurnEnvelope consumes and signs
 both as `work_context` and `required_reads`; it never independently synthesizes
 another policy. Already delivered content requires no second CLI invocation.
+
+The ordinary `quota should-run` display shares exact complete acceptance copies
+within that response. Its preferred carrier is a loaded Goal-acceptance source
+in `work_context`, otherwise the planning horizon (or the first available full
+copy). Duplicate `acceptance_contract` / `goal_acceptance_contract` fields become
+their corresponding `_ref` fields pointing to that inline carrier. Resolve them
+in the **same response**, including when reading replan context; do not fetch a
+new revision. Different revisions, scopes, sources, failures or JSON types stay
+inline. Nothing is truncated or removed from the retained contract, and no
+decision or acceptance verdict changes. Diagnostic detail options still share
+these copies; canonical state and saved full-decision captures retain their
+original structure. TurnEnvelope relocates the known work-context reference to
+its own signed `work_context` root and rejects an unavailable or dangling source.
+This reduces display bytes, not upstream authority reads, and does not by itself
+establish model adoption or end-to-end efficiency.
+
+中文：普通 `quota should-run` 在同一次响应内复用完全相同的完整验收内容，优先保留
+work context 中已加载的来源，其次保留 planning horizon 或第一份完整副本。重复字段
+改为对应的 `_ref`；读取重规划上下文时也必须沿同响应引用读取，不能另查新版本。
+版本、作用域、来源、失败或 JSON 类型不同则保留原文，不截短要求或改变验收判断。
+详情选项同样复用；权威状态和完整决策捕获不改。TurnEnvelope 将已知引用移到自己
+签名覆盖的 work context，拒绝缺失或不可用来源。这只证明展示成本下降，尚不证明
+上游读取减少、模型采用或完整任务效率提升。
+
 The selected-Todo display body is display-only and may be bounded; the typed
 owner validates the exact read against selected identity, lifecycle, claim and
 source revision. A supplied full-body snapshot must match before fulfilling the read. If the full body is already
