@@ -15,7 +15,8 @@ def seed_crowded(project, actor):
              "revision": 1, "todo_ids": [],
              "requirements": [{"id": f"r{r}", "description": f"Preserve requirement {r}"} for r in range(5)],
              "sources": [{"ref": f"origin-{i}", "summary": "Owner requested this result"}]} for i in range(20)]}
-    size = lambda: len(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode())
+    def size():
+        return len(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode())
     i = 0
     while size() < 130400:
         state["outcomes"][i % 20]["sources"].append({"ref": f"source-{i}", "summary": "x" * 500})
