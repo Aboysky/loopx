@@ -90,6 +90,8 @@ import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
 import { ManagerBrief } from "./manager-brief";
 // Loaded on demand: settings and their editors are a separate chunk that
 // arrives when the owner first opens Settings, not on every workspace visit.
+const ContentProductionResults = lazy(() => import("./content-production-results").then(module => ({default: module.ContentProductionResults})));
+
 const WorkspaceSettingsPage = lazy(() => import("./workspace-settings-page").then((module) => ({ default: module.WorkspaceSettingsPage })));
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
@@ -314,6 +316,7 @@ function GoalOutputsView({
   goalId,
   localResults,
   researchApi,
+  production,
 }: {
   active: boolean;
   items: Array<Extract<WorkspaceTimelineItem, { kind: "output" }>>;
@@ -323,6 +326,7 @@ function GoalOutputsView({
   goalId: string;
   localResults: boolean;
   researchApi?: GoalResearchApi;
+  production?: ReactNode;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [teamSnapshot, setTeamSnapshot] = useState<LoopXModeSnapshot | null>(null);
@@ -348,8 +352,8 @@ function GoalOutputsView({
     && teamSnapshot?.settings.agent_id && teamSnapshot?.settings.execution_config);
   return (
     <>
-      <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
-        <header><strong>{t("files.title")}</strong>{!teamConfigured ? <span>{items.length}</span> : null}</header>
+      {items.length > 0 || reportState?.loading || reportState?.error || !production ? <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
+        <header><strong>{t("files.title")}</strong>{!teamConfigured && !production ? <span>{items.length}</span> : null}</header>
         {reportState?.loading ? (
           <p className="personal-object-list-state" role="status"><RefreshCw className="is-spinning" size={14} />{t("files.loadingReports")}</p>
         ) : null}
@@ -372,8 +376,10 @@ function GoalOutputsView({
             ].filter(Boolean).join(" · ")}</small>
           </button>
         ))}
-        {localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} /> : null}
-      </section>
+        {localResults && !production ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} /> : null}
+      </section> : null}
+      {production}
+      {production && localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} hideEmpty /> : null}
       {active && localResults ? <GoalExploreResults key={goalId} goalId={goalId} zh={locale === "zh-CN"} /> : null}
       {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} /> : null}
       {active && teamSessionId && !teamSnapshot && !teamError ? <p className="personal-object-list-state" role="status">{t("files.checkingTeam")}</p> : null}
@@ -1389,7 +1395,7 @@ export function PersonalWorkspacePage({
       goalId: selectedGoal.goalId, goalTitle: selectedGoal.title, ownerLabel: item.claimedBy}}});
   }, [selectionScope, routedTodoId, selectedGoal, readOnly, locale, selectionState]);
   const workspaceReview = useDeliveryReview(selectedGoal, model.userTodos, !readOnly && !settingsOpen
-    && (selectedGoalTab === "overview" || selectedGoalTab === "tasks") && !selectedGoal?.loadState, selectionScope);
+    && (selectedGoalTab === "overview" || selectedGoalTab === "tasks" || selectedGoalTab === "files") && !selectedGoal?.loadState, selectionScope);
   const workspaceDigest = useGoalWorkspaceDigest(selectedGoal, model.userTodos, items,
     workspaceReview.usable ? workspaceReview.snapshot?.goal_map : null);
   // "Since you looked" (RFC goal-workspace-surface §5.7): compare the current
@@ -2667,6 +2673,10 @@ export function PersonalWorkspacePage({
                     goalId={selectedGoal.goalId}
             localResults={!readOnly && active}
             researchApi={researchApi}
+            production={active && !readOnly && selectedGoalTab === "files" ? <Suspense fallback={<p role="status">{locale === "zh-CN" ? "正在读取作品…" : "Loading artifacts…"}</p>}>
+              <ContentProductionResults key={selectedGoal.goalId} goalId={selectedGoal.goalId} review={workspaceReview}
+                onOpenConversation={() => {setSelectedGoalTab("chat"); requestAnimationFrame(() => composerRef.current?.focus());}} />
+            </Suspense> : undefined}
                   />) : null;
   return (
     <>

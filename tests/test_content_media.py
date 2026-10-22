@@ -419,6 +419,10 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
         and headers["Cache-Control"] == "no-store"
     )
     assert headers["Content-Disposition"] == 'inline; filename="video.mp4"'
+    pinned = query + "&revision=1&sha256=" + hashlib.sha256(movie.read_bytes()).hexdigest()
+    assert exchange("GET", "/api/chat/content-media/file?" + pinned,
+                    headers={"Range": "bytes=0-31"})[2] == movie.read_bytes()[:32]
+    assert exchange("GET", "/api/chat/content-media/file?" + pinned.replace("revision=1", "revision=2"))[0] == 404
     # Decode both actual subtitle containers through FFmpeg, independently of
     # the writer. ASS represents the visible newline as \N; ordinary ampersands
     # and quotes must round-trip without becoming escaped display text.
@@ -536,6 +540,15 @@ def test_real_optional_renderer_reuse_and_http_byte_readback(http_workspace):
     assert (
         work.render(fixed["composition_id"], expected_revision=3)["status"] == "ready"
     )
+    second_movie = work.file(fixed["composition_id"], "video.mp4").read_bytes()
+    versioned = urlencode({"goal_id": "media-demo", "composition_id": fixed["composition_id"],
+                           "file": "video.mp4", "revision": "3",
+                           "sha256": hashlib.sha256(second_movie).hexdigest()})
+    assert exchange("GET", "/api/chat/content-media/file?" + versioned)[2] == second_movie
+    next_brief = work.prepare({**second, "title": "Requested changes"}, source_directory=work.project,
+                              composition_id=fixed["composition_id"], expected_revision=3)
+    assert next_brief["revision"] == 4 and next_brief["status"] == "prepared"
+    assert exchange("GET", "/api/chat/content-media/file?" + versioned)[0] == 404
     # A damaged artifact cannot be downloaded or silently treated as ready.
     movie.write_bytes(b"damaged")
     assert work.inspect(ident)["status"] == "damaged"
