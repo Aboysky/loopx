@@ -61,6 +61,15 @@ function analysisReadback(selected = "a") {
       final_candidate_delta: selected === "d" ? null : selected === "b" ? -2 : 4,
     };
   }
+  if (selected === "d") {
+    const usage = snapshot.pack.solver_usage.projection;
+    usage.method = "codex_observed_session_counters_v1";
+    usage.incomplete_turn = {turn_id: "unfinished", start: usage.end, observed_through: usage.end,
+      first_line: 4, last_line: 5, counter_observations: 1,
+      usage: {input_tokens: 400, cached_input_tokens: 300, uncached_input_tokens: 100, output_tokens: 8}};
+    usage.input_tokens += 400; usage.cached_input_tokens += 300;
+    usage.uncached_input_tokens += 100; usage.output_tokens += 8;
+  }
   if (selected === "d") {snapshot.pack.result = null; snapshot.pack.job = null; snapshot.pack.native_outcomes.projection.initial = null;}
   return snapshot;
 }
@@ -636,10 +645,19 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await history.getByRole('button', {name: '关闭分析', exact: true}).click();
       await page.setViewportSize({width: 1280, height: 900});
       await progress.locator('.research-progress-basis > summary').click();
-      assert.equal(await progress.getByText("100", {exact: true}).count(), 1, "Uncached input is shown without charging cache twice");
+      assert.equal(await progress.locator(".research-progress-values dd").filter({hasText: /^100 tokens$/}).count(), 1, "Uncached input is shown without charging cache twice");
+      // Actual observations precede provenance; details and help remain operable.
+      assert.equal(await progress.locator('.research-usage-detail').evaluate(e => e.open), false);
+      assert.doesNotMatch(await progress.innerText(), /codex_complete_session_counters_v1/);
+      await progress.locator('.research-usage-detail > summary').focus();
+      await page.keyboard.press('Enter');
       assert.match(await progress.innerText(), /1,?100.*1,?000/s);
+      assert.match(await progress.innerText(), /codex_complete_session_counters_v1/);
+      await progress.locator('.research-usage-detail > summary').press('Enter');
       assert.match(await progress.innerText(), /30.*4.*tokens/s, "Analysis attempt cost is distinct from solver usage");
-      assert.match(await progress.innerText(), /更早失败.*恢复.*评测/s);
+      await progress.getByRole('button', {name: '分析开销范围', exact: true}).focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /更早失败.*恢复.*评测/s);
+      await page.keyboard.press('Escape');
       await progress.locator('.research-progress-basis > summary').click();
       for (const limit of [1, 0]) {
         episodeMetadataLimit = limit;
@@ -778,7 +796,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
       assert.match(await progress.locator('.research-progress-basis > summary').innerText(), /完整成本未知/);
       await progress.locator('.research-progress-basis > summary').click();
-      assert.match(await progress.innerText(), /尚无完整用量捕获|No complete usage/);
+      assert.match(await progress.innerText(), /尚无用量捕获|No usage capture/);
+      await progress.getByRole('button', {name: '用量范围与成本', exact: true}).focus();
+      assert.doesNotMatch(await progress.getByRole('tooltip').innerText(), /本次完整捕获|This complete capture/);
+      await page.keyboard.press('Escape');
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await analysis.count(), 0, "Changing a factual scope preserves the closed analysis panel");
       assert.match(await progress.innerText(), /不适用|N\/A/);
@@ -795,6 +816,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await analysis.press('Escape');
       await progress.getByRole('combobox').selectOption('d'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
+      await progress.locator('.research-progress-basis > summary').click();
+      assert.match(await progress.innerText(), /末轮未完成|final Turn incomplete/);
+      assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
+      await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /所选范围尚未分析/);
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
