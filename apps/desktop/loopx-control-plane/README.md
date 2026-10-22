@@ -219,6 +219,15 @@ are allowed to finish; boot pages retain the framework's reload behavior.
 This changes post-crash navigation only; other platforms keep their existing
 handoff policy.
 
+The macOS App's two private Core services also follow the native process's
+lifetime after an abrupt App crash. Each runs with a helper from the same
+native executable. Losing the App's private pipe stops only that helper's own
+process group; reopening does not leave an additional pair of services behind.
+A service exit still reaches the existing supervisor for recovery. Shared
+development services and other platforms keep their existing process policy.
+This process cleanup does not establish the cause or visual recovery of a
+WebContent blank screen, and it does not replay a failed task.
+
 The opt-in macOS regression uses a hidden incognito window, a synthetic local
 server and a separate App identifier. It terminates only that window's own
 WebContent process, simulates a temporary backend failure and a slow response,
