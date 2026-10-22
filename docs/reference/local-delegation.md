@@ -813,6 +813,22 @@ scope reduction or configuration switch is needed for normal `.bin` links.
 
 ### Check a binding before new work
 
+Inspection reads the member's native Turn lane without taking its lock. A live
+holder reports `turn_blocked` / `turn_lane_in_flight`; an unreadable or foreign-host
+holder reports `turn_lane_state_unknown`. Both prevent the Chat handoff from
+submitting another worker and preserve its saved Inbox context. Recheck after the
+holder settles or observation is restored. Released/dead/absent native holders
+do not prove an App conversation is idle. The executing Turn still owns the
+single-flight fence if another execution races the preview. This adds neither a
+background retry nor ordinary Inbox activation without a bound task.
+
+中文：检查绑定时只读成员原生 Turn 通道，不抢占锁。正在执行返回
+`turn_blocked` / `turn_lane_in_flight`；记录不可读或属于其他宿主时返回
+`turn_lane_state_unknown`。两者均阻止 Chat 交接提交另一个 worker，已保存的
+Inbox 上下文保留；当前执行结束或状态读回恢复后重新检查。原生 holder 已释放、
+退出或不存在，不证明 App 会话空闲。预览之后发生竞争仍由实际 Turn 的单执行者
+锁处理。本改动不新增后台重试，也不实现无绑定任务的普通 Inbox 激活。
+
 `delegate inspect --binding-id independent-review` uses the same task,
 workspace, host, model/effort and validator arguments as an actual delegation,
 through `turn run-once` without `--execute`. It creates no request or Turn,
