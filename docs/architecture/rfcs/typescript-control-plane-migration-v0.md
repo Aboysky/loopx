@@ -47,6 +47,15 @@ request-scope adoption separately rather than counting its gain again.
 
 ### Product conversations and asynchronous inbox
 
+**Public quota read scope.** `quota/should_run.py` now reuses the existing
+executable-revision request scope for each complete public quota read. The
+compatibility facade and global views share that lifetime instead of resolving
+the code tree before every typed decision. Existing outer scopes still compose;
+the next independent read resolves current code again. The caller's status
+snapshot and existing provider/callback reads are not cached by this scope.
+This adds no data cache, bridge operation, semantic owner or provider route, and
+does not change scheduling authority.
+
 **Bounded Goal portfolio reads.** `goal_portfolio.py` now joins the existing
 executable-revision request scope around the complete portfolio read. CLI,
 Chat context and manager inspection callers reuse that scope across status and

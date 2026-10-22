@@ -43,6 +43,12 @@ guard、格式和 typed owner。这不新增领域规则、桥接操作或数据
 
 ### 产品对话与通用异步 inbox
 
+**公共 quota 读取作用域。** `quota/should_run.py` 现在为每次完整公共 quota 读取
+复用既有 executable-revision 请求作用域。兼容 facade 和全局视图共用该生命周期，
+不再在每次 typed 判定前重新解析代码树。已有外层作用域仍可组合；下一次独立读取
+重新解析当前代码。该作用域不缓存调用者的 status 快照或既有 provider/callback
+读取。这不新增数据缓存、桥接操作、语义 owner 或 provider 路由，也不改变调度权限。
+
 **有界 Goal portfolio 读取。** `goal_portfolio.py` 现在在完整 portfolio 读取期间
 复用既有 executable-revision 请求作用域。CLI、Chat context 和 manager inspection
 调用者在 status 与逐 Agent quota 读取之间共用该作用域。嵌套作用域加入当前请求；
