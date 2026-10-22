@@ -133,7 +133,10 @@ impl OwnedService {
         let _ = self.child.wait();
         #[cfg(target_os = "macos")]
         if let Err(error) = crate::service_lifetime::wait_for_group_exit(group) {
-            eprintln!("LoopX owned {} stop not confirmed: {error}", self.kind.label());
+            eprintln!(
+                "LoopX owned {} stop not confirmed: {error}",
+                self.kind.label()
+            );
         }
     }
 }
