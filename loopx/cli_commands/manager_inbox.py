@@ -10,7 +10,6 @@ from ..capabilities.manager_context import (
     configure_evidence_scope,
 )
 from ..control_plane.projects.registry_codec import load_project_registry
-from ..control_plane.effect_runtime import effect_runtime_request_scope
 from ..presentation.answer_instruction import collaboration_answer_instruction
 
 
@@ -89,7 +88,6 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--reason")
 
 
-@effect_runtime_request_scope()
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
         if getattr(args, "read_goal_scope", None) is not None and args.manager_inbox_action != "configure-read-scope":
