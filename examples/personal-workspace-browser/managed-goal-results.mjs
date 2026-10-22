@@ -53,6 +53,7 @@ export const managedGoalResultsScenario = {
       await page.screenshot({path: resolve(outputDir, "managed-goal-results-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
       assert(await results.evaluate(el => el.scrollWidth <= el.clientWidth), "Files report must fit a phone");
+      await results.getByRole("button", {name: "下载原文", exact: true}).scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "managed-goal-results-mobile.png"), animations: "disabled"});
       stale = true;
       await results.getByRole("button", {name: "刷新", exact: true}).click();
