@@ -57,4 +57,17 @@ export interface TrajectorySolverUsage {
     elapsed_seconds: number; usage: {input_tokens: number; cached_input_tokens: number;
       uncached_input_tokens: number; output_tokens: number}}>;
   limitations: string[];
+  /** Supplementary reconciliation, never a replacement for the session-counter basis. */
+  request_coverage?: TrajectoryRequestCoverage;
 }
+
+export interface TrajectoryRequestTokens {
+  input_tokens: number; cached_input_tokens: number; cache_write_input_tokens: number;
+  output_tokens: number; reasoning_output_tokens: number; total_tokens: number;
+}
+export type TrajectoryRequestCoverage = {
+  method: 'codex_request_reconciliation_v1';
+} & ({status: 'verified'; unique_requests: number; compaction_requests: number;
+  duplicate_records: number; counter_observations: number; observed_through: string;
+  all_requests: TrajectoryRequestTokens; compaction: TrajectoryRequestTokens;
+} | {status: 'unavailable'; reason: string});

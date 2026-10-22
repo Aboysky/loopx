@@ -580,6 +580,173 @@ def _usage_fixture():
     return "\n".join(json.dumps(e) for e in events) + "\n"
 
 
+def _request_usage_fixture():
+    """Two Turns; one compaction request absent from the legacy counters."""
+
+    def tokens(i, c, o):
+        return dict(
+            input_tokens=i,
+            cached_input_tokens=c,
+            output_tokens=o,
+            cache_write_input_tokens=0,
+            reasoning_output_tokens=0,
+            total_tokens=i + o,
+        )
+
+    def request(response, turn, usage, thread, turn_usage=None):
+        return dict(
+            type="token_usage_record",
+            payload=dict(
+                thread_id="solver-session",
+                session_id="solver-session",
+                turn_id=turn,
+                root_turn_id=turn,
+                response_id=response,
+                usage=usage,
+                thread_token_usage=thread,
+                turn_token_usage=turn_usage or usage,
+                private_response_text="SYNTHETIC-PRIVATE-DO-NOT-TRANSPORT",
+            ),
+        )
+
+    rows = [json.loads(line) for line in _usage_fixture().splitlines()]
+    compact = request(
+        "compact", "a", tokens(20, 10, 7), tokens(120, 70, 17), tokens(120, 70, 17)
+    )
+    rows[2:2] = [request("one", "a", tokens(100, 60, 10), tokens(100, 60, 10))]
+    rows[4:4] = [
+        compact,
+        dict(
+            type="compacted",
+            payload=dict(
+                compaction_response_id="compact",
+                latest_token_usage_record=compact["payload"],
+                replacement_history="SYNTHETIC-PRIVATE-DO-NOT-TRANSPORT",
+            ),
+        ),
+    ]
+    rows[8:8] = [request("two", "b", tokens(40, 20, 5), tokens(160, 90, 22))]
+    for i, row in enumerate(rows):
+        row["timestamp"] = (
+            datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=i)
+        ).isoformat()
+    return "\n".join(json.dumps(row) for row in rows) + "\n"
+
+def test_request_usage_native_cli_replay_privacy_and_historical_readback(
+    pack, monkeypatch
+):
+    import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
+
+    scope, _, old, input_path, sources, _ = pack
+    capture = sources / "usage.jsonl"
+    rows = _request_usage_fixture().splitlines()
+    # Exercise the real large-snapshot transport with repeated observations,
+    # while the independent three-request total remains 160 input / 22 output.
+    rows[3:3] = [rows[2]] * 2500
+    capture.write_text("\n".join(rows) + "\n")
+    args = dict(
+        **scope,
+        input_path=input_path,
+        source_root=sources,
+        title=old["title"],
+        usage_jsonl="usage.jsonl",
+        usage_session_id="solver-session",
+    )
+    actual = store.effect_runtime_result
+    transported = []
+
+    def observe(command, params, **kwargs):
+        if command == "benchmark.trajectory.codex-usage":
+            transported.append(params)
+        return actual(command, params, **kwargs)
+
+    monkeypatch.setattr(store, "effect_runtime_result", observe)
+    registered = register_pack(**args)
+    view = inspect_pack(**scope)
+    facts = view["solver_usage"]["projection"]
+    assert facts["input_tokens"] == 140 and facts["output_tokens"] == 15
+    coverage = facts["request_coverage"]
+    assert coverage["status"] == "verified"
+    assert coverage["all_requests"]["output_tokens"] == 22
+    assert coverage["compaction"]["output_tokens"] == 7
+    assert coverage["unique_requests"] == 3 and coverage["compaction_requests"] == 1
+    assert coverage["duplicate_records"] == 2500
+    assert len(json.dumps(transported).encode()) > 1024 * 1024
+    assert transported and "SYNTHETIC-PRIVATE" not in json.dumps(transported)
+    assert "SYNTHETIC-PRIVATE" not in json.dumps(view)
+    registry = sources.parent / "request-registry.json"
+    registry.write_text('{"projects":{}}')
+    prefix = [
+        sys.executable,
+        "-m",
+        "loopx.entrypoint",
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(scope["runtime_root"]),
+        "--format",
+        "json",
+        "benchmark",
+    ]
+    cli_args = [
+        "trajectory-pack-register",
+        "--goal-id",
+        scope["owner_goal_id"],
+        "--input-json",
+        str(input_path),
+        "--source-root",
+        str(sources),
+        "--title",
+        old["title"],
+        "--usage-jsonl",
+        "usage.jsonl",
+        "--usage-session-id",
+        "solver-session",
+    ]
+    replay = subprocess.run([*prefix, *cli_args], capture_output=True, text=True)
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert json.loads(replay.stdout)["pack_id"] == registered["pack_id"]
+    read = subprocess.run(
+        [*prefix, "trajectory-packs", "--goal-id", scope["owner_goal_id"]],
+        capture_output=True,
+        text=True,
+    )
+    assert read.returncode == 0
+    current = next(
+        p
+        for p in json.loads(read.stdout)["packs"]
+        if p["pack_id"] == registered["pack_id"]
+    )
+    assert current["solver_usage"] == view["solver_usage"]
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["job"] is None
+    # A partial serialized record is not silently promoted into complete coverage.
+    capture.write_text(capture.read_text() + '{"type":"token_usage_record"')
+    with pytest.raises(ValueError):
+        register_pack(**args)
+    stale = inspect_pack(**scope, pack_id=registered["pack_id"])["solver_usage"]
+    assert stale["reason_code"] == "source_changed" and stale["projection"] == facts
+    # A valid counter capture with inconsistent optional evidence remains readable.
+    capture.write_text(
+        _request_usage_fixture().replace('"response_id": "two"', '"response_id": "one"')
+    )
+    invalid = register_pack(**args)
+    failed = inspect_pack(**scope, pack_id=invalid["pack_id"])["solver_usage"][
+        "projection"
+    ]
+    assert failed["request_coverage"]["status"] == "unavailable"
+    assert (
+        failed["input_tokens"] == 140
+        and "all_requests" not in failed["request_coverage"]
+    )
+    assert (
+        inspect_pack(**scope, pack_id=registered["pack_id"])["solver_usage"][
+            "projection"
+        ]
+        == facts
+    )
+    assert not list(scope["runtime_root"].rglob("receipt.json"))
+
+
 def test_optional_solver_usage_is_read_only_scoped_and_separate_from_model(pack):
     scope, _, old, input_path, sources, _ = pack
     assert "solver_usage" not in inspect_pack(**scope)

@@ -91,8 +91,41 @@ def _source_path(source_root: Path, artifact: str) -> Path:
     return path
 
 
+def _request_usage_record(value: object) -> object:
+    """Transport the provider's typed usage only; TS owns reconciliation."""
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, object] = {
+        key: value[key] if isinstance(value[key], str) else None
+        for key in ("thread_id", "session_id", "turn_id", "root_turn_id", "response_id")
+        if key in value
+    }
+    for key in ("usage", "turn_token_usage", "thread_token_usage"):
+        counters = value.get(key)
+        result[key] = (
+            {
+                name: counters[name] if type(counters[name]) is int else None
+                for name in (
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "cache_write_input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                    "total_tokens",
+                )
+                if name in counters
+            }
+            if isinstance(counters, dict)
+            else None
+        )
+    return result
+
 def _usage_capture(
-    source_root: Path, artifact: str, session_id: str, *, include_incomplete: bool = False
+    source_root: Path,
+    artifact: str,
+    session_id: str,
+    *,
+    include_incomplete: bool = False,
 ) -> dict:
     data = _source_path(source_root, artifact).read_bytes()
     events = []
@@ -107,6 +140,17 @@ def _usage_capture(
             raise ValueError("Usage capture contains a non-object payload")
         if event.get("type") == "session_meta":
             payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
+        elif event.get("type") == "token_usage_record":
+            payload = _request_usage_record(payload)
+        elif event.get("type") == "compacted":
+            payload = {
+                "compaction_response_id": payload.get("compaction_response_id")
+                if isinstance(payload.get("compaction_response_id"), str)
+                else None,
+                "latest_token_usage_record": _request_usage_record(
+                    payload.get("latest_token_usage_record")
+                ),
+            }
         elif event.get("type") == "event_msg" and payload.get("type") in {
             "task_started",
             "task_complete",
@@ -143,7 +187,11 @@ def _usage_capture(
         )
     projection = effect_runtime_result(
         "benchmark.trajectory.codex-usage",
-        {"events": events, "session_id": session_id, "include_incomplete": include_incomplete},
+        {
+            "events": events,
+            "session_id": session_id,
+            "include_incomplete": include_incomplete,
+        },
         large_local_snapshot=True,
     )
     return {
