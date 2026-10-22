@@ -28,13 +28,13 @@ from .inbox import (
     plan_request_publication,
 )
 from .peer_context_observation import require_parent_context_access
+from .source_policy_fence import source_policy_fence
 from .goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
     goal_accepts_collaboration,
 )
 from ...agent_registry import registered_agent_ids_for_goal
-from ...file_lock import exclusive_file_lock
 from ...thread_agent_binding import resolve_thread_agent_binding
 from ..projects.registry_codec import load_project_registry
 from ..runtime.file_paths import windows_extended_path
@@ -105,7 +105,7 @@ def request(
     # An inherited source grant must remain current until its request is stored.
     # Take the policy fence before Goal/request locks, as the source writer does.
     with (
-        exclusive_file_lock((_root(root) / "policy.json").with_suffix(".lock"))
+        source_policy_fence(_root(root) / "policy.json")
         if parent_request_id else nullcontext()
     ), collaboration_goal_scope(
         registry,

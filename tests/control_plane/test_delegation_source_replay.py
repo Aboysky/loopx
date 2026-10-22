@@ -61,19 +61,24 @@ def test_saved_handoff_replay_cannot_substitute_its_original_identity(saved_hand
     assert not (Path(binding["workspace"]) / "host-invocations").exists()
 
 
-def test_exact_prepared_replay_is_read_only_and_keeps_the_original_return(saved_handoff, monkeypatch):  # noqa: F811
+def test_exact_prepared_replay_rejoins_only_the_original_operation(saved_handoff, monkeypatch):  # noqa: F811
     _, worker, binding, (_, session, turn, request, receipt, _), operation = saved_handoff
-    monkeypatch.setattr(execution.Delegations, "_spawn",
-                        lambda *_: pytest.fail("readback cannot resubmit a prepared operation"))
+    resumed = []
+    monkeypatch.setattr(
+        execution.Delegations,
+        "_spawn",
+        lambda _self, operation_id, **kwargs: resumed.append((operation_id, kwargs)),
+    )
     before = durable_bytes(worker.root)
     assert read_delegation_source_execution(worker, binding["id"], operation,
         source_request_id=receipt["request_id"], brief=request["brief"],
         conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]})["status"] == "prepared"
-    for _ in range(2):
-        result = execution.dispatch(worker.root, worker.registry, session=session, turn=turn,
-            request=request, receipt=receipt, execution_allowed=lambda: True)
-        assert result["submitted"] and result["replayed"] and result["status"] == "prepared"
-        assert result["operation_id"] == operation
+    result = execution.dispatch(worker.root, worker.registry, session=session, turn=turn,
+        request=request, receipt=receipt, execution_allowed=lambda: True)
+    assert result["submitted"], result
+    assert result["replayed"] and result["status"] == "prepared"
+    assert result["operation_id"] == operation
+    assert resumed == [(operation, {"prepared_source_request_id": receipt["request_id"]})]
     assert durable_bytes(worker.root) == before
     assert _read(worker.path(operation))["conversation"] == {
         "session_id": session["session_id"], "turn_id": turn["turn_id"],

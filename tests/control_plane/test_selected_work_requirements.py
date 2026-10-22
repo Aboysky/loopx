@@ -85,7 +85,7 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
 
     def guard(*extra, expected_exit=0):
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--scan-path", str(tmp_path), *extra,
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == expected_exit, json.dumps(packet, indent=2)
         return packet
@@ -157,7 +157,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
 
     def guard(*extra: str) -> dict:
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--scan-path", str(tmp_path), *extra,
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
         assert packet["should_run"] is True, packet.get("reason")
@@ -204,7 +204,13 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert reads[-1]["content"]["todo"]["text"] == expected
     assert json.dumps(context).count(expected) == 1
     assert envelope["required_reads"] == channel["required_reads"]
-    assert envelope["work_context"] == context
+    assert context["selected_todo_text_verified"] is True
+    assert envelope["work_context"] == {
+        key: value
+        for key, value in context.items()
+        if key != "selected_todo_text_verified"
+    }
+    assert envelope["action"]["selected_todo"]["text_source_verified"] is True
     selected = envelope["action"]["selected_todo"]
     assert selected["todo_id"] == "todo_cursor_work"
     read = reads[-1]
@@ -235,7 +241,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     authority = extract_turn_authority(request)
     assert authority["selected_todo"]["todo_id"] == "todo_cursor_work"
     assert authority["required_reads"] == channel["required_reads"]
-    assert authority["work_context"] == context
+    assert authority["work_context"] == envelope["work_context"]
+    assert authority["selected_todo"]["text_source_verified"] is True
     assert read["command"] in render_prompt(authority)
 
     # A fresh CLI process must recover current requirements from the same owner,
@@ -342,7 +349,6 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     args = build_parser().parse_args([
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--goal-id", "selected-race-goal", "--agent-id", "agent-a",
-        "--scan-path", str(tmp_path),
     ])
     packet: dict[str, object] = {}
 
@@ -420,7 +426,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     assert json.dumps(context).count(note) == 1
 
     code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a", "--scan-path", str(tmp_path), "--turn-envelope",
+        "--agent-id", "agent-a",  "--turn-envelope",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
     turn_context = turn["work_context"]

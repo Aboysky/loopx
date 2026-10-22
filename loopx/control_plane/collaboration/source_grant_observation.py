@@ -1,5 +1,6 @@
 """Provider/store observation for the typed context-recipient policy owner."""
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,6 +14,7 @@ from ..projects.registry_codec import (
 )
 from . import conversation_scope
 from .inbox import _hash, _read, _root
+from .source_policy_fence import source_policy_fence
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 POLICY_SCHEMA = "loopx_manager_context_policy_v1"
@@ -175,19 +177,24 @@ def source_execution_bindings(
 
 def require_delegation_source_execution(runtime_root: Path, registry_path: Path, *,
         goal_id: str, requester_agent_id: str, source_request_id: str,
-        binding: dict[str, Any], caller_goal_ref: dict[str, Any] | None) -> None:
+        binding: dict[str, Any], caller_goal_ref: dict[str, Any] | None,
+        policy_locked: bool = False) -> None:
     """Reobserve the original Chat source; the existing TS owner decides its grant.
 
     A return address only locates frozen evidence. It never grants execution,
     and observing it must not recover or mutate the original Chat store.
     """
-    from ...file_lock import exclusive_file_lock
     from .goal_instance_scope import collaboration_goal_scope
     from .inbox import _entry
     from .source_chat_observation import observe_source_chat
 
     try:
-        with exclusive_file_lock((_root(runtime_root) / "policy.json").with_suffix(".lock")), collaboration_goal_scope(
+        policy_guard = (
+            nullcontext()
+            if policy_locked
+            else source_policy_fence(_root(runtime_root) / "policy.json")
+        )
+        with policy_guard, collaboration_goal_scope(
             registry_path, goal_id=goal_id, agents=(requester_agent_id, binding["agent_id"]),
             caller_goal_ref=caller_goal_ref, require_active=True,
         ) as scope:

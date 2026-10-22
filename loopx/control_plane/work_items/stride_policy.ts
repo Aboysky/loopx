@@ -369,9 +369,11 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
   const deliveredPages = Array.isArray(context.explore_result_pages) ? context.explore_result_pages as JsonObject[] : [];
   for (const page of (explore.result_pages ?? []) as JsonObject[]) {
     const resolved = deliveredPages.find(row => row.revision === page.revision &&
-      row.offset === page.offset && row.limit === page.limit);
-    if (page.revision !== (basis.result_page as JsonObject | null)?.revision || !resolved) {
-      return "Explore result pages require current source replay; reread global pages under the original Turn.";
+      row.offset === page.offset && row.limit === page.limit && row.todo_id === page.todo_id);
+    if (!resolved || page.todo_id === undefined && page.revision !== (basis.result_page as JsonObject | null)?.revision) {
+      return page.todo_id === undefined
+        ? "Explore result pages require current source replay; reread global pages under the original Turn."
+        : "Explore task result pages require current source replay; reread scoped pages under the original Turn.";
     }
     for (const ref of resolved.finding_refs as string[]) allowed.add(ref);
     candidates.push(...comparisonCandidates(resolved.comparison_candidates));

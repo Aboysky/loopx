@@ -13,7 +13,7 @@ import subprocess
 from typing import Any
 
 from . import POLICY_SCHEMA, _root, _read, _write
-from ...file_lock import exclusive_file_lock
+from ...control_plane.collaboration.source_policy_fence import source_policy_fence
 from ...control_plane.status.ssh_host_catalog import configured_ssh_host_aliases
 
 # --- The bounded turn-time source read ---------------------------------------
@@ -66,7 +66,7 @@ def configure(root, *, channel, host, goal_ids, execute=False, config_path=None)
     ids = sorted(set(goal_ids))
     if execute:
         path = _root(root) / "policy.json"
-        with exclusive_file_lock(path.with_suffix(".lock")):
+        with source_policy_fence(path):
             policy = (
                 _read(path)
                 if path.exists()

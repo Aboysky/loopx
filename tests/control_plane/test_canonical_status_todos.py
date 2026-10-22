@@ -94,11 +94,13 @@ def promoted_goal(tmp_path: Path, record_format, provider):
     return goal, runtime, state
 
 
-@pytest.mark.parametrize("display", ["stale", "missing", "invalid_utf8"])
+@pytest.mark.parametrize("display", ["stale", "missing", "invalid_utf8", "truncated"])
 def test_status_uses_provider_and_allows_native_monitor_writeback_without_display(promoted_goal, display, monkeypatch):
     goal, runtime, state = promoted_goal
     if display == "invalid_utf8":
         state.write_bytes(b"\xff")
+    elif display == "truncated":
+        state.write_text("# Goal\n\n## Next Action\n\nKeep the human narrative.\n")
     original = state.read_bytes()
     if display == "missing":
         state.unlink()
@@ -159,13 +161,17 @@ def test_unpromoted_status_retains_markdown_without_starting_authority(tmp_path,
     assert fields["agent_todos"]["items"][0]["text"] == "Legacy work"
 
 
-@pytest.mark.parametrize("display", ["missing", "invalid_utf8", "invalid_user_todo"])
+@pytest.mark.parametrize(
+    "display", ["missing", "invalid_utf8", "invalid_user_todo", "truncated"]
+)
 def test_public_status_cli_uses_canonical_contract_and_attention(promoted_goal, tmp_path, display):
     goal, runtime, state = promoted_goal
     if display == "missing":
         state.unlink()
     elif display == "invalid_utf8":
         state.write_bytes(b"\xff")
+    elif display == "truncated":
+        state.write_text("# Goal\n\n## Next Action\n\nKeep the human narrative.\n")
     else:
         state.write_text(
             "# Goal\n\n## User Todo\n\n- [ ] Obsolete display-only gate\n"
@@ -356,8 +362,7 @@ def test_whole_status_reuses_the_contract_snapshot_and_refreshes_next_request(
 
     monkeypatch.setattr(status_module, 'build_attention_queue', remove_then_project)
     arguments = dict(registry_path=registry, runtime_root_override=str(runtime),
-                     scan_roots=[], limit=5, goal_id=goal['id'],
-                     include_public_boundary_scan=False)
+                     limit=5, goal_id=goal['id'])
     payload = status_module.collect_status(**arguments)
     assert len(reads) == 1
     queue = next(item for item in payload['attention_queue']['items'] if item['goal_id'] == goal['id'])

@@ -16,8 +16,9 @@ from tests.control_plane.test_native_todo_planning_update import fixture
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("focused", [False, True])
 def test_explore_read_pins_runtime_once_and_rechecks_after_success_or_failure(
-    tmp_path, monkeypatch, provider,
+    tmp_path, monkeypatch, provider, focused,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, _ = fixture(tmp_path, provider)
@@ -52,7 +53,8 @@ def test_explore_read_pins_runtime_once_and_rechecks_after_success_or_failure(
     def read(expected_ids):
         before = len(snapshots)
         result = explore_turn_context(registry_path=registry, runtime_root=runtime,
-                                      goal_id="goal-a", agent_id="agent-a")
+                                      goal_id="goal-a", agent_id="agent-a",
+                                      **({"todo_id": "todo_target"} if focused else {}))
         assert {row["finding_id"] for row in result["graph"]["recent_findings"]} == expected_ids
         assert len(snapshots) - before == 1
         assert effect_runtime._REQUEST_RUNTIME_REVISION.get() is None

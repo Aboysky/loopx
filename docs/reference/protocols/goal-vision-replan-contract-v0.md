@@ -615,6 +615,15 @@ Source replay verifies the declared citation, not that the model understood or
 adopted it. Existing v2 decisions without pages and historical v1 reads retain
 their behavior. Other detail routes are not supplemental citation sources.
 
+An Explore page read with `--todo-id` prioritizes that canonical open task's
+explicit question links. Its descriptor adds optional `todo_id` beside
+`revision/offset/limit`; preserve it in `result_pages`. The source replays those
+links, ownership and page revision before accepting citations, while retaining
+the originally delivered global basis and `explore_review.revision`. Missing,
+closed, newly foreign-owned or relinked tasks invalidate old scoped pages.
+Global pages without `todo_id` keep their existing contract. Task focus changes
+read relevance, never task admission or an enforced choice of experiment.
+
 The typed owner validates shape, references and declared provenance before the
 fresh Vision path exit. When an enabled Goal reaches a periodic review or an
 existing observed-stall review (`typed_progress_repeat`, `no_progress_streak`,
@@ -687,6 +696,12 @@ not improved model decisions or net efficiency.
 其他 Agent 产出的证据。来源变化、不可用、伪造成员或按节点筛选的页面会被拒绝，
 应在原 Turn 和原复盘义务下补读并重新评估。读取不写入回执或扣额度，分页引用随
 决策保留到历史和下次复盘；来源核验不证明模型理解、采用或研究收益。
+
+通过 `--todo-id` 读取的 Explore 页，按当前 canonical 开放任务的明确问题关联排序；
+页面描述在 `revision/offset/limit` 外携带可选 `todo_id`，引用时保留。可信来源重放
+当前关联、归属和页面版本，原全局 basis 与 `explore_review.revision` 不替换。
+任务缺失、关闭、改由他人认领或关联改变时旧页失效。未携带任务 ID 的全局页面保持
+原契约；任务范围只改变证据相关性，不授予准入或强制选题。
 
 ### Source-bound comparison selection
 

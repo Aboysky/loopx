@@ -92,6 +92,13 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
             row = read_delegation_source_execution(service, selected, operation,
                 source_request_id=receipt["request_id"], brief=request["brief"],
                 conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]})
+            if row["status"] == "prepared":
+                # The requester may have died after persisting the operation
+                # but before starting its worker. Rejoin that same owner under
+                # fresh source authority; never retry an uncertain running Host.
+                if not execution_allowed() or grant not in _grants(root, registry, session, turn):
+                    raise ValueError("source execution grant changed before recovery")
+                row = service.resume(operation, prepared_source_request_id=receipt["request_id"])
             return {"submitted": True, "operation_id": operation, "todo_id": binding["todo_id"],
                     "status": row["status"], "replayed": True}
         preflight = service.inspect(selected)

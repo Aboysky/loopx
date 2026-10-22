@@ -47,6 +47,12 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
     cycle: bool,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # Compare complete Todo readbacks at one observation time. Elapsed wall
+    # time changes the derived wait projection without mutating the Todo.
+    monkeypatch.setattr(
+        "loopx.control_plane.todos.resume_condition.now_utc_iso",
+        lambda: "2026-09-20T00:00:00Z",
+    )
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
     _configure_selectable_alternative(project)
@@ -145,8 +151,6 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
     )
     rc, admitted = run(*guard_args)
     assert rc == 0 and admitted["normal_delivery_allowed"], admitted
@@ -282,8 +286,6 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
         AGENT_ID,
         "--turn-instance-id",
         "independent-next-turn",
-        "--scan-path",
-        str(project),
     )
     assert rc == 0 and next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID, (
         next_turn

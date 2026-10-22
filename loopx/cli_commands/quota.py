@@ -242,7 +242,6 @@ def _record_automatic_heartbeat_stall(
     reloaded = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-        scan_roots=context.scan_roots,
         limit=context.status_limit,
         goal_id=context.status_goal_id,
         available_capabilities=args.available_capabilities,
@@ -340,7 +339,7 @@ def _dispatch_quota_turn_start_hooks(
     if args.agent_id:
         from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
         dispatch = extend_explore(dispatch, registry_path=registry_path, runtime_root=root,
-            goal_id=args.goal_id, agent_id=args.agent_id)
+            goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id)
     local_private_state_mutated = bool(dispatch.get("uncertain_local_effects")) or any(
         isinstance(result, Mapping)
         and result.get("local_private_state_mutated") is not False
@@ -530,7 +529,6 @@ def handle_quota_command(
             heartbeat_turn_id,
             detail_sections,
             runtime_root,
-            scan_roots,
             status_limit,
             status_goal_id,
             status_payload,
@@ -541,7 +539,6 @@ def handle_quota_command(
             context.heartbeat_turn_id,
             context.detail_sections,
             context.runtime_root,
-            context.scan_roots,
             context.status_limit,
             context.status_goal_id,
             context.status_payload,
@@ -686,7 +683,6 @@ def handle_quota_command(
                 status_reloader=lambda: collect_status(
                     registry_path=registry_path,
                     runtime_root_override=runtime_root_arg,
-                    scan_roots=scan_roots,
                     limit=status_limit,
                     goal_id=status_goal_id,
                     available_capabilities=args.available_capabilities,

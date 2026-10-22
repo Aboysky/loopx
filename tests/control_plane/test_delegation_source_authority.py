@@ -8,12 +8,19 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 
 import pytest
 
-from loopx.capabilities.manager_context import _root, _write, deliver, execution
+from loopx.capabilities.manager_context import (
+    _root,
+    _write,
+    deliver,
+    execution,
+)
 from loopx.control_plane.collaboration import delegation_results, delegation_validation
 from loopx.control_plane.collaboration.inbox import _read
+from loopx.control_plane.collaboration.source_policy_fence import source_policy_fence
 from test_independent_delegation_validation import independent_binding
 from test_local_delegation import demo, service as delegation_service  # noqa: F401
 from test_manager_context_execution import source
@@ -126,6 +133,91 @@ def test_revocation_during_real_acceptance_capture_is_rechecked_before_launch(sa
     worker.execute(operation)
     assert not (Path(binding["workspace"]) / "host-invocations").exists()
     assert _read(worker.path(operation))["status"] == "rejected"
+
+
+@pytest.mark.parametrize("saved_handoff", [True], indirect=True)
+def test_final_source_revocation_cannot_split_completion_and_settlement(
+    saved_handoff, monkeypatch,
+):
+    root, worker, binding, (_, session, _, _, _, _), operation = saved_handoff
+    complete = worker._complete_delegated_todo
+    revocation_started = threading.Event()
+    revocation_finished = threading.Event()
+    revocation_errors = []
+    revocation_threads = []
+    completed_before_revocation = []
+
+    def revoke_from_owner():
+        revocation_started.set()
+        try:
+            policy_path = _root(worker.root) / "policy.json"
+            with source_policy_fence(policy_path):
+                current = _read(policy_path)
+                current["sources"][session["channel_id"]]["execution_bindings"] = []
+                _write(policy_path, current)
+        except Exception as exc:  # pragma: no cover - asserted below
+            revocation_errors.append(exc)
+        finally:
+            revocation_finished.set()
+
+    def complete_with_concurrent_revocation(row, current_binding):
+        thread = threading.Thread(target=revoke_from_owner, daemon=True)
+        thread.start()
+        assert revocation_started.wait(5)
+        complete(row, current_binding)
+        completed_before_revocation.append(not revocation_finished.is_set())
+        revocation_threads.append(thread)
+
+    monkeypatch.setattr(worker, "_complete_delegated_todo", complete_with_concurrent_revocation)
+    worker.execute(operation)
+    [thread] = revocation_threads
+    thread.join(10)
+    assert not revocation_errors
+    assert completed_before_revocation == [True]
+    assert revocation_finished.is_set()
+    row = worker.read(operation)
+    assert row["status"] == "accepted", row
+    assert demo.canonical_tasks(root)[binding["todo_id"]]["done"]
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
+    worker.execute(operation)
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
+
+
+@pytest.mark.parametrize("saved_handoff", [True], indirect=True)
+def test_prelaunch_refusal_recreates_original_bootstrap_on_authorized_resume(
+    saved_handoff, monkeypatch,
+):
+    root, worker, binding, (_, session, _, _, _, policy), operation = saved_handoff
+    original_policy = json.loads(json.dumps(policy))
+    acquire = worker._acquire_delegation_lease
+    revoked = False
+
+    def revoke_after_original_lease(path, row, current_binding):
+        nonlocal revoked
+        result = acquire(path, row, current_binding)
+        if not revoked:
+            revoked = True
+            policy["sources"][session["channel_id"]]["execution_bindings"] = []
+            _write(_root(worker.root) / "policy.json", policy)
+        return result
+
+    monkeypatch.setattr(worker, "_acquire_delegation_lease", revoke_after_original_lease)
+    worker.execute(operation)
+    refused = _read(worker.path(operation))
+    assert refused["status"] == "running", refused
+    assert "source execution" in refused["error"]
+    assert not (Path(binding["workspace"]) / "host-invocations").exists()
+    assert not demo.canonical_tasks(root)[binding["todo_id"]]["done"]
+    assert not (Path(binding["workspace"]) / "DELEGATION.json").exists()
+
+    _write(_root(worker.root) / "policy.json", original_policy)
+    worker.execute(operation)
+    resumed = worker.read(operation)
+    assert resumed["status"] == "accepted", resumed
+    assert demo.canonical_tasks(root)[binding["todo_id"]]["done"]
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
+    worker.execute(operation)
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
 
 
 @pytest.mark.parametrize("checkpoint", ["host_return", "completion_dependencies"])
