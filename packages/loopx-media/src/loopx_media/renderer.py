@@ -1,8 +1,8 @@
 """Bounded local rendering. Stdin is an admitted private composition envelope.
 
-No account, network, arbitrary command, source-directory discovery or publication.
-The content-ops caller provides immutable source snapshots and an exclusive attempt
-directory. This renderer implements the protocol; it does not admit that effect.
+Ordinary render requests have no network or account effects. The separately
+permissioned generation operations use the provider's bounded cloud transport.
+The content-ops caller admits both effects; neither grants publication.
 """
 from __future__ import annotations
 
@@ -50,7 +50,8 @@ def font_file(content: str = "LoopX") -> str | None:
                  "C:/Windows/Fonts/arial.ttf"):
         if Path(name).is_file():
             with TTFont(name, fontNumber=0, lazy=True) as font:
-                if required <= set(font.getBestCmap() or {}): return name
+                if required <= set(font.getBestCmap() or {}):
+                    return name
     return None
 
 
@@ -112,7 +113,10 @@ def soundtrack(plan: dict, sources: dict[str, Path], out: Path, ff: str, check) 
         for path in (text, aiff, wav):
             path.unlink()
     with wave.open(str(destination), "wb") as audio:
-        audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(44100); audio.writeframes(timeline)
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(44100)
+        audio.writeframes(timeline)
     return {"mode": mode, "cues": rows, "subjective_listening": "not_tested"}
 
 
@@ -162,7 +166,8 @@ def render(request: dict) -> dict:
         shot["title"] + " " + shot["body"] + " " + shot["boundary"] + " " + " ".join(shot.get("nodes", []))
         for shot in plan["shots"])
     font_path = font_file(visible_text)
-    if not font_path: raise ValueError("No installed font covers this brief; install a suitable font before retrying")
+    if not font_path:
+        raise ValueError("No installed font covers this brief; install a suitable font before retrying")
     fonts = {}
 
     def font(size):
@@ -181,11 +186,13 @@ def render(request: dict) -> dict:
             cjk = bool(re.fullmatch(r"[\u2e80-\u9fff\uf900-\ufaff]", word))
             candidate = current + (" " if current and not cjk and not previous_cjk else "") + word
             if draw.textlength(candidate, font=selected) > limit and current:
-                lines.append(current); current = word
+                lines.append(current)
+                current = word
             else:
                 current = candidate
             previous_cjk = cjk
-        if current: lines.append(current)
+        if current:
+            lines.append(current)
         if len(lines) > max_lines or any(draw.textlength(line, font=selected) > limit for line in lines):
             raise ValueError("Text exceeds the layout; revise or split the shot")
         return lines
@@ -281,7 +288,8 @@ def render(request: dict) -> dict:
                                 active = progress > 0
                                 draw.rounded_rectangle((x, y, x + box_w, y + h), radius=round(10 * scale), fill=style["background"], outline=accent if active else LINE, width=2)
                                 node_end = draw_text(draw, (x + round(13 * scale), y + round(20 * scale)), label, 22, ink if active else muted, max_width=box_w - round(26 * scale), max_lines=3)
-                                if node_end > y + h - 8: raise ValueError("Node label overflows; shorten or split the diagram")
+                                if node_end > y + h - 8:
+                                    raise ValueError("Node label overflows; shorten or split the diagram")
                                 if j:
                                     a, b = x - gap + 4, x - 4
                                     draw.line((a, y + h / 2, a + (b - a) * progress, y + h / 2), fill=accent, width=2)
@@ -294,19 +302,26 @@ def render(request: dict) -> dict:
                         draw_text(draw, (margin, height - round(56 * scale)), shot["boundary"], 16, muted, max_lines=2)
                         bar = margin + (width - 2 * margin) * (frames / request["frame_count"])
                         draw.line((margin, height-8, bar, height-8), fill=accent, width=3)
-                    if frames == 0: im.save(out / "poster.png")
-                    encoder.stdin.write(im.tobytes()); frames += 1
+                    if frames == 0:
+                        im.save(out / "poster.png")
+                    encoder.stdin.write(im.tobytes())
+                    frames += 1
             finally:
                 if decoder:
                     decoder.stdout.close()
                     decoder.terminate()
-                    try: decoder.wait(timeout=3)
-                    except subprocess.TimeoutExpired: decoder.kill(); decoder.wait()
+                    try:
+                        decoder.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        decoder.kill()
+                        decoder.wait()
         encoder.stdin.close()
-        if encoder.wait(timeout=15) != 0: raise ValueError("Video encoder failed")
+        if encoder.wait(timeout=15) != 0:
+            raise ValueError("Video encoder failed")
     finally:
         if encoder.poll() is None:
-            encoder.kill(); encoder.wait()
+            encoder.kill()
+            encoder.wait()
     check()
     if audio["mode"] == "silent":
         (out / "silent.mp4").rename(video)
@@ -320,7 +335,8 @@ def render(request: dict) -> dict:
     if audio["mode"] != "silent":
         with wave.open(str(out / "narration.wav")) as wav:
             samples = array.array("h", wav.readframes(wav.getnframes()))
-        if sys.byteorder != "little": samples.byteswap()
+        if sys.byteorder != "little":
+            samples.byteswap()
         peak = max((abs(sample) for sample in samples), default=0)
         audio.update(peak_dbfs=round(20 * math.log10(peak / 32768), 2) if peak else None,
                      clipped_samples=sum(abs(sample) >= 32767 for sample in samples))
@@ -342,12 +358,22 @@ def main() -> int:
             from .blender import available
             ff = imageio_ffmpeg.get_ffmpeg_exe()
             run([ff, "-version"], timeout=5)
-            if not font_file(): raise ValueError("Install a supported local font")
+            if not font_file():
+                raise ValueError("Install a supported local font")
             print(json.dumps({"ok": True, "protocol": PROTOCOL, "system_speech": sys.platform == "darwin", "font": "system", "blender_extra_present": available()}))
             return 0
         raw = sys.stdin.buffer.read(1024 * 1024 + 1)
-        if len(raw) > 1024 * 1024: raise ValueError("Render request exceeds the protocol limit")
-        result = render(json.loads(raw))
+        if len(raw) > 1024 * 1024:
+            raise ValueError("Render request exceeds the protocol limit")
+        request = json.loads(raw)
+        if str(request.get("operation", "")).startswith("generation."):
+            from .generation import operate
+            result = operate(request)
+        elif str(request.get("operation", "")).startswith("image."):
+            from .images import operate
+            result = operate(request)
+        else:
+            result = render(request)
     except RenderCancelled:
         result = {"ok": False, "error_code": "cancelled"}
     except (OSError, ValueError, KeyError, TypeError, TimeoutError, subprocess.SubprocessError):
