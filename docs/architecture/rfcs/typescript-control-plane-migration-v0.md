@@ -550,6 +550,21 @@ the read-only three-arm rehearsal as a separate promotion gate.
 - Checkpoint moved to the execution ledger: [Provider-neutral projection conformance checkpoint (2026-09-12)](ledger/typescript-control-plane-migration-v0/2026-09-12-provider-neutral-projection-conformance.md).
 - Checkpoint moved to the execution ledger: [Canonical Todo presentation checkpoint (2026-09-12)](ledger/typescript-control-plane-migration-v0/2026-09-12-canonical-todo-presentation.md).
 
+### Quota Todo source selection (2026-10-21)
+
+Quota source and planning-inventory reads select the preferred available summary
+before invoking the existing typed projection owners. Canonical/legacy precedence
+and an authoritative empty selection are preserved. Unselected rows no longer
+cross the runtime transport; malformed unselected rows cannot block a valid
+selected source. A selected-source projection failure still propagates without
+adopting the other source.
+
+The duplicated planning adapter and discarded projections are removed. Python
+retains compatibility source selection until its quota and planning callers move
+in-process. There is no new RPC, data cache or domain-rule implementation. This
+bounded caller change requires complete-command SQLite measurements and installed
+File/SQLite parity; fewer requests alone do not establish performance payoff.
+
 ### Long-goal persistence is part of the migration payoff
 
 The product target is at least ten elapsed days per goal, not a short-lived
