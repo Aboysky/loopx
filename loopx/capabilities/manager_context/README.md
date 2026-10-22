@@ -562,12 +562,21 @@ unsupported transport remains an explicit delivery gap. A path mentioned only in
 text is not an attachment. This slice does not qualify local-Web file presentation,
 group disclosure, cross-host transfer or inline video playback. Installed live
 provider qualification remains separate from the synthetic transport regressions.
-For a text-only result exceeding the provider's rich-post byte limit, the existing
-text fallback renders table cells with their column labels and removes paired
-strong markers and heading prefixes. It retains all values and links, keeps the
-authored Markdown in the source record, and verifies the rendered text on recovery
-without resending. Historical raw-text receipts remain readable. File-bearing
-posts still reject an oversized request rather than dropping their attachments.
+
+Oversized Markdown results stay rich posts. The Lark presentation splitter counts
+UTF-8 bytes of the serialized provider request, including escaped JSON, numbering
+and attachments, against the documented 30 KB post bound (30,000 bytes as a
+conservative local interpretation). It keeps the complete
+body across ordered parts without a fixed part-count cap or a plain-text fallback;
+code fences and table column headers continue across oversized blocks. The
+existing private Lark part-delivery journal retains the frozen plan and each
+provider locator. Recovery verifies known writes before continuing never-sent
+parts; unknown writes, changed intent or lost locators cannot be blindly resent.
+Attachments remain on the last concrete post. A composite provider receipt proves
+completion only after every part and required attachment readback has succeeded.
+Historical single-text receipts remain verify-only compatibility. Intentional
+text and identity-verified mention delivery keep their existing contracts.
+
 Before downgrading to an older runtime that does not understand result files,
 pause the reply pump while any file-bearing result remains pending; an old
 text-only reader cannot certify attachment delivery. Retain the result snapshots
