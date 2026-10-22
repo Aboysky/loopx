@@ -56,6 +56,14 @@ finalize 重新取得 Goal lifetime guard，并在共享 request fence 内重读
 完整默认 SQLite CLI 性能仍是独立资格门。本次源码切换不证明 R1–R3 或完整异步协作
 生命周期已通过验收。
 
+**Inbox CLI 调用者接入。** 正常 `manager-inbox` 命令族现在使用既有按命令
+parser、共享 dispatcher 和 executable-revision 请求作用域。完整兼容 CLI
+复用同一个 dispatcher，旧 Inbox 重复分支已退役。两条路径保留既有 parser、
+handler、registry／runtime 解析和 native-controller guard。一次命令只解析一次
+可执行代码身份；源记录仍在原锁协议下实时读取，下一次命令重新解析当前代码。
+既有 TypeScript 语义 owner、桥接操作、回执格式和 Python provider IO 均不变。
+这是 Stage 3 调用者接入，不是新的叶子迁移、结果存储，也不证明 R1–R3 已完成。
+
 R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 [App/inbox 融合设计](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
 按调用者修复、行为刻画、完整异步生命周期切换、真实 adapter 恢复与旧代码删除推进。
@@ -1260,6 +1268,13 @@ TypeScript 类型在运行时会被擦除。因此 network/RPC payload、解析�
 而不必在每层重复临时字段检查。Framing、authentication、size limit 等 transport
 检查与 schema validation、semantic invariant 分层负责。未经检查的
 `JSON.parse(...) as T` 不能建立控制面 authority。
+
+Canonical Todo 集合读取在同一个已加载 provider head 内共享 `GoalAcceptanceRead`。
+合同、oracle basis 和工作 guard 复用已验证的 authority、Todo 索引和任务判断。
+guard 保持惰性投影，保留来源 identity 与连续页检查的原拒绝顺序。公开独立 helper
+每次重新读取，返回的容器相互隔离。每个新 provider head 或连续页读取都建立新
+scope。不新增 Python bridge、RPC、持久化缓存或写权限；原生读取测量不证明
+完整 CLI 延迟、安装采用或 PostgreSQL 运行资格。
 
 `as unknown as T` 只允许作为具名迁移缝：cutover PR 必须明确其调用点、上游
 validator、负向边界覆盖和移除 owner。只要 public、持久化、RPC 或 extension
