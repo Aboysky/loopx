@@ -159,6 +159,12 @@ def _large_block(block: str, fits, first_prefix: str = "") -> list[str]:
                     cut = start
                     break
         if cut <= 0:
+            if first_prefix and not result:
+                # A protected element may fit a fresh post even when the
+                # preceding paragraph leaves too little room for it.
+                result.append(first_prefix)
+                first_prefix = ""
+                continue
             raise LarkOutboundTextError(
                 "one rich inline element exceeds the provider message bound"
             )

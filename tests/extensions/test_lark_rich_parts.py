@@ -139,6 +139,33 @@ def test_split_keeps_code_fences_tables_links_and_complete_data():
     assert sum(link in part for part in parts) == 1
 
 
+@pytest.mark.parametrize("element", [
+    "[source](https://example.org/" + "x" * 5000 + ")",
+    "`" + "x" * 5000 + "`",
+], ids=["link", "inline-code"])
+def test_real_entry_moves_protected_element_to_a_fresh_post(tmp_path, element):
+    text = "P" * 28000 + "\n\n" + element + "z" * 35000
+    provider = RichProvider()
+    _, result = send(tmp_path, provider, text)
+    assert result["ok"] and result["reply_verified"]
+    bodies = [m["zh_cn"]["content"][0][0]["text"] for m in provider.sent]
+    # The paragraph break becomes a message boundary; no authored data may go.
+    assert bodies[0].split("\n\n", 1)[1] == "P" * 28000
+    assert "".join(body.split("\n\n", 1)[1] for body in bodies[1:]) == element + "z" * 35000
+    assert sum(element in body for body in bodies) == 1
+
+
+@pytest.mark.parametrize("block", [
+    "[source](https://example.org/" + "x" * 31000 + ")",
+    "| Case | Value |\n| --- | --- |\n| row | " + "x" * 31000 + " |\n",
+], ids=["link", "table-row"])
+def test_unrepresentable_atomic_block_stays_pending_without_any_send(tmp_path, block):
+    provider = RichProvider()
+    with pytest.raises(LarkOutboundTextError, match="exceeds the provider"):
+        send(tmp_path, provider, "P" * 28000 + "\n\n" + block)
+    assert provider.sent == []
+
+
 @pytest.mark.parametrize("escaped_unicode", [False, True])
 def test_real_entry_splits_rich_posts_and_recovers_only_unsent_parts(
     tmp_path, escaped_unicode
