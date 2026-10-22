@@ -180,6 +180,14 @@ export const goalWorkMapScenario = {
       assert.equal(await canvas.locator('.work-map-node[aria-pressed="true"]').count(), 0,
         "Closing details clears the shared task selection");
       assert.equal(new URL(page.url()).searchParams.get("todo"), null, "Closing details clears the task route");
+      await page.goBack({waitUntil: "domcontentloaded"});
+      await drawer.getByText(finalRequirement, {exact: true}).waitFor();
+      assert.equal(new URL(page.url()).searchParams.get("todo"), "todo_map_reserve");
+      assert.deepEqual(await drawer.locator(".personal-task-request .personal-md > p").allTextContents(), requestParagraphs,
+        "Back restores the same complete request through its native owner");
+      await page.goForward({waitUntil: "domcontentloaded"});
+      await drawer.waitFor({state: "hidden"});
+      assert.equal(new URL(page.url()).searchParams.get("todo"), null);
 
       const hiddenRegistry = `${authority.registry}.hidden`;
       const errorsBeforeLoss = desktop.errors.length;
