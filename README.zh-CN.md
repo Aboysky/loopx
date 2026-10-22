@@ -32,7 +32,7 @@ python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 重启 Agent 宿主，打开项目，再给 Codex 一个具体任务：
 
 ```text
-$loopx 处理 PR 上未解决的 review 意见，保持补丁易于评审
+$loopx 优化这个项目最慢的流程，对比方案并验证性能提升
 ```
 
 Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升级说明 ↓](#试用-loopx)
@@ -178,7 +178,7 @@ python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 例如，给 Agent 一个具体成果要求：
 
 ```text
-$loopx 处理 PR 上未解决的 review 意见，保持补丁易于评审
+$loopx 优化这个项目最慢的流程，对比方案并验证性能提升
 ```
 
 LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并设置宿主的循环。

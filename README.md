@@ -32,7 +32,7 @@ python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 Restart your Agent host, open your project, then give Codex a concrete task:
 
 ```text
-$loopx fix the open PR review feedback and keep the patch reviewable
+$loopx speed up this project's slowest workflow; compare approaches and verify the gains
 ```
 
 Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgrades ↓](#try-loopx)
@@ -200,7 +200,7 @@ Restart your Agent host, then start from a session opened on your project:
 For example, give your Agent a concrete outcome:
 
 ```text
-$loopx fix the open PR review feedback and keep the patch reviewable
+$loopx speed up this project's slowest workflow; compare approaches and verify the gains
 ```
 
 LoopX reuses existing project state or connects the project, plans the work as
