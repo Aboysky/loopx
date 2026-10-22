@@ -205,6 +205,18 @@ Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次�
 `selected_candidate`；写回仍重放相同分页并核对精确来源摘要。默认三条视图与
 独立的卡片数量上限保持不变。较大的结果页不授予执行权限，也不证明选题质量。
 
+`explore turn-context --goal-id <id> --agent-id <agent> --todo-id <todo-id>`
+按当前开放、归自己认领或尚未认领任务的 canonical 问题关联，优先展示其结论与量化反馈，
+不再只跟随独立分支规划器的建议。quota 与 managed turn 自动传入显式选择的任务。
+每个相关问题仍优先保留一条范围反证；其它结果继续分页可读，缺少关联不代表没有证据。
+该读取不启用能力、不修改规划分数、任务准入、claim/lease、配额或图谱。
+
+任务范围的 `result_page` 多携带 `todo_id`，后续命令也保留它。引用该页时，将它和
+`revision/offset/limit` 一同复制到原 `explore_review.result_pages`；主 review revision
+仍引用原有全局 basis。写回从同一可信来源重放任务关联与精确页面，不替换已准入的
+复盘上下文。关联变化、任务缺失/关闭或改由他人认领时，旧页面失效，应重新读取。
+未指定任务的全局读取和引用保持原行为；来源正确不证明模型已采用或效果提升。
+
 ## 可选 Todo 分支规划
 
 `loopx explore todo-branch-plan` 是面向探索目标的窄 opt-in harness：一次尝试多个看起来都合理的下一个 todo。它使用 CPU 分支预测类比 + DSpark 启发调度器：对 open agent todos 排序，估计分支置信度与预期证据单位，选择置信度调度的验证前缀，选一个 `primary` 分支加安全的 `speculative` 分支，拒绝声明写作用域与已选分支重叠的分支。

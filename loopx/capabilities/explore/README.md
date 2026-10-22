@@ -678,12 +678,19 @@ to one question:
 ```sh
 loopx explore turn-context --goal-id <id> --agent-id <agent> --result-limit 10
 loopx explore turn-context --goal-id <id> --agent-id <agent> --result-node <node-id> --result-limit 10
+loopx explore turn-context --goal-id <id> --agent-id <agent> --todo-id <todo-id>
 ```
 
 Page size accepts 1–20; every detail retains applicability and interpretation.
 Planning mode prioritizes one recent refutation per linked question before
-repeated findings on the same question. Evidence-only mode retains recency
-ordering. These reads do not alter planner scores, graph state, claims or quota.
+repeated findings on the same question. An explicit `--todo-id` prioritizes that
+open, own-or-unclaimed task's canonical question links and measurement groups
+ahead of the independent planner's suggestions. Quota and managed-turn callers
+carry their explicit task selection into this read automatically. Other results
+remain available through the same bounded pages; an absent link does not imply
+that no evidence exists. Without a task scope, evidence-only mode retains
+recency ordering. These reads do not alter planner scores, graph state, claims
+or quota, and neither mode is enabled by supplying a task id.
 The dashboard's saved-evidence reader also pages through history; the CLI
 options above control the agent context, not dashboard page size.
 
@@ -697,6 +704,15 @@ rejects changed/unavailable pages. This adds no read-side writes or execution
 permission. Node-filtered and planner-detail reads are not supported by this
 citation path. See the [stride contract](../../../docs/reference/protocols/goal-vision-replan-contract-v0.md#structured-stride-control)
 for the existing decision, budget and original-Turn recovery rules.
+
+A task-scoped `result_page` also includes `todo_id`; copy it alongside the three
+page coordinates when citing that page. Its `next_command` retains the scope.
+Writeback replays the current canonical task links and exact page without
+replacing the original global stride basis or changing its review revision.
+Changed links, a missing/closed task or another agent's claim invalidate the
+scoped page. Restart the read after correcting the scope. Unscoped global reads
+and citations retain their existing behavior. This improves evidence delivery;
+it does not prove that the Agent used it or improved an outcome.
 
 Each comparison card retains every linked outcome on that result page, up to
 the same 20-result bound. Expanding `--result-limit` therefore also makes the

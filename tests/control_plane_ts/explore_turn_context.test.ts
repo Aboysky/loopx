@@ -131,3 +131,62 @@ for (const limit of [3, 4, 20]) {
     assert.equal(Object.hasOwn(evidenceOnly.graph, "comparison_candidates"), false);
   });
 }
+
+test("explicit task links outrank an independent planner without hiding scoped counterevidence", () => {
+  const result = (id: string, node: string, status = "confirmed") => ({finding_id: id, node_id: node,
+    finding: id, status, summary: `Only ${id}'s recorded inputs.`, tags: ["writeback-result"],
+    measurements: [{metric: "quality", value: id === "current-negative" ? 4 : 8, unit: "points",
+      higher_is_better: true, comparison_scope: `validation:${node}`, input_revision: "inputs-v1",
+      evaluation_ref: "evaluator:v1", candidate_ref: `candidate:${id}`, evidence_ref: `result:${id}`}],
+    evidence_refs: [`result:${id}`]});
+  const findings = [result("other-new", "other"), result("current-new", "current"),
+    result("other-negative", "other", "refuted"), result("current-negative", "current", "refuted")];
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], graph_enabled: true,
+    harness_gate: {enabled: true}, result_limit: 1,
+    projection: {nodes: ["current", "other"].map(node_id => ({node_id, status: "exploring"})), findings},
+    plan: {selected_branches: [{todo_id: "todo_planned", actionable_open: true,
+      typed_evidence_audit: {requested_node_refs: ["other"]}}]}};
+  const global = projectExploreTurnContext(request);
+  const focus = {todo_id: "todo_chosen", focus_todo: {todo_id: "todo_chosen", role: "agent", status: "open",
+    claimed_by: "worker", explore_result_node_refs: ["current"]}};
+  const chosen = projectExploreTurnContext({...request, ...focus});
+  assert.equal((global.graph as JsonObject).writeback_results[0].finding_id, "other-negative");
+  assert.equal((chosen.graph as JsonObject).writeback_results[0].finding_id, "current-negative");
+  assert.equal((chosen.graph as JsonObject).measurement_feedback[0].node_id, "current");
+  assert.deepEqual((chosen.harness as JsonObject).selected_branches, (global.harness as JsonObject).selected_branches);
+  assert.deepEqual(chosen.boundary, global.boundary, "read focus grants no execution or selection authority");
+  const graph = chosen.graph as JsonObject;
+  assert.equal(graph.result_page.total, findings.length);
+  assert.ok(graph.result_page.next_command.includes("--todo-id"));
+  assert.ok(graph.result_page.next_command.includes("todo_chosen"));
+  const second = projectExploreTurnContext({...request, ...focus, result_offset: 1,
+    result_revision: graph.result_page.revision});
+  assert.equal((second.graph as JsonObject).writeback_results[0].finding_id, "current-new");
+  const all = projectExploreTurnContext({...request, ...focus, result_limit: 20}).graph as JsonObject;
+  assert.deepEqual(new Set(all.writeback_results.map((row: JsonObject) => row.finding_id)),
+    new Set(findings.map(row => row.finding_id)), "other findings remain available");
+  const source = {...chosen, graph: all};
+  const basis = projectStrideExploreBasis(source, "research", "worker")!;
+  const decision = {explore_review: {revision: basis.revision,
+    disposition: "used", considered_refs: ["current-negative"]}};
+  assert.equal(strideReviewMismatch(decision, {explore_basis: basis}), null);
+  const page = {revision: graph.result_page.revision, offset: 1, limit: 1, todo_id: "todo_chosen"};
+  assert.deepEqual(projectExploreTurnContext({...request, ...focus, review_pages: [page]}).review_pages[0].finding_refs,
+    ["current-new"]);
+  assert.deepEqual(projectExploreTurnContext({...request, review_pages: [page]}).review_pages, []);
+  assert.throws(() => projectExploreTurnContext({...request, ...focus, focus_todo: {
+    ...focus.focus_todo, explore_result_node_refs: ["other"]}, result_offset: 1,
+    result_revision: graph.result_page.revision}), /changed/);
+});
+
+test("task focus rejects missing, foreign and terminal sources and is inert when Explore is off", () => {
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], graph_enabled: true,
+    harness_gate: {enabled: false}, projection: {}, plan: {}, todo_id: "todo_chosen"};
+  const task = {todo_id: "todo_chosen", role: "agent", status: "open", claimed_by: "worker"};
+  for (const focus_todo of [null, {...task, todo_id: "todo_other"}, {...task, claimed_by: "peer"},
+    {...task, status: "done"}, {...task, role: "user"}]) {
+    assert.throws(() => projectExploreTurnContext({...request, focus_todo}), /Todo/);
+  }
+  const off = {...request, graph_enabled: false};
+  assert.deepEqual(projectExploreTurnContext(off), projectExploreTurnContext({...off, todo_id: null}));
+});
