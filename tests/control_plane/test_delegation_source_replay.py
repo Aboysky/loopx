@@ -79,3 +79,21 @@ def test_exact_prepared_replay_is_read_only_and_keeps_the_original_return(saved_
         "session_id": session["session_id"], "turn_id": turn["turn_id"],
     }
     assert not (Path(binding["workspace"]) / "host-invocations").exists()
+
+
+def test_chat_handoff_replay_reports_an_original_return_mismatch(saved_handoff):  # noqa: F811
+    _, worker, binding, (store, session, turn, request, _, _), operation = saved_handoff
+    row = _read(worker.path(operation))
+    row["conversation"] = {"session_id": "another-session", "turn_id": "another-turn"}
+    _write(worker.path(operation), row)
+    before = worker.path(operation).read_bytes()
+    answer = "The original scope remains in effect."
+    response = execution.handoff_response(worker.root, worker.registry,
+        session=session, turn=turn, response={"context_handoff": request, "message": answer},
+        source_authorized=lambda: True, execution_allowed=lambda: True, source_store=store)
+    assert response["context_handoff_receipt"]["status"] == "delivered"
+    assert response["context_execution"]["submitted"] is False
+    assert "status" not in response["context_execution"]
+    assert response["message"].startswith(answer + "\n\n")
+    assert worker.path(operation).read_bytes() == before
+    assert not (Path(binding["workspace"]) / "host-invocations").exists()
