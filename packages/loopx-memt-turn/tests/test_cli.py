@@ -15,7 +15,7 @@ def invoke(config, tmp_path, *arguments):
     path = tmp_path / "operator.json"
     path.write_text(json.dumps(asdict(config)))
     return subprocess.run([sys.executable, "-m", "loopx_memt_turn.cli", "--config", str(path), *arguments],
-                          input=json.dumps(turn()), text=True, capture_output=True, timeout=30)
+                          input=json.dumps(turn()), text=True, capture_output=True, timeout=30, cwd=config.workspace)
 
 
 def test_cli_returns_a_turn_candidate_through_real_sdk_and_http(config, provider, tmp_path):
@@ -72,3 +72,13 @@ def test_task_workspace_cannot_own_operator_configuration(config):
     path.write_text(json.dumps(asdict(config)))
     with pytest.raises(AdapterError, match="config_must_be_outside_workspace"):
         load_config(path)
+
+
+def test_cli_rejects_a_different_execution_workspace_before_provider_calls(config, provider, tmp_path):
+    path = tmp_path / "operator.json"
+    path.write_text(json.dumps(asdict(config)))
+    response = subprocess.run([sys.executable, "-m", "loopx_memt_turn.cli", "--config", str(path)],
+                              input=json.dumps(turn()), text=True, capture_output=True, timeout=30, cwd=tmp_path)
+    assert response.returncode == 1
+    assert json.loads(response.stdout)["error"] == "workspace_binding_mismatch"
+    assert provider.requests == []

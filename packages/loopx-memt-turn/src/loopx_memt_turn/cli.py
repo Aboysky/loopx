@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             from .host import run
 
+            if config.enabled and Path.cwd().resolve() != Path(config.workspace).resolve():
+                raise AdapterError("workspace_binding_mismatch")
             request = decode_document(sys.stdin.buffer.read(256_001))
             report = asyncio.run(run(request, config))
     except Exception as error:

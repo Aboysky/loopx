@@ -96,6 +96,9 @@ def config(tmp_path, provider):
     model_config = {"model_type": "memt_qwen3_5_moe", "memt": {}, "backbone_configs": {}}
     (tokenizer / "config.json").write_text(json.dumps(model_config))
     vocabulary = ["[UNK]", "[EOS]", provider.candidate, "not JSON", '{"result_kind":"wait"}']
+    vocabulary += [json.dumps({"result_kind": "validated_progress", "classification": "recorded",
+                              "next_action": "Validate the artifact.", "summary": summary})
+                   for summary in ("x" * 401, {"invalid": "type"})]
     vocabulary += [f"<tool_call><function=record_observation><parameter=observation>{text}</parameter></function></tool_call>"
                    for text in ("first", "one", "two")]
     codec = Tokenizer(models.WordLevel({text: index for index, text in enumerate(vocabulary)}, unk_token="[UNK]"))

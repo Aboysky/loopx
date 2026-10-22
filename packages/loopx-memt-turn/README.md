@@ -110,6 +110,8 @@ This previews the Turn. Supply an operator-authored validator that independently
 checks the real artifact, then add `--execute` to the reviewed command. Existing
 admission and permission requirements still apply. The adapter returns one
 `loopx_turn_result_v0` candidate; a successful model reply is not acceptance.
+Execution must start in the configured workspace; the normal Turn launcher sets
+that working directory. A mismatch fails before any provider calls.
 `fresh` creates a new execution session while explicitly restoring advisory
 native memory, not an old host conversation or its authority.
 

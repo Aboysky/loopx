@@ -7,6 +7,7 @@ import re
 from loopx.control_plane.turn_driver.host_candidate import (
     build_result, extract_turn_authority, parse_model_json, render_prompt,
 )
+from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
 from loopx.file_lock import exclusive_file_lock, LockAcquisitionPolicy, write_json_atomic
 
 from .config import AdapterError, Config, decode_document, digest
@@ -109,7 +110,11 @@ async def generate(session, tools, request: dict, config: Config) -> dict:
     candidate = parse_model_json(reply["answer"])
     if candidate is None:
         raise AdapterError("typed_candidate_required")
-    return build_result(request, candidate, host_name="MemT Nano")
+    result = build_result(request, candidate, host_name="MemT Nano")
+    plan = {"transaction": {"turn_key": request["turn_key"]}, "turn_envelope": request["turn_envelope"]}
+    if not validate_loopx_turn_host_result(plan, result)["ok"]:
+        raise AdapterError("invalid_typed_candidate")
+    return result
 
 
 async def execute(request: dict, config: Config, identity: dict) -> dict:

@@ -144,6 +144,15 @@ def test_invalid_or_truncated_output_never_becomes_a_snapshot(config, provider, 
     assert provider.snapshots == {}
 
 
+@pytest.mark.parametrize("summary", ["x" * 401, {"invalid": "type"}])
+def test_structurally_invalid_candidate_is_rejected_before_memory_export(config, provider, summary):
+    provider.candidate = json.dumps({"result_kind": "validated_progress", "classification": "recorded",
+                                    "next_action": "Validate the artifact.", "summary": summary})
+    with pytest.raises(AdapterError, match="invalid_typed_candidate"):
+        execute(config)
+    assert provider.snapshots == {}
+
+
 def test_receipt_is_not_a_transcript_or_credential_log(config, provider):
     execute(config)
     receipts = [json.loads(path.read_text()) for path in Path(config.state_dir).rglob("*.json")]
