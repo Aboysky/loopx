@@ -68,7 +68,8 @@ def _thread_id(file: Path) -> str:
 
 
 @pytest.mark.parametrize("case", ["bound", "sole", "multiple", "none", "ephemeral"])
-def test_pi_start_preserves_native_identity_authority(tmp_path, monkeypatch, case):
+@pytest.mark.parametrize("selected_goal", [False, True])
+def test_pi_start_preserves_native_identity_authority(tmp_path, monkeypatch, case, selected_goal):
     node = shutil.which("node")
     assert node, "Node.js >=22.22.3 is required for the shipped Pi adapter"
     project = tmp_path / "project"
@@ -116,7 +117,11 @@ def test_pi_start_preserves_native_identity_authority(tmp_path, monkeypatch, cas
         f"#!{sys.executable}\nimport json, sys\nfrom pathlib import Path\n"
         f"with Path({str(calls)!r}).open('a', encoding='utf-8') as f:\n"
         "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "from loopx.cli import main\nraise SystemExit(main())\n"
+        # Also exercise the canonical packet after the Goal selection step;
+        # this selects a Goal, never an Agent or a fabricated gate result.
+        "from loopx.cli import main\n"
+        f"extra = ['--goal-id', 'pi-test'] if {selected_goal!r} and 'start-goal' in sys.argv else []\n"
+        "raise SystemExit(main(sys.argv[1:] + extra))\n"
     ))
     monkeypatch.setenv("LOOPX_BIN", str(launcher))
     completed = subprocess.run([
