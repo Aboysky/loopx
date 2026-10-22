@@ -79,6 +79,29 @@ Native Goal continuation stays with Codex; blocked Goals are not automatically
 unblocked. Plain exec versus Goal app-server also changes transport; it does
 not isolate the continuation effect alone.
 
+Native worker receipts retain both the latest Turn status and Goal status.
+`native_goal_outcome` distinguishes `complete`, `blocked`, `paused`,
+`budget_exhausted`, `usage_limited`, `cancelled`, `failed`, and `unknown`.
+A failed Turn takes precedence over a blocked or complete Goal and exits nonzero;
+intentional blocking/pausing and normal budget exhaustion do not become execution
+failures. `ok` indicates a handled stop, never task acceptance. Only completion
+may enter the explicitly enabled continuation option below.
+
+Terminal errors retain a digest, an allowlisted native error variant and an
+optional structured HTTP status. Unrecognized errors remain unknown; message
+text is not parsed into a category or copied into the receipt. The existing
+`error_event_count` counts error notifications, not requests: a terminal event
+that repeats an error does not increment it. A later native continuation clears
+the terminal-error fields and may complete normally.
+
+The EdgeBench adapter carries this outcome through artifact collection into
+`runtime-receipt.json`. If a native Goal fails after execution starts, its
+`final_result.json` still retains native scores, with explicit `runtime_status`
+and `native_goal_outcome`; the presence of that file alone is not successful
+completion or result qualification. Ordinary non-native profile handling is
+unchanged. Adopt this behavior only for newly pinned attempts; frozen histories
+retain their original receipts and require explicit post-run classification.
+
 The optional `native_goal_continue: true` loop retains the original task's
 requirements and evaluation rules after completion. Its continuation prompt no
 longer requires a candidate to improve on an accepted best before submission.
