@@ -20,7 +20,7 @@ const reservation = createServer();
 await new Promise(accept => reservation.listen(0, "127.0.0.1", accept));
 const port = reservation.address().port;
 await new Promise(accept => reservation.close(accept));
-const child = spawn(python, ["-u", "examples/personal-workspace-browser/goal-outcome-backend.py", root, String(port), "--without-check-plan",
+const child = spawn(python, ["-u", "examples/personal-workspace-browser/goal-outcome-backend.py", root, String(port), "--without-check-plan", "--overview-readability",
   ...(process.env.LOOPX_GOAL_OUTCOME_ASSETS ? ["--assets-dir", process.env.LOOPX_GOAL_OUTCOME_ASSETS] : [])],
   {cwd: repoRoot, env: environment, stdio: ["ignore", "pipe", "pipe"]});
 let diagnostic = "", browser, page, releaseDelivery;
@@ -48,6 +48,7 @@ try {
   await waitForHttp(url);
   browser = await launchBrowser(loadPlaywright().chromium);
   page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+  await page.clock.install();
   await mkdir(output, {recursive: true});
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(statusUrl => {
@@ -91,15 +92,38 @@ try {
   await page.locator(".personal-goal-link").first().click();
   await page.getByRole("button", {name: "Overview", exact: true}).click();
   const outcomes = page.locator(".goal-outcomes");
+  await outcomes.waitFor();
+  await firstDelivery;
+  const changedReview = cli("inspect").goal_acceptance_contract.outcome_requirements.outcomes.find(item => item.id === "experience-0");
+  assert.ok(changedReview.requirements.some(item => item.agent_review?.basis_current === false),
+    "The fixture retains a genuinely invalidated native review");
+  assert.equal(await outcomes.locator(".goal-outcome-disclosure").count(), await outcomes.locator(".goal-outcome").count(),
+    "Every declared outcome has its own complete-body disclosure");
+  assert.equal(await outcomes.locator(".goal-outcome-disclosure[open]").count(), 0,
+    "A populated overview starts with whole outcome bodies closed");
+  assert.ok(await outcomes.locator(".goal-outcome:visible").count() <= 3,
+    "Long repeated requirements do not fill the overview before current work");
+  await page.screenshot({path: resolve(output, "default-desktop.png"), animations: "disabled"});
+  await page.screenshot({path: resolve(output, "default-whole-desktop.png"), animations: "disabled", fullPage: true});
+  await page.setViewportSize({width: 390, height: 844});
+  await page.screenshot({path: resolve(output, "default-narrow.png"), animations: "disabled"});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.setViewportSize({width: 1440, height: 1000});
   const expandAll = async () => {
     const more = outcomes.locator(":scope > .goal-outcomes-more");
-    if (await more.getAttribute("aria-expanded") === "false") await more.click();
+    if (await more.count() && await more.getAttribute("aria-expanded") === "false") await more.click();
+  };
+  const openOutcome = async region => {
+    const details = region.locator(":scope > .goal-outcome-disclosure");
+    if (await details.getAttribute("open") === null) {
+      await details.locator(":scope > summary").focus();
+      await page.keyboard.press("Enter");
+    }
   };
   await expandAll();
-  const openingGroup = outcomes.locator(".goal-outcome-status-group").filter({has: page.getByText("Retain the approved introduction", {exact: true})}).first();
-  if (await openingGroup.getAttribute("open") === null) await openingGroup.locator(":scope > summary").click();
+  const original = outcomes.locator(".goal-outcome").filter({has: page.getByRole("heading", {name: "Deliver a clear product tour", exact: true})});
+  await openOutcome(original);
   await outcomes.locator(".goal-overview-criteria").getByText("Retain the approved introduction", {exact: true}).waitFor();
-  await firstDelivery;
   assert.ok(deliverySnapshot?.acceptance, "Retain the real initial delivery snapshot before advancing the native owner");
   const evidence = page.locator(".goal-overview-evidence");
   assert.equal(await evidence.getAttribute("open"), null, "Secondary evidence starts collapsed without losing its reader");
@@ -119,11 +143,11 @@ try {
     "--expected-provider-revision", cli("inspect").provider_revision, "--execute");
   const initialCount = outcome().requirements.length;
   assert.equal(deliverySnapshot.acceptance.goal_acceptance_contract.outcome_requirements.outcomes.some(item => item.id === outcomeId), false);
-  const original = outcomes.locator(".goal-outcome").filter({has: page.getByRole("heading", {name: "Deliver a clear product tour", exact: true})});
   await original.getByText("Add a requirement", {exact: true}).click();
   await original.getByRole("button", {name: "Refresh result", exact: true}).click();
   const region = outcomes.locator(".goal-outcome").filter({has: page.getByRole("heading", {name: newOutcome.objective, exact: true})});
   await region.waitFor();
+  await openOutcome(region);
   const form = region.locator("form");
   await region.getByText("Add a requirement", {exact: true}).click();
   const text = form.locator("textarea");
@@ -158,6 +182,30 @@ try {
   };
   const draft = "Keep the conclusion understandable without prior context";
   await text.fill(draft);
+  await outcomes.locator(":scope > .goal-outcomes-more").click();
+  assert.equal(await outcomes.locator(":scope > .goal-outcomes-more").getAttribute("aria-expanded"), "false");
+  assert.equal(await text.isVisible(), true,
+    "An open outcome and its draft stay visible when the full collection collapses to the attention preview");
+  const scrollBefore = await text.evaluate(node => {
+    const positions = [];
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) positions.push(parent.scrollTop);
+    return positions;
+  });
+  const writesBeforePoll = requests.length;
+  const poll = page.waitForResponse(response => response.url().includes("/api/chat/goal-acceptance?") && response.request().method() === "GET");
+  await page.clock.fastForward(15_001);
+  await poll;
+  assert.equal(await text.inputValue(), draft, "Quiet updates preserve the unsent draft");
+  assert.notEqual(await region.locator(".goal-outcome-disclosure").getAttribute("open"), null,
+    "Quiet updates preserve the selected outcome");
+  assert.deepEqual(await text.evaluate(node => {
+    const positions = [];
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) positions.push(parent.scrollTop);
+    return positions;
+  }), scrollBefore, "Quiet same-source updates preserve the reading position");
+  assert.equal(requests.length, writesBeforePoll, "A background read does not check, refine or run a model");
+  assert.ok(cli("inspect").goal_acceptance_contract.outcome_requirements.outcomes.find(item => item.id === "experience-0")
+    .requirements.some(item => item.agent_review?.basis_current === false), "A fresh read does not validate the changed requirement basis");
   await interruptDelivery();
   assert.equal(await text.inputValue(), draft, "Unsubmitted draft survives delivery loading and error");
   assert.equal(requests.length, 0);
@@ -231,6 +279,7 @@ try {
   await refresh.click();
   await text.waitFor({state: "hidden"});
   await expandAll();
+  await openOutcome(region);
   await region.getByText("Add a requirement", {exact: true}).click();
   await text.fill("This pending requirement belongs to the original lifetime");
   rejectRefinement = true;
@@ -284,6 +333,7 @@ try {
   await refresh.click();
   await text.waitFor({state: "hidden"});
   await expandAll();
+  await openOutcome(region);
   await region.getByText("Add a requirement", {exact: true}).click();
   assert.equal(await text.inputValue(), "", "A reused Goal/outcome id cannot inherit another lifetime's pending request");
   assert.equal(await rebase.count(), 0, "The old request cannot be rebased into the successor lifetime");
@@ -311,8 +361,7 @@ try {
   await page.getByRole("option", {name: "Remote snapshot", exact: true}).click();
   await page.getByRole("heading", {name: "Remote handoff workspace", exact: true}).waitFor();
   await expandAll();
-  const remoteGroup = outcomes.locator(".goal-outcome-status-group").first();
-  if (await remoteGroup.getAttribute("open") === null) await remoteGroup.locator(":scope > summary").click();
+  await openOutcome(outcomes.locator(".goal-outcome").first());
   await outcomes.getByText("Only this remote source declaration", {exact: true}).waitFor();
   assert.equal(await outcomes.getByText(newOutcome.objective, {exact: true}).count(), 0,
     "The same Goal id in a remote source cannot consume the local acceptance cache");
