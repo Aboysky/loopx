@@ -863,13 +863,10 @@ def test_console_native_scheduler_followup_fails_closed_without_node(
 	"goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks",
 ])
 def test_global_read_preserves_empty_coverage_without_loading_full_cli(tmp_path, command):
-	registry, runtime, public = tmp_path / "registry.json", tmp_path / "runtime", tmp_path / "public"
+	registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
 	runtime.mkdir()
-	public.mkdir()
 	registry.write_text(json.dumps({"goals": [], "common_runtime_root": str(runtime)}))
 	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", command]
-	if command != "goal-portfolio":
-		argv.extend(["--scan-path", str(public)])
 	before = registry.read_bytes()
 	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
 	full = run_cli_main("loopx.cli", argv)
