@@ -44,12 +44,13 @@ def work(tmp_path):
 
 
 @pytest.fixture
-def provider():
+def provider(monkeypatch):
     path = (
         Path(__file__).resolve().parents[1]
         / "packages/loopx-media/src/loopx_media/images.py"
     )
-    spec = importlib.util.spec_from_file_location("image_provider_test", path)
+    monkeypatch.syspath_prepend(str(path.parents[1]))
+    spec = importlib.util.spec_from_file_location("loopx_media.images", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -192,6 +193,38 @@ def test_image_submit_once_retains_pixels_and_collects_damaged_local_output_with
     with Image.open(ws.file(ident, "generated.png")) as image:
         image.load()
         assert image.size == (1280, 720)
+
+
+def test_windows_image_journal_retains_cached_pixels_and_no_duplicate_post(
+    work, provider, monkeypatch
+):
+    from types import SimpleNamespace
+
+    journal = importlib.import_module("loopx_media.journal")
+    real_os, synced = journal.os, []
+
+    def sync(fd):
+        synced.append(fd)
+        real_os.fsync(fd)
+
+    def unsupported_directory(*_):
+        raise PermissionError(13, "Windows CRT cannot open a directory")
+
+    monkeypatch.setattr(journal, "os", SimpleNamespace(
+        name="nt", fsync=sync, open=unsupported_directory,
+        O_RDONLY=real_os.O_RDONLY, close=real_os.close, chmod=real_os.chmod,
+    ))
+    ws, calls = connect(monkeypatch, work, provider)
+    ident = ws.prepare(brief(), source_directory=ws.media.project)["image_id"]
+    assert ws.operate(ident, "submit", expected_revision=1)["status"] == "ready"
+    original = ws.file(ident, "original.png").read_bytes()
+    saved = json.loads((ws._bundle(ident) / "image-submission.json").read_text())
+    assert saved["plan_digest"] == ws.inspect(ident)["plan_digest"]
+    ws.operate(ident, "submit", expected_revision=1)
+    ws.file(ident, "generated.png").unlink()
+    assert ws.operate(ident, "collect", expected_revision=1)["status"] == "ready"
+    assert ws.file(ident, "original.png").read_bytes() == original
+    assert len(calls) == 1 and len(synced) >= 2
 
 
 def test_lost_provider_stdout_recovers_only_saved_response_and_ambiguous_post_never_repeats(

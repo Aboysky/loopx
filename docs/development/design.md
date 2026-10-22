@@ -81,13 +81,28 @@ Owner-facing state follows four rules:
   "executing", "running") requires an observed active worker, session or turn.
   A stored status, a registration or a count is not activity; unknown stays
   visibly unknown.
+  Aggregate mixed Agent lanes without letting one unreadable lane erase
+  another's observed activity. Distinguish a recent ended turn from execution.
+  Show missing coverage neutrally beside the Goal state, with each affected
+  Agent, host and read failure available through the shared contextual help.
+  A cadence miss is an older observation, not proof of a stopped worker.
 - **Group by responsibility.** Collaboration surfaces place work under the
   member, Agent or owner responsible for it, so one glance shows who is doing
   what and who is blocked. Work with no resolvable owner goes into an explicit
   "other" group; it is never dropped.
+  Keep the steward's request inventory discoverable in its existing header,
+  with one count and an in-place reader grouped by recipient. Counts describe
+  requests still needing follow-up, not distinct tasks or accepted outcomes.
+  Show an unavailable or partial count honestly; put full current briefs,
+  linked work, provenance and original conversations behind row expansion.
 - **Owner language first.** Primary copy uses the owner's words. Protocol ids,
   gate kinds, preview mechanics and executor profiles belong in a collapsed
   diagnostics disclosure.
+  Generated analysis follows the current interface language, including its
+  questions, explanations and limitations. Pass that language through the
+  analysis owner and cache identity; translating labels alone is insufficient.
+  Switching language is a read, never implicit model execution. Keep original
+  questions and quoted evidence available on demand, identified as originals.
 
 Review realistic populated, quiet, blocked, and unavailable states on desktop
 and mobile. Show before/after views, name what earns attention and what was
@@ -141,6 +156,22 @@ source, method and limitation paragraphs before adding another note.
   per-cell footnotes. On wide screens, use a compact value band so the related
   graph or result remains nearby; reflow on narrower screens. Merge optional
   source, method and cost material into the existing disclosure where practical.
+- In an expanded assessment, make items comparable before asking the owner to
+  read their evidence: one compact row per declared item, with its identity and
+  actual judgment. Show the shared interpretation once on demand. Expand an
+  individual row for its complete question, verbatim rationale and source links;
+  do not repeat a long question template, full rationale and button wall for
+  every item. Apply the same hierarchy to the deep-analysis reader: opening
+  analysis should show comparable episode rows, not expand every evidence
+  section. Show each rationale and its citations once within that episode.
+  Use declared identities rather than extracting guessed labels
+  from prose. Keep unknowns, exclusions and denominators visible at the metric,
+  and preserve keyboard and touch access to the full evidence.
+- When analysis has a successor, show one compact version/change summary and
+  the existing previous-version entry. Keep the new result separate from the
+  last valid result while pending or failed. Put detailed input differences and
+  changed judgments in the same optional disclosure; do not introduce another
+  setup page, repeated methodology paragraphs or automatic model execution.
 
 For example, research metrics can show “19 episodes · purposive sample ·
 uncalibrated” once, with a nearby explanation of yes/eligible counts and unknowns.
@@ -351,8 +382,8 @@ Do not mix marketing pills and application squares in the same control group.
 - Theme and language choices use the same two-column grid in every workspace theme.
 - Omit secondary descriptive lines under workspace page titles, navigation labels, and display choices. Preserve operational status, errors, and action outcomes.
 - Capability navigation shows the localized name; omit the secondary internal identifier. Show Goal/machine badges only in mixed-scope catalogs, not when the page already selects one scope. Configuration forms use shared spacing and a full-width switch row; optional capability and field explanations live in a collapsed configuration-help section. Keep activation consequences and read-only restrictions visible. Goal and machine editors share the enable-row JSON entry point. Goal JSON accepts only registered editable fields and invalidates the previous preview whenever edited; applying still requires a new reviewed preview.
-- Present one Capability Center with an explicit device-default / single-Goal target. Goal entry points preselect their Goal; global entry points never silently choose one. Target changes discard the previous editor draft and preview, fetch the selected configuration, and preserve the existing revision-checked write owner. Distinguish configuration ownership from the currently selected target and editor permission: show device-only, Goal-only or device-default-with-Goal-override from the capability contract, even for read-only capabilities; keep writability in the existing editor status, and never list a machine-only capability in Goal scope. Show the affected scope and effective source before changes; do not turn storage boundaries into competing navigation entries.
-- Keep Steward a first-level destination for the host steward executor/model/effort and runtime grant. Navigation follows purpose; configuration scope does not dictate navigation. See the [per-capability scope decisions](../architecture/rfcs/desktop-execution-frontends-v0.md#settings-ownership-and-scope).
+- Organize Settings by an explicit **this device / one Goal** target, then by purpose within that scope. Keep one Capability Center in each selected scope; its target comes from the shared settings header. Goal entry points preselect their Goal; the global entry opens device settings and never silently chooses the background Goal. Switching to Goal scope requires an explicit Goal choice. Keep that target visible while scrolling and on narrow screens; preserve scope, target and category on refresh/Back, and discard drafts and previews on target/source changes. Read-only or missing sources show their restriction instead of local management forms. Missing statistics remain unknown, never zero. Target changes discard the previous editor draft and preview, fetch the selected configuration, and preserve the existing revision-checked write owner. Distinguish configuration ownership from the currently selected target and editor permission: show device-only, Goal-only or device-default-with-Goal-override from the capability contract, even for read-only capabilities; keep writability in the existing editor status, and never list a machine-only capability in Goal scope. Show the affected scope and effective source before changes; do not turn storage boundaries into competing navigation entries.
+- Keep Steward a first-level destination within device settings for the host steward executor/model/effort and runtime grant. Device means this installation/runtime, not every machine. Describe effect timing per owner: new sessions, future Goals and live inherited capability defaults are different. Lark profile credentials and the all-connection directory belong to device settings; Goal settings show only that Goal’s connections, with no implicit target or private-steward conversation. See the [per-capability scope decisions](../architecture/rfcs/desktop-execution-frontends-v0.md#settings-ownership-and-scope).
 - Scope each settings catalog to its owner: Goal settings include only capabilities with Goal scope, including Goal-scoped read-only entries. Machine-only capabilities belong in machine or steward settings even when a shared API catalog also describes them.
 
 ### Forms

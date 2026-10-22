@@ -64,14 +64,13 @@ def brief():
 
 
 @pytest.fixture
-def provider():
+def provider(monkeypatch):
     path = (
         Path(__file__).resolve().parents[1]
         / "packages/loopx-media/src/loopx_media/generation.py"
     )
-    spec = importlib.util.spec_from_file_location(
-        "media_generation_provider_test", path
-    )
+    monkeypatch.syspath_prepend(str(path.parents[1]))
+    spec = importlib.util.spec_from_file_location("loopx_media.generation", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -189,6 +188,63 @@ def test_duplicate_paid_submission_and_crash_recovery_keep_one_provider_task(
     assert [method for method, _ in calls].count("POST") == 1
     with pytest.raises(ValueError, match="revision"):
         ws.operate(ident, "check", expected_revision=2)
+
+
+def test_windows_journal_keeps_file_durability_and_submits_once(
+    work, provider, monkeypatch
+):
+    from types import SimpleNamespace
+
+    journal = importlib.import_module("loopx_media.journal")
+    real_os, synced = journal.os, []
+
+    def sync(fd):
+        synced.append(fd)
+        real_os.fsync(fd)
+
+    def unsupported_directory(*_):
+        raise PermissionError(13, "Windows CRT cannot open a directory")
+
+    monkeypatch.setattr(journal, "os", SimpleNamespace(
+        name="nt", fsync=sync, open=unsupported_directory,
+        O_RDONLY=real_os.O_RDONLY, close=real_os.close, chmod=real_os.chmod,
+    ))
+    ws, _ = work
+    connect(monkeypatch, ws, provider)
+    calls = []
+
+    def api(method, *_):
+        calls.append(method)
+        return {"id": "cgt-windows-journal"}
+
+    monkeypatch.setattr(provider, "api", api)
+    ident = ws.prepare(brief(), source_directory=ws.media.project)["generation_id"]
+    assert ws.operate(ident, "submit", expected_revision=1)["status"] == "submitted"
+    saved = json.loads((ws._bundle(ident) / "submission.json").read_text())
+    assert saved["task_id"] == "cgt-windows-journal"
+    assert saved["plan_digest"] == ws.inspect(ident)["plan_digest"]
+    ws.operate(ident, "submit", expected_revision=1)
+    assert calls == ["POST"] and len(synced) >= 2
+
+
+def test_posix_journal_directory_sync_failure_is_not_silently_ignored(
+    tmp_path, provider, monkeypatch
+):
+    from types import SimpleNamespace
+
+    journal = importlib.import_module("loopx_media.journal")
+    real_os = journal.os
+
+    def unavailable_directory(*_):
+        raise PermissionError(13, "Synthetic POSIX durability failure")
+
+    monkeypatch.setattr(journal, "os", SimpleNamespace(
+        name="posix", fsync=real_os.fsync, open=unavailable_directory,
+        O_RDONLY=real_os.O_RDONLY, close=real_os.close,
+    ))
+    with pytest.raises(PermissionError, match="durability failure"):
+        provider.save(tmp_path / "journal.json", {"task_id": "cgt-preserved"})
+    assert json.loads((tmp_path / "journal.json").read_text())["task_id"] == "cgt-preserved"
 
 
 def test_ambiguous_post_is_durable_unknown_and_never_reposted(

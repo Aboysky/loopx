@@ -9,6 +9,7 @@ import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semant
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis} from "./stride_policy.ts";
+import {MATERIAL_DELIVERY_OUTCOMES} from "./delivery_outcome.ts";
 
 const CONTEXT_SCHEMA = "replan_context_v0";
 // Replan is an infrequent decision, not the ordinary guard's display window.
@@ -98,10 +99,12 @@ export function projectCoreGoal(value: unknown): JsonObject {
   for (const objective of [active, registered]) {
     if (objective != null && typeof objective !== "string") throw new EffectRuntimeRequestError("Goal objective must be text");
   }
-  const objective = active || registered || null;
   const acceptance = facts.acceptance_contract == null ? null
     : requireJsonObject(facts.acceptance_contract, "goal_acceptance_contract");
-  return {objective, objective_source: active ? "active_state" : registered ? "registry" : null,
+  const revised = objectOrNull(acceptance?.goal_objective);
+  const objective = revised ? requireNonEmptyString(revised.objective, "revised Goal objective") : active || registered || null;
+  return {objective, objective_source: revised ? "canonical_revision" : active ? "active_state" : registered ? "registry" : null,
+    ...(revised ? {objective_revision: revised.revision, objective_digest: revised.digest} : {}),
     objective_missing: objective === null, acceptance_contract: acceptance,
     ...(facts.goal_read_action == null ? {} : {
       read_action: requireNonEmptyString(facts.goal_read_action, "goal_facts.goal_read_action"),
@@ -229,6 +232,12 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
       }
       continue;
     }
+    // Reuse the delivery owner's recorded classification. A status/preparation
+    // writeback is still readable evidence, but cannot consume a cited result
+    // or create a new pending work result. Unknown legacy outcomes stay unknown.
+    // Material gaps remain eligible: this relation certifies neither successful
+    // execution nor scientific gain, and must preserve useful negative evidence.
+    if (!MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome)) continue;
     const todo = String(observationTodo(row));
     if (!origin.has(todo)) continue;
     const ref = "replan-evidence-" + digest(readableEvidenceRow(row));
@@ -250,7 +259,7 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
     unresolved: visible, recorded_followthrough_count: followed.length,
     recorded_followthrough: followed.slice(-6).reverse(),
     omitted_followthrough_count: Math.max(0, followed.length - 6),
-    guidance: "Resolve unresolved evidence even when a newer review has occurred. A cited result stays unresolved until later recorded work is linked through that decision's declared Todo. " +
+    guidance: "Resolve unresolved evidence even when a newer review has occurred. A cited result stays unresolved until a later material delivery is linked through that decision's declared Todo; surface-only and unknown outcomes do not consume it. " +
       "Recorded followthrough is an attributable history relation, not verified execution, applicability to a current candidate, or Goal gain. " +
       "Check the provider's exact candidate/input/result revision before adopting an outcome; retain valid negative and inconclusive evidence. Existing authority, stopping and settlement rules remain unchanged."};
 }
@@ -570,7 +579,12 @@ export function projectReplanContext(value: unknown): JsonObject {
       ? (obligation.triggers as JsonObject[]).find(trigger => trigger.progress_baseline)?.progress_baseline
       : null
   ) ?? null;
-  const frontier = {baseline, required_any_of: obligation ? requiredSemanticOutcomes(obligation) : []};
+  const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
+  // This context has not been attached yet. Project outcomes with its current
+  // effective strategy through the same owner used by requirements/writeback.
+  const frontier = {baseline, required_any_of: obligation ? requiredSemanticOutcomes({
+    ...obligation, replan_context: {stride_strategy: strideStrategy},
+  }) : []};
   const prefix = request.read_prefix === undefined ? "loopx" : requireNonEmptyString(request.read_prefix, "read_prefix");
   const groups = new Map<string, {row: JsonObject; count: number; first: unknown}>();
   for (const row of evidence) {
@@ -619,7 +633,6 @@ export function projectReplanContext(value: unknown): JsonObject {
     ? [String((row.progress_observation as JsonObject).fingerprint)] : []));
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
   const core = projectCoreGoal(request.goal_facts);
-  const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent && strideStrategy !== "off"
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;

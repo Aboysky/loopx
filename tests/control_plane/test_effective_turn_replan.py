@@ -33,16 +33,19 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
 )
 
 
-@pytest.mark.parametrize("threshold_override,device_count,threshold", [
-    (None, None, 6), (2, 3, 2), (None, 3, 3), (5, 6, 5), (None, 5, 5), (6, None, 6), (None, 6, 6),
+@pytest.mark.parametrize("threshold_override,device_count,threshold,declare_outcome", [
+    (None, None, 6, False), (None, None, 6, True), (2, 3, 2, False), (None, 3, 3, False),
+    (5, 6, 5, False), (None, 5, 5, False), (6, None, 6, False), (None, 6, 6, False),
 ])
 def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     tmp_path: Path, threshold_override: int | None, device_count: int | None,
-    threshold: int,
+    threshold: int, declare_outcome: bool,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     fixture = json.loads(registry.read_text())
     fixture["goals"][0]["quota"]["allowed_slots"] = threshold + 2
+    if declare_outcome:
+        fixture["goals"][0]["status"] = "active"
     registry.write_text(json.dumps(fixture))
     if device_count is not None:
         machine_registry = build_builtin_machine_configuration_registry()
@@ -78,6 +81,21 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     context = effective_turn_cadence_context(
         resolve_todo_replan_cadence_goal(goal, runtime), runtime,
     )
+    original_outcomes = None
+    if declare_outcome:
+        _initialize_fixture_authority(project, runtime)
+        rc, basis = _run_cli(registry, runtime, "goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+        assert rc == 0, basis
+        outcome_path = tmp_path / "ongoing-outcome.json"
+        outcome_path.write_text(json.dumps({"outcome_id": "ongoing-delivery", "owner_agent_id": AGENT_ID,
+            "objective": "Deliver the complete requested result", "todo_ids": [TODO_ID],
+            "requirements": [{"id": "complete", "description": "Meet the complete acceptance scope"}],
+            "source": {"ref": "request:complete-delivery", "summary": "Preserve the requested result across Turns"}}))
+        rc, declared = _run_cli(registry, runtime, "goal-acceptance", "refine", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--document", str(outcome_path), "--operation-id", "declare-ongoing-outcome",
+            "--expected-provider-revision", basis["provider_revision"], "--execute")
+        assert rc == 0, declared
+        original_outcomes = declared["goal_acceptance_contract"]["outcome_requirements"]
 
     def periodic():
         path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
@@ -189,6 +207,12 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     obligation = next_guard.get("autonomous_replan_obligation")
     assert obligation is not None, next_guard
     assert "periodic_review_due" in json.dumps(obligation)
+    if original_outcomes:
+        assert obligation["replan_context"]["core_goal"]["acceptance_contract"]["outcome_requirements"] == original_outcomes
+        assert original_outcomes["acceptance_gaps"] == [], "periodic review must include requirements covered by open work"
+    else:
+        assert obligation["replan_context"]["core_goal"]["acceptance_contract"] is None
+    assert any("even with open Todos" in line for line in next_guard["replan_action_packet"]["planning_guidance"])
     runs = [
         json.loads(line)
         for line in (runtime / "goals" / GOAL_ID / "runs" / "index.jsonl")
@@ -249,6 +273,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
             "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
         )
         assert rc == 0, envelope
+        assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
         assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
         assert envelope["writeback"]["settlement_plan"] == plan
     vision_path = tmp_path / "periodic-vision.json"
@@ -559,6 +584,31 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
          "--replan-obligation-id", next_obligation["obligation_id"], "--turn-instance-id", "stride-next-review",
          "--slots", "1", "--source", "heartbeat", "--execute")
+    # An unbound observation may name the declared work without claiming a Turn
+    # settlement. The public CLI rejects surface-only Turn settlement, but this
+    # ordinary status route must not consume the cited negative result either.
+    status_update = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--progress-work-item-id", next_successor["todo_id"], "--progress-result-class", "unchanged",
+        "--classification", "status_readback",
+        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "surface_only",
+        "--recommended-action", "The next probe remains planned; no new experiment has run.",
+        "--vision-summary", "The accepted source comparison is still pending; this is a status clarification only.",
+        "--no-global-sync", "--suppress-external-sinks")
+    status_run = json.loads(Path(status_update["json_path"]).read_text())
+    assert status_run["delivery_outcome"] == "surface_only"
+    assert status_run["agent_vision"], "the ordinary source must enter the causal history replay"
+    from loopx.control_plane.work_items.replan_context_codec import project_replan_context
+    from loopx.history import load_index_snapshot
+
+    context = project_replan_context(goal_id=GOAL_ID, agent_id=AGENT_ID,
+        runs=load_index_snapshot(runtime / "goals" / GOAL_ID / "runs/index.jsonl",
+                                 include_artifact_status=False).records,
+        history_newest_first=False, stride_strategy="evidence_conditioned_v1")
+    assert any(row["coverage_ref"] == status_run["progress_observation"]["fingerprint"]
+               for row in context["decision_followthrough"]["observations"])
+    pending = context["decision_followthrough"]["work_result_use"]
+    assert any(row["evidence_ref"] == ordinary_ref for row in pending["unresolved"])
+    assert not any(row["result_evidence_ref"] == ordinary_ref for row in pending["recorded_followthrough"])
     for index in range(2):
         turn = f"adopted-probe-{index}"
         guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,

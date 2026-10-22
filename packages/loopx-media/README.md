@@ -58,11 +58,42 @@ optional; other platforms require supplied audio or explicit silence.
 No cloud voice or game engine is bundled here. The bounded Ark video and image
 routes below are explicit and optional; neither is a render fallback.
 
-Excerpt and Blender layouts display the title and source boundary; nonempty
+The default excerpt and Blender layouts display the title and source boundary; nonempty
 `body` text is explicitly refused. Preserve a needed qualifier in those visible
 fields, a separate title scene or timed captions before preparing a new revision.
 The renderer also refuses a stale/direct request with unsupported body text;
 it cannot return ready while silently dropping that text.
+
+## Picture framing
+
+For a source-led composition, an Agent can set `framing: "full_frame"` on an
+image/video excerpt or Blender shot. Version 0.3.0 fits the complete picture
+without cropping and keeps its source boundary in a separate strip below it.
+The studio header, drawn shot title and progress bar are omitted; the title
+remains in the timeline/source readback. Include needed titles in the artwork,
+a title shot or timed captions. Each shot can choose independently. Omitted
+framing or `"editorial"` keeps the original canonical plan and layout.
+
+Use the explicit package upgrade/reinstall and extension upgrade/doctor route
+below for an existing provider. The core refuses full-frame readiness when an
+older renderer omits its framing readback. Retry the unchanged plan after the
+upgrade. The workbench displays the choice and retains its existing render,
+cancel, retry and verified-download journey. To roll back the composition,
+prepare a new revision without framing and render it. No global setting,
+source classification or publication authority changes. See the
+[bilingual contract](../../docs/reference/protocols/content-ops-media-v0.md#per-shot-picture-framing).
+
+中文：0.3.0 在原 content-ops 镜头中加入可选“大画面”构图。素材保持完整比例，
+来源说明另置底栏；需要观众看到的标题由素材、标题镜头或字幕承载。Agent 准备
+分镜，工作台沿原入口制作和查看。已有安装应显式升级可选包及 manifest 并运行
+doctor；移除字段、保存新修订并重制即可恢复原构图。默认计划和发布边界不变。
+
+Public synthetic packaged-workbench captures (macOS, source qualification;
+not an installed-App or comprehension claim):
+
+| Editorial | Full frame | Narrow, scrolled to movie |
+| --- | --- | --- |
+| ![Editorial](examples/framing/editorial-desktop.png) | ![Full frame](examples/framing/full-frame-desktop.png) | ![Narrow](examples/framing/full-frame-narrow.png) |
 
 ## Optional Blender scenes
 
@@ -250,11 +281,12 @@ Token usage returned by the service is shown separately. Read actual account
 charges when a complete financial total is required. Parameters belong in the
 structured plan; Ark's weak prompt parameter suffixes are refused.
 
-![Generated footage in the content-ops workbench](docs/footage-after-desktop.png)
+![Versioned works in the Goal artifact view](docs/workspace-after-desktop.png)
 
-Packaged author fixture with synthetic source frames and generated footage.
-The [390px view](docs/footage-after-phone.png) retains the same controls;
-[downloads remain available after scrolling the detail](docs/footage-phone-download.png).
+Packaged Goal artifact view with synthetic local works, using the real backend.
+The [390px view](docs/workspace-after-narrow.png) keeps preview and download
+with the requested work. This fixture checks delivery mechanics; it does not
+qualify live generation or creative quality.
 
 In **Goal → Files → Content artifacts**, the same workbench
 shows the prepared footage, external-upload/usage consequence, submit button,
@@ -333,16 +365,13 @@ illustration must not be presented as a recorded product or benchmark trace.
 Disabling the same extension stops new image/video effects and keeps saved
 results readable. No separate image service or settings owner is introduced.
 
-![Image workbench with a synthetic saved-response fixture](docs/image-after-desktop.png)
-
-Packaged workbench with a disposable Goal and synthetic HTTP response using a
-locally rendered poster. This demonstrates saved-response collection and
-download, **not live Seedream output or creative acceptance**. The
-[390px entry view](docs/image-after-phone.png) and
-[scrolled download view](docs/image-phone-download.png) use the same backend.
-[Unavailable credentials](docs/image-unavailable-desktop.png) retain the draft;
-an [unconfirmed external request](docs/image-unknown-desktop.png) has no paid
-resubmit control.
+Images use the same Goal artifact view and backend as the video example above.
+The disposable saved-response fixture uses a locally rendered poster to check
+collection and download, **not live Seedream output or creative acceptance**.
+Unavailable credentials retain the draft; an unconfirmed external request has
+no paid resubmit control. [Unavailable Goal acceptance information](docs/workspace-checks-unavailable-narrow.png)
+remains an explicit gap beside the works, rather than becoming media-owned
+acceptance state.
 
 Ark's DELETE both cancels queued work and erases finished task records, without
 a documented atomic queued-only precondition. The provider therefore retains

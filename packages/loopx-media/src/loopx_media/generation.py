@@ -21,6 +21,8 @@ from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 from PIL import Image
 
+from .journal import save
+
 BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 MODEL = "doubao-seedance-2-5-260628"
 REMOTE_STATES = {"queued", "running", "succeeded", "failed", "cancelled", "expired"}
@@ -29,21 +31,6 @@ REMOTE_STATES = {"queued", "running", "succeeded", "failed", "cancelled", "expir
 def sha(path: Path) -> str:
     with path.open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def save(path: Path, value: dict) -> None:
-    # Provider owns its journal only, never the core record or authority state.
-    temp = path.with_suffix(".tmp")
-    with temp.open("w", encoding="utf-8") as output:
-        json.dump(value, output, ensure_ascii=False)
-        output.flush()
-        os.fsync(output.fileno())
-    temp.replace(path)
-    fd = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 class NoRedirect(HTTPRedirectHandler):

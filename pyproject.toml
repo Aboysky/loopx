@@ -30,17 +30,24 @@ public-source-reader = [
   "mcp==1.30.0",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
-  "pillow>=11,<13",
+  "pillow>=11,<14",
 ]
 deepseek-harness = [
   "deepseek-harness-sdk==0.1.5rc1",
+]
+# Selected unit tests only; integration, lint and full-suite validation use test.
+test-core = [
+  "distlib>=0.3.9,<1; sys_platform == 'win32'",
+  "jsonschema>=4.23,<5",
+  "pyyaml>=6,<7",
+  "pytest>=9.0.3,<10",
 ]
 test = [
   "distlib>=0.3.9,<1; sys_platform == 'win32'",
   "docker==7.2.0",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
-  "pillow>=11,<13",
+  "pillow>=11,<14",
   "jsonschema>=4.23,<5",
   "mcp==1.30.0",
   "pyyaml>=6,<7",

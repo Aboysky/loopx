@@ -14,6 +14,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from PIL import Image
 
+from .journal import save as save_journal
+
 BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 MODEL = "doubao-seedream-5-0-pro-260628"
 MAXIMUM = 32 * 1024 * 1024
@@ -25,18 +27,7 @@ def sha(path: Path) -> str:
 
 
 def save(path: Path, value: dict) -> None:
-    temporary = path.with_suffix(".tmp")
-    with temporary.open("w", encoding="utf-8") as output:
-        os.chmod(temporary, 0o600)
-        json.dump(value, output)
-        output.flush()
-        os.fsync(output.fileno())
-    temporary.replace(path)
-    fd = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    save_journal(path, value, private=True, ensure_ascii=True)
 
 
 def available() -> bool:

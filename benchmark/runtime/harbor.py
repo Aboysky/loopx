@@ -17,6 +17,7 @@ from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
 from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
@@ -73,11 +74,18 @@ class BenchmarkCodex(CodexOffline):
         turn_envelope=False,
         native_goal_continue=False,
         task_objective=None,
+        execution_observation=None,
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
         defer_codex_home=False,
         **kwargs,
     ):
+        if "research_loop" in kwargs:
+            raise ValueError(
+                "research_loop has been removed; remove it from the adapter kwargs. "
+                "Use ordinary Goal/Todo planning, choose stride_strategy independently, "
+                "and select execution_observation='local_probe' only when needed."
+            )
         if isinstance(validation_command, str):
             raise ValueError("validation_command must be an argv list, not shell text")
         self.execution = Execution(
@@ -121,7 +129,15 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("planning_horizon_goal must be a boolean")
             if not self.execution.uses_loopx:
                 raise ValueError("planning_horizon_goal requires a LoopX execution mode")
-        self.planning_horizon_goal = planning_horizon_goal
+        self.planning_horizon_goal = (
+            DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
+            else planning_horizon_goal
+        )
+        from .research_probe import resolve_execution_observation
+
+        self.execution_observation = resolve_execution_observation(execution_observation)
+        if self.execution_observation is not None and self.execution.mode != "heartbeat":
+            raise ValueError("execution_observation requires heartbeat execution")
         self.checkpoint_request_path = None
         self._checkpoint_declaration = None
         if checkpoint_request is not None:
@@ -147,8 +163,7 @@ class BenchmarkCodex(CodexOffline):
         if task_objective is not None and (not isinstance(task_objective, str)
                                           or not task_objective.strip()):
             raise ValueError("Task objective must be a non-empty string")
-        self.task_objective = (task_objective if task_objective is not None else
-                              "Complete the current benchmark task through validated LoopX Todos.")
+        self.task_objective = task_objective
         super().__init__(*args, **kwargs)
 
     def _turn_envelope_receipt(self) -> dict:
@@ -327,6 +342,12 @@ class BenchmarkCodex(CodexOffline):
                 raise RuntimeError("LoopX doctor returned invalid JSON") from exc
             if doctor_payload.get("ok") is not True:
                 raise RuntimeError(f"LoopX doctor failed: {doctor_payload}")
+            if self.execution_observation is not None:
+                wrapper = (f"#!/bin/sh\nexec env PYTHONPATH={shlex.quote(_SRC)} "
+                           f"{_PYTHON}/bin/python3 -m benchmark.runtime.research_probe \"$@\"\n")
+                await self.exec_as_agent(environment,
+                    command=f"printf %s {shlex.quote(wrapper)} > {_PROFILE}/bin/loopx-research-probe; "
+                            f"chmod 0755 {_PROFILE}/bin/loopx-research-probe", env=self._profile_env())
 
         receipt = {
             "loopx_commit": actual_commit,
@@ -335,6 +356,8 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
+            **({"execution_observation": self.execution_observation}
+               if self.execution_observation is not None else {}),
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
             "home_scope": "trial",
@@ -442,7 +465,8 @@ class BenchmarkCodex(CodexOffline):
                     "--goal-id",
                     self.goal_id,
                     "--objective",
-                    self.task_objective,
+                    # Phase feedback can replace task.md, but not the original Goal.
+                    self.task_objective or instruction.strip(),
                     "--goal-doc",
                     _TASK_DOC,
                     "--adapter-kind",
@@ -506,8 +530,8 @@ class BenchmarkCodex(CodexOffline):
             raise RuntimeError(
                 f"replan cadence readback mismatch for {key}: expected {expected}, got {configured!r}"
             )
-        actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal", False)
-        if actual_horizon != (self.planning_horizon_goal or False):
+        actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal")
+        if type(actual_horizon) is not bool or actual_horizon != self.planning_horizon_goal:
             raise RuntimeError("planning_horizon_goal readback mismatch")
         strategy = configured_state.get("execution_profile", {}).get("stride_strategy", "off")
         if strategy != (self.stride_strategy or "off"):
@@ -582,6 +606,8 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_SHARED_SKILLS": _SHARED_SKILLS,
                 "LOOPX_EXECUTION_MODE": self.execution.mode,
                 "LOOPX_TASK_ENTRY": self.execution.task_entry,
+                **({"LOOPX_EXECUTION_OBSERVATION": self.execution_observation}
+                   if self.execution_observation is not None else {}),
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),

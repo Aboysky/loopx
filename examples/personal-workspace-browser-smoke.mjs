@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
+import {completedHistoryIsolationScenario} from "./personal-workspace-browser/completed-history-isolation.mjs";
+import {researchWorkerReadbackScenario} from "./personal-workspace-browser/research-worker-readback.mjs";
 import { zcodeGoalScenario } from "./personal-workspace-browser/zcode-goal.mjs";
 import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
 import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
@@ -102,6 +104,7 @@ scenarioCatalog.push(conversationImageRequestScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
 scenarioCatalog.push(monitorReadbackScenario);
 scenarioCatalog.push(blockedReasonReadbackScenario);
+scenarioCatalog.push(researchWorkerReadbackScenario);
 scenarioCatalog.push(turnStepsScenario);
 scenarioCatalog.push(goalWorkMapScenario);
 scenarioCatalog.push(goalMastheadScenario);
@@ -136,6 +139,7 @@ scenarioCatalog.push(firstGoalHomeLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
+scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

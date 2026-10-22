@@ -9,6 +9,7 @@ import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
+import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 
 type Selection = {nodes: string[]; day: string | null};
 type Lens = "timeline" | "graph";
@@ -75,9 +76,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const outcomeCopy: Record<string, string> = zh ? {replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定"} : {replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human"};
   const findingBody = (finding: ExploreHistoryEvent) => {
     const sections = parseExploreFindingSections(finding.summary);
-    if (!sections) return <p>{finding.summary}</p>;
-    const decision = sections.decision;
-    return <dl className="research-finding-sections">
+    const decision = sections?.decision;
+    const execution = finding.execution_observation;
+    const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
+    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{sections ? <dl className="research-finding-sections">
       <dt>{sectionCopy.observation}</dt><dd>{sections.observation}</dd>
       {decision ? <>
         <dt>{zh ? "决策" : "Decision"}</dt><dd><b className={`research-outcome is-${decision.outcome}`}>{outcomeCopy[decision.outcome] ?? decision.outcome}</b></dd>
@@ -85,10 +87,20 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </> : <><dt>{sectionCopy.interpretation}</dt><dd>{sections.interpretation}</dd></>}
       <dt>{sectionCopy.applicability}</dt><dd className="is-muted">{sections.applicability}</dd>
       <dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd>
-    </dl>;
+    </dl> : <p>{finding.summary}</p>}{execution ? <details><summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
+      <dl className="research-finding-sections">
+        <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
+        {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}
+        <dt>{zh ? "运行秒数 / 上限秒数" : "Elapsed / limit seconds"}</dt><dd>{measured(execution.elapsed_seconds)} / {measured(execution.limit_seconds)}</dd>
+        <dt>{zh ? "搜索次数" : "Search iterations"}</dt><dd>{measured(execution.search_iterations)}</dd>
+        <dt>{zh ? "结束原因" : "Termination reason"}</dt><dd>{measured(execution.stop_reason)}</dd>
+        <dt>{zh ? "执行候选 SHA-256" : "Executed candidate SHA-256"}</dt><dd><code>{String(execution.candidate_sha256)}</code></dd>
+        {execution.result_ref ? <><dt>{zh ? "该候选的结果引用" : "Result for this candidate"}</dt><dd><code>{String(execution.result_ref)}</code></dd></> : null}
+      </dl><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p>
+    </details> : null}</>;
   };
   const findingElement = (finding: ExploreHistoryEvent) => <div className="research-recorded-finding" key={finding.event_id}><strong>{finding.title}</strong><small>{timeLabel(finding.recorded_at)} · {zh ? "来源标记" : "Source label"} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>{findingBody(finding)}{finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}</div>;
-  const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{stateLabel(event.status)} · {event.title}{event.summary ? ` — ${event.summary}` : ""}</span>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
+  const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{stateLabel(event.status)} · {event.title}{event.summary ? ` — ${event.summary}` : ""}</span>{event.measurements ? <ExploreMeasurements measurements={event.measurements} zh={zh}/> : null}{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
 
   useEffect(() => {
     const pop = () => setSelection(selectedFromUrl(goalId));
@@ -136,6 +148,12 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     catch (failure) {return {value: null, error: String(failure)};}
   }, [read.events, goalId]);
   const value = history.value;
+  const measurementFeedback = value?.measurementFeedback ?? [];
+  const measurementSummary = (nodeId: string) => {
+    const feedback = measurementFeedback.filter(item => item.node_id === nodeId);
+    return feedback.length ? <ExploreMeasurements title={zh ? "最近记录与历史最佳" : "Latest recorded and historical best"}
+      measurements={feedback.map(item => item.latest.measurement)} feedback={feedback} zh={zh}/> : null;
+  };
   const grouped = useMemo(() => groupUnlinkedHistoryQuestions(value?.nodes ?? [], value?.edges ?? []), [value]);
   const layout = useMemo(() => layoutExploreHistory(grouped.nodes, value?.edges ?? []), [grouped, value]);
   const timeline = useMemo(() => value ? buildExploreTimeline(value.nodes, value.edges, value.events) : null, [value]);
@@ -212,11 +230,15 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
               return <path key={`parent:${item.node.id}`} className="is-grouping" d={`M${parent.x + 206},${parent.y + 47} C${parent.x + 226},${parent.y + 47} ${item.x - 20},${item.y + 47} ${item.x},${item.y + 47}`} />;
             })}
           </svg>
-          {layout.map(({node, x, y}) => <button key={node.id} type="button" className={`research-history-node is-${node.latest.status}${selection.nodes.includes(node.id) ? " is-selected" : ""}`}
+          {layout.map(({node, x, y}) => {
+            const measured = measurementFeedback.find(item => item.node_id === node.id);
+            return <button key={node.id} type="button" className={`research-history-node is-${node.latest.status}${selection.nodes.includes(node.id) ? " is-selected" : ""}`}
             style={{left: x, top: y}} aria-pressed={selection.nodes.includes(node.id)} aria-label={`${node.latest.title} · ${stateLabel(node.latest.status)}`} onClick={() => choose(node.id)}>
             <span className="research-node-meta">{node.latest.node_kind === "experiment" ? <FlaskConical size={13} aria-hidden/> : <Circle size={12} aria-hidden/>}{kindLabel(node.latest.node_kind)}<small>{stateLabel(node.latest.status)}</small></span>
-            <strong>{node.latest.title}</strong><span className="research-node-count"><time>{timeLabel(node.updates[0]?.recorded_at)}</time>{node.updates.length > 1 ? ` · ${node.updates.length} ${copy.changes}` : ""}{node.findings.length ? ` · ${node.findings.length} ${copy.findings}` : ""}</span>
-          </button>)}
+            <strong>{node.latest.title}</strong>{measured ? <span className="research-node-count" title={`${measured.metric} (${measured.unit}) · ${measured.comparison_scope} · ${measured.evaluation_ref}`}>
+              {measured.metric} {formatExploreMeasurementValue(measured.latest.measurement.value, zh)} · best {formatExploreMeasurementValue(measured.best?.value ?? null, zh)} {measured.higher_is_better ? "↑" : "↓"}
+            </span> : <span className="research-node-count"><time>{timeLabel(node.updates[0]?.recorded_at)}</time>{node.updates.length > 1 ? ` · ${node.updates.length} ${copy.changes}` : ""}{node.findings.length ? ` · ${node.findings.length} ${copy.findings}` : ""}</span>}
+          </button>})}
           {grouped.groups.map((group, index) => <button type="button" key={`day:${group.day}`} className={`research-history-node research-history-group${selectedGroup === group ? " is-selected" : ""}`} style={{left: (index % 4) * 230 + 24, top: clusterY + Math.floor(index / 4) * 124}}
             aria-pressed={selectedGroup === group} onClick={() => select({nodes: [], day: group.day})}>
             <span className="research-node-meta"><Circle size={12} aria-hidden/>{zh ? "未关联问题" : "Unlinked questions"}</span>
@@ -228,6 +250,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p>
         <h3>{selected.latest.title}</h3><p>{selected.latest.summary || (zh ? "此节点尚无详细说明。" : "No detail was recorded for this node.")}</p>
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
+        {measurementSummary(selected.id)}
         <h4>{copy.evidence}</h4>
         {selected.findings.length ? selected.findings.map(findingElement) : <p>{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p>}
         <h4>{copy.versions}</h4>{selected.latest.evidence_refs.length ? selected.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : <p>{zh ? "产物版本与来源引用未记录。" : "Artifact version and source references were not recorded."}</p>}
@@ -238,6 +261,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       {selectedMembers?.length ? <div className="research-history-detail" ref={detail} role="region" aria-label={selectedGroup ? (zh ? "按日期收纳的未关联问题" : "Unlinked questions by date") : (zh ? "相邻研究项的全部记录" : "All records for nearby research items")} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); choose("", false); graph.current?.focus();}}}>
         <h3>{selectedGroup ? `${selectedGroup.day || copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
         {selectedMembers.map(node => <article className="research-history-group-member" key={node.id} data-research-node={node.id}><h4>{node.latest.title}</h4><p>{stateLabel(node.latest.status)} · {node.latest.summary}</p>{node.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
+          {measurementSummary(node.id)}
           {node.findings.map(findingElement)}
           {updateRecords(node.revisions)}
         </article>)}

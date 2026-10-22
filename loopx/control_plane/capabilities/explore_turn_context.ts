@@ -3,9 +3,11 @@ import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
-import {normalizeExploreResultPages} from "./explore_result_page.ts";
+import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
+import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
@@ -110,12 +112,41 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const command = (...args: string[]) => [...route, "explore", ...args, "--goal-id", goal];
   const resultLimit = requireInteger(params.result_limit ?? 3, "result_limit");
   const resultOffset = requireInteger(params.result_offset ?? 0, "result_offset");
-  if (resultLimit < 1 || resultLimit > 20 || resultOffset < 0) {
+  if (resultLimit < 1 || resultLimit > EXPLORE_RESULT_PAGE_MAX || resultOffset < 0) {
     throw new EffectRuntimeRequestError("Use result_limit 1..20 and a nonnegative result_offset");
   }
   const resultNode = params.result_node == null ? null : requireNonEmptyString(params.result_node, "result_node");
+  const measurementFeedback = projectExploreMeasurementFeedback(findings)
+    .filter(item => resultNode === null || item.node_id === resultNode)
+    .sort((a, b) => Number(selectedRefs.has(b.node_id)) - Number(selectedRefs.has(a.node_id)));
   const resultRows = resultNode == null ? writebackResults : writebackResults.filter(row => row.node_id === resultNode);
   const nodeById = new Map(nodes.map(node => [node.node_id, node]));
+  // Bind current Todo links to the results on this page. Include the full
+  // planner's nonselected branches: a heuristic/batch budget cannot prevent
+  // the Agent from comparing a lower-ranked method. This grants no claim,
+  // lease, quota or execution permission; their existing owners still apply.
+  const comparisonCandidates = (page: JsonObject[], limit: number): JsonObject => {
+    if (!harness) return {};
+    const linkedCandidates = [...branches, ...rejected].flatMap(branch => {
+      if (typeof branch.todo_id !== "string" || !PLANNING_TODO_ID.test(branch.todo_id)
+        || branch.actionable_open !== true || branch.claimed_by && branch.claimed_by !== agent
+        || branch.typed_evidence_audit == null) return [];
+      const audit = requireJsonObject(branch.typed_evidence_audit, "Explore evidence audit");
+      const linked = new Set(requireStringArray(audit.requested_node_refs ?? [], "Explore node refs")
+        .filter(ref => nodeById.has(ref)));
+      // The explicit page already bounds these results. A second three-row
+      // cap would display findings that the same page cannot bind at writeback.
+      const outcomes = page.filter(row => linked.has(String(row.node_id)));
+      return outcomes.length ? [{todo_id: branch.todo_id, outcomes}] : [];
+    });
+    if (!linkedCandidates.length) return {};
+    return {
+      comparison_candidates: linkedCandidates.slice(0, limit).map(card => ({todo_id: card.todo_id,
+        outcomes: card.outcomes.map(row => ({node_id: row.node_id, finding_id: row.finding_id,
+          source_sha256: createHash("sha256").update(JSON.stringify(row)).digest("hex")}))})),
+      omitted_comparison_candidates: Math.max(0, linkedCandidates.length - limit),
+    };
+  };
   const relationsByNode = new Map<unknown, JsonObject[]>();
   for (const edge of rows(projection.edges)) {
     for (const id of new Set([edge.from_node, edge.to_node])) {
@@ -141,6 +172,10 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   };
   const resultRevision = createHash("sha256").update(JSON.stringify([
     goal, agent, resultNode, resultRows, resultRows.map(currentQuestion),
+    // Manual findings participate in feedback too, even without a writeback
+    // tag. Bind every compared source before paging either derived view.
+    ...(measurementFeedback.length ? [findings.filter(row => row.measurements !== undefined
+      && (resultNode === null || row.node_id === resultNode))] : []),
   ])).digest("hex");
   if (params.result_revision != null && params.result_revision !== resultRevision) {
     throw new EffectRuntimeRequestError("Explore evidence changed; restart at result_offset 0 without result_revision");
@@ -157,11 +192,20 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       // context/read route; the replan owner refuses any unresolved citation.
       return [];
     }
-    return [{...page, finding_refs: resultRows.slice(Number(page.offset), Number(page.offset) + Number(page.limit))
-      .map(row => row.finding_id)}];
+    const found = resultRows.slice(Number(page.offset), Number(page.offset) + Number(page.limit));
+    return [{...page, finding_refs: found.map(row => row.finding_id),
+      ...comparisonCandidates(found, Number(page.limit))}];
   });
+  const visibleComparisons = comparisonCandidates(visibleResults, resultLimit);
   const remainingResults = Math.max(0, resultRows.length - resultOffset - visibleResults.length);
+  const visibleMeasurements = measurementFeedback.slice(resultOffset, resultOffset + resultLimit);
+  const remainingMeasurements = Math.max(0, measurementFeedback.length - resultOffset - visibleMeasurements.length);
   const resultRead = (...args: string[]) => command("turn-context", "--agent-id", agent, ...args);
+  const nextRead = (remaining: number, count: number) => remaining ? resultRead(
+    "--result-offset", String(resultOffset + count),
+    "--result-limit", String(resultLimit), "--result-revision", resultRevision,
+    ...(resultNode == null ? [] : ["--result-node", resultNode]),
+  ) : null;
   const writeback = exploreResultWritebackAffordance();
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
@@ -178,16 +222,14 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       writeback_results: visibleResults
         .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
           summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
+          ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
+          ...(row.measurements ? {measurements: row.measurements} : {}),
           ...currentQuestion(row),
           ...findingDigest(row, findingSources)})),
       result_page: {
         total: resultRows.length, offset: resultOffset, limit: resultLimit,
         remaining: remainingResults, revision: resultRevision,
-        next_command: remainingResults ? resultRead(
-          "--result-offset", String(resultOffset + visibleResults.length),
-          "--result-limit", String(resultLimit), "--result-revision", resultRevision,
-          ...(resultNode == null ? [] : ["--result-node", resultNode]),
-        ) : null,
+        next_command: nextRead(remainingResults, visibleResults.length),
         node_command_template: resultRead("--result-node", "<node-id>", "--result-limit", "10"),
       },
       omitted_nodes: Math.max(0, nodes.length - 3),
@@ -202,6 +244,17 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       optional_question_evolution_example: writeback.optional_question_evolution_example,
       result_writeback_guidance: writeback.guidance,
       result_attachment_template: writeback.attachment_template,
+      optional_measurement_example: writeback.optional_measurement_example,
+      ...(measurementFeedback.length ? {
+        measurement_feedback: visibleMeasurements,
+        omitted_measurement_feedback: remainingMeasurements,
+        measurement_feedback_page: {
+          total: measurementFeedback.length, offset: resultOffset, limit: resultLimit,
+          remaining: remainingMeasurements, revision: resultRevision,
+          next_command: nextRead(remainingMeasurements, visibleMeasurements.length),
+        },
+        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Follow measurement_feedback_page.next_command for omitted groups, or filter by node; existing result limit/offset/revision options apply and changed evidence requires restarting the read.",
+      } : {}),
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
       record_finding_template: command("finding", "--node", "<node-id>", "--title", "<evidence-backed result>", "--status", "<tentative|confirmed|refuted>"),
       guidance: "Use result_page.next_command for omitted results or node_command_template for a question; --result-limit can expand each page up to 20. Use existing evidence before repeating a route. Record meaningful hypotheses and supported or refuted results with stable node ids. Fill templates from actual evidence; do not create ceremonial nodes or infer findings from a score alone.",
@@ -210,6 +263,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       orchestration_gate: gate,
       candidate_count: plan.candidate_count ?? 0,
       selected_branches: branches.slice(0, 3).map(branch => branchContext(branch, findingSources)),
+      ...visibleComparisons,
       omitted_selected_branches: Math.max(0, branches.length - 3),
       rejected_candidates: rejected.slice(0, 3).map(branch => branchContext(branch)),
       omitted_rejected_candidates: Math.max(0,

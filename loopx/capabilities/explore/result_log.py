@@ -349,6 +349,8 @@ def build_explore_finding_event(
     tags: Sequence[str] | None = None,
     supersedes: str | None = None,
     recorded_at: str | None = None,
+    execution_observation: Mapping[str, Any] | None = None,
+    measurements: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _safe_goal_id(goal_id)
     safe_title = _compact_text(title, limit=TITLE_LIMIT, field="title")
@@ -379,6 +381,22 @@ def build_explore_finding_event(
     safe_confidence = _safe_confidence(confidence)
     if safe_confidence is not None:
         event["confidence"] = safe_confidence
+    if execution_observation is not None:
+        from .execution_observation import normalize_execution_observation
+
+        observed = normalize_execution_observation(execution_observation)
+        if any(ref not in event.get("evidence_refs", []) for ref in observed["evidence_refs"]):
+            raise ValueError("execution evidence must be included in the finding's evidence_refs")
+        event["execution_observation"] = observed
+    if measurements is not None:
+        from .measurements import normalize_measurements
+
+        if not node_id:
+            raise ValueError("measurements require an explicit node")
+        measured = normalize_measurements(measurements)
+        if any(item["evidence_ref"] not in event.get("evidence_refs", []) for item in measured):
+            raise ValueError("measurement evidence must be included in the finding's evidence_refs")
+        event["measurements"] = measured
     event["event_id"] = _event_id(event)
     return event
 
@@ -497,6 +515,8 @@ def validate_explore_result_event(
             evidence_refs=payload.get("evidence_refs"),
             tags=payload.get("tags"),
             supersedes=payload.get("supersedes"),
+            execution_observation=payload.get("execution_observation"),
+            measurements=payload.get("measurements"),
         )
     if summary:
         rebuilt["summary"] = summary
@@ -719,7 +739,7 @@ def explore_history_rows(events, *, goal_id=None):
         "schema_version", "event_id", "goal_id", "event_kind", "result_id",
         "recorded_at", "title", "summary", "status", "node_kind",
         "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
-        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence",
+        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements",
     )
     return [{key: event[key] for key in fields if key in event} for event in events]
 
@@ -728,7 +748,7 @@ def _fold_by_result_id(
     events: Sequence[Mapping[str, Any]], *, event_kind: str
 ) -> list[dict[str, Any]]:
     folded: dict[str, dict[str, Any]] = {}
-    for event in events:
+    for recorded_order, event in enumerate(events):
         if event.get("event_kind") != event_kind:
             continue
         result_id = str(event.get("result_id") or "")
@@ -736,6 +756,7 @@ def _fold_by_result_id(
             continue
         prior = folded.get(result_id)
         view = dict(event)
+        view["_recorded_order"] = recorded_order
         view["first_recorded_at"] = (
             prior["first_recorded_at"] if prior else str(event.get("recorded_at") or "")
         )
@@ -820,6 +841,9 @@ def _materialized_parent_edges(
 
 def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
     return {
+        **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
+        **({"measurements": event["measurements"], "recorded_order": event["_recorded_order"]}
+           if "measurements" in event else {}),
         "finding_id": str(event.get("result_id") or ""),
         "finding": str(event.get("title") or ""),
         "summary": str(event.get("summary") or ""),

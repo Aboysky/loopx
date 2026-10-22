@@ -24,7 +24,10 @@ from ..goals.first_party_host_admission import (
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
-from ..work_items.delivery_outcome import require_delivery_outcome
+from ..work_items.delivery_outcome import (
+    explain_turn_scoped_settlement_gap,
+    require_delivery_outcome,
+)
 from . import subagent_execution_topology as subagent
 from .command_validation import (
     TaskValidator,
@@ -91,6 +94,7 @@ LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION = "loopx_turn_journal_inspection_v1
 LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION = "loopx_turn_task_validation_v0"
 HOST_RESULT_MAX_BYTES = 12_000
 HOST_AGENT_VISION_JSON_MAX_CHARS = 3_200
+HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS = 4_096
 HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS = 2_400
 HOST_PATH_DELTA_MODES = {"", "unchanged", "material_replan"}
 HOST_RESULT_TEXT_LIMITS = (
@@ -100,6 +104,10 @@ HOST_RESULT_TEXT_LIMITS = (
     ("vision_unchanged_reason", 240),
     ("summary", 400),
 )
+HOST_RESULT_EVIDENCE_LIMITS = {
+    "work_evidence": (8, 240, 1_200),
+    "validation_evidence": (8, 240, 1_200),
+}
 MATERIAL_HOST_RESULT_KINDS = {
     LoopXTurnResultKind.VALIDATED_PROGRESS,
     LoopXTurnResultKind.VALIDATED_COMPLETION,
@@ -119,8 +127,10 @@ HOST_RESULT_FIELDS = {
     "vision_unchanged_reason",
     "path_delta_mode",
     "agent_vision_json",
+    "progress_observation_json",
     "summary",
     "reward_memory_reflection_json",
+    *HOST_RESULT_EVIDENCE_LIMITS,
 }
 
 
@@ -218,7 +228,13 @@ def _bounded_public_text(
     required: bool,
     errors: list[str],
 ) -> str | None:
-    text = str(result.get(field) or "").strip()
+    value = result.get(field)
+    # Missing/null legacy optional text remains absent. Other JSON types must
+    # not acquire instruction meaning through Python string coercion.
+    if value is not None and not isinstance(value, str):
+        errors.append(f"{field} must be a string")
+        return None
+    text = (value or "").strip()
     if required and not text:
         errors.append(f"{field} is required")
         return None
@@ -233,6 +249,51 @@ def _bounded_public_text(
         errors.append(str(exc))
         return None
     return text
+
+
+def _bounded_public_evidence(
+    result: Mapping[str, Any],
+    field: str,
+    *,
+    required: bool,
+    errors: list[str],
+) -> list[str] | None:
+    max_items, max_item_chars, max_total_chars = HOST_RESULT_EVIDENCE_LIMITS[field]
+    raw = result.get(field)
+    if raw is None:
+        if required:
+            errors.append(
+                f"{field} is required for a material host result carrying "
+                "execution_profile"
+            )
+        return None
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        errors.append(f"{field} must be an array of strings")
+        return None
+    evidence = [item.strip() for item in raw]
+    if not evidence or any(not item for item in evidence):
+        errors.append(f"{field} must contain 1-{max_items} non-empty strings")
+        return None
+    if len(evidence) > max_items:
+        errors.append(f"{field} must contain at most {max_items} items")
+        return None
+    if any(len(item) > max_item_chars for item in evidence):
+        errors.append(
+            f"{field} items must contain at most {max_item_chars} characters"
+        )
+        return None
+    if sum(len(item) for item in evidence) > max_total_chars:
+        errors.append(
+            f"{field} must contain at most {max_total_chars} characters total"
+        )
+        return None
+    for index, item in enumerate(evidence):
+        try:
+            validate_public_safe_text(f"host_result.{field}[{index}]", item)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return None
+    return evidence
 
 
 def _normalize_host_path_delta(
@@ -346,7 +407,7 @@ def validate_loopx_turn_host_result(
     errors: list[str] = []
     allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan)
     if from_journal:
-        allowed_fields = allowed_fields | {"agent_vision"}
+        allowed_fields = allowed_fields | {"agent_vision", "progress_observation"}
     unknown = sorted(set(result) - allowed_fields)
     if unknown:
         errors.append("unsupported host result fields: " + ", ".join(unknown))
@@ -417,7 +478,24 @@ def validate_loopx_turn_host_result(
             errors.append(
                 "non-material host results cannot declare a reward memory reflection"
             )
+    progress_observation = None
     if material:
+        raw_progress = result.get("progress_observation_json", "")
+        try:
+            from ..work_items.progress_observation import normalize_progress_observation
+
+            if from_journal and "progress_observation" in result:
+                if "progress_observation_json" in result:
+                    raise ValueError("cached progress observation cannot also supply JSON")
+                progress_observation = normalize_progress_observation(result["progress_observation"])
+            elif not isinstance(raw_progress, str):
+                raise ValueError("progress_observation_json must be a JSON string")
+            elif raw_progress.strip():
+                if len(raw_progress) > HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS:
+                    raise ValueError("progress_observation_json exceeds the Host result limit")
+                progress_observation = normalize_progress_observation(json.loads(raw_progress))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"invalid progress observation: {exc}")
         try:
             normalized["delivery_batch_scale"] = require_delivery_batch_scale(
                 result.get("delivery_batch_scale")
@@ -428,8 +506,28 @@ def validate_loopx_turn_host_result(
             normalized["delivery_outcome"] = require_delivery_outcome(
                 result.get("delivery_outcome")
             ).value
+            if not from_journal:
+                # Observation transport does not add a no-spend Host closeout.
+                # Refuse new candidates before preparing an impossible write.
+                # Saved results retain provider readback/recovery: an effect
+                # may already have committed under an older producer.
+                settlement_gap = explain_turn_scoped_settlement_gap(
+                    normalized["delivery_outcome"], None,
+                )
+                if settlement_gap:
+                    errors.append(settlement_gap)
         except ValueError as exc:
             errors.append(str(exc))
+
+        for field in HOST_RESULT_EVIDENCE_LIMITS:
+            evidence = _bounded_public_evidence(
+                result,
+                field,
+                required=False,
+                errors=errors,
+            )
+            if evidence is not None:
+                normalized[field] = evidence
 
         unchanged_reason = str(normalized.get("vision_unchanged_reason") or "")
         path_delta_mode, agent_vision = _normalize_host_path_delta(
@@ -454,15 +552,20 @@ def validate_loopx_turn_host_result(
         str(result.get("path_delta_mode") or "").strip()
         or str(result.get("agent_vision_json") or "").strip()
         or (from_journal and "agent_vision" in result)
+        or ("progress_observation_json" in result and result["progress_observation_json"] != "")
+        or (from_journal and "progress_observation" in result)
+        or any(field in result for field in HOST_RESULT_EVIDENCE_LIMITS)
     ):
         errors.append(
-            "non-material host results cannot declare path_delta_mode or agent_vision_json"
+            "non-material host results cannot declare path_delta_mode or "
+            "agent_vision_json, progress observation, or work/validation evidence"
         )
     if subagent.subagent_execution_topology(plan) is not None:
         subagent.observe_subagent_host_result(plan, result, normalized, errors)
     return {
         "ok": not errors,
-        "result": normalized,
+        "result": (normalized if progress_observation is None else
+                   {**normalized, "progress_observation": progress_observation}),
         "errors": errors,
     }
 

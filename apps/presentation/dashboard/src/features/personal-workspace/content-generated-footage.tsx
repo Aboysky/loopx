@@ -19,9 +19,11 @@ export function ContentGeneratedFootage({goalId}: {goalId: string}) {
   const [library, setLibrary] = useState<Library | null>(null), [selectedId, select] = useState("");
   const [busyAction, setBusyAction] = useState<"submit" | "check" | "collect" | null>(null), [error, setError] = useState(""), [watch, setWatch] = useState(false);
   const busy = busyAction !== null;
-  const epoch = useRef(0), readSequence = useRef(0), pending = useRef(false), checks = useRef(0);
+  const epoch = useRef(0), readSequence = useRef(0), pending = useRef(false), watchDeadline = useRef<number | null>(null);
   const current = library?.generations.find(item => item.generation_id === selectedId) ?? library?.generations[0];
   const active = current && ["submitted", "queued", "running"].includes(current.status);
+  function stopWatching() {watchDeadline.current = null; setWatch(false);}
+  function startWatching() {watchDeadline.current = performance.now() + 5 * 60 * 1000; setWatch(true);}
   async function request(action: string, item?: Footage) {
     const response = await fetch(ENDPOINT, {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({goal_id: goalId, action: `generation_${action}`,
@@ -35,10 +37,10 @@ export function ContentGeneratedFootage({goalId}: {goalId: string}) {
     try {
       const result: Library = await request("list");
       if (scope === epoch.current && sequence === readSequence.current) {setLibrary(result); setError("");}
-    } catch {if (scope === epoch.current && sequence === readSequence.current) setError(copy("镜头暂不可读，请重新读取。", "Cannot read footage. Recheck this workspace."));}
+    } catch {if (scope === epoch.current && sequence === readSequence.current) {stopWatching(); setError(copy("镜头暂不可读，请重新读取。", "Cannot read footage. Recheck this workspace."));}}
   }
   useEffect(() => {
-    epoch.current += 1; pending.current = false; checks.current = 0;
+    epoch.current += 1; pending.current = false; watchDeadline.current = null;
     setLibrary(null); select(""); setBusyAction(null); setWatch(false); void reload();
     return () => {epoch.current += 1;};
   }, [goalId]);
@@ -50,21 +52,24 @@ export function ContentGeneratedFootage({goalId}: {goalId: string}) {
       const result = await request(action, current);
       if (scope !== epoch.current) return;
       await reload();
-      if (!result.ok) setError(result.error_code === "generation_provider_unavailable"
+      if (scope !== epoch.current) return;
+      if (!result.ok) {stopWatching(); setError(result.error_code === "generation_provider_unavailable"
         ? copy("当前 Host 未加载云端生成凭据或扩展未启用。请让 Agent 修复后重试；镜头草稿已保留。", "The current host has no available cloud-generation credential or enabled extension. Ask your Agent to repair it; the draft is retained.")
-        : copy("本次操作未完成。请检查原任务或保存状态；不会重新提交付费生成。", "The operation is incomplete. Check the existing task or collection state; no new paid task will be submitted."));
-      if (action === "submit" && result.ok) {checks.current = 0; setWatch(true);}
-    } catch {if (scope === epoch.current) setError(copy("操作未确认。请先读取现有任务，勿重新提交付费生成。", "Operation unconfirmed. Read the existing task before submitting any new paid generation."));}
+        : copy("本次操作未完成。请检查原任务或保存状态；不会重新提交付费生成。", "The operation is incomplete. Check the existing task or collection state; no new paid task will be submitted."));}
+      if (action === "submit" && result.ok) startWatching();
+    } catch {if (scope === epoch.current) {stopWatching(); setError(copy("操作未确认。请先读取现有任务，勿重新提交付费生成。", "Operation unconfirmed. Read the existing task before submitting any new paid generation."));}}
     finally {if (scope === epoch.current) {pending.current = false; setBusyAction(null);}}
   }
   useEffect(() => {
-    if (!watch || !active) return;
+    if (!watch) return;
+    if (!active || watchDeadline.current === null) {stopWatching(); return;}
     const timer = setInterval(() => {
+      if (watchDeadline.current === null || performance.now() >= watchDeadline.current) {stopWatching(); return;}
       if (pending.current) return;
-      if (++checks.current > 30) {setWatch(false); return;}
       void operate("check");
     }, 10000);
-    return () => clearInterval(timer);
+    const expiry = setTimeout(stopWatching, Math.max(0, watchDeadline.current - performance.now()));
+    return () => {clearInterval(timer); clearTimeout(expiry);};
   }, [watch, current?.generation_id, current?.status, goalId]);
   const names: Record<string, string> = {
     prepared: copy("待生成", "Ready to generate"), submitting: copy("提交结果待确认", "Submission awaiting confirmation"),
@@ -88,7 +93,7 @@ export function ContentGeneratedFootage({goalId}: {goalId: string}) {
     {library && !current ? <p>{copy("让 Agent 准备需要生成的镜头。普通本机视频制作仍可使用。", "Ask your Agent to prepare a footage intent. Ordinary local composition remains available.")}</p> : null}
     {current ? <div className="content-media-workspace">
       <nav aria-label={copy("选择镜头", "Choose footage")}>{library!.generations.map(item => <button type="button" key={item.generation_id} aria-pressed={item.generation_id === current.generation_id}
-        onClick={() => {select(item.generation_id); setWatch(false); checks.current = 0;}}><span>{item.title}</span><small>{names[item.status] ?? item.status}</small></button>)}</nav>
+        onClick={() => {select(item.generation_id); stopWatching();}}><span>{item.title}</span><small>{names[item.status] ?? item.status}</small></button>)}</nav>
       <div className="content-media-result"><h4>{current.title}</h4>
         <p role="status">{names[current.status] ?? current.status} · {current.seconds}s · {current.resolution}</p>
         {current.status === "prepared" ? <><p>{copy("将提示词和参考帧发送至 Ark，生成一次镜头。预计", "Send the prompt and reference frames to Ark for one generation. Estimated")} ¥{current.estimate.cny.toFixed(2)}{copy("；实际用量与账单可能不同。", "; actual usage and billing may differ.")}</p>
@@ -97,7 +102,7 @@ export function ContentGeneratedFootage({goalId}: {goalId: string}) {
         {active || ["submitting", "submission_unknown", "succeeded", "damaged"].includes(current.status) ? <div className="content-media-downloads">
           <button type="button" disabled={busy} onClick={() => void operate("check")}>{copy("查询原任务", "Check existing task")}</button>
           {["succeeded", "damaged"].includes(current.status) ? <button type="button" disabled={busy} onClick={() => void operate("collect")}>{current.status === "damaged" ? copy("重新保存镜头", "Save footage again") : copy("保存镜头", "Save footage")}</button> : null}
-          {active ? <button type="button" onClick={() => {checks.current = 0; setWatch(!watch);}}>{watch ? copy("停止自动查询", "Stop checking") : copy("自动查询最多 5 分钟", "Check for up to 5 minutes")}</button> : null}</div> : null}
+          {active ? <button type="button" onClick={() => watch ? stopWatching() : startWatching()}>{watch ? copy("停止自动查询", "Stop checking") : copy("自动查询最多 5 分钟", "Check for up to 5 minutes")}</button> : null}</div> : null}
         {active ? <p>{copy("停止查询不会取消云端任务或费用。此服务不提供可安全自动重试的取消操作。", "Stopping checks does not cancel the cloud task or its charges. This service has no safe automatic cancellation operation.")}</p> : null}
         {current.error_code ? <p role="alert">{copy("本次操作尚未完成。原任务和草稿保留；让 Agent 检查任务读回或配置。", "The operation is incomplete. The existing task and draft are retained; ask your Agent to check task readback or configuration.")}</p> : null}
         {current.result && current.status === "ready" ? <><video controls preload="metadata" src={file("generated.mp4")} poster={file("poster.png")} />
