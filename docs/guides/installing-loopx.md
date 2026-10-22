@@ -409,6 +409,25 @@ processes to install workflow skills and slash commands, runs doctor, revalidate
 enabled extensions, and restarts managed local LoopX services. It does not
 switch the installation to an archive snapshot.
 
+On Windows, an update requested through the pip/pipx `loopx.exe` launcher is
+refused before installation starts: the running launcher would prevent pip
+from replacing it and can leave a partially uninstalled package. Follow the
+returned command, which uses the owning Python interpreter's module entry and
+preserves the original arguments, including registry and runtime routes:
+
+```powershell
+python -m loopx.entrypoint --format json update apply
+```
+
+Linked pipx application aliases, such as `loopx-preview.exe` installed with
+`--suffix=-preview`, receive the same protection when they refer to the owning
+environment's `loopx.exe` file.
+
+Use the interpreter printed in the refusal rather than an unrelated `python`
+from PATH. Read-only `update check` and `update plan` remain available. If a
+previous update already damaged the installation, repair it with that owning
+interpreter's pip first; a module entry cannot import a missing package.
+
 The equivalent manual sequence is:
 
 ```bash
