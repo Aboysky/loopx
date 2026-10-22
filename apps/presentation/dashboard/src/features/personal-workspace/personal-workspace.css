@@ -2067,9 +2067,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-goal-acceptance dd, .personal-goal-acceptance p { overflow-wrap: anywhere; }
 .personal-goal-acceptance details { margin-top: 16px; }
 
-.personal-channel-scroll[data-active-goal-view="overview"] { padding-inline: max(24px, calc((100% - 1120px) / 2)); }
+.personal-channel-scroll[data-active-goal-view="overview"], .personal-channel-scroll[data-active-goal-view="research"], .personal-channel-scroll[data-active-goal-view="files"] { padding-inline: max(24px, calc((100% - 1120px) / 2)); }
 
-/* Goal identity and settings stay above its views; runtime selection stays beside them. */
+/* Identity is shared; each view exposes only its relevant controls. */
 .personal-channel-header[data-goal-selected="true"] { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 16px; padding-block: 12px 0; }
 .personal-channel-header[data-goal-selected="true"] .personal-channel-title { grid-row: 1; grid-column: 1 / 3; }
 .personal-channel-header[data-goal-selected="true"] .personal-channel-title h1 { overflow: visible; white-space: normal; overflow-wrap: anywhere; text-wrap: pretty; }
@@ -2094,7 +2094,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-channel-header[data-goal-selected="true"] .personal-goal-tabs { gap: 8px; }
   .personal-goal-navigation .personal-goal-tabs button { min-width: 44px; padding-inline: 0; }
   .personal-goal-navigation .personal-read-only-source { max-width: 132px; }
-  .personal-channel-scroll[data-active-goal-view="overview"] { padding-inline: 14px; }
+  .personal-channel-scroll[data-active-goal-view="overview"], .personal-channel-scroll[data-active-goal-view="research"], .personal-channel-scroll[data-active-goal-view="files"] { padding-inline: 14px; }
 }
 
 /* Whole-channel attention hierarchy: conversation first, details on demand. */

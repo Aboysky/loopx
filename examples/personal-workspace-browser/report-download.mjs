@@ -45,6 +45,7 @@ export const reportDownloadScenario = {
       }});
       const {page, api} = context;
       await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
+      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "已验收的团队报告"});
       const button = results.getByRole("button", {name: "下载原文", exact: true});
       await button.waitFor();

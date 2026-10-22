@@ -1,3 +1,4 @@
+import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
@@ -2673,9 +2674,9 @@ const exploreResultPageSchema = z.object({
   })),
 });
 export type ExploreResultPage = z.infer<typeof exploreResultPageSchema>;
-export async function fetchExploreResults(goalId: string, cursor?: string) {
+export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string) {
   const query = new URLSearchParams({goal_id: goalId, ...(cursor ? {cursor} : {})});
-  const page = exploreResultPageSchema.parse(await requestJson<unknown>(`/api/chat/explore-results?${query}`));
+  const page = exploreResultPageSchema.parse(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`)));
   if (page.goal_id !== goalId) throw new Error("Explore result Goal mismatch");
   return page;
 }
