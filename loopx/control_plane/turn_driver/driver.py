@@ -544,7 +544,7 @@ def build_loopx_turn_plan(
         execution_mode=execution_mode,
         scheduler_owner=str(context_projection.get("scheduler_owner") or ""),
         session_action=str(session.get("action") or "none"),
-        turn_instance_id=(turn_instance_id or
+        turn_instance_id=(turn_instance_id if turn_instance_id is not None else
                           (settlement_identity.turn_instance_id if settlement_identity else None)),
         goal_ref=goal_ref,
         settlement_identity=settlement_identity,
