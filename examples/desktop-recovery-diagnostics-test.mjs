@@ -144,14 +144,18 @@ test('feed results do not replace the native startup state', async () => {
     {phase:'checking',details:{background:true}},
     {phase:'error',details:{code:'update_network_failed',background:true}},
   ]) {
+    for (const startup_state of [{phase:'connecting'},null]) {
     const {context,elements}=page();
+    elements.get('main').dataset.state='loading';
+    elements.get('#status').textContent='正在打开 LoopX';
     context.window.__TAURI__={core:{invoke:async()=>({
-      app_version:'1.2.4', state, startup_state:{phase:'connecting'},
+      app_version:'1.2.4', state, startup_state,
     })}};
     await runInNewContext('refresh()',context);
     assert.equal(elements.get('main').dataset.state,'loading');
-    assert.equal(elements.get('#status').textContent,'正在打开工作区');
+    assert.equal(elements.get('#status').textContent,startup_state?'正在打开工作区':'正在打开 LoopX');
     assert.doesNotMatch(elements.get('#boot-detail').textContent,/启动已停止/);
+    }
   }
 });
 

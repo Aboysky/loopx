@@ -253,7 +253,7 @@ async function refresh() {
     forgetSelection.hidden = result.runtime_selection?.explicit === true || (result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code));
     renderDiagnostics(result);
     render(result.state);
-    const startup = result.startup_state ?? result.state;
+    const startup = Object.hasOwn(result, "startup_state") ? result.startup_state : result.state;
     renderStartup({...result, state:startup});
     escalateFromSnapshot(startup);
   } catch {
