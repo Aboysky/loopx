@@ -6,9 +6,9 @@ mod prepared_update;
 mod runtime_ancestry;
 mod runtime_selection;
 mod service_endpoints;
+mod service_lifecycle;
 #[cfg(target_os = "macos")]
 mod service_lifetime;
-mod service_lifecycle;
 mod services;
 mod update_backup;
 mod upgrade_request;
