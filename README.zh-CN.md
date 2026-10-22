@@ -2,6 +2,8 @@
 
 <h1 align="center">LoopX 2.0</h1>
 
+<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="LoopX — GitHub Trending #1，由 Trendshift 记录" width="220" height="48"></a>
+
 **让 Agent 把长程目标做成可验证的成果。**
 
 面向 Agent 与团队的本地优先控制面和研究工作台。<br>
@@ -775,8 +777,6 @@ benchmark 证据、operator surface 与 IM integration、shared-goal 跨 host �
 明确分阶段的架构与研究孵化器。
 
 ## Star 趋势
-
-<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx 在 Trendshift 的趋势排名" width="220" height="48"></a>
 
 <p align="center">
   <a href="https://github.com/loopx-project/loopx/stargazers"><img src="https://loopx-project.github.io/loopx/site-assets/star-history.svg" alt="LoopX GitHub Star 历史趋势，来自已校验快照" width="800"></a><br>

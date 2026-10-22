@@ -148,6 +148,19 @@ size empty summaries to their content rather than filling large decorative cards
 
 ### Explanations On Demand
 
+Make layout explain the interface before adding secondary copy. Hierarchy,
+grouping, spacing and clear control names should reveal what belongs together
+and what can be done. Remove decorative slogans, subtitles that repeat headings,
+instructions that restate visible controls, and implementation or Agent-facing
+directions. When a paragraph compensates for unclear layout, redesign that layout
+first. This applies across the page, not only inside one component. It does not
+remove accessible control names, necessary input constraints, permission or
+activation consequences, errors, recovery or action outcomes. Keep optional help
+at the existing contextual entry; a blanket word limit cannot judge its value.
+This distinction follows the [layout-first copy observation](https://x.com/luinlee/status/2113085361836744764)
+and the [author's explanation](https://x.com/luinlee/status/2113085363606765963);
+those observations motivate the rule, not a measured model-quality guarantee.
+
 The primary view presents the result, its unit and scope, material uncertainty,
 and the next useful action. A truthful interface does not need to repeat its
 methodology in every component. Review the whole viewport for repeated scope,
@@ -666,8 +679,10 @@ parity is required. Framework migration alone must not alter the UI.
 - [ ] Marketing and application controls use the correct shape language.
 - [ ] Desktop and mobile layouts are validated.
 - [ ] Keyboard, focus, contrast, and reduced-motion behavior are preserved.
-- [ ] Repeated explanations are consolidated; help works on hover, focus and tap,
-      while material qualifiers, failures and action consequences remain visible.
+- [ ] Layout and control names explain the task without slogans, repeated labels
+      or instructions about the implementation. Necessary labels, qualifiers,
+      failures and action consequences remain visible; optional help works on
+      hover, focus and tap.
 - [ ] Owner decisions complete in place with a readback; live treatment is
       backed by an observed active fact; protocol identifiers are not primary copy.
 - [ ] English and Chinese content remain usable.
