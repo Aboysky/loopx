@@ -661,7 +661,12 @@ observation"). Reduced motion stops the arc; the ring and core still read live.
   turning a read-only source into a setup task. A known empty state and an
   unobserved source remain different states.
 - **Loading** holds the final geometry with a quiet skeleton; a region does
-  not collapse to one spinner and then jump.
+  not collapse to one spinner and then jump. An initial read is not evidence of
+  an empty or disconnected source. Bind loading, errors and results to the same
+  Goal/source/language/selection; a delayed response cannot borrow another
+  scope's content. Keep one read-status surface across summary and detail,
+  with retry available where the user encountered the failure. A failed refresh
+  may retain the same scope's last result, visibly marked as such.
 - **Region failure** is one announced line (icon, plain cause, how to retry)
   sized to its content. Reserve banners for a whole-surface failure.
 - **Unknown** stays visible as "—" with its reason; it never becomes zero or
