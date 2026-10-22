@@ -173,7 +173,14 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
   }
   const state: OutcomeState = {schema_version: GOAL_OUTCOMES_SCHEMA, goal_id: goalId, goal_ref: goalRef, revision: (previous?.revision ?? 0) + 1,
     outcomes: [...(previous?.outcomes.filter(o => o.id !== outcomeId) ?? []), outcome]};
-  requireValue(Buffer.byteLength(JSON.stringify(state), "utf8") <= 131072, "outcome declaration capacity exceeded; retain source detail in its owning material");
+  // A retained declaration must leave room for its next evidence review.
+  // Keep both envelopes bounded without changing the single stored snapshot,
+  // provenance, receipt history or the projection consumed by existing callers.
+  const declaration = {...state, outcomes: state.outcomes.map(({review: _review, ...outcome}) => outcome)};
+  const declarationBytes = Buffer.byteLength(JSON.stringify(declaration), "utf8");
+  requireValue(declarationBytes <= 131072, "outcome declaration capacity exceeded; retain source detail in its owning material");
+  requireValue(Buffer.byteLength(JSON.stringify(state), "utf8") - declarationBytes <= 131072,
+    "outcome review capacity exceeded; retain detailed evidence in its owning material");
   return readState({...head, goal_outcomes: state}, goalId)!;
 }
 
