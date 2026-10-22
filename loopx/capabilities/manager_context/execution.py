@@ -15,7 +15,7 @@ from ...agent_registry import load_goal_from_registry
 from ...collaboration_mcp import Delegations
 from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.source_grant_observation import (
-    source_execution_bindings,
+    read_delegation_source_execution, source_execution_bindings,
 )
 from ...control_plane.effect_runtime import EffectRuntimeRejected
 from ...orchestration import compact_orchestration_policy, normalize_subagent_execution_config
@@ -89,7 +89,9 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
         # Recover an existing operation instead of probing a now-completed Todo
         # and misreporting an accepted result as a refused new launch.
         if service.path(operation).exists():
-            row = service.read(operation)
+            row = read_delegation_source_execution(service, selected, operation,
+                source_request_id=receipt["request_id"], brief=request["brief"],
+                conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]})
             return {"submitted": True, "operation_id": operation, "todo_id": binding["todo_id"],
                     "status": row["status"], "replayed": True}
         preflight = service.inspect(selected)

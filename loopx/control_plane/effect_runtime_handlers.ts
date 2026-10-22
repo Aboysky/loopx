@@ -605,6 +605,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./post_writeback_hook_transaction.ts"), ({evaluatePostWritebackHookTransaction}) => evaluatePostWritebackHookTransaction),
     ],
     ["collaboration.delegation.binding", lazyHandler(() => import("./collaboration/delegation.ts"), ({selectDelegationBinding}) => selectDelegationBinding)],
+    ["collaboration.delegation.source_replay", lazyHandler(() => import("./collaboration/delegation.ts"), ({verifyDelegationSourceReplay}) => verifyDelegationSourceReplay)],
     ["turn.selection.rejection", lazyHandler(() => import("./turn_driver/selection_rejection.ts"), ({projectTurnSelectionRejection}) => projectTurnSelectionRejection)],
     ["collaboration.delegation.preflight", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationPreflight}) => delegationPreflight)],
     ["collaboration.delegation.validation_plan", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationValidationPlan}) => delegationValidationPlan)],

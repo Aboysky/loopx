@@ -73,6 +73,16 @@ def require_operation_id(value: str) -> str:
     return value
 
 
+def _operation_address(root: Path, scope, source_agent_id: str, operation_id: str) -> tuple[str, Path]:
+    """The existing immutable peer-operation address, shared with replay reads."""
+    source_id = "peer:" + _hash([
+        scope.caller_goal_ref if scope.exact else scope.goal_id,
+        source_agent_id, require_operation_id(operation_id),
+    ])
+    return source_id, (_root(root) / "peer-operations"
+                       / _hash(scope.target(source_agent_id)) / (source_id[5:] + ".json"))
+
+
 def request(
     root,
     registry,
@@ -143,12 +153,7 @@ def request(
                 "message": parent["message"],
                 **({"brief": parent["brief"]} if "brief" in parent else {}),
             }
-        source_identity = (
-            [goal_scope.caller_goal_ref, source_agent_id, operation_id]
-            if goal_scope.exact
-            else [goal_id, source_agent_id, operation_id]
-        )
-        source_id = "peer:" + _hash(source_identity)
+        source_id, operation_path = _operation_address(root, goal_scope, source_agent_id, operation_id)
         request_id = _hash(
             [source_id, _target(goal_id, target_agent_id, goal_scope)]
         )
@@ -172,12 +177,6 @@ def request(
                 "host_surface": binding["host_surface"],
                 "thread_id": binding["thread_id"],
             }
-        operation_path = (
-            _root(root)
-            / "peer-operations"
-            / _hash(_target(goal_id, source_agent_id, goal_scope))
-            / (source_id[5:] + ".json")
-        )
         path = (
             _root(root)
             / "entries"

@@ -208,6 +208,47 @@ def require_delegation_source_execution(runtime_root: Path, registry_path: Path,
         raise ValueError("original source execution authority is unavailable or revoked") from exc
 
 
+def read_delegation_source_execution(service, binding_id: str, operation_id: str, *,
+        source_request_id: str, brief: dict, conversation: dict) -> dict:
+    """Observe the existing exact-Goal sources for the typed replay comparison.
+
+    This performs no request publication, worker submission or result adoption.
+    Legacy sources retain their legacy lifetime profile; they are not promoted.
+    """
+    from .goal_instance_scope import collaboration_goal_scope, decide_collaboration_lifecycle
+    from .inbox import _entry
+    from .peers import _operation_address, require_operation_id
+
+    require_operation_id(operation_id)
+    runtime_root, registry_path = service.root, service.registry
+    goal_id, requester_agent_id = service.goal_id, service.agent_id
+    caller_goal_ref = service._caller_goal_ref()
+    binding = service.binding(binding_id, require_active=True)
+    require_delegation_source_execution(runtime_root, registry_path, goal_id=goal_id,
+        requester_agent_id=requester_agent_id, source_request_id=source_request_id,
+        binding=binding, caller_goal_ref=caller_goal_ref)
+    record = _read(service.path(operation_id))
+    with collaboration_goal_scope(registry_path, goal_id=goal_id,
+            agents=(requester_agent_id, binding["agent_id"]),
+            caller_goal_ref=caller_goal_ref, require_active=True) as scope:
+        original = _entry(runtime_root, goal_id, binding["agent_id"], source_request_id, scope=scope)
+        peer = _entry(runtime_root, goal_id, binding["agent_id"], record["identity"]["request_id"], scope=scope)
+        _, operation_path = _operation_address(runtime_root, scope, requester_agent_id, operation_id)
+        for entry in (original, peer):
+            decide_collaboration_lifecycle(scope, operation="history_inspect", record=entry)
+        try:
+            effect_runtime_result("collaboration.delegation.source_replay", {
+                "config": _read(service.config), "binding_id": binding["id"], "agent_id": requester_agent_id,
+                "goal_id": goal_id, "goal_ref": scope.record_identity().get("goal_ref"), "record": record,
+                "operation_id": operation_id, "source_request_id": source_request_id,
+                "source_request": original, "peer_request": peer, "peer_operation": _read(operation_path),
+                "brief": brief, "conversation": conversation,
+            })
+        except EffectRuntimeRejected as exc:
+            raise ValueError("delegation operation identity conflict") from exc
+    return service.read(operation_id)
+
+
 def source_context_authority(
     runtime_root: Path, registry_path: Path, session: dict[str, Any], turn: dict[str, Any]
 ) -> dict[str, Any]:

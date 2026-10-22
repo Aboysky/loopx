@@ -63,7 +63,9 @@ from .control_plane.collaboration.goal_instance_scope import (
     decide_collaboration_lifecycle,
 )
 from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
-from .control_plane.collaboration.source_grant_observation import require_delegation_source_execution
+from .control_plane.collaboration.source_grant_observation import (
+    read_delegation_source_execution, require_delegation_source_execution,
+)
 from .control_plane.collaboration.peers import (
     _goal,
     consume_return,
@@ -708,6 +710,9 @@ class Delegations:
         path = self.path(operation_id)
         with exclusive_file_lock(path.with_suffix(".dispatch")):
             exists = path.exists()
+            if exists and source_request_id is not None:
+                return read_delegation_source_execution(self, binding_id, operation_id,
+                    source_request_id=source_request_id, brief=brief, conversation=conversation or {})
             if not exists:
                 delegation_results.require_dependencies(self, binding, brief)
             delivered = request(self.root, self.registry, self.goal_id, self.agent_id,

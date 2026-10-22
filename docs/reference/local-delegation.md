@@ -64,6 +64,14 @@ only that operation's settlement without repeating the Host. Completing the
 requester's Chat Turn does not cancel independently delegated work. Operator/MCP
 operations without a Chat source retain their existing binding authority.
 
+Chat retry also verifies the saved operation against the original Inbox request,
+complete brief, peer request, current binding and original return Session/Turn
+before reporting its status. Selecting another authorized binding does not
+retarget an existing operation. A mismatch returns the existing unavailable
+execution response without publishing a peer request or resubmitting the worker;
+matching prepared or terminal operations are read back in place. Historical
+operator inspection remains available through the ordinary read command.
+
 Member completion uses the ordinary active-Goal continuation, including legacy
 non-hard-lease routes. It does not declare terminal `no_followup` for a
 requester-owned synthesis. This lets controller validation finish the Todo
@@ -85,6 +93,11 @@ Chat 发起的执行还保留原 Inbox 请求与固定的对话来源。worker �
 历史记录仍可查看。Host 已返回时保留原 Turn 与未结算效果，恢复授权后仅续接该
 operation 的结算，不重跑 Host。请求方 Chat Turn 完成不取消独立委派的工作。
 没有 Chat 来源的 operator/MCP 操作继续沿用原 binding 授权。
+
+Chat 重试在报告状态前，也核对已保存 operation 的原 Inbox 请求、完整 brief、peer
+请求、当前 binding 及原回传 Session/Turn。选择另一个获准 binding 不会改派既有
+operation；身份不符时返回原执行不可用反馈，不新发 peer 请求或重新提交 worker。
+身份一致的 prepared 或终态操作原位读回；普通 read 命令仍可查看历史。
 
 成员完成沿用普通 active-Goal 继续状态，旧的非 hard-lease 路径也如此；不会为仍由
 请求方负责的汇总声明 terminal `no_followup`。因此可以先通过 controller 校验完成
