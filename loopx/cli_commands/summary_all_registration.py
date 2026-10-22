@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 
-from ..paths import default_public_scan_root
-
 
 GLOBAL_READ_COMMANDS = frozenset({
     "goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks",
@@ -19,23 +17,6 @@ def _add_current_manager_flags(
 ) -> None:
     parser.add_argument("--agent-id", help=agent_help)
     parser.add_argument("--limit", type=int, default=8, help=limit_help)
-    parser.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help=(
-            "Public files to scan for obvious private material. "
-            "Defaults to the LoopX install root."
-        ),
-    )
-    parser.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help=(
-            "Specific public file or directory to scan. Repeatable. "
-            "Overrides --scan-root when set."
-        ),
-    )
 
 
 

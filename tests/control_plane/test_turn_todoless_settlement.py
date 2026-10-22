@@ -46,7 +46,7 @@ def _fixture(tmp_path, monkeypatch, provider, *, replan=True):
     turn = "empty-frontier-planning-turn"
     code, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-        "--scan-path", str(project), cwd=project)
+        cwd=project)
     assert code == 0 and guard["decision"] == ("autonomous_replan_required" if replan else "run"), guard
     assert guard.get("selected_todo") is None
     return project, runtime, registry, turn, guard, original
@@ -114,7 +114,7 @@ def _run_turn(project, runtime, registry, host, *, turn=None, resume=None, valid
         "--agent-id", AGENT_ID, "--host", "codex-cli", "--codex-bin", str(host),
         "--execution-mode", "isolated-headless", "--project", str(project),
         "--validation-command-json", json.dumps([sys.executable, "-c", validator]),
-        "--scan-root", str(project), "--no-global-sync", "--execute",
+        "--no-global-sync", "--execute",
         *(["--turn-instance-id", turn] if turn else []),
         *(["--resume-turn-key", resume] if resume else []),
         *(["--retry-failed-turn"] if retry else []), cwd=project)

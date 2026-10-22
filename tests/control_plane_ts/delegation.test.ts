@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation, verifyDelegationSourceReplay} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -8,6 +8,38 @@ const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", wor
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
 const params = {agent_id: "coordinator", binding_id: "review",
   config: {schema_version: "loopx_local_delegation_v0", bindings: [binding]}};
+
+test("source replay requires the original binding, complete brief, peer and return identity", () => {
+  const brief = {schema_version: "collaboration_brief_v0", purpose: "Review", context: "Original scope",
+    constraints: ["No external writes"], inputs: [], acceptance: ["Return findings"], return_requirement: "Reply here"};
+  const goalRef = {goal_id: "goal", goal_instance_id: "original-instance"};
+  const source = {request_id: "a".repeat(64), goal_id: "goal", goal_ref: goalRef,
+    agent_id: "reviewer", execution_binding_id: binding.id, brief};
+  const peer = {request_id: "b".repeat(64), goal_id: "goal", goal_ref: goalRef,
+    agent_id: "reviewer", source_kind: "peer", source_agent_id: "coordinator", brief};
+  const conversation = {session_id: "original-session", turn_id: "original-turn"};
+  const identity = {binding, request_id: peer.request_id, operation_id: "original-operation",
+    source_request_id: source.request_id};
+  const input = {...params, goal_id: "goal", goal_ref: goalRef, operation_id: identity.operation_id,
+    source_request_id: source.request_id, source_request: source, peer_request: peer, peer_operation: peer,
+    brief, conversation, record: {identity, conversation, status: "prepared"}};
+  assert.deepEqual(verifyDelegationSourceReplay(input), {matched: true});
+  for (const record of [{...input.record, status: "accepted"}, {...input.record, status: "stopped"}])
+    assert.deepEqual(verifyDelegationSourceReplay({...input, record}), {matched: true});
+  for (const change of [
+    {binding_id: "other"}, {goal_id: "other"}, {goal_ref: {...goalRef, goal_instance_id: "replacement"}},
+    {source_request_id: "c".repeat(64)}, {operation_id: "other-operation"},
+    {brief: {...brief, constraints: ["Different scope"]}},
+    {conversation: {...conversation, turn_id: "other-turn"}},
+    {source_request: {...source, execution_binding_id: "other"}},
+    {peer_request: {...peer, source_agent_id: "another-requester"}},
+    {peer_request: {...peer, brief: {...brief, acceptance: ["Different work"]}}},
+    {peer_request: {...peer, goal_ref: {...goalRef, goal_instance_id: "replacement"}}},
+    {record: {...input.record, identity: {...identity, binding: {...binding, workspace: "/other"}}}},
+    {record: {...input.record, identity: {...identity, source_request_id: "c".repeat(64)}}},
+    {record: {...input.record, identity: {...identity, confirmed_operation_id: "another-effect"}}},
+  ]) assert.throws(() => verifyDelegationSourceReplay({...input, ...change}));
+});
 
 test("wake observation preserves conversation and current Goal-reference scope", () => {
   const goalRef = {goal_id: "goal", goal_instance_id: "original-instance"};

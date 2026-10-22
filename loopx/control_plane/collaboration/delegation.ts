@@ -9,6 +9,7 @@ import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {PROJECTION_ENVELOPE_SEAL_REQUEST, sealProjectionEnvelope} from "../projection_envelope.ts";
+import {normalizeCollaborationBrief, planCollaborationRequestPublication} from "./semantic_request.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -156,6 +157,39 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
     && binding.output_refs.length <= 20 && binding.output_refs.every(ref => text(ref)
       && !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").includes("..")), "bounded relative output refs required");
   return binding;
+}
+
+/** An operation locator is not proof that a new selection owns its result.
+ * Recover only the original source, peer work, binding and return conversation.
+ * The host observes these records through the existing exact-Goal Inbox owner.
+ */
+export function verifyDelegationSourceReplay(params: JsonObject): JsonObject {
+  const binding = selectDelegationBinding(params);
+  const record = requireJsonObject(params.record, "saved delegation");
+  const identity = requireJsonObject(record.identity, "saved delegation identity");
+  const source = requireJsonObject(params.source_request, "original source request");
+  const peer = requireJsonObject(params.peer_request, "original peer request");
+  const operation = requireJsonObject(params.peer_operation, "original peer operation");
+  planCollaborationRequestPublication({request: operation, entry: peer, operation});
+  const conversation = requireJsonObject(params.conversation, "original conversation");
+  const same = (a: unknown, b: unknown) => canonicalAuthoritySha256(a) === canonicalAuthoritySha256(b);
+  requireThat(typeof params.source_request_id === "string" && BARE_SHA256_PATTERN.test(params.source_request_id)
+    && source.request_id === params.source_request_id && source.execution_binding_id === binding.id
+    && peer.source_kind === "peer" && peer.source_agent_id === params.agent_id
+    && source.goal_id === params.goal_id && peer.goal_id === params.goal_id
+    && source.agent_id === binding.agent_id && peer.agent_id === binding.agent_id
+    && same(source.goal_ref ?? null, peer.goal_ref ?? null)
+    && same(source.goal_ref ?? null, params.goal_ref ?? null), "delegation replay source identity mismatch");
+  requireThat(text(params.operation_id) && typeof peer.request_id === "string"
+    && BARE_SHA256_PATTERN.test(peer.request_id)
+    && same(identity, {binding, request_id: peer.request_id,
+      operation_id: params.operation_id, source_request_id: params.source_request_id}),
+  "delegation replay operation identity mismatch");
+  const brief = normalizeCollaborationBrief(params.brief);
+  requireThat(same(source.brief, brief) && same(peer.brief, brief), "delegation replay brief changed");
+  requireThat(Object.keys(conversation).length === 2 && text(conversation.session_id) && text(conversation.turn_id)
+    && same(record.conversation, conversation), "delegation replay return conversation changed");
+  return {matched: true};
 }
 
 type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected" | "stopped";

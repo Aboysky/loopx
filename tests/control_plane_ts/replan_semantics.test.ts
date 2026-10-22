@@ -335,6 +335,9 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
     const projection = projectReplanSemantics({operation: "requirements", obligation: source});
     const guidance = projection.planning_guidance as string[];
     assert.equal(guidance.length, 5);
+    assert.match(guidance[0], /operating objective and cumulative requirements/);
+    assert.match(guidance[0], /justified no-change decision/);
+    assert.match(guidance[0], /scope conflict, missing evidence or stale display text/);
     assert.match(guidance[3], /provisional agent-created candidate rules/);
     assert.match(guidance[3], /Do not relax frozen acceptance/);
     assert.match(guidance[4], /Compare expected goal\/information gain with full marginal cost/);

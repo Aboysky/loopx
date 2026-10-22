@@ -97,10 +97,8 @@ def test_truncated_legacy_agent_todo_section_is_not_projected_as_empty(tmp_path:
     status = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[],
         limit=5,
         goal_id=GOAL_ID,
-        include_public_boundary_scan=False,
     )
     assert status["ok"] is False
     goal_attention = next(
@@ -196,8 +194,6 @@ def test_truncated_legacy_state_cli_paths_fail_closed(tmp_path: Path) -> None:
         GOAL_ID,
         "--agent-id",
         "agent-a",
-        "--scan-path",
-        str(tmp_path),
         registry_path=registry_path,
         runtime_root=runtime_root,
     )

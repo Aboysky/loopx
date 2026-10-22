@@ -61,6 +61,15 @@ function analysisReadback(selected = "a") {
       final_candidate_delta: selected === "d" ? null : selected === "b" ? -2 : 4,
     };
   }
+  if (selected === "d") {
+    const usage = snapshot.pack.solver_usage.projection;
+    usage.method = "codex_observed_session_counters_v1";
+    usage.incomplete_turn = {turn_id: "unfinished", start: usage.end, observed_through: usage.end,
+      first_line: 4, last_line: 5, counter_observations: 1,
+      usage: {input_tokens: 400, cached_input_tokens: 300, uncached_input_tokens: 100, output_tokens: 8}};
+    usage.input_tokens += 400; usage.cached_input_tokens += 300;
+    usage.uncached_input_tokens += 100; usage.output_tokens += 8;
+  }
   if (selected === "d") {snapshot.pack.result = null; snapshot.pack.job = null; snapshot.pack.native_outcomes.projection.initial = null;}
   return snapshot;
 }
@@ -121,6 +130,7 @@ export const researchHistoryScenario = {
     let collisionOwner, emptyOwner, temporary;
     let context;
     const pages = [];
+    const findingReads = [];
     let unavailable = false;
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
@@ -197,6 +207,8 @@ export const researchHistoryScenario = {
           await route.fulfill({response});
         });
         await page.route("**/api/chat/explore-results?*", async route => {
+          const query = new URL(route.request().url()).searchParams;
+          if (query.get("view") === "findings") findingReads.push({goal: query.get("goal_id"), cursor: query.get("cursor")});
           if (unavailable) return route.fulfill({status: 503, json: {error: "Isolated history transport unavailable"}});
           const response = await fetchWorkspaceBackend(route, owner.base);
           assert.equal(response.status(), 200);
@@ -211,11 +223,30 @@ export const researchHistoryScenario = {
         return raw?.startsWith('[') ? JSON.parse(raw) : raw ? [raw] : [];
       };
       await page.locator(".personal-goal-link", {hasText: capture.display_name}).click();
+      const tabs = page.getByRole("navigation", {name: "Goal 视图"});
+      assert.equal(pages.length, 0, "Overview must not fetch full research history");
+      assert.equal(await page.locator(".research-history").count(), 0, "Research is not a second long section in Overview");
+      await page.locator(".personal-goal-tabs").getByRole("button", {name: "研究", exact: true}).click();
+      assert.equal(new URL(page.url()).searchParams.get("view"), "research");
       const history = page.getByRole("region", {name: "研究历程", exact: true});
       await history.getByRole("status").filter({hasText: "76 / 76"}).waitFor();
       assert.equal(pages.length, 2, "The complete Portfolio checkpoint requires every bounded HTTP page");
       assert.deepEqual(pages.flatMap(value => value.items).map(row => row.event_id), capture.events.map(row => row.event_id));
       await history.locator(".research-phases").waitFor();
+      const early = history.locator(".research-phase").first();
+      await early.click();
+      assert.equal(new URL(page.url()).searchParams.get("research_phase"), "0");
+      await history.getByRole("button", {name: "关系图", exact: true}).click();
+      await page.goBack();
+      assert.equal(await history.getByRole("button", {name: "时间线", exact: true}).getAttribute("aria-pressed"), "true");
+      assert.equal(await early.getAttribute("aria-pressed"), "true");
+      await page.goBack();
+      assert.equal(await early.getAttribute("aria-pressed"), "false");
+      await tabs.getByRole("button", {name: "概览", exact: true}).click();
+      assert.equal(await history.isVisible(), false);
+      await tabs.getByRole("button", {name: "研究", exact: true}).click();
+      await history.waitFor();
+      assert.equal(analysisWrites, 0, "Browsing and returning never starts analysis");
       assert.equal(await history.locator('.research-route').count(),0,'The solver recorded no routes or parent links');
       assert.equal(await history.locator('.research-decision-ticks span').count()>0,true,'Actual recorded decisions remain visible');
       await page.screenshot({path:resolve(outputDir,'research-history-portfolio-viewport.png'),animations:'disabled'});
@@ -256,11 +287,21 @@ export const researchHistoryScenario = {
       const checkpoints=[];
       for(const [file,label] of [['edgebench-graph-checkpoint-history.json','graph'],['edgebench-ad-checkpoint-history.json','ad']]) {
         const other=JSON.parse(await readFile(resolve(repoRoot,'apps/presentation/dashboard/src/data/fixtures',file)));
+        const previousUrl = page.url();
+        const previousSelection = selectedNodes();
         pages.length=0;
         await page.locator('.personal-goal-link',{hasText:other.display_name}).click();
+        assert.equal(new URL(page.url()).searchParams.get('view'), 'research', 'Comparing Goals must keep the research reading context');
         await history.getByRole('status').filter({hasText:`${other.events.length} / ${other.events.length}`}).waitFor();
         assert.deepEqual(pages.flatMap(value=>value.items).map(row=>row.event_id),other.events.map(row=>row.event_id),`${label}: all original pages, without cross-Goal records`);
+        assert.equal(await history.locator('.research-history-detail').count(),0, 'A different Goal must not adopt the prior evidence selection');
         assert.equal(await history.locator('.research-route').count(),0);
+        await page.goBack();
+        assert.equal(page.url(), previousUrl, 'Back restores the prior Goal and its own evidence URL');
+        assert.deepEqual(selectedNodes(), previousSelection);
+        await page.goForward();
+        await history.getByRole('status').filter({hasText:`${other.events.length} / ${other.events.length}`}).waitFor();
+        assert.equal(await history.locator('.research-history-detail').count(),0);
         await history.evaluate(element=>element.scrollIntoView({block:'start'}));
         await page.screenshot({path:resolve(outputDir,`research-history-${label}-timeline.png`),animations:'disabled'});
         await history.locator('.research-unlinked-days button').first().click();
@@ -269,6 +310,62 @@ export const researchHistoryScenario = {
         await page.screenshot({path:resolve(outputDir,`research-history-${label}-detail.png`),animations:'disabled'});
         checkpoints.push({goal_id:other.goal_id,event_count:other.events.length,history_pages:Math.ceil(other.events.length/40)});
       }
+      // The saved-finding reader uses the same real backend and retains full
+      // source content; metadata stays optional and failures cannot show stale facts.
+      const saved = page.locator(".research-saved-evidence");
+      await saved.locator(":scope > summary").click();
+      const evidence = saved.locator(".goal-explore-results");
+      await evidence.locator(".goal-team-result-reader").waitFor();
+      const item = evidence.locator(".goal-team-result-list button").first();
+      await item.focus(); await item.press("Enter");
+      const reader = evidence.locator(".goal-team-result-reader");
+      await page.waitForFunction(() => document.activeElement?.classList.contains("goal-team-result-reader"));
+      assert(await reader.locator(".explore-finding-prose").count(), "Decode the existing writer format into readable sections");
+      const bodyStyle = await reader.locator("p").first().evaluate(el => ({size: parseFloat(getComputedStyle(el).fontSize), color: getComputedStyle(el).color}));
+      assert(bodyStyle.size >= 16, "Evidence is body text, not a wall of captions");
+      await reader.getByText("来源与范围", {exact: true}).click();
+      await reader.getByText("完整原文", {exact: true}).click();
+      assert.match(await reader.locator(".explore-finding-raw").textContent(), /Input revision:/, "The complete original remains available");
+      unavailable = true;
+      await evidence.getByRole("button", {name: "刷新证据"}).click();
+      await evidence.getByRole("alert").waitFor();
+      assert.equal(await evidence.locator(".goal-team-result-reader").count(), 0);
+      unavailable = false;
+      await evidence.getByRole("button", {name: "刷新证据"}).click();
+      await reader.waitFor();
+      const selectedFinding = await reader.locator("h4").textContent();
+      const readerScroll = await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop);
+      await tabs.getByRole("button", {name: "概览", exact: true}).click();
+      await tabs.getByRole("button", {name: "研究", exact: true}).click();
+      await reader.waitFor();
+      assert.equal(await reader.locator("h4").textContent(), selectedFinding);
+      const returnedScroll = await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop);
+      assert(Math.abs(returnedScroll - readerScroll) < 2, "Returning to Research preserves its reading position");
+      // A populated mobile reader must expose every record without a long
+      // horizontal card strip. The selected record remains complete below it.
+      await page.setViewportSize({width:390, height:844});
+      const picker = evidence.getByRole("combobox", {name:"选择结论"});
+      await picker.waitFor();
+      assert.equal(await evidence.getByRole("navigation", {name:"选择结论"}).isVisible(), false);
+      const lastFinding = await picker.locator("option").last().getAttribute("value");
+      await picker.selectOption(lastFinding);
+      assert.equal(await reader.locator("h4").count(), 1);
+      await reader.getByText("来源与范围", {exact:true}).click();
+      assert((await reader.textContent()).includes(lastFinding), "Selected identity is available in full provenance");
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+      await page.setViewportSize({width:1512, height:982});
+      await evidence.getByRole("button", {name:"下一页",exact:true}).click();
+      await reader.waitFor();
+      assert(findingReads.at(-1).cursor, "Exercise an actual later findings page");
+      const graphCapture = JSON.parse(await readFile(resolve(repoRoot,'apps/presentation/dashboard/src/data/fixtures/edgebench-graph-checkpoint-history.json')));
+      const readsBeforeSwitch = findingReads.length;
+      await page.locator('.personal-goal-link',{hasText:graphCapture.display_name}).click();
+      await saved.locator(":scope > summary").click();
+      await reader.waitFor();
+      const newReads = findingReads.slice(readsBeforeSwitch).filter(read => read.goal === graphCapture.goal_id);
+      assert(newReads.length > 0);
+      assert(newReads.every(read => read.cursor === null), "A different Goal starts from its own first page, never the previous Goal's cursor");
+      await saved.locator(":scope > summary").click();
       const readback=await(await fetch(`${owner.base}/fixture/readback`)).json();
       assert.equal(readback.source_unchanged,true);
       assert.equal(readback.mutation_attempts,0);
@@ -305,7 +402,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const realOwner=owner; owner=collisionOwner;
       await realOwner.close();
       await page.setViewportSize({width:1280,height:900});
-      await page.goto(new URL(`?goalId=${goal}&view=overview&statusUrl=%2Fstatus.json`,url).href,{waitUntil:'networkidle'});
+      await page.goto(new URL(`?goalId=${goal}&view=research&statusUrl=%2Fstatus.json`,url).href,{waitUntil:'networkidle'});
       await history.getByRole('status').filter({hasText:'11 / 11'}).waitFor();
       assert(await history.locator('.research-density .is-gap').count() > 0, 'The sparse capture includes recording gaps');
       const gapLegend = history.getByText('无记录', {exact: true});
@@ -548,10 +645,19 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await history.getByRole('button', {name: '关闭分析', exact: true}).click();
       await page.setViewportSize({width: 1280, height: 900});
       await progress.locator('.research-progress-basis > summary').click();
-      assert.equal(await progress.getByText("100", {exact: true}).count(), 1, "Uncached input is shown without charging cache twice");
+      assert.equal(await progress.locator(".research-progress-values dd").filter({hasText: /^100 tokens$/}).count(), 1, "Uncached input is shown without charging cache twice");
+      // Actual observations precede provenance; details and help remain operable.
+      assert.equal(await progress.locator('.research-usage-detail').evaluate(e => e.open), false);
+      assert.doesNotMatch(await progress.innerText(), /codex_complete_session_counters_v1/);
+      await progress.locator('.research-usage-detail > summary').focus();
+      await page.keyboard.press('Enter');
       assert.match(await progress.innerText(), /1,?100.*1,?000/s);
+      assert.match(await progress.innerText(), /codex_complete_session_counters_v1/);
+      await progress.locator('.research-usage-detail > summary').press('Enter');
       assert.match(await progress.innerText(), /30.*4.*tokens/s, "Analysis attempt cost is distinct from solver usage");
-      assert.match(await progress.innerText(), /更早失败.*恢复.*评测/s);
+      await progress.getByRole('button', {name: '分析开销范围', exact: true}).focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /更早失败.*恢复.*评测/s);
+      await page.keyboard.press('Escape');
       await progress.locator('.research-progress-basis > summary').click();
       for (const limit of [1, 0]) {
         episodeMetadataLimit = limit;
@@ -690,7 +796,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
       assert.match(await progress.locator('.research-progress-basis > summary').innerText(), /完整成本未知/);
       await progress.locator('.research-progress-basis > summary').click();
-      assert.match(await progress.innerText(), /尚无完整用量捕获|No complete usage/);
+      assert.match(await progress.innerText(), /尚无用量捕获|No usage capture/);
+      await progress.getByRole('button', {name: '用量范围与成本', exact: true}).focus();
+      assert.doesNotMatch(await progress.getByRole('tooltip').innerText(), /本次完整捕获|This complete capture/);
+      await page.keyboard.press('Escape');
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await analysis.count(), 0, "Changing a factual scope preserves the closed analysis panel");
       assert.match(await progress.innerText(), /不适用|N\/A/);
@@ -707,6 +816,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await analysis.press('Escape');
       await progress.getByRole('combobox').selectOption('d'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
+      await progress.locator('.research-progress-basis > summary').click();
+      assert.match(await progress.innerText(), /末轮未完成|final Turn incomplete/);
+      assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
+      await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /所选范围尚未分析/);
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
@@ -759,6 +872,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const comparisonCitation = rows.first().getByRole('button', {name: /source.*行 1–2/});
       await comparisonCitation.click();
       await citedOriginal.waitFor(); await citedOriginal.press('Escape');
+      await page.waitForFunction(element => element === document.activeElement, await comparisonCitation.elementHandle());
       assert.equal(await comparisonCitation.evaluate(element => element === document.activeElement), true,
         'Returning from original evidence restores the exact expanded row');
       await firstRow.press('Enter');
@@ -854,6 +968,34 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.getByRole('button', {name: 'About deep analysis', exact: true}).click();
       await page.getByText('This action reuses existing judgments without a model call; original usage stays with the previous version.', {exact: true}).waitFor();
       await page.keyboard.press('Escape');
+      // A source can expose complete saved findings without a complete Task
+      // association endpoint. Unknown links must never be presented as zero.
+      await page.route("**/api/chat/explore-results?*", route => {
+        const query = new URL(route.request().url()).searchParams;
+        if (query.get("view") === "history") return route.fallback();
+        assert.equal(query.get("view"), "findings");
+        return route.fulfill({json: {ok: true, goal_id: query.get("goal_id"), total: 2, next_cursor: null,
+          items: [0, 1].map(index => ({finding_id: `saved-${index}`, node_id: "question", finding: `Saved observation ${index + 1}`,
+            question: "Does this observation support the original objective?", scope: "Fixed synthetic input",
+            summary: "The measured change did not improve the original objective. Keep the negative result and investigate the next unresolved question. " +
+              "The observation applies to the fixed input only; comparison with a different input remains unverified.",
+            status: "refuted", agent_id: "researcher", evidence_refs: ["artifact:fixed-input"],
+            last_updated_at: "2026-01-01T12:00:00Z", linked_todos: [], linked_todos_available: false}))}});
+      });
+      await page.getByText("Read saved findings", {exact: true}).click();
+      const sourceReader = page.getByRole("region", {name: "Explore evidence", exact: true});
+      const sourceBody = sourceReader.locator(".goal-team-result-reader");
+      await sourceBody.waitFor();
+      await sourceBody.getByText("Linked tasks · —", {exact: true}).click();
+      assert.match(await sourceBody.innerText(), /Complete task associations are not available/);
+      assert.doesNotMatch(await sourceBody.innerText(), /No links found/);
+      await page.setViewportSize({width: 1440, height: 1000});
+      await sourceReader.evaluate(element => element.scrollIntoView({block: "start"}));
+      await page.screenshot({path: resolve(outputDir, "source-saved-findings-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await sourceBody.scrollIntoViewIfNeeded();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: resolve(outputDir, "source-saved-findings-mobile.png"), animations: "disabled"});
       assert.equal(analysisWrites, 0, "Cached, reload, switch and keyboard reading never request execution");
       assert.equal(api.turnRequests.length, 0, "Reading the graph cannot start an Agent");
       return {note: "Three unchanged real checkpoint histories through production HTTP + packaged UI; per-Goal complete pagination, genuine negative evidence, no invented edges, reload/back/forward, mobile and failed refresh. Separate synthetic coincident-target regression; no benchmark qualification or model dispatch.",

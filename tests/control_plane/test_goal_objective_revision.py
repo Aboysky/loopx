@@ -82,6 +82,8 @@ def test_objective_and_acceptance_guidance_share_real_inline_goal_read(acceptanc
     assert all(clause in reason for clause in required), reason
     reads = admission["interaction_contract"]["agent_channel"]["required_reads"]
     assert not any(read["source"] == "goal_acceptance" for read in reads), "one inline read should fulfill the command"
+    assert "prepare-objective" not in json.dumps([context, reads]), (
+        "ordinary reads must not proactively direct objective revision")
 
 
 def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal, monkeypatch):
@@ -152,7 +154,9 @@ def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal,
 def test_native_conversation_exposes_and_executes_revision_loop(conversation_check):
     project, cli, controller, sid, _, _, adapter = conversation_check
     from loopx.chat_loopx_mode import TOOL, GUIDANCE
-    assert "prepare_goal_objective" in GUIDANCE and "adopt_goal_objective" in GUIDANCE
+    # Ordinary conversation can call the API without a proactive revision nudge.
+    assert "prepare_goal_objective" not in GUIDANCE
+    assert "adopt_goal_objective" in GUIDANCE
     state = project / "state.md"
     state.write_text(state.read_text() + "\n## Objective\nBootstrap the project\n")
     handler = adapter.session.read_tool_handler

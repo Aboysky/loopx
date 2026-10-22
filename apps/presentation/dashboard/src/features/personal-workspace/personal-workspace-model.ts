@@ -305,7 +305,7 @@ export type WorkspaceOutput = {
 };
 
 export type WorkspaceChannel = "manager" | "attention" | "running" | "outputs";
-export type WorkspaceGoalTab = "overview" | "chat" | "tasks" | "files";
+export type WorkspaceGoalTab = "overview" | "chat" | "tasks" | "research" | "files";
 
 export type WorkspaceScheduleKind = "heartbeat" | "monitor";
 

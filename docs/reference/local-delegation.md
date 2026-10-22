@@ -130,6 +130,29 @@ work or configures owner acceptance. Disable by removing the exact binding
 from the operator configuration; existing operations retain their history and
 cannot re-execute or return accepted evidence under a revoked grant.
 
+Chat-originated execution also retains its original Inbox request and frozen
+conversation provenance. The worker rechecks that source's current sender,
+recipient and exact Goal/Agent/requester/binding grant at entry, before Host
+launch, and before completion. Missing provenance or a revoked source grant
+rejects queued work on the original operation before a Host or Turn starts.
+The final source observation, canonical completion and original-Turn settlement
+share the source-policy fence, so a grant revocation linearizes before the
+observation or after both effects.
+Historical inspection remains available. If the Host already returned, its
+original Turn and unsettled effects remain visible; restoring authority permits
+only that operation's settlement without repeating the Host. Completing the
+requester's Chat Turn does not cancel independently delegated work. Operator/MCP
+operations without a Chat source retain their existing binding authority.
+
+Chat retry also verifies the saved operation against the original Inbox request,
+complete brief, peer request, current binding and original return Session/Turn
+before reporting its status. Selecting another authorized binding does not
+retarget an existing operation. A mismatch returns the existing unavailable
+execution response without publishing a peer request or resubmitting the worker;
+matching prepared operations may resume only under the restored current grant,
+and matching terminal operations are read back in place. Historical operator
+inspection remains available through the ordinary read command.
+
 A Chat handoff with a separate source execution grant can recover when its
 requester exits after saving the original operation but before starting the
 worker. Replaying that handoff rechecks the source Turn and exact grant, then
@@ -141,6 +164,16 @@ still needs explicit original-operation reconciliation. Recovery preserves the
 original Inbox request, binding, conversation and governed Turn; it creates no
 replacement task, grant or scheduler. This remains the explicit task-bound
 route described here, not general automatic activation of an idle Inbox owner.
+
+中文：Chat 发起的执行保留原 Inbox 请求、固定的对话来源和原 operation。worker 在
+入口、Host 启动前和完成结算前重新核对当前发送者、接收者及精确
+Goal/Agent/requester/binding grant；撤权、来源不可读或身份变化会拒绝在原
+operation 上的新执行。最终来源观察、规范完成和原 Turn 结算共享来源策略锁，
+撤权只能发生在观察之前或两项副作用完成之后；历史仍可检查。Host 已返回时保留原 Turn 和未结算效果；
+恢复授权后只结算该 operation，不重跑 Host。重试在报告状态前核对原 Inbox、完整
+brief、peer request、当前 binding 和原回传 Session/Turn；选择另一个合法 binding
+不能改派既有 operation，身份不符时返回原执行不可用反馈且不新发请求。身份一致的
+prepared operation 可在恢复的当前 grant 下续接原 owner，终态 operation 原位读回。
 
 中文：另有来源执行授权的 Chat 交接，在原 operation 已保存、worker 尚未启动时
 请求方退出，可重放同一交接恢复。重放重新核对来源 Turn 与精确 grant，只续接原
@@ -260,7 +293,22 @@ Current grants, stop state and declared ancestry are checked again before
 revalidation or committed-result recovery. Restoring the task output alone
 does not restore unavailable source inputs.
 
+If the original worker still owns the operation, revalidation returns its
+current observation without starting another revalidation or settlement. A terminal
+observation can precede worker release; check delivery again after it finishes.
+Managed CLI subprocesses receive no caller stdin: their request is supplied in
+arguments, keeping MCP and other interactive input channels with their owner.
+Delegation validators also receive EOF instead of conversation input. Ordinary
+standalone caller validation retains its existing stdin inheritance.
+If a host terminates its worker process tree on disconnect (for example a
+Windows MCP Job), reconnect and use `resume` for the original operation. This
+reconciles its durable execution; it does not bypass the host's process policy.
+
 中文：先修复真实产物或校验环境，再复核原执行；通过后继续原 Turn 结算，保留失败证据，不重复 Host 或扣额。停止、撤权与来源链失效仍阻止复验或提交后的恢复；仅修复输出不能恢复失效的来源输入。
+原 worker 仍占用执行时，复核只返回当前观察，不另行复核任务或结算。终态观察可能早于 worker 释放；结束后再重新检查交付。
+托管 CLI 子进程通过参数接收请求，不继承调用方的标准输入，MCP 等交互通道仍由原调用方持有。
+委派校验器同样读取 EOF，不消费对话输入；普通独立调用校验器仍保留原有的标准输入继承行为。
+宿主断连时若终止整个进程树（如 Windows MCP Job），重连后可沿原 operation 执行 `resume`，对账持久化执行，不绕过宿主进程策略。
 
 ## Source use and recheck
 

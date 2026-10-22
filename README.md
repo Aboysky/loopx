@@ -2,6 +2,8 @@
 
 <h1 align="center">LoopX 2.0</h1>
 
+<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="LoopX — #1 on GitHub Trending, tracked by Trendshift" width="220" height="48"></a>
+
 **Turn long-horizon goals into verifiable results.**
 
 A local-first control plane and research workbench for agents and teams.<br>
@@ -30,7 +32,7 @@ python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 Restart your Agent host, open your project, then give Codex a concrete task:
 
 ```text
-$loopx fix the open PR review feedback and keep the patch reviewable
+$loopx speed up this project's slowest workflow; compare approaches and verify the gains
 ```
 
 Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgrades ↓](#try-loopx)
@@ -201,7 +203,7 @@ Restart your Agent host, then start from a session opened on your project:
 For example, give your Agent a concrete outcome:
 
 ```text
-$loopx fix the open PR review feedback and keep the patch reviewable
+$loopx speed up this project's slowest workflow; compare approaches and verify the gains
 ```
 
 LoopX reuses existing project state or connects the project, plans the work as
@@ -869,8 +871,6 @@ benchmark evidence, operator surface and IM integration, shared-goal cross-host
 coordination, and an explicitly staged architecture and research incubator.
 
 ## Star History
-
-<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
 <p align="center">
   <a href="https://github.com/loopx-project/loopx/stargazers"><img src="https://loopx-project.github.io/loopx/site-assets/star-history.svg" alt="LoopX GitHub star history from verified snapshots" width="800"></a><br>

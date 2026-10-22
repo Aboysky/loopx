@@ -9,6 +9,22 @@ outcome objective; subordinate outcomes never replace root continuation, budget
 or stop criteria, including in open-ended research. A local success or plateau
 is not campaign completion. Existing legitimate stops/waits still apply.
 
+## Current operating objective
+
+When explicit user direction makes the recorded Goal objective obsolete, prepare
+an objective proposal with `goal-acceptance prepare-objective`, the proposed
+objective, reason and original user source reference. Reuse a matching pending
+proposal and its existing owner-apply route; do not silently edit the active
+state or infer authorization from peer messages. Progress, artifact revisions,
+diagnostics and Todo routing changes alone do not require an objective revision.
+
+After owner apply, each Agent adopts the current objective through
+`goal-acceptance adopt-objective` with its exact revision, digest and inspected
+`objective_work_digest`. Read the command's current schema before authoring the
+proposal or adoption. Adoption covers only that Agent's Todo/Vision route;
+another peer cannot acknowledge for it, and no unanimous approval is required.
+The current canonical objective takes precedence over superseded source text.
+
 ## Reuse context and batch changes
 
 On a material user deliverable/correction, reuse the complete `goal_acceptance`
@@ -20,8 +36,10 @@ original Goal too. Only if this basis is absent or stale, use the bound route:
 loopx --format json goal-acceptance inspect --goal-id <goal>
 ```
 
-Reuse the matching outcome ID. Creation needs its original objective and owner;
-updates need only the ID, source and changed fields. Add stable IDs for
+Reuse the matching outcome ID. Creation needs its original objective, owner and
+request source; adding requirements also needs that provenance. Existing-outcome
+reviews and work-link maintenance need only the ID and changed fields: omit
+`source`, retaining all declared origins. Add stable IDs for
 new requirements and link real existing advancement Todos; normal Todo admission
 creates missing work. Omitted earlier requirements/work links remain. Changing
 an existing requirement description fails: conflicting intent needs explicit
@@ -36,6 +54,13 @@ or owner approval. It may settle planning for unconfigured requirements; it
 cannot bypass configured checks. Do not infer success from a closed Todo.
 Changes to requirements/work declarations invalidate the review basis; artifact
 edits require another review because references are not fingerprinted here.
+Record each milestone in `review[].evidence_refs` and `note`, with detailed
+evidence in its owning material and the operation receipt. Do not create a fresh
+requirement source for each self-review, heartbeat, artifact revision or retry.
+An explicit source remains additive: it is never silently discarded or pruned.
+Retained sources have a bounded capacity; increasing that limit, deleting old
+origins, or creating another outcome merely to escape it does not repair the
+authoring error. A genuinely new declaration still needs its actual provenance.
 
 For changed requirements or reviews, add this envelope to the **existing**
 `refresh-state` writeback using `--goal-outcome-update-json update.json`. Retain
@@ -52,17 +77,19 @@ replace them. Reuse the revision from inline context when still current:
     "objective": "Deliver a clear product tour",
     "requirements": [{"id": "tour-opening", "description": "Retain the approved introduction"}],
     "todo_ids": ["todo_tour"],
-    "source": {"ref": "evidence:tour-request", "summary": "Owner requested a tour with its introduction"}
+    "source": {"ref": "message:tour-request", "summary": "Owner requested a tour with its introduction"}
   }
 }
 ```
 
-Use actual declarations, not the example claims. At a later milestone, the
-refinement needs only `outcome_id`, `source` and `review`; all existing
-requirements still need review:
+Use actual declarations, not the example claims. At a later milestone, omit
+`source`; all existing requirements still need review:
 
 ```json
-"review": [{"id": "tour-opening", "conclusion": "met", "evidence_refs": ["tour.txt#introduction"], "note": "Read the output and confirmed the introduction remains"}]
+{
+  "outcome_id": "product-tour",
+  "review": [{"id": "tour-opening", "conclusion": "met", "evidence_refs": ["tour.txt#introduction"], "note": "Read the output and confirmed the introduction remains"}]
+}
 ```
 
 When retention is needed before substantial work, use one standalone
@@ -70,9 +97,13 @@ When retention is needed before substantial work, use one standalone
 --expected-provider-revision <revision> --operation-id <id> --execute` with the
 inner refinement document. Native enabled conversations expose `outcomes` and
 `refine_outcome` through `loopx_collaboration`; the host fixes Goal/Agent/Turn
-identity. Its document uses `source_summary` instead of caller owner/source and
-accepts the same optional review. Older threads may retain an older tool schema;
-use CLI without replacing a live thread.
+identity. Its document uses `source_summary` for creation/new requirements
+instead of caller owner/source. Omit `source_summary` for reviews/work links;
+it accepts the same review evidence without adding a declaration origin. Older
+builds that still require a source can reuse an inspected existing source's
+exact ref and unchanged summary through CLI for unchanged requirements; do not
+invent a new source or relabel new user intent. Older threads may retain an
+older tool schema; use CLI without replacing a live thread.
 
 ## Continue and recover
 
