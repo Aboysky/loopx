@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-20
+- Last revised: 2026-10-21
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -35,6 +35,14 @@ matched complete SQLite CLI performance must qualify independently before
 delivery. Fewer requests alone do not establish a performance gain.
 
 ### Product conversations and asynchronous inbox
+
+**Bounded Goal portfolio reads.** `goal_portfolio.py` now joins the existing
+executable-revision request scope around the complete portfolio read. CLI,
+Chat context and manager inspection callers reuse that scope across status and
+per-Agent quota reads. Nested scopes join it; the next portfolio read resolves
+the current executable again. Registry, provider and run-history reads remain
+live, with their existing scope, limits and change detection. This is bounded
+caller adoption: no new bridge, data cache, semantic owner or provider routing.
 
 **Receiver Inbox read transaction (2026-10-19).**
 `loopx/control_plane/collaboration/inbox_read.ts` now composes local source scans, pagination,

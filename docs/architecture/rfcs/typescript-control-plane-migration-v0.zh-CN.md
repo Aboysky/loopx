@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-20
+- Last revised：2026-10-21
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -33,6 +33,13 @@ follow-up wire 契约、真实 runtime transport、已安装调用者，以及�
 SQLite CLI 性能。仅减少请求次数不能证明性能收益。
 
 ### 产品对话与通用异步 inbox
+
+**有界 Goal portfolio 读取。** `goal_portfolio.py` 现在在完整 portfolio 读取期间
+复用既有 executable-revision 请求作用域。CLI、Chat context 和 manager inspection
+调用者在 status 与逐 Agent quota 读取之间共用该作用域。嵌套作用域加入当前请求；
+下一次 portfolio 读取重新解析当前代码。Registry、provider 与 run-history 仍实时
+读取，保留既有范围、上限和变化检查。这是有界调用者接入，不新增桥接、数据缓存、
+语义 owner 或 provider 路由。
 
 **接收方 Inbox 读取事务（2026-10-19）。**
 `loopx/control_plane/collaboration/inbox_read.ts` 现在通过既有 typed owner 组合本地源扫描、分页、
