@@ -166,11 +166,17 @@
 .goal-outcomes .is-stale, .goal-outcomes .is-held { color: var(--pw-caution); }
 .goal-outcome { padding: 10px 0; border-top: 1px solid var(--pw-line); min-width: 0; }
 .goal-outcome[hidden], .goal-outcome-criteria > li[hidden], .goal-outcome > details[hidden] { display: none; }
-.goal-outcome-status-group > summary[hidden] { display: none; }
-.goal-outcome-status-group > summary { color: var(--pw-muted); font-size: var(--text-caption); cursor: pointer; }
-.goal-outcome > header { display: flex; align-items: start; gap: 16px; padding-bottom: 4px; }
+.goal-outcome .goal-outcome-disclosure { margin: 0; }
+.goal-outcome-disclosure > summary { display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 6px 0; min-height: 40px; list-style: none; cursor: pointer; }
+.goal-outcome-disclosure > summary::-webkit-details-marker { display: none; }
+.goal-outcome-disclosure > summary > svg { margin-top: 4px; color: var(--pw-faint); transform: rotate(-90deg); }
+.goal-outcome-disclosure[open] > summary > svg { transform: rotate(0); }
+.goal-outcome-disclosure > summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; border-radius: 4px; }
 .goal-outcome h5 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; flex: 1; min-width: 0; font: inherit; font-weight: 500; line-height: var(--leading-body); margin: 0; }
-.goal-outcome > header > span { flex: none; color: var(--pw-faint); font-size: var(--text-caption); line-height: var(--leading-body); }
+.goal-outcome-disclosure[open] > summary h5 { display: block; }
+.goal-outcome-summary-states { display: flex; flex-wrap: wrap; justify-content: end; gap: 4px 12px; max-width: 28em; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-body); }
+.goal-outcome-summary-states > span { white-space: nowrap; }
+.goal-outcome-body { padding: 4px 0 4px 23px; }
 .goal-outcome .goal-outcome-criteria { border: 0; }
 .goal-outcome .goal-outcome-criteria > li { display: block; padding: 0; min-height: 0; border: 0; }
 .goal-outcome .goal-outcome-requirement { margin: 0; }
@@ -193,7 +199,9 @@
 .goal-outcome textarea { width: 100%; min-height: 72px; padding: 8px; resize: vertical; border: 1px solid var(--pw-line); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
 .goal-outcome code { overflow-wrap: anywhere; }
 @media (max-width: 640px) {
-  .goal-outcome > header { gap: 8px; }
+  .goal-outcome-disclosure > summary { grid-template-columns: 15px minmax(0, 1fr); }
+  .goal-outcome-summary-states { grid-column: 2; justify-content: start; max-width: none; }
+  .goal-outcome-body { padding-left: 0; }
   .goal-outcome-requirement > summary { grid-template-columns: 15px minmax(0, 1fr); gap: 4px 8px; }
   .goal-outcome-requirement > summary > small { grid-column: 2; max-width: none; padding-top: 0; }
 }
