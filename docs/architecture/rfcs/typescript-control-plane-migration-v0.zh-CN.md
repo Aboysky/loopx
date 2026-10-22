@@ -1743,6 +1743,15 @@ invariant 冲突，PR 必须披露，并把行为变更单独批准。旧 author
 还要求删除只服务这次实现对比的 characterization machinery；当 fixture 表达 public
 或 persisted compatibility contract 时，可以保留为持久 regression test。
 
+#### Canonical Todo 恢复资格验证（2026-10-21）
+
+Canonical Todo 读回不会使单独声明的 Goal 来源变成可选项。
+该状态文件缺失时，quota 仍拒绝自动执行。恢复 fixture 因此保留原始 Goal 正文，
+只在 capture 后移除旧 Todo 展示。File 与 SQLite CLI 检查覆盖 monitor 修复、
+generation 等待和 capacity 恢复，且不会重建 Todo 展示。
+独立的来源缺失与恢复检查保留 Goal 健康门禁。这里验证有界 Todo 恢复路径；
+完整 Goal 来源迁移仍是独立工作。
+
 ### 性能
 
 Cold startup 与 steady-state 分开测量。每笔 transaction cutover 必须报告：

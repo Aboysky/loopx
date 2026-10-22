@@ -2363,6 +2363,17 @@ promotion also requires deleting characterization machinery that serves only
 that implementation comparison; durable regression fixtures may remain when
 they express a public or persisted compatibility contract.
 
+#### Canonical Todo recovery qualification (2026-10-21)
+
+Canonical Todo readback does not make a separately declared Goal source optional.
+Quota still refuses automatic work when that declared state file is missing.
+Recovery fixtures therefore retain the original Goal prose and remove only its
+legacy Todo display after capture. File and SQLite CLI checks exercise monitor
+repair, generation waits and capacity recovery without recreating Todo display.
+Separate missing-source and restore checks retain the Goal health guard. These
+checks qualify the bounded Todo recovery paths; full Goal-source migration
+remains separate.
+
 ### Performance
 
 Measure cold startup separately from steady-state execution. Every transaction
