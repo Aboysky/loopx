@@ -190,7 +190,7 @@ def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, mo
     guard = cli("quota", "should-run", *identity, "--codex-app", "--scan-path", str(project),
         "--turn-instance-id", turn, "--todo-id", fixture.TODO_ID)
     control = guard["replan_action_packet"]["stride_control"]
-    page = cli("explore", "turn-context", *identity, "--result-limit", "20")
+    page = cli("explore", "turn-context", *identity, "--todo-id", fixture.TODO_ID, "--result-limit", "20")
     [card] = [row for row in page["harness"]["comparison_candidates"] if row["todo_id"] == fixture.TODO_ID]
     assert len(page["graph"]["writeback_results"]) == len(card["outcomes"]) == 5
     # Choose a quantified outcome omitted by the default three-row view.
@@ -207,7 +207,7 @@ def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, mo
     decision["explore_review"] = {"revision": control["explore_basis"]["revision"],
         "disposition": "used", "considered_refs": [selected["finding_id"]],
         "selected_candidate": selected, "reason": "This exact measured scope informs the next experiment.",
-        "result_pages": [{k: page["graph"]["result_page"][k] for k in ("revision", "offset", "limit")}]}
+        "result_pages": [{k: page["graph"]["result_page"][k] for k in ("revision", "offset", "limit", "todo_id")}]}
     packet = actor.vision(request, selected["finding_id"], outcome="replan")
     packet.update(stride_decision=decision, todo_delta=["retain:" + fixture.TODO_ID])
     path = project / "wide-review.json"
