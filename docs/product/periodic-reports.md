@@ -154,10 +154,13 @@ Discovery enumerates the complete current authorized Goal scope. Each Goal must
 provide a complete native Todo read and exact current decision terms. If one
 Goal is unreadable or unmigrated, its previous subjects, pending notices and
 unknown sends remain retained; an unavailable source is never treated as an
-empty or withdrawn Todo list. Notices from other readable Goals continue. A
-retained notice becomes eligible only after its own source is read again, with
+empty or withdrawn Todo list. Notices from other readable Goals continue. An
+unsent notice becomes eligible only after its own source is read again, with
 the original generation and provider intent preserved. Real withdrawals or
-scope removal still cancel unsent notices.
+scope removal still cancel unsent notices. A known provider locator continues
+independent readback of the frozen original effect, even if the Todo changes
+or its source is unavailable; current App, owner and original-route verification
+remain required. This read cannot create another notification.
 
 First enable baselines readable history and remembers unreadable initial Goals.
 Their first successful read also baselines history, avoiding a delayed recovery

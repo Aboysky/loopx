@@ -218,7 +218,7 @@ class LarkOwnerAttention:
                     state["last_checked_at"] = time.time()
                     self._write(path, state)
                     ready = [row["id"] for row in state["outbox"] if row["status"] in {"pending", "unconfirmed"}
-                             and row.get("source_current") is True
+                             and (row["status"] != "pending" or row.get("source_current") is True)
                              and float(row.get("next_attempt_at", 0)) <= time.time()
                              and (row["status"] == "pending" or row.get("message_id"))][:2]
                     for notice_id in ready:
@@ -228,8 +228,12 @@ class LarkOwnerAttention:
                         state = self._plan(state, self._snapshot(binding))
                         self._write(path, state)
                         row = next((row for row in state["outbox"] if row["id"] == notice_id), None)
-                        if row is None or row["status"] not in {"pending", "unconfirmed"} or row.get("source_current") is not True:
+                        if (row is None or row["status"] not in {"pending", "unconfirmed"}
+                                or (row["status"] == "pending" and row.get("source_current") is not True)):
                             continue
+                        # New writes need current Todo terms. Readback only
+                        # verifies the already-frozen effect on its original
+                        # authorized route, even if that Todo was withdrawn.
                         route = self._route(binding, state["route"])
                         if row["status"] == "pending":
                             text = present_lark_conversation_text(row["body"])

@@ -436,6 +436,9 @@ def test_partial_source_worker_recovers_unknown_receipt_without_duplicate_send(o
         return native(**args)
     monkeypatch.setattr(module, "list_goal_todos", read)
     o.provider.verify_replies = True
+    state = o.attention._read(path)
+    state["outbox"][0]["next_attempt_at"] = 0
+    o.attention._write(path, state)
     o.tasks([{"id": "todo_healthy", "text": "Healthy independent notification"}], goal="beta")
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=o.store.root.parent,
         runtime_controller=o.runtime, private_conversations=o.transport)
@@ -444,21 +447,44 @@ def test_partial_source_worker_recovers_unknown_receipt_without_duplicate_send(o
     try:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if len(o.provider.writes) == before + 2 and o.attention.health(o.binding["binding_id"])["unconfirmed_count"] == 1:
+            if len(o.provider.writes) == before + 2 and o.attention.health(o.binding["binding_id"])["unconfirmed_count"] == 0:
                 break
             time.sleep(.05)
         assert len(o.provider.writes) == before + 2, "the original worker makes healthy progress despite the gap"
     finally:
         service._closed.set()
         worker.join(10)
-    held = o.attention._read(path)["outbox"][0]
-    assert held["status"] == "unconfirmed" and held["id"] == unknown["id"]
-    assert held["intent"] == unknown["intent"] and held["message_id"] == unknown["message_id"]
+    saved = json.loads((path.parent / "receipts" / path.stem / f"{unknown['id']}.json").read_text())
+    assert saved["status"] == "delivered" and saved["id"] == unknown["id"]
+    assert saved["intent"] == unknown["intent"] and saved["message_id"] == unknown["message_id"]
+    assert o.attention.health(o.binding["binding_id"])["source_coverage"]["unavailable_goal_count"] == 1
     monkeypatch.setattr(module, "list_goal_todos", native)
-    state = o.attention._read(path)
-    next(row for row in state["outbox"] if row["id"] == held["id"])["next_attempt_at"] = 0
-    o.attention._write(path, state)
     restarted = LarkPrivateConversations(controller=o.runtime, runtime_root=o.store.root.parent,
                                          runner=o.provider, cli_bin="lark-cli").owner_attention
-    assert restarted.reconcile() == 1
     assert restarted.reconcile() == 0 and len(o.provider.writes) == before + 2
+
+
+@pytest.mark.parametrize("change", ["withdrawn", "terms_changed"])
+def test_readback_of_frozen_send_does_not_require_current_todo_terms(owner, change):
+    o = owner
+    o.configure()
+    o.tasks([{"id": "todo_notice", "text": "Original owner decision"}])
+    o.provider.verify_replies = False
+    before = len(o.provider.writes)
+    assert o.attention.reconcile() == 0
+    path = o.attention._path(o.binding["binding_id"])
+    state = o.attention._read(path)
+    unknown = state["outbox"][0]
+    unknown["next_attempt_at"] = 0
+    o.attention._write(path, state)
+    o.tasks([{"id": "todo_notice", "text": "Changed owner decision" if change == "terms_changed"
+              else "Original owner decision", "done": change == "withdrawn"}])
+    o.provider.verify_replies = True
+    restarted = LarkPrivateConversations(controller=o.runtime, runtime_root=o.store.root.parent,
+                                         runner=o.provider, cli_bin="lark-cli").owner_attention
+    assert restarted.reconcile() == (2 if change == "terms_changed" else 1)
+    saved = json.loads((path.parent / "receipts" / path.stem / f"{unknown['id']}.json").read_text())
+    assert saved["status"] == "delivered" and saved["message_id"] == unknown["message_id"]
+    assert saved["intent"] == unknown["intent"]
+    assert restarted.reconcile() == 0
+    assert len(o.provider.writes) == before + (2 if change == "terms_changed" else 1)
