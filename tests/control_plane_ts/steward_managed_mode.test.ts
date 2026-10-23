@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {bindStewardManagedActor, planStewardManagedMode} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+import {admitStewardManagedTurn, bindStewardManagedActor, planStewardManagedMode} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 
 function fixture() {
@@ -21,6 +21,36 @@ function fixture() {
     creation_operation_id: `steward-managed:${binding.binding_id}:${source}`};
   return {params, goal};
 }
+
+test("native dispatch binds the prepared actor, while an active original Turn permits revalidation only", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const request = {operation: "native_turn", host: "codex-app-server", actor,
+    turn_instance_id: "monitor-window-1", todo_id: "todo_original", validation_command: null};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor}, request};
+  assert.deepEqual(admitStewardManagedTurn(input).actor, actor);
+  const active = {...input, session: {...params.session, active_turn_id: "accepted-native", manager_authorization_scope_id: "prior-scope"},
+    scope: {current: "new-scope", without_actor: "prior-scope"},
+    turn: {turn_id: "accepted-native", session_id: params.session.session_id, status: "running",
+      origin: "native_loopx", loopx_execution: true, loopx_request: request}};
+  assert.deepEqual(admitStewardManagedTurn({...active, queued_turn_count: 1}).actor, actor);
+  assert.equal(admitStewardManagedTurn(active).refresh_original_scope, true);
+  assert.throws(() => admitStewardManagedTurn({...input, queued_turn_count: 1}));
+  assert.throws(() => admitStewardManagedTurn({...input, session: active.session}));
+  for (const changed of [
+    {...active, turn: {...active.turn, status: "interrupted"}},
+    {...active, turn: {...active.turn, origin: "lark"}},
+    {...active, turn: {...active.turn, loopx_execution: false}},
+    {...active, turn: {...active.turn, turn_id: "other-turn"}},
+    {...active, request: {...request, actor: {...actor, source_ref: "0".repeat(24)}}},
+    {...active, request: {...request, host: "codex-cli"}},
+    {...active, goal_active: false},
+    {...active, goal: {...goal, goal_instance_id: "replacement-lifetime"}},
+    {...active, scope: {current: "other-scope", without_actor: "not-the-original-scope"}},
+    {...active, binding: {...active.binding, goal_scope: "selected"}},
+    {...active, request: {...request, validation_command: ["shell\0injection"]}},
+  ]) assert.throws(() => admitStewardManagedTurn(changed));
+});
 
 test("preparation names one persistent steward, without model or scheduling authority", () => {
   const {params, goal} = fixture();

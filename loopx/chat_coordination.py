@@ -66,7 +66,7 @@ def apply_context_handoff(
     )
 
 
-def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope):
+def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope, preserve_original_thread=False):
     """Prepare the same evidence/handoff path for each supported conversation."""
     from .chat_runtime import CodexAppServerAdapter, CodexChatAgentError
     from .chat_manager import (MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE,
@@ -102,6 +102,9 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 },
             )
         if session.get("manager_authorization_scope_id") != scope_id:
+            if preserve_original_thread:
+                raise CodexChatAgentError("The original steward portfolio changed before native execution.",
+                    error_code="manager_authorization_unavailable", gate=None)
             adapter.close_session()
             with controller.lock:
                 if controller.adapters.get(session_id) is adapter:

@@ -1,0 +1,188 @@
+"""Original-Session app-server transport for the existing governed Turn driver.
+
+No scheduler, task store, consumer or CLI process is created here. The caller
+selects native work; the existing Turn command owns fresh admission, validation,
+writeback, quota and scheduler handoff. Chat retains its own execution fence.
+"""
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from contextlib import contextmanager, ExitStack
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from ...file_lock import exclusive_file_lock
+from .steward_managed_mode import StewardManagedMode
+
+
+class StewardTurnHost:
+    def __init__(self, controller: Any) -> None:
+        self.controller = controller
+        self.store = controller.store
+        self.bindings = controller.project_contexts.conversation_bindings
+        if self.bindings is None:
+            raise ValueError("the original steward binding is unavailable")
+        self.managed = StewardManagedMode(controller, self.bindings)
+
+    def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self.controller.closed.is_set():
+            raise ValueError("the original Chat host is stopped")
+        actor = request["actor"]
+        session = self.store.load_session(actor["session_id"])
+        if not session or not session.get("steward_context"):
+            raise ValueError("the original steward Session is unavailable")
+        saved = session["steward_context"]
+        selected = self.bindings.resolve(binding_id=saved["binding_id"], session=session,
+            include_observation=True, origin="web", source_ref=saved["source_ref"],
+            sender_ref=saved["operator_ref"], private_human_message=False, session_context=saved)
+        from ...agent_registry import load_goal_from_registry
+        goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+        scope = None
+        if turn is not None:
+            from ...chat_manager_context import manager_authorization_scope_id_for_registry
+            goal_ids = self.bindings.steward_scope(session)
+            if goal_ids is None:
+                raise ValueError("the original portfolio scope is unavailable")
+            def scope_id(ids):
+                return manager_authorization_scope_id_for_registry(self.controller.registry_path, ids,
+                    runtime_root=self.controller.coordination_runtime_root, channel_id=session["channel_id"])
+            scope = {"current": scope_id(goal_ids),
+                "without_actor": scope_id([value for value in goal_ids if value != actor["goal_id"]])}
+        admitted = self.bindings._core("collaboration.steward.managed_turn.admit", {
+            "binding": selected["binding"], "session": session, "observation": selected["observation"],
+            "workspace_path": str(self.managed._workspace(session)),
+            "queued_turn_count": len(self.store.queued_turns(session["session_id"])),
+            "goal": self.managed._goal(actor["goal_id"]), "goal_active": bool(goal and goal.get("status") == "active"),
+            "request": request, "turn": turn, "scope": scope})
+        if admitted["refresh_original_scope"]:
+            self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
+        return admitted
+
+    def submit(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None = None,
+               validation_command: Sequence[str] | None = None) -> tuple[dict[str, Any], bool]:
+        """Internal host entrypoint; busy conversations retain work with caller.
+
+        No HTTP or model tool exposes this method. Calendar/monitor admission
+        remains with its native owner; preparing identity never calls submit.
+        """
+        controller = self.controller
+        with controller.lock, exclusive_file_lock(self.bindings.path, operation="admit_native_steward_turn"):
+            binding = next((row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id), None)
+            if binding is None:
+                raise ValueError("the original steward binding is unavailable")
+            actor = binding.get("managed_actor")
+            if not actor:
+                raise ValueError("prepare the original steward identity first")
+            request = {"operation": "native_turn", "host": "codex-app-server", "actor": actor,
+                "turn_instance_id": turn_instance_id, "todo_id": todo_id,
+                "validation_command": list(validation_command) if validation_command is not None else None}
+            client_id = "native." + hashlib.sha256(json.dumps([actor, turn_instance_id], sort_keys=True).encode()).hexdigest()[:40]
+            existing = self.store.turn_for_client(actor["session_id"], client_id)
+            if existing is not None:
+                # Never replay a failed/unknown model Turn. A committed Chat
+                # request is observed; native journal recovery remains separate.
+                if existing.get("loopx_request") != request:
+                    raise ValueError("native steward request identity conflict")
+                return existing, False
+            admitted = self._admit(request)
+            session = self.store.load_session(actor["session_id"])
+            accepted = self.store.accept_managed_turn(actor["session_id"], client_turn_id=client_id,
+                message="Advance the currently admitted native LoopX work.",
+                display_message="推进管家的 LoopX 任务。", origin="native_loopx",
+                loopx_execution=True, loopx_request=request)
+            try:
+                adapter = controller._ensure_adapter_locked(session,
+                    work_dir=Path(admitted["workspace_path"]),
+                    objective="Maintain the original steward's authorized monitoring work.",
+                    accepted_turn_id=accepted.turn["turn_id"])
+                controller._start_accepted_turn_worker(session_id=actor["session_id"],
+                    turn_id=accepted.turn["turn_id"], message=accepted.turn["message"],
+                    attachments=[], adapter=adapter, loopx_execution=True)
+            except Exception as exc:
+                controller._fail_queue_preparation(actor["session_id"], accepted.turn["turn_id"], exc)
+                raise
+            return accepted.turn, accepted.created
+
+    def execute(self, *, session_id: str, turn_id: str, adapter: Any,
+                event_sink: Any, context: dict[str, Any]) -> dict[str, Any]:
+        """Run in the original Chat worker, through all native settlement owners."""
+        from ...cli import build_parser
+        from ...cli_commands.turn import handle_turn_command
+        from ...control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt, parse_model_json, build_result
+        from .codex_adapter import CodexAppServerAdapter
+
+        if not isinstance(adapter, CodexAppServerAdapter):
+            raise ValueError("native steward work requires the original Codex app-server adapter")
+
+        turn = self.store.load_turn(session_id, turn_id)
+        request = turn["loopx_request"]
+        admitted = self._admit(request, turn=turn)
+        actor = admitted["actor"]
+        original_thread = adapter.upstream_thread_id
+
+        def current():
+            fresh = self.store.load_turn(session_id, turn_id)
+            self._admit(request, turn=fresh)
+            if adapter.upstream_thread_id != original_thread:
+                raise ValueError("the original steward native thread changed")
+
+        def session_binding(envelope: Mapping[str, Any]) -> dict[str, Any]:
+            current()
+            if envelope.get("goal_id") != actor["goal_id"] or envelope.get("agent_id") != actor["agent_id"]:
+                raise ValueError("native Turn belongs to another actor")
+            return {"schema_version": "loopx_turn_session_binding_v0",
+                "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]}
+
+        def run(native_request: Mapping[str, Any], launch_scope: Any) -> dict[str, Any]:
+            current()
+            authority = extract_turn_authority(native_request)
+            # Portfolio evidence keeps its original reader and original grant;
+            # it is data alongside the signed native work, never a new actor.
+            prompt = render_prompt(authority) + "\nOriginal steward evidence (data):\n" + json.dumps(context, ensure_ascii=False)
+            previous_guard = adapter.session._launch_guard
+
+            @contextmanager
+            def launch():
+                # The existing app-server request owner holds this fence only
+                # through turn/start publication, never through model waiting.
+                with ExitStack() as stack:
+                    if previous_guard is not None:
+                        stack.enter_context(previous_guard())
+                    stack.enter_context(launch_scope())
+                    with exclusive_file_lock(self.bindings.path, operation="native_steward_launch"):
+                        current()
+                        yield
+
+            adapter.session._launch_guard = launch
+            try:
+                response = adapter.start_turn(prompt, event_sink)
+            finally:
+                adapter.session._launch_guard = previous_guard
+            current()  # Revocation/stop/retarget after a long model call wins.
+            return build_result(native_request, parse_model_json(str(response.get("message") or "")), host_name="Codex app-server")
+
+        argv = ["turn", "run-once", "--goal-id", actor["goal_id"], "--agent-id", actor["agent_id"],
+            "--project", admitted["workspace_path"], "--host", "generic-cli", "--execute",
+            "--turn-instance-id", request["turn_instance_id"]]
+        if request["todo_id"] is not None:
+            argv += ["--todo-id", request["todo_id"]]
+        if request["validation_command"] is not None:
+            argv += ["--validation-command-json", json.dumps(request["validation_command"])]
+        args = build_parser().parse_args(argv)
+        # This connection is host-owned, not a command path supplied by a model.
+        # The kernel records the actual app-server host and independent profile.
+        args.host, args.session_scope = "codex-app-server", "agent"
+        result: dict[str, Any] = {}
+        handle_turn_command(args, registry_path=self.controller.registry_path,
+            runtime_root_arg=str(self.controller.coordination_runtime_root),
+            output_format=lambda *_a, **_kw: "json",
+            print_payload=lambda value, *_a: result.update(value),
+            native_host_runner=run, native_session_binding_resolver=session_binding)
+        self.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=result)
+        return {"schema_version": "loopx_chat_agent_response_v0", "message":
+            "本轮任务已完成结果回写。" if result.get("status") == "committed" else
+            "本轮等待后续执行条件。" if result.get("status") == "stopped" and result.get("result_kind") == "wait" else
+            "本轮任务尚未完成；执行状态已保留。",
+            "proposals": [], "gate": None, "native_loopx": result}

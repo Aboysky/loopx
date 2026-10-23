@@ -156,6 +156,24 @@ windows, rather than starting an unbounded series of model calls.
 
 ## Implementation order and acceptance
 
+The original-Session host bridge now runs a bounded native Turn through the
+existing Chat worker and Codex app-server connection. It uses the explicit
+`codex_app_server` outer-controller profile, not Codex CLI execution or a
+desktop App heartbeat. Fresh native work selection, independent validation,
+writeback, quota and scheduler handoff remain with the existing Turn command.
+It preserves the original conversation thread, provider and portfolio grant;
+busy/queued user work wins admission, and revoked or stopped sources cannot
+commit a late model result. Same-request readback does not restart failed or
+unknown work.
+
+This internal bridge has no new HTTP/model entrypoint or automatic wake. Identity
+preparation still leaves scheduling disabled. Monitor deadline dispatch,
+calendar configuration, unfinished native-journal recovery and original report
+publication remain the next integration boundary. A passing synthetic
+File/SQLite host journey does not establish an enabled daily report or real
+model/report quality. Keep the existing prepared-but-not-enabled settings
+journey until that complete integration is qualified.
+
 1. Qualify the native steward upgrade and rollback at an idle boundary. Verify
    one registered actor, preserved original history/requests/grants, and no
    change to ordinary assistants or other project Agents.

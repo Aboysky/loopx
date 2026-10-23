@@ -47,6 +47,8 @@ def handle_turn_command(
     runtime_root_arg: str | None,
     output_format: FormatSelector,
     print_payload: PrintPayload,
+    native_host_runner: Callable[..., dict[str, Any]] | None = None,
+    native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
 ) -> int | None:
     if args.command != "turn":
         return None
@@ -69,6 +71,10 @@ def handle_turn_command(
     payload: dict[str, Any] = {}
     turn_start_hook_dispatch: dict[str, Any] = {}
     try:
+        if (native_host_runner is not None or native_session_binding_resolver is not None) and (
+            args.host != "codex-app-server" or native_host_runner is None or native_session_binding_resolver is None
+        ):
+            raise ValueError("an app-server Turn requires its original host connection and session resolver")
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
             or any(getattr(args, key, None) for key in ("resume_goal_id", "resume_agent_id", "resume_todo_id"))
@@ -227,8 +233,10 @@ def handle_turn_command(
             )
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
-            session_scope = (args.session_scope if args.host == "codex-cli"
+            session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}
                              and not getattr(args, "codex_operation_tools", False) else "todo")
+            if native_session_binding_resolver is not None:
+                session_binding = native_session_binding_resolver(turn_envelope)
             if (
                 args.turn_command == "run-once"
                 and (args.host == "codex-cli" or dsh_operation_module)
@@ -330,6 +338,8 @@ def handle_turn_command(
                 operator_environ=operator_environ,
                 operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                native_host_runner=native_host_runner,
+                native_session_binding_resolver=native_session_binding_resolver,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")
