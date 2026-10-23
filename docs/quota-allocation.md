@@ -499,6 +499,16 @@ claim-scoped full selection source. An existing wait lane or its display limit
 cannot hide a new retry; foreign, excluded, mismatched and replaced waits do not
 qualify through this path.
 
+Ordinary open-Vision wait projection uses the same complete, Agent-scoped
+runnable-work counts as selection. Commitment counts still include unfinished
+work and cannot establish that it can execute during a receipt retry. The
+existing resume owner supplies the retry's complete pending-clock proof to
+Vision and host supervision. A causally linked pending retry can therefore
+defer the open acceptance gap until its original due time; it neither closes
+the Vision nor suppresses independent work, a missing checkpoint or an unrelated
+acceptance obligation. Incomplete or differently scoped counts retain the
+existing conservative frontier behavior.
+
 类型化 deadline owner 会把新叠加的、更早到期的 Turn 重试纳入已有的完整来源
 缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。同一个 typed batch
 从完整且合格的 receipt 来源独立投影 `blocked_retry_wait`；`frontier_deadline`
@@ -510,6 +520,12 @@ qualify through this path.
 stored resume lane 建立后新增的 receipt wait，沿同一个 claim-scoped 完整
 selection 来源读回。已有等待列表及其显示上限不能隐藏新重试；其它 Agent、
 被排除的执行者、身份不匹配或已被替换的等待不能由这条路径取得资格。
+
+普通开放 Vision 的等待投影复用 selection 的完整 Agent 范围可执行工作计数；
+未完成承诺仍保留在 commitment 计数中，但不代表 receipt retry 期间可执行。
+既有 resume owner 向 Vision 和 Host 监督提供完整的未到期时钟证明；具有因果关联的
+retry 可暂缓普通开放验收缺口至原到期时间，不关闭 Vision，也不遮蔽独立工作、
+缺失 checkpoint 或无关验收义务；计数不完整或范围不匹配时仍保留原有保守判断。
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a

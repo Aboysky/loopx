@@ -1917,6 +1917,81 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     assert next_turn["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] <= 5
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_receipt_retry_keeps_open_vision_quiet_through_real_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_completion_validation_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    rc, before = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, before
+    binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", "turn-vision-feedback")
+    rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                            "--goal-id", GOAL_ID, *binding, cwd=project)
+    assert rc == 0, admitted
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Qualify the work after new feedback.",
+                         "advancement_policy": "repeat_until_closed"},
+        "todo_delta": [f"retain:{TODO_ID}"],
+        "path_delta": {"outcome": "no_change", "prior_assumption": "Feedback is required.",
+                       "observed_reality": "No new feedback is available.",
+                       "retained": ["The original work and acceptance."],
+                       "evidence_refs": ["evidence:feedback-pending"]},
+    }), encoding="utf-8")
+    rc, closed = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID,
+                          *binding, "--classification", "feedback_pending",
+                          "--delivery-batch-scale", "single_surface",
+                          "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+                          "--progress-blocker-id", "external-feedback",
+                          "--progress-evidence-id", "evidence:feedback-pending",
+                          "--agent-vision-json", str(vision),
+                          "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert rc == 0, closed
+    assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+    rc, waiting = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                           "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                           "--turn-instance-id", "turn-before-feedback-due", cwd=project)
+    assert rc == 0, waiting
+    assert waiting["execution_obligation"]["must_attempt_work"] is False
+    assert not waiting.get("autonomous_replan_obligation")
+    assert waiting["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert waiting["agent_todo_summary"]["blocked_retry_wait"]["due_at"] == closed["blocked_retry"]["due_at"]
+    wait = waiting["goal_frontier_projection"]["vision_wait_state"]
+    assert wait["selected_todo_id"] == TODO_ID
+    assert wait["resume_condition"]["scheduled_for"] == closed["blocked_retry"]["due_at"]
+    envelope = build_turn_envelope(waiting)
+    assert envelope["contract_capsule"]["execution_obligation"]["must_attempt_work"] is False
+    rc, after = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, after
+    assert after["todos"] == before["todos"]
+    assert _spend_run_count(runtime) == 0
+    rc, independent = _run_cli(
+        registry, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "agent", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "independent-feedback",
+        "--claimed-by", AGENT_ID, "--text", "Validate independent evidence.",
+    )
+    assert rc == 0, independent
+    rc, resumed = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "turn-independent-feedback", cwd=project,
+    )
+    assert rc == 0, resumed
+    assert resumed["selected_todo"]["todo_id"] == independent["todo_id"]
+    assert resumed["execution_obligation"]["must_attempt_work"] is True
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("kind", ["todo_done", "monitor_changed", "resume_at", "implicit", "monitor"])
 def test_blocked_wait_transports_complete_lifecycle_facts_without_prose(
     kind: str, monkeypatch: pytest.MonkeyPatch,

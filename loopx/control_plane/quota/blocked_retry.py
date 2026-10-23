@@ -6,7 +6,10 @@ from datetime import datetime
 from typing import Any
 
 from ..todos.contract import normalize_todo_id
-from ..todos.resume_condition import compact_todo_resume_items
+from ..todos.resume_condition import (
+    compact_todo_resume_items,
+    evaluate_todo_resume_conditions,
+)
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 BLOCKED_RETRY_SCHEMA_VERSION = "quota_blocked_retry_v0"
@@ -170,6 +173,17 @@ def overlay_active_turn_retries(
     items = queue.get("items") if isinstance(queue, dict) else None
     if not isinstance(items, list):
         return status_payload
+    # Reuse the resume owner for complete clock proof. A bare satisfied=False
+    # suppresses selection but cannot qualify an automatic Vision/host wait.
+    retry_items = [
+        {"todo_id": todo_id, "status": "open", "role": "agent",
+         "task_class": "advancement_task", "claimed_by": agent_id,
+         "resume_when": retry["resume_when"]}
+        for todo_id, retry in waits.items()
+    ]
+    resume_conditions = evaluate_todo_resume_conditions(
+        retry_items, source_items=retry_items, evaluated_at=observed_at,
+    )
     projected_items = []
     changed = False
 
@@ -207,9 +221,7 @@ def overlay_active_turn_retries(
                             "blocked_retry": retry,
                             "next_due_at": retry["due_at"],
                             "resume_condition": {
-                                "kind": "resume_at",
-                                "resume_when": resume,
-                                "satisfied": False,
+                                **resume_conditions[todo["todo_id"]],
                                 "blocked_retry": retry,
                             },
                         }
