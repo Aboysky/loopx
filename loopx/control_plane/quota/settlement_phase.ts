@@ -1,4 +1,4 @@
-import type { SettlementIdentity } from "../effect_program.ts";
+import { settlementIdentity, type SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
 import { isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
@@ -52,6 +52,38 @@ export function isAcceptedBlockedReplanWriteback(
       const trigger = jsonObject(value);
       return trigger?.kind === "material_delivery_outcome" && trigger.delivery_outcome === "outcome_gap";
     });
+}
+
+/** Classify persisted Run facts for history selection, without granting a
+ * settlement, debit or execution right. Reuse the settlement owner's exact
+ * semantic qualification; a caller-supplied "administrative" flag is no proof.
+ * One batch keeps history reads independent of per-Run bridge latency. */
+export function acceptedBlockedReplanHistoryIndexes(runs: unknown[]): number[] {
+  const accepted: number[] = [];
+  runs.forEach((value, index) => {
+    const run = jsonObject(value);
+    if (!run || run.todo_id != null ||
+        ![run.goal_id, run.agent_id, run.turn_instance_id, run.replan_obligation_id]
+          .every(value => typeof value === "string" && value.trim().length > 0)) return;
+    const identity = settlementIdentity({
+      goal_id: run.goal_id as string, agent_id: run.agent_id as string,
+      turn_instance_id: run.turn_instance_id as string,
+      replan_obligation_id: run.replan_obligation_id as string,
+    });
+    const persisted = jsonObject(run.settlement_identity);
+    if (run.settlement_identity != null && (!persisted ||
+        Object.entries(identity).some(([key, value]) =>
+          (value === null ? persisted[key] ?? null : persisted[key]) !== value))) return;
+    // compact_vision_checkpoint omits the historical default boundary. Decode
+    // that existing representation here; live settlement still requires its
+    // explicit committed checkpoint and independently verified receipts.
+    const checkpoint = jsonObject(run.vision_checkpoint);
+    const decoded = checkpoint && checkpoint.delivery_boundary === undefined
+      ? {...run, vision_checkpoint: {...checkpoint, delivery_boundary: "semantic_closeout"}}
+      : run;
+    if (isAcceptedBlockedReplanWriteback(decoded, identity, run.replan_obligation_id)) accepted.push(index);
+  });
+  return accepted;
 }
 
 /** A service-qualified capability duty can retire its exact admitted Turn.

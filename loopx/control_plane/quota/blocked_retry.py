@@ -6,7 +6,10 @@ from datetime import datetime
 from typing import Any
 
 from ..todos.contract import normalize_todo_id
-from ..todos.resume_condition import compact_todo_resume_items
+from ..todos.resume_condition import (
+    compact_todo_resume_items,
+    evaluate_todo_resume_conditions,
+)
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 BLOCKED_RETRY_SCHEMA_VERSION = "quota_blocked_retry_v0"
@@ -110,6 +113,7 @@ def overlay_active_turn_retries(
     goal_id: str,
     agent_id: str | None,
     observed_at: str,
+    include_unclaimed: bool = True,
 ) -> dict[str, Any]:
     """Project a receipt-owned wait into selection without editing hard-lease Todos.
 
@@ -170,6 +174,17 @@ def overlay_active_turn_retries(
     items = queue.get("items") if isinstance(queue, dict) else None
     if not isinstance(items, list):
         return status_payload
+    # Reuse the resume owner for complete clock proof. A bare satisfied=False
+    # suppresses selection but cannot qualify an automatic Vision/host wait.
+    retry_items = [
+        {"todo_id": todo_id, "status": "open", "role": "agent",
+         "task_class": "advancement_task", "claimed_by": agent_id,
+         "resume_when": retry["resume_when"]}
+        for todo_id, retry in waits.items()
+    ]
+    resume_conditions = evaluate_todo_resume_conditions(
+        retry_items, source_items=retry_items, evaluated_at=observed_at,
+    )
     projected_items = []
     changed = False
 
@@ -194,7 +209,8 @@ def overlay_active_turn_retries(
                     and todo.get("status") == "open"
                     and todo.get("task_class") == "advancement_task"
                     and not todo.get("resume_when")
-                    and todo.get("claimed_by") in (None, agent_id)
+                    and (todo.get("claimed_by") == agent_id or
+                         include_unclaimed and todo.get("claimed_by") is None)
                 ):
                     resume = retry["resume_when"]
                     projected_rows.append(
@@ -207,9 +223,7 @@ def overlay_active_turn_retries(
                             "blocked_retry": retry,
                             "next_due_at": retry["due_at"],
                             "resume_condition": {
-                                "kind": "resume_at",
-                                "resume_when": resume,
-                                "satisfied": False,
+                                **resume_conditions[todo["todo_id"]],
                                 "blocked_retry": retry,
                             },
                         }
@@ -262,6 +276,8 @@ def overlay_status_turn_retries(
 
     History is the uncompressed control-plane snapshot, not the display tail.
     Qualification, supersession and clocks stay with the existing retry owner.
+    An unclaimed Todo is shared across lanes: only the requesting Agent's
+    admission may overlay its own retry there, never an unscoped status read.
     No canonical Todo, receipt, scheduler or quota mutation is performed here.
     """
     payload = {"run_history": history, "attention_queue": queue}
@@ -283,6 +299,6 @@ def overlay_status_turn_retries(
         for agent_id in agents:
             payload = overlay_active_turn_retries(
                 payload, goal_id=goal["id"], agent_id=agent_id,
-                observed_at=observed_at,
+                observed_at=observed_at, include_unclaimed=False,
             )
     return payload["attention_queue"]

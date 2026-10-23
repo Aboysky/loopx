@@ -241,6 +241,24 @@ selection of independent work remain unchanged. A previously committed debit
 is retained, and neither a bare blocker declaration nor an unqualified ACK
 closes the Turn.
 
+History selection also distinguishes this accepted administrative blocked replan
+from a delivered milestone. The existing TypeScript settlement owner qualifies
+the persisted Run facts in one batch; a bare blocker, unaccepted ACK, mismatched
+identity or unsupported checkpoint remains outcome-relevant. Both semantic
+history and the legacy recent-Run reader retain the preceding real outcome
+checkpoint, including any unresolved gap, instead of manufacturing a new
+final-outcome obligation from the administrative closeout. The latest vision,
+checkpoint and replan ACK remain visible. Missing checkpoints and genuine
+delivery gaps still require their original review; this read classification
+grants no execution, completion, acceptance or settlement authority.
+
+历史选取将已验收的行政阻塞重规划与成果里程碑区分。复用 TypeScript 结算 owner 批量
+核对持久 Run 的类型化事实；裸阻塞、未验收 ACK、身份错配和未知 checkpoint 均不能
+取得行政豁免。语义历史和旧 recent-Run 读路都保留前一个真实成果 checkpoint 及其
+未解决缺口，避免行政收尾反复制造新的成果复核义务。最新 vision、checkpoint 和
+重规划 ACK 仍然可见；缺失 checkpoint 与真实交付 gap 保持原复核要求，这一读取
+分类不授予执行、完成、验收或结算权限。
+
 An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
 Todo-bound Turn after the matching writeback and spend receipts commit. Both
 `in_flight_continuation` and `semantic_closeout` use their corresponding typed
@@ -494,10 +512,31 @@ monitor clock, genuine gate and independent runnable work keep their own rules.
 This corrects the automatic notice explanation without adding configuration or
 persisted state. The pending retry is a recheck deadline, not execution authority:
 current gates and the configured cadence floor still apply at and after due time.
+
+A causal Vision wait retains the same non-gating notice and original retry
+deadline; it must not emit a response plan asking the worker to wait for that
+user action. Unscoped status overlays apply a receipt retry only to its current
+claimant. An unclaimed Todo remains available to other Agents; the requesting
+Agent's admission overlays only its own retry. History retains the original
+Run and clock, and genuine gates still block their declared scope.
+
+关联 Vision 的等待保留同一非阻塞通知与原重试期限，不得再投影“等待用户”的响应
+计划。未分 Agent 的 status 只向当前认领者投影其重试；未认领 Todo 仍可由其他 Agent
+选择，各 Agent 的准入只叠加自己的重试。原 Run／时钟和真正授权门禁保持原边界。
 Receipt waits added after stored resume lanes were built are read from the same
 claim-scoped full selection source. An existing wait lane or its display limit
 cannot hide a new retry; foreign, excluded, mismatched and replaced waits do not
 qualify through this path.
+
+Ordinary open-Vision wait projection uses the same complete, Agent-scoped
+runnable-work counts as selection. Commitment counts still include unfinished
+work and cannot establish that it can execute during a receipt retry. The
+existing resume owner supplies the retry's complete pending-clock proof to
+Vision and host supervision. A causally linked pending retry can therefore
+defer the open acceptance gap until its original due time; it neither closes
+the Vision nor suppresses independent work, a missing checkpoint or an unrelated
+acceptance obligation. Incomplete or differently scoped counts retain the
+existing conservative frontier behavior.
 
 类型化 deadline owner 会把新叠加的、更早到期的 Turn 重试纳入已有的完整来源
 缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。同一个 typed batch
@@ -510,6 +549,12 @@ qualify through this path.
 stored resume lane 建立后新增的 receipt wait，沿同一个 claim-scoped 完整
 selection 来源读回。已有等待列表及其显示上限不能隐藏新重试；其它 Agent、
 被排除的执行者、身份不匹配或已被替换的等待不能由这条路径取得资格。
+
+普通开放 Vision 的等待投影复用 selection 的完整 Agent 范围可执行工作计数；
+未完成承诺仍保留在 commitment 计数中，但不代表 receipt retry 期间可执行。
+既有 resume owner 向 Vision 和 Host 监督提供完整的未到期时钟证明；具有因果关联的
+retry 可暂缓普通开放验收缺口至原到期时间，不关闭 Vision，也不遮蔽独立工作、
+缺失 checkpoint 或无关验收义务；计数不完整或范围不匹配时仍保留原有保守判断。
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a

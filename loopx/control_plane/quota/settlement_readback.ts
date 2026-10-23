@@ -34,6 +34,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isAcceptedBlockedReplanWriteback,
+  acceptedBlockedReplanHistoryIndexes,
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
@@ -1382,6 +1383,11 @@ export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
+  if (jsonObject(value)?.schema_version === "loopx_quota_blocked_replan_history_request_v0") {
+    const runs = jsonObject(value)?.runs;
+    if (!Array.isArray(runs)) throw new EffectRuntimeRequestError("blocked replan history requires Run facts");
+    return {accepted_indexes: acceptedBlockedReplanHistoryIndexes(runs)};
+  }
   if (jsonObject(value)?.schema_version === RECEIPT_BOUND_WAIT_REQUEST_SCHEMA) {
     return projectReceiptBoundWait(value);
   }

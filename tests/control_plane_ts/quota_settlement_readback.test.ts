@@ -183,6 +183,14 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
     assert.equal((accepted.progress as any).closeout_kind, "typed_blocked_writeback_no_spend");
     assert.equal((accepted.spend as any).payload.ok, false);
     assert.equal((accepted.terminal_closeout as any).payload.ok, false);
+    const history = async (runs: unknown[]) => (await readQuotaSettlement({
+      schema_version: "loopx_quota_blocked_replan_history_request_v0", runs,
+    })).accepted_indexes;
+    assert.deepEqual(await history([base, {...base, administrative_blocked_replan: true,
+      autonomous_replan_ack: null}]), [0]);
+    const compactCheckpoint = {...checkpoint} as Record<string, unknown>;
+    delete compactCheckpoint.delivery_boundary;
+    assert.deepEqual(await history([{...base, vision_checkpoint: compactCheckpoint}]), [0]);
     await writeFile(index, JSON.stringify({...base, autonomous_replan_ack: {...ack,
       semantic_delta: {...semantic, satisfying_outcomes: ["fresh_vision_path_outcome"]}}}) + "\n");
     assert.equal((await read()).replay_phase, "settled");
@@ -202,6 +210,7 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
         {triggers: []}].map(patch => ({...base, vision_checkpoint: {...checkpoint, ...patch}})),
     ];
     for (const changed of invalid) {
+      assert.deepEqual(await history([changed]), []);
       await writeFile(index, JSON.stringify(changed) + "\n");
       assert.notEqual((await read()).replay_phase, "settled");
     }
