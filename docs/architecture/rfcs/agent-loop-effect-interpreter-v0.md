@@ -712,14 +712,15 @@ The next slice stays within the existing three convergence acceptances above:
    TypeScript owners for execution facts across ordinary quota, heartbeat
    full/thin and native Turn. Characterize real callers before retiring a
    duplicate Python projection; retain Python source IO and host effect ownership.
-2. **One captured-source read route.** Extend the existing capture/detail
-   transport so CLI consumers can read a named source or current action without
-   writing a parser or loading the full observation again. Bind readback to the
-   original Goal/Agent/Turn, content hash and source revision. Reading a capture
-   cannot rerun admission, renew a lease or settle/spend. Preserve unresolved
-   required reads; a smaller display does not make them optional. This is the
-   next independently reviewable implementation boundary, not shipped behavior.
-3. **Proven retained-context reuse.** Then evaluate exact reuse of unchanged
+2. **Preserve existing callers while removing duplicate work.** Start with
+   internal projection work that ordinary quota and Turn can share or avoid.
+   Preserve quota's public JSON shape, existing detail commands and guard flow;
+   this slice does not require a new CLI read route or a host baseline protocol.
+   Compare the complete output and signatures against the same captured inputs,
+   including historical compatibility, and measure transport as well as local
+   computation. Moving a small helper across runtimes can add more cost than it
+   removes. Keep required reads, original capture identity and effect ownership.
+3. **Proven retained-context reuse.** Separately evaluate exact reuse of unchanged
    required context when the host can establish that the same session still
    retains the previously consumed baseline. File existence, a prior hash or an
    old delivery receipt alone cannot establish that fact. Compaction, restart,

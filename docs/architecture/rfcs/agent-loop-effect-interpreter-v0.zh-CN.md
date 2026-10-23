@@ -485,11 +485,12 @@ live 模型结果、App 采用或以下三项收敛验收完成。
 1. **统一执行视图。** 普通 quota、heartbeat full/thin 与原生 Turn 复用已有 interaction/
    work-context、TurnEnvelope 的 TypeScript owner。移除重复 Python 投影前，先刻画真实
    调用方；保留 Python 来源 IO 与各 host 的 effect 归属。
-2. **统一捕获来源读取。** 扩展已有 capture/detail 传输，让 CLI 调用方直接读取指定来源
-   或当前动作，不必自行写解析器或再次载入整个观察包。读回绑定原 Goal/Agent/Turn、内容
-   hash 与来源修订；读取不能再次准入、续租、结算或 spend。保留未完成的 required reads，
-   不能因展示缩小而改成可选。这是下一可独立评审的实现边界，尚未交付。
-3. **有依据的上下文复用。** 随后验证完全相同的已读要求在同一 session 中仍被保留时的
+2. **保留现有调用方并消除重复工作。** 先处理普通 quota 与 Turn 可共享或免除的内部投影
+   工作。保留 quota 公开 JSON 形态、已有详情命令与 guard 流程；本切片不要求新增 CLI
+   读取入口或 host baseline 协议。用同次捕获输入比较完整输出及签名，覆盖历史兼容，
+   同时度量传输与本地计算。把小 helper 跨 runtime 搬迁可能增加更多成本。
+   保留 required reads、原始 capture 身份与 effect 归属。
+3. **有依据的上下文复用。** 独立研究完全相同的已读要求在同一 session 中仍被保留时的
    复用。文件存在、旧 hash 或过去的交付回执本身不能证明模型仍持有 baseline。发生
    compaction、重启、证据缺失/损坏或保留状态未知时，回退到完整当前要求。当前动作、
    准入、范围、取消、claim/lease、结算条件始终重新投影，旧上下文不授予新执行权限。
