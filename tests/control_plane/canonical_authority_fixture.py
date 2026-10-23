@@ -13,6 +13,21 @@ import subprocess
 import tempfile
 
 
+def assert_todo_read_unchanged(current, previous):
+    """Compare complete readback except validated evaluator/observation clocks."""
+    def stable(payload):
+        payload = without_resume_observation_time(payload)
+        envelope = payload["projection_envelope"]
+        assert envelope["schema_version"] == "loopx_projection_envelope_v0"
+        for key in ("observed_at", "served_at"):
+            assert datetime.fromisoformat(envelope.pop(key).replace("Z", "+00:00")).tzinfo is not None
+        for source in envelope["sources"]:
+            assert datetime.fromisoformat(source.pop("last_read_at").replace("Z", "+00:00")).tzinfo is not None
+        return payload
+
+    assert stable(current) == stable(previous)
+
+
 def empty_todo_display(state_path: Path) -> None:
     """Remove display work without deleting Goal intent, acceptance or stops.
 
@@ -69,6 +84,37 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
     result = json.loads(process.stdout)
     assert result["status"] == "applied", result
     return result
+
+
+def read_fixture_todos(state_path: Path) -> list[dict]:
+    """Read authored input before initializing a disposable canonical fixture."""
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+
+    summary = parse_active_state_todos(
+        state_path.read_text(encoding="utf-8"), state_path=state_path, item_limit=None,
+    )
+    return [
+        *(summary.get("user_todos", {}).get("items") or []),
+        *(summary.get("agent_todos", {}).get("items") or []),
+    ]
+
+
+def initialize_canonical_source_fixture(
+    runtime_root: Path, goal_id: str, *, state_path: Path,
+    provider: str = "file", handoff_mode: str = "soft_claim",
+    leases: list[dict] | None = None,
+) -> dict:
+    """Finalize source authoring once; later changes use the canonical writer."""
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    return initialize_canonical_authority(
+        runtime_root, goal_id,
+        build_todo_runtime_shadow_projection(
+            goal_id=goal_id, todos=read_fixture_todos(state_path),
+            handoff_mode=handoff_mode, leases=leases or [],
+        ),
+        state_path=state_path, provider=provider,
+    )
 
 
 def isolate_sqlite_runtime(tmp_path, monkeypatch):
