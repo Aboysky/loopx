@@ -142,6 +142,11 @@ Python retry qualification and batches administrative/retry history facts throug
 the existing TypeScript settlement owner for semantic retention and legacy status.
 It preserves independent outcomes, original clocks and historical microsecond
 expiry; malformed Turn identities no longer establish a positive retry proof.
+The periodic-history caller also respects the latest same-Agent accepted retry
+until its original deadline without resetting earned review counts. File/SQLite
+real CLI tests cover the threshold, independent work, real user gates and natural
+deadline recovery. Identical Explore guidance is referenced within the same CLI
+packet, preserving all clauses and standalone reads.
 Full-repository qualification, comparable full caller cost, installed adoption
 and measured long-horizon benefit remain distinct and incomplete.
 

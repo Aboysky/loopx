@@ -112,6 +112,20 @@ The cadence does not interrupt a host, schedule a Turn, spend quota or grant
 authority. The executor must settle work and re-enter quota before starting the
 next work Turn for the review obligation to take effect.
 
+A reached periodic count alone does not preempt the latest same-Agent work's
+accepted, unexpired receipt retry. The shared settlement owner qualifies that
+retry and its original deadline. The counter is not acknowledged or reset:
+review becomes due again at expiry. New work or evidence-driven triggers and
+independent runnable Todos retain their normal paths; another Agent's wait
+cannot suppress this Agent's review.
+
+The compact CLI packet may replace an identical Explore writeback-guidance
+mirror with `result_writeback_guidance_ref`, pointing to the complete settlement
+attachment in the same packet. Every clause remains available without another
+guard call. Differing text, standalone Explore reads and `--include-detail vision`
+retain the original guidance. This changes presentation, not work or settlement
+obligations.
+
 ```bash
 # Preview, apply, and read back an explicit Goal threshold (supported: 1–6).
 loopx configure-goal --goal-id example --execution-replan-after-turns 5

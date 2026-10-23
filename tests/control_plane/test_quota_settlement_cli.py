@@ -1902,12 +1902,18 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     assert next_turn["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] <= 5
 
 
-def _receipt_retry_with_vision_fixture(tmp_path, monkeypatch, provider, *, peer_agent=None):
+def _receipt_retry_with_vision_fixture(
+    tmp_path, monkeypatch, provider, *, peer_agent=None, prior_work_turns=0,
+):
     """Create the wait through its actual admission and blocked-writeback owners."""
     from canonical_authority_fixture import isolate_sqlite_runtime
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
+    if prior_work_turns:
+        configuration = json.loads(registry.read_text())
+        configuration["goals"][0]["quota"]["allowed_slots"] = 30
+        registry.write_text(json.dumps(configuration))
     if peer_agent is not None:
         configuration = json.loads(registry.read_text())
         configuration["goals"][0]["coordination"]["registered_agents"].append(peer_agent)
@@ -1915,6 +1921,24 @@ def _receipt_retry_with_vision_fixture(tmp_path, monkeypatch, provider, *, peer_
         registry.write_text(json.dumps(configuration))
     _configure_completion_validation_todo(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
+    for index in range(prior_work_turns):
+        prior_binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                         "--todo-id", TODO_ID, "--turn-instance-id", f"verified-work-{index}")
+        rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                                *prior_binding, cwd=project)
+        assert rc == 0, admitted
+        assert admitted["execution_obligation"]["must_attempt_work"] is True
+        artifact = project / "verified-arithmetic.txt"
+        artifact.write_text(str(17 * (23 + index)))
+        assert int(artifact.read_text()) == 17 * (23 + index)
+        rc, written = _run_cli(registry, runtime, "refresh-state", *prior_binding,
+            "--classification", "arithmetic_verified", "--delivery-batch-scale", "single_surface",
+            "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+            "--no-global-sync", "--suppress-external-sinks", cwd=project)
+        assert rc == 0, written
+        rc, spent = _run_cli(registry, runtime, "quota", "spend-slot", *prior_binding,
+                             "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+        assert rc == 0 and spent["appended"], spent
     rc, before = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, before
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
@@ -1949,13 +1973,15 @@ def _receipt_retry_with_vision_fixture(tmp_path, monkeypatch, provider, *, peer_
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("human_item", [None, "user_action", "user_gate"])
+@pytest.mark.parametrize("prior_work_turns", [0, 5])
 def test_receipt_retry_keeps_open_vision_quiet_through_real_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, human_item: str | None,
+    prior_work_turns: int,
 ) -> None:
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 
     project, runtime, registry, before, closed = _receipt_retry_with_vision_fixture(
-        tmp_path, monkeypatch, provider,
+        tmp_path, monkeypatch, provider, prior_work_turns=prior_work_turns,
     )
     if human_item is not None:
         scope = "--bound-agent" if human_item == "user_action" else "--blocks-agent"
@@ -1974,7 +2000,7 @@ def test_receipt_retry_keeps_open_vision_quiet_through_real_cli(
         assert waiting["interaction_contract"]["user_channel"]["action_required"] is True
         assert not waiting["interaction_contract"]["user_channel"].get("non_gating_notice")
         assert waiting["scheduler_hint"]["action"] == "backoff_waiting_for_user"
-        assert _spend_run_count(runtime) == 0
+        assert _spend_run_count(runtime) == prior_work_turns
         return
     assert not waiting.get("autonomous_replan_obligation")
     assert waiting["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
@@ -1993,7 +2019,7 @@ def test_receipt_retry_keeps_open_vision_quiet_through_real_cli(
     rc, after = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, after
     assert next(todo for todo in after["todos"] if todo["todo_id"] == TODO_ID) == before["todos"][0]
-    assert _spend_run_count(runtime) == 0
+    assert _spend_run_count(runtime) == prior_work_turns
     rc, independent = _run_cli(
         registry, runtime, "todo", "add", "--goal-id", GOAL_ID,
         "--role", "agent", "--task-class", "advancement_task",
@@ -2008,7 +2034,7 @@ def test_receipt_retry_keeps_open_vision_quiet_through_real_cli(
     assert rc == 0, resumed
     assert resumed["selected_todo"]["todo_id"] == independent["todo_id"]
     assert resumed["execution_obligation"]["must_attempt_work"] is True
-    assert _spend_run_count(runtime) == 0
+    assert _spend_run_count(runtime) == prior_work_turns
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
