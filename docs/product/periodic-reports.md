@@ -347,6 +347,11 @@ Todo, fixed-window delivery and handoff readers. It enumerates every permitted
 Goal, including stopped Goals; expands task excerpts and delivery details;
 and reads each delivery's associated task, including completed records. It does
 not read unregistered projects, SSH sources or referenced artifact contents.
+Its delivery reads include typed `outcome_gap` records as counterevidence;
+ordinary `view=deliveries` retains progress-only selection unless the caller
+explicitly sets `include_outcome_gaps=true`. Neutral observations and untyped
+host failures are outside that delivery source, so even complete pagination is
+not a claim to have independently audited every failure or artifact.
 
 The first call freezes one bounded snapshot in that Turn's reader. Source
 observations and individual coverage gaps are rows too. Page through

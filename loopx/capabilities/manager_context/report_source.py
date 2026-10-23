@@ -141,7 +141,7 @@ def collect_manager_report_source(
                 begin, prior_size = len(rows), size
                 arguments = {"view": view, "goal_id": gid}
                 if view == "deliveries":
-                    arguments.update(window)
+                    arguments.update(window, include_outcome_gaps=True)
                 try:
                     evidence, revision = pages(arguments)
                     # Preserve complete allowed detail and every referenced

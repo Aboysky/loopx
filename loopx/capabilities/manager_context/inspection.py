@@ -45,6 +45,7 @@ READ_TOOL = {
             },
             "source_id": {"type": "string", "description": "Default local. For SSH use an exact source_id from view=sources; local Goal IDs do not discover remote Goals."},
             "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Deliveries lookback; expand for latest known progress older than yesterday."},
+            "include_outcome_gaps": {"type": "boolean", "description": "Local deliveries: include recorded outcome_gap counterevidence alongside progress. Default false for ordinary delivery queries; report_source always includes it. Observations and untyped host failures are not delivery outcomes."},
             "window_start": {"type": "string", "description": "Local deliveries/report_source: exact inclusive ISO-8601 timestamp with offset. Pair with window_end instead of days, e.g. a frozen report window."},
             "window_end": {"type": "string", "description": "Local deliveries/report_source: exact exclusive ISO-8601 timestamp with offset. Boundaries do not move while paging; report_source requires a closed window."},
             "expected_source_revision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries/report_source: copy source.source_revision from the first page onto subsequent pages. A conflicting response requires restarting this read, not merging pages from different snapshots."},
@@ -171,6 +172,11 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
                 "days:must_be_an_integer_between_"
                 f"{READ_DAYS_RANGE[0]}_and_{READ_DAYS_RANGE[1]}"
             )
+    if "include_outcome_gaps" in arguments:
+        if view != "deliveries" or arguments.get("source_id", "local") != "local":
+            rejected.append("include_outcome_gaps:only_for_local_deliveries")
+        elif type(arguments["include_outcome_gaps"]) is not bool:
+            rejected.append("include_outcome_gaps:must_be_a_boolean")
     if not isinstance(arguments.get("source_id", "local"), str):
         rejected.append("source_id:must_be_a_string")
     exact_arguments = {"window_start", "window_end", "expected_source_revision", "delivery_ref"} & arguments.keys()
@@ -540,7 +546,7 @@ class ManagerInspection:
         else:
             source = read_manager_delivery_history(
                 self.runtime_root, goal_id, limit=limit, offset=offset, lookback_days=arguments.get("days", 1),
-                **{name: arguments[name] for name in ("window_start", "window_end", "expected_source_revision", "delivery_ref")
+                **{name: arguments[name] for name in ("window_start", "window_end", "expected_source_revision", "delivery_ref", "include_outcome_gaps")
                    if name in arguments},
             )
             page = source.pop("deliveries", [])

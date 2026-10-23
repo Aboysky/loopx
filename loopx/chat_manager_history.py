@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .chat_manager_details import _text
 from .control_plane.runtime.run_context_retention import goal_semantic_history_from_runs
-from .control_plane.work_items.delivery_outcome import PROGRESS_DELIVERY_OUTCOMES
+from .control_plane.work_items.delivery_outcome import MATERIAL_DELIVERY_OUTCOMES, PROGRESS_DELIVERY_OUTCOMES
 from .history import STATUS_NEUTRAL_CLASSIFICATIONS, load_index_snapshot
 
 
@@ -95,11 +95,13 @@ def _recorded_details(run, *, complete=False):
 def read_manager_delivery_history(
     runtime_root: Path, goal_id: str, *, now=None, limit=24, offset=None, lookback_days=1,
     total_limit=None, window_start=None, window_end=None, expected_source_revision=None,
-    delivery_ref=None,
+    delivery_ref=None, include_outcome_gaps=False,
 ):
     now = now or datetime.now().astimezone()
     if type(lookback_days) is not int or not 1 <= lookback_days <= 90:
         raise ValueError("lookback_days must be 1..90")
+    if type(include_outcome_gaps) is not bool:
+        raise ValueError("include_outcome_gaps must be a boolean")
     if total_limit is not None and (
         type(total_limit) is not int or not 1 <= total_limit <= 500
     ):
@@ -113,6 +115,7 @@ def read_manager_delivery_history(
         "window_end": end.isoformat(),
         "window_days": None if window else lookback_days,
         **({"window_bounds": "[start,end)", "window_complete": end <= now} if window else {}),
+        **({"includes_outcome_gaps": True} if include_outcome_gaps else {}),
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "deliveries": [],
     }
@@ -140,10 +143,11 @@ def read_manager_delivery_history(
 
         rows = []
         invalid = 0
+        outcomes = MATERIAL_DELIVERY_OUTCOMES if include_outcome_gaps else PROGRESS_DELIVERY_OUTCOMES
         for run in runs:
             if run.get("classification") in STATUS_NEUTRAL_CLASSIFICATIONS:
                 continue
-            if run.get("delivery_outcome") not in PROGRESS_DELIVERY_OUTCOMES:
+            if run.get("delivery_outcome") not in outcomes:
                 continue
             try:
                 at = datetime.fromisoformat(

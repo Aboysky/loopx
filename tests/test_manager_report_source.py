@@ -32,6 +32,7 @@ def source_fixture(goals=15):
                 rows = [{"todo_id": f"todo-{i}", "title": f"Current task {i}",
                          "status": "open", "content_truncated": i == 0} for i in range(13)]
         elif view == "deliveries":
+            assert args["include_outcome_gaps"] is True
             assert args["window_start"] == "2026-01-01T01:00:00+00:00"
             assert args["window_end"] == "2026-01-02T01:00:00+00:00"
             if args.get("offset") or args.get("delivery_ref"):
@@ -167,6 +168,18 @@ def test_original_reader_freezes_and_pages_source_but_revocation_wins(tmp_path, 
     assert len(records) == 2
 
 
+@pytest.mark.parametrize("extra", [
+    {"include_outcome_gaps": 1}, {"include_outcome_gaps": "true"},
+    {"include_outcome_gaps": True, "source_id": "ssh:fixture"},
+])
+def test_counterevidence_selection_rejects_invalid_or_remote_arguments(tmp_path, extra):
+    tool = ManagerInspection(context={}, registry_path=tmp_path / "unreadable",
+        runtime_root=tmp_path, owner_scope=False, scope_valid=lambda: pytest.fail("invalid input reached the reader"),
+        record=lambda _: pytest.fail("invalid input produced evidence"))
+    result = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "goal-a", **extra})
+    assert result["error"] == "invalid_arguments"
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_actual_canonical_sources_join_a_completed_task_and_fixed_boundaries(tmp_path, monkeypatch, provider):
     from tests.control_plane.canonical_authority_fixture import (
@@ -190,16 +203,20 @@ def test_actual_canonical_sources_join_a_completed_task_and_fixed_boundaries(tmp
     path = runtime / "goals/goal-a/runs/index.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     run = {"goal_id": "goal-a", "todo_id": todo["todo_id"], "delivery_outcome": "outcome_progress"}
-    path.write_text("".join(json.dumps({**run, "generated_at": timestamp}) + "\n" for timestamp in (
-        "2026-01-01T09:00:00+08:00", "2026-01-02T09:00:00+08:00")))
+    path.write_text("".join(json.dumps({**run, "generated_at": timestamp,
+        "delivery_outcome": "outcome_gap" if i == 0 else "outcome_progress"}) + "\n" for i, timestamp in enumerate((
+        "2026-01-01T09:00:00+08:00", "2026-01-02T08:59:00+08:00", "2026-01-02T09:00:00+08:00"))))
     tool = ManagerInspection(context={"scope": "owner_goal", "goals": [{"goal_id": "goal-a"}]},
         registry_path=registry, runtime_root=runtime, owner_scope=True, scope_valid=lambda: True,
         discovery_scope=lambda: ["goal-a"], record=lambda _: None)
     snapshot = collect_manager_report_source(lambda args: tool.read(TOOL_NAME, args), WINDOW)
     assert snapshot["goal_ids"] == ["goal-a"]
     deliveries = [row["evidence"] for row in snapshot["rows"] if row["kind"] == "deliveries"]
-    assert len(deliveries) == 1 and deliveries[0]["recorded_at"].startswith("2026-01-01T09:")
+    assert len(deliveries) == 2 and {row["outcome"] for row in deliveries} == {"outcome_gap", "outcome_progress"}
+    assert deliveries[-1]["recorded_at"].startswith("2026-01-01T09:")
     linked = [row["evidence"] for row in snapshot["rows"] if row["kind"] == "delivery_task"]
     assert len(linked) == 1 and linked[0]["todo_id"] == todo["todo_id"] and linked[0]["status"] == "done"
     assert deliveries[0]["recorded_details"]["verification"] == "recorded_claim_not_independent_verification"
+    ordinary = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "goal-a", **WINDOW})
+    assert ordinary["matched"] == 1 and ordinary["rows"][0]["outcome"] == "outcome_progress"
     assert list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a")["todos"][0] == todo
