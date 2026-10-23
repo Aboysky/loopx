@@ -138,6 +138,7 @@ def test_recovery_never_constructs_settlement_or_executable_primary_action(monke
     [command] = cli["next_cli_actions"]
     assert contract["agent_channel"]["primary_action"] == command
     argv = shlex.split(command)
+    assert argv[0] == "loopx" and "--cli-bin" not in argv
     for flag, value in {"--registry": "/registry with spaces.json", "--runtime-root": "/runtime with spaces",
                         "--goal-id": "selection-fixture", "--agent-id": "fixture-agent",
                         "--turn-instance-id": "selection-turn", "--available-capability": "shell"}.items():

@@ -51,12 +51,10 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
     poison.chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
 
-    def run(argv):
+    def run(argv, *, expected_code=0):
         result = subprocess.run(argv, cwd=project, capture_output=True, text=True, timeout=60)
-        payload = json.loads(result.stdout)
-        assert result.returncode == 0, {k: payload.get(k) for k in (
-            "error", "error_code", "reason", "recovery")}
-        return payload
+        assert result.returncode == expected_code, (result.returncode, result.stdout, result.stderr)
+        return json.loads(result.stdout)
 
     prefix = [program, "--cli-bin", program, "--format", "json", "--registry", str(registry),
               "--runtime-root", str(runtime)]
@@ -68,6 +66,30 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
             "--idempotency-key", "candidate-work", "--expected-version", "0",
             "--write-scope", "tests/**",
         ])["lease"]
+    rejected = run([
+        *prefix, "quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
+        "--agent-id", cli.AGENT_ID, "--turn-instance-id", cli.TURN_ID,
+        "--todo-id", "todo_not_projected",
+    ], expected_code=1)
+    assert rejected["state"] == "quota_action_selection_rejected"
+    assert not rejected["ok"] and not rejected["should_run"]
+    assert rejected["heartbeat_receipt"]["status"] == "not_committed"
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 0
+    assert cli._spend_run_count(runtime) == 0
+    [recovery] = rejected["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    recovery_args = shlex.split(recovery)
+    # Execute the returned recovery unchanged; a lost route must hit the
+    # poisoned global executable instead of being repaired by the test.
+    recovered = run(recovery_args)
+    assert recovered["ok"] and not marker.exists()
+    assert recovery_args[:3] == [program, "--cli-bin", program]
+    for flag, value in {"--registry": str(registry), "--runtime-root": str(runtime),
+                        "--goal-id": cli.GOAL_ID, "--agent-id": cli.AGENT_ID,
+                        "--turn-instance-id": cli.TURN_ID}.items():
+        assert recovery_args[recovery_args.index(flag) + 1] == value
+    assert "--todo-id" not in recovery_args
+    assert "--codex-app" in recovery_args
+    assert cli._spend_run_count(runtime) == 0
     bootstrap = run([
         *prefix, "heartbeat-prompt", "--thin", "--codex-app", "--goal-id", cli.GOAL_ID,
         "--agent-id", cli.AGENT_ID, "--cli-bin", program,
