@@ -334,7 +334,7 @@ def action_selection_recovery_command(
     scheduler_args: str, available_capabilities: Any = None,
     goal_ref: Mapping[str, object] | None = None,
 ) -> str:
-    argv = ["loopx"]
+    argv = loopx_cli_argv()
     if registry_path:
         argv.extend(["--registry", registry_path])
     if runtime_root:
