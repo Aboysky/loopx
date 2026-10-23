@@ -769,6 +769,16 @@ protocol input cover configured checks and outcomes without checks; Todo-less
 inspection still returns its original inventory. This qualifies the scoped IO
 boundary, not live model benefit, installed adoption or total Turn cost.
 
+The native acceptance/capture matrix also covers work added or changed after
+capture, a future resume condition and explicitly removed checks. The original
+synthetic work is validated and settled before a new managed Turn: current
+admission rejects unbound/stale work and pending waits, while removing checks
+does not create a new owner question. Cumulative requirements and their sources
+remain intact; current work status and its derived basis fingerprint may change.
+The original detail remains byte-for-byte readable without another admission or
+authority revision. These cases qualify the existing boundary, not a new
+execution default or any of the three complete convergence streams.
+
 The Goal source context now separates explicitly generated Todo regions using
 the existing writer's strict ownership parser. All remaining text is delivered
 verbatim through the shared typed context owner, with the full-file hash and
