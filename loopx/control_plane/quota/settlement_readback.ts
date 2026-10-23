@@ -34,7 +34,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isAcceptedBlockedReplanWriteback,
-  acceptedBlockedReplanHistoryIndexes,
+  qualifySettlementHistory,
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
@@ -1383,10 +1383,12 @@ export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
-  if (jsonObject(value)?.schema_version === "loopx_quota_blocked_replan_history_request_v0") {
-    const runs = jsonObject(value)?.runs;
-    if (!Array.isArray(runs)) throw new EffectRuntimeRequestError("blocked replan history requires Run facts");
-    return {accepted_indexes: acceptedBlockedReplanHistoryIndexes(runs)};
+  if (jsonObject(value)?.schema_version === "loopx_quota_history_qualification_request_v0") {
+    const input = jsonObject(value)!, runs = input.runs, observedAt = input.observed_at;
+    if (!Array.isArray(runs) || (observedAt != null && typeof observedAt !== "string")) {
+      throw new EffectRuntimeRequestError("history qualification requires Run facts and an optional observation clock");
+    }
+    return qualifySettlementHistory(runs, typeof observedAt === "string" ? observedAt : null);
   }
   if (jsonObject(value)?.schema_version === RECEIPT_BOUND_WAIT_REQUEST_SCHEMA) {
     return projectReceiptBoundWait(value);

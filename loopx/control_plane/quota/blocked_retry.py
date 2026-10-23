@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from ..todos.contract import normalize_todo_id
@@ -11,11 +10,7 @@ from ..todos.resume_condition import (
     evaluate_todo_resume_conditions,
 )
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
-
-BLOCKED_RETRY_SCHEMA_VERSION = "quota_blocked_retry_v0"
-MIN_RETRY_SECONDS = 60
-MAX_RETRY_SECONDS = 30 * 60
-TURN_SETTLEMENT_RETRY_SECONDS = 5 * 60
+from ..work_items.autonomous_replan_ack import qualify_settlement_history
 
 
 def compact_settlement_wait_todos(
@@ -66,47 +61,6 @@ def require_blocked_retry_wait(
     return result
 
 
-def active_turn_retry_for_run(
-    run: dict[str, Any], *, observed_at: str
-) -> dict[str, Any] | None:
-    """Accept only the exact active, receipt-owned retry on a blocked work Run."""
-
-    todo_id = normalize_todo_id(run.get("todo_id"))
-    retry = run.get("blocked_retry")
-    progress = run.get("progress_observation")
-    if (
-        not todo_id
-        or not isinstance(retry, dict)
-        or retry.get("schema_version") != BLOCKED_RETRY_SCHEMA_VERSION
-        or retry.get("source") != "turn_settlement"
-        or retry.get("todo_id") != todo_id
-        or run.get("delivery_outcome") != "outcome_gap"
-        or not isinstance(progress, dict)
-        or progress.get("result_class") != "blocked"
-        or not run.get("turn_instance_id")
-    ):
-        return None
-    try:
-        now = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
-        observed = datetime.fromisoformat(
-            str(retry["observed_at"]).replace("Z", "+00:00")
-        )
-        due = datetime.fromisoformat(str(retry["due_at"]).replace("Z", "+00:00"))
-        delay = (due - observed).total_seconds()
-    except (KeyError, ValueError, TypeError):
-        return None
-    if (
-        now.tzinfo is None
-        or observed.tzinfo is None
-        or due.tzinfo is None
-        or not MIN_RETRY_SECONDS <= delay <= MAX_RETRY_SECONDS
-        or due <= now
-        or retry.get("resume_when") != f"resume_at:{retry['due_at']}"
-    ):
-        return None
-    return retry
-
-
 def overlay_active_turn_retries(
     status_payload: dict[str, Any],
     *,
@@ -150,11 +104,11 @@ def overlay_active_turn_retries(
     )
     if not isinstance(runs, list):
         return status_payload
+    runs = [run for run in runs if isinstance(run, dict) and run.get("agent_id") == agent_id]
+    qualification = qualify_settlement_history(runs, observed_at=observed_at)
     waits: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
-    for run in runs:
-        if not isinstance(run, dict) or run.get("agent_id") != agent_id:
-            continue
+    for index, run in enumerate(runs):
         todo_id = normalize_todo_id(run.get("todo_id"))
         if not todo_id or todo_id in seen:
             continue
@@ -162,8 +116,8 @@ def overlay_active_turn_retries(
         if classification.startswith(("quota_slot_", "quota_scheduler_")):
             continue
         seen.add(todo_id)
-        retry = active_turn_retry_for_run(run, observed_at=observed_at)
-        if retry is not None:
+        if index in qualification.active_turn_retries:
+            retry = run["blocked_retry"]
             waits[todo_id] = {
                 **retry, "goal_id": goal_id, "agent_id": agent_id,
                 "turn_instance_id": run["turn_instance_id"],

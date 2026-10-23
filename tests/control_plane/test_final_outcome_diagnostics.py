@@ -179,6 +179,51 @@ def test_administrative_history_qualification_is_batched_and_ordinary_reads_are_
     assert history["agents"][0]["latest_outcome_vision_checkpoint_run"]["generated_at"] == STAMP
 
 
+def test_retry_history_uses_one_batch_and_never_retimes_the_source(monkeypatch):
+    from loopx.control_plane.work_items import autonomous_replan_ack as codec
+
+    waiting = {
+        "agent_id": AGENT, "todo_id": "todo_pending001", "turn_instance_id": "pending-turn",
+        "delivery_outcome": "outcome_gap", "progress_observation": {"result_class": "blocked"},
+        "blocked_retry": {
+            "schema_version": "quota_blocked_retry_v0", "source": "turn_settlement",
+            "todo_id": "todo_pending001", "observed_at": STAMP,
+            "due_at": "2026-01-01T00:05:00.000001Z",
+            "resume_when": "resume_at:2026-01-01T00:05:00.000001Z",
+        },
+    }
+    original = deepcopy(waiting)
+    calls = []
+    real = codec.effect_runtime_result
+
+    def observe(method, params, **kwargs):
+        calls.append((method, len(params["runs"])))
+        return real(method, params, **kwargs)
+
+    monkeypatch.setattr(codec, "effect_runtime_result", observe)
+    monkeypatch.setattr("loopx.control_plane.runtime.run_context_retention.now_utc_iso",
+                        lambda: "2026-01-01T00:05:00Z")
+    history = goal_semantic_history_from_runs([waiting] * 100 + [material_run()])
+    assert calls == [("quota.settlement.read", 100)]
+    assert history["active_blocked_retry_runs"] == [waiting]
+    assert waiting == original
+    # One microsecond later the original clock expires; it is not renewed.
+    monkeypatch.setattr("loopx.control_plane.runtime.run_context_retention.now_utc_iso",
+                        lambda: "2026-01-01T00:05:00.000001Z")
+    assert goal_semantic_history_from_runs([waiting])["active_blocked_retry_runs"] == []
+
+
+@pytest.mark.parametrize("indexes", [[True], [-1], [1], "0", None])
+def test_history_transport_rejects_malformed_qualification(indexes, monkeypatch):
+    from loopx.control_plane.work_items import autonomous_replan_ack as codec
+
+    monkeypatch.setattr(codec, "effect_runtime_result", lambda *args, **kwargs: {
+        "accepted_indexes": [], "active_retry_indexes": indexes,
+    })
+    with pytest.raises(RuntimeError, match="valid indexes"):
+        codec.qualify_settlement_history([{"blocked_retry": {}}], observed_at=STAMP)
+
+
 def decision():
     status = quota_status_payload(
         goal_id=GOAL,

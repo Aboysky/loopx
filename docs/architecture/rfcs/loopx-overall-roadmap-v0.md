@@ -137,8 +137,13 @@ from administrative closure. Source coverage now includes notice/gate overlap,
 original-deadline recovery and fresh canonical unclaim/reassignment with each
 Agent's own Vision and clock. The complete affected CLI suite passes after
 canonical-fixture integration and original-Turn accounting checks; preserve the
-earlier failures and their base/head attribution. Full-repository qualification,
-integration, installed adoption and measured benefit remain distinct.
+earlier failures and their base/head attribution. The follow-on refactor removes
+Python retry qualification and batches administrative/retry history facts through
+the existing TypeScript settlement owner for semantic retention and legacy status.
+It preserves independent outcomes, original clocks and historical microsecond
+expiry; malformed Turn identities no longer establish a positive retry proof.
+Full-repository qualification, comparable full caller cost, installed adoption
+and measured long-horizon benefit remain distinct and incomplete.
 
 **S5/S11 long-horizon progress design.** The [research measurement refinement](long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
 and [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)

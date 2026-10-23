@@ -259,6 +259,22 @@ grants no execution, completion, acceptance or settlement authority.
 重规划 ACK 仍然可见；缺失 checkpoint 与真实交付 gap 保持原复核要求，这一读取
 分类不授予执行、完成、验收或结算权限。
 
+The same settlement owner qualifies active receipt retries for semantic-history
+selection and the legacy status overlay. Each reader sends one candidate batch;
+ordinary history without candidates needs no runtime request. Administrative
+acceptance and retry activity remain separate results. Python transports facts
+and applies existing row selection instead of maintaining a second retry rule.
+Historical reads retain aware timestamps, microsecond expiry and the original
+deadline; live settlement validation is unchanged. A non-string or blank Turn
+identity cannot establish an active retry. Full caller cost and installed
+adoption require separate qualification.
+
+同一结算 owner 也为语义历史选取和旧状态叠加核对活动回执重试。每条读路只发送一批
+候选；没有候选的普通历史无需 runtime 请求。行政验收和重试活动分别返回，Python
+传递事实并沿用已有行选取，不再维护第二套重试规则。历史读取保留带时区时间、微秒
+到期边界和原截止时间；实时结算校验不变。非字符串或空白 Turn 身份不能证明重试
+活动。完整调用成本与安装采用仍需分别验证。
+
 An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
 Todo-bound Turn after the matching writeback and spend receipts commit. Both
 `in_flight_continuation` and `semantic_closeout` use their corresponding typed
