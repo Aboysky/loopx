@@ -1437,11 +1437,7 @@ class ChatRuntimeController:
                     if active and active.get("status") not in TERMINAL_TURN_STATES:
                         self.closed.wait(0.05)
                         continue
-                    self.store.update_session(
-                        session_id,
-                        status="ready",
-                        active_turn_id=None,
-                    )
+                    self.store.release_active_turn(session_id, active_turn_id)
                 refreshed = self.store.load_session(session_id)
                 if refreshed is None:
                     return

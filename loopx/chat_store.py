@@ -52,6 +52,7 @@ TERMINAL_EVENT_KINDS = {"turn.completed", "turn.failed", "turn.interrupted"}
 REPLAY_ONLY_EVENT_KINDS = {"answer.delta", "assistant.delta", "agent.phase", "turn.activity"}
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
+_SESSION_RELEASE_UNSET = object()
 
 
 def utc_now() -> str:
@@ -647,10 +648,10 @@ class ChatSessionStore(ChatIngressStore):
         session_id: str,
         turn_id: str,
         *,
-        last_activity_at: str,
-        last_error_code: str | None,
+        last_activity_at: str | object = _SESSION_RELEASE_UNSET,
+        last_error_code: str | None | object = _SESSION_RELEASE_UNSET,
     ) -> bool:
-        """Make a Session ready only while the completing Turn still owns it."""
+        """Release this Turn's claim, preserving metadata omitted by the caller."""
 
         path = self._session_path(session_id)
         with self._session_lock(session_id):
@@ -668,11 +669,13 @@ class ChatSessionStore(ChatIngressStore):
                     {
                         "status": "ready",
                         "active_turn_id": None,
-                        "last_activity_at": last_activity_at,
-                        "last_error_code": last_error_code,
                         "updated_at": utc_now(),
                     }
                 )
+                if last_activity_at is not _SESSION_RELEASE_UNSET:
+                    payload["last_activity_at"] = last_activity_at
+                if last_error_code is not _SESSION_RELEASE_UNSET:
+                    payload["last_error_code"] = last_error_code
                 _atomic_write_json(path, payload, preserve_mode=True)
                 return True
 
