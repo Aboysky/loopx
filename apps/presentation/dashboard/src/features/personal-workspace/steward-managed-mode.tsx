@@ -31,7 +31,7 @@ export function StewardManagedMode({state, zh, busy, available, onPrepare, onMon
         </label></div>
         <div className="personal-cadence-actions"><button className="is-primary" style={{minHeight: 44}} type="button" disabled={busy || !available || state.goal_active === false || !Number.isInteger(cadence) || cadence < 30 || cadence > 1440}
           onClick={() => onMonitor("enable", cadence)}>{state.scheduling_enabled ? (zh ? "更新周期" : "Update interval") : (zh ? "启用状态监控" : "Enable monitoring")}</button>
-        {state.monitor?.status === "open" ? <button style={{minHeight: 44}} type="button" disabled={busy || !available} onClick={() => onMonitor("pause", cadence)}>{zh ? "暂停状态监控" : "Pause monitoring"}</button> : null}</div>
+        {state.monitor?.status === "open" ? <button style={{minHeight: 44}} type="button" disabled={busy || !available} onClick={() => onMonitor("pause", initial ?? 30)}>{zh ? "暂停状态监控" : "Pause monitoring"}</button> : null}</div>
       </>
       : <>
         <p>{zh ? "为当前管家准备一个可见的 LoopX 工作身份，保留原对话和权限。此步骤不会启动定时任务或模型。" : "Prepare one visible LoopX identity for this steward, retaining its original conversation and permissions. This step starts neither scheduled tasks nor a model."}</p>
