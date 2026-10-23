@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import shutil
 import sys
 from collections.abc import Callable, Mapping
@@ -44,6 +43,10 @@ def register_dsh_launch_command(
     )
     parser.add_argument(
         "--runtime-root",
+        # The main parser owns the same destination. Keep this alias for
+        # `dsh-launch --runtime-root ...`, but an omitted alias must not replace
+        # a value selected before the subcommand with None.
+        default=argparse.SUPPRESS,
         help=(
             "LoopX machine runtime root that owns the provider credential. "
             "Defaults to this machine's selected runtime root."
@@ -124,21 +127,3 @@ def handle_dsh_launch_command(
 
     exec_environment(dsh_bin, [dsh_bin, *dsh_args], environment)
     return 0
-
-
-def render_dsh_launch(args: argparse.Namespace) -> str:
-    """Return a public-safe invocation preview without resolved credentials."""
-
-    dsh_bin, dsh_args, environment = resolve_dsh_launch(args)
-    return "\n".join(
-        [
-            "# LoopX DSH launch",
-            f"- executable: `{dsh_bin}`",
-            f"- DSH_HOME: `{environment['DSH_HOME']}`",
-            "- command: "
-            + " ".join(
-                shlex.quote(value) for value in [dsh_bin, *dsh_args]
-            ),
-            "- provider credential: resolved into the child environment only",
-        ]
-    )
