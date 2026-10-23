@@ -237,6 +237,8 @@ def _same_todo_identity(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def _blocked_priority_fallback(
     agent_todo_summary: dict[str, Any] | None,
+    *,
+    selected_executable: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(agent_todo_summary, dict):
         return None
@@ -250,7 +252,9 @@ def _blocked_priority_fallback(
         if isinstance(agent_todo_summary.get("first_executable_items"), list)
         else []
     )
-    selected = next((item for item in first_executable if isinstance(item, dict)), None)
+    selected = selected_executable or next(
+        (item for item in first_executable if isinstance(item, dict)), None,
+    )
     if not selected:
         return None
 
