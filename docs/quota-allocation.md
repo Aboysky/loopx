@@ -512,6 +512,17 @@ monitor clock, genuine gate and independent runnable work keep their own rules.
 This corrects the automatic notice explanation without adding configuration or
 persisted state. The pending retry is a recheck deadline, not execution authority:
 current gates and the configured cadence floor still apply at and after due time.
+
+A causal Vision wait retains the same non-gating notice and original retry
+deadline; it must not emit a response plan asking the worker to wait for that
+user action. Unscoped status overlays apply a receipt retry only to its current
+claimant. An unclaimed Todo remains available to other Agents; the requesting
+Agent's admission overlays only its own retry. History retains the original
+Run and clock, and genuine gates still block their declared scope.
+
+关联 Vision 的等待保留同一非阻塞通知与原重试期限，不得再投影“等待用户”的响应
+计划。未分 Agent 的 status 只向当前认领者投影其重试；未认领 Todo 仍可由其他 Agent
+选择，各 Agent 的准入只叠加自己的重试。原 Run／时钟和真正授权门禁保持原边界。
 Receipt waits added after stored resume lanes were built are read from the same
 claim-scoped full selection source. An existing wait lane or its display limit
 cannot hide a new retry; foreign, excluded, mismatched and replaced waits do not

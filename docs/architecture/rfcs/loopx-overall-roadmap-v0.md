@@ -133,9 +133,12 @@ separate from this source repair.
 also separates an accepted blocked replan from the preceding real outcome
 checkpoint. File/SQLite CLI readback and long/compacted history regressions retain
 the previous milestone or genuine gap without creating a new outcome obligation
-from administrative closure. The complete local CLI suite still has failures;
-source qualification, integration, installed adoption and measured benefit remain
-distinct. Preserve those failures and the existing full-suite qualification work.
+from administrative closure. Source coverage now includes notice/gate overlap,
+original-deadline recovery and fresh canonical unclaim/reassignment with each
+Agent's own Vision and clock. The complete affected CLI suite passes after
+canonical-fixture integration and original-Turn accounting checks; preserve the
+earlier failures and their base/head attribution. Full-repository qualification,
+integration, installed adoption and measured benefit remain distinct.
 
 **S5/S11 long-horizon progress design.** The [research measurement refinement](long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
 and [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)

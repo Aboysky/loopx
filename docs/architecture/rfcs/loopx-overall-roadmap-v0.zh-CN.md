@@ -106,9 +106,10 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 
 **S3/S7 行政收尾提案。** [#7117](https://github.com/loopx-project/loopx/pull/7117)
 进一步区分已验收的阻塞重规划与前一个真实成果 checkpoint。File/SQLite CLI 回读和
-长期／压缩历史回归保留原里程碑或真实缺口，避免行政收尾制造新的成果义务。完整
-本地 CLI 套件仍有失败；源码资格、集成、安装采用与实测收益分别验证，保留失败
-记录和既有完整套件资格工作。
+长期／压缩历史回归保留原里程碑或真实缺口，避免行政收尾制造新的成果义务。源码
+覆盖已包括通知／真门禁叠加、原截止恢复，以及各自持有 Vision 和时钟时的原生取消
+认领／转派。canonical fixture 整合及原 Turn 记账检查后的完整受影响 CLI 套件通过；
+保留此前失败及 base/head 归因。整仓资格、集成、安装采用与实测收益仍分别验证。
 
 **S5/S11 长程进展设计。** [研究计量细化](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#基于证据的研究片段评估拟议细化)
 与[产品阅读旅程](../../product/use-cases/auto-research/long-horizon-progress-design.zh-CN.md)
