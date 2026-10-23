@@ -34,14 +34,9 @@ writeback and settlement semantics. DSH owns model calls, tools, provider
 retries and raw Session storage in both routes; LoopX owns durable decisions
 and work authority.
 
-Research and polish disproportionately toward the plugin route for the
-user-facing "work with LoopX from DSH" journey. Keep Turn-on-DSH as the
-headless automation path and invest in it where unattended continuation,
-turn-bound validation or App-visible executor readiness is the required
-outcome. A practical allocation is roughly 60% plugin user journey, 25% shared
-conformance and result contracts, and 15% managed-Turn setup and recovery.
-That ratio should move only after measured user use shows unattended Turns are
-the primary DSH workload.
+Prioritize the plugin for interactive DSH work and the Turn adapter for
+unattended, bounded execution. Qualify each route against its actual caller
+and the shared contract; readiness of one does not qualify the other.
 
 ## Authority Boundary
 
