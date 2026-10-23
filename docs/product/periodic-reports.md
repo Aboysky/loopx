@@ -338,3 +338,44 @@ the Agent's claims.
 This extends evidence reading in the existing conversation. It does not enable
 a report subscription, start a model, change a Goal, or send a report. Calendar
 admission, report generation and verified delivery retain their existing owners.
+
+### Authorized portfolio source
+
+The same original conversation reader now accepts `view=report_source` with a
+closed `window_start`/`window_end`. This composes the existing local portfolio,
+Todo, fixed-window delivery and handoff readers. It enumerates every permitted
+Goal, including stopped Goals; expands task excerpts and delivery details;
+and reads each delivery's associated task, including completed records. It does
+not read unregistered projects, SSH sources or referenced artifact contents.
+Its delivery reads include typed `outcome_gap` records as counterevidence;
+ordinary `view=deliveries` retains progress-only selection unless the caller
+explicitly sets `include_outcome_gaps=true`. Neutral observations and untyped
+host failures are outside that delivery source, so even complete pagination is
+not a claim to have independently audited every failure or artifact.
+
+The first call freezes one bounded snapshot in that Turn's reader. Source
+observations and individual coverage gaps are rows too. Page through
+`next_offset`, carrying `source.source_revision`. Later pages reuse the frozen
+data, while the original live authorization check still wins over the cache.
+Another Turn or a lost snapshot cannot resume at an old offset. An inventory
+change, source revision conflict, outage, invalid/oversized row or read budget
+limit remains an explicit coverage gap. Other readable Goals continue. Current
+task and handoff state is observed at collection time; it is not an as-of-window
+reconstruction or proof of a newly completed business outcome.
+
+The provider's `manager_portfolio_report_source_adapter` composes with the
+existing `PeriodicReportAdapterRegistry` using that authorized reader. Its
+supporting items contain lossless JSON-string parts of the permitted evidence
+rows, grouped by `source_ref`; decode each part's `summary` and concatenate in
+item order. These are editorial input data, not audience-facing report prose.
+The Agent still reads relevant referenced artifacts and authors the report.
+There is no new state store or background loop. A capture allows at most 512
+reader calls, 4,000 evidence rows and 4 MiB of evidence data, plus bounded source
+coverage metadata; exhaustion is partial coverage,
+not success or zero progress. These are IO bounds, not a model budget.
+
+This source can be read through the original Chat dynamic tool. It does not
+activate the daily subscription, wake the reporting actor, write an editorial
+response or deliver a report. The remaining production integration must bind
+this source to the original actor's calendar intent, generation and private
+full-body delivery, then verify that original route independently.
