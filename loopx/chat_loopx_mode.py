@@ -1255,6 +1255,11 @@ class DelegationWakeService:
                 )
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                 _LOG.warning("Delegation wake receipts unavailable; retrying")
+            try:
+                from .capabilities.native_chat.steward_monitor import pump_steward_monitors
+                pump_steward_monitors(self.controller, cancelled=self.stop.is_set)
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                _LOG.warning("Native steward monitor unavailable; original work retained")
             self.stop.wait(self.interval)
 
     def close(self) -> None:

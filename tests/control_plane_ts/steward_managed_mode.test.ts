@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {admitStewardManagedTurn, bindStewardManagedActor, planStewardManagedMode} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+import {admitStewardManagedTurn, bindStewardManagedActor, planStewardManagedMode,
+  planStewardMonitor, observeStewardPortfolio} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 
 function fixture() {
@@ -21,6 +22,71 @@ function fixture() {
     creation_operation_id: `steward-managed:${binding.binding_id}:${source}`};
   return {params, goal};
 }
+
+test("only the canonical open watch can run without a model, and it cannot reuse another model scope", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const request = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.original", todo_id: "todo_watch", validation_command: null,
+    monitor_deadline: "2026-10-23T10:00:00Z", monitor_lease_version: 0};
+  const monitor = {todo_id: "todo_watch", task_class: "continuous_monitor", target_key: "steward-portfolio-watch",
+    watch_only: "true", claimed_by: "steward", status: "open", next_due_at: request.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor}, request,
+    monitor_todo: monitor, session: {...params.session, active_turn_id: "original-watch", manager_authorization_scope_id: "old-model-scope"},
+    scope: {current: "new-authorized-goals", without_actor: "also-new"},
+    turn: {session_id: params.session.session_id, turn_id: "original-watch", status: "running",
+      origin: "native_loopx", loopx_execution: true, loopx_request: request}};
+  const admitted = admitStewardManagedTurn(input);
+  assert.equal(admitted.observation_only, true);
+  assert.equal(admitted.refresh_original_scope, false); // the model's isolation hash is preserved
+  for (const invalid of [null, {...monitor, status: "blocked"}, {...monitor, watch_only: false},
+    {...monitor, claimed_by: "other-owner"}, {...monitor, todo_id: "todo_other"}, {...monitor, next_due_at: "later"}]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_todo: invalid}));
+  }
+  const modelRequest = {...request, work_kind: "native_turn"};
+  assert.throws(() => admitStewardManagedTurn({...input, request: modelRequest,
+    turn: {...input.turn, loopx_request: modelRequest}}));
+});
+
+test("monitor configuration retains the original actor and native Todo authority", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    operation: "enable", cadence_minutes: 30, todos: []};
+  const plan = planStewardMonitor(input);
+  assert.deepEqual(plan.actor, actor);
+  assert.equal(plan.model_invoked, false);
+  const todo = {todo_id: "todo_original", task_class: "continuous_monitor", target_key: "steward-portfolio-watch",
+    watch_only: true, claimed_by: "steward", status: "blocked"};
+  assert.notEqual(planStewardMonitor({...input, todos: [todo]}).plan_id, plan.plan_id);
+  for (const invalid of [
+    {...input, cadence_minutes: 1}, {...input, cadence_minutes: 30.5}, {...input, goal_active: false},
+    {...input, todos: [todo, todo]}, {...input, todos: [{...todo, claimed_by: "another-owner"}]},
+    {...input, todos: [{...todo, status: "done"}]},
+  ]) assert.throws(() => planStewardMonitor(invalid));
+});
+
+test("observations retain stopped Goals and gaps, distinguish material changes, and ignore collection clocks", () => {
+  const original = {goal_id: "original", activation_state: "stopped", quality: "unavailable",
+    attention: [{kind: "pending-return", request_ref: "retained-original"}], progress: {completed: 1},
+    agents: [{agent_id: "original-agent", age_seconds: 1}], generated_at: "first"};
+  const own = {goal_id: "steward", progress: {monitor_polls: 1}};
+  const input = {context: {goals: [original, own], coverage: {gaps: ["one-source-unavailable"]}},
+    goal_ids: ["steward", "original"], actor_goal_id: "steward", previous_hash: null};
+  const first = observeStewardPortfolio(input);
+  assert.equal(first.observed_goal_count, 2);
+  assert.equal(first.material_change, false);
+  assert.deepEqual(first.coverage, input.context.coverage);
+  const unchanged = observeStewardPortfolio({...input, previous_hash: first.result_hash,
+    context: {...input.context, goals: [{...own, progress: {monitor_polls: 2}},
+      {...original, generated_at: "second", agents: [{agent_id: "original-agent", age_seconds: 88}]}]}});
+  assert.equal(unchanged.result_hash, first.result_hash);
+  assert.equal(unchanged.material_change, false);
+  assert.equal(observeStewardPortfolio({...input, previous_hash: first.result_hash,
+    context: {...input.context, goals: [{...original, progress: {completed: 2}}, own]}}).material_change, true);
+  assert.throws(() => observeStewardPortfolio({...input, context: {goals: [own]}}));
+  assert.throws(() => observeStewardPortfolio({...input, context: {goals: [own, original, original]}}));
+});
 
 test("native dispatch binds the prepared actor, while an active original Turn permits revalidation only", () => {
   const {params, goal} = fixture();

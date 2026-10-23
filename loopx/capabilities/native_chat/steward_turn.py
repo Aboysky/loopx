@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
 from .steward_managed_mode import StewardManagedMode
 
@@ -39,6 +40,10 @@ class StewardTurnHost:
             sender_ref=saved["operator_ref"], private_human_message=False, session_context=saved)
         from ...agent_registry import load_goal_from_registry
         goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+        from .steward_monitor import StewardMonitor
+        canonical_actor = selected["binding"].get("managed_actor")
+        monitor = StewardMonitor(self.controller).current(canonical_actor) if canonical_actor else None
+        monitor = monitor if monitor and monitor["todo_id"] == request.get("todo_id") else None
         scope = None
         if turn is not None:
             from ...chat_manager_context import manager_authorization_scope_id_for_registry
@@ -54,14 +59,15 @@ class StewardTurnHost:
             "binding": selected["binding"], "session": session, "observation": selected["observation"],
             "workspace_path": str(self.managed._workspace(session)),
             "queued_turn_count": len(self.store.queued_turns(session["session_id"])),
-            "goal": self.managed._goal(actor["goal_id"]), "goal_active": bool(goal and goal.get("status") == "active"),
-            "request": request, "turn": turn, "scope": scope})
+            "goal": self.managed._goal(actor["goal_id"]), "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
+            "request": request, "turn": turn, "scope": scope, "monitor_todo": monitor})
         if admitted["refresh_original_scope"]:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
         return admitted
 
     def submit(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None = None,
-               validation_command: Sequence[str] | None = None) -> tuple[dict[str, Any], bool]:
+               validation_command: Sequence[str] | None = None,
+               work_kind: str = "native_turn", monitor_deadline: str | None = None) -> tuple[dict[str, Any], bool]:
         """Internal host entrypoint; busy conversations retain work with caller.
 
         No HTTP or model tool exposes this method. Calendar/monitor admission
@@ -77,26 +83,42 @@ class StewardTurnHost:
                 raise ValueError("prepare the original steward identity first")
             request = {"operation": "native_turn", "host": "codex-app-server", "actor": actor,
                 "turn_instance_id": turn_instance_id, "todo_id": todo_id,
+                "work_kind": work_kind,
                 "validation_command": list(validation_command) if validation_command is not None else None}
             client_id = "native." + hashlib.sha256(json.dumps([actor, turn_instance_id], sort_keys=True).encode()).hexdigest()[:40]
             existing = self.store.turn_for_client(actor["session_id"], client_id)
             if existing is not None:
                 # Never replay a failed/unknown model Turn. A committed Chat
                 # request is observed; native journal recovery remains separate.
-                if existing.get("loopx_request") != request:
+                frozen = {key: value for key, value in (existing.get("loopx_request") or {}).items()
+                    if key not in {"monitor_lease_version", "monitor_deadline"}}
+                frozen.setdefault("work_kind", "native_turn")
+                if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
                     raise ValueError("native steward request identity conflict")
                 return existing, False
+            if work_kind == "monitor":
+                from .steward_commands import native_command
+                if not todo_id or not monitor_deadline:
+                    raise ValueError("a native watch requires its original Todo and deadline")
+                retained = native_command(controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
+                    "--todo-id", todo_id]).get("lease")
+                request.update(monitor_deadline=monitor_deadline,
+                    monitor_lease_version=retained["version"] if retained else 0)
             admitted = self._admit(request)
             session = self.store.load_session(actor["session_id"])
             accepted = self.store.accept_managed_turn(actor["session_id"], client_turn_id=client_id,
                 message="Advance the currently admitted native LoopX work.",
-                display_message="推进管家的 LoopX 任务。", origin="native_loopx",
+                display_message="检查授权工作状态。" if work_kind == "monitor" else "推进管家的 LoopX 任务。", origin="native_loopx",
                 loopx_execution=True, loopx_request=request)
             try:
-                adapter = controller._ensure_adapter_locked(session,
-                    work_dir=Path(admitted["workspace_path"]),
-                    objective="Maintain the original steward's authorized monitoring work.",
-                    accepted_turn_id=accepted.turn["turn_id"])
+                if admitted["observation_only"]:
+                    from .steward_monitor import StewardObservationAdapter
+                    adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
+                else:
+                    adapter = controller._ensure_adapter_locked(session,
+                        work_dir=Path(admitted["workspace_path"]),
+                        objective="Maintain the original steward's authorized monitoring work.",
+                        accepted_turn_id=accepted.turn["turn_id"])
                 controller._start_accepted_turn_worker(session_id=actor["session_id"],
                     turn_id=accepted.turn["turn_id"], message=accepted.turn["message"],
                     attachments=[], adapter=adapter, loopx_execution=True)
@@ -113,13 +135,16 @@ class StewardTurnHost:
         from ...control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt, parse_model_json, build_result
         from .codex_adapter import CodexAppServerAdapter
 
-        if not isinstance(adapter, CodexAppServerAdapter):
-            raise ValueError("native steward work requires the original Codex app-server adapter")
-
         turn = self.store.load_turn(session_id, turn_id)
         request = turn["loopx_request"]
         admitted = self._admit(request, turn=turn)
         actor = admitted["actor"]
+        if admitted["observation_only"]:
+            from .steward_monitor import StewardMonitor
+            monitor = StewardMonitor(self.controller)
+            return monitor.observe(host=self, request=request, turn=turn, context=context, todo=monitor.current(actor))
+        if not isinstance(adapter, CodexAppServerAdapter):
+            raise ValueError("native steward work requires the original Codex app-server adapter")
         original_thread = adapter.upstream_thread_id
 
         def current():

@@ -178,9 +178,31 @@ def test_http_preparation_requires_current_preview_and_reads_original_binding(st
         assert code == 200
         row = next(row for row in readback["connections"] if row["binding_id"] == binding["binding_id"])
         assert row["managed_steward"] == {"available": True, "prepared": True, "scheduling_enabled": False,
+            "goal_active": True, "monitor": None,
             "goal_id": applied["actor"]["goal_id"], "agent_id": "steward", "session_id": sid}
         assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
         assert request(route, {**body, "plan_id": preview["plan"]["plan_id"]})[1]["idempotent"]
+        monitor_route = route + "/monitor"
+        setting = {"binding_id": binding["binding_id"], "operation": "enable", "cadence_minutes": 30}
+        assert request(monitor_route, setting, "https://foreign.example")[0] == 403
+        assert request(monitor_route, {**setting, "goal_id": "borrowed-goal"})[0] == 409
+        assert request(monitor_route, {**setting, "cadence_minutes": True})[0] == 409
+        assert request(monitor_route, {**setting, "operation": []})[0] == 409
+        code, plan = request(monitor_route, setting)
+        assert code == 200 and not plan["applied"]
+        assert request(monitor_route, {**setting, "execute": True, "plan_id": "stale"})[0] == 409
+        code, enabled = request(monitor_route, {**setting, "execute": True, "plan_id": plan["plan"]["plan_id"]})
+        assert code == 200 and enabled["applied"] and enabled["model_invoked"] is False
+        row = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        assert row["managed_steward"]["scheduling_enabled"] is True
+        assert row["managed_steward"]["monitor"]["todo_id"] == enabled["monitor"]["todo_id"]
+        setting["operation"] = "pause"
+        plan = request(monitor_route, setting)[1]["plan"]
+        assert request(monitor_route, {**setting, "execute": True, "plan_id": plan["plan_id"]})[0] == 200
+        row = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        assert row["managed_steward"]["scheduling_enabled"] is False
+        assert row["managed_steward"]["monitor"]["status"] == "blocked"
+        assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
     finally:
         server.shutdown()
         server.server_close()
