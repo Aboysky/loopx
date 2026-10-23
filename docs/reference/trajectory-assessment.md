@@ -565,3 +565,41 @@ old observations stay readable. The builtin benchmark-toolkit provider and its
 TypeScript reducer retain ownership, with Python restricted to scoped file
 reading and transport. There is no new telemetry, accounting store or scoring
 policy.
+
+### Reconcile request and compaction coverage
+
+New usage captures also inspect persisted Codex `token_usage_record` and
+`compacted` counters when present. The supplemental
+`request_coverage.method=codex_request_reconciliation_v1` projection deduplicates
+response identities, verifies per-Turn and session cumulative totals, and
+reconciles every session-counter observation against a stable captured basis:
+`all_requests` includes compaction and `ordinary_requests` excludes it. Equal
+prefixes retain both candidates until informative evidence distinguishes them;
+zero compaction or otherwise indistinguishable evidence yields `undetermined`.
+Changing basis within a capture is unavailable, as is any new unique request
+after its final session-counter observation, including a zero-token request.
+The additive `counter_basis` field is absent on historical saved projections;
+readers keep that basis unknown without rewriting the original capture.
+A compaction's `latest_token_usage_record` is a mirror of its linked request,
+never another charge. Input includes cached input; output includes reasoning.
+
+Research → Sources and usage keeps **Session counters** on their original basis
+and shows **Request coverage** separately: recorded request totals and the
+compaction subset. Do not add these totals to one another or to repeated pack
+captures. This diagnostic does not change Goal accounting, provider invoices,
+scoring, completion admission or model execution. Even verified reconciliation
+cannot establish unpersisted requests, other sessions, evaluator costs or money.
+
+Missing request fields, conflicting responses, mismatched prefixes, unresolved
+compaction links and inconsistent counters produce unavailable request coverage,
+with no speculative request totals. Independently valid session counters remain
+readable. Hosts without request records and previously saved packs remain
+unchanged; absent coverage means unknown, not zero compactions. Malformed JSONL,
+including a truncated final record, still rejects registration. The existing
+complete-session default and explicit unfinished-Turn opt-in both remain in force.
+
+Only allowlisted identity/counter fields cross the Python file adapter into the
+existing TypeScript owner; replacement history and response text are excluded.
+Registration retains the source hash, and changed or missing sources mark the
+saved capture historical. Re-registering a source with this additional
+projection can create a new pack identity; old packs are never rewritten.
