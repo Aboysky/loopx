@@ -708,33 +708,44 @@ occupies context. Historical incomplete inputs are not an efficiency baseline.
 
 The next slice stays within the existing three convergence acceptances above:
 
-1. **One execution view.** Reuse the interaction/work-context and TurnEnvelope
-   TypeScript owners for execution facts across ordinary quota, heartbeat
-   full/thin and native Turn. Characterize real callers before retiring a
-   duplicate Python projection; retain Python source IO and host effect ownership.
-2. **Preserve existing callers while removing duplicate work.** Start with
-   internal projection work that ordinary quota and Turn can share or avoid.
-   Preserve quota's public JSON shape, existing detail commands and guard flow;
-   this slice does not require a new CLI read route or a host baseline protocol.
-   Compare the complete output and signatures against the same captured inputs,
-   including historical compatibility, and measure transport as well as local
-   computation. Moving a small helper across runtimes can add more cost than it
-   removes. Keep required reads, original capture identity and effect ownership.
-3. **Proven retained-context reuse.** Separately evaluate exact reuse of unchanged
-   required context when the host can establish that the same session still
-   retains the previously consumed baseline. File existence, a prior hash or an
-   old delivery receipt alone cannot establish that fact. Compaction, restart,
-   missing/corrupt evidence or unknown retention falls back to complete current
-   requirements. Always project current action, admission, scope, cancellation,
-   claim/lease and settlement conditions; prior context grants no fresh authority.
-   Exact reconstruction is necessary but does not prove model adoption.
-4. **Cold-start requirements.** Treat mixed Todo history and acceptance
+1. **Reduce ordinary quota input first.** The first delivery target is the
+   existing `quota should-run` packets actually consumed by solvers inside
+   benchmark cases. Operator/control-plane and personal maintenance packets are
+   secondary; do not use their size as evidence of solver input. Solvers should
+   benefit without opting into TurnEnvelope or a new host protocol. Start
+   with measured, lossless repetition in the emitted packet, then qualify the
+   structured required-context projection. Demonstrate the reduction on the same
+   captured decisions and actual caller read path, counting necessary follow-up
+   reads. A smaller stored capture, an import cleanup or a different transport
+   name does not establish lower model input.
+2. **Converge along that delivery path.** Reuse the interaction/work-context and
+   TurnEnvelope TypeScript owners while reducing ordinary quota costs. Preserve
+   existing invocation, selection/guard, settlement and detail routes; qualify
+   compatibility for any compact representation. This slice requires no new CLI
+   read route or host baseline protocol. Characterize real callers before
+   retiring duplicate Python projections; retain Python source IO, required
+   reads, original capture identity and host effect ownership. Compare complete
+   execution facts and signatures against the same captured inputs, including
+   historical compatibility. Measure transport and local computation: moving a
+   small helper across runtimes can add more cost than it removes.
+3. **Cold-start requirements.** Treat mixed Todo history and acceptance
    explanations at their structured owner before deciding what can become
    optional detail. Do not infer obsolete requirements from age, owner, status,
    headings or length. Keep earlier commitments, global constraints, source
    provenance and late stop/correction clauses. Changing which information is
    mandatory requires explicit clause and negative-case qualification; moving
    a mandatory body behind a reference and reading it all back is not a saving.
+   Replacing accumulated notes with a shorter latest note is a state change,
+   not packet compression; preserve historical requirements during writeback.
+4. **Proven retained-context reuse.** Separately evaluate exact reuse of unchanged
+   required context when the host can establish that the same session still
+   retains the previously consumed baseline. This research is not a prerequisite
+   for ordinary quota reductions. File existence, a prior hash or an old delivery
+   receipt alone cannot establish retention. Compaction, restart, missing/corrupt
+   evidence or unknown retention falls back to complete current requirements.
+   Always project current action, admission, scope, cancellation, claim/lease and
+   settlement conditions; prior context grants no fresh authority. Exact
+   reconstruction is necessary but does not prove model adoption.
 
 Qualification compares matched normal, replan and wait/recovery workloads with
 optional capability modes unchanged. Include first delivery, warm reuse, reset,
