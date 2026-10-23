@@ -201,6 +201,11 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             </ContextHelp></div>
             {coverage?.status === "verified" ? <>
               <p>{number(coverage.unique_requests)} {zh ? "次请求" : "requests"} · {number(coverage.compaction_requests)} {zh ? "次上下文压缩" : "context compactions"}</p>
+              <p>{coverage.counter_basis === "all_requests"
+                ? (zh ? "会话计数含压缩请求" : "Session counters include compaction requests")
+                : coverage.counter_basis === "ordinary_requests"
+                  ? (zh ? "会话计数不含压缩请求" : "Session counters exclude compaction requests")
+                  : (zh ? "会话计数口径未确定" : "Session counter basis undetermined")}</p>
               <dl className="research-request-values">
                 <div><dt>{zh ? "全部请求 · 未缓存输入" : "All requests · uncached input"}</dt><dd>{number(coverage.all_requests.input_tokens - coverage.all_requests.cached_input_tokens)} <span>tokens</span></dd></div>
                 <div><dt>{zh ? "全部请求 · 输出" : "All requests · output"}</dt><dd>{number(coverage.all_requests.output_tokens)} <span>tokens</span></dd></div>

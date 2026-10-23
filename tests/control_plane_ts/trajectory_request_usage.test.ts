@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {summarizeTrajectoryCodexUsage as summarize} from '../../loopx/control_plane/capabilities/trajectory_codex_usage.ts';
+import {reconcileTrajectoryRequests as reconcile} from '../../loopx/control_plane/capabilities/trajectory_request_usage.ts';
 
 const tokens = (input: number, cached: number, output: number) => ({input_tokens: input,
   cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: 0,
@@ -31,11 +32,45 @@ test('request reconciliation accounts for compaction once and preserves the lega
   assert.equal(c.unique_requests, 3); assert.equal(c.compaction_requests, 1);
   assert.deepEqual(c.all_requests, tokens(160, 90, 22)); assert.deepEqual(c.compaction, tokens(20, 10, 7));
   assert.equal(c.counter_observations, 2);
+  assert.equal(c.counter_basis, 'ordinary_requests');
   const oldRows = fixture().filter(e => !['token_usage_record', 'compacted'].includes(e.type));
   const {request_coverage, ...legacy} = result;
   assert.deepEqual(run(oldRows), legacy);
   // Old persisted projections can be read without retroactively manufacturing coverage.
   assert.equal(run(oldRows).request_coverage, undefined);
+});
+
+test('an ambiguous early prefix does not reject coherent compaction-inclusive counters', () => {
+  const es = fixture();
+  es[9].payload.info.total_token_usage = tokens(160, 90, 22);
+  es[9].payload.info.last_token_usage = tokens(60, 30, 12);
+  const result = run(es), c = result.request_coverage!;
+  assert.equal(result.input_tokens, 160); assert.equal(result.output_tokens, 22);
+  assert.equal(c.status, 'verified'); if (c.status !== 'verified') return;
+  assert.equal(c.counter_basis, 'all_requests');
+  assert.deepEqual(c.all_requests, tokens(160, 90, 22));
+  assert.deepEqual(c.compaction, tokens(20, 10, 7));
+});
+
+test('every informative snapshot must agree on a stable counter basis', () => {
+  for (const first of ['all_requests', 'ordinary_requests']) {
+    const es = fixture();
+    const snap = counter(first === 'all_requests' ? tokens(120, 70, 17) : tokens(100, 60, 10));
+    es.splice(6, 0, {...snap, timestamp: '2026-01-01T00:00:05.500Z'});
+    if (first === 'ordinary_requests') es[10].payload.info.total_token_usage = tokens(160, 90, 22);
+    const c = reconcile(es, 'session')!;
+    assert.equal(c.status, 'unavailable');
+    if (c.status === 'unavailable') assert.match(c.reason, /basis|counters/i);
+  }
+});
+
+test('a new zero-token request after the final counter is still an uncovered tail', () => {
+  const es = fixture();
+  es.splice(-1, 0, {...response('tail', 'b', tokens(0, 0, 0), tokens(160, 90, 22), tokens(40, 20, 5)),
+    timestamp: '2026-01-01T00:00:09.500Z'});
+  const c = reconcile(es, 'session')!;
+  assert.equal(c.status, 'unavailable');
+  if (c.status === 'unavailable') assert.match(c.reason, /last session-counter/);
 });
 
 test('identical response and compaction mirrors are idempotent', () => {
@@ -93,6 +128,7 @@ test('a host without request records is unknown, while verified zero compactions
   const c=run(es).request_coverage!;
   assert.equal(c.status,'verified');if(c.status!=='verified')return;
   assert.equal(c.compaction_requests,0);assert.deepEqual(c.compaction,tokens(0,0,0));
+  assert.equal(c.counter_basis, 'undetermined');
   const noRecords=fixture().filter(e=>e.type!=='token_usage_record');
   assert.equal(run(noRecords).request_coverage?.status,'unavailable');
 });

@@ -632,14 +632,21 @@ def _request_usage_fixture():
         ).isoformat()
     return "\n".join(json.dumps(row) for row in rows) + "\n"
 
+@pytest.mark.parametrize("counter_basis", ["ordinary_requests", "all_requests"])
 def test_request_usage_native_cli_replay_privacy_and_historical_readback(
-    pack, monkeypatch
+    pack, monkeypatch, counter_basis
 ):
     import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
 
     scope, _, old, input_path, sources, _ = pack
     capture = sources / "usage.jsonl"
     rows = _request_usage_fixture().splitlines()
+    if counter_basis == "all_requests":
+        data = [json.loads(row) for row in rows]
+        counter = data[9]["payload"]["info"]
+        counter["total_token_usage"].update(input_tokens=160, cached_input_tokens=90, output_tokens=22, total_tokens=182)
+        counter["last_token_usage"].update(input_tokens=60, cached_input_tokens=30, output_tokens=12, total_tokens=72)
+        rows = [json.dumps(row) for row in data]
     # Exercise the real large-snapshot transport with repeated observations,
     # while the independent three-request total remains 160 input / 22 output.
     rows[3:3] = [rows[2]] * 2500
@@ -664,9 +671,11 @@ def test_request_usage_native_cli_replay_privacy_and_historical_readback(
     registered = register_pack(**args)
     view = inspect_pack(**scope)
     facts = view["solver_usage"]["projection"]
-    assert facts["input_tokens"] == 140 and facts["output_tokens"] == 15
+    assert facts["input_tokens"] == (160 if counter_basis == "all_requests" else 140)
+    assert facts["output_tokens"] == (22 if counter_basis == "all_requests" else 15)
     coverage = facts["request_coverage"]
     assert coverage["status"] == "verified"
+    assert coverage["counter_basis"] == counter_basis
     assert coverage["all_requests"]["output_tokens"] == 22
     assert coverage["compaction"]["output_tokens"] == 7
     assert coverage["unique_requests"] == 3 and coverage["compaction_requests"] == 1
@@ -745,6 +754,30 @@ def test_request_usage_native_cli_replay_privacy_and_historical_readback(
         == facts
     )
     assert not list(scope["runtime_root"].rglob("receipt.json"))
+
+
+def test_legacy_saved_request_coverage_is_read_without_inventing_counter_basis(pack):
+    import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
+
+    scope, _, old, input_path, sources, _ = pack
+    (sources / "usage.jsonl").write_text(_request_usage_fixture())
+    current = register_pack(**scope, input_path=input_path, source_root=sources,
+        title=old["title"], usage_jsonl="usage.jsonl", usage_session_id="solver-session")
+    owner, record = store._resolve(**scope, pack_id=current["pack_id"])
+    # A separately registered synthetic historical record, never an active Goal
+    # migration or a rewrite of the new capture's identity.
+    del record["solver_usage"]["projection"]["request_coverage"]["counter_basis"]
+    legacy_id = store._pack_id(scope["owner_goal_id"], record)
+    path = owner / "packs" / f"{legacy_id}.json"
+    path.write_text(json.dumps(record))
+    index = json.loads((owner / "packs.json").read_text())
+    index["pack_ids"].append(legacy_id)
+    (owner / "packs.json").write_text(json.dumps(index))
+    before = path.read_bytes()
+    coverage = inspect_pack(**scope, pack_id=legacy_id)["solver_usage"]["projection"]["request_coverage"]
+    assert coverage["status"] == "verified" and "counter_basis" not in coverage
+    assert coverage["all_requests"]["input_tokens"] == 160
+    assert path.read_bytes() == before
 
 
 def test_optional_solver_usage_is_read_only_scoped_and_separate_from_model(pack):

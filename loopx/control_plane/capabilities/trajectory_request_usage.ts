@@ -48,7 +48,9 @@ export function reconcileTrajectoryRequests(rows: Array<{type?: unknown; payload
     const requests = new Map<string, Request>(), turns = new Map<string, TrajectoryRequestTokens>();
     let total = zero(), ordinary = zero(), compaction = zero(), duplicates = 0, snapshots = 0;
     let active: string | null = null, previousTime = -Infinity, observedThrough = '';
-    let lastCounter: Record<string, number> | null = null;
+    // Equal pre-compaction prefixes support both interpretations. Intersect
+    // evidence across the whole capture instead of committing to the first one.
+    let matchesAll = true, matchesOrdinary = true, lastCounterRequests = -1;
     for (const e of rows) {
       const p = object(e.payload);
       if (e.type === 'session_meta') continue;
@@ -81,13 +83,18 @@ export function reconcileTrajectoryRequests(rows: Array<{type?: unknown; payload
         // latest_token_usage_record is a mirror, never another request.
       } else if (p.type === 'token_count' && p.info) {
         const counter = object(object(p.info).total_token_usage);
-        if (sessionKeys.some(k => ordinary[k] !== counter[k])) return invalid('Session counters disagree with non-compaction requests.');
-        lastCounter = counter as Record<string, number>; snapshots++;
+        matchesAll &&= sessionKeys.every(k => total[k] === counter[k]);
+        matchesOrdinary &&= sessionKeys.every(k => ordinary[k] === counter[k]);
+        if (!matchesAll && !matchesOrdinary) return invalid('Session counters disagree with a stable request counter basis.');
+        lastCounterRequests = requests.size; snapshots++;
       }
     }
     if (!requests.size || !snapshots) return invalid('Request or session-counter observations are missing.');
-    if (sessionKeys.some(k => ordinary[k] !== lastCounter![k])) return invalid('Requests extend beyond the last session-counter observation.');
+    if (requests.size !== lastCounterRequests) return invalid('Requests extend beyond the last session-counter observation.');
+    const counterBasis = matchesAll && matchesOrdinary ? 'undetermined'
+      : matchesAll ? 'all_requests' : 'ordinary_requests';
     return {method, status: 'verified', unique_requests: requests.size, compaction_requests: compactionIds.size,
+      counter_basis: counterBasis,
       duplicate_records: duplicates, counter_observations: snapshots, observed_through: observedThrough, all_requests: total, compaction};
   } catch (error) {
     // A supplementary source failure does not rewrite or invalidate the

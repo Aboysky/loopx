@@ -572,7 +572,14 @@ New usage captures also inspect persisted Codex `token_usage_record` and
 `compacted` counters when present. The supplemental
 `request_coverage.method=codex_request_reconciliation_v1` projection deduplicates
 response identities, verifies per-Turn and session cumulative totals, and
-reconciles each session-counter observation against non-compaction requests.
+reconciles every session-counter observation against a stable captured basis:
+`all_requests` includes compaction and `ordinary_requests` excludes it. Equal
+prefixes retain both candidates until informative evidence distinguishes them;
+zero compaction or otherwise indistinguishable evidence yields `undetermined`.
+Changing basis within a capture is unavailable, as is any new unique request
+after its final session-counter observation, including a zero-token request.
+The additive `counter_basis` field is absent on historical saved projections;
+readers keep that basis unknown without rewriting the original capture.
 A compaction's `latest_token_usage_record` is a mirror of its linked request,
 never another charge. Input includes cached input; output includes reasoning.
 

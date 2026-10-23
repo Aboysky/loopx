@@ -68,6 +68,8 @@ export interface TrajectoryRequestTokens {
 export type TrajectoryRequestCoverage = {
   method: 'codex_request_reconciliation_v1';
 } & ({status: 'verified'; unique_requests: number; compaction_requests: number;
+  /** Absent on historical saved projections; never infer a basis for those. */
+  counter_basis?: 'all_requests' | 'ordinary_requests' | 'undetermined';
   duplicate_records: number; counter_observations: number; observed_through: string;
   all_requests: TrajectoryRequestTokens; compaction: TrajectoryRequestTokens;
 } | {status: 'unavailable'; reason: string});
