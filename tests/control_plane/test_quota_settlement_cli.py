@@ -254,7 +254,9 @@ def _run_generated_cli(
     cwd: Path = REPO_ROOT,
 ) -> tuple[int, dict[str, Any]]:
     argv = shlex.split(command)
-    assert argv[0] == "loopx"
+    # The worker renderer may pin this environment's executable explicitly.
+    # Keep rejecting unrelated executables instead of matching only a basename.
+    assert argv[0] in {"loopx", str(Path(sys.executable).parent / "loopx")}
     if "--registry" not in argv:
         argv[1:1] = ["--registry", str(registry_path)]
     result = subprocess.run(
