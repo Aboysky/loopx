@@ -173,8 +173,13 @@ def test_native_terminal_release_wakes_final_after_prior_pending_read(ordinary, 
             turn = runtime.wait_for_turn(session_id=native["session_id"], turn_id=native["turn_id"], timeout_sec=5)
             assert turn["status"] == "completed"
             assert delivered.wait(5)
-            assert provider.writes[-1] == ("notes-app", turn["response"]["message"])
-            assert provider.writes.count(provider.writes[-1]) == 1
+            # A final can edit the progress post; creation logs retain its old body.
+            answers = [message for message in provider.messages.values()
+                if message["sender"]["sender_type"] == "app"
+                and json.loads(message["body"]["content"])["zh_cn"]["content"][0][0]["text"]
+                == turn["response"]["message"]]
+            assert [(message["chat_id"], message["sender"]["id"]) for message in answers] == [
+                (event["chat_id"], provider.profile_apps["notes-app"])]
             assert len(store.list_sessions()) == 1
             packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
             assert sum(p["method"] == "turn/start" for p in packets) == 1
