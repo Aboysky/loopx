@@ -147,7 +147,7 @@ from .settlement_precedence import (
     HEARTBEAT_SETTLED_REPLAY_REASON,
     clear_quota_action_projections,
 )
-from .should_run_prepare import _QuotaDecisionPreparation
+from .should_run_prepare import _QuotaDecisionPreparation, _blocked_priority_fallback
 from ._supporting_projections import (
     _attach_quota_supporting_projections,
     _attach_truthy_fields,
@@ -1373,6 +1373,15 @@ def _build_active_quota_payload(
     include_agent_todo_detail: bool = False,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
+    if route.normal_delivery_allowed and route.agent_lane_next_action and prepared.blocked_priority_fallback:
+        # Selection/receipt continuity is authoritative; the first executable
+        # summary row was only a provisional candidate. Reuse the notice owner
+        # for every downstream projection without changing admission or gates.
+        prepared.blocked_priority_fallback = _blocked_priority_fallback(
+            prepared.agent_todo_summary, selected_executable=route.agent_lane_next_action,
+        )
+        if "blocked_priority_fallback" in route.heartbeat_recommendation:
+            route.heartbeat_recommendation["blocked_priority_fallback"] = prepared.blocked_priority_fallback
     agent_scope_action = _agent_scope_frontier_action(route.effective_action)
     retry_deadline = (prepared.agent_todo_summary or {}).get("frontier_deadline") or {}
     user_summary = prepared.user_todo_summary or {}

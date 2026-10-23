@@ -5,18 +5,30 @@ from copy import deepcopy
 import contextlib
 import io
 import json
+import shlex
 import subprocess
 import sys
 
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.work_items.context_readback import _source_content
+
+
+def _recording_host(tmp_path):
+    runner = tmp_path / "runner.py"
+    runner.write_text("import json\nfrom pathlib import Path\n"
+        "def run_dsh_turn(*, prompt, workspace, **kwargs):\n"
+        "    Path(workspace, 'received.txt').write_text(prompt)\n"
+        "    return json.dumps({'result_kind':'wait','summary':'Protocol input recorded.'})\n")
+    return [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(tmp_path),
+        "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -117,14 +129,8 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     assert envelope["action"]["selected_todo"]["text_source_verified"] is True
     request = build_loopx_turn_host_request(build_loopx_turn_plan(envelope,
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id="export-context-turn"))
-    runner = tmp_path / "runner.py"
-    runner.write_text("import json\nfrom pathlib import Path\n"
-        "def run_dsh_turn(*, prompt, workspace, **kwargs):\n"
-        "    Path(workspace, 'received.txt').write_text(prompt)\n"
-        "    return json.dumps({'result_kind':'wait','summary':'Protocol input recorded.'})\n")
     before = {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
-    command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(tmp_path),
-        "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
+    command = _recording_host(tmp_path)
     result = subprocess.run(command,
         input=json.dumps(request), capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -185,3 +191,125 @@ def test_acceptance_observation_does_not_transport_the_large_selected_body(tmp_p
         runtime_root=runtime, goal_id="large-acceptance-context", todo_id="todo_large")
     assert basis["status"] == "loaded" and [row["todo_id"] for row in basis["tasks"]] == ["todo_large"]
     assert "todo" not in basis and "completion_requirements" not in basis
+
+
+@pytest.mark.parametrize("change", ["work_added", "work_changed", "timer_wait", "checks_removed"])
+def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_goal, tmp_path, change):
+    project, document, acceptance_cli, run = acceptance_goal
+    goal, agent, selected = "goal-acceptance", "agent-a", "todo_export"
+
+    def cli(*arguments):
+        code, result = run(*arguments)
+        assert code == 0, result
+        return result
+
+    def configure(*arguments):
+        code, result = acceptance_cli(*arguments)
+        assert code == 0, result
+        return result
+
+    requirements = tmp_path / "requirements.json"
+    requirements.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": agent,
+        "objective": "Retain the complete export", "todo_ids": [selected], "requirements": [
+            {"id": "content", "description": "Retain every original section."},
+            {"id": "recovery", "description": "Stop before publication; preserve the recovery tail."}],
+        "source": {"ref": "message:original", "summary": "The owner requested a complete export."}}))
+    configure("refine", "--agent-id", agent, "--document", str(requirements),
+        "--expected-provider-revision", configure("inspect")["provider_revision"],
+        "--operation-id", "original-requirements", "--execute")
+    configure("configure", "--document", str(document),
+        "--expected-provider-revision", configure("inspect")["provider_revision"],
+        "--operation-id", "original-checks", "--execute")
+    original = configure("inspect")["goal_acceptance_contract"]["outcome_requirements"]
+    capture = tmp_path / "decision"
+    guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
+    first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
+        "--turn-envelope", "--decision-output-dir", str(capture))
+    saved = (capture / "decision.json").read_bytes()
+    full = json.loads(saved)
+    basis = next(row["content"] for row in first["work_context"]["sources"]
+        if row.get("source") == "goal_acceptance")
+    assert first["action"]["delivery_allowed"] is True
+    assert basis["tasks"][0]["state"] == "ready"
+    assert basis["goal_acceptance_contract"]["outcome_requirements"] == original
+    request = build_loopx_turn_host_request(build_loopx_turn_plan(first,
+        host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery"))
+    result = subprocess.run(_recording_host(project), input=json.dumps(request),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    prompt = (project / "received.txt").read_text()
+    authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    assert authority["work_context"] == first["work_context"]
+
+    # Finish the original synthetic work before attempting another managed
+    # Turn. An unsettled receipt is its own legitimate recovery boundary.
+    (project / "artifact.txt").write_text("accepted")
+    check = json.loads(document.read_text())["criteria"][0]["validation_argv"]
+    subprocess.run(check, cwd=project, check=True)
+    identity = ("--goal-id", goal, "--agent-id", agent, "--todo-id", selected,
+        "--turn-instance-id", "original-delivery")
+    cli("refresh-state", *identity, "--classification", "validated_progress",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+    for appended in (True, False):
+        spent = cli("quota", "spend-slot", *identity, "--slots", "1", "--source", "heartbeat", "--execute")
+        assert spent["appended"] is appended
+
+    target = selected
+    if change == "work_added":
+        target = cli("todo", "add", "--goal-id", goal, "--role", "agent", "--claimed-by", agent,
+            "--text", "Deliver a newly requested export", "--task-class", "advancement_task",
+            "--action-kind", "implement")["todo_id"]
+    elif change == "work_changed":
+        cli("todo", "update", "--goal-id", goal, "--todo-id", selected, "--agent-id", agent,
+            "--text", "Deliver the export and a newly required checksum")
+    elif change == "timer_wait":
+        cli("todo", "update", "--goal-id", goal, "--todo-id", selected, "--agent-id", agent,
+            "--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z")
+    else:
+        configure("clear-checks", "--expected-provider-revision", configure("inspect")["provider_revision"],
+            "--operation-id", "remove-checks", "--execute")
+
+    # A capture is an immutable observation. Reading its detail cannot admit
+    # changed work, remove a wait or silently rebind the owner's checks.
+    code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery")
+    assert code == (0 if change == "checks_removed" else 1), current
+    channel = current["interaction_contract"]["agent_channel"]
+    assert channel["delivery_allowed"] is (change == "checks_removed")
+    if change != "checks_removed":
+        assert current["error_code"] == "quota_action_selection_rejected"
+    cold = configure("inspect")
+    # Work status and its derived fingerprint may change; every original
+    # objective, requirement, source and work link must remain intact.
+    requirements_now = cold["goal_acceptance_contract"]["outcome_requirements"]
+    assert {k: v for k, v in requirements_now.items() if k != "outcomes"} == {
+        k: v for k, v in original.items() if k != "outcomes"}
+    old_outcome, = original["outcomes"]
+    new_outcome, = requirements_now["outcomes"]
+    assert {k: v for k, v in new_outcome.items() if k not in {"work", "basis_digest"}} == {
+        k: v for k, v in old_outcome.items() if k not in {"work", "basis_digest"}}
+    assert (new_outcome["basis_digest"] != old_outcome["basis_digest"]) is (
+        change in {"work_changed", "timer_wait"})
+    assert new_outcome["work"] == [
+        {**old_outcome["work"][0], "status": "deferred" if change == "timer_wait" else "open"}]
+    if change == "work_added":
+        assert {row["todo_id"]: row["state"] for row in cold["goal_acceptance_contract"]["tasks"]} == {
+            selected: "ready", target: "unbound"}
+    if change == "work_changed":
+        assert cold["goal_acceptance_contract"]["tasks"][0]["state"] == "stale"
+    if change == "checks_removed":
+        assert current["interaction_contract"]["user_channel"]["action_required"] is False
+    # The unselected normal/replan/wait view follows the same current owner,
+    # including all cumulative requirements whenever execution needs a read.
+    inspection = cli(*guard[:-1])
+    current_context = inspection["interaction_contract"]["agent_channel"].get("work_context", {})
+    for source in current_context.get("sources", []):
+        if source.get("source") == "goal_acceptance":
+            assert source["content"]["goal_acceptance_contract"] == cold["goal_acceptance_contract"]
+    before_read = {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()}
+    detail = subprocess.run(shlex.split(first["detail_ref"]["full_decision"]),
+        capture_output=True, check=True).stdout
+    assert detail == saved and json.loads(detail) == full
+    assert {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()} == before_read
+    assert configure("inspect") == cold
+    assert (project / "received.txt").read_text() == prompt

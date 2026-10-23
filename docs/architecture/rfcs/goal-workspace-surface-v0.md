@@ -442,7 +442,9 @@ The history reader's recorded-evidence search filters the complete loaded
 snapshot before display pagination, including historical revisions, original
 text, source references and run/result identifiers. Literal terms and recorded
 status narrow the list without turning an older observation into the latest
-finding. Each result expands its exact original record and provenance. An
+finding. Validated translations may be displayed, while matching still uses original
+text and each result retains full original text and provenance. Display-language
+toggles preserve the query. An
 interrupted load identifies partial coverage; failed refresh retains the previous
 snapshot with a stale-read warning and retry. This is a read-only S5/S11 discovery
 slice, not evidence of subsequent Agent adoption or scientific benefit. Packaged

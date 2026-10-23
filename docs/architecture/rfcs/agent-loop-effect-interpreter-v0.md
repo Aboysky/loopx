@@ -466,6 +466,20 @@ The existing R5 CLI captures full decisions before projection, with a private di
 
 Under existing M7.4 and roadmap S2/S3/S6/S8, converge the **execution facts**
 used by heartbeat and Turn hosts, while keeping host effect ownership separate.
+When an admitted Todo later waits on a timer, PR or capability, the typed
+receipt owner preserves its original writeback and settlement route. Reentry
+projects only that closeout, including for deferred work and after the wait
+becomes due; it cannot resume business work, select a successor or invent a
+retry clock. Recovery reuses the committed receipt's positive work admission
+and exact settlement binding. Workspace repair alone has no business result;
+the same Turn must first requalify freshly selected work on that exact Todo
+through the normal guard. Broad compatibility flags without that selection
+cannot turn a retained binding into work admission. A Turn with
+an original semantic replan keeps that decision instead of being mistaken for
+an existing business result. Real File/SQLite CLI coverage exercises generated commands, refused
+rebinding, one writeback/debit, preserved initial replan and settled replay.
+This source-path repair does not qualify installed host adoption or
+complete-cost acceptance.
 Neither today's large quota packet nor the smaller TurnEnvelope is a target
 shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off
@@ -754,6 +768,16 @@ observations and a second selected-Todo body. File/SQLite CLI and actual DSH
 protocol input cover configured checks and outcomes without checks; Todo-less
 inspection still returns its original inventory. This qualifies the scoped IO
 boundary, not live model benefit, installed adoption or total Turn cost.
+
+The native acceptance/capture matrix also covers work added or changed after
+capture, a future resume condition and explicitly removed checks. The original
+synthetic work is validated and settled before a new managed Turn: current
+admission rejects unbound/stale work and pending waits, while removing checks
+does not create a new owner question. Cumulative requirements and their sources
+remain intact; current work status and its derived basis fingerprint may change.
+The original detail remains byte-for-byte readable without another admission or
+authority revision. These cases qualify the existing boundary, not a new
+execution default or any of the three complete convergence streams.
 
 The Goal source context now separates explicitly generated Todo regions using
 the existing writer's strict ownership parser. All remaining text is delivered
