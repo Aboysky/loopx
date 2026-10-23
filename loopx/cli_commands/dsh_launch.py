@@ -15,7 +15,7 @@ DEFAULT_DSH_HOME = Path.home() / ".local" / "state" / "loopx" / "dsh-home"
 
 
 def register_dsh_launch_command(
-    subparsers: argparse._SubParsersAction,
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     add_format: object,
 ) -> None:
     del add_format
