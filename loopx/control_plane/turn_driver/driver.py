@@ -35,7 +35,7 @@ LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION = (
     "loopx_iteration_context_policy_v0"
 )
 LOOPX_CHILD_HOST_OPERATION_SCHEMA_VERSION = "loopx_child_host_operation_v0"
-SUPPORTED_HOSTS = {"codex-cli", "claude-code", "dsh", "generic-cli"}
+SUPPORTED_HOSTS = {"codex-cli", "codex-app-server", "claude-code", "dsh", "generic-cli"}
 SUPPORTED_EXECUTION_MODES = {"interactive-visible", "isolated-headless"}
 SUPPORTED_ITERATION_CONTEXT_POLICIES = {"fresh", "resume"}
 
@@ -486,10 +486,10 @@ def build_loopx_turn_plan(
             "iteration context policy must be fresh or resume"
         )
     if session_scope is None:
-        session_scope = "agent" if host == "codex-cli" else "todo"
+        session_scope = "agent" if host in {"codex-cli", "codex-app-server"} else "todo"
     session_identity_fields(session_scope)
-    if session_scope != "todo" and host != "codex-cli":
-        raise ValueError("agent session scope requires the codex-cli host")
+    if session_scope != "todo" and host not in {"codex-cli", "codex-app-server"}:
+        raise ValueError("agent session scope requires a Codex conversation host")
 
     execution_context = scheduler_execution_context_for_turn(
         host=host,

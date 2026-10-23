@@ -66,7 +66,7 @@ def apply_context_handoff(
     )
 
 
-def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope):
+def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope, preserve_original_thread=False):
     """Prepare the same evidence/handoff path for each supported conversation."""
     from .chat_runtime import CodexAppServerAdapter, CodexChatAgentError
     from .chat_manager import (MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE,
@@ -76,19 +76,26 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
     session_id = session["session_id"]
     runtime_root = getattr(controller, "coordination_runtime_root", controller.store.root.parent)
     from .chat_manager_context import collect_manager_turn_context
+    observation_only = getattr(adapter, "observation_only", False) is True
     event_sink("agent.phase", {"phase": "manager_context", "label": "正在读取当前 Goal 的工作与协作" if scope["kind"] == "owner_goal" else "正在读取授权范围内的 Goal 状态"})
     context = collect_manager_turn_context(
         controller.registry_path, session, runtime_root, controller.manager_scope_resolver,
-        **({"include_details": False} if isinstance(adapter, CodexAppServerAdapter) else {}),
+        **({"include_details": False} if isinstance(adapter, CodexAppServerAdapter) or observation_only else {}),
+        **({"include_stopped": True} if observation_only else {}),
         # An interactive endpoint reads the declared sources on
         # demand, but a prompt-only segment can only receive them,
         # so it gets the bounded read inline.
-        remote_evidence=not isinstance(adapter, CodexAppServerAdapter),
+        remote_evidence=not isinstance(adapter, CodexAppServerAdapter) and not observation_only,
     )
     if scope.get("bound_steward") is True and isinstance(context.get("bound_steward"), dict):
         from .capabilities.native_chat.external_conversations import ChatExternalConversations
         context["bound_steward"]["executions"] = ChatExternalConversations(controller).commission_evidence(session)
     controller.store.append_event(session_id, turn_id, kind="manager.context", payload=context)
+    if observation_only:
+        # The scoped reader validates its full current source before/after.
+        # A watch never reuses or changes model context, including when an
+        # all-registered grant intentionally discovers a newly registered Goal.
+        return adapter, context
     if scope["kind"] == "external_audience":
         scope_id = str(context.get("authorization_scope_id") or "")
         if not scope_id:
@@ -102,6 +109,9 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 },
             )
         if session.get("manager_authorization_scope_id") != scope_id:
+            if preserve_original_thread:
+                raise CodexChatAgentError("The original steward portfolio changed before native execution.",
+                    error_code="manager_authorization_unavailable", gate=None)
             adapter.close_session()
             with controller.lock:
                 if controller.adapters.get(session_id) is adapter:

@@ -12,6 +12,7 @@ from typing import Any
 
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ...chat_store import _atomic_write_json
+from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
 
 
@@ -151,7 +152,19 @@ class StewardManagedMode:
                     or session.get("status") == "closed"
                     or goal["workspace_path"] != str(self._workspace(session))):
                 raise ValueError("native steward identity unavailable")
-            return {"available": True, "prepared": True, "scheduling_enabled": False,
+            from .steward_monitor import StewardMonitor
+            from ...control_plane.scheduler.monitor_todo import monitor_cadence_delta
+            monitor = StewardMonitor(self.controller).current(actor)
+            native_goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+            active = bool(native_goal and native_goal.get("status") == "active" and not goal_is_stopped(native_goal))
+            cadence = monitor_cadence_delta(monitor.get("cadence")) if monitor else None
+            return {"available": True, "prepared": True,
+                    "scheduling_enabled": bool(active and monitor and monitor.get("status") == "open"),
+                    "goal_active": active,
+                    "monitor": ({"todo_id": monitor["todo_id"], "status": monitor["status"],
+                        "cadence_minutes": int(cadence.total_seconds() / 60) if cadence else None,
+                        "next_due_at": monitor.get("next_due_at"), "last_checked_at": monitor.get("last_checked_at")}
+                        if monitor else None),
                     "goal_id": actor["goal_id"], "agent_id": actor["agent_id"], "session_id": actor["session_id"]}
         except (KeyError, StopIteration, OSError, ValueError):
             return {"available": False, "error_code": "managed_steward_identity_unavailable"}

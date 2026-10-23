@@ -36,7 +36,7 @@ export function normalizeStewardManagedActor(value: unknown): JsonObject {
     creation_operation_id: text(row.creation_operation_id, "managed Goal creation")};
 }
 
-function basis(params: JsonObject) {
+function basis(params: JsonObject, executing = false) {
   const binding = requireJsonObject(params.binding, "steward binding");
   const session = requireJsonObject(params.session, "original steward Session");
   const context = requireJsonObject(session.steward_context, "original steward authority");
@@ -48,7 +48,7 @@ function basis(params: JsonObject) {
       || session.goal_id !== "loopx-manager" || session.agent_id !== "codex"
       || session.session_mode === "attached_host" || session.status === "closed"
       || session.channel_id !== `manager.external.native.${id}.${source}`
-      || session.active_turn_id || params.queued_turn_count !== 0) {
+      || !executing && (session.active_turn_id || params.queued_turn_count !== 0)) {
     throw new EffectRuntimeRequestError("prepare the original idle private steward, retaining its current work");
   }
   for (const key of ["binding_id", "provider_ref", "operator_ref", "project_ref"]) {
@@ -73,6 +73,138 @@ function basis(params: JsonObject) {
     throw new EffectRuntimeRequestError("the prepared steward identity or its original Goal lifetime is unavailable");
   }
   return {binding, session, id, source, workspace, sessionId, goalId, creation, goal, actor};
+}
+
+/** Bind an internal host dispatch to the prepared actor and original Core Turn.
+ * This is conversation admission only; the native quota/Turn owner still
+ * decides whether this exact work can run and commits its result.
+ */
+export function admitStewardManagedTurn(params: JsonObject): JsonObject {
+  const turn = params.turn == null ? null : requireJsonObject(params.turn, "current Chat Turn");
+  const current = basis(params, turn !== null);
+  if (!current.actor || !current.goal || params.goal_active !== true) {
+    throw new EffectRuntimeRequestError("the original prepared steward Goal must be active");
+  }
+  const request = requireJsonObject(params.request, "native steward Turn request");
+  const fields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
+    "monitor_deadline", "monitor_lease_version"];
+  if (Object.keys(request).some(key => !fields.includes(key))
+      || request.operation !== "native_turn" || request.host !== "codex-app-server"
+      || ![undefined, "native_turn", "monitor"].includes(request.work_kind as string | undefined)
+      || JSON.stringify(normalizeStewardManagedActor(request.actor)) !== JSON.stringify(current.actor)
+      || typeof request.turn_instance_id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(request.turn_instance_id)
+      || request.todo_id !== null && (typeof request.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(request.todo_id))) {
+    throw new EffectRuntimeRequestError("native work must retain the exact prepared steward identity");
+  }
+  if (request.validation_command !== null && (!Array.isArray(request.validation_command)
+      || request.validation_command.length < 1 || request.validation_command.length > 100
+      || request.validation_command.some(value => typeof value !== "string" || !value || value.includes("\0") || value.length > 10000))) {
+    throw new EffectRuntimeRequestError("the host's native validator must be a bounded argv");
+  }
+  if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
+      || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
+      || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request))) {
+    throw new EffectRuntimeRequestError("the original native Chat Turn no longer owns execution");
+  }
+  const monitor = params.monitor_todo == null ? null : requireJsonObject(params.monitor_todo, "native monitor");
+  const observationOnly = request.work_kind === "monitor";
+  if (monitor && !observationOnly) {
+    throw new EffectRuntimeRequestError("a native watch must retain its no-model observation transport");
+  }
+  if (observationOnly && (!monitor || !isStewardMonitorTodo(monitor)
+      || monitor.todo_id !== request.todo_id || monitor.status !== "open"
+      || typeof request.monitor_deadline !== "string" || request.monitor_deadline !== monitor.next_due_at
+      || !Number.isSafeInteger(request.monitor_lease_version) || Number(request.monitor_lease_version) < 0)) {
+    throw new EffectRuntimeRequestError("observation-only execution requires the original native watch Todo");
+  }
+  let refreshScope = false;
+  if (turn) {
+    const scope = requireJsonObject(params.scope, "original steward scope observation");
+    if (typeof scope.current !== "string" || !scope.current) {
+      throw new EffectRuntimeRequestError("the original portfolio scope is unavailable");
+    }
+    if (current.session.manager_authorization_scope_id !== scope.current) {
+      // Preparing this actor added exactly its own registered Goal. Admit that
+      // known creation without forking the original native conversation. Any
+      // other inventory/lifetime or selected-scope change retains the existing
+      // external-conversation isolation boundary.
+      const knownSelfRegistration = current.binding.goal_scope === "all_registered"
+        && scope.without_actor && current.session.manager_authorization_scope_id === scope.without_actor;
+      if (!knownSelfRegistration && !observationOnly) {
+        throw new EffectRuntimeRequestError("the original portfolio changed beyond the prepared steward creation");
+      }
+      // A pure native watch uses only the fresh scoped reader and cannot
+      // invoke, reuse or mutate model context. Other changes leave the model's
+      // old scope hash untouched so its existing isolation owner still wins.
+      refreshScope = Boolean(knownSelfRegistration);
+    }
+  }
+  return {actor: current.actor, workspace_path: current.workspace, host: "codex-app-server",
+    refresh_original_scope: refreshScope, observation_only: observationOnly};
+}
+
+export const STEWARD_MONITOR_TARGET = "steward-portfolio-watch";
+
+function isStewardMonitorTodo(row: JsonObject): boolean {
+  return row.target_key === STEWARD_MONITOR_TARGET && row.task_class === "continuous_monitor"
+    && row.claimed_by === AGENT_ID && (row.watch_only === true || row.watch_only === "true");
+}
+
+/** The monitor Todo is the configuration authority; the binding stores no toggle. */
+export function planStewardMonitor(params: JsonObject): JsonObject {
+  const current = basis(params, true);
+  if (!current.actor || !current.goal || params.operation === "enable" && params.goal_active !== true) {
+    throw new EffectRuntimeRequestError("prepare the original active steward first");
+  }
+  if (!["enable", "pause"].includes(String(params.operation))
+      || !Number.isSafeInteger(params.cadence_minutes)
+      || Number(params.cadence_minutes) < 30 || Number(params.cadence_minutes) > 1440
+      || !Array.isArray(params.todos)) {
+    throw new EffectRuntimeRequestError("select a monitor operation and a cadence of 30..1440 minutes");
+  }
+  const matches = params.todos.map(value => requireJsonObject(value, "native Todo"))
+    .filter(row => row.target_key === STEWARD_MONITOR_TARGET);
+  if (matches.length > 1 || matches.some(row => !isStewardMonitorTodo(row) || !["open", "blocked"].includes(String(row.status)))) {
+    throw new EffectRuntimeRequestError("the native steward monitor is ambiguous or belongs to another owner");
+  }
+  const todo = matches[0] ?? null;
+  const planId = createHash("sha256").update(JSON.stringify([
+    current.actor, params.operation, params.cadence_minutes, todo,
+  ])).digest("hex");
+  return {schema_version: "loopx_steward_monitor_plan_v0", plan_id: planId,
+    actor: current.actor, operation: params.operation, cadence_minutes: params.cadence_minutes,
+    target_key: STEWARD_MONITOR_TARGET, todo, model_invoked: false};
+}
+
+/** Hash observed material fields, not collection clocks or the monitor's own bookkeeping. */
+export function observeStewardPortfolio(params: JsonObject): JsonObject {
+  const context = requireJsonObject(params.context, "current portfolio observation");
+  if (!Array.isArray(params.goal_ids) || !Array.isArray(context.goals)) {
+    throw new EffectRuntimeRequestError("the complete authorized portfolio is unavailable");
+  }
+  const expected = [...params.goal_ids].map(String).sort();
+  const goals = context.goals.map(value => requireJsonObject(value, "observed Goal"));
+  if (JSON.stringify(goals.map(row => String(row.goal_id)).sort()) !== JSON.stringify(expected)) {
+    throw new EffectRuntimeRequestError("the portfolio observation omitted authorized Goals");
+  }
+  // These are diagnostic projection clocks, not source event timestamps.
+  const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
+    "collection_completed_at", "generated_at", "evaluated_at", "age_seconds"]);
+  function canonical(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => !clocks.has(key)).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, canonical(item)]));
+    return value;
+  }
+  const facts = goals.filter(row => row.goal_id !== params.actor_goal_id)
+    .sort((a, b) => String(a.goal_id).localeCompare(String(b.goal_id)))
+    .map(row => Object.fromEntries(["goal_id", "goal_instance_id", "activation_state", "quality",
+      "attention", "progress", "goal_lifecycle", "agents", "deliveries"].map(key => [key, row[key] ?? null])));
+  const resultHash = "sha256:" + createHash("sha256").update(JSON.stringify(canonical(facts))).digest("hex");
+  return {result_hash: resultHash, material_change: params.previous_hash != null && params.previous_hash !== resultHash,
+    coverage: context.coverage ?? null, observed_goal_count: goals.length,
+    own_monitor_bookkeeping_excluded: true};
 }
 
 export function planStewardManagedMode(params: JsonObject): JsonObject {

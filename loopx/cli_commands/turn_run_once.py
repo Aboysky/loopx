@@ -73,6 +73,8 @@ def execute_turn_run_once(
     operator_environ: Mapping[str, str],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    native_host_runner: Callable[..., dict[str, Any]] | None = None,
+    native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
@@ -83,6 +85,14 @@ def execute_turn_run_once(
         )
         if planned_host.get("kind") != args.host:
             raise ValueError("--host must match the journaled LoopX Turn plan")
+        if args.host == "codex-app-server" and (
+            native_host_runner is None or native_session_binding_resolver is None
+        ):
+            raise ValueError("app-server execution requires its original in-process Chat connection")
+        if args.host != "codex-app-server" and (
+            native_host_runner is not None or native_session_binding_resolver is not None
+        ):
+            raise ValueError("a native Chat connection cannot replace a selected CLI host")
         if args.host == "generic-cli":
             if not args.host_command_json:
                 raise ValueError(
@@ -777,7 +787,27 @@ def execute_turn_run_once(
 
         host_runner: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
         session_binding_resolver = None
-        if args.host == "codex-cli":
+        if args.host == "codex-app-server":
+            def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
+                return current_turn_host_launch_decision(args, registry_path=current_registry,
+                    runtime_root=runtime_root, identity=settlement_identity,
+                    replan_obligation_id=replan_obligation_id,
+                    planned_effective_action=payload["turn_envelope"].get("effective_action"),
+                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
+                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                    turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref)
+
+            native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
+                registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
+            )).with_launch_decision(native_launch_decision)
+
+            def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
+                return native_host_runner(request, lambda: native_admission.launch_lifetime(
+                    operation="native_conversation_turn_launch"))
+
+            host_runner = run_native_host
+            session_binding_resolver = native_session_binding_resolver
+        elif args.host == "codex-cli":
 
             def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
                 # Revalidate the already admitted identity through the same
