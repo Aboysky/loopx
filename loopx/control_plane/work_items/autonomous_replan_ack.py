@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..effect_runtime import effect_runtime_result
 from ..runtime.time import parse_timestamp
 from .progress_observation import FRESH_VISION_PATH_DISPOSITIONS
 
@@ -12,6 +13,34 @@ AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW = 20
 # neutral events. The budget is per agent lane: a Goal-wide window that peer
 # lanes also fill cannot decide one lane's material-run count.
 AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK = AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW * 3
+
+
+def accepted_blocked_replan_history_indexes(runs: list[dict[str, Any]]) -> set[int]:
+    """Transport persisted administrative candidates to the shared TS owner.
+
+    This only selects history slots. It neither acknowledges a replan nor
+    replaces the receipt checks required for actual settlement. Missing legacy
+    evidence remains an ordinary outcome checkpoint, conservatively.
+    """
+    candidates = [index for index, run in enumerate(runs) if run.get("replan_obligation_id")]
+    if not candidates:
+        return set()
+    fields = (
+        "goal_id", "agent_id", "todo_id", "turn_instance_id", "replan_obligation_id",
+        "settlement_identity", "delivery_outcome", "progress_observation",
+        "autonomous_replan_ack", "vision_checkpoint",
+    )
+    result = effect_runtime_result("quota.settlement.read", {
+        "schema_version": "loopx_quota_blocked_replan_history_request_v0",
+        "runs": [{key: runs[index][key] for key in fields if key in runs[index]}
+                 for index in candidates],
+    }, large_local_snapshot=True)
+    indexes = result.get("accepted_indexes") if isinstance(result, dict) else None
+    if not isinstance(indexes, list) or any(
+        type(index) is not int or not 0 <= index < len(candidates) for index in indexes
+    ):
+        raise RuntimeError("TypeScript blocked replan history result must contain valid indexes")
+    return {candidates[index] for index in indexes}
 
 
 def ack_binds_trigger_checkpoints(ack: dict[str, Any] | None) -> bool:

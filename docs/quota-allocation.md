@@ -241,6 +241,24 @@ selection of independent work remain unchanged. A previously committed debit
 is retained, and neither a bare blocker declaration nor an unqualified ACK
 closes the Turn.
 
+History selection also distinguishes this accepted administrative blocked replan
+from a delivered milestone. The existing TypeScript settlement owner qualifies
+the persisted Run facts in one batch; a bare blocker, unaccepted ACK, mismatched
+identity or unsupported checkpoint remains outcome-relevant. Both semantic
+history and the legacy recent-Run reader retain the preceding real outcome
+checkpoint, including any unresolved gap, instead of manufacturing a new
+final-outcome obligation from the administrative closeout. The latest vision,
+checkpoint and replan ACK remain visible. Missing checkpoints and genuine
+delivery gaps still require their original review; this read classification
+grants no execution, completion, acceptance or settlement authority.
+
+历史选取将已验收的行政阻塞重规划与成果里程碑区分。复用 TypeScript 结算 owner 批量
+核对持久 Run 的类型化事实；裸阻塞、未验收 ACK、身份错配和未知 checkpoint 均不能
+取得行政豁免。语义历史和旧 recent-Run 读路都保留前一个真实成果 checkpoint 及其
+未解决缺口，避免行政收尾反复制造新的成果复核义务。最新 vision、checkpoint 和
+重规划 ACK 仍然可见；缺失 checkpoint 与真实交付 gap 保持原复核要求，这一读取
+分类不授予执行、完成、验收或结算权限。
+
 An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
 Todo-bound Turn after the matching writeback and spend receipts commit. Both
 `in_flight_continuation` and `semantic_closeout` use their corresponding typed

@@ -12,6 +12,7 @@ from ..work_items.progress_result import PROGRESS_OBSERVATION_SCHEMA_VERSION, Pr
 from ..work_items.autonomous_replan_ack import (
     AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
     autonomous_replan_ack_recorded,
+    accepted_blocked_replan_history_indexes,
 )
 from ..work_items.autonomous_replan_obligation import run_history_agent_id
 from ..work_items.replan_history_codec import REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS
@@ -142,7 +143,8 @@ def goal_semantic_history_from_runs(
     seen_retry_todos: set[tuple[str, str]] = set()
     observed_at = now_utc_iso()
 
-    for run in runs:
+    administrative_indexes = accepted_blocked_replan_history_indexes(runs)
+    for index, run in enumerate(runs):
         if latest_owner_correction_run is None and isinstance(
             run.get("human_reward"), dict
         ):
@@ -183,6 +185,7 @@ def goal_semantic_history_from_runs(
 
         if (
             "latest_outcome_vision_checkpoint_run" not in context
+            and index not in administrative_indexes
             and _run_has_outcome_vision_checkpoint(run)
         ):
             context["latest_outcome_vision_checkpoint_run"] = run
@@ -200,6 +203,7 @@ def goal_semantic_history_from_runs(
 
         if (
             "latest_material_milestone_run" not in context
+            and index not in administrative_indexes
             and str(run.get("delivery_outcome") or "").strip()
             in MATERIAL_DELIVERY_OUTCOMES
         ):

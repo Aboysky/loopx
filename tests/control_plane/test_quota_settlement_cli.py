@@ -6421,6 +6421,85 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     assert _spend_run_count(runtime) == 1
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_blocked_replan_keeps_material_checkpoint_in_native_readback(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    stamp = "2026-01-01T00:00:00+00:00"
+    prior = {
+        "generated_at": stamp, "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "classification": "verified_stage", "delivery_outcome": "outcome_progress",
+        "agent_vision": {
+            "agent_id": AGENT_ID, "state": "vision_active", "generated_at": stamp,
+            "vision_patch": {"vision_summary": "Verify the next outcome.",
+                             "acceptance_summary": "Prior stage verified by evidence:stage."},
+            "path_delta": {"outcome": "continue", "prior_assumption": "Verify the stage.",
+                           "observed_reality": "The stage passed its independent check.",
+                           "retained": ["Verify the next outcome."], "evidence_refs": ["evidence:stage"]},
+        },
+        "vision_checkpoint": {
+            "schema_version": "vision_checkpoint_v0", "agent_id": AGENT_ID,
+            "satisfied": True, "decision": "patched", "delivery_boundary": "semantic_closeout",
+            "triggers": [{"kind": "material_delivery_outcome", "delivery_outcome": "outcome_progress"}],
+        },
+    }
+    runs = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    runs.write_text(json.dumps(prior) + "\n" + runs.read_text())
+    turn = "blocked-replan-history-turn"
+    rc, guard = _run_cli(registry_path, runtime, "quota", "should-run", "--codex-app",
+                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn)
+    assert rc == 0, guard
+    assert guard["decision"] == "autonomous_replan_required", guard
+    obligation = guard["replan_action_packet"]["obligation_id"]
+    packet = tmp_path / "vision.json"
+    packet.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"vision_summary": "Continue after the source is available.",
+                         "acceptance_summary": "The source is still unavailable; the outcome remains open."},
+        "path_delta": {"outcome": "wait", "prior_assumption": "The source may be available.",
+                       "observed_reality": "An independent read confirmed the source is unavailable.",
+                       "retained": ["Keep the outcome open."], "evidence_refs": ["evidence:source-unavailable"]},
+    }))
+    rc, closed = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn, "--replan-obligation-id", obligation,
+        "--classification", "source_wait_replanned", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "source-not-ready", "--progress-evidence-id", "evidence:source-unavailable",
+        "--agent-vision-json", str(packet), "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert rc == 0, closed
+    assert closed["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+    assert closed["delivery_outcome"] == "outcome_gap"
+    assert _spend_run_count(runtime) == 0
+
+    # Read actual persisted facts through both status and subsequent admission.
+    # No receipt, checkpoint, history or clock is rewritten to obtain the result.
+    rc, status = _run_cli(registry_path, runtime, "status", "--goal-id", GOAL_ID)
+    assert rc == 0, status
+    goal = next(goal for goal in status["run_history"]["goals"] if goal["id"] == GOAL_ID)
+    context = next(row for row in goal["semantic_history"]["agents"] if row["agent_id"] == AGENT_ID)
+    assert context["latest_outcome_vision_checkpoint_run"]["generated_at"] == stamp
+    assert context["latest_material_milestone_run"]["generated_at"] == stamp
+    assert context["latest_autonomous_replan_ack_run"]["generated_at"] != stamp
+    for next_turn in (turn, "after-blocked-replan-history-turn"):
+        rc, readback = _run_cli(registry_path, runtime, "quota", "should-run", "--codex-app",
+                               "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                               "--turn-instance-id", next_turn)
+        assert rc == 0, readback
+        diagnostics = readback.get("vision_continuation_audit", {}).get("outcome_checkpoint_diagnostics", [])
+        assert diagnostics == []
+        assert not any(trigger.get("kind") == "vision_outcome_checkpoint_required"
+                       for trigger in readback.get("autonomous_replan_obligation", {}).get("triggers", []))
+    assert _spend_run_count(runtime) == 0
+
+
 def test_todoless_blocked_replan_settles_read_only_external_evidence_without_worktree(
     tmp_path: Path,
 ) -> None:
