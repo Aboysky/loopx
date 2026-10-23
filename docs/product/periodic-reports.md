@@ -1,8 +1,8 @@
 # Managed steward monitoring and periodic reports
 
-Status: native identity preparation is implemented. Scheduled execution and
-daily portfolio reports remain the target described below; they are not enabled
-by preparing an identity.
+Status: native identity preparation and opt-in status monitoring are implemented.
+Daily portfolio reports remain the target described below. Preparing an identity
+enables neither monitoring nor reports.
 
 The steward should become a persistent LoopX-managed Agent. Its original private
 conversation remains the user's entry point. Native monitor Todos, Turn
@@ -22,11 +22,12 @@ The current components already provide most of the lifecycle:
 - Native external-conversation admission and the existing Lark reply journal
   retain original requests, audience identity and delivery evidence.
 
-The private steward currently uses the special `loopx-manager` conversation
-identity. It does not have its own registered execution Goal/Agent. The existing
-Chat LoopX-mode endpoint accepts a project Goal Chat, and rejects this steward.
-Also, a report Turn-start hook does not independently wake a sleeping actor.
-These are integration gaps; calendar calculation alone does not enable a report.
+The private steward retains the special `loopx-manager` conversation identity;
+preparation adds the separate registered execution Goal/Agent described below.
+The original project-Goal Chat endpoint still rejects this private steward.
+Its source-bound native host bridge supplies monitoring admission. A report
+Turn-start hook alone does not independently wake a sleeping actor, so calendar
+calculation does not enable a report.
 
 Chat `/goal` transport supervision and a LoopX-managed Turn are distinct. Merely
 relaxing `validate_goal_chat`, changing a Session field, adding a prompt, or
@@ -82,15 +83,64 @@ A lost registration or binding response can resume the same verified creation;
 it cannot adopt an unrelated Goal or recreate a missing bound Goal. Repeating
 an applied request verifies the same registration and returns the same actor.
 The original Session, history, upstream thread, accepted requests and portfolio
-grant are retained. No model, native monitor, scheduler host or extra message
-consumer starts. The UI explicitly shows **Scheduled tasks are not enabled**.
+grant are retained. Preparation invokes no model and enables no native monitor.
+The UI shows the prepared identity with monitoring not yet enabled.
 
-This is a separately reviewable preparation boundary. There is no active host
-to stop or migrate back. Disconnecting the conversation uses its existing owner
+Preparation remains separate from enabling recurring work. Disconnecting the conversation uses its existing owner
 and leaves the registered, unscheduled Goal visible; it does not delete history
 or accepted work. Removing that Goal remains an explicit native Goal lifecycle
-operation. Activation and its pause/rollback controls are the next integration
-stage, not an implied consequence of this preparation.
+operation. Monitoring requires the separate explicit setting below.
+
+### Native status monitoring
+
+After preparation, choose **Enable monitoring** in the same connection panel.
+The native continuous-monitor Todo owns enable/pause, the 30–1440 minute cadence,
+last observation, result hash and next deadline. The panel's single gesture
+obtains a fresh source-bound preview and applies it through
+`POST /api/chat/lark/private-conversations/managed-steward/monitor`; it accepts
+only the original binding, enable/pause operation, cadence and preview id.
+It cannot select a different actor, workspace, account or grant.
+
+The existing Chat host wake service checks this native frontier. A due watch
+enters the original Session's Core worker and settles through native
+`quota monitor-poll`, with an exact task-lease generation. It reads the current
+authorized local portfolio, including stopped Goals and coverage gaps, without
+a model call or execution-quota spend. Its own monitor bookkeeping is excluded
+from the material-change hash. This watch neither delivers business replies
+nor enables a daily report.
+
+Active or queued user work retains priority. Pause uses the existing native
+blocked lifecycle to retire the current lease atomically; enable reopens that
+same Todo and obtains a fresh generation for cadence edits. First enable checks
+immediately; resume or a changed cadence starts a fresh future window. An
+unchanged setting leaves the existing deadline alone. Each accepted watch fixes
+its native deadline and observed lease version before collecting data, so a
+pause/re-enable cannot let old data borrow a new lease generation. Final native
+writeback rechecks the collected scope under the binding's configuration and
+revocation fence. Native Goal stop
+also blocks observation. The user can still pause the retained monitor while
+that Goal is stopped. Restart reads the native Todo/deadline and original Core
+request. A failed or unknown accepted attempt is retained, never replayed.
+An in-memory wake hint expires within a minute and holds no scheduling
+authority; configuration invalidates it immediately. No extra scheduler,
+message consumer or binding-side scheduling toggle is created.
+
+The packaged browser journey below uses synthetic private connections over
+real HTTP, Core and native File storage. Desktop views are 1440×1000; narrow
+views are 390×844 viewport emulations, not physical-phone acceptance. The
+journey covers enable, one automatic poll, cadence edit, failed authorization,
+pause, resume and reload. An ordinary web-manager Session may also be prepared
+by the workspace; the original private Session remains unchanged and the watch
+adds no model request. File/SQLite regression tests independently check that
+monitor polls leave execution-quota slots and original business replies alone.
+
+| Before: prepared identity | After: enabled native monitor |
+| --- | --- |
+| ![Prepared steward before scheduling](../assets/personal-workspace/steward-monitor/before-desktop.png) | ![Enabled native monitor with last and next checks](../assets/personal-workspace/steward-monitor/enabled-desktop.png) |
+
+| Enabled, narrow viewport | Paused, retained deadline |
+| --- | --- |
+| ![Enabled monitor in a narrow viewport](../assets/personal-workspace/steward-monitor/enabled-phone.png) | ![Paused native monitor retaining its deadline](../assets/personal-workspace/steward-monitor/paused-phone.png) |
 
 ## Native scheduling and execution
 
@@ -155,6 +205,23 @@ offline time, produce the most recent complete window and disclose missing
 windows, rather than starting an unbounded series of model calls.
 
 ## Implementation order and acceptance
+
+The original-Session host bridge now runs a bounded native Turn through the
+existing Chat worker and Codex app-server connection. It uses the explicit
+`codex_app_server` outer-controller profile, not Codex CLI execution or a
+desktop App heartbeat. Fresh native work selection, independent validation,
+writeback, quota and scheduler handoff remain with the existing Turn command.
+It preserves the original conversation thread, provider and portfolio grant;
+busy/queued user work wins admission, and revoked or stopped sources cannot
+commit a late model result. Same-request readback does not restart failed or
+unknown work.
+
+The native status-monitor producer now uses this original-Session bridge,
+with the separate no-model observation path described above. Identity
+preparation still leaves monitoring disabled. Calendar configuration, unfinished
+native-journal recovery and original report publication remain the next
+integration boundary. A passing synthetic File/SQLite host journey does not
+establish an enabled daily report or real model/report quality.
 
 1. Qualify the native steward upgrade and rollback at an idle boundary. Verify
    one registered actor, preserved original history/requests/grants, and no

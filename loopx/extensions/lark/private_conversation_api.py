@@ -158,6 +158,27 @@ class PrivateConversationRequestMixin:
             return
         self._send_json(result)
 
+    def _private_conversation_steward_monitor(self) -> None:
+        from ...capabilities.native_chat.steward_monitor import StewardMonitor
+        try:
+            body = self._read_json()
+            if (set(body) - {"binding_id", "operation", "cadence_minutes", "plan_id", "execute"}
+                    or not isinstance(body.get("binding_id"), str)
+                    or not isinstance(body.get("operation"), str)
+                    or body.get("operation") not in {"enable", "pause"}
+                    or type(body.get("cadence_minutes", 30)) is not int
+                    or type(body.get("execute", False)) is not bool
+                    or ("plan_id" in body and not isinstance(body["plan_id"], str))):
+                raise ValueError("use the original steward monitor setting")
+            result = StewardMonitor(self.server.runtime_controller).configure(body["binding_id"],
+                operation=body["operation"], cadence_minutes=body.get("cadence_minutes", 30),
+                expected_plan_id=body.get("plan_id"), execute=body.get("execute", False))
+        except (ValueError, KeyError, OSError, RuntimeError):
+            self._send_error("Native monitoring could not be changed. Refresh the original connection; existing work and receipts are retained.",
+                status=409, error_code="managed_steward_monitor_unavailable")
+            return
+        self._send_json(result)
+
     def _private_conversation_agent_target(self) -> None:
         try:
             body = self._read_json()

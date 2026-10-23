@@ -2623,7 +2623,10 @@ const privateConversationSchema = z.object({
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),
   managed_steward: z.discriminatedUnion("available", [
-    z.object({available: z.literal(true), prepared: z.boolean(), scheduling_enabled: z.literal(false),
+    z.object({available: z.literal(true), prepared: z.boolean(), scheduling_enabled: z.boolean(),
+      goal_active: z.boolean().optional(), monitor: z.object({todo_id: z.string(), status: z.string(),
+        cadence_minutes: z.number().int().nullable(), next_due_at: z.string().nullable(),
+        last_checked_at: z.string().nullable()}).nullable().optional(),
       goal_id: z.string().optional(), agent_id: z.string().optional(), session_id: z.string().optional()}),
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),
@@ -2666,6 +2669,20 @@ export async function prepareManagedSteward(bindingId: string) {
   const applied = stewardPreparationSchema.parse(await send({binding_id: bindingId, execute: true,
     session_id: preview.plan.session_id, plan_id: preview.plan.plan_id}));
   if (!applied.applied) throw new Error("The original steward identity has not been prepared.");
+  return applied;
+}
+
+const stewardMonitorPlanSchema = z.object({ok: z.literal(true), applied: z.boolean(), plan: z.object({
+  schema_version: z.literal("loopx_steward_monitor_plan_v0"), plan_id: z.string().regex(/^[a-f0-9]{64}$/),
+})});
+export async function configureStewardMonitor(bindingId: string, operation: "enable" | "pause", cadenceMinutes: number) {
+  const path = "/api/chat/lark/private-conversations/managed-steward/monitor";
+  const send = (body: unknown) => requestJson<unknown>(path, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const request = {binding_id: bindingId, operation, cadence_minutes: cadenceMinutes};
+  const preview = stewardMonitorPlanSchema.parse(await send({...request, execute: false}));
+  const applied = stewardMonitorPlanSchema.parse(await send({...request, execute: true, plan_id: preview.plan.plan_id}));
+  if (!applied.applied) throw new Error("The original native monitor setting was not applied.");
   return applied;
 }
 

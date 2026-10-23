@@ -169,6 +169,18 @@ def test_dsh_turn_plan_uses_the_headless_outer_controller_context() -> None:
     }
 
 
+def test_app_server_turn_retains_agent_session_and_names_its_actual_host() -> None:
+    payload = build_loopx_turn_plan(_envelope(), host="codex-app-server",
+        execution_mode="isolated-headless", session_scope="agent",
+        session_binding={"schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
+            "goal_id": "fixture-goal", "agent_id": "codex-fixture"})
+    assert payload["ok"] and payload["session"]["action"] == "resume"
+    assert payload["host"]["kind"] == "codex-app-server"
+    assert payload["scheduler_execution_context"]["host_surface"] == "codex_app_server"
+    assert payload["scheduler_execution_context"]["scheduler_owner"] == "outer_controller"
+    assert payload["scheduler_execution_context"]["codex_app_applicability"] == "not_applicable"
+
+
 def _adaptive_envelope() -> dict[str, object]:
     envelope = _envelope()
     envelope["task_orchestration_contract"] = {

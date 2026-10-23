@@ -15,6 +15,7 @@ class HostSurface(str, Enum):
     CODEX_APP = "codex_app"
     CODEX_APP_SSH = "codex_app_ssh"
     CODEX_CLI = "codex_cli"
+    CODEX_APP_SERVER = "codex_app_server"
     TRAE_APP = "trae_app"
     GENERIC_CLI = "generic_cli"
     CLAUDE_CODE = "claude_code"
@@ -48,6 +49,7 @@ class SchedulerRuntimeProfile(str, Enum):
     KIRO_CLI_VISIBLE = "kiro_cli"
     GENERIC_CLI_AGENT_LOOP = "generic_cli"
     GENERIC_CLI_OUTER_CONTROLLER = "outer_controller"
+    CODEX_APP_SERVER = "codex_app_server"
 
 
 
@@ -150,6 +152,11 @@ _SCHEDULER_RUNTIME_PROFILE_CONTEXTS = {
         SchedulerOwner.OUTER_CONTROLLER,
         ExecutionMode.ISOLATED_HEADLESS,
     ),
+    SchedulerRuntimeProfile.CODEX_APP_SERVER: (
+        HostSurface.CODEX_APP_SERVER,
+        SchedulerOwner.OUTER_CONTROLLER,
+        ExecutionMode.ISOLATED_HEADLESS,
+    ),
 }
 
 
@@ -237,6 +244,11 @@ class SchedulerExecutionContextResolution:
 
 def _validation_errors(context: SchedulerExecutionContext) -> list[str]:
     errors: list[str] = []
+    if context.host_surface is HostSurface.CODEX_APP_SERVER:
+        if (context.scheduler_owner is not SchedulerOwner.OUTER_CONTROLLER
+                or context.execution_mode is not ExecutionMode.ISOLATED_HEADLESS):
+            errors.append("codex_app_server requires outer_controller and isolated_headless")
+        return errors
     cli_surfaces = {
         HostSurface.CODEX_APP_SSH,
         HostSurface.CODEX_CLI,
@@ -464,6 +476,7 @@ def scheduler_execution_context_for_turn(
     host_surface = {
         "codex-app-ssh": HostSurface.CODEX_APP_SSH.value,
         "codex-cli": HostSurface.CODEX_CLI.value,
+        "codex-app-server": HostSurface.CODEX_APP_SERVER.value,
         "generic-cli": HostSurface.GENERIC_CLI.value,
         "claude-code": HostSurface.CLAUDE_CODE.value,
         "pi": HostSurface.GENERIC_CLI.value,
@@ -477,7 +490,7 @@ def scheduler_execution_context_for_turn(
     }.get(execution_mode, execution_mode)
     owner = scheduler_owner or (
         SchedulerOwner.OUTER_CONTROLLER.value
-        if host_surface == HostSurface.GENERIC_CLI.value
+        if host_surface in {HostSurface.GENERIC_CLI.value, HostSurface.CODEX_APP_SERVER.value}
         else SchedulerOwner.AGENT_CLI_LOOP.value
     )
     return resolve_scheduler_execution_context(

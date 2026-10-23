@@ -38,6 +38,7 @@ from loopx.control_plane.work_items.interaction_contract import (
 from loopx.quota import build_quota_should_run
 
 VALID_COMBINATIONS = {
+    ("codex_app_server", "outer_controller", "isolated_headless"),
     ("ark_managed_agent", "goal_runtime", "interactive"),
     ("codex_app", "host_automation", "hosted_automation"),
     ("trae_app", "host_automation", "hosted_automation"),
@@ -58,6 +59,11 @@ VALID_COMBINATIONS = {
 }
 
 FIRST_CLASS_RUNTIME_PROFILES = (
+    (
+        SchedulerRuntimeProfile.CODEX_APP_SERVER,
+        ("codex_app_server", "outer_controller", "isolated_headless"),
+        " --runtime-profile codex_app_server",
+    ),
     (
         SchedulerRuntimeProfile.ARK_MANAGED_AGENT_GOAL,
         ("ark_managed_agent", "goal_runtime", "interactive"),
