@@ -111,6 +111,25 @@ App, autonomous relationship quality or deep analysis is qualified by this reade
 
 ## Reproduce
 
+### Find an earlier observation
+
+Use **Search research records** in the history toolbar, then enter words, a
+source reference or a run/result ID. Terms match literally, ignoring case; all
+terms must occur in a record. The recorded-status filter can isolate negative
+observations. Expand a result to read its original text and identifiers, including
+historical revisions. Search covers the loaded snapshot before display pagination;
+incomplete reads and failed refreshes stay visible. Clear filters to browse again.
+Queries are local to this open reader and reset when it closes or the Goal changes.
+
+The synthetic packaged regression exercises native paged history, an old negative
+revision after 75 other findings, status filtering, interrupted reads and retry,
+Goal isolation and desktop/narrow layouts without dispatching an Agent:
+
+```sh
+node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-search.test.mjs
+LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
+```
+
 From the worktree root:
 
 ```sh
