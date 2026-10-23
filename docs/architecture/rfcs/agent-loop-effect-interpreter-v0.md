@@ -688,6 +688,14 @@ This closes the producer-to-detail transport gap only. Live models, packaged
 App/Lark, later authority checks and the remaining convergence matrix retain
 their independent acceptance; no Python projection is retired by this slice.
 
+New quota and native Turn captures now share compact JSON encoding, removing
+layout whitespace from stored detail without omitting decision values or string
+content. The original atomic publication, source signature and retry owners are
+unchanged. File/SQLite native Host qualification covers both new compact and
+historical indented observations, including source changes, missing/corrupt
+detail and exactly-once recovery. This is a lossless transport cost reduction,
+not evidence of model quality, complete Turn cost or a new convergence default.
+
 The shared Host result adapter now retains supplied text for the existing Turn
 validator instead of truncating it into a passing candidate. Over-limit next
 actions could lose a trailing approval constraint while still being accepted.
@@ -746,6 +754,16 @@ observations and a second selected-Todo body. File/SQLite CLI and actual DSH
 protocol input cover configured checks and outcomes without checks; Todo-less
 inspection still returns its original inventory. This qualifies the scoped IO
 boundary, not live model benefit, installed adoption or total Turn cost.
+
+The Goal source context now separates explicitly generated Todo regions using
+the existing writer's strict ownership parser. All remaining text is delivered
+verbatim through the shared typed context owner, with the full-file hash and
+excluded-region lineage. Unmarked/mixed documents retain their progressive read;
+malformed ownership fails closed. This changes default context delivery, not
+canonical Todo authority, source files or cumulative acceptance. File/SQLite
+native guard and signed DSH protocol-input checks qualify this source boundary;
+model adoption, installed App/Lark, full Turn cost and all three convergence
+streams remain open. Large arbitrary narrative is retained without truncation.
 
 Next, inventory authorized real Goal captures across active work, peer/replan,
 wait/recovery and optional-capability shapes, then map each retained clause to
