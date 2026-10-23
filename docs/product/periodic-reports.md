@@ -125,6 +125,11 @@ An in-memory wake hint expires within a minute and holds no scheduling
 authority; configuration invalidates it immediately. No extra scheduler,
 message consumer or binding-side scheduling toggle is created.
 
+An unreadable Session or queued Turn file affects only its own binding. Other
+stewards continue their due checks. The unreadable data and original monitor
+deadline remain intact; once the file is repaired, queued user work still takes
+priority over monitoring.
+
 The packaged browser journey below uses synthetic private connections over
 real HTTP, Core and native File storage. Desktop views are 1440×1000; narrow
 views are 390×844 viewport emulations, not physical-phone acceptance. The
