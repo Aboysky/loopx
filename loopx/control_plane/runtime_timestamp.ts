@@ -97,8 +97,10 @@ export function parseTodoTimestampMicros(value: string, awarePythonDatetime = fa
     offset = parts[2][0] === "-" ? -parsed : parsed;
   }
   const result = BigInt(calendar.valueOf()) * 1000n + local - offset;
-  // Python datetime requires UTC results within 0001-01-01T00:00:00Z to 9999-12-31T23:59:59.999999Z.
+  // Todo normalization requires a representable UTC datetime. Historical
+  // aware-datetime comparisons also accept valid local dates whose offset
+  // places their instant outside that UTC range; no UTC datetime is built.
   // -62135596800000000n is 0001-01-01T00:00:00Z, 253402300800000000n is 10000-01-01T00:00:00Z.
-  if (result < -62135596800000000n || result >= 253402300800000000n) return null;
+  if (!awarePythonDatetime && (result < -62135596800000000n || result >= 253402300800000000n)) return null;
   return result;
 }

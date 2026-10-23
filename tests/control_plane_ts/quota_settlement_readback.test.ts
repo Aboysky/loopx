@@ -2098,7 +2098,8 @@ test("history retry qualification preserves its original aware clock and exact e
     assert.deepEqual((await read([bad], "2026-01-01T00:01:00Z")).active_retry_indexes, []);
   }
   for (const patch of [{delivery_outcome: "outcome_progress"}, {progress_observation: null},
-    {todo_id: null}, {turn_instance_id: null}, {turn_instance_id: {}}]) {
+    {todo_id: null}, {turn_instance_id: null}, {turn_instance_id: {}},
+    {turn_instance_id: true}, {turn_instance_id: 1}, {turn_instance_id: " "}]) {
     assert.deepEqual((await read([{...run, ...patch}], "2026-01-01T00:01:00Z")).active_retry_indexes, []);
   }
   // Historical Python datetime inputs retain ISO-week dates and offset seconds.
@@ -2110,6 +2111,14 @@ test("history retry qualification preserves its original aware clock and exact e
     observed_at: "2026-01-01z00:00:00Z", due_at: "2026-01-01z00:05:00Z",
     resume_when: "resume_at:2026-01-01z00:05:00Z"}};
   assert.deepEqual((await read([legacySeparator], "2026-01-01T00:01:00Z")).active_retry_indexes, [0]);
+  // Aware Python comparisons need not normalize the instant into a UTC datetime.
+  for (const start of ["0001-01-01T00:00:00+08:00", "9999-12-31T23:00:00-08:00"]) {
+    const due = start.replace(":00:00", ":05:00"), now = start.replace(":00:00", ":01:00");
+    const edge = {...run, blocked_retry: {...run.blocked_retry,
+      observed_at: start, due_at: due, resume_when: `resume_at:${due}`}};
+    assert.deepEqual((await read([edge], now)).active_retry_indexes, [0]);
+    assert.deepEqual((await read([edge], due)).active_retry_indexes, []);
+  }
   for (const [observed_at, due_at, expected] of [
     ["2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", [0]],
     ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", [0]],
