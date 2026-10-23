@@ -1,14 +1,15 @@
 # Managed steward monitoring and periodic reports
 
-Status: native identity preparation and opt-in status monitoring are implemented.
-Daily portfolio reports remain the target described below. Preparing an identity
-enables neither monitoring nor reports.
+Status: source-bound identity preparation, opt-in status monitoring and the
+original steward's periodic full-body report path are implemented. Installation,
+an enabled subscription and a natural scheduled delivery require their own
+readback evidence. Preparing an identity enables neither monitoring nor reports.
 
-The steward should become a persistent LoopX-managed Agent. Its original private
+The steward becomes a persistent LoopX-managed Agent. Its original private
 conversation remains the user's entry point. Native monitor Todos, Turn
 admission, scheduling and periodic-report publication own recurring work.
 
-## What exists and what is missing
+## Lifecycle owners
 
 The current components already provide most of the lifecycle:
 
@@ -273,24 +274,110 @@ sent again, and uncertain sends are read back before retry. After extended
 offline time, produce the most recent complete window and disclose missing
 windows, rather than starting an unbounded series of model calls.
 
-## Implementation order and acceptance
+### Original private report settings and execution
+
+In **Settings → Lark → the original steward → Native periodic monitoring**,
+the owner can enable or update detailed reports, select daily/weekly frequency,
+local time, timezone and first report date, or pause/cancel. The existing calendar
+field is reused. A source-bound preview and exact-plan apply configure the
+existing `periodic_report` Goal setting with the `portfolio-progress` preset;
+the destination is derived from the original private binding. Neither the
+browser nor the model can supply another Goal, App or recipient. The generic
+single-Goal report consumer cannot consume this private portfolio preset.
+This preset requires a calendar; its switch cannot select the generic
+stage-boundary reporting mode. Pause or cancel through the report actions.
+
+The existing idle Chat wake producer admits one calendar window and creates
+one native finite generation Todo for it. The original Chat worker and native
+thread author the report, using complete frozen source records and the owner's
+`REPORTING.md` criteria. Public-safe Turn fields remain separate from private
+editorial content. A report-specific opt-in allows the kernel's existing
+`validated_completion`; its original task lease and independent artifact
+validator must pass before the generation Todo closes. Ordinary host prompts
+and result vocabulary retain their defaults.
+The finite postcondition is the validated generation itself: a complete valid
+editorial response closes this generation Todo even if the model labels it
+progress. This does not close the ongoing Goal or claim delivery.
+
+If generation has completed but native writeback or debit has not committed,
+the normal idle producer resumes the remaining effects of that same original
+Turn. It reads the canonical completion under the original Turn fence, without
+reopening the Todo or invoking the model again. Existing effect readbacks also
+reconcile a committed effect whose response was lost; a missing outer Chat
+result event can be recovered from the committed native journal. Historical
+failures and generated content remain intact. Delivery still requires the
+native committed result and current original authorization; unknown or
+contradictory journal identity remains blocked.
+
+The existing Lark outbound pool reads the committed native result, validates
+the frozen source/editorial/artifact lineage and returns the full Chinese body
+through the original reply owner, splitting long text into verified parts.
+Known part IDs are read back after restart; a send with unknown outcome and no
+locator is retained without another create. Only complete provider verification
+advances the existing publication cursor. No additional scheduler, consumer,
+model worker, business store or provider scope is created.
+
+Pause disables subsequent generation and delivery. Cancel also requests a stop
+only for an active report Turn; an unconfirmed stop is shown separately from
+the committed configuration. Original reports and delivery receipts remain.
+Revocation, subscription changes, source/provider changes or damaged artifacts
+block late publication. Monitoring and ordinary conversation retain their own
+lifecycles. The settings show the next due time, retained window, generation and
+verified/unconfirmed delivery as separate facts.
+Changing a frozen, unverified report's schedule is rejected with a specific
+pending-window explanation. Pause and restoration of the same plan remain
+available; schedule edits can proceed after verified publication. This keeps an
+unfinished original window from being stranded by a different subscription.
+
+A terminal native attempt with a retained invalid editorial response, no
+generation and no delivery attempt is shown as generation failed. The owner's
+existing cancel action can explicitly retire that failed window: its Todo is
+paused as blocked, the native failure, cost and artifacts remain, and the cadence journal
+records retirement separately from publication. Restoring the same plan does
+not replay the failed attempt; a later due window can progress. A changed future
+plan is also allowed after retirement. Unknown model outcomes and partial or
+unknown sends cannot take this exit; they keep the original recovery boundary.
+
+| Cancelled failure on the original settings page | Narrow retained-failure state |
+| --- | --- |
+| ![Cancelled generation is not completed or delivered](../assets/personal-workspace/steward-reports/failed-window-cancelled.png) | ![Retained cancelled window in a narrow viewport](../assets/personal-workspace/steward-reports/cancelled-window-narrow.png) |
+
+![Default narrow settings viewport before opening monitoring](../assets/personal-workspace/steward-reports/default-narrow.png)
+
+The packaged browser fixture uses actual HTTP/Core/calendar storage with a
+synthetic original provider/model. Screenshots below are that isolated journey,
+not production-message or real-phone proof.
+
+| Before integration: monitoring only | Enabled future first date |
+| --- | --- |
+| ![Original steward has only status monitoring](../assets/personal-workspace/steward-reports/baseline-desktop.png) | ![Future first report date saved and read back](../assets/personal-workspace/steward-reports/enabled-desktop.png) |
+
+![Report controls in a narrow viewport](../assets/personal-workspace/steward-reports/enabled-narrow.png)
+
+## Acceptance boundaries
 
 The original-Session host bridge now runs a bounded native Turn through the
 existing Chat worker and Codex app-server connection. It uses the explicit
 `codex_app_server` outer-controller profile, not Codex CLI execution or a
 desktop App heartbeat. Fresh native work selection, independent validation,
 writeback, quota and scheduler handoff remain with the existing Turn command.
-It preserves the original conversation thread, provider and portfolio grant;
-busy/queued user work wins admission, and revoked or stopped sources cannot
+It retains the original visible conversation, provider and portfolio grant.
+With unchanged authorization it reuses the upstream model thread. For an
+all-registered report whose authorized inventory or Goal lifetime changed before
+execution, the existing context owner discards old model history and prepares a
+fresh upstream context, records it through the existing context owner, then re-enters strict native
+execution admission. No new user message is required to repair this context.
+Selected-scope changes, revocation and changes during a model call still fail
+closed. Busy/queued user work wins admission, and revoked or stopped sources cannot
 commit a late model result. Same-request readback does not restart failed or
 unknown work.
 
 The native status-monitor producer now uses this original-Session bridge,
 with the separate no-model observation path described above. Identity
-preparation still leaves monitoring disabled. Calendar configuration, unfinished
-native-journal recovery and original report publication remain the next
-integration boundary. A passing synthetic File/SQLite host journey does not
-establish an enabled daily report or real model/report quality.
+preparation still leaves monitoring disabled. Calendar configuration, native
+generation and original private publication use the owners described above.
+A passing synthetic File/SQLite host journey does not establish an enabled
+production subscription, real model/report quality or natural deadline delivery.
 
 1. Qualify the native steward upgrade and rollback at an idle boundary. Verify
    one registered actor, preserved original history/requests/grants, and no
@@ -374,8 +461,8 @@ reader calls, 4,000 evidence rows and 4 MiB of evidence data, plus bounded sourc
 coverage metadata; exhaustion is partial coverage,
 not success or zero progress. These are IO bounds, not a model budget.
 
-This source can be read through the original Chat dynamic tool. It does not
-activate the daily subscription, wake the reporting actor, write an editorial
-response or deliver a report. The remaining production integration must bind
-this source to the original actor's calendar intent, generation and private
-full-body delivery, then verify that original route independently.
+This source can also be read through the original Chat dynamic tool. Reading
+alone does not activate a subscription or deliver a report. The opt-in original
+steward report path binds it to the admitted calendar window, native generation
+and private full-body delivery; installed adoption, current configuration and
+the original production route still need independent verification.
