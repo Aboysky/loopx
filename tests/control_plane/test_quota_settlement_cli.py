@@ -1795,9 +1795,15 @@ def test_typed_blocked_retry_with_peer_hard_lease(
         "peer_independent_worktree_required": False,
     }
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
-    rc, listed = _run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
-    todos = listed["todos"]
+    # Author the disposable source before promoting its canonical authority;
+    # the public reader correctly rejects an uninitialized provider.
+    summary = parse_active_state_todos(
+        state.read_text(encoding="utf-8"), state_path=state, item_limit=None,
+    )
+    todos = [
+        *(summary.get("user_todos", {}).get("items") or []),
+        *(summary.get("agent_todos", {}).get("items") or []),
+    ]
     for todo in todos:
         todo["required_write_scopes"] = ["src/**"]
     if large_history:
