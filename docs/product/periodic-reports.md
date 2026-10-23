@@ -1,8 +1,8 @@
 # Managed steward monitoring and periodic reports
 
-Status: native identity preparation is implemented. Scheduled execution and
-daily portfolio reports remain the target described below; they are not enabled
-by preparing an identity.
+Status: native identity preparation and opt-in status monitoring are implemented.
+Daily portfolio reports remain the target described below. Preparing an identity
+enables neither monitoring nor reports.
 
 The steward should become a persistent LoopX-managed Agent. Its original private
 conversation remains the user's entry point. Native monitor Todos, Turn
@@ -22,11 +22,12 @@ The current components already provide most of the lifecycle:
 - Native external-conversation admission and the existing Lark reply journal
   retain original requests, audience identity and delivery evidence.
 
-The private steward currently uses the special `loopx-manager` conversation
-identity. It does not have its own registered execution Goal/Agent. The existing
-Chat LoopX-mode endpoint accepts a project Goal Chat, and rejects this steward.
-Also, a report Turn-start hook does not independently wake a sleeping actor.
-These are integration gaps; calendar calculation alone does not enable a report.
+The private steward retains the special `loopx-manager` conversation identity;
+preparation adds the separate registered execution Goal/Agent described below.
+The original project-Goal Chat endpoint still rejects this private steward.
+Its source-bound native host bridge supplies monitoring admission. A report
+Turn-start hook alone does not independently wake a sleeping actor, so calendar
+calculation does not enable a report.
 
 Chat `/goal` transport supervision and a LoopX-managed Turn are distinct. Merely
 relaxing `validate_goal_chat`, changing a Session field, adding a prompt, or
@@ -114,7 +115,9 @@ same Todo and obtains a fresh generation for cadence edits. First enable checks
 immediately; resume or a changed cadence starts a fresh future window. An
 unchanged setting leaves the existing deadline alone. Each accepted watch fixes
 its native deadline and observed lease version before collecting data, so a
-pause/re-enable cannot let old data borrow a new lease generation. Native Goal stop
+pause/re-enable cannot let old data borrow a new lease generation. Final native
+writeback rechecks the collected scope under the binding's configuration and
+revocation fence. Native Goal stop
 also blocks observation. The user can still pause the retained monitor while
 that Goal is stopped. Restart reads the native Todo/deadline and original Core
 request. A failed or unknown accepted attempt is retained, never replayed.

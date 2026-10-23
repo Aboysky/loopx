@@ -63,7 +63,7 @@ class StewardTurnHost:
             "request": request, "turn": turn, "scope": scope, "monitor_todo": monitor})
         if admitted["refresh_original_scope"]:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
-        return admitted
+        return {**admitted, "observed_scope_id": scope["current"] if scope else None}
 
     def submit(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None = None,
                validation_command: Sequence[str] | None = None,

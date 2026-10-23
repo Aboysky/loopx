@@ -209,14 +209,14 @@ def test_owner_pause_fences_a_poll_which_already_read_the_portfolio(steward, tmp
     _, runtime, _, _, binding, capture, _ = steward
     _, actor, monitor = prepared(steward, tmp_path, monkeypatch)
     before, calls = monitor.current(actor), capture.read_bytes()
-    command, paused = module.native_command, []
-    def pause_before_commit(controller, argv):
-        if argv[:2] == ["quota", "monitor-poll"] and not paused:
+    commit, paused = module.StewardMonitor._commit_poll, []
+    def pause_before_commit(self, host, request, turn, context, argv):
+        if not paused:
             plan = monitor.configure(binding["binding_id"], operation="pause")["plan"]
             paused.append(monitor.configure(binding["binding_id"], operation="pause",
                 execute=True, expected_plan_id=plan["plan_id"]))
-        return command(controller, argv)
-    monkeypatch.setattr(module, "native_command", pause_before_commit)
+        return commit(self, host, request, turn, context, argv)
+    monkeypatch.setattr(module.StewardMonitor, "_commit_poll", pause_before_commit)
     turn = pump_steward_monitors(runtime)[0]
     assert finish(runtime, turn)["status"] == "failed"
     current = monitor.current(actor)
@@ -250,6 +250,53 @@ def test_pause_resume_cannot_let_old_collection_acquire_a_new_lease_generation(s
     assert "version" in str(result.get("error", "")).lower(), result
     assert monitor.current(actor).get("result_hash") == before.get("result_hash")
     assert capture.read_bytes() == calls
+
+
+@pytest.mark.parametrize("change", ["disconnect", "selected-scope"])
+def test_binding_change_after_collection_prevents_native_commit(steward, tmp_path, monkeypatch, change):
+    import threading
+    import loopx.capabilities.native_chat.steward_monitor as module
+    _, runtime, _, transport, binding, capture, _ = steward
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch)
+    before, calls = monitor.current(actor), capture.read_bytes()
+    commit, revocations, errors = module.StewardMonitor._commit_poll, [], []
+    def change_before_commit(self, host, request, turn, context, argv):
+        if change == "disconnect":
+            # The real owner disconnects from a different request thread; its
+            # stop waits for this worker, so invoking it on this worker would
+            # manufacture a self-wait instead of exercising revocation.
+            def disconnect():
+                try:
+                    transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+                except Exception as exc:
+                    errors.append(exc)
+            worker = threading.Thread(target=disconnect)
+            revocations.append(worker)
+            worker.start()
+            deadline = time.monotonic() + 5
+            while any(row["binding_id"] == binding["binding_id"] and row.get("enabled") is True
+                      for row in transport.bindings.read()["bindings"]):
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+        else:
+            transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+                executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+        return commit(self, host, request, turn, context, argv)
+    monkeypatch.setattr(module.StewardMonitor, "_commit_poll", change_before_commit)
+    result = finish(runtime, pump_steward_monitors(runtime)[0])
+    for worker in revocations:
+        worker.join(5)
+        assert not worker.is_alive()
+    assert not errors
+    assert result["status"] in {"failed", "interrupted"}, result
+    current = monitor.current(actor)
+    assert current.get("result_hash") == before.get("result_hash") and current["next_due_at"] == before["next_due_at"]
+    if change == "disconnect":
+        import json
+        extra = capture.read_bytes()[len(calls):].decode().splitlines()
+        assert not any(json.loads(line).get("method") in {"thread/start", "thread/resume", "turn/start"} for line in extra)
+    else:
+        assert capture.read_bytes() == calls
 
 
 def test_unavailable_provider_retains_the_native_deadline_until_recovery(steward, tmp_path, monkeypatch):

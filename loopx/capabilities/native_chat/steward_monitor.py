@@ -87,6 +87,16 @@ class StewardMonitor:
             "--todo-id", todo["todo_id"], "--owner", actor["agent_id"],
             "--idempotency-key", lease["idempotency_key"], "--expected-version", str(lease["version"])])
 
+    def _commit_poll(self, host, request, turn, context, argv):
+        # Configuration and revocation use this original binding fence too.
+        # Keep the final scoped admission and native write in one ordering;
+        # data collected under an earlier scope cannot become a new result.
+        with self.controller.lock, exclusive_file_lock(self.bindings.path, operation="commit_steward_monitor"):
+            admitted = host._admit(request, turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
+            if not context.get("authorization_scope_id") or admitted["observed_scope_id"] != context["authorization_scope_id"]:
+                raise ValueError("the portfolio scope changed after observation")
+            return native_command(self.controller, argv)
+
     def configure(self, binding_id: str, *, operation: str, cadence_minutes: int = 30,
                   expected_plan_id: str | None = None, execute: bool = False) -> dict[str, Any]:
         session = self.managed._session(binding_id, None)
@@ -182,8 +192,7 @@ class StewardMonitor:
         lease = self._acquire(actor, todo, request["turn_instance_id"],
             expected_version=request["monitor_lease_version"])["lease"]
         try:
-            host._admit(request, turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
-            result = native_command(self.controller, ["quota", "monitor-poll", *route,
+            result = self._commit_poll(host, request, turn, context, ["quota", "monitor-poll", *route,
                 "--target-key", TARGET, "--result-hash", observation["result_hash"],
                 "--task-lease-idempotency-key", request["turn_instance_id"],
                 "--task-lease-expected-version", str(lease["version"]), "--execute",
