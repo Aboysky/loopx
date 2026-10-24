@@ -117,6 +117,37 @@ upgrades installed automations nor proves model adoption or token/latency gains.
 To roll back, install the prior revision and regenerate prompts; changing a
 transport flag does not restore the old exact Todo schema.
 
+## Opt-in native reuse
+
+The existing [native context delivery option](../heartbeat-automation-prompt.md#opt-in-native-context-delivery)
+uses one TypeScript codec for ordinary quota and TurnEnvelope. Within a confirmed
+baseline, both representations repeat `planning_horizon.core_goal`'s original
+objective, provenance and availability, including a changed or missing objective.
+The complete `acceptance_contract` and registered planning trees use exact
+reuse, subtree changes or a complete refresh; the acceptance tree is not treated
+as the original Goal sentence. Unknown horizon fields remain current input.
+
+The same codec retains complete static closure guidance in quota channels and
+the Turn contract capsule. Current closure decisions, conditions, identities,
+commands and unknown controls remain current input. Explore's registered owner
+also permits exact reuse of branch evidence audits and its evidence-link template;
+branch identity, selection, status, resume facts and orchestration gates remain
+current. Reordering, refutation, removed evidence and changed guidance reconstruct
+the exact current source; no timestamp, revision or text is normalized away.
+
+Object edits may group complete current fields in `values`, alongside recursive
+`changed` edits and `removed` keys. Array edits use exact indices in `items` and
+`values`, with `length` for resizing. These literals are present in the current
+input; grouping saves repeated wrappers rather than omitting controls. The
+codec compares this encoding with ordinary edits and full replacement before
+choosing. A reader that does not recognize the edit recovers the full capture.
+
+These are presentation rules within the existing default-off option, not a new
+configuration or admission policy. Missing retention, a changed epoch, a damaged
+patch or an incompatible reader automatically recovers the same original full
+capture. Recovery never reruns the guard, asks the owner, spends quota or grants
+execution. Wire reduction alone does not establish actual model costs or outcomes.
+
 ## 中文
 
 普通 Heartbeat/quota 默认在 `agent_channel.work_context` 返回完整选定 Todo、
@@ -160,3 +191,19 @@ Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修�
 
 安装后重新生成旧展开式 heartbeat 提示；此 PR 不热更新 runtime/automation，
 也不证明模型已采用或获得质量收益。回滚需恢复旧版本并重新生成提示。
+
+既有默认关闭的原生 context delivery 由同一 TypeScript codec 处理普通 quota 与
+TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizon.core_goal` 的
+原始目标、来源和可用性，包括目标改变或缺失。完整 `acceptance_contract` 与已登记
+规划树按精确复用、子树变化或全量交付；累计验收树不等于原始目标句。未知 horizon
+字段仍作为本轮输入。quota 通道与 Turn 契约摘要复用完整静态收口指导，当前收口判断、
+条件、身份、命令与未知控制仍逐轮发送。Explore owner 登记分支证据审计与证据关联
+模板的精确复用；分支身份、选择、状态、恢复事实与编排门仍是当前输入。重排、反证、
+移除与指导变更完整重建当前来源，不规范化时间戳、修订或正文。
+对象编辑可以在 `values` 中合并携带本轮完整字段，同时保留递归 `changed` 与删除
+`removed`；数组的 `items` 与 `values` 使用精确索引，`length` 调整长度。
+字段仍在本轮输入中，只减少重复 wrapper；codec 比较普通编辑、合并字段
+与完整替换后选择，无法识别该编辑的读者恢复完整 capture。
+这些只改变既有选项内的展示，不新增配置或准入。保留不明、epoch 改变、patch 损坏
+或读者不兼容时，自动恢复同一原始 full capture，不重跑 guard、不问询、不扣额，
+也不授予执行权限。传输减少本身不证明实际模型费用或结果改善。

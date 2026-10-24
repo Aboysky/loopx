@@ -25,10 +25,10 @@ import {exploreReusableContextPaths} from "./capabilities/explore_turn_context.t
 
 /** The registered owner selects reusable read-model subtrees. Unknown hooks
  * remain complete; payloads cannot nominate their own execution fields. */
-export function reusableTurnContextPaths(source: JsonObject): string[][] {
+export function reusableTurnContextPaths(source: JsonObject): (string | number)[][] {
   return source.source === "turn_start_capability_hook" && source.hook_id === "explore.turn_context"
     && source.capability_id === "explore" && source.kind === "explore_turn_context"
-    ? exploreReusableContextPaths() : [];
+    ? exploreReusableContextPaths(source.content as JsonObject | undefined) : [];
 }
 
 export const CAPABILITY_HOOK_REGISTRATION_SCHEMA_VERSION =
