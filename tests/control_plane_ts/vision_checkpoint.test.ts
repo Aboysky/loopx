@@ -45,6 +45,24 @@ function prepareRequest(overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("authoring examples distinguish ordinary continuation from autonomous durable changes", () => {
+  const existing = {vision_patch: {acceptance_summary: "Original evidence pending."}};
+  for (const autonomous of [false, true]) {
+    const packet = visionAuthoringContract(autonomous).minimal_example as Record<string, unknown>;
+    const result = buildVisionCheckpoint(prepareRequest({
+      agent_vision_packet: packet, existing_agent_vision: existing,
+      require_path_delta_for_durable_change: autonomous,
+    })).agent_vision as Record<string, unknown>;
+    assert.equal((result.path_delta as Record<string, unknown>).outcome, autonomous ? "replan" : "continue");
+    assert.deepEqual(result.vision_patch, packet.vision_patch);
+  }
+  const ordinary = visionAuthoringContract().minimal_example;
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({
+    agent_vision_packet: ordinary, existing_agent_vision: existing,
+    require_path_delta_for_durable_change: true,
+  })), /changes durable fields acceptance_summary/);
+});
+
 test("prepare owns packet normalization, budgets, and path delta", () => {
   const result = buildVisionCheckpoint(prepareRequest({
     agent_vision_packet: {
