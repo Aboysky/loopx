@@ -657,12 +657,27 @@ oracle 检查实际发出的模型输入，而非 hook 日志或 stdout。这只
 模式、共享 Turn 来源内容、epoch 丢失、差分损坏、来源状态不变和零额外扣账。这是
 产品代码提案，还不是已启用的原生温态 adapter 或安装态 App 交付。
 
+普通 `quota should-run` 的 capture rendezvous 现已把该 codec 接到 JSON stdout，
+同时支持 quota 与 `--turn-envelope`。已获资格的调用方在被保留的 `decision.json`
+旁写入私有 `delivery-request.json`，沿用 `scope` 及可选的 `baseline`、`retained`
+输入，并在既有摘要绑定的 release 中添加 `context_delivery: true` 显式启用。
+CLI 将 Goal/Agent 绑定到实际决策，保存不可变的 `projection.json`，返回共享全量/
+差分展示及完整恢复文件的路径、字节摘要。优化输入缺失、损坏、身份不符或不可用时
+返回全量，不重跑准入或改变原决策成功状态。旧 release 与普通调用的输出、文件行为
+保持不变。
+
+真实 File/SQLite 子进程测试覆盖首次/温态输出、epoch 重置、损坏请求、跨 Agent
+拒绝、来源保留、原 receipt 和零扣额。差分准备后仍可从精确保存的投影恢复。
+这只关闭 CLI producer 接缝；rendezvous 仍位于原生输出处理之前，release 不等于
+模型交付 ACK，没有合格连续性观察器的调用方不得启用温态复用。实际 solver 与
+安装态 App 的生命周期消费者仍未获得资格。
+
 原生传输 probe 使用实际共享投影、有界工具读取和很小的 `SessionStart(compact)`
 引用。确定性的本机 provider 请求相应读取，不证明自主 solver 会遵循恢复路线。
 保留之前整包 hook 与 fail-open 负例；从实际发出的模型输入验证首次完整读取、温态
 差分、压缩、主 handler 失败和完整目标读回。成本与调用次数须包含每个恢复分段，
-hook 或 packet 变小本身不等于节省。下一接入是既有普通 quota capture/detail 路径与
-Codex 生命周期 adapter，覆盖一期两个调用方，不增加第二套 runner 或审批流程。
+hook 或 packet 变小本身不等于节省。下一接入是让 Codex 生命周期 adapter 消费
+既有普通 quota capture/detail 路径，覆盖一期两个调用方，不增加第二套 runner 或审批流程。
 
 在可选能力模式不变的条件下，比较匹配的普通执行、重规划和等待/恢复负载，覆盖首次交付、
 温态复用、reset、删除、数组重排、丢失/重复/乱序 delta、部分输出、来源/身份不匹配及迟到

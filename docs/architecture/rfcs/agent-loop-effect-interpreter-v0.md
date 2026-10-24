@@ -956,6 +956,25 @@ profiles, shared Turn source content, epoch loss, corrupt delta, unchanged sourc
 state and zero extra spend. This is a shipped-code proposal, not an enabled native
 warm adapter or installed App delivery.
 
+The ordinary `quota should-run` capture rendezvous now connects that codec to
+JSON stdout, for both quota and `--turn-envelope`. A qualified caller writes a
+private `delivery-request.json` beside the held `decision.json`, containing the
+existing `scope`, optional `baseline` and `retained` inputs. It opts in by adding
+`context_delivery: true` to the existing digest-bound release. The CLI binds the
+Goal/Agent to the actual decision, saves immutable `projection.json`, and returns
+the shared full/delta presentation with a path and byte digest for full recovery.
+Missing, malformed, cross-identity or unavailable optimization input returns full;
+it does not rerun admission or change the decision's success status. Legacy
+releases and ordinary invocations keep their original output and file behavior.
+
+Real File/SQLite subprocess tests cover cold/warm output, epoch reset, malformed
+request, cross-Agent refusal, source preservation, original receipt and zero
+spend. Recovery uses the exact saved projection, including after the candidate
+delta was prepared. This closes the CLI producer seam only. The rendezvous is
+still before native output processing: a release does not ACK model delivery,
+and callers without a qualified continuity observer must not opt into warm reuse.
+Both actual solver and installed App lifecycle consumers remain unqualified.
+
 The native transport probe uses the actual shared projector, bounded tool reads
 and a small `SessionStart(compact)` reference. Its deterministic local provider
 requests the reads; it does not prove an autonomous solver follows the recovery
@@ -963,7 +982,7 @@ route. Preserve the earlier bulk-hook and fail-open negatives. Qualify complete
 first read, warm delta, compaction, primary-handler failure and full target read
 from outgoing model inputs. Include every recovery page in cost and call counts;
 a smaller hook or packet alone is not a saving. The next integration is the
-existing ordinary quota capture/detail path plus the Codex lifecycle adapter for
+Codex lifecycle adapter consuming the ordinary quota capture/detail path for
 both phase-one consumers, without a second runner or a new approval flow.
 
 Qualification compares matched normal, replan and wait/recovery workloads with
