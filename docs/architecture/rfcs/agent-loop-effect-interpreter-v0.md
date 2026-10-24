@@ -729,8 +729,8 @@ The next slice stays within the existing three convergence acceptances above:
 3. **Retain full current authority and cold-start requirements.** Every response
    supplies fresh identity, action, admission, scope/approval/stop conditions,
    cancellation, selection, claim/lease, unresolved reads and settlement/scheduler
-   obligations. Only allowlisted source payloads are eligible for reuse;
-   current control results remain full even when their bytes are unchanged.
+   obligations. Registered complete source and packet projections are eligible for exact reuse;
+   current control results remain inline even when their bytes are unchanged.
    Reused requirement text remains binding, including its textual stop clauses;
    it is neither a summary nor optional background. Preserve complete original
    requirements in the reconstructed context. Treat
@@ -757,43 +757,54 @@ App consumers, and their full fallback. A standalone diff helper is insufficient
 |---|---|
 | Baseline owner | The host tracks complete model-input delivery and context continuity. The typed projection validates the supplied binding and computes the delta; it cannot infer retention from storage. Unsupported hosts continue full delivery. No model self-attestation is required. |
 | Full capture | Retain the immutable complete current decision for audit, signatures and same-capture recovery. A delta is a presentation, never a new authority store or mutation patch against Goal state. |
-| Delta unit | Initially compare JSON object subtrees exactly, preserving scalar types, missing versus null, empty values and full strings. Replace changed arrays atomically; do not infer element identity or equivalence from prose. State removals explicitly. Give base/target identities and digests once, with readable paths and changed values; avoid nested reference chains and instructions that require the model to reconstruct the entire JSON mechanically. |
+| Delta unit | Compare complete registered JSON subtrees exactly, preserving scalar types, missing versus null, empty values and full strings. Arrays use edits at indices in the exact hashed baseline, including length changes; indices are transport coordinates, never inferred entity identities. Reorders remain exact or select full when smaller. Do not normalize timestamps/revisions or infer equivalence from prose. Use a hierarchical change tree with complete values, object changes/removals and array items/length, avoiding repeated long path prefixes. |
 | Consumer recovery | Missing or mismatched baseline, skipped/out-of-order delta or truncated delivery returns the full current projection from the original capture, without rerunning admission. A lost delta is never acknowledged as the next baseline. Reset the baseline after full delivery; bound incremental ancestry with a full refresh rather than an ever-growing patch chain. Source freshness and authority are still checked before execution; presentation recovery cannot revive a stale or cancelled decision. |
 | CLI adoption | Keep the ordinary quota entrypoint and existing capture/detail route. A host that can observe the active model context passes the optional baseline binding at that transport boundary. A bare CLI with no continuity observer returns full context; it must not silently trust a previous output file. Exact argument/wire shape follows caller characterization, not a new command family. |
 | Turn adoption | Consume the same full/delta context owner while retaining Turn signatures and outer-executor effects. Host-only settlement execution remains distinct from a manual CLI agent's executable settlement obligations. |
 | Choice of representation | Emit a delta only when it is smaller after binding/removal metadata. Otherwise emit full context. Do not truncate values or change source selection to meet a byte target. |
 
-**Source and change boundaries.** Include registered complete Goal narrative,
-canonical acceptance requirement bodies and selected Todo text/notes, retaining
-their exact strings and source identity. The Explore typed owner also supplies
-its reusable evidence and instruction subtrees: recorded findings, measurement
-feedback and their provenance/applicability, plus guidance and writeback examples.
-Keep orchestration gates, selected/rejected branches, source health, pagination
-revisions and unknown fields fresh. Evidence status inside a finding is part of
-that exact evidence record, not live execution admission; any changed array is
-replaced completely. Do not ignore timestamps or revisions inside reusable data.
-Eligibility comes from the existing
-source adapter and typed field contract, never a classifier of sentence meaning.
-Keep current source revision, completeness, failures, status/claim, user gates,
-adoption and other execution-control fields in the fresh portion. An unknown or
-mixed source without a qualified split stays full. Give each known source slot
-a stable key derived from its existing source kind and canonical entity identity;
-ambiguous or duplicate identities fall back to full. Do not compare the whole
-`sources` array as one unit: a changing authority revision must not resend an
-unchanged requirement body. Inside a source payload, arrays remain atomic in
-the first version. A changed field is replaced completely, including any late
-constraint; deleted fields have explicit removal paths. The owner reconstructs
-and compares against the complete target before releasing a delta.
+**Source and change boundaries.** The shared `context_delivery_v1` presentation
+covers whole quota packets, whole Turn envelopes and their common work context.
+The surface is part of the existing Goal/Agent/session/epoch/capture binding, so
+one surface cannot borrow another surface's baseline. This extends presentation,
+not admission, persistence or settlement authority. Registered complete packet
+projections can reuse unchanged subtrees. Unknown root fields stay fresh.
 
-Stable source identities are internal matching keys. On the wire, unchanged
-subtrees carry readable current paths and a prior path only when their position
-moved; replacements carry a path and complete value, and removals a prior path.
-Do not repeat a long entity identity plus a location map for every subtree.
-Validate these paths against the current typed split before reconstructing;
-wire paths cannot nominate additional reusable fields. Include all binding,
-path, replacement and removal overhead in the full-versus-delta comparison.
-A narrow body-only saving is not an estimate of the packet's total reusable
-content; report eligible bytes and metadata separately from total bytes.
+Current identity, action, admission, scope/approval/stops, cancellation, claims,
+source health, pending reads, quota and scheduler facts stay inline. Settlement
+identity, commands, step order, conditions and attachment requirements also stay
+inline. Static preconditions, authoring schemas and optional attachment guidance
+can be reused exactly; they remain binding, not optional because omitted from a
+warm wire. The same rule covers existing vision-audit instructions while its
+current judgment stays inline. Unknown fields within these control owners stay
+fresh. There is no second copy of the fresh controls in the delta.
+
+Work context retains registered complete Goal narrative, canonical acceptance
+bodies and selected Todo text/notes. The Explore owner registers exact evidence,
+guidance and authoring metadata; orchestration gates, branch selection, pagination,
+current source revisions and unknown fields remain fresh. Source explanations,
+context-read instructions and the Todo read-model's field-name descriptor may be
+reused without dropping the actual Todo fields, current revision or provenance.
+An unknown or mixed source without a qualified split stays fresh; ambiguous source
+identities and incomplete sources select full. Changed strings remain complete,
+including late constraints. Evidence statuses and timestamps are never ignored.
+
+The previous body-only split, atomic changed arrays and per-leaf path lists were
+an initial implementation, not a limit on the accepted efficiency goal. The
+current codec forces fresh fields into one hierarchical change tree and computes
+exact edits for the rest. Array growth, shrinkage, reorder, duplicates and null
+are structural changes against that specific baseline, with no fuzzy matching.
+The owner validates the expected tree and reconstructs the exact immutable target
+before delivery. Omitting an unchanged live control is rejected even if the
+remaining patch could otherwise reconstruct correctly. Corrupt, lost, mismatched
+or more expensive deltas use the same-capture full representation automatically.
+
+Count cold full envelopes, bindings, repeated controls, change-tree metadata,
+changed values and recovery reads in the comparison. A narrow-body percentage
+cannot estimate whole-packet reuse; offline retained-baseline bytes still do not
+establish actual solver input savings or model outcomes. The existing projection
+RPC is the only preparation/recovery interface; both transports use the same TS
+codec, and Python remains a thin adapter. Production host adoption stays open.
 
 **First real consumer and the compaction race.** The current native Codex CLI
 session adapter observes session identity; its capture/handoff release occurs
