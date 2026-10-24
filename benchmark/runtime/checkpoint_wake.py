@@ -136,6 +136,8 @@ class CheckpointWake:
                          "turn_envelope": self.receipt.get("turn_envelope", False),
                          "capture_root": str(self.capture_root), "socket_path": self.socket_path,
                          "decision_sha256": held["sha256"]}
+                if self.env.get("LOOPX_CODEX_CONTEXT_DIR"):
+                    guard["codex_context_dir"] = self.env["LOOPX_CODEX_CONTEXT_DIR"]
                 reader = readers.enter_context(native_checkpoint_reader(self.env, timeout=max(.1, window - time.time())))
                 native = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
                     timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader,

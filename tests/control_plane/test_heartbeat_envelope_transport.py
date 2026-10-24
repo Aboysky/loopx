@@ -364,5 +364,15 @@ def test_native_context_prompt_keeps_capture_on_reentry(tmp_path):
     assert enabled["task_body"].replace(suffix, "") == plain["task_body"]
     with pytest.raises(ValueError, match="capture root"):
         build_heartbeat_prompt(**(args | {"decision_output_root": None}), codex_context_dir=context)
-    with pytest.raises(ValueError, match="second handoff"):
+    with pytest.raises(ValueError, match="invalid decision handoff socket"):
         build_heartbeat_prompt(**args, codex_context_dir=context, decision_handoff_socket="unused")
+    with tempfile.TemporaryDirectory(prefix="context-handoff-", dir="/tmp") as short:
+        endpoint = str(Path(short).resolve() / "host.sock")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(endpoint)
+            packet = build_heartbeat_prompt(**args, codex_context_dir=context, decision_handoff_socket=endpoint)
+            for field in ("quota_guard_command", "thin_prompt_command"):
+                argv = shlex.split(packet[field])
+                assert argv[argv.index("--decision-output-root") + 1] == str(tmp_path)
+                assert argv[argv.index("--decision-handoff-socket") + 1] == endpoint
+                assert argv[argv.index("--codex-context-dir") + 1] == context

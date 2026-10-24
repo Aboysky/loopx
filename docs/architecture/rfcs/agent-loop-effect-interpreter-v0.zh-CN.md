@@ -806,6 +806,15 @@ journal，独立 trial home 保留 `--codex-context-dir`。只读查找不创建
 [启用/读回/回滚](../../heartbeat-automation-prompt.md#opt-in-native-context-delivery)。
 本段验证生成配置及原生消费，不等于真实桌面安装采用或新的成本测量。
 
+原生上下文交付也可复用既有 checkpoint handoff 的同一 capture。checkpoint owner
+先持有并核验原始完整决策，按精确摘要释放后才执行原生投影。释放丢失或拒绝不发布
+优化结果；中断时保留原始全量 continuation，不再次 guard。原生中断 cursor 核验
+除既有身份/capture 路由外，也绑定 context 路由。宿主侧 preflight 仍使用全量，
+Darwin 原生 checkpoint 限制保持不变。确定性原生测试覆盖普通持有释放、warm 复用、
+hook 丢失后的压缩恢复，以及唤醒中途捕获/拒绝。续跑 worker 测试读取最新生成的
+guard，在新 Turn 前通过正常入口结算独立核验的前次读回；旧历史不能替代新准入。
+这只验证传输组合，不构成新的成本/结果资格，也不授予修改冻结 trial 的权限。
+
 显式启用的 benchmark worker 将简短恢复指令放入原生 `developer_instructions`，
 独立于 SessionStart/PreToolUse 的交付。原生 code-mode 消费者也可在隔离配置中携带
 同一产品 owner 生成的指令；应追加到既有宿主指令，不替换无关规则。触发条件是

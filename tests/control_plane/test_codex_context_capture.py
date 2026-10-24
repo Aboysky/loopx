@@ -68,7 +68,7 @@ def _delivered(request, digest):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -159,8 +159,13 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         generated_guard += " --todo-id " + shlex.quote(TODO_ID)
         env["LOOPX_TURN"] = "native-capture-turn"
 
+    checkpoint_wakes, held_captures = [], []
+
     def invoke(name):
-        return (generated_guard or shlex.join(command)) + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
+        argv = list(command)
+        if checkpoint_handoff:
+            assert argv[argv.index("--decision-handoff-socket") + 1] == checkpoint_wakes[-1].socket_path
+        return (generated_guard or shlex.join(argv)) + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
 
     def pages(name, path):
         raw = path.read_bytes()
@@ -214,12 +219,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             if host == "benchmark":
                 # Read the actual worker-rendered guard, including its original
                 # wake/capture identity. No substitute dispatcher or guard.
-                line = next(line for line in _input_text(request).splitlines()
-                            if " quota should-run " in line and "--codex-context-dir" in line)
+                line = [line for line in _input_text(request).splitlines()
+                        if " quota should-run " in line and "--codex-context-dir" in line][-1]
                 native_guard = shlex.split(line)
                 assert native_guard[0] == env["LOOPX_CLI"]
-                assignment = next(line for line in _input_text(request).splitlines()
-                                  if line.startswith("LOOPX_TURN="))
+                assignment = [line for line in _input_text(request).splitlines()
+                              if line.startswith("LOOPX_TURN=")][-1]
                 turn_id = shlex.split(assignment)[0].split("=", 1)[1]
                 command = [turn_id if arg == "${LOOPX_TURN:?}" else arg for arg in native_guard]
                 command += ["--todo-id", TODO_ID]
@@ -244,6 +249,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             stages.update(baseline_confirmed=True, phase="warm_ready")
             if resumed:
                 stages["phase"] = "resuming"
+                stages["cold_readback_sha256"] = hashlib.sha256(delivered(request, "cold").encode()).hexdigest()
+                message["content"][0]["text"] = stages["cold_readback_sha256"]
                 return message
             cmd = invoke("warm")
         elif phase == "warm_read":
@@ -388,17 +395,74 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 LOOPX_CLI=str(wrapper if hook_loss else Path(sys.executable).with_name("loopx")), CODEX_BIN=binary,
                 MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=url,
                 OPENAI_API_KEY="synthetic-loopback-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="90")
+            if checkpoint_handoff:
+                from contextlib import contextmanager
+                from benchmark.runtime import checkpoint_wake
+                original_enter = checkpoint_wake.CheckpointWake.__enter__
+                original_hold = checkpoint_wake.held_quota_decision
+
+                def enter(wake):
+                    value = original_enter(wake)
+                    assert value.listener is not None and value.socket_path
+                    checkpoint_wakes.append(value)
+                    return value
+
+                @contextmanager
+                def held(*args, **kwargs):
+                    with original_hold(*args, **kwargs) as capture:
+                        # The checkpoint owner sees the original admitted
+                        # decision before projection; it releases those bytes.
+                        raw = capture["path"].read_bytes()
+                        assert hashlib.sha256(raw).hexdigest() == capture["sha256"]
+                        assert json.loads(raw)["ok"] is True
+                        assert json.loads(raw).get("schema_version") != "context_delivery_v1"
+                        held_captures.append((capture["path"], raw))
+                        yield capture
+                        assert capture["path"].read_bytes() == raw
+
+                monkeypatch.setattr(checkpoint_wake.CheckpointWake, "__enter__", enter)
+                monkeypatch.setattr(checkpoint_wake, "held_quota_decision", held)
+                declaration = workspace / "checkpoint-request.json"
+                declaration.write_text(json.dumps({"trigger": "fresh_replan",
+                    "destination": str(workspace / "checkpoints"),
+                    "components": [{"id": "task", "source_path": str(state)}], "point_metadata": {}}))
+                env["LOOPX_CHECKPOINT_REQUEST"] = str(declaration)
             result = run_once(env)
             assert result["ok"] and result["host_invoked"], result
             assert result["context_transport"] == {"available": True}
             assert result["session"]["session_id"]
             if resumed:
                 session_id = result["session"]["session_id"]
+                # A later worker wake owns a new Turn. Settle the independently
+                # checked first readback through the real CLI, rather than
+                # reusing a stale guard/Turn from resumed history to obtain an
+                # artificially eligible warm packet.
+                from test_quota_settlement_cli import _run_cli
+                expected = hashlib.sha256(read_paths["cold"].read_text().rstrip("\n").encode()).hexdigest()
+                assert stages["cold_readback_sha256"] == expected
+                artifact = project / "native-context-readback.txt"
+                artifact.write_text(stages["cold_readback_sha256"])
+                assert artifact.read_text() == expected
+                cold_turn = json.loads(snapshots[0][1])["heartbeat_receipt"]["turn_instance_id"]
+                binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                           "--todo-id", TODO_ID, "--turn-instance-id", cold_turn)
+                rc, written = _run_cli(registry, runtime, "refresh-state", *binding,
+                    "--classification", "native_context_readback_verified", "--delivery-batch-scale", "single_surface",
+                    "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+                    "--no-global-sync", "--suppress-external-sinks", cwd=project)
+                assert rc == 0, written
+                rc, spent = _run_cli(registry, runtime, "quota", "spend-slot", *binding,
+                    "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+                assert rc == 0 and spent["appended"], spent
                 result = run_once(env)
                 assert result["ok"] and result["host_invoked"], result
                 assert result["context_transport"] == {"available": True}
                 assert result["session"]["session_id"] == session_id
             assert not unrelated.exists()  # only exact trial-owned hooks received trust
+            if checkpoint_handoff:
+                assert len(held_captures) == 2
+                assert all(path.read_bytes() == raw for path, raw in held_captures)
+                assert result["checkpoint"]["captured"] is False  # no replan was requested
         else:
             session_id = _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
             if resumed:
@@ -408,7 +472,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
 
     assert stages["phase"] == "done"
     assert len(snapshots) == 2  # compaction/readback never invokes a third guard
-    assert len(list(root.glob("*/decision.json"))) == 2
+    captured = (list((workspace / "wakes").glob("*/decisions/*/decision.json"))
+                if host == "benchmark" else list(root.glob("*/decision.json")))
+    assert len(captured) == 2
     assert wire_paths["warm"].stat().st_size < wire_paths["cold"].stat().st_size
     assert len(calls) == len(observed) and stages["baseline_confirmed"]
     if host == "benchmark":
@@ -429,7 +495,14 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                         if source["source"] == "selected_todo")
         assert selected["todo_id"] == TODO_ID and selected["text"] == body
     assert all(path.read_bytes() == raw for path, raw in snapshots)
-    assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
+    if host == "benchmark" and resumed:
+        assert _spend_run_count(runtime) == 1
+        from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+        retained = next(todo for todo in read_canonical_todos_if_promoted(
+            runtime_root=runtime, goal_id=GOAL_ID)["todos"] if todo["todo_id"] == TODO_ID)
+        assert retained["text"] == body and retained["done"] is False
+    else:
+        assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("host,surface,hook_loss", [
@@ -445,3 +518,9 @@ def test_native_missing_hook_recovers_from_persistent_cli_route(tmp_path, monkey
 def test_native_shared_configuration_resume_and_lost_hook(tmp_path, monkeypatch, surface):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         "code_mode", surface, False, True, True, "missing", shared_root=True)
+
+
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_benchmark_context_keeps_checkpoint_handoff(tmp_path, monkeypatch, surface):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "benchmark", surface, False, True, True, "missing", checkpoint_handoff=True)

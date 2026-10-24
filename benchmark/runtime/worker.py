@@ -93,8 +93,6 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
     context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "1" else None
-    if context_dir and decision_handoff_socket is not None:
-        raise ValueError("native context delivery and checkpoint handoff need separate trials")
     if env.get("LOOPX_TURN_ENVELOPE") == "1" or decision_handoff_socket is not None or context_dir:
         if native_goal:
             raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
@@ -510,9 +508,7 @@ def run_once(env: dict[str, str]) -> dict:
             checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
         else:
             checkpoint_wake = _InertCheckpointWake()
-        if execution.context_delivery and checkpoint_wake.socket_path is not None:
-            receipt["context_transport"] = {"available": False, "reason": "checkpoint_handoff_owns_capture"}
-        elif execution.context_delivery:
+        if execution.context_delivery:
             from benchmark.runtime.context_delivery import prepare_context_delivery
 
             prior_trace = env.get("CODEX_ROLLOUT_TRACE_ROOT")

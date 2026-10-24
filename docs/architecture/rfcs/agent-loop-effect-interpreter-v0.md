@@ -1169,6 +1169,19 @@ installs nothing, changes no trust and grants no execution authority. See
 This qualifies generated configuration plus native consumption, not installed
 desktop adoption or a new cost measurement.
 
+Native context delivery can also share the existing checkpoint handoff capture.
+The checkpoint owner holds/verifies the original full decision and releases its
+exact digest before native projection. Lost/refused release publishes no optimized
+result; interruption retains original full continuation, without another guard.
+Native interrupted-cursor verification binds the context route as well as the
+existing identity/capture routes. The host-side preflight remains full, and the
+Darwin native-checkpoint limitation is unchanged. Deterministic native tests
+cover ordinary held release, warm reuse, lost-hook compaction recovery and
+midwake capture/refusal. Resumed worker tests use the latest generated guard and
+settle the independently checked prior readback before a new Turn; old history
+cannot stand in for a new admission. This is transport composition, not a new
+cost/outcome qualification or permission to modify frozen trials.
+
 The opt-in benchmark worker carries a compact recovery instruction in native
 `developer_instructions`, independently of SessionStart/PreToolUse delivery.
 Native code-mode consumers can carry the same product-owned instruction in

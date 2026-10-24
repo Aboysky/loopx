@@ -593,7 +593,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN") or os.name != "posix",
                    reason="Requires the real native CLI and private Unix transport")
 @pytest.mark.parametrize("capture", ["files", "native", "full", "off", "controller"])
-def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(tmp_path, capture):
+def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(tmp_path, capture, context_delivery=False):
     """Use run_once, its renderer/listener/session owner and the actual quota CLI."""
     import sys
     import tomllib
@@ -601,12 +601,13 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
     from benchmark.runtime.worker import run_once
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TURN_ID, _write_fixture, _configure_autonomous_replan_fixture,
-        _heartbeat_receipt_count, _run_cli,
+        _heartbeat_receipt_count, _run_cli, _initialize_fixture_authority,
     )
 
     if capture == "controller" and os.environ.get("LOOPX_CHECKPOINT_EXTERNAL_CONTROLLER") != "1":
         pytest.skip("Requires an explicitly attached host checkpoint supervisor")
     project, runtime, registry = _write_fixture(tmp_path / "authority")
+    _initialize_fixture_authority(project, runtime)
     logs = Path("/logs/agent/wakes") if capture == "controller" else tmp_path / "trial" / "wakes"
     candidate = project / "candidate.txt"
     candidate.write_text("original candidate")
@@ -654,6 +655,23 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
             index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
             prior_runs = index_path.read_text() if index_path.exists() else ""
             _configure_autonomous_replan_fixture(project, runtime, registry)
+            # This fixture's later scenario is canonical too. Do not reseed a
+            # promoted store or make Markdown authoritative after cutover.
+            from tests.control_plane.canonical_authority_fixture import read_fixture_todos
+            from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+            projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
+                todos=read_fixture_todos(project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+                handoff_mode="soft_claim")
+            provider = Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination/local_authority_provider.ts"
+            script = (f"import {{openLocalAuthorityStore}} from {json.dumps(provider.as_uri())};"
+                "let raw='';for await(const part of process.stdin)raw+=part;const v=JSON.parse(raw);"
+                "const s=await openLocalAuthorityStore(v.root,v.goal);const h=await s.loadAuthority();"
+                "const r=await s.commitAuthority({expected_provider_revision:h.provider_revision,"
+                "operation_id:'fixture-midwake-scenario',events:[],receipts:[],next_projection:v.projection});"
+                "if(r.status!=='applied')throw Error(JSON.stringify(r));")
+            subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
+                input=json.dumps({"root": str(runtime), "goal": GOAL_ID, "projection": projection}),
+                text=True, capture_output=True, check=True, timeout=30)
             # Preserve the actual preflight settlement evidence. The reusable
             # fixture replaces the index; its two later synthetic observations
             # must not erase the already settled original Host Turn.
@@ -700,12 +718,16 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                    LOOPX_CODEX_HOME=str(tmp_path / "worker-home"), LOOPX_SHARED_SKILLS=str(skills),
                    MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=base_url,
                    OPENAI_API_KEY="synthetic-local-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60")
+        if context_delivery:
+            env["LOOPX_CONTEXT_DELIVERY"] = "1"
         deadline = str(time.time() + 600)
         env["LOOPX_PHASE_DEADLINE_EPOCH"] = deadline
         if capture != "off":
             env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
         result = run_once(env)
         assert result["ok"] and not result["timed_out"], result
+        if context_delivery:
+            assert result["context_transport"] == {"available": True}
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
         # Checkpoint preloading keeps the existing heartbeat contract without
         # injecting a Host countdown or runtime guidance.
@@ -785,3 +807,11 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
         # The private endpoint belongs to this wake and is gone after readback.
         argv = shlex.split(guards[0])
         assert not Path(argv[argv.index("--decision-handoff-socket") + 1]).exists()
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN") or os.name != "posix",
+                   reason="Requires the real native CLI and private Unix transport")
+@pytest.mark.parametrize("capture", ["files", "native"])
+def test_context_delivery_preserves_actual_midwake_checkpoint(tmp_path, capture):
+    test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(
+        tmp_path, capture, context_delivery=True)

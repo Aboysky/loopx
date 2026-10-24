@@ -237,3 +237,34 @@ def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(t
         assert json.loads(Path(wire["recovery"]["path"]).read_text()) == wire["context"]
     assert _heartbeat_receipt_count(runtime, "native-full") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original
+
+
+@pytest.mark.parametrize("native_failure", [False, True])
+def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, native_failure):
+    from loopx.cli import build_parser
+    from loopx.cli_commands import quota
+    from loopx.control_plane.turn_driver import codex_context
+
+    args = build_parser().parse_args(["--format", "json", "quota", "should-run",
+        "--goal-id", "fixture", "--agent-id", "worker", "--codex-context-dir", str(tmp_path)])
+    original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"}}
+    monkeypatch.setattr(quota, "handoff_decision", lambda *args: ({"scope": "host-request"}, "digest"))
+    monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
+
+    def competing(*args, **kwargs):
+        pytest.fail("explicit native observation must not compose two projection owners")
+
+    def native(payload, **kwargs):
+        assert payload == original
+        if native_failure:
+            raise OSError("native observation unavailable")
+        return {"native_projection": payload}
+
+    monkeypatch.setattr(quota, "project_captured_context", competing)
+    monkeypatch.setattr(codex_context, "project_codex_context", native)
+    printed = []
+    assert quota._emit_quota_result(original, args, context=None, registry_path=tmp_path / "absent.json",
+        heartbeat_turn_id=None, usage_quota_started=0, capture_directory=tmp_path,
+        detail_sections=frozenset(), print_payload=lambda value, *args: printed.append(value)) == 0
+    assert printed == [original if native_failure else {"native_projection": original}]
+    assert json.loads((tmp_path / "decision.json").read_text()) == original

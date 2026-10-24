@@ -462,6 +462,10 @@ names `quota context-read --codex-context-root ...` when an entire hook is lost;
 lookup is read-only and subsequent pages pin the original file/hash. It never
 readmits or spends. Normal native trust/settings UI remains the activation and
 error surface; unsupported diagnostics keep the same full path.
+An existing decision-handoff socket may use this same capture. Handoff validates
+and releases the immutable original first; native projection follows release.
+It does not create a second checkpoint or change the handoff's failure/recovery
+rules. If interrupted while held, consume the original full continuation packet.
 To roll back, remove the context/capture options from this bootstrap and remove
 only the generated hooks/recovery instruction from the native configuration.
 Existing captures remain private recovery evidence. This opt-in does not grant

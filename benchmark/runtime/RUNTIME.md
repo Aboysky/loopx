@@ -89,12 +89,23 @@ See [heartbeat setup](../../docs/heartbeat-automation-prompt.md#opt-in-native-co
 for activation, diagnostics, readback and rollback. Generated setup and a native
 app-server test do not by themselves prove installed desktop adoption.
 
-A simultaneous `fresh_replan` checkpoint listener retains its existing capture
-ownership and reports this context treatment unavailable; it continues the
-original checkpoint path. Choose separate newly pinned trials to compare the
-features. Do not modify an active/frozen trial. Disable `context_delivery` for a
-new trial to roll back; default runs install no hooks, trust or trace settings.
-No scorer, budget, task semantics or launch authority changes with this option.
+A simultaneous `fresh_replan` checkpoint listener retains ownership of the same
+original capture. It validates and holds the original full decision before any
+context projection, then releases its exact digest. Only afterward may the
+native observer project full/delta for an uninterrupted tool. A refused/lost
+release remains the original typed transport failure, without publishing an
+optimized result or rerunning the guard. An interrupted guard continues with
+the original full packet; no delta is required for checkpoint recovery. Native
+cursor verification also binds the context-directory/root option. The existing
+Darwin native-checkpoint refusal remains in force.
+
+The host-side checkpoint preflight still preloads full input; this composition
+does not reduce that initial read or establish autonomous solver benefit.
+Across distinct worker wakes, settle the prior Turn before selecting new work;
+reading an old prompt from resumed history cannot supply the next wake's guard.
+Do not modify an active/frozen trial. Disable `context_delivery` for a new trial
+to roll back; default runs install no hooks, trust or trace settings. No scorer,
+budget, task semantics or launch authority changes with this option.
 
 Checkpoint capture is independent of this display experiment. A `fresh_replan`
 declaration may establish a private capture/handoff socket while

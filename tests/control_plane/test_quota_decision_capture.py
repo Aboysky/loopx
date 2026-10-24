@@ -311,7 +311,8 @@ def test_capture_root_allocates_private_distinct_children(tmp_path):
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
 @pytest.mark.parametrize('release', ['exact', 'wrong_digest', 'disconnect', 'changed_capture'])
-def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
+@pytest.mark.parametrize('native_context', [False, True])
+def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_context):
     import hashlib
     import socket
     import sys
@@ -322,6 +323,9 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
     state = _configure_read_only_todo(project)
     initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state)
     capture = tmp_path / 'handoff-capture'
+    context = tmp_path / 'native-context'
+    if native_context:
+        context.mkdir(mode=0o700)
     with tempfile.TemporaryDirectory(prefix='quota-host-', dir='/tmp') as short:
         endpoint = Path(short).resolve() / 'host.sock'
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
@@ -335,6 +339,8 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
                        '--runtime-profile', 'generic_cli', '--available-capability', 'shell',
                        '--available-capability', 'filesystem_read',
                        '--decision-output-dir', str(capture), '--decision-handoff-socket', str(endpoint)]
+            if native_context:
+                command += ['--codex-context-dir', str(context)]
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}) as process:
                 try:
@@ -352,6 +358,8 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
                         # successful output while the Host is taking its snapshot.
                         import select
                         assert not select.select([process.stdout], [], [], 0)[0]
+                        if native_context:
+                            assert list(context.iterdir()) == []  # no projection before release
                         if release == 'changed_capture':
                             (capture / 'decision.json').write_bytes(original + b'\n')
                         if release != 'disconnect':
@@ -364,6 +372,8 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
                     else:
                         assert process.returncode != 0
                         assert 'Do not blindly rerun' in stderr + stdout
+                        if native_context:
+                            assert list(context.iterdir()) == []
                     assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
                     assert json.loads(original)['heartbeat_receipt']['turn_instance_id'] == TURN_ID
                 finally:
