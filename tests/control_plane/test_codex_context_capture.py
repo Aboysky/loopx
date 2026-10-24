@@ -29,16 +29,26 @@ pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"
     reason="Explicit native Codex binary required; inference uses loopback only")
 
 
-def _delivered(request, name):
+def _delivered(request, digest):
     pages = {}
     for item in request["input"]:
         output = item.get("output")
-        marker = f"CAPTURE_PAGE {name} "
-        if item.get("type") == "function_call_output" and isinstance(output, str) and marker in output:
-            index, body = output.split(marker, 1)[1].split("\n", 1)
-            assert "truncated output" not in output
-            pages[int(index)] = body.rstrip("\n")
-    return "".join(pages[i] for i in range(len(pages)))
+        if item.get("type") != "function_call_output" or not isinstance(output, str):
+            continue
+        try:
+            page = json.loads(output[output.index("{"):output.rindex("}") + 1])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(page, dict) and page.get("schema_version") == "context_capture_page_v1" and page.get("sha256") == digest:
+            assert "truncated output" not in output and page["ok"]
+            assert page["offset"] not in pages or pages[page["offset"]] == page["content"]
+            pages[page["offset"]] = page["content"]
+    offset, parts = 0, []
+    for start, body in sorted(pages.items()):
+        assert start == offset
+        parts.append(body)
+        offset += len(body.encode())
+    return "".join(parts).rstrip("\n")
 
 
 @pytest.mark.parametrize("host,surface", [("exec", "quota_packet"), ("app_server", "turn_envelope")])
@@ -84,7 +94,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     snapshots, requests_to_host, errors = [], [], []
     stopped = threading.Event()
     stages = {"phase": "start", "pages": [], "baseline_confirmed": False, "compact_response": None}
-    wires = {}
+    wires, page_digests = {}, {}
 
     with tempfile.TemporaryDirectory(prefix="context-native-", dir="/tmp") as short:
         endpoint = Path(short).resolve() / "host.sock"
@@ -140,14 +150,25 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 return shlex.join(command) + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
 
             def pages(name, path):
-                raw = path.read_text().rstrip("\n")
-                chunks = []
-                for index, start in enumerate(range(0, len(raw), 5000)):
-                    script = ("from pathlib import Path; import sys; "
-                        f"sys.stdout.write('CAPTURE_PAGE {name} {index}\\n' + "
-                        f"Path({str(path)!r}).read_text().rstrip('\\n')[{start}:{start + 5000}])")
-                    chunks.append(shlex.join([sys.executable, "-c", script]))
-                return chunks
+                raw = path.read_bytes()
+                digest = hashlib.sha256(raw).hexdigest()
+                page_digests[name] = digest
+                # Plan only read offsets. Every actual model-facing page must
+                # come from the public CLI, including digest verification.
+                offsets, start, count = [0], 0, 0
+                for character in raw.decode():
+                    size = len(character.encode())
+                    if count + size > 5000:
+                        start += count
+                        offsets.append(start)
+                        count = 0
+                    count += size
+                return [shlex.join(command[:5] + ["--format", "json", "quota", "context-read",
+                    "--capture-file", str(path), "--capture-sha256", digest,
+                    "--offset", str(offset), "--page-bytes", "5000"]) for offset in offsets]
+
+            def delivered(request, name):
+                return _delivered(request, page_digests[name])
 
             def response(request, number, message):
                 phase = stages["phase"]
@@ -164,12 +185,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                     stages["phase"] = name + "_read"
                     cmd = stages["pages"].pop(0)
                 elif phase == "cold_read":
-                    assert _delivered(request, "cold") == wire_paths["cold"].read_text().rstrip("\n")
+                    assert delivered(request, "cold") == wire_paths["cold"].read_text().rstrip("\n")
                     stages.update(baseline_confirmed=True, phase="warm_ready")
                     cmd = invoke("warm")
                 elif phase == "warm_read":
-                    assert _delivered(request, "cold") == wire_paths["cold"].read_text().rstrip("\n")
-                    assert _delivered(request, "warm") == wire_paths["warm"].read_text().rstrip("\n")
+                    assert delivered(request, "cold") == wire_paths["cold"].read_text().rstrip("\n")
+                    assert delivered(request, "warm") == wire_paths["warm"].read_text().rstrip("\n")
                     reference.write_text(json.dumps(wires["warm"]["recovery"]))
                     stages.update(phase="compact", compact_response=number)
                     cmd = "printf synthetic-work"
@@ -180,13 +201,13 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 elif phase == "recovery_ready":
                     assert (home / "epoch-invalidated").read_text() == "compact"
                     assert "Baseline invalidated." in _input_text(request)
-                    assert _delivered(request, "cold") == "" and _delivered(request, "warm") == ""
+                    assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
                     stages["phase"] = "recovered"
                     stages["pages"] = pages("recovery", Path(wires["warm"]["recovery"]["path"]))
                     cmd = stages["pages"].pop(0)
                 else:
                     assert phase == "recovered"
-                    recovered = _delivered(request, "recovery")
+                    recovered = delivered(request, "recovery")
                     assert recovered == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
                     stages["phase"] = "done"
                     return message

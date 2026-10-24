@@ -27,6 +27,7 @@ def register_quota_command(
             "status",
             "plan",
             "should-run",
+            "context-read",
             "monitor-poll",
             "scheduler-ack",
             "scheduler-ack-current",
@@ -35,7 +36,7 @@ def register_quota_command(
             "void-slot",
         ],
         default="status",
-        help="Use status for all groups, plan for next-turn groups, should-run for one goal, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
+        help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument(
         "--goal-id",
@@ -196,6 +197,11 @@ def register_quota_command(
               "Requires a capture destination and a same-user Unix socket in a private directory. "
               "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
     )
+    quota_parser.add_argument("--capture-file", help="For context-read: original captured JSON file; no guard is evaluated.")
+    quota_parser.add_argument("--capture-sha256", help="For context-read: exact SHA-256 supplied with the capture reference.")
+    quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
+    quota_parser.add_argument("--page-bytes", type=int, default=4096,
+        help="For context-read: maximum UTF-8 content bytes per page, 256–8192 (default: 4096).")
     quota_parser.add_argument(
         "--turn-instance-id",
         help=(

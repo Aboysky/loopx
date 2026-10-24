@@ -672,6 +672,17 @@ CLI 将 Goal/Agent 绑定到实际决策，保存不可变的 `projection.json`�
 模型交付 ACK，没有合格连续性观察器的调用方不得启用温态复用。实际 solver 与
 安装态 App 的生命周期消费者仍未获得资格。
 
+恢复引用现包含可直接执行的 `quota context-read` 命令。这是既有 quota 入口下的
+本地 capture IO，不另建投影或决策 owner。传入原始 `--capture-file` 和
+`--capture-sha256`，依次执行每页 `next_command` 到 `eof`，按字节 offset 顺序组合
+`content`。`--page-bytes` 限制 UTF-8 内容大小（256–8192 字节，默认 4096）；JSON
+元数据和 Host 包装同样计入输出成本。每页返回内容前校验完整文件摘要及 JSON object。
+文件被替换、offset 错误或 capture 不可用时返回错误，不交付部分上下文或产生 quota
+副作用。父目录别名仍可使用；拒绝被替换为符号链接的最终文件及非普通文件。该命令
+无需初始化 Goal 或 runtime，不执行 guard、准入或扣额。分页 EOF 只表示文件结尾，
+不证明模型完整消费，也不授予基线复用资格。传输局部的 `context_capture_page_v1`
+形状不扩展控制面生命周期状态。
+
 原生传输 probe 使用实际共享投影、有界工具读取和很小的 `SessionStart(compact)`
 引用。确定性的本机 provider 请求相应读取，不证明自主 solver 会遵循恢复路线。
 保留之前整包 hook 与 fail-open 负例；从实际发出的模型输入验证首次完整读取、温态
@@ -685,7 +696,8 @@ hook 或 packet 变小本身不等于节省。下一接入是让 Codex 生命周
 压缩后恢复同一份不可变 CLI 投影，包含主恢复 handler 失败，且不触发第三次 guard 或
 quota 扣额。这补齐 producer 到原生传输的测试缺口；输入观察器仍是确定性 loopback
 provider，并非生产 Codex 连续性 adapter。来源正文、来源状态和原始 capture 独立于
-delta 校验。包括恢复在内的全部分页仍属于成本边界；安装采用和自主成果保持未完成。
+delta 校验。包括恢复在内的全部分页仍属于成本边界；这些读取现执行带摘要校验的
+`quota context-read`，不再自行编写文件切片。安装采用和自主成果保持未完成。
 
 Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
 重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout

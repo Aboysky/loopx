@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import socket
 import stat
@@ -13,6 +14,64 @@ from pathlib import Path
 
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import validate_handoff_socket
+
+
+def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096) -> str:
+    return shlex.join(["loopx", "--format", "json", "quota", "context-read",
+        "--capture-file", str(path), "--capture-sha256", digest,
+        "--offset", str(offset), "--page-bytes", str(page_bytes)])
+
+
+def read_context_capture(args: argparse.Namespace) -> dict:
+    """Bounded local IO over immutable JSON, not a new context/authority owner.
+
+    Verify the complete byte digest on every page. The cursor addresses bytes
+    in that exact capture, so a replacement cannot silently mix two decisions.
+    EOF describes this page, never a model's complete-consumption receipt.
+    """
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+    try:
+        digest = getattr(args, "capture_sha256", None)
+        value = getattr(args, "capture_file", None)
+        offset, size = args.offset, args.page_bytes
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None or not value:
+            raise ValueError("context-read requires the original capture file and its exact SHA-256")
+        if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= 8192:
+            raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192")
+        path = Path(value).expanduser().absolute()
+        # Parent aliases such as macOS /tmp are normal capture locations.
+        # Resolve those once, but never follow a substituted final file.
+        path = path.parent.resolve(strict=True) / path.name
+        if path.is_symlink():
+            raise ValueError("context-read requires the physical original capture path, not a symlink")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(descriptor, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
+                raise ValueError("capture must be a regular JSON file within the existing transport size limit")
+            raw = stream.read(MAX_REQUEST_BYTES + 1)
+        if len(raw) > MAX_REQUEST_BYTES or hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
+        if not isinstance(json.loads(raw.decode("utf-8")), dict):
+            raise ValueError("capture must contain a complete JSON object")
+        if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
+            raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
+        end = min(offset + size, len(raw))
+        while end < len(raw) and raw[end] & 0xC0 == 0x80:
+            end -= 1
+        result = {"ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
+            "offset": offset, "next_offset": end if end < len(raw) else None,
+            "total_bytes": len(raw), "eof": end == len(raw), "content": raw[offset:end].decode("utf-8")}
+        if end < len(raw):
+            result["next_command"] = context_capture_read_command(path, digest, offset=end, page_bytes=size)
+        return result
+    except (OSError, ValueError, RecursionError) as exc:
+        # Recovery is presentation-only: keep failures separate from quota's
+        # collection error path and retain the existing receipt/capture.
+        return {"ok": False, "schema_version": "context_capture_page_v1",
+            "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
+            "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
@@ -178,9 +237,11 @@ def project_captured_context(
         delivery["recovery"] = {
             "path": str(projection), "sha256": hashlib.sha256(projection.read_bytes()).hexdigest(),
             "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
-                "truncated or uncertain, use this full projection before dependent work. Read bounded pages "
-                "if necessary; do not rerun admission or ask the owner. This file is not retention proof.",
+                "truncated or uncertain, use this full projection before dependent work. Run command and follow "
+                "next_command through eof, combining every content page in offset order. Do not rerun admission "
+                "or ask the owner. This file and page EOF are not retention proof.",
         }
+        delivery["recovery"]["command"] = context_capture_read_command(projection, delivery["recovery"]["sha256"])
         return delivery
     except (OSError, ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         # The original full payload is already available. An unavailable optional

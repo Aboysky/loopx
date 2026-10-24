@@ -975,6 +975,21 @@ still before native output processing: a release does not ACK model delivery,
 and callers without a qualified continuity observer must not opt into warm reuse.
 Both actual solver and installed App lifecycle consumers remain unqualified.
 
+The recovery reference now carries a runnable `quota context-read` command.
+This is local capture IO under the existing quota entrypoint, not another
+projection or decision owner. Pass the original `--capture-file` and
+`--capture-sha256`; follow each `next_command` until `eof`, combining `content`
+pages in byte-offset order. `--page-bytes` bounds UTF-8 content (256–8192 bytes,
+4096 by default); JSON metadata and host wrapping also count toward output cost.
+Each page verifies the complete file digest and object before returning content.
+Replacement, bad offsets or unavailable captures return an error without partial
+context or quota side effects. Parent directory aliases remain usable; substituted
+final symlinks and non-regular files are refused. The command works without Goal
+or runtime initialization and never executes a guard, admission or debit. Page
+EOF means only that file's end, not proof of model consumption or permission to
+reuse a baseline. This transport-local `context_capture_page_v1` shape does not
+extend control-plane lifecycle state.
+
 The native transport probe uses the actual shared projector, bounded tool reads
 and a small `SessionStart(compact)` reference. Its deterministic local provider
 requests the reads; it does not prove an autonomous solver follows the recovery
@@ -995,7 +1010,9 @@ or quota debit. This closes a producer-to-native transport test gap; the input
 observer is still the deterministic loopback provider, not a production Codex
 continuity adapter. The source text, source state and original captures are
 checked independently of the delta. All pages, including recovery, remain part
-of the cost boundary. Installed adoption and autonomous outcomes remain open.
+of the cost boundary. These reads now execute `quota context-read`, including
+digest checks, rather than ad-hoc file slicing. Installed adoption and autonomous
+outcomes remain open.
 
 Capture regression qualification also distinguishes settlement binding from
 closeout: an upgraded receipt with an outstanding semantic replan still permits

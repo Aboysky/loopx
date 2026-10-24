@@ -8,6 +8,7 @@ from pathlib import Path
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
     prepare_decision_capture, project_captured_context,
+    read_context_capture,
 )
 from ..usage_goal import observe_quota_result
 
@@ -519,6 +520,12 @@ def handle_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
 ) -> int:
+    if args.quota_command == "context-read":
+        # Presentation recovery reads the original capture, never current Goal
+        # state. In particular it must not evaluate a guard or append a receipt.
+        payload = read_context_capture(args)
+        print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
+        return 0 if payload["ok"] else 1
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
