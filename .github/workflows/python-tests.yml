@@ -894,6 +894,7 @@ jobs:
           tests/test_doctor_install_freshness.py
           tests/test_file_lock.py
           tests/test_file_lock_cross_process.py
+          tests/test_host_thread_activity.py
           tests/control_plane/test_effect_runtime_integration.py
           tests/control_plane/test_shadow_observation_retirement.py
           tests/test_python_install_owner_platform.py
