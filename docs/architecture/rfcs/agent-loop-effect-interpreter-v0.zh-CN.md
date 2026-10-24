@@ -781,6 +781,14 @@ code-mode 调用方可以直接转发成功的 CLI stdout，避免再次序列�
 偏移及原始完整摘要；批次失败时缩小批次并重读同一原 capture，不重新准入。单次
 重放不能资格化通用批次数或提高默认上限。保留截断负例，并在后续推广成本中计入恢复。
 
+生产 quota 恢复指令与原生 resume/compact hook 现共用这份有界读取指导，包含直接转发
+成功 stdout、小批量自适应读取及同 capture 重试。损坏的模型可见页不贡献保留证据，
+也不会永久否决当前输入中随后完整的重读。分页大小改变后，原生 observer 仅在每个
+完整区间都匹配原摘要绑定的字节、且区间并集覆盖整个 capture 时接受重叠读取。
+缺口、只有预览或不同 capture 仍不足以证明保留；无需清空历史、新增 ACK 或重新准入。
+组合 code-mode 测试覆盖批量 stdout、重叠分页边界、跨进程续跑、温态差分及原生压缩
+恢复，包含 quota 和 Turn 两种视图。
+
 Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
 重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout
 则抑制该捕获。真实 CLI fixture 和 typed selector 现分别验证这些事实，不再从

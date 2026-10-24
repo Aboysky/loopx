@@ -1133,6 +1133,18 @@ capture rather than readmit. No universal batch count or increased default limit
 is qualified by a particular replay. Keep truncation negatives alongside the
 successful cost comparison, and include recovery in any subsequent promotion.
 
+The production quota recovery instruction and native resume/compact hooks now
+share that bounded-read guidance, including direct successful stdout forwarding,
+small adaptive batches and same-capture retries. A malformed model-visible page
+contributes no retention evidence. It does not permanently poison a subsequent
+complete reread still present in the current input. The native observer accepts
+overlapping ranges after a page-size change only when each intact range matches
+the original digest-bound bytes and their union covers the complete capture.
+Gaps, previews alone and a different capture remain insufficient; no history
+clearing, new acknowledgement or admission is needed. Composed code-mode tests
+exercise batched stdout, overlapping read boundaries, cross-process resume,
+warm delta and native compaction recovery for both quota and Turn views.
+
 Capture regression qualification also distinguishes settlement binding from
 closeout: an upgraded receipt with an outstanding semantic replan still permits
 an inert replan capture and grants no delivery authority. Explicit pending

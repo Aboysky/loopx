@@ -104,16 +104,18 @@ def codex_context_hook(directory: str, event: dict) -> dict:
         # It also cannot manufacture a fresh active-call observation.
         pass
     if name == "SessionStart" and isinstance(recovery, dict) and recovery.get("command"):
+        from ...cli_commands.quota_capture import CONTEXT_CAPTURE_READ_GUIDANCE
+
         if event.get("source") == "resume":
             return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
                 "LoopX resumed context is unconfirmed. Reuse prior context only when complete in current input. "
-                "If missing before continuing the captured decision, read the original full capture through eof; "
-                "do not repeat admission or ask the owner. Recovery does not renew authority or freshness. "
+                "If missing before continuing the captured decision, read the original full capture. "
+                "Recovery does not renew authority or freshness. " + CONTEXT_CAPTURE_READ_GUIDANCE + " "
                 + recovery["command"]}}
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
-            "LoopX context baseline invalidated. Before dependent work, read this original full capture "
-            "and follow next_command through eof, combining every content page. Do not rerun admission "
-            "or ask the owner. Capture recovery does not renew authority or source freshness. "
+            "LoopX context baseline invalidated. Before dependent work, read this original full capture. "
+            "Capture recovery does not renew authority or source freshness. "
+            + CONTEXT_CAPTURE_READ_GUIDANCE + " "
             + recovery["command"]}}
     return {}
 

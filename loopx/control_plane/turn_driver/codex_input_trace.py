@@ -143,7 +143,7 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
         captured = encoded(json.loads(raw))
         if digest != observation["capture_sha256"] or captured not in (expected, context):
             return False
-        pages: dict[int, bytes] = {}
+        ranges: list[tuple[int, int]] = []
 
         def texts():
             for item in request["input"]:
@@ -175,20 +175,26 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
                 continue
             start, content = page.get("offset"), page.get("content")
             if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
-                return False
+                continue
             data = content.encode("utf-8")
             end = start + len(data)
             if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
                     or page.get("eof") is not (end == len(raw))
                     or page.get("next_offset") != (None if end == len(raw) else end)
-                    or raw[start:end] != data or (start in pages and pages[start] != data)):
-                return False
-            pages[start] = data
+                    or raw[start:end] != data):
+                # A host preview can remain valid JSON while shortening content
+                # and retaining the original cursor. It proves no bytes. Keep
+                # looking for complete rereads in this same current input.
+                continue
+            ranges.append((start, end))
         cursor = 0
-        for start, data in sorted(pages.items()):
-            if start != cursor:
+        for start, end in sorted(ranges):
+            if start > cursor:
                 return False
-            cursor += len(data)
+            # Reducing page size after truncation changes boundaries. Exact
+            # overlapping ranges are safe: each was compared to the immutable
+            # capture, not another page or a saved delivery acknowledgement.
+            cursor = max(cursor, end)
         return cursor == len(raw)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return False

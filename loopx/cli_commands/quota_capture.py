@@ -16,6 +16,18 @@ from ..control_plane.quota.error_codes import QuotaCommandValidationError, Quota
 from ..control_plane.turn_driver.decision_capture import validate_handoff_socket
 
 
+CONTEXT_CAPTURE_READ_GUIDANCE = (
+    "Follow next_command through eof and combine content in byte-offset order. "
+    "In code-mode, forward successful exec stdout directly with text(result.output); "
+    "retain errors. Small batches can save model round trips; start with at most two default pages "
+    "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
+    "Check each model-visible content's UTF-8 byte length against next_offset (total_bytes at eof), "
+    "complete coverage and the original SHA-256. If incomplete, reread the affected range "
+    "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
+    "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
+)
+
+
 def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096) -> str:
     from ..command_invocation import loopx_cli_argv
 
@@ -257,9 +269,8 @@ def project_captured_context(
         delivery["recovery"] = {
             "path": str(projection), "sha256": hashlib.sha256(projection.read_bytes()).hexdigest(),
             "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
-                "truncated or uncertain, use this full projection before dependent work. Run command and follow "
-                "next_command through eof, combining every content page in offset order. Do not rerun admission "
-                "or ask the owner. This file and page EOF are not retention proof.",
+                "truncated or uncertain, use this full projection before dependent work. "
+                + CONTEXT_CAPTURE_READ_GUIDANCE,
         }
         delivery["recovery"]["command"] = context_capture_read_command(projection, delivery["recovery"]["sha256"])
         return delivery

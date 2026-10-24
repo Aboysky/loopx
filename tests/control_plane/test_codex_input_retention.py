@@ -75,6 +75,42 @@ def test_long_trace_uses_current_window_and_never_old_delivery(tmp_path):
     assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
 
 
+@pytest.mark.parametrize("code_mode", [False, True])
+def test_smaller_complete_rereads_recover_after_valid_json_preview(tmp_path, code_mode):
+    observation, baseline, request, _ = fixture(tmp_path)
+    raw = Path(observation["capture_file"]).read_bytes()
+    middle = json.loads(request["input"][1]["output"].split("\nOutput:\n")[1])
+    # Host truncation inside a string can preserve valid JSON and its old cursor.
+    preview = {**middle, "content": middle["content"][:30] + "…9 tokens truncated…"}
+    request["input"][1]["output"] = json.dumps(preview)
+    path = tmp_path / "trace/payloads/input.json"
+    path.write_text(json.dumps(request))
+    assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
+    # Repage the same capture at different boundaries, overlapping intact old
+    # ranges; no new capture, fake ACK, history clearing or new admission.
+    split = raw.index("🙂".encode())
+    recovered = []
+    for start, end in ((0, split), (split, len(raw))):
+        page = {**middle, "offset": start, "next_offset": end if end < len(raw) else None,
+                "eof": end == len(raw), "content": raw[start:end].decode()}
+        recovered.append({"type": "function_call_output", "output": json.dumps(page)})
+    request["input"].extend(recovered)
+    if code_mode:
+        # One code-mode cell can emit several raw stdout blocks. Every block,
+        # including the old preview, is actual model-facing input.
+        request["input"] = [{"type": "custom_tool_call_output", "output": [
+            {"type": "input_text", "text": item["output"]} for item in request["input"]]}]
+    path.write_text(json.dumps(request))
+    assert codex_context_in_active_input(observation, baseline=baseline, session_id="session")
+    # The bad preview never covers the gap when a corrected range is absent.
+    if code_mode:
+        request["input"][0]["output"].pop()
+    else:
+        request["input"].pop()
+    path.write_text(json.dumps(request))
+    assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
+
+
 def test_full_projection_read_is_retention_evidence_with_json_number_semantics(tmp_path):
     observation, baseline, _, _ = fixture(tmp_path)
     baseline["context"]["compute"] = 1
@@ -91,7 +127,7 @@ def test_full_projection_read_is_retention_evidence_with_json_number_semantics(t
 
 
 @pytest.mark.parametrize("failure", ["middle_missing", "pruned", "preview", "quoted", "wrong_role", "server_history",
-    "bad_page", "overlap", "capture_changed", "other_session", "other_tool", "ended", "new_inference", "compacted",
+    "bad_page", "shifted_offset", "capture_changed", "other_session", "other_tool", "ended", "new_inference", "compacted",
     "child", "code_mode", "wrong_response", "partial_trace", "reordered_trace", "missing_trace", "outside_payload", "symlink", "boolean_type"])
 def test_unknown_stale_lossy_or_unbound_observation_never_reuses(tmp_path, failure):
     observation, baseline, request, rows = fixture(tmp_path)
@@ -114,7 +150,7 @@ def test_unknown_stale_lossy_or_unbound_observation_never_reuses(tmp_path, failu
         request["previous_response_id"] = "opaque-history"
     elif failure == "bad_page":
         request["input"][1]["output"] = request["input"][1]["output"].replace('"eof": false', '"eof": true')
-    elif failure == "overlap":
+    elif failure == "shifted_offset":
         page = json.loads(request["input"][1]["output"].split("\nOutput:\n")[1])
         page["offset"] -= 1
         request["input"][1]["output"] = json.dumps(page)

@@ -27,41 +27,48 @@ pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"
 
 
 def _delivered(request, digest):
-    pages = {}
+    # Independent byte-map oracle: recover every model-visible byte, including
+    # separate code-mode emissions and overlapping reads at smaller page sizes.
+    delivered = {}
     for item in request["input"]:
         output = item.get("output")
-        if item.get("type") == "custom_tool_call_output" and isinstance(output, list):
-            # Native code-mode preserves text() emissions as separate blocks.
-            output = next((part["text"] for part in output if part.get("type") == "input_text"
-                           and part.get("text", "").startswith('{"chunk_id"')), "")
-            if output:
-                output = json.loads(output)["output"]
-        if not isinstance(output, str):
-            continue
-        try:
-            page = json.loads(output[output.index("{"):output.rindex("}") + 1])
-        except (ValueError, TypeError):
-            continue
-        if isinstance(page, dict) and page.get("schema_version") == "context_capture_page_v1" and page.get("sha256") == digest:
-            assert "truncated output" not in output and page["ok"]
-            assert page["offset"] not in pages or pages[page["offset"]] == page["content"]
-            pages[page["offset"]] = page["content"]
-    offset, parts = 0, []
-    for start, body in sorted(pages.items()):
-        assert start == offset
-        parts.append(body)
-        offset += len(body.encode())
-    return "".join(parts).rstrip("\n")
+        texts = ([part["text"] for part in output if part.get("type") == "input_text"]
+                 if item.get("type") == "custom_tool_call_output" and isinstance(output, list)
+                 else [output])
+        for output in texts:
+            if not isinstance(output, str):
+                continue
+            try:
+                page = json.loads(output.split("\nOutput:\n", 1)[-1])
+                if isinstance(page, dict) and page.get("exit_code") == 0 and isinstance(page.get("output"), str):
+                    page = json.loads(page["output"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(page, dict) or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
+                continue
+            assert page["ok"]
+            data = page["content"].encode()
+            assert len(data) == (page["total_bytes"] if page["eof"] else page["next_offset"]) - page["offset"]
+            for offset, value in enumerate(data, page["offset"]):
+                assert offset not in delivered or delivered[offset] == value
+                delivered[offset] = value
+    if not delivered:
+        return ""
+    assert set(delivered) == set(range(len(delivered)))
+    raw = bytes(delivered[i] for i in range(len(delivered)))
+    assert hashlib.sha256(raw).hexdigest() == digest
+    return raw.decode().rstrip("\n")
 
 
-@pytest.mark.parametrize("host,surface,failed_primary,resumed", [
-    (host, surface, failed, False) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope"),
+@pytest.mark.parametrize("host,surface,failed_primary,resumed,adaptive", [
+    (host, surface, failed, False, False) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope"),
                                                 ("code_mode", "quota_packet"), ("code_mode", "turn_envelope")]
     for failed in [False, True]
-] + [("benchmark", surface, False, False) for surface in ("quota_packet", "turn_envelope")]
-  + [(host, surface, False, True) for host in ("benchmark", "code_mode")
-     for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed):
+] + [("benchmark", surface, False, False, False) for surface in ("quota_packet", "turn_envelope")]
+  + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
+     for surface in ("quota_packet", "turn_envelope")]
+  + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -123,10 +130,11 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         page_digests[name] = digest
         # Plan only read offsets. Every actual model-facing page must
         # come from the public CLI, including digest verification.
+        page_size = 4096 if adaptive else 5000
         offsets, start, count = [0], 0, 0
         for character in raw.decode():
             size = len(character.encode())
-            if count + size > 5000:
+            if count + size > page_size:
                 start += count
                 offsets.append(start)
                 count = 0
@@ -144,9 +152,17 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 routed[routed.index("--offset") + 1] = str(offset)
                 commands.append(shlex.join(routed))
             return commands
-        return [shlex.join(cli + ["--format", "json", "quota", "context-read",
+        commands = [shlex.join(cli + ["--format", "json", "quota", "context-read",
             "--capture-file", str(path), "--capture-sha256", digest,
-            "--offset", str(offset), "--page-bytes", "5000"]) for offset in offsets]
+            "--offset", str(offset), "--page-bytes", str(page_size)]) for offset in offsets]
+        if adaptive and name == "cold":
+            # An intact initial short read remains in current native input when
+            # subsequent reads choose different boundaries. Production must
+            # accept exact complete coverage without clearing that history.
+            initial = shlex.split(commands[0])
+            initial[-1] = "256"
+            commands.insert(0, shlex.join(initial))
+        return commands
 
     def delivered(request, name):
         return _delivered(request, page_digests[name])
@@ -215,6 +231,15 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             stages["phase"] = "done"
             return message
         if host == "code_mode":
+            if adaptive:
+                commands = [cmd]
+                if stages["pages"]:
+                    commands.append(stages["pages"].pop(0))
+                code = "".join("{const r=await tools.exec_command(" + json.dumps({
+                    "cmd": command, "max_output_tokens": 2400})
+                    + ");text(r.exit_code === 0 ? r.output : r);}" for command in commands)
+                return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
+                    "name": "exec", "input": code}
             return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
                 "name": "exec", "input": "text(await tools.exec_command(" + json.dumps({
                     "cmd": cmd, "max_output_tokens": 2000}) + "));"}
