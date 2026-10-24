@@ -824,6 +824,13 @@ Goal/Agent/Turn，原生工具调用同一 projector/实际输入 observer，不
 顺序和默认关闭时的全量预载保持；完整成本/solver 结果资格须计入新增描述及工具读取，
 不能只计算 delta 字节。
 
+新增匹配的确定性原生 worker 诊断，计入生成的 preflight、跨唤醒历史和全部分页；
+两侧使用相同合成要求及默认 function-tool 读取策略，并覆盖正反执行顺序。每侧两组
+双唤醒中，序列化输入 token 估算下降 35.83%，reader 调用从 72 次降为 48 次。
+冷启动输入约增加 11%，收益来自 warm 复用；耗时区间重叠，未证明延迟改善。
+两侧均开启诊断捕获，不据此认定相对未采集诊断时的追踪成本、自主 solver 成果或精确
+计费。既有真实捕获回放是另一种负载及读取策略，分别保留。
+
 显式启用的 benchmark worker 将简短恢复指令放入原生 `developer_instructions`，
 独立于 SessionStart/PreToolUse 的交付。原生 code-mode 消费者也可在隔离配置中携带
 同一产品 owner 生成的指令；应追加到既有宿主指令，不替换无关规则。触发条件是

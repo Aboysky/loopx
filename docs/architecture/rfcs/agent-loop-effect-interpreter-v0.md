@@ -1196,6 +1196,16 @@ decision freshness, checkpoint ordering and default-off full preloading remain;
 total-cost/solver-outcome qualification must include the added descriptor and
 tool reads, not only delta bytes.
 
+A matched deterministic native worker diagnostic now includes the generated
+preflight, resumed history and every page, using the same synthetic requirement
+and default function-tool read policy in both execution orders. Across two
+two-wake trials per arm, serialized-input token estimates fall 35.83% and reader
+calls fall from 72 to 48. Cold input increases about 11%; savings come from warm
+reuse. Elapsed ranges overlap, so this establishes no latency improvement.
+Both arms enable diagnostic capture; it does not qualify tracing cost against
+uninstrumented execution, autonomous solver outcomes or exact billing. The
+separate real-capture replay remains a different workload and read policy.
+
 The opt-in benchmark worker carries a compact recovery instruction in native
 `developer_instructions`, independently of SessionStart/PreToolUse delivery.
 Native code-mode consumers can carry the same product-owned instruction in
