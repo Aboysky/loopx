@@ -32,3 +32,36 @@ return focus, unknown retention and invalid results are exercised by the same
 packaged scenario. Browsing starts no model or experiment and leaves the source
 unchanged. These captures qualify a proposed packaged surface, not installed
 adoption, user comprehension improvement or release readiness.
+
+## Native measurement hierarchy
+
+The UI source is `ee911667cbe664d7cbf8a914ee076d766a048c64`, based on main
+`44050e953aa21f6deb932935fa158b5e415894c1`. The packaged capture run used
+those source bytes; this documentation commit only records its visual evidence.
+
+The `hierarchy-desktop.png` and `hierarchy-mobile.png` captures use the same
+native-only fixture as `after-desktop.png` and `after-mobile.png`. The capture's
+best valid value is now primary; initial, last valid and actually retained
+results are compact context. Unknown retention stays explicit. A document icon
+opens original evidence without suggesting a trend. Raw unit, direction,
+valid-result coverage and a concise UTC window remain visible. Full timestamps,
+submission identities, method, source digest and limitations are available in
+one disclosure with body-sized text.
+
+The `hierarchy-report-*.png` images show the same synthesis fixture as the
+earlier ordinary report captures. The `hierarchy-sources-*.png` images use a
+separate synthetic signed-value fixture: best, last and retained differ, so the
+source view can be checked without treating best as adoption. These are whole
+packaged workspace viewports, not live operating context or installed-App
+readback. Desktop is 1280 × 900; narrow is 390 × 844. The narrow report view
+uses the existing one-step report navigation; it is a selected reading position,
+not the default top of the page.
+
+The existing research-history scenario covers ordinary/deep/history reading,
+historical results and source switching. The focused `research-native-reading`
+scenario crosses the same real registration, typed native projection, SQLite
+store and HTTP reader for higher/lower directions, negative and zero values,
+invalid first/all-invalid/empty samples, partial windows, distinct retained
+results and long units. It also checks exact citation return, source disclosure,
+Chinese/English help, narrow layout and 200% text. No model or experiment is
+executed; original sources and mutation counts are checked separately.
