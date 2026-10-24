@@ -402,19 +402,29 @@ def _host_retry_replan(state: dict[str, Any], payload: dict[str, Any],
     return pending[0]
 
 
-def _read_resolved_replan_attempts(state: dict[str, Any], payload: dict[str, Any], args: argparse.Namespace) -> bool:
+def _read_resolved_replan_attempts(
+    state: dict[str, Any], payload: dict[str, Any], args: argparse.Namespace,
+    prior: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Only the original settlement owner can resolve a known lost response.
 
     An opaque unbound shell command has no such proof. Leave it visibly unknown
     instead of inferring a Turn from the latest row or dispatching a new command.
+    Return only attempts verified by this read, not historical local markers.
     """
-    unresolved = [attempt for attempt in state.get("replan_attempts", [])
-                  if attempt["status"] in {"started", "unknown"} and attempt.get("settlement_identity")]
-    if not unresolved:
-        return False
+    retry_obligation = (prior or {}).get("replan_obligation_id")
+    # Recheck a saved recovery marker after restart: local transport state is
+    # not a substitute for the original canonical settlement proof.
+    candidates = [attempt for attempt in state.get("replan_attempts", [])
+                  if attempt.get("settlement_identity") and (
+                      attempt["status"] in {"started", "unknown"}
+                      or (retry_obligation == attempt["obligation_id"]
+                          and attempt.get("recovery") == "original_settlement_verified"))]
+    if not candidates:
+        return []
     scope = _admission_scope(payload, args)
-    changed = False
-    for attempt in unresolved:
+    resolved: list[dict[str, Any]] = []
+    for attempt in candidates:
         if not _same_replan_scope(attempt, scope):
             continue
         original = _attempt_settlement_identity(attempt)
@@ -430,8 +440,8 @@ def _read_resolved_replan_attempts(state: dict[str, Any], payload: dict[str, Any
                 and readback.replay_phase == "settled" and readback.settlement.failure is None
                 and readback.settlement.value is not None):
             attempt.update(status="returned", recovery="original_settlement_verified")
-            changed = True
-    return changed
+            resolved.append(attempt)
+    return resolved
 
 
 def _observe_worker_replan(
@@ -854,13 +864,19 @@ def _run_worker_locked(
                             sleep(min(delay, 60.0))
                             retry_after_error = True
                             break
-                    if _read_resolved_replan_attempts(state, payload, args):
+                    resolved_replans = _read_resolved_replan_attempts(state, payload, args, prior)
+                    if resolved_replans:
                         _save_state(state_path, state)
                     retry_replan = _host_retry_replan(state, payload, args, prior) if host_guard and prior else None
                     if prior.get("replan_obligation_id") and retry_replan is None:
-                        _log("status=host_failure_hold reason=original_replan_not_retryable "
-                             "next=original_host_recovery goal_complete=false new_wake=false")
-                        return 2
+                        scope_now = _admission_scope(payload, args)
+                        bound = [attempt for attempt in state.get("replan_attempts", [])
+                                 if attempt["obligation_id"] == prior["replan_obligation_id"]
+                                 and _attempt_scope(attempt) == scope_now]
+                        if len(bound) != 1 or not any(attempt is bound[0] for attempt in resolved_replans):
+                            _log("status=host_failure_hold reason=original_replan_not_retryable "
+                                 "next=original_host_recovery goal_complete=false new_wake=false")
+                            return 2
                     if _pending_replan_attempt(state, payload, args) and retry_replan is None:
                         replan_scope = _admission_scope(payload, args)
                         original = next(previous for previous in state["replan_attempts"]
