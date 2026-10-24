@@ -135,27 +135,34 @@ def _configure_provider(home, url):
 
 @pytest.mark.parametrize("host", ["exec", "app_server"])
 @pytest.mark.parametrize("failed_primary", [False, True])
-def test_native_shared_delta_with_small_compact_recovery_reference(tmp_path, host, failed_primary):
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_shared_delta_with_small_compact_recovery_reference(tmp_path, host, failed_primary, surface):
     """Real native input: shared delta, small event hook, same-capture file read.
 
     The deterministic provider requests the necessary reads. This establishes
     transport ordering/recovery, not autonomous solver adoption or token savings.
     """
     from loopx.control_plane.quota.turn_envelope import (
-        prepare_work_context_delivery, restore_work_context_delivery,
+        prepare_context_delivery, restore_context_delivery,
     )
     binary, env, workspace, home = _native_fixture(tmp_path)
     scope = dict(goal_id="fixture", agent_id="agent", session_id="synthetic-session", context_epoch="before-compact")
     source = {"complete": True, "sources": [{"source": "selected_todo", "content": {
         "todo": {"todo_id": "todo_fixture", "text": SOURCE, "note": "Stop before publishing.", "status": "open"}}}]}
-    base = prepare_work_context_delivery(source, scope=scope, capture_id="capture-a")
     target_source = json.loads(json.dumps(source))
     target_source["sources"][0]["content"]["todo"]["note"] = "Stop before publishing or deploying."
-    target = prepare_work_context_delivery(target_source, scope=scope, capture_id="capture-b")
-    delta = prepare_work_context_delivery(target_source, scope=scope, capture_id="capture-b",
+    def projection(context):
+        if surface == "quota_packet":
+            return {"goal_id": "fixture", "agent_id": "agent", "should_run": True,
+                "interaction_contract": {"agent_channel": {"delivery_allowed": True, "work_context": context}}}
+        return {"schema_version": "loopx_turn_envelope_v0", "action": {"delivery_allowed": True}, "work_context": context}
+    base_source, target_source = projection(source), projection(target_source)
+    base = prepare_context_delivery(base_source, scope=scope, capture_id="capture-a", surface=surface)
+    target = prepare_context_delivery(target_source, scope=scope, capture_id="capture-b", surface=surface)
+    delta = prepare_context_delivery(target_source, scope=scope, capture_id="capture-b", surface=surface,
         baseline=base, retained={"complete": True, "target": base["target"]})
     assert delta["mode"] == "delta"
-    assert restore_work_context_delivery(delta, baseline=base, current=target)["context"] == target_source
+    assert restore_context_delivery(delta, baseline=base, current=target)["context"] == target_source
     files = {}
     for name, value in (("base", base), ("target", target), ("delta", delta)):
         files[name] = workspace / f"{name}.json"

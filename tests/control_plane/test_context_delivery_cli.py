@@ -13,7 +13,7 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import (
-    build_turn_envelope, prepare_work_context_delivery, restore_work_context_delivery,
+    build_turn_envelope, prepare_context_delivery, restore_context_delivery,
 )
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID,
@@ -49,26 +49,38 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
     assert turn_context["instruction"] == context["instruction"]
     original = deepcopy(guard)
     scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id=profile, context_epoch="epoch-a")
-    full = prepare_work_context_delivery(context, scope=scope, capture_id="capture-a")
+    full = prepare_context_delivery(context, scope=scope, capture_id="capture-a")
     assert full["mode"] == "full" and full["context"] == context
-    warm = prepare_work_context_delivery(context, scope=scope, capture_id="capture-b",
+    warm = prepare_context_delivery(context, scope=scope, capture_id="capture-b",
         baseline=full, retained={"complete": True, "target": full["target"]})
     assert warm["mode"] == "delta"
     assert len(json.dumps(warm).encode()) < len(json.dumps(full).encode()) / 2
-    current = prepare_work_context_delivery(context, scope=scope, capture_id="capture-b")
-    assert restore_work_context_delivery(warm, baseline=full, current=current)["context"] == context
-    turn_full = prepare_work_context_delivery(turn_context, scope=scope, capture_id="turn-capture")
-    turn_delta = prepare_work_context_delivery(turn_context, scope=scope, capture_id="turn-capture",
+    current = prepare_context_delivery(context, scope=scope, capture_id="capture-b")
+    assert restore_context_delivery(warm, baseline=full, current=current)["context"] == context
+    turn_full = prepare_context_delivery(turn_context, scope=scope, capture_id="turn-capture")
+    turn_delta = prepare_context_delivery(turn_context, scope=scope, capture_id="turn-capture",
         baseline=full, retained={"complete": True, "target": full["target"]})
     assert turn_delta["mode"] == "delta"
-    assert restore_work_context_delivery(turn_delta, baseline=full, current=turn_full)["context"] == turn_context
-    for baseline, delivery in [(None, warm), (full, {**warm, "reused": []})]:
-        recovered = restore_work_context_delivery(delivery, baseline=baseline, current=current)
+    assert restore_context_delivery(turn_delta, baseline=full, current=turn_full)["context"] == turn_context
+    for baseline, delivery in [(None, warm), (full, {**warm, "changes": None})]:
+        recovered = restore_context_delivery(delivery, baseline=baseline, current=current)
         assert recovered["mode"] == "full" and recovered["context"] == context
         assert recovered["target"] == current["target"]
-    reset = prepare_work_context_delivery(context, scope={**scope, "context_epoch": "epoch-b"},
+    reset = prepare_context_delivery(context, scope={**scope, "context_epoch": "epoch-b"},
         capture_id="capture-b", baseline=full, retained={"complete": True, "target": full["target"]})
     assert reset["mode"] == "full" and reset["context"] == context
+    # The same RPC now transports the whole ordinary quota packet and whole
+    # Turn envelope, rather than assuming the common work_context is the packet.
+    for surface, projection in [("quota_packet", guard), ("turn_envelope", build_turn_envelope(guard))]:
+        first = prepare_context_delivery(projection, scope=scope, capture_id="whole-a", surface=surface)
+        next_capture = prepare_context_delivery(projection, scope=scope, capture_id="whole-b", surface=surface)
+        delta = prepare_context_delivery(projection, scope=scope, capture_id="whole-b", surface=surface,
+            baseline=first, retained={"complete": True, "target": first["target"]})
+        assert delta["mode"] == "delta"
+        restored = restore_context_delivery(delta, baseline=first, current=next_capture)
+        assert restored["mode"] == "delta" and restored["context"] == projection
+        missing = restore_context_delivery(delta, baseline=None, current=next_capture)
+        assert missing["mode"] == "full" and missing["context"] == projection
     # Neither native source state, the signed decision nor settlement is changed
     # by presentation, warm reuse or recovery. A new capture is not an admission.
     assert state.read_bytes() == before_source

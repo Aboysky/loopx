@@ -12,7 +12,7 @@ import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 /** Reusable evidence and instructions in this owner's read model. Current
  * selection, eligibility, source revisions and pagination stay outside this
- * split. A changed evidence array is replaced in full, including its status,
+ * split. Exact array edits retain every change, including its status,
  * provenance and applicability; no timestamp or revision is normalized away. */
 export function exploreReusableContextPaths(): string[][] {
   return [
@@ -20,7 +20,9 @@ export function exploreReusableContextPaths(): string[][] {
       "path_delta_attachment_template", "linked_question_attachment_template",
       "optional_question_evolution_example", "result_writeback_guidance",
       "result_attachment_template", "optional_measurement_example", "measurement_guidance",
-      "record_node_template", "record_finding_template", "guidance"].map(key => ["graph", key]),
+      "record_node_template", "record_finding_template", "guidance",
+      "result_writeback_option", "result_writeback_inline_option", "result_writeback_inline_field",
+      "result_attachment_schema", "path_delta_attachment_schema"].map(key => ["graph", key]),
     ["harness", "guidance"],
   ];
 }
