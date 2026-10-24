@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {managedAgentSessionsScenario} from "./personal-workspace-browser/managed-agent-sessions.mjs";
 import {reportDownloadScenario} from "./personal-workspace-browser/report-download.mjs";
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
 import {completedHistoryIsolationScenario} from "./personal-workspace-browser/completed-history-isolation.mjs";
@@ -154,6 +155,7 @@ scenarioCatalog.push(attentionNotificationsLiveScenario);
 scenarioCatalog.push(firstGoalHomeLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
+scenarioCatalog.push(managedAgentSessionsScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);

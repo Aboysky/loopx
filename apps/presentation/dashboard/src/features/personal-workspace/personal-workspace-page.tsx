@@ -924,6 +924,7 @@ export function PersonalWorkspacePage({
   selectedView: controlledView,
   selectedTodoId: routedTodoId,
   selectedWorkAgentId,
+  selectedWorkSessionId,
   managerChannelBinding,
   managerRuntime,
   model,
@@ -956,6 +957,7 @@ export function PersonalWorkspacePage({
   selectedView?: WorkspaceGoalTab;
   selectedTodoId?: string | null;
   selectedWorkAgentId?: string | null;
+  selectedWorkSessionId?: string;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
@@ -1009,6 +1011,7 @@ export function PersonalWorkspacePage({
   const [localView, setLocalView] = useState<WorkspaceGoalTab>("overview");
   const selectedGoalTab = controlledView ?? localView;
   const agentWorkActive = Boolean(controlledGoalId === undefined ? localGoalId : controlledGoalId) && selectedGoalTab === "chat" && selectedWorkAgentId != null;
+  const managedWorkActive = agentWorkActive && selectedWorkSessionId?.startsWith("managed:") === true;
   const workReturn = useRef<{scope: string; agentId: string} | null>(null);
   useEffect(() => {
     if (agentWorkActive) {workReturn.current = {scope: selectionScope, agentId: selectedWorkAgentId!}; return;}
@@ -1100,10 +1103,10 @@ export function PersonalWorkspacePage({
     setRecheckingRuntimes(true);
     callbacks.onRecheckRuntimes();
   }
-  const conversationKey = originalConversation ? conversationContextKey({ kind: "bound", ...originalConversation.target }) : selectedWorkspaceRef
+  const conversationKey = workspaceConversations?.managed ? conversationContextKey({kind: "managed", ...workspaceConversations.managed.target}) : originalConversation ? conversationContextKey({ kind: "bound", ...originalConversation.target }) : selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
     : selectedGoalId ?? "manager";
-  const composerDraftKey = `${conversationKey}:${selectedAgentId}`;
+  const composerDraftKey = managedWorkActive ? conversationKey : `${conversationKey}:${selectedAgentId}`;
   const { composer, setComposer, restoreFailedSubmission,
     sending, setSending, steering, setSteering, actionFeedback, setActionFeedback,
     imageAttachments, setImageAttachments, imageAttachmentError, setImageAttachmentError,
@@ -1362,7 +1365,7 @@ export function PersonalWorkspacePage({
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
     [items, managerSessionProposalIds, managerChannelProposalIds],
   );
-  const conversationOpen = !agentWorkActive && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
+  const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
   const conversationMessages = selectedGoal ? goalMessages : managerMessages;
   const latestMessage = conversationMessages.at(-1);
   const latestMessageTextLength = latestMessage?.text.length ?? 0;
@@ -2319,7 +2322,7 @@ export function PersonalWorkspacePage({
   async function sendMessage(messageOverride?: string, intent: "send" | "steer" = "send") {
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
-    if (!message || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || conversationHistoryState?.sendBlocked) return;
+    if (!message || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked) return;
     const previousSteering = readSteeringRequest(composerDraftKey);
     const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text.trim() === message
       ? previousSteering : undefined;
@@ -2816,7 +2819,7 @@ export function PersonalWorkspacePage({
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
             /> : null}
-          <div className="personal-channel-scroll" data-agent-work={agentWorkActive || undefined} data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
+          <div className="personal-channel-scroll" data-agent-work={agentWorkActive && !managedWorkActive || undefined} data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
             onScroll={(event) => {
               if (!conversationOpen) return;
               const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
@@ -2872,7 +2875,14 @@ export function PersonalWorkspacePage({
                     : <ContextHelp label={locale === "zh-CN" ? "来源无研究读取入口" : "Research source unavailable"} icon={CircleHelp}><p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p></ContextHelp>,
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
-                    onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}/> : (<>
+                    sessionId={selectedWorkSessionId} onSession={(id, replace) => callbacks.onSelectWorkSession?.(id, replace)}
+                    onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}>
+                    {workspaceConversations?.managed?.error ? <p role="alert">{workspaceConversations.managed.error} <button type="button" onClick={workspaceConversations.managed.retry}>{t("history.retry")}</button></p> : null}
+                    <ChannelTimeline items={visibleTimelineItems.filter(item => item.kind === "message")} onSelect={setSelection} selectedGoal={selectedGoal}
+                      onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
+                      onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
+                      onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? turnId => callbacks.onInterruptConversationTurn!(conversationKey, turnId) : undefined}/>
+                  </GoalAgentWorkPage> : (<>
                     {selectedGoal && activeSessionRun?.goalId === selectedGoal.goalId ? (
                       <SessionRecordHeader
                         onClose={() => setActiveSessionRun(null)}
@@ -2909,7 +2919,7 @@ export function PersonalWorkspacePage({
             )}
             </> : null}
           </div>
-          {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive}>
+          {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive && !managedWorkActive}>
             {originalConversation && !originalConversation.session?.resumable ? <div className="personal-history-notice" role={originalConversation.error ? "alert" : "status"}>
               <span>{originalConversation.session
                 ? (locale === "zh-CN" ? "可以回看原记录；此执行器暂不支持继续原会话。" : "Original history is available; this executor cannot continue its Session.")
@@ -3074,7 +3084,7 @@ export function PersonalWorkspacePage({
                 rows={1}
                 value={composer}
               />
-              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
+              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
             {conversationOpen ? <div className="personal-composer-hint">{steering
               ? (locale === "zh-CN" ? "正在发送…" : "Sending…")
