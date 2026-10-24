@@ -802,8 +802,10 @@ code-mode 调用方可以直接转发成功的 CLI stdout，避免再次序列�
 `generic_cli` profile 加显式 `LOOPX_EXECUTION_MODE=heartbeat` 与
 `LOOPX_CONTEXT_DELIVERY=on` 声明。worker 既有执行 owner 拒绝非 heartbeat 模式，
 并把这些设置传递给原生工具；scheduler 声明不变。不通过进程名或环境中的原生
-session 启发式认证宿主。声明缺失、
-矛盾或不受支持时保留全量并说明原因，不阻塞已有权限内的工作。hook、配置、已保存
+session 启发式认证宿主。`on` 时，跑法声明缺失、不完整、
+矛盾或不受支持会在准入与 transport 写入前以非零退出码和可操作原因报错，hook 也遵守
+此规则。应修正声明或改为 `off`，不新增 owner 问询或审批。受支持跑法内，输入保留证据
+缺失或失效仍自动恢复同一 capture 的全量。hook、配置、已保存
 包展示和重入均传递这一二态选择。目录参数或 host handoff 本身不能开启差分。关闭时
 仍可回查原 capture 全量。这些调用方声明只选择受支持 adapter 路径，不授予执行权限，
 也不替代实际输入保留验证。

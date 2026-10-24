@@ -18,7 +18,7 @@ from loopx.control_plane.quota.turn_envelope import (
 )
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID,
-    _run_cli, _spend_run_count, _write_fixture,
+    _heartbeat_receipt_count, _run_cli, _spend_run_count, _write_fixture,
 )
 
 
@@ -305,7 +305,9 @@ def test_plain_quota_context_default_does_not_touch_transport(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("activation", [[], ["--context-delivery", "off"], ["--context-delivery", "on"]])
-def test_unsupported_or_off_delivery_keeps_full_and_does_not_touch_native_cache(tmp_path, activation):
+def test_off_keeps_full_but_explicit_unsupported_on_errors_before_admission(tmp_path, monkeypatch, activation):
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     initialize_canonical_authority(runtime, GOAL_ID,
@@ -315,8 +317,28 @@ def test_unsupported_or_off_delivery_keeps_full_and_does_not_touch_native_cache(
     code, result = _run_cli(registry, runtime, "quota", "should-run", "--runtime-profile", "generic_cli",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "unsupported",
         "--codex-context-dir", str(root), *activation, cwd=project)
-    assert code == 0 and result["ok"] and result.get("schema_version") != "context_delivery_v1", result
     assert not root.exists()
     if activation == ["--context-delivery", "on"]:
-        assert result["context_delivery"]["enabled"] is False
-        assert result["context_delivery"]["reason"] == "unsupported_or_missing_run_mode"
+        assert code != 0 and result["ok"] is False, result
+        assert "supported declared run mode" in result["reason"]
+        assert _heartbeat_receipt_count(runtime, "unsupported") == 0
+        assert _spend_run_count(runtime) == 0
+    else:
+        assert code == 0 and result["ok"] and result.get("schema_version") != "context_delivery_v1", result
+
+
+@pytest.mark.parametrize("command", ["context-config", "context-hook", "context-project", "should-run"])
+@pytest.mark.parametrize("host", [[], ["--host-surface", "codex_app"], ["--runtime-profile", "claude_code"]])
+def test_unsupported_native_commands_fail_without_creating_transport_or_authority(tmp_path, command, host):
+    # A missing registry/capture must not hide this explicit configuration error
+    # or turn it into an optional-transport full fallback (including hooks).
+    runtime, registry = tmp_path / "runtime", tmp_path / "missing-registry.json"
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    code, result = _run_cli(registry, runtime, "quota", command, *host, "--context-delivery", "on",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "unqualified",
+        "--codex-context-dir", str(native), "--decision-output-root", str(captures), cwd=tmp_path)
+    assert code != 0 and result["ok"] is False, result
+    assert "supported declared run mode" in result["reason"]
+    assert not native.exists() and not captures.exists() and not registry.exists()
+    assert _heartbeat_receipt_count(runtime, "unqualified") == 0
+    assert _spend_run_count(runtime) == 0

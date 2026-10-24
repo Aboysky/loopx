@@ -244,6 +244,10 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         # No native proof in this CLI fixture: composed capture must still
         # release ordinary full output and preserve reentry and settlement.
         env.update(LOOPX_CONTEXT_DELIVERY='on', LOOPX_EXECUTION_MODE='heartbeat', LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / 'context'))
+        # Generated CLI reentry uses this process's environment; preserve the
+        # same worker declarations carried by the native tool environment.
+        monkeypatch.setenv('LOOPX_CONTEXT_DELIVERY', 'on')
+        monkeypatch.setenv('LOOPX_EXECUTION_MODE', 'heartbeat')
     body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=private_handoff)
     # Execute the renderer's actual guard, preserving its route and flags.
     block = body.split('```sh\n', 1)[1].split('```', 1)[0]
@@ -357,6 +361,18 @@ def test_renderer_retains_owned_handoff_without_enabling_it_by_default(tmp_path)
                 build_heartbeat_prompt(**args, decision_handoff_socket=endpoint)
     with pytest.raises(ValueError, match='invalid decision handoff socket'):
         build_heartbeat_prompt(**args, decision_output_root=tmp_path, decision_handoff_socket=endpoint)
+
+
+@pytest.mark.parametrize("profile", [None, "generic_cli", "claude_code"])
+def test_native_context_prompt_rejects_unqualified_on_and_keeps_off_inert(tmp_path, monkeypatch, profile):
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile=profile,
+                thin=True)
+    assert build_heartbeat_prompt(**args) == build_heartbeat_prompt(**args, context_delivery="off")
+    with pytest.raises(ValueError, match="supported declared run mode"):
+        build_heartbeat_prompt(**args, context_delivery="on", codex_context_dir=str(tmp_path / "absent"))
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_native_context_prompt_keeps_capture_on_reentry(tmp_path, monkeypatch):

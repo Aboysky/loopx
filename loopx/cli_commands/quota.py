@@ -470,14 +470,14 @@ def _emit_quota_result(
         )
     from .quota_capture import native_context_activation
 
-    activation = native_context_activation(args)
+    context_delivery_enabled = payload.get("ok") is True and native_context_activation(args)["enabled"]
     bind_capture_selection_transport(payload, args)
     delivery_request = None
     decision_identity = ("", "")
     try:
         capture_decision(capture_directory, payload)
         if payload.get("ok") is True:
-            delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), activation["enabled"])
+            delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
     except QuotaDecisionTransportError as exc:
         # The guard already ran. Report that typed fact with the durable receipt
         # and saved decision, never a new collection failure that could replace
@@ -510,9 +510,9 @@ def _emit_quota_result(
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
-    native_context = activation["enabled"] and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     if (args.format == "json" and succeeded and delivery_request is not None and not native_context
-            and activation["enabled"]):
+            and context_delivery_enabled):
         payload = project_captured_context(payload, directory=capture_directory,
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
@@ -532,8 +532,6 @@ def _emit_quota_result(
                 capture_id=capture_id)
         except (OSError, ValueError):
             pass  # Lost optional capture: keep the admitted full payload, never rerun its guard.
-    if activation["requested"] == "on" and not activation["enabled"]:
-        payload = {**payload, "context_delivery": activation}
     print_payload(payload, args.format, _quota_renderer(args))
     return 0 if succeeded else 1
 

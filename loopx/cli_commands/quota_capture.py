@@ -27,13 +27,16 @@ def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
     profiles = [value for value in (getattr(args, "runtime_profile", None),
         "codex_app_heartbeat" if getattr(args, "codex_app", False) else None,
         "trae_app" if getattr(args, "trae_app", False) else None) if value is not None]
-    if len(profiles) > 1:
-        return context_delivery_activation(getattr(args, "context_delivery", "off"))
-    return context_delivery_activation(getattr(args, "context_delivery", "off"),
-        runtime_profile=profiles[0] if profiles else None,
-        scheduler_execution_context=fields if any(fields.values()) else None,
-        benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
-            if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None)
+    try:
+        if len(profiles) > 1:
+            return context_delivery_activation(getattr(args, "context_delivery", "off"))
+        return context_delivery_activation(getattr(args, "context_delivery", "off"),
+            runtime_profile=profiles[0] if profiles else None,
+            scheduler_execution_context=fields if any(fields.values()) else None,
+            benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
+                if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None)
+    except ValueError as exc:
+        raise QuotaCommandValidationError(str(exc)) from exc
 
 
 def _read_capture(value: str, digest: str) -> tuple[Path, bytes, dict[str, Any]]:
@@ -116,8 +119,10 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     Publication is delayed until this native tool runs, so the same actual-input
     observer can qualify a resumed baseline. Any optional transport failure
     returns the original full read reference, never a replacement guard.
+    Invalid run-mode opt-ins fail before that optional transport path.
     """
     try:
+        activation = native_context_activation(args)
         path, raw, payload = _read_capture(args.capture_file, args.capture_sha256)
         identity = payload.get("agent_identity")
         receipt = payload.get("heartbeat_receipt")
@@ -128,6 +133,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("context-project requires the captured quota decision's exact Goal, Agent and Turn")
         if args.turn_envelope or args.decision_output_dir or args.decision_handoff_socket:
             raise ValueError("context-project presents the saved quota view; it does not change view or handoff")
+    except QuotaCommandValidationError as exc:
+        return {"ok": False, "reason": str(exc)}
     except (OSError, ValueError, TypeError, RecursionError) as exc:
         return {"ok": False, "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
             "recovery": "Restore the original digest-bound decision; no guard, admission or spend was performed."}
@@ -141,7 +148,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
         from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
-        if not native_context_activation(args)["enabled"]:
+        if not activation["enabled"]:
             raise ValueError("context delivery is off")
         root = Path(args.decision_output_root).expanduser().absolute()
         metadata = root.lstat()
@@ -172,7 +179,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     return {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
         "recovery": full_reference,
         "capture_sha256": args.capture_sha256,
-        **({"context_delivery": native_context_activation(args)} if getattr(args, "context_delivery", "off") == "on" else {}),
+        **({"context_delivery": activation} if activation["enabled"] else {}),
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + CONTEXT_CAPTURE_READ_GUIDANCE}
 
@@ -330,13 +337,18 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None]) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    if args.quota_command in ("context-config", "context-hook"):
+        try:
+            activation = native_context_activation(args)
+        except QuotaCommandValidationError as exc:
+            payload = {"ok": False, "reason": str(exc)}
+            print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+            return 1
     if args.quota_command == "context-config":
-        import json
         from ..command_invocation import loopx_cli_argv
         from ..control_plane.turn_driver.codex_context import codex_context_configuration
 
         try:
-            activation = native_context_activation(args)
             if not activation["enabled"]:
                 payload = {"ok": True, "context_delivery": activation}
                 print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
@@ -358,14 +370,13 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
         return 0 if payload["ok"] else 1
     if args.quota_command == "context-hook":
-        import json
         import sys
         from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
         from ..control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
 
         # Native transport only: no registry discovery, guard or quota effects.
         try:
-            if not native_context_activation(args)["enabled"]:
+            if not activation["enabled"]:
                 print("{}")
                 return 0
             raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)

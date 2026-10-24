@@ -54,8 +54,15 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
                     and context.execution_mode is ExecutionMode.INTERACTIVE
                     and benchmark_mode == "heartbeat"):
                 scenario = "codex_benchmark_heartbeat"
+        if scenario is None:
+            raise ValueError(
+                "--context-delivery on requires a supported declared run mode: "
+                "Codex App heartbeat (--codex-app or --runtime-profile codex_app_heartbeat), "
+                "or the Codex benchmark heartbeat worker. Missing, contradictory or unsupported "
+                "declarations are rejected; use --context-delivery off for ordinary full delivery."
+            )
     return {"requested": setting, "enabled": scenario is not None, "scenario": scenario,
-        "reason": "supported_declared_run_mode" if scenario else "disabled" if setting == "off" else "unsupported_or_missing_run_mode",
+        "reason": "supported_declared_run_mode" if scenario else "disabled",
         "supported_scenarios": list(CONTEXT_DELIVERY_SCENARIOS)}
 
 

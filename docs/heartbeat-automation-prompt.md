@@ -434,9 +434,12 @@ session variables. Only two declared run modes can activate it:
 | Codex benchmark heartbeat worker | Existing `generic_cli` profile plus the worker-owned `LOOPX_EXECUTION_MODE=heartbeat` and `LOOPX_CONTEXT_DELIVERY=on` declarations; its execution owner rejects other modes |
 
 `--codex-app` is a shortcut for a complete runtime profile. `--host-surface` alone
-is only one field; incomplete, contradictory or unsupported declarations do not
-activate reuse. `on` with no supported declaration returns full delivery and an
-activation reason. `off` creates no native journal, hook configuration or input
+is only one field. With `on`, missing, incomplete, contradictory or unsupported
+run-mode declarations are configuration errors: the CLI exits nonzero with a
+reason before admission or transport writes, including in native hooks. Correct
+the declaration or select `off`; there is no owner question or new approval.
+In a supported run mode, missing or invalid retained-input evidence still
+recovers the same original full capture automatically. `off` creates no native journal, hook configuration or input
 observation; directories alone never turn it on. This declaration check is not
 host authentication, execution authority or proof of retained input. Every warm
 delta still needs independently verified complete current-input evidence.

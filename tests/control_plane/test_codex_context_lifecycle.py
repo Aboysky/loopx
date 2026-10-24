@@ -314,8 +314,15 @@ def test_activation_reuses_declared_host_mode_and_off_is_inert(tmp_path, monkeyp
         args += ["--context-delivery", setting]
     results = []
     parsed = build_parser().parse_args(args)
-    assert handle_native_context_command(parsed, print_payload=lambda value, *_: results.append(value)) == 0
+    code = handle_native_context_command(parsed, print_payload=lambda value, *_: results.append(value))
     result = results[0]
+    if setting == "on" and expected is None:
+        assert code == 1 and result["ok"] is False
+        assert "supported declared run mode" in result["reason"]
+        assert "--context-delivery off" in result["reason"]
+        assert "native_config" not in result and list(tmp_path.iterdir()) == []
+        return
+    assert code == 0 and result["ok"] is True
     activation = result["context_delivery"]
     expected = expected if setting == "on" else None
     assert activation["requested"] == (setting or "off")
@@ -350,6 +357,10 @@ def test_benchmark_activation_uses_existing_explicit_worker_declaration(monkeypa
         monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
     args = build_parser().parse_args(["quota", "context-config", "--runtime-profile", "generic_cli",
         "--context-delivery", setting])
+    if setting == "on" and not expected:
+        with pytest.raises(ValueError, match="supported declared run mode"):
+            native_context_activation(args)
+        return
     result = native_context_activation(args)
     assert result["enabled"] is expected
     assert result["scenario"] == ("codex_benchmark_heartbeat" if expected else None)

@@ -1163,9 +1163,12 @@ profile plus its explicit `LOOPX_EXECUTION_MODE=heartbeat` and
 `LOOPX_CONTEXT_DELIVERY=on` declarations. The worker's existing execution owner
 rejects non-heartbeat modes and propagates these settings to native tools; its
 scheduler declaration is unchanged. No process or ambient native-session
-heuristic authenticates a host. Unsupported, absent or
-contradictory declarations keep full presentation with a reason; they do not
-block otherwise authorized work. Hooks, configuration, saved presentation and
+heuristic authenticates a host. With `on`, unsupported, absent, incomplete or
+contradictory run-mode declarations fail the invocation with a nonzero exit and
+an actionable reason before admission or transport writes, including hooks.
+Correct the declaration or use `off`; this adds no owner question or approval.
+Within a supported run mode, missing or invalid retained-input evidence still
+automatically restores the same full capture. Hooks, configuration, saved presentation and
 reentry preserve this binary selection. Directory options or a host handoff
 alone cannot turn on deltas. Full original-capture recovery remains usable when
 off. These caller declarations select a supported adapter path, grant no
