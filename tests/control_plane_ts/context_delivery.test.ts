@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {compactSelectedTodoSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
+import {compactTodoContextSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
 
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
 
@@ -190,11 +190,11 @@ test("final assembly race, truncated or out-of-order delta uses same-capture ful
 
 test("cold-source title deduplication retains full body, distinct title and original capture", () => {
   const original = {todo: {text: long, title: long, note: "Keep this note", status: "open"}};
-  const result = compactSelectedTodoSource(original);
+  const result = compactTodoContextSource(original);
   assert.deepEqual(result, {todo: {text: long, note: "Keep this note", status: "open"}});
   assert.equal(original.todo.title, long);
   const distinct = {todo: {...original.todo, title: "A meaningful short title"}};
-  assert.strictEqual(compactSelectedTodoSource(distinct), distinct);
+  assert.strictEqual(compactTodoContextSource(distinct), distinct);
 });
 
 function evidenceContext(): JsonObject {

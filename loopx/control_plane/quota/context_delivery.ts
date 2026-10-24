@@ -5,6 +5,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {reusableTurnContextPaths} from "../capability_hooks.ts";
+import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
 
 const VERSION = "context_delivery_v1";
 const MAX_ANCESTRY = 32;
@@ -21,14 +22,26 @@ const equal = (a: unknown, b: unknown): boolean => {
 const digest = (value: unknown): string => `sha256:${canonicalAuthoritySha256(value)}`;
 const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
 
-/** A title equal to the complete body carries no second instruction. Never use
- * the bounded hot title/text as the source, and retain a genuinely distinct title. */
-export function compactSelectedTodoSource(content: JsonObject): JsonObject {
+/** Context keeps complete records and provenance, rather than repeating the
+ * canonical reader's field dictionary. Unknown read schemas remain verbatim.
+ * A title equal to the complete body carries no second instruction. */
+export function compactTodoContextSource(content: JsonObject): JsonObject {
+  let result = content;
   const todo = jsonObject(content.todo);
-  if (!todo || typeof todo.text !== "string" || todo.title !== todo.text) return content;
-  const copy = {...todo};
-  delete copy.title;
-  return {...content, todo: copy};
+  if (todo && typeof todo.text === "string" && todo.title === todo.text) {
+    const copy = {...todo};
+    delete copy.title;
+    result = {...result, todo: copy};
+  }
+  const authority = jsonObject(content.authority_read);
+  const model = jsonObject(authority?.todo_read_model);
+  if (model?.schema_version === COORDINATION_STATE_CONTRACT.todo_read_record.schema_version
+      && Array.isArray(model.contract_fields)
+      && model.contract_fields.every(field => typeof field === "string")) {
+    const {contract_fields: _dictionary, ...metadata} = model;
+    result = {...result, authority_read: {...authority, todo_read_model: metadata}};
+  }
+  return result;
 }
 
 function parentAt(root: JsonObject, path: Path): Record<string | number, unknown> {

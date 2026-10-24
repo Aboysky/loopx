@@ -46,6 +46,13 @@ selection and fulfillment policy in both ordinary packets and TurnEnvelope.
 `work_context.complete` means no known source failure, not that pending reads
 have been consumed. TurnEnvelope signs the same content and obligations; its
 size warning never truncates current requirements or removes a pending read.
+Full progressive reads carry the complete-Goal, no-summary and fresh-guard
+obligations. Only a fulfilled registered narrative adds the generated-region
+and canonical-Todo ownership explanation; pending reads do not repeat that
+inapplicable explanation. Todo-bound semantic replanning also uses the same
+autonomous Vision authoring contract in its action and settlement projections,
+so exact in-response references retain complete replacement and replan rules.
+Ordinary settlement and all execution/receipt checks keep their existing rules.
 
 Preferences remain conditional on scoped records. The existing preference and
 Explore hooks return their actual read context through registered adapters;
@@ -54,6 +61,15 @@ receipts stay separate from the single content carrier. Unconfigured hooks
 preserve their off-state. User Todo inventory views disappear only from exact
 Todo responses; scoped User decisions and gates remain in the work context
 and retain their existing admission/notification authority.
+
+Todo context retains complete scoped records and canonical read provenance,
+including the record schema, snapshot digest, count and provider revision. It
+omits the known canonical reader's `contract_fields` dictionary: field names
+describe the reader's record format, not additional task requirements. Empty
+scoped User results still retain their source proof. Unknown read schemas and
+malformed dictionaries remain verbatim. The explicit canonical Todo commands
+keep their full read metadata; this default context compaction requires no
+cross-Turn baseline and leaves all record values, gates and stops intact.
 
 Source failure retains the unresolved read, identifies the unavailable source,
 and blocks dependent delivery until recovery and a fresh guard. Reading current
