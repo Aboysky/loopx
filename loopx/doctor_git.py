@@ -81,17 +81,14 @@ def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
             return None
         if result.returncode != 0:
             return None
-        return result.stdout.strip() or None
+        return result.stdout.strip()
 
-    commit = _run(["rev-parse", "HEAD"])
-    branch = _run(["symbolic-ref", "--quiet", "--short", "HEAD"])
-    tag = _run(["describe", "--tags", "--exact-match"])
+    commit = _run(["rev-parse", "HEAD"]) or None
+    branch = _run(["symbolic-ref", "--quiet", "--short", "HEAD"]) or None
+    tag = _run(["describe", "--tags", "--exact-match"]) or None
     status = _run(["status", "--porcelain"])
-    dirty = (
-        None
-        if commit is None and branch is None and tag is None and status is None
-        else bool(status)
-    )
+    # Empty successful output proves clean; a failed status leaves it unknown.
+    dirty = None if status is None else bool(status)
     return {
         "root": str(source_root),
         "git_commit": commit,
