@@ -110,7 +110,7 @@ def _query_threads(uri: str, thread_ids: list[str]) -> dict[str, tuple[Any, Any]
 
 def _thread_rows(db: Path, thread_ids: list[str]) -> dict[str, tuple[Any, Any]]:
     # Configured homes may be relative; SQLite file URIs require an absolute path.
-    uri = db.resolve().as_uri()
+    uri = db.absolute().as_uri()
     try:
         return _query_threads(f"{uri}?mode=ro", thread_ids)
     except sqlite3.OperationalError:
