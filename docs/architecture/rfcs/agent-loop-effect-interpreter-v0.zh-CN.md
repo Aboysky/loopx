@@ -809,11 +809,20 @@ journal，独立 trial home 保留 `--codex-context-dir`。只读查找不创建
 原生上下文交付也可复用既有 checkpoint handoff 的同一 capture。checkpoint owner
 先持有并核验原始完整决策，按精确摘要释放后才执行原生投影。释放丢失或拒绝不发布
 优化结果；中断时保留原始全量 continuation，不再次 guard。原生中断 cursor 核验
-除既有身份/capture 路由外，也绑定 context 路由。宿主侧 preflight 仍使用全量，
+除既有身份/capture 路由外，也绑定 context 路由。宿主侧 preflight 保留完整原始捕获，
 Darwin 原生 checkpoint 限制保持不变。确定性原生测试覆盖普通持有释放、warm 复用、
 hook 丢失后的压缩恢复，以及唤醒中途捕获/拒绝。续跑 worker 测试读取最新生成的
 guard，在新 Turn 前通过正常入口结算独立核验的前次读回；旧历史不能替代新准入。
 这只验证传输组合，不构成新的成本/结果资格，也不授予修改冻结 trial 的权限。
+
+已保存 preflight 的交付现走公开 `quota context-project`：宿主固定原始路径/摘要和
+Goal/Agent/Turn，原生工具调用同一 projector/实际输入 observer，不再次 guard 或扣额。
+简短描述返回 full/delta 读取命令、可用的 target 和原始全量回退。冷启动全文仍可核验；
+原生状态不确定或可选 cache 失败选择全量，来源摘要/作用域失败则在发布前拒绝。
+物理文件和摘要的有界 IO 与既有 reader 复用。原生测试通过真实 checkpoint worker
+跨唤醒恢复后生成的 saved-read 入口验证 warm 完整重建及零 guard 重放。原决策新鲜度、checkpoint
+顺序和默认关闭时的全量预载保持；完整成本/solver 结果资格须计入新增描述及工具读取，
+不能只计算 delta 字节。
 
 显式启用的 benchmark worker 将简短恢复指令放入原生 `developer_instructions`，
 独立于 SessionStart/PreToolUse 的交付。原生 code-mode 消费者也可在隔离配置中携带

@@ -8,8 +8,33 @@ from __future__ import annotations
 import json
 import os
 import stat
+import shlex
 from pathlib import Path
 import tempfile
+
+
+def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, turn_id: str) -> str:
+    """Delay presentation of the original preflight until its native tool call.
+
+    No model input exists at host preflight time. Keep the original source/hash
+    and let the product's current-input observer choose full/delta later.
+    """
+    from loopx.command_invocation import loopx_cli_argv
+
+    prefix = [*loopx_cli_argv(env["LOOPX_CLI"]), "--format", "json", "quota"]
+    source = ["--capture-file", str(path), "--capture-sha256", digest]
+    project = [*prefix, "context-project", *source,
+        "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
+        "--turn-instance-id", turn_id, "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
+        "--decision-output-root", str(path.parent / "decisions")]
+    full = [*prefix, "context-read", *source]
+    return ("Present that same immutable packet with:\n```sh\n" + shlex.join(project)
+        + "\n```\nFollow the returned command and all next_command pages; reconstruct any delta against "
+        "its exact retained baseline before following the original interaction_contract. "
+        "If projection is unavailable, the baseline is absent/uncertain, or a response is incomplete, "
+        "follow its full recovery reference. If the projection command itself fails, read the original "
+        "complete packet with:\n```sh\n" + shlex.join(full) + "\n```\nFollow every next_command. "
+        "Neither presentation nor recovery renews this decision's authority or freshness. ")
 
 
 def prepare_context_delivery(env: dict[str, str], home: Path) -> None:

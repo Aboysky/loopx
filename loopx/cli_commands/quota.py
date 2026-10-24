@@ -8,7 +8,7 @@ from pathlib import Path
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
     prepare_decision_capture, project_captured_context,
-    read_context_capture,
+    read_context_capture, project_saved_context_capture,
 )
 from ..usage_goal import observe_quota_result
 
@@ -583,6 +583,10 @@ def handle_quota_command(
             payload = {}
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         return 0
+    if args.quota_command == "context-project":
+        payload = project_saved_context_capture(args)
+        print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
+        return 0 if payload["ok"] else 1
     if args.quota_command == "context-read":
         # Presentation recovery reads the original capture, never current Goal
         # state. In particular it must not evaluate a guard or append a receipt.

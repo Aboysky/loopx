@@ -99,8 +99,18 @@ the original full packet; no delta is required for checkpoint recovery. Native
 cursor verification also binds the context-directory/root option. The existing
 Darwin native-checkpoint refusal remains in force.
 
-The host-side checkpoint preflight still preloads full input; this composition
-does not reduce that initial read or establish autonomous solver benefit.
+The host-side checkpoint preflight still captures the complete original decision.
+With context delivery enabled, its prompt now supplies `quota context-project`
+with that original path/hash, Goal/Agent/Turn and private cache location. The
+native tool presents the saved decision using the same current-input observer;
+no guard, checkpoint, admission or debit is repeated. Cold delivery supplies the
+full body and its target; qualified warm delivery supplies the exact delta.
+The small response points to bounded reads and an original full-read fallback.
+No native setup, invalid cache or uncertain retention keeps full input. A bad
+source hash/scope is refused before publication. This does not renew decision
+freshness or establish autonomous solver benefit. Default-off preloading is
+unchanged. Include the projection command, descriptor, recovery and page reads
+in subsequent total-cost comparisons.
 Across distinct worker wakes, settle the prior Turn before selecting new work;
 reading an old prompt from resumed history cannot supply the next wake's guard.
 Do not modify an active/frozen trial. Disable `context_delivery` for a new trial

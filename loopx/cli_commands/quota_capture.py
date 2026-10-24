@@ -36,6 +36,32 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, pa
         "--offset", str(offset), "--page-bytes", str(page_bytes)])
 
 
+def _read_capture(value: str, digest: str) -> tuple[Path, bytes, dict]:
+    """One bounded physical-file/hash check for recovery and saved projection."""
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None or not value:
+        raise ValueError("context-read requires the original capture file and its exact SHA-256")
+    path = Path(value).expanduser().absolute()
+    # Parent aliases such as macOS /tmp are normal capture locations.
+    # Resolve those once, but never follow a substituted final file.
+    path = path.parent.resolve(strict=True) / path.name
+    if path.is_symlink():
+        raise ValueError("context-read requires the physical original capture path, not a symlink")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
+            raise ValueError("capture must be a regular JSON file within the existing transport size limit")
+        raw = stream.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES or hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("capture must contain a complete JSON object")
+    return path, raw, payload
+
+
 def read_context_capture(args: argparse.Namespace) -> dict:
     """Bounded local IO over immutable JSON, not a new context/authority owner.
 
@@ -43,8 +69,6 @@ def read_context_capture(args: argparse.Namespace) -> dict:
     in that exact capture, so a replacement cannot silently mix two decisions.
     EOF describes this page, never a model's complete-consumption receipt.
     """
-    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-
     try:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
@@ -64,22 +88,7 @@ def read_context_capture(args: argparse.Namespace) -> dict:
             raise ValueError("context-read requires the original capture file and its exact SHA-256")
         if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= 8192:
             raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192")
-        path = Path(value).expanduser().absolute()
-        # Parent aliases such as macOS /tmp are normal capture locations.
-        # Resolve those once, but never follow a substituted final file.
-        path = path.parent.resolve(strict=True) / path.name
-        if path.is_symlink():
-            raise ValueError("context-read requires the physical original capture path, not a symlink")
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-        with os.fdopen(descriptor, "rb") as stream:
-            metadata = os.fstat(stream.fileno())
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
-                raise ValueError("capture must be a regular JSON file within the existing transport size limit")
-            raw = stream.read(MAX_REQUEST_BYTES + 1)
-        if len(raw) > MAX_REQUEST_BYTES or hashlib.sha256(raw).hexdigest() != digest:
-            raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
-        if not isinstance(json.loads(raw.decode("utf-8")), dict):
-            raise ValueError("capture must contain a complete JSON object")
+        path, raw, _ = _read_capture(value, digest)
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         end = min(offset + size, len(raw))
@@ -99,6 +108,70 @@ def read_context_capture(args: argparse.Namespace) -> dict:
         return {"ok": False, "schema_version": "context_capture_page_v1",
             "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
+
+
+def project_saved_context_capture(args: argparse.Namespace) -> dict:
+    """Present an immutable already-decided quota capture, without authority IO.
+
+    Publication is delayed until this native tool runs, so the same actual-input
+    observer can qualify a resumed baseline. Any optional transport failure
+    returns the original full read reference, never a replacement guard.
+    """
+    try:
+        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256)
+        identity = payload.get("agent_identity")
+        receipt = payload.get("heartbeat_receipt")
+        if (payload.get("ok") is not True or not isinstance(identity, dict) or not isinstance(receipt, dict)
+                or not args.goal_id or not args.agent_id or not args.turn_instance_id
+                or payload.get("goal_id") != args.goal_id or identity.get("agent_id") != args.agent_id
+                or receipt.get("turn_instance_id") != args.turn_instance_id):
+            raise ValueError("context-project requires the captured quota decision's exact Goal, Agent and Turn")
+        if args.turn_envelope or args.decision_output_dir or args.decision_handoff_socket:
+            raise ValueError("context-project presents the saved quota view; it does not change view or handoff")
+    except (OSError, ValueError, TypeError, RecursionError) as exc:
+        return {"ok": False, "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
+            "recovery": "Restore the original digest-bound decision; no guard, admission or spend was performed."}
+
+    reference = {"path": str(path), "sha256": args.capture_sha256,
+        "command": context_capture_read_command(path, args.capture_sha256)}
+    full_reference = dict(reference)
+    mode = "full"
+    target = None
+    try:
+        from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
+        from ..control_plane.turn_driver.decision_capture import write_decision_capture
+
+        root = Path(args.decision_output_root).expanduser().absolute()
+        metadata = root.lstat()
+        if root.resolve(strict=True) != root or not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            raise ValueError("saved projection needs an existing private physical capture root")
+        directory = codex_context_directory(directory=args.codex_context_dir,
+            root=args.codex_context_root, create=True)
+        if not directory:
+            raise ValueError("native context is unavailable")
+        cache = Path(tempfile.mkdtemp(prefix="context-", dir=root))
+        projected = project_codex_context(payload, directory=directory, capture_directory=cache,
+            goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
+            capture_id=hashlib.sha256(raw).hexdigest())
+        wire = cache / "delivery.json"
+        write_decision_capture(wire, projected)
+        digest = hashlib.sha256(wire.read_bytes()).hexdigest()
+        reference = {"path": str(wire), "sha256": digest, "command": context_capture_read_command(wire, digest)}
+        if projected.get("schema_version") == "context_delivery_v1":
+            mode = projected["mode"]
+            target = projected["target"]
+            if mode == "full":
+                # The native observer verifies paged complete context bytes.
+                # Deliver that exact full body plus its target in this small
+                # descriptor, rather than paging another wrapper around it.
+                reference = {key: projected["recovery"][key] for key in ("path", "sha256", "command")}
+    except (OSError, ValueError, TypeError, RecursionError):
+        pass  # Optional presentation unavailable: the original full reference is already verified.
+    return {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
+        "recovery": full_reference,
+        "capture_sha256": args.capture_sha256,
+        "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
+            + CONTEXT_CAPTURE_READ_GUIDANCE}
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:

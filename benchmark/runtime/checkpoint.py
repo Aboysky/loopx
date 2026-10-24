@@ -153,8 +153,14 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     preflight_seen = guard_path.exists()
     guard_path.write_text(guard_run.stdout, encoding="utf-8")
     guard_path.chmod(0o600)
-    preloaded_body = (f"Host checkpoint preflight has already executed this wake's original quota guard once. "
-        f"Read the complete packet at {guard_path} before work, then follow its interaction_contract. "
+    reading = f"Read the complete packet at {guard_path} before work, then follow its interaction_contract. "
+    if env.get("LOOPX_CONTEXT_DELIVERY") == "1" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
+        from .context_delivery import preflight_context_instruction
+
+        reading = preflight_context_instruction(env, guard_path,
+            hashlib.sha256(guard_path.read_bytes()).hexdigest(), receipt["turn_id"])
+    preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
+        + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False, "phase": "before_replan"}
     try:

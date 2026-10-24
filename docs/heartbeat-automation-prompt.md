@@ -466,6 +466,28 @@ An existing decision-handoff socket may use this same capture. Handoff validates
 and releases the immutable original first; native projection follows release.
 It does not create a second checkpoint or change the handoff's failure/recovery
 rules. If interrupted while held, consume the original full continuation packet.
+
+For a host that already saved the quota decision before invoking Codex, present
+that immutable snapshot from the native tool instead of running its guard again:
+
+```sh
+loopx --format json quota context-project \
+  --capture-file <original-quota-json> --capture-sha256 <original-sha256> \
+  --goal-id <goal> --agent-id <agent> --turn-instance-id <original-turn> \
+  --codex-context-root <private-context-root> --decision-output-root <private-capture-root>
+```
+
+The JSON response supplies `mode`, the digest-pinned read `command`, the target
+when available, and an original full `recovery` reference. Cold mode delivers
+complete context plus its target; a warm delta still requires actual current-input
+proof. Follow every page and reconstruct before dependent work. Invalid optional
+transport/cache falls back to that same full capture; invalid source hash or
+Goal/Agent/Turn refuses publication. This is integrity-checked presentation of
+the caller's snapshot, not fresh authority, registry lookup, installation,
+admission or accounting. The original file stays unchanged; generated caches
+remain private. A missing projection command can use `quota context-read` with
+the original file/hash. Disable the existing context opt-in to restore the host's
+ordinary full-read instruction; no stored decision or receipt is rewritten.
 To roll back, remove the context/capture options from this bootstrap and remove
 only the generated hooks/recovery instruction from the native configuration.
 Existing captures remain private recovery evidence. This opt-in does not grant

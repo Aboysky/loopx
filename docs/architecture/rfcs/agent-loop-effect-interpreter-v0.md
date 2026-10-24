@@ -1174,13 +1174,27 @@ The checkpoint owner holds/verifies the original full decision and releases its
 exact digest before native projection. Lost/refused release publishes no optimized
 result; interruption retains original full continuation, without another guard.
 Native interrupted-cursor verification binds the context route as well as the
-existing identity/capture routes. The host-side preflight remains full, and the
-Darwin native-checkpoint limitation is unchanged. Deterministic native tests
+existing identity/capture routes. The host-side preflight retains the complete
+original capture; the Darwin native-checkpoint limitation is unchanged. Deterministic native tests
 cover ordinary held release, warm reuse, lost-hook compaction recovery and
 midwake capture/refusal. Resumed worker tests use the latest generated guard and
 settle the independently checked prior readback before a new Turn; old history
 cannot stand in for a new admission. This is transport composition, not a new
 cost/outcome qualification or permission to modify frozen trials.
+
+Saved preflight presentation now uses public `quota context-project`: the host
+pins the original path/hash and Goal/Agent/Turn, then the native tool invokes the
+same projector/actual-input observer without another guard or debit. A compact
+descriptor supplies full/delta read commands, the available target and an
+original full fallback. Cold complete context remains verifiable; uncertain
+native state or optional cache failure selects full. Source hash/scope failure
+refuses before publication. Bounded physical-file/hash IO is shared with the
+existing reader. Native tests prove complete warm reconstruction through the
+real checkpoint worker's generated saved-read entry across resumed wakes,
+without guard replay. Existing
+decision freshness, checkpoint ordering and default-off full preloading remain;
+total-cost/solver-outcome qualification must include the added descriptor and
+tool reads, not only delta bytes.
 
 The opt-in benchmark worker carries a compact recovery instruction in native
 `developer_instructions`, independently of SessionStart/PreToolUse delivery.
