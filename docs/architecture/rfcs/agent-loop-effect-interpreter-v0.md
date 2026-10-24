@@ -1112,6 +1112,27 @@ not net solver savings. Harbor/container and Codex App installation,
 wholly lost hooks and complete solver/cost qualification remain open.
 Native discovery, trace IO and all recovery reads belong in that cost comparison.
 
+Matched native input replay now separates the subtree codec from the read policy:
+compare full and delta under the same page size, forwarding and batching policy,
+then compare read policies separately. Count all repeated model input (including
+history and tool definitions), model requests, CLI reads and private trace bytes.
+A cold-plus-warm pair can save fewer bytes than a long warm series. Smaller pages
+batched into fewer model rounds can increase CLI calls while reducing repeated
+input; do not attribute that combined gain to the codec alone. Deterministic
+replay over captured inputs qualifies transport cost proxies, not autonomous
+solver outcomes, billed tokens, cache savings or installed adoption.
+
+Code-mode callers can forward successful CLI stdout directly without serializing
+another exec-result wrapper. They may group bounded reads only when every page
+survives the **final model-facing output**, including the host's separate cap.
+A larger requested output budget alone is insufficient: the native host can omit
+text blocks or truncate inside otherwise valid JSON. Parse success and page EOF
+therefore do not establish intact delivery. Verify contiguous UTF-8 offsets and
+the original complete digest; reduce a failed batch and reread the same original
+capture rather than readmit. No universal batch count or increased default limit
+is qualified by a particular replay. Keep truncation negatives alongside the
+successful cost comparison, and include recovery in any subsequent promotion.
+
 Capture regression qualification also distinguishes settlement binding from
 closeout: an upgraded receipt with an outstanding semantic replan still permits
 an inert replan capture and grants no delivery authority. Explicit pending
