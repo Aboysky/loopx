@@ -4,12 +4,13 @@ import argparse
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
-    prepare_decision_capture, project_captured_context,
-    read_context_capture, project_saved_context_capture,
+    prepare_decision_capture, handle_native_context_command,
 )
+from ..control_plane.turn_driver.decision_capture import project_captured_context
 from ..usage_goal import observe_quota_result
 
 from ..capabilities.explore.composition_frontier import (
@@ -531,6 +532,67 @@ def _emit_quota_result(
     return 0 if succeeded else 1
 
 
+def _record_non_guard_quota_event(
+    payload: dict[str, Any], args: argparse.Namespace, *, registry_path: Path,
+    runtime_root_arg: str | None, context: QuotaCommandContext | None, goal_ref: dict[str, str] | None,
+    rollout_todo_id: str | None, rollout_replan_obligation_id: str | None,
+    spend_turn_instance_id: str | None, rollout_details: dict[str, Any],
+    append_cli_rollout_event: RolloutEventAppender,
+) -> None:
+    """Record the CLI event before settlement readback and optional memory ingest."""
+    append_cli_rollout_event(
+        payload,
+        registry_path=registry_path,
+        runtime_root_arg=runtime_root_arg,
+        event_kind=QUOTA_EVENT_KINDS[args.quota_command],
+        goal_ref=goal_ref,
+        agent_id=args.agent_id,
+        todo_id=rollout_todo_id,
+        run_id=(
+            spend_turn_instance_id
+            if args.quota_command == "spend-slot"
+            else None
+        ),
+        status=str(
+            payload.get("effective_action")
+            or payload.get("decision")
+            or payload.get("mode")
+            or args.quota_command
+        ),
+        summary=(
+            f"quota {args.quota_command} decision="
+            f"{payload.get('decision') or payload.get('mode')} "
+            f"state={payload.get('state') or ''}"
+        ),
+        details=rollout_details,
+        allow_failed=args.quota_command == "should-run",
+    )
+    if args.quota_command == "spend-slot" and spend_turn_instance_id:
+        assert context is not None  # A settlement requires a prepared authority context.
+        attach_spend_settlement_result(
+            payload,
+            runtime_root=context.runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            todo_id=rollout_todo_id,
+            turn_instance_id=spend_turn_instance_id,
+            replan_obligation_id=rollout_replan_obligation_id,
+            goal_ref=goal_ref,
+        )
+        attach_reward_memory_ingest_after_spend(
+            payload,
+            execute=bool(args.execute),
+            runtime_root=context.runtime_root,
+            registry_path=registry_path,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            todo_id=rollout_todo_id,
+            turn_instance_id=spend_turn_instance_id,
+            replan_obligation_id=rollout_replan_obligation_id,
+            goal_ref=goal_ref,
+        )
+
+
 def handle_quota_command(
     args: argparse.Namespace,
     *,
@@ -540,59 +602,9 @@ def handle_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
 ) -> int:
-    if args.quota_command == "context-config":
-        import json
-        from ..command_invocation import loopx_cli_argv
-        from ..control_plane.turn_driver.codex_context import codex_context_configuration
-
-        try:
-            directory = getattr(args, "codex_context_root", None) or args.codex_context_dir
-            if not directory:
-                raise ValueError("context-config requires codex-context-root or codex-context-dir")
-            config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
-                cli_argv=loopx_cli_argv(), session_root=bool(getattr(args, "codex_context_root", None)))
-            payload = {"ok": True, "native_config": config,
-                "activation": "Merge hooks and append developer_instructions to the existing native configuration; "
-                    "review and trust only these exact hooks in Codex. Restart/resume with the resulting configuration. "
-                    "Pass this same context location and a decision-output-root to heartbeat-prompt/should-run. "
-                    "For delta, the native process must already have CODEX_ROLLOUT_TRACE_ROOT pointing to private diagnostics; "
-                    "unavailable diagnostics preserve full delivery. Disabling the context options restores ordinary output. "
-                    "This command installs nothing and grants no execution authority."}
-        except (OSError, ValueError, TypeError) as exc:
-            payload = {"ok": False, "reason": str(exc)}
-        print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
-        return 0 if payload["ok"] else 1
-    if args.quota_command == "context-hook":
-        import json
-        import sys
-        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-        from ..control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
-
-        # Native transport only: no registry discovery, guard or quota effects.
-        try:
-            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-            event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
-            if (isinstance(event, dict) and isinstance(event.get("session_id"), str) and event["session_id"]
-                    and event.get("hook_event_name") in ("SessionStart", "PreCompact", "PreToolUse")):
-                directory = codex_context_directory(directory=args.codex_context_dir,
-                    root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
-                payload = codex_context_hook(directory, event)
-            else:
-                payload = {}
-        except (OSError, ValueError, TypeError, RecursionError):
-            payload = {}
-        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-        return 0
-    if args.quota_command == "context-project":
-        payload = project_saved_context_capture(args)
-        print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
-        return 0 if payload["ok"] else 1
-    if args.quota_command == "context-read":
-        # Presentation recovery reads the original capture, never current Goal
-        # state. In particular it must not evaluate a guard or append a receipt.
-        payload = read_context_capture(args)
-        print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
-        return 0 if payload["ok"] else 1
+    native_result = handle_native_context_command(args, print_payload=print_payload)
+    if native_result is not None:
+        return native_result
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
@@ -1006,56 +1018,14 @@ def handle_quota_command(
                         ),
                     )
         else:
-            append_cli_rollout_event(
-                payload,
-                registry_path=registry_path,
-                runtime_root_arg=runtime_root_arg,
-                event_kind=QUOTA_EVENT_KINDS[args.quota_command],
-                goal_ref=goal_ref,
-                agent_id=args.agent_id,
-                todo_id=rollout_todo_id,
-                run_id=(
-                    spend_turn_instance_id
-                    if args.quota_command == "spend-slot"
-                    else None
-                ),
-                status=str(
-                    payload.get("effective_action")
-                    or payload.get("decision")
-                    or payload.get("mode")
-                    or args.quota_command
-                ),
-                summary=(
-                    f"quota {args.quota_command} decision="
-                    f"{payload.get('decision') or payload.get('mode')} "
-                    f"state={payload.get('state') or ''}"
-                ),
-                details=rollout_details,
-                allow_failed=args.quota_command == "should-run",
+            _record_non_guard_quota_event(
+                payload, args, registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg, context=context, goal_ref=goal_ref,
+                rollout_todo_id=rollout_todo_id,
+                rollout_replan_obligation_id=rollout_replan_obligation_id,
+                spend_turn_instance_id=spend_turn_instance_id, rollout_details=rollout_details,
+                append_cli_rollout_event=append_cli_rollout_event,
             )
-            if args.quota_command == "spend-slot" and spend_turn_instance_id:
-                attach_spend_settlement_result(
-                    payload,
-                    runtime_root=runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    todo_id=rollout_todo_id,
-                    turn_instance_id=spend_turn_instance_id,
-                    replan_obligation_id=rollout_replan_obligation_id,
-                    goal_ref=goal_ref,
-                )
-                attach_reward_memory_ingest_after_spend(
-                    payload,
-                    execute=bool(args.execute),
-                    runtime_root=runtime_root,
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    todo_id=rollout_todo_id,
-                    turn_instance_id=spend_turn_instance_id,
-                    replan_obligation_id=rollout_replan_obligation_id,
-                    goal_ref=goal_ref,
-                )
     attach_reward_memory_recall_after_should_run(
         payload,
         quota_command=args.quota_command,

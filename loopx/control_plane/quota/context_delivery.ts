@@ -137,7 +137,7 @@ const pathKey = (path: Path): string => JSON.stringify(path);
 // obligation or make a historical source authoritative.
 const REUSABLE_PACKET_FIELDS = new Set([
   "registry", "runtime_root", "source", "project_asset_source", "long_task_cadence_hint",
-  "plan_summary", "reason", "recommended_action", "heartbeat_recommendation",
+  "plan_summary", "reason", "recommended_action",
   "goal_frontier_projection", "todo_write_hint", "vision_continuation_audit", "agent_lane_next_action",
   "user_todo_summary", "agent_todo_summary", "blocked_priority_fallback",
   "autonomous_backlog_candidates", "autonomous_monitor_candidates", "next_action_projection_warning",
@@ -151,7 +151,7 @@ const REUSABLE_PACKET_FIELDS = new Set([
 /** Current controls are forced into the change tree even when equal. This avoids
  * duplicating them in both a fresh frame and a patch. Static authoring guidance
  * remains binding via exact reuse; commands, conditions and identity stay fresh. */
-function freshPaths(context: JsonObject, surface: Surface): {paths: Path[]; valid: boolean} {
+function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[]): {paths: Path[]; valid: boolean} {
   const paths: Path[] = [];
   let valid = true;
   const leaves = (value: unknown, path: Path) => {
@@ -212,7 +212,10 @@ function freshPaths(context: JsonObject, surface: Surface): {paths: Path[]; vali
     }
   } else {
     for (const [key, value] of Object.entries(context)) {
-      if (key !== "interaction_contract") { if (!REUSABLE_PACKET_FIELDS.has(key)) paths.push([key]); continue; }
+      if (key !== "interaction_contract") {
+        if (!REUSABLE_PACKET_FIELDS.has(key) && !legacyQuotaFields.includes(key)) paths.push([key]);
+        continue;
+      }
       const contract = jsonObject(value);
       if (!contract) { paths.push([key]); continue; }
       for (const [channel, fields] of Object.entries(contract)) {
@@ -307,7 +310,7 @@ function surfaceOf(value: unknown): Surface {
 
 /** Final-input host boundary only. Unsupported/uncertain retention returns full;
  * the host ACKs intact delivery, never file creation or an Agent assertion. */
-export function prepareContextDelivery(request: JsonObject): JsonObject {
+export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[] = []): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   const surface = surfaceOf(request.surface ?? "work_context"), target = targetBinding(request, context, surface);
   const full = (reason: string): JsonObject => ({schema_version: VERSION, mode: "full", target,
@@ -319,7 +322,7 @@ export function prepareContextDelivery(request: JsonObject): JsonObject {
       || binding.context_digest !== digest(prior)) return full("baseline_unavailable");
   const depth = baseline?.ancestry;
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return full("full_refresh_due");
-  const before = freshPaths(prior, surface), after = freshPaths(context, surface);
+  const before = freshPaths(prior, surface, legacyQuotaFields), after = freshPaths(context, surface, legacyQuotaFields);
   if (!before.valid || !after.valid) return full("source_not_reusable");
   const changes = changeTree(prior, context, after.paths);
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
@@ -333,7 +336,7 @@ export function prepareContextDelivery(request: JsonObject): JsonObject {
 /** Validate the exact change tree against the immutable CURRENT capture before
  * applying it. Wire keys never choose freshness, scope or arbitrary write paths.
  * Recovery neither reruns admission nor mutates Goal/quota state. */
-export function restoreContextDelivery(request: JsonObject): JsonObject {
+export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[] = []): JsonObject {
   const current = requireJsonObject(request.current, "current full capture");
   const currentContext = requireJsonObject(current.context, "current full context");
   const target = requireJsonObject(current.target, "current capture binding");
@@ -349,7 +352,7 @@ export function restoreContextDelivery(request: JsonObject): JsonObject {
         || !equal(delivery.base, base) || !compatible(base, target) || base.context_digest !== digest(context)
         || !Number.isSafeInteger(baseline.ancestry) || Number(baseline.ancestry) < 0
         || delivery.ancestry !== Number(baseline.ancestry) + 1 || Number(delivery.ancestry) > MAX_ANCESTRY) return fallback();
-    const before = freshPaths(context, surface), after = freshPaths(currentContext, surface);
+    const before = freshPaths(context, surface, legacyQuotaFields), after = freshPaths(currentContext, surface, legacyQuotaFields);
     if (!before.valid || !after.valid) return fallback();
     const expected = changeTree(context, currentContext, after.paths);
     // Also rejects omitted unchanged controls, redundant/conflicting edits,

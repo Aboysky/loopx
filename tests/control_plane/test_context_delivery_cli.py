@@ -203,7 +203,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
 
 
 def test_optional_capture_projection_failure_falls_back_without_hiding_source(tmp_path, monkeypatch):
-    from loopx.cli_commands.quota_capture import project_captured_context
+    from loopx.control_plane.turn_driver.decision_capture import project_captured_context
     from loopx.control_plane.quota import turn_envelope
     from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
     payload = {"ok": True, "goal_id": "fixture", "requirements": "Keep late stop conditions."}

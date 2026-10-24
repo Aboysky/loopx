@@ -3,6 +3,8 @@ import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {compactSelectedTodoSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
 
+import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
+
 const scope = {goal_id: "goal", agent_id: "agent", session_id: "session", context_epoch: "epoch-1"};
 const long = "Keep the original acceptance and stop before publication. ".repeat(400);
 function context(): JsonObject {
@@ -314,4 +316,24 @@ test("quota and Turn use one codec but cannot borrow another surface's baseline"
   assert.equal(inline(delta, ["action", "allowed"]), true);
   assert.deepEqual(restoreContextDelivery({delivery: delta, baseline,
     current: packetFull(turn, "capture-b", "turn_envelope")}).context, turn);
+});
+
+
+test("legacy quota fields are bound by the existing adapter, never caller data", () => {
+  const value = {...packet(), heartbeat_recommendation: {reason: long}};
+  const baseline = evaluateTurnEnvelope({operation: "context_delivery", context: value,
+    scope, capture_id: "capture-a", surface: "quota_packet"});
+  const request = {context: value, scope, capture_id: "capture-b", surface: "quota_packet", baseline,
+    retained: {complete: true, target: baseline.target}, legacyQuotaFields: ["unknown_future_control"]};
+  const delta = evaluateTurnEnvelope({...request, operation: "context_delivery"});
+  assert.equal(delta.mode, "delta");
+  assert.equal(inline(delta, ["heartbeat_recommendation"]), undefined);
+  assert.deepEqual(inline(delta, ["unknown_future_control"]), value.unknown_future_control);
+  const current = evaluateTurnEnvelope({operation: "context_delivery", context: value,
+    scope, capture_id: "capture-b", surface: "quota_packet"});
+  const restored = evaluateTurnEnvelope({operation: "context_recovery", current, delivery: delta, baseline});
+  assert.equal(restored.mode, "delta");
+  assert.deepEqual(restored.context, value);
+  // A direct codec call has no legacy binding and conservatively refreshes it.
+  assert.deepEqual(inline(prepareContextDelivery(request), ["heartbeat_recommendation"]), value.heartbeat_recommendation);
 });

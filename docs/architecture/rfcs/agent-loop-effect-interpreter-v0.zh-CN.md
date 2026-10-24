@@ -831,6 +831,13 @@ Goal/Agent/Turn，原生工具调用同一 projector/实际输入 observer，不
 两侧均开启诊断捕获，不据此认定相对未采集诊断时的追踪成本、自主 solver 成果或精确
 计费。既有真实捕获回放是另一种负载及读取策略，分别保留。
 
+原生 adapter 改为复用既有 Core 原始 capture IO owner 的共享读取指导与投影，消除
+Core 反向依赖 CLI。CLI 展示命令仍在权限 IO 之前分派；事件记录、settlement 回读与
+memory ingest 保持原顺序。原生输入解析、调用绑定和摘要绑定分页核验分清职责，
+不削弱生命周期或完整覆盖检查。既有旧 quota adapter 向编码与恢复两侧提供自己拥有
+的字段绑定；调用方 JSON 不能指定更多可复用控制字段，未知字段仍为 fresh。这些调整
+保持已测运行契约，不新增另一套投影或兼容读取入口。
+
 显式启用的 benchmark worker 将简短恢复指令放入原生 `developer_instructions`，
 独立于 SessionStart/PreToolUse 的交付。原生 code-mode 消费者也可在隔离配置中携带
 同一产品 owner 生成的指令；应追加到既有宿主指令，不替换无关规则。触发条件是

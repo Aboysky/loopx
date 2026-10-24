@@ -8,6 +8,7 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 
 def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
@@ -28,7 +29,95 @@ def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
     return raw.split(b"\n", 1)[-1] if offset else raw
 
 
-def codex_context_in_active_input(observation: dict, *, baseline: dict, session_id: str) -> bool:
+def _canonical_native_json(value: object) -> object:
+    # JSON has one number type; native Python projection may spell 1.0
+    # where the TS codec spells 1. Preserve booleans and numeric values.
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, list):
+        return [_canonical_native_json(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _canonical_native_json(item) for key, item in value.items()}
+    return value
+
+
+def _encoded_native_document(value: object) -> str:
+    return json.dumps(_canonical_native_json(value), sort_keys=True, ensure_ascii=False, allow_nan=False)
+
+
+def _native_tool_is_bound(tail: list[dict[str, Any]], completed: list[dict[str, Any]], tools: list[dict[str, Any]], output: dict[str, Any], tool_id: str) -> bool:
+    tool = tools[0]["payload"]
+    if tool.get("requester") == {"type": "model"}:
+        bound = (tool.get("model_visible_call_id") == tool_id
+                 and tool.get("code_mode_runtime_tool_id") is None
+                 and any(item.get("type") == "function_call" and item.get("call_id") == tool_id
+                         and item.get("name") == "exec_command" for item in output.get("output_items", [])))
+    else:
+        # A code-mode child has no model-visible call id of its own. Bind
+        # the live child to its native cell and that cell's exact model
+        # output; a child id or a saved source string alone proves nothing.
+        requester = tool.get("requester", {})
+        cell_id = requester.get("runtime_cell_id")
+        cells = [row for row in tail if row["payload"].get("type") == "code_cell_started"
+                 and row["payload"].get("runtime_cell_id") == cell_id]
+        bound = (requester.get("type") == "code_cell" and isinstance(cell_id, str) and bool(cell_id)
+                 and isinstance(tool.get("code_mode_runtime_tool_id"), str)
+                 and bool(tool["code_mode_runtime_tool_id"])
+                 and tool.get("model_visible_call_id") is None and len(cells) == 1
+                 and completed[0]["seq"] < cells[0]["seq"] < tools[0]["seq"]
+                 and isinstance(cells[0]["payload"].get("source_js"), str)
+                 and isinstance(cells[0]["payload"].get("model_visible_call_id"), str)
+                 and not any(row["payload"].get("type") == "code_cell_ended"
+                             and row["payload"].get("runtime_cell_id") == cell_id for row in tail)
+                 and any(item.get("type") == "custom_tool_call" and item.get("name") == "exec"
+                         and item.get("call_id") == cells[0]["payload"].get("model_visible_call_id")
+                         and item.get("input") == cells[0]["payload"].get("source_js")
+                         for item in output.get("output_items", [])))
+    return bound
+
+
+def _model_input_texts(request: dict[str, Any]) -> Iterator[str]:
+    for item in request["input"]:
+        if item.get("type") == "function_call_output" and isinstance(item.get("output"), str):
+            yield item["output"]
+        elif item.get("type") == "custom_tool_call_output" and isinstance(item.get("output"), list):
+            for part in item["output"]:
+                if part.get("type") == "input_text" and isinstance(part.get("text"), str):
+                    yield part["text"]
+
+
+def _read_bundle_payload(bundle: Path, ref: dict[str, Any]) -> dict[str, Any]:
+    relative = Path(ref["path"])
+    if (relative.is_absolute() or len(relative.parts) != 2 or relative.parts[0] != "payloads"
+            or ".." in relative.parts):
+        raise ValueError("native payload reference escapes its bundle")
+    path = bundle / relative
+    path.resolve(strict=True).relative_to(bundle)
+    value = json.loads(read_native_trace_file(path))
+    if not isinstance(value, dict):
+        raise ValueError("native payload must be an object")
+    return value
+
+
+def _capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tuple[int, int] | None:
+    if page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
+        return None
+    start, content = page.get("offset"), page.get("content")
+    if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
+        return None
+    data = content.encode("utf-8")
+    end = start + len(data)
+    if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
+            or page.get("eof") is not (end == len(raw))
+            or page.get("next_offset") != (None if end == len(raw) else end)
+            or raw[start:end] != data):
+        # A host preview can remain valid JSON while shortening content
+        # and retaining the original cursor. It proves no bytes.
+        return None
+    return start, end
+
+
+def codex_context_in_active_input(observation: dict[str, Any], *, baseline: dict[str, Any], session_id: str) -> bool:
     """Cross-check a host's retention claim against a native in-flight tool call.
 
     Native trace v1 is an optional, provider-specific IO boundary. Only an
@@ -40,41 +129,18 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
     dispatch. The caller still owns lifecycle invalidation and same-capture
     recovery. It must not use this function as a standalone continuity lease.
     """
-    def canonical(value):
-        # JSON has one number type; native Python projection may spell 1.0
-        # where the TS codec spells 1. Preserve booleans and numeric values.
-        if isinstance(value, float) and value.is_integer():
-            return int(value)
-        if isinstance(value, list):
-            return [canonical(item) for item in value]
-        if isinstance(value, dict):
-            return {key: canonical(item) for key, item in value.items()}
-        return value
-
-    def encoded(value):
-        return json.dumps(canonical(value), sort_keys=True, ensure_ascii=False, allow_nan=False)
-
     try:
         if baseline.get("mode") != "full" or baseline.get("target", {}).get("session_id") != session_id:
             return False
         # Python equality conflates booleans and numbers; source observation
         # must retain their JSON types, as the shared projection owner does.
-        expected = encoded(baseline)
-        context = encoded(baseline.get("context"))
+        expected = _encoded_native_document(baseline)
+        context = _encoded_native_document(baseline.get("context"))
         bundle = Path(observation["trace_bundle"]).resolve(strict=True)
         manifest = json.loads(read_native_trace_file(bundle / "manifest.json"))
         if (manifest.get("schema_version") != 1 or manifest.get("root_thread_id") != session_id
                 or manifest.get("rollout_id") != session_id):
             return False
-
-        def payload(ref: dict) -> dict:
-            relative = Path(ref["path"])
-            if (relative.is_absolute() or len(relative.parts) != 2 or relative.parts[0] != "payloads"
-                    or ".." in relative.parts):
-                raise ValueError("native payload reference escapes its bundle")
-            path = bundle / relative
-            path.resolve(strict=True).relative_to(bundle)
-            return json.loads(read_native_trace_file(path))
 
         raw_events = read_native_trace_file(bundle / "trace.jsonl", tail=True)
         if not raw_events.endswith(b"\n"):
@@ -106,55 +172,21 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
                or (row["payload"].get("type") == "tool_call_ended" and row["payload"].get("tool_call_id") == tool_id)
                for row in tail):
             return False
-        output = payload(completed[0]["payload"]["response_payload"])
-        if tool.get("requester") == {"type": "model"}:
-            bound = (tool.get("model_visible_call_id") == tool_id
-                     and tool.get("code_mode_runtime_tool_id") is None
-                     and any(item.get("type") == "function_call" and item.get("call_id") == tool_id
-                             and item.get("name") == "exec_command" for item in output.get("output_items", [])))
-        else:
-            # A code-mode child has no model-visible call id of its own. Bind
-            # the live child to its native cell and that cell's exact model
-            # output; a child id or a saved source string alone proves nothing.
-            requester = tool.get("requester", {})
-            cell_id = requester.get("runtime_cell_id")
-            cells = [row for row in tail if row["payload"].get("type") == "code_cell_started"
-                     and row["payload"].get("runtime_cell_id") == cell_id]
-            bound = (requester.get("type") == "code_cell" and isinstance(cell_id, str) and bool(cell_id)
-                     and isinstance(tool.get("code_mode_runtime_tool_id"), str)
-                     and bool(tool["code_mode_runtime_tool_id"])
-                     and tool.get("model_visible_call_id") is None and len(cells) == 1
-                     and completed[0]["seq"] < cells[0]["seq"] < tools[0]["seq"]
-                     and isinstance(cells[0]["payload"].get("source_js"), str)
-                     and isinstance(cells[0]["payload"].get("model_visible_call_id"), str)
-                     and not any(row["payload"].get("type") == "code_cell_ended"
-                                 and row["payload"].get("runtime_cell_id") == cell_id for row in tail)
-                     and any(item.get("type") == "custom_tool_call" and item.get("name") == "exec"
-                             and item.get("call_id") == cells[0]["payload"].get("model_visible_call_id")
-                             and item.get("input") == cells[0]["payload"].get("source_js")
-                             for item in output.get("output_items", [])))
+        output = _read_bundle_payload(bundle, completed[0]["payload"]["response_payload"])
+        bound = _native_tool_is_bound(tail, completed, tools, output, tool_id)
         if not bound:
             return False
-        request = payload(tail[0]["payload"]["request_payload"])
+        request = _read_bundle_payload(bundle, tail[0]["payload"]["request_payload"])
         if request.get("previous_response_id"):
             return False  # implicit server-side history is outside this observer
         raw = read_native_trace_file(Path(observation["capture_file"]))
         digest = hashlib.sha256(raw).hexdigest()
-        captured = encoded(json.loads(raw))
+        captured = _encoded_native_document(json.loads(raw))
         if digest != observation["capture_sha256"] or captured not in (expected, context):
             return False
         ranges: list[tuple[int, int]] = []
 
-        def texts():
-            for item in request["input"]:
-                if item.get("type") == "function_call_output" and isinstance(item.get("output"), str):
-                    yield item["output"]
-                elif item.get("type") == "custom_tool_call_output" and isinstance(item.get("output"), list):
-                    for part in item["output"]:
-                        if part.get("type") == "input_text" and isinstance(part.get("text"), str):
-                            yield part["text"]
-
-        for text in texts():
+        for text in _model_input_texts(request):
             # The qualified exec transport wraps complete output after this
             # delimiter. Ignore prose/quoted JSON, previews and other item roles.
             text = text.split("\nOutput:\n", 1)[-1]
@@ -168,25 +200,13 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
                     page = json.loads(page["output"])
             except ValueError:
                 continue
-            document = encoded(page)
+            document = _encoded_native_document(page)
             if document == expected or (captured == context and document == context):
                 return True
-            if not isinstance(page, dict) or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
-                continue
-            start, content = page.get("offset"), page.get("content")
-            if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
-                continue
-            data = content.encode("utf-8")
-            end = start + len(data)
-            if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
-                    or page.get("eof") is not (end == len(raw))
-                    or page.get("next_offset") != (None if end == len(raw) else end)
-                    or raw[start:end] != data):
-                # A host preview can remain valid JSON while shortening content
-                # and retaining the original cursor. It proves no bytes. Keep
-                # looking for complete rereads in this same current input.
-                continue
-            ranges.append((start, end))
+            if isinstance(page, dict):
+                page_range = _capture_page_range(page, raw=raw, digest=digest)
+                if page_range is not None:
+                    ranges.append(page_range)
         cursor = 0
         for start, end in sorted(ranges):
             if start > cursor:

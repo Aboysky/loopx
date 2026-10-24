@@ -7,16 +7,18 @@ No hook grants execution authority or acknowledges model understanding.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Iterator
+from typing import Any
 import json
 import os
 from pathlib import Path
 import stat
 import uuid
 
-from .decision_capture import write_decision_capture
+from .decision_capture import write_decision_capture, project_captured_context, CONTEXT_CAPTURE_READ_GUIDANCE
 
 
-def _read(path: Path, *, private: bool = True) -> dict:
+def _read(path: Path, *, private: bool = True) -> dict[str, Any]:
     from ..effect_runtime import MAX_REQUEST_BYTES
 
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -67,7 +69,7 @@ def codex_context_directory(*, directory: str | None = None, root: str | None = 
 
 
 @contextmanager
-def _locked(directory: str):
+def _locked(directory: str) -> Iterator[Path]:
     if os.name != "posix":
         raise ValueError("native context continuity is unavailable on this platform")
     import fcntl
@@ -84,18 +86,18 @@ def _locked(directory: str):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def _state(root: Path) -> dict:
+def _state(root: Path) -> dict[str, Any]:
     try:
         return _read(root / "session.json")
     except FileNotFoundError:
         return {}
 
 
-def _save(root: Path, state: dict) -> None:
+def _save(root: Path, state: dict[str, Any]) -> None:
     write_decision_capture(root / "session.json", state, publish=os.replace)
 
 
-def read_codex_context_reference(directory: str, *, goal_id: str, agent_id: str) -> tuple[str, str]:
+def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_id: str | None) -> tuple[str, str]:
     """Select an original capture after a lost hook; never assert retention.
 
     The journal is atomically replaced, so this read needs no lock or write.
@@ -135,7 +137,7 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
 
 
 def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
-                                 cli_argv: list[str], session_root: bool = False) -> dict:
+                                 cli_argv: list[str], session_root: bool = False) -> dict[str, Any]:
     """Native configuration data shared by the worker and CLI setup journey.
 
     This renders no trust hashes and writes no host configuration. The native
@@ -154,7 +156,7 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
             agent_id=agent_id, cli_argv=cli_argv, session_root=session_root)}
 
 
-def codex_context_hook(directory: str, event: dict) -> dict:
+def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str, Any]:
     """Consume native lifecycle events; emit only same-capture recovery refs.
 
     Compaction/fork/restart invalidate. Same-session resume keeps only a candidate:
@@ -163,6 +165,8 @@ def codex_context_hook(directory: str, event: dict) -> dict:
     primary journal still returns the existing recovery ref when available.
     Trust/enablement and complete event delivery remain native host concerns.
     """
+    if directory is None:
+        return {}
     name, session = event.get("hook_event_name"), event.get("session_id")
     if not isinstance(session, str) or not session:
         return {}
@@ -191,8 +195,6 @@ def codex_context_hook(directory: str, event: dict) -> dict:
         # It also cannot manufacture a fresh active-call observation.
         pass
     if name == "SessionStart" and isinstance(recovery, dict) and recovery.get("command"):
-        from ...cli_commands.quota_capture import CONTEXT_CAPTURE_READ_GUIDANCE
-
         if event.get("source") == "resume":
             return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
                 "LoopX resumed context is unconfirmed. Reuse prior context only when complete in current input. "
@@ -242,8 +244,8 @@ def _trace_bundle(session: str, tool_id: str) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def project_codex_context(payload: dict, *, directory: str, capture_directory: Path,
-                          goal_id: str, agent_id: str, surface: str, capture_id: str) -> dict:
+def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
+                          goal_id: str, agent_id: str, surface: str, capture_id: str) -> dict[str, Any]:
     """Existing CLI consumer, sharing the rendezvous projector and recovery IO.
 
     Serialization prevents an invalidation from moving the epoch during
@@ -251,9 +253,10 @@ def project_codex_context(payload: dict, *, directory: str, capture_directory: P
     so a later compact event recovers those exact bytes. Full candidates are
     never advanced from file existence, hook success or a saved delivery flag.
     """
-    from ...cli_commands.quota_capture import project_captured_context
     from .codex_input_trace import codex_context_in_active_input
 
+    if directory is None:
+        return payload
     try:
         with _locked(directory) as root:
             state = _state(root)
@@ -263,7 +266,7 @@ def project_codex_context(payload: dict, *, directory: str, capture_directory: P
                     or Path(state.get("cwd", "")).resolve() != Path.cwd().resolve()):
                 return payload
             scope = dict(goal_id=goal_id, agent_id=agent_id, session_id=session, context_epoch=epoch)
-            request = {"scope": scope}
+            request: dict[str, Any] = {"scope": scope}
             candidate = state.get("candidate")
             if isinstance(candidate, dict) and isinstance(state.get("active_call"), str):
                 try:

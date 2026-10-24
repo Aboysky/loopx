@@ -1206,6 +1206,17 @@ Both arms enable diagnostic capture; it does not qualify tracing cost against
 uninstrumented execution, autonomous solver outcomes or exact billing. The
 separate real-capture replay remains a different workload and read policy.
 
+The native adapter now uses the existing Core original-capture IO owner for
+shared read guidance and projection, removing the reverse Core-to-CLI dependency.
+CLI presentation dispatch remains ahead of authority IO; event recording,
+settlement readback and memory ingestion keep their original order. Native
+input parsing, call binding and digest-bound page validation have separate
+responsibilities without weakening lifecycle or complete-coverage checks.
+The existing legacy quota adapter supplies its own field binding to both codec
+operations; caller JSON cannot nominate additional reusable controls. Unknown
+fields stay fresh. These changes preserve the measured runtime contract rather
+than introduce another projection or compatibility reader.
+
 The opt-in benchmark worker carries a compact recovery instruction in native
 `developer_instructions`, independently of SessionStart/PreToolUse delivery.
 Native code-mode consumers can carry the same product-owned instruction in

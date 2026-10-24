@@ -11,32 +11,16 @@ import socket
 import stat
 import tempfile
 from pathlib import Path
+from typing import Any
+from collections.abc import Callable
 
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
-from ..control_plane.turn_driver.decision_capture import validate_handoff_socket
-
-
-CONTEXT_CAPTURE_READ_GUIDANCE = (
-    "Follow next_command through eof and combine content in byte-offset order. "
-    "In code-mode, forward successful exec stdout directly with text(result.output); "
-    "retain errors. Small batches can save model round trips; start with at most two default pages "
-    "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
-    "Check each model-visible content's UTF-8 byte length against next_offset (total_bytes at eof), "
-    "complete coverage and the original SHA-256. If incomplete, reread the affected range "
-    "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
-    "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
+from ..control_plane.turn_driver.decision_capture import (
+    validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
 )
 
 
-def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096) -> str:
-    from ..command_invocation import loopx_cli_argv
-
-    return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
-        "--capture-file", str(path), "--capture-sha256", digest,
-        "--offset", str(offset), "--page-bytes", str(page_bytes)])
-
-
-def _read_capture(value: str, digest: str) -> tuple[Path, bytes, dict]:
+def _read_capture(value: str, digest: str) -> tuple[Path, bytes, dict[str, Any]]:
     """One bounded physical-file/hash check for recovery and saved projection."""
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
 
@@ -62,7 +46,7 @@ def _read_capture(value: str, digest: str) -> tuple[Path, bytes, dict]:
     return path, raw, payload
 
 
-def read_context_capture(args: argparse.Namespace) -> dict:
+def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     """Bounded local IO over immutable JSON, not a new context/authority owner.
 
     Verify the complete byte digest on every page. The cursor addresses bytes
@@ -110,7 +94,7 @@ def read_context_capture(args: argparse.Namespace) -> dict:
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
-def project_saved_context_capture(args: argparse.Namespace) -> dict:
+def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
     Publication is delayed until this native tool runs, so the same actual-input
@@ -232,7 +216,7 @@ def capture_decision(directory: Path | None, payload: dict[str, object]) -> None
         ) from exc
 
 
-def bind_capture_selection_transport(payload: dict, args: argparse.Namespace) -> None:
+def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace) -> None:
     """Retain caller display/capture options in the existing selection command.
 
     Only transport argv is added here; the typed quota owner still selects the
@@ -261,7 +245,7 @@ def bind_capture_selection_transport(payload: dict, args: argparse.Namespace) ->
     selection["command_args_template"] = template + suffix
 
 
-def handoff_decision(directory: Path | None, socket_path: str | None) -> tuple[dict, str] | None:
+def handoff_decision(directory: Path | None, socket_path: str | None) -> tuple[dict[str, Any], str] | None:
     """Withhold the original output until the Host releases these exact bytes.
 
     No second guard, admission, settlement or retry is performed here. A lost
@@ -269,7 +253,7 @@ def handoff_decision(directory: Path | None, socket_path: str | None) -> tuple[d
     recovery; it must never be silently replaced by a later observation.
     """
     if socket_path is None:
-        return
+        return None
     if directory is None:
         raise ValueError("decision handoff requires a captured decision")
     path = directory / "decision.json"
@@ -316,54 +300,59 @@ def handoff_decision(directory: Path | None, socket_path: str | None) -> tuple[d
         return {}, digest
 
 
-def project_captured_context(
-    payload: dict, *, directory: Path | None, request: dict | None,
-    goal_id: str, agent_id: str, surface: str, capture_id: str,
-) -> dict:
-    """Adapt an admitted capture to the shared TS presentation owner.
+def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None]) -> int | None:
+    """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    if args.quota_command == "context-config":
+        import json
+        from ..command_invocation import loopx_cli_argv
+        from ..control_plane.turn_driver.codex_context import codex_context_configuration
 
-    The caller-owned rendezvous may supply a continuity observation. It must
-    still recheck the candidate at final model-input assembly and ACK only intact
-    delivery. Unsupported ordinary CLI clients never supply this request. Every
-    opt-in attempt saves the complete projected JSON for same-capture recovery;
-    neither malformed requests nor optimization failures rerun the guard.
-    """
-    if request is None or directory is None:
-        return payload
-    from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-    from ..control_plane.quota.turn_envelope import prepare_context_delivery
-    from ..control_plane.turn_driver.decision_capture import write_decision_capture
+        try:
+            directory = getattr(args, "codex_context_root", None) or args.codex_context_dir
+            if not directory:
+                raise ValueError("context-config requires codex-context-root or codex-context-dir")
+            config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
+                cli_argv=loopx_cli_argv(), session_root=bool(getattr(args, "codex_context_root", None)))
+            payload = {"ok": True, "native_config": config,
+                "activation": "Merge hooks and append developer_instructions to the existing native configuration; "
+                    "review and trust only these exact hooks in Codex. Restart/resume with the resulting configuration. "
+                    "Pass this same context location and a decision-output-root to heartbeat-prompt/should-run. "
+                    "For delta, the native process must already have CODEX_ROLLOUT_TRACE_ROOT pointing to private diagnostics; "
+                    "unavailable diagnostics preserve full delivery. Disabling the context options restores ordinary output. "
+                    "This command installs nothing and grants no execution authority."}
+        except (OSError, ValueError, TypeError) as exc:
+            payload = {"ok": False, "reason": str(exc)}
+        print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+        return 0 if payload["ok"] else 1
+    if args.quota_command == "context-hook":
+        import json
+        import sys
+        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+        from ..control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
 
-    try:
-        projection = directory / "projection.json"
-        write_decision_capture(projection, payload)
-        scope = request.get("scope")
-        if not isinstance(scope, dict) or scope.get("goal_id") != goal_id or scope.get("agent_id") != agent_id:
-            return payload
-        retained = request.get("retained")
-        if "native_input" in request:
-            from ..control_plane.turn_driver.codex_input_trace import codex_context_in_active_input
-
-            # An optional native observation can only narrow the caller's
-            # retention claim. It never mints an ACK or enables tracing, and a
-            # malformed/stale observation must not fall back to that claim.
-            observation, baseline = request["native_input"], request.get("baseline")
-            if (not isinstance(observation, dict) or not isinstance(baseline, dict)
-                    or not codex_context_in_active_input(observation, baseline=baseline,
-                        session_id=scope.get("session_id"))):
-                retained = None
-        delivery = prepare_context_delivery(payload, scope=scope,
-            capture_id=capture_id, surface=surface,
-            baseline=request.get("baseline"), retained=retained)
-        delivery["recovery"] = {
-            "path": str(projection), "sha256": hashlib.sha256(projection.read_bytes()).hexdigest(),
-            "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
-                "truncated or uncertain, use this full projection before dependent work. "
-                + CONTEXT_CAPTURE_READ_GUIDANCE,
-        }
-        delivery["recovery"]["command"] = context_capture_read_command(projection, delivery["recovery"]["sha256"])
-        return delivery
-    except (OSError, ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
-        # The original full payload is already available. An unavailable optional
-        # codec/capture must not convert safe full delivery into an execution gate.
-        return payload
+        # Native transport only: no registry discovery, guard or quota effects.
+        try:
+            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+            event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
+            if (isinstance(event, dict) and isinstance(event.get("session_id"), str) and event["session_id"]
+                    and event.get("hook_event_name") in ("SessionStart", "PreCompact", "PreToolUse")):
+                directory = codex_context_directory(directory=args.codex_context_dir,
+                    root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
+                payload = codex_context_hook(directory, event)
+            else:
+                payload = {}
+        except (OSError, ValueError, TypeError, RecursionError):
+            payload = {}
+        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        return 0
+    if args.quota_command == "context-project":
+        payload = project_saved_context_capture(args)
+        print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
+        return 0 if payload["ok"] else 1
+    if args.quota_command == "context-read":
+        # Presentation recovery reads the original capture, never current Goal
+        # state. In particular it must not evaluate a guard or append a receipt.
+        payload = read_context_capture(args)
+        print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
+        return 0 if payload["ok"] else 1
+    return None
