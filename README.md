@@ -42,8 +42,8 @@ Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgr
 <!-- Keep 2–3 reader-facing milestones, newest first, in both READMEs. Use published
      dates (UTC) and primary sources; the full change history belongs in Releases. -->
 
-- **2026-10-23 · [v2.1.1](https://github.com/loopx-project/loopx/releases/tag/v2.1.1)** — Task and original-conversation recovery, quick navigation, and optional content workflows. [Upgrade guide](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md).
 - **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript control plane and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
+- **2026-09-06 · [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — A Personal Agent Workspace to follow agent work, act on decisions, and inspect delivered results across sessions. [Workspace guide](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md).
 
 [All releases](https://github.com/loopx-project/loopx/releases)
 

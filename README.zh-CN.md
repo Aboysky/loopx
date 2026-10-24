@@ -42,8 +42,8 @@ Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升�
 <!-- Keep 2–3 reader-facing milestones, newest first, in both READMEs. Use published
      dates (UTC) and primary sources; the full change history belongs in Releases. -->
 
-- **2026-10-23 · [v2.1.1](https://github.com/loopx-project/loopx/releases/tag/v2.1.1)** — 改进任务与原对话恢复、快速导航，以及可选内容工作流。[升级指南](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md#中文指南)。
 - **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共享 TypeScript 控制面与长程研究工作台。[迁移指南](docs/product/releases/v2.0.0.md#中文指南) · [重构历程](https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/)。
+- **2026-09-06 · [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — 个人 Agent 工作区：跨会话跟进 Agent 工作、处理待决事项、核对交付结果。[工作区指南](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md)。
 
 [全部发布记录](https://github.com/loopx-project/loopx/releases)
 
