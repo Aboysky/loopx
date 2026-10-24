@@ -1206,6 +1206,31 @@ Both arms enable diagnostic capture; it does not qualify tracing cost against
 uninstrumented execution, autonomous solver outcomes or exact billing. The
 separate real-capture replay remains a different workload and read policy.
 
+A subsequent three-arm diagnostic at runtime source `912d56036` compares
+ordinary tracing-off, ordinary tracing-on and opt-in delta/tracing-on execution.
+Three counterbalanced two-wake trials per arm include generated preflight,
+resumed history, descriptors, persistent instructions and every 4096-byte serial
+read. Against ordinary tracing-off, delta reduces the summed serialized-input
+o200k proxy from 5,482,641 to 3,499,312 (36.17%), whole-request proxy from
+5,892,161 to 3,801,600 (35.48%), and requests from 114 to 84. Reader calls fall
+from 108 to 72, with six additional projection calls. All trials verify complete
+original bytes, independent reconstruction, session continuity and unchanged
+guard/debit counts. Tokenization runs outside timing; synthetic loopback usage
+does not establish billing or autonomous solver outcomes.
+
+The default-off comparison exposes an IO tradeoff: delta retains about 5.77 MB
+of native diagnostics per two-wake trial, versus zero without tracing. Native
+background plugin-catalog clones dominate the variable total retained footprint;
+endpoint file sizes are not cumulative writes. Timing, CPU and net IO savings
+remain unqualified. Hook identity discovery now disables plugin features only
+in its temporary native process, avoiding unrelated catalog startup. It still
+asks native `hooks/list` for hashes and trusts only the exact owned hooks;
+solver configuration, default-off execution and model settings are unchanged.
+Real native config readback verifies this isolation, repeated discovery returns
+the same trust identities, and discovery sends no inference request. The same
+test detects the old helper's enabled plugin features. The cost figures above
+precede this helper fix and do not measure its latency or disk savings.
+
 The native adapter now uses the existing Core original-capture IO owner for
 shared read guidance and projection, removing the reverse Core-to-CLI dependency.
 CLI presentation dispatch remains ahead of authority IO; event recording,

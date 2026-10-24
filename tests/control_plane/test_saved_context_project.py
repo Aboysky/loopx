@@ -241,3 +241,49 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
         capture_id=warm["target"]["capture_id"], surface="quota_packet")
     assert restore_context_delivery(warm, baseline=cold, current=current)["context"] == original
     assert all(path.read_bytes() == raw for path, raw in sources)
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
+def test_native_discovery_keeps_plugins_out_of_probe_without_changing_solver(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from benchmark.runtime.context_delivery import prepare_context_delivery
+    from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+    from tests.control_plane.test_codex_context_boundary import _configure_provider, _native_fixture
+
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    observed = []
+    original_spawn = StdioNativeGoalTransport.spawn
+
+    @contextmanager
+    def inspect_probe(argv, **kwargs):
+        with original_spawn(argv, **kwargs) as native:
+            def request(method, params):
+                result = native.request(method, params)
+                if method == "hooks/list":
+                    effective = native.request("config/read", {"cwd": str(workspace), "includeLayers": False})
+                    observed.append(effective["config"]["features"])
+                return result
+            from types import SimpleNamespace
+            yield SimpleNamespace(request=request, notify=native.notify)
+
+    monkeypatch.setattr(StdioNativeGoalTransport, "spawn", inspect_probe)
+    with local_inference_provider() as (url, calls, _):
+        _configure_provider(home, url)
+        config = home / "config.toml"
+        config.write_text(config.read_text().replace("plugins=false", "plugins=true")
+                          .replace("remote_plugin=false", "remote_plugin=true")
+                          .replace("plugin_sharing=false", "plugin_sharing=true"))
+        original_config = config.read_bytes()
+        env.update(CODEX_BIN=binary, LOOPX_PROJECT=str(workspace), LOOPX_GOAL_ID="fixture",
+                   LOOPX_AGENT_ID="agent", LOOPX_CLI=str(Path(sys.executable).with_name("loopx")))
+        prepare_context_delivery(env, home)
+        first_trust = env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"]
+        prepare_context_delivery(env, home)
+        assert env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] == first_trust
+        assert calls == []  # Hook identity lookup never starts inference.
+    assert len(observed) == 2
+    for features in observed:
+        assert all(features[key] is False for key in ("plugins", "remote_plugin", "plugin_sharing"))
+    assert config.read_bytes() == original_config
+    assert not list(home.rglob("*.pack")), "discovery must not clone a plugin catalog"

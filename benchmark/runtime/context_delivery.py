@@ -68,7 +68,12 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     # bypass trust for unrelated workspace hooks. Discovery launches no model.
     with (home / "context-hooks-stderr.log").open("a") as stderr:
         with StdioNativeGoalTransport.spawn(
-            [env["CODEX_BIN"], "app-server", "--listen", "stdio://"],
+            # This process only reads native hook identities. Catalog/plugin
+            # startup can clone repositories into an otherwise private home;
+            # it is unrelated to discovery and must not affect solver config.
+            [env["CODEX_BIN"], "-c", "features.plugins=false",
+             "-c", "features.remote_plugin=false", "-c", "features.plugin_sharing=false",
+             "app-server", "--listen", "stdio://"],
             cwd=env["LOOPX_PROJECT"], env=env, stderr=stderr, response_timeout_sec=10,
         ) as native:
             native.request("initialize", {"clientInfo": {"name": "loopx_context_transport", "version": "0.1.0"},

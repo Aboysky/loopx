@@ -1164,3 +1164,44 @@ def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
         prepare_context_delivery(env, home)
     assert (protected.read_bytes() if protected.is_file() else protected.lstat().st_mode) == before
     assert "LOOPX_CODEX_CONTEXT_TRUST_ARGS" not in env
+
+
+def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from benchmark.runtime.context_delivery import prepare_context_delivery
+    from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    config = home / "config.toml"
+    original_config = b"[features]\nplugins=true\nremote_plugin=true\nplugin_sharing=true\n"
+    config.write_bytes(original_config)
+    methods, commands = [], []
+
+    @contextmanager
+    def discovery(argv, **kwargs):
+        commands.append(argv)
+        def request(method, params):
+            methods.append(method)
+            if method == "initialize":
+                return {}
+            assert method == "hooks/list", "discovery must not start model work"
+            own = [{"sourcePath": str((home / "hooks.json").resolve()),
+                    "key": f"own-{i}", "currentHash": f"native-hash-{i}"} for i in range(2)]
+            return {"data": [{"hooks": [*own, {"sourcePath": str(tmp_path / "other-hooks.json"),
+                "key": "unrelated", "currentHash": "never-trust-this"}]}]}
+        yield SimpleNamespace(request=request, notify=lambda *args: None)
+
+    monkeypatch.setattr(StdioNativeGoalTransport, "spawn", discovery)
+    env = {"LOOPX_CLI": "fixture-loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "agent",
+           "CODEX_BIN": "native-codex", "LOOPX_PROJECT": str(tmp_path)}
+    prepare_context_delivery(env, home)
+    assert methods == ["initialize", "hooks/list"]
+    assignments = {commands[0][i + 1] for i, value in enumerate(commands[0]) if value == "-c"}
+    assert assignments == {"features.plugins=false", "features.remote_plugin=false", "features.plugin_sharing=false"}
+    trusted = json.loads(env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"])
+    assert "native-hash-0" in trusted[1] and "native-hash-1" in trusted[1]
+    assert "unrelated" not in trusted[1] and "never-trust-this" not in trusted[1]
+    assert all("features.plugins" not in value and "features.remote_plugin" not in value
+               and "features.plugin_sharing" not in value for value in trusted)
+    assert config.read_bytes() == original_config
