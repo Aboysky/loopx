@@ -10,9 +10,9 @@ It does not change solver prompts, benchmark scoring, checkpoints or research bu
 ## Researcher synthesis in the existing reader
 
 New registrations using the default configuration and CLI previews request
-`research_synthesis: true` in their
+`research_synthesis: true` and `research_synthesis_revision: 2` in their
 frozen model configuration. Explicit analysis uses the same observer call to
-produce `research-episodes-synthesis-v1`: the six episode judgments plus a
+produce `research-episodes-synthesis-v2`: the six episode judgments plus a
 source-bound `synthesis`. There is no extra per-finding model call. The ordinary
 Goal view follows **results → research report → research history**. Native
 measurements and unknown retention appear first; the saved report adds a concise
@@ -48,12 +48,40 @@ in the summary. Useful negative evidence and observed late gains remain visible.
 Existing registered configurations without this field keep their original
 prompt, analysis key, schema and saved results. They are not automatically
 upgraded or rerun. For an explicitly requested synthesis of an older study,
-register a new version with `config.research_synthesis: true`; keep the previous
+register a new version with `config.research_synthesis: true` and
+`config.research_synthesis_revision: 2`; keep the previous
 pack and its failures. The Python preparation adapter also accepts
 `research_synthesis=False` to reproduce the legacy method. To disable new
 synthesis, register with that field false or an explicit legacy configuration;
 no source history is deleted. A language change retains the existing independent
 language-specific cache and execution boundary.
+
+Revision 2 refines the existing report fields, without new verdicts or a second
+analysis call. It asks the observer to reconcile completed comparisons and
+follow-up decisions before recommending work, preserve paired gains and
+regressions, and distinguish configured limits from actual completed work.
+Controls and predictions should explain whether the intervention engaged and
+which missing observations would prevent interpretation. Equal seeds or time
+limits do not alone prove matched work: distinguish fixed-work from wall-clock
+comparisons and check the relevant coupling, allowing the intended state/path
+divergence. A justified repeat with contemporary controls can still be useful.
+These are model reasoning instructions; the validator does not certify that the
+answer followed them or that a proposed experiment is scientifically sufficient.
+
+New default producer requests persist revision 2. Previously stored synthesis
+configurations that omit the revision retain the exact v1 prompt, key and
+language caches; reading or retrying them does not upgrade the method. Explicit
+custom curator configurations also remain v1 when the revision is omitted.
+To use revised guidance on an existing case, register a successor pack and
+explicitly run that new analysis in the same workbench. Keep both reports and
+their separate failures and usage. No new configuration screen, automatic
+generation or experiment execution is introduced.
+
+新版指引要求先核对已完成比较和后续取舍，再提出下一步；把配置上限、实际完成工作及
+干预是否生效分开，并保留配对改善／回退和局部结果未转移到原生测评的边界。相同种子
+或墙钟期限不等于工作量匹配；应核对相关耦合，也允许机制本身造成后续路径分歧。
+新生产请求保存第2版；缺少版本字段的旧配置保持原提示、标识和语言缓存。接续分析须
+另行明确生成，原报告、失败与用量保留。引用资格和指引文字均不构成科学有效性证明。
 
 Curators must admit relevant prior feedback into each episode that needs it.
 A source existing elsewhere in the pack does not authorize a metric to cite it.

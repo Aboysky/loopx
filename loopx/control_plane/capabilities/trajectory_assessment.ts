@@ -195,6 +195,15 @@ Answer what was learned about the original objective, the important turning poin
 The summary is a concise account of this declared sample, not the whole run. Return up to three findings, ordered by research value. For each, separate the directly observed result from your interpretation and concrete competing explanations. Preserve useful negative results and real late gains as positive signals without claiming their mechanism is proven. Empty findings are valid when evidence is insufficient; explain the gap in the summary.
 Return up to two next_experiments in priority order, only when justified by this evidence. State the question, why it matters now, the smallest intervention, controls including relevant checkpoint/input and comparable budget, a predicted distinguishing observation and a result that would disconfirm the interpretation. Advice is a proposal, not execution or authorization. Avoid generic advice that cannot distinguish the supplied explanations.
 Every summary, finding and next experiment must name the supplied episode_ids it draws on and cite the exact supporting source lines within those episodes' source_ids. Cite observations supporting the inference, not a future result. Cross-episode synthesis may combine the named episodes' evidence, but does not expand any individual metric's citation scope. Global sources outside those named episodes are not permitted. Do not infer causality from temporal adjacency, local proxy gains, a test count or a model verdict. Missing observations remain explicit limitations. Keep technical identifiers, numeric values, units, failures and uncertainty faithful to the sources.`;
+// The revision is persisted in new requests. Omission replays the exact v1
+// instructions and identity, including language-specific historical jobs.
+const SYNTHESIS_DECISION_INSTRUCTION = `${SYNTHESIS_INSTRUCTION}
+Before proposing work, reconcile applicable completed comparisons, follow-up outcomes and the decision that retained or rejected the candidate. A missing excerpt does not establish that an experiment never happened. Prefer the unresolved condition or counterexample; justify a repeat when contemporary controls, noise or recovery make it informative.
+Make the comparison legible: identify the baseline and candidate, input selection, actual budget and validity. Keep paired improvements, regressions and ties together when supplied; do not add overlapping cohorts or compare differences from different baselines as if paired. Preserve local-to-native transfer failures and distinguish best, final and retained results.
+For a resource-limit explanation, distinguish a configured ceiling from attempted, completed and effective work. Ask whether the changed limit could actually bind in the observed execution. A run that ended before the old deadline is not positive evidence that relaxing that deadline helped; it can be an unexposed control. Missing phase-entry, stopping-reason or completed-work evidence remains unknown, not proof of either no effect or more exploration.
+Use the existing controls, prediction and disconfirming_result fields to make the proposed test interpretable. Name only the operational checks needed to tell whether its intervention engaged and its comparison held, such as phase entry, actual exit reason and completed/effective work. Make predictions conditional on those checks; a failed manipulation is not a refutation of the mechanism.
+Equal seeds or wall-clock limits alone do not establish matched random draws, proposal coverage or completed work. Where relevant, distinguish a fixed-work comparison from an end-to-end wall-clock comparison, and say how actual coupling will be checked. Identify intended post-intervention state/path divergence separately from a confound; do not demand identical later trajectories when changing those trajectories is the mechanism. Sampled proposals, accepted intermediate moves and direct final improvements are different observations; no direct update does not exclude an indirect path effect.
+Keep findings and proposals concise and specific to the cited evidence. These are reasoning instructions, not extra measurements, automatic scientific qualification or permission to execute a test.`;
 const groundedSchema = {
   episode_ids: {type: 'array', minItems: 1, items: {type: 'string'}},
   citations: {type: 'array', minItems: 1, items: citationSchema},
@@ -220,7 +229,12 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
     throw new EffectRuntimeRequestError('research_synthesis must be boolean');
   }
   const synthesis = config.research_synthesis === true;
-  const method = synthesis ? SYNTHESIS_METHOD : TRAJECTORY_METHOD;
+  const synthesisRevision = config.research_synthesis_revision;
+  if (synthesisRevision !== undefined && (synthesisRevision !== 2 || !synthesis)) {
+    throw new EffectRuntimeRequestError('research_synthesis_revision requires enabled synthesis and supported revision 2');
+  }
+  const synthesisInstruction = synthesisRevision === 2 ? SYNTHESIS_DECISION_INSTRUCTION : SYNTHESIS_INSTRUCTION;
+  const method = synthesis ? synthesisRevision === 2 ? 'research-episodes-synthesis-v2' : SYNTHESIS_METHOD : TRAJECTORY_METHOD;
   if (config.output_language !== undefined && config.output_language !== 'zh' && config.output_language !== 'en') {
     throw new EffectRuntimeRequestError('output_language must be zh or en');
   }
@@ -232,7 +246,8 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   // Only analysis identity; provider configuration/execution is owned by its adapter.
   // Omission preserves the identity of already registered, language-unspecified artifacts.
   const configIdentity = {model: str(config.model, 'model'), effort: str(config.effort, 'effort'), service_tier: str(config.service_tier, 'service_tier'),
-    ...(language ? {output_language: language} : {}), ...(synthesis ? {research_synthesis: true} : {})};
+    ...(language ? {output_language: language} : {}), ...(synthesis ? {research_synthesis: true} : {}),
+    ...(synthesisRevision === 2 ? {research_synthesis_revision: synthesisRevision} : {})};
   const numberedSources = input.sources.map(s => ({...s, text: s.text.split('\n').map((line, n) => `${s.first_line+n}: ${line}`).join('\n')}));
   const languageInstruction = language ? `\n\nOutput language: ${language === 'zh' ? 'Simplified Chinese (简体中文)' : 'English'}. Write every reason, limitation and episode question in this language, regardless of the evidence language.
 Return episode_questions exactly once per supplied episode: episode_id unchanged and question as a concise faithful rendering of its research question. Preserve uncertainty, negation, comparisons, numbers and units. Do not add conclusions to questions. These are analytical renderings, not replacements for original records.
@@ -252,7 +267,7 @@ Do not translate source identities, references, timestamps, statuses, measuremen
   const output_schema = synthesis ? {...assessmentSchema,
     required: [...assessmentSchema.required, 'synthesis'], properties: {...assessmentSchema.properties, synthesis: synthesisSchema}} : assessmentSchema;
   const analysis_key = createHash('sha256').update(JSON.stringify({method, rubric: RUBRIC, input, config: configIdentity,
-    ...(synthesis ? {synthesis_instruction: SYNTHESIS_INSTRUCTION} : {}),
+    ...(synthesis ? {synthesis_instruction: synthesisInstruction} : {}),
     ...(native ? {native_context_instruction: NATIVE_CONTEXT_INSTRUCTION} : {}),
     ...(language ? {language_instruction: languageInstruction} : {}),
     ...(display ? {display_method: display.schema_version, display_instruction: displayInstruction + literalValueInstruction + contextInstruction + quantityInstruction} : {})})).digest('hex');
@@ -266,7 +281,7 @@ Do not translate source identities, references, timestamps, statuses, measuremen
     ...(display ? {display_request: {schema_version: display.schema_version, snapshot_key: display.snapshot_key,
       source_id: display.source_id, source_namespace: display.source_namespace, eligible: display.fields.length}} : {}),
     ...(measured ? {native_outcomes: measured} : {}),
-    prompt: `${RUBRIC}${languageInstruction}${displayInstruction}${literalValueInstruction}${contextInstruction}${quantityInstruction}${synthesis ? SYNTHESIS_INSTRUCTION : ''}${native ? NATIVE_CONTEXT_INSTRUCTION : ''}\n\nEvidence pack:\n${JSON.stringify({...input, sources: promptSources})}${native ? `\n\nNative outcome context:\n${JSON.stringify(native)}` : ''}${display ? `\n\ndisplay_fields:\n${JSON.stringify(display.requests.map(field => ({field_id: field.field_id, text: field.protected.masked,
+    prompt: `${RUBRIC}${languageInstruction}${displayInstruction}${literalValueInstruction}${contextInstruction}${quantityInstruction}${synthesis ? synthesisInstruction : ''}${native ? NATIVE_CONTEXT_INSTRUCTION : ''}\n\nEvidence pack:\n${JSON.stringify({...input, sources: promptSources})}${native ? `\n\nNative outcome context:\n${JSON.stringify(native)}` : ''}${display ? `\n\ndisplay_fields:\n${JSON.stringify(display.requests.map(field => ({field_id: field.field_id, text: field.protected.masked,
       ...(field.context_citations ? {context_citations: field.context_citations} : {}),
       ...(display.literalContext ? {literals: field.protected.literals} : {}),
       ...(display.literalValues ? {explanation_numbers: field.protected.explanation_numbers} : {})})))}` : ''}`,
