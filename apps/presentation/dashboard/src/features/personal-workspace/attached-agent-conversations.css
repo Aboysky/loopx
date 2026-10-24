@@ -77,3 +77,10 @@
   .goal-agent-work-page form label {flex-basis: 100%;}
   .goal-agent-work-page form button[type="submit"] {margin-left: auto;}
 }
+
+.agent-work-session-source { display: flex; align-items: center; gap: 8px; margin-block: 8px 16px; color: var(--pw-muted); font-size: 14px; overflow-wrap: anywhere; }
+
+.goal-agent-work-page > .attached-conversation-heading { position: sticky; top: 0; z-index: 2; background: var(--pw-bg); }
+.goal-agent-work-page > .attached-conversation-heading .agent-work-navigation { width: 100%; justify-content: space-between; }
+
+.goal-agent-work-page[data-managed] { height: auto; min-height: 100%; }

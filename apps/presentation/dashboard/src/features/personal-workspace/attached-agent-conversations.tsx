@@ -2,7 +2,7 @@ import {useEffect, useLayoutEffect, useRef, useState} from "react";
 import {AttachedConversationTimeline, type ConversationRecord, type ContentPage} from "./attached-conversation-record";
 import "./attached-agent-conversations.css";
 
-type Binding = {agent_id: string; thread_id: string; binding_ref: string};
+export type Binding = {agent_id: string; thread_id: string; binding_ref: string};
 type Message = ConversationRecord;
 type Snapshot = {messages?: Message[]; before?: number | null; after?: number; has_more?: boolean; reset?: boolean; source_ref?: string; history_size?: number; revision: string; unchanged?: boolean; connected?: boolean; can_reply?: boolean; activity: {state: string}};
 type Submission = {operation_id: string; text: string; status?: string};
@@ -14,7 +14,7 @@ class ConversationRequestError extends Error {
   constructor(message: string, readonly unsubmittedOperation?: string, readonly httpStatus?: number) {super(message);}
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
+export async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {...options, signal: AbortSignal.timeout(6_000)});
   // Read the body as text first: a service failure can answer with an HTML or
   // empty body, and the caller still needs the HTTP status to decide whether
@@ -43,11 +43,11 @@ function interruptedRead(failure: unknown): boolean {
   return failure instanceof TypeError || (failure instanceof DOMException && failure.name === "TimeoutError");
 }
 
-function retryableRead(failure: unknown): boolean {
+export function retryableRead(failure: unknown): boolean {
   return interruptedRead(failure) || (failure instanceof ConversationRequestError && (failure.httpStatus ?? 0) >= 500);
 }
 
-function readFailureMessage(failure: unknown, zh: boolean): string {
+export function readFailureMessage(failure: unknown, zh: boolean): string {
   return retryableRead(failure)
     ? (zh ? "暂时无法读取原会话。已读记录会保留，连接恢复后将自动更新。" : "The conversation is temporarily unavailable. Existing records are retained; updates resume when the connection recovers.")
     : String(failure);
@@ -79,68 +79,8 @@ async function readVisiblePage(params: URLSearchParams, current: () => boolean):
   return forward ? page : {...page, after: newestBoundary, has_more: newerAvailable};
 }
 
-/** Select an exact original Session within the registered Agent, never an executor. */
-export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
-  goalId: string; zh: boolean; targetAgentId: string;
-}) {
-  const selectionKey = `loopx-attached-selection:${goalId}:${targetAgentId}`;
-  const [selected, setSelected] = useState(() => {
-    try {return sessionStorage.getItem(selectionKey) ?? "";} catch {return "";}
-  });
-  const [bindings, setBindings] = useState<Binding[]>([]);
-  const [discovering, setDiscovering] = useState(true);
-  const [error, setError] = useState("");
-  const [refresh, setRefresh] = useState(0);
-  const locale = useRef(zh);
-  useEffect(() => {locale.current = zh;}, [zh]);
-  useEffect(() => {
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    setBindings([]); setDiscovering(true); setError("");
-    async function discover() {
-      try {
-        const value = await request<{agents: Binding[]}>(`/api/chat/codex-attached?${new URLSearchParams({goal_id: goalId})}`);
-        if (!Array.isArray(value.agents)) throw new Error("Conversation directory unavailable");
-        const choices = value.agents.filter(row => row.agent_id === targetAgentId);
-        if (active) {
-          setBindings(choices); setError("");
-          // A saved choice that was revoked stays unavailable. Never substitute
-          // another Session or carry its draft into a different conversation.
-          setSelected(previous => previous || (choices.length === 1 ? choices[0].binding_ref : ""));
-        }
-      } catch (failure) {
-        if (active) {
-          setError(readFailureMessage(failure, locale.current));
-          if (retryableRead(failure)) timer = setTimeout(discover, 1000);
-        }
-      } finally {if (active) setDiscovering(false);}
-    }
-    void discover();
-    return () => {active = false; clearTimeout(timer);};
-  }, [goalId, targetAgentId, refresh]);
-  const binding = bindings.find(row => row.binding_ref === selected);
-  const reconnect = () => setRefresh(value => value + 1);
-  return <>
-    {!discovering && bindings.length > 0 && (bindings.length > 1 || selected && !binding) ? <label className="attached-session-selection">
-      <span>{zh ? "工作会话" : "Conversation"}</span>
-      <select aria-label={zh ? "工作会话" : "Conversation"} value={binding ? selected : ""} onChange={event => {
-        const next = event.target.value;
-        setSelected(next);
-        try {sessionStorage.setItem(selectionKey, next);} catch {/* Reading needs no browser storage grant. */}
-      }}>
-        <option value="" disabled>{selected ? (zh ? "原会话绑定已变更" : "Original conversation binding changed") : (zh ? "选择工作会话" : "Choose a conversation")}</option>
-        {bindings.map(row => <option key={row.binding_ref} value={row.binding_ref}>Codex App · {row.thread_id}</option>)}
-      </select>
-    </label> : null}
-    {discovering ? <p role="status">{zh ? "正在连接原会话…" : "Connecting to the original conversation…"}</p>
-      : error ? <p role="alert">{error} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button></p>
-      : !bindings.length ? <p role="status">{zh ? "此 Agent 暂无已绑定的本机 Codex App 原会话。" : "This Agent has no bound local Codex App conversation."}</p> : null}
-    {binding ? <AttachedConversation key={binding.binding_ref} goalId={goalId} binding={binding} zh={zh} reconnect={reconnect}/> : null}
-  </>;
-}
-
 /** Remount on binding changes so history, live readers and pending input cannot cross Sessions. */
-function AttachedConversation({goalId, binding, zh, reconnect}: {
+export function AttachedConversation({goalId, binding, zh, reconnect}: {
   goalId: string; binding: Binding; zh: boolean; reconnect: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);

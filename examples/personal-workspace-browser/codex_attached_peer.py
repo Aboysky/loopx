@@ -127,6 +127,7 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
                         "goals": [
                             {
                                 "id": goal_id,
+                                "status": "active",
                                 "repo": str(tmp_path),
                                 "coordination": {
                                     "registered_agents": ["worker"],
@@ -287,6 +288,10 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
             server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
             server.registry_path = registry
             server.runtime_root = tmp_path / "runtime"
+            from loopx.chat_store import ChatSessionStore
+            from types import SimpleNamespace
+            server.chat_store = ChatSessionStore(server.runtime_root)
+            server.runtime_controller = SimpleNamespace(store=server.chat_store, registry_path=registry, close=lambda: None)
             server.verbose = False
             http_thread = threading.Thread(target=server.serve_forever, daemon=True)
             http_thread.start()

@@ -58,6 +58,7 @@ async function runConversation(browser, uncertain) {
       // Unrelated Goal/status APIs use the public synthetic workspace. The
       // original-conversation route always reaches the real production owner.
       await page.route('**/api/chat/codex-attached**', route => route.continue());
+      await page.route('**/api/chat/sessions?*managed_agent_id=*', route => route.continue());
     }});
     const {page} = context;
     await page.locator('.personal-goal-link').filter({hasText:'Product Release'}).click();
@@ -68,8 +69,8 @@ async function runConversation(browser, uncertain) {
       const other = page.getByRole('button',{name:'与 other-worker 对话',exact:true});
       await other.click();
       const unavailable = page.getByRole('region',{name:'Agent 工作会话',exact:true});
-      await unavailable.getByRole('button',{name:'会话来源未接入',exact:true}).click();
-      await unavailable.getByText('此 Agent 尚无已绑定的会话来源。',{exact:true}).waitFor();
+      await unavailable.getByRole('button',{name:'尚无工作会话',exact:true}).click();
+      await unavailable.getByText('此 Agent 尚无已绑定的工作会话。原 Goal 对话记录仍独立保留。',{exact:true}).waitFor();
       assert.equal(await unavailable.getByText('Original result',{exact:true}).count(),0);
       assert.equal(await unavailable.getByRole('textbox').count(),0);
       await page.goBack();
@@ -211,7 +212,10 @@ async function runConversation(browser, uncertain) {
       // drafts, delayed reads and refresh must keep their exact original scope.
       await page.screenshot({path:resolve(outputDir,'agent-sessions-before-desktop.png'),animations:'disabled'});
       await page.request.post(new URL('/fixture/second-conversation',url).href);
-      await page.reload();
+      // A fresh directory has no exact route selection. An existing exact URL
+      // otherwise correctly keeps its original Session when another is added.
+      const directoryUrl = new URL(page.url()); directoryUrl.searchParams.delete('workSession');
+      await page.goto(directoryUrl.href);
       const sessions = panel.getByRole('combobox',{name:'工作会话',exact:true});
       await sessions.waitFor();
       assert.equal(await sessions.inputValue(),'','Multiple Sessions require an exact choice');
@@ -561,8 +565,8 @@ async function runConversation(browser, uncertain) {
     await page.reload();
     await windowRead;
     await panel.getByRole('combobox',{name:'查看 Agent'}).selectOption('other-worker');
-    await panel.getByRole('button',{name:'会话来源未接入',exact:true}).click();
-    await panel.getByText('此 Agent 尚无已绑定的会话来源。',{exact:true}).waitFor();
+    await panel.getByRole('button',{name:'尚无工作会话',exact:true}).click();
+    await panel.getByText('此 Agent 尚无已绑定的工作会话。原 Goal 对话记录仍独立保留。',{exact:true}).waitFor();
     const lateWindow = page.waitForResponse(response => new URL(response.url()).searchParams.get('agent_id') === 'worker');
     releaseWindow(); await lateWindow;
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
