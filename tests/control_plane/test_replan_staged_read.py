@@ -80,7 +80,8 @@ def test_staged_packet_budget_and_lossless_authority(stride):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("replan", [True, False])
-def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source(tmp_path, monkeypatch, provider, replan):
+@pytest.mark.parametrize("context_delivery", [False, True])
+def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source(tmp_path, monkeypatch, provider, replan, context_delivery):
     """Exercise the production preflight without a model or evaluator.
 
     A full-source fixture alone missed the original bug: the model must be sent
@@ -103,6 +104,12 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         "LOOPX_PROJECT": str(fixture["project"]), "LOOPX_RUNTIME_ROOT": str(fixture["runtime"]),
         "LOOPX_REGISTRY": str(fixture["registry"]), "LOOPX_GOAL_ID": GOAL, "LOOPX_AGENT_ID": AGENT,
         "LOOPX_TURN_ENVELOPE": "0"}
+    if context_delivery:
+        native = tmp_path / "native-context"
+        native.mkdir(mode=0o700)
+        env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_EXECUTION_MODE="heartbeat", LOOPX_CODEX_CONTEXT_DIR=str(native))
+    else:
+        env["LOOPX_CONTEXT_DELIVERY"] = "off"
     # This boundary has no native session to capture. Stop only the optional
     # artifact operation; real quota, selector and reader remain unmocked.
     monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_gate",
@@ -121,6 +128,16 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
+        if context_delivery:
+            # The optional full/delta transport must present the staged CLI
+            # view too. Its full recovery must not restore old inline hints.
+            command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+            projected = run(shlex.split(command), cwd=fixture["project"], env=env,
+                capture_output=True, text=True, timeout=60)
+            assert projected.returncode == 0, projected.stdout
+            presentation = json.loads(projected.stdout)
+            assert presentation["ok"] and presentation["mode"] == "full"
+            assert presentation["recovery"]["path"] == str(view_path)
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert source["heartbeat_receipt"] == view["heartbeat_receipt"]
         assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
@@ -195,6 +212,9 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             "--todo-id", TODO, "--decision-output-dir", str(capture),
             *(["--turn-envelope"] if envelope else []))
         packet = guard["replan_action_packet"]
+        if not envelope:
+            assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
+            assert "--replan-stage writeback" in guard["interaction_contract"]["cli_channel"]["settlement_read"]
         saved = (capture / "decision.json").read_bytes()
         source = json.loads(saved)
         original_files = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
@@ -214,6 +234,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             assert result.returncode == expected_code, (result.stdout, result.stderr)
             return json.loads(result.stdout)
         review, writer = read("review"), read("writeback")
+        assert writer["settlement_command"].endswith(" --settle-turn")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
         assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])

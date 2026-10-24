@@ -388,10 +388,19 @@ function replanView(request: JsonObject): JsonObject {
       delete authoring.minimal_example;
       contract.vision_authoring = authoring;
     }
+    const writeback = actionProjection(payload).writeback;
+    const plan = object(object(writeback).settlement_plan);
+    const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
+    const refresh = steps.find(step => step.kind === "durable_writeback");
     return {...common, ...sourceRead, writeback_contract: contract,
       required_outcome: packet.required_outcome, allowed_terminal: packet.allowed_terminal,
       ...(packet.stride_control ? {stride_control: stride} : {}),
-      writeback: actionProjection(payload).writeback,
+      writeback,
+      ...(typeof refresh?.command_template === "string" ? {
+        settlement_command: `${refresh.command_template} --settle-turn`,
+        settlement_usage: "After validation, fill this refresh command from the actual result. It follows only the verified owed quota step on this same binding. " +
+          "Do not also execute a quota step after settled readback; retain the original plan for completion, blocked/no-spend closeout and failure recovery.",
+      } : {}),
       context_read: reads?.review ?? null};
   }
   if (request.stage !== "review") throw new EffectRuntimeRequestError("unsupported replan read stage");
@@ -1162,9 +1171,17 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const obligation = {...object(payload.autonomous_replan_obligation)};
     delete obligation.replan_context;
     const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
+    const cli = {...object(interaction.cli_channel)};
+    // Defer only authoring/settlement format, not admission or stop facts.
+    // This default captured path needs no optional native delta transport.
+    if (Object.keys(object(cli.settlement_plan)).length || Array.isArray(cli.next_cli_actions) && cli.next_cli_actions.length) {
+      delete cli.settlement_plan;
+      delete cli.next_cli_actions;
+      cli.settlement_read = reads.writeback;
+    }
     return {...payload,
       ...(payload.planning_horizon ? {planning_horizon: {context_read: reads.review}} : {}),
-      interaction_contract: {...interaction, agent_channel: {...agent,
+      interaction_contract: {...interaction, cli_channel: cli, agent_channel: {...agent,
         work_context: replanWorkContext(payload, object(agent.work_context))}},
       autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};

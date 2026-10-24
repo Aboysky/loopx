@@ -132,6 +132,40 @@ Identical work-context acceptance copies use that same read; other revisions
 stay inline. A source exceeding the RPC request bound uses the existing bounded
 local-snapshot transport for pure projection, preserving both transport limits.
 
+With native context delivery off, a captured CLI entry defers any existing
+settlement plan/command list to the writeback read instead of printing both.
+Selection, current admission and stop facts stay inline. Optional native
+full/delta presentation and full recovery carry this same CLI view; the original
+source remains unchanged for checkpoint qualification and authority inspection.
+Writeback also offers `refresh-state --settle-turn`: after successful writeback
+and delivery postconditions it follows the canonical owed quota command for the
+same Goal, Agent, Todo/obligation and Turn, then verifies receipts. It collects no
+guard, changes no binding and performs no Todo completion. Failed validation,
+unsatisfied checkpoints, dry runs and no-spend closeout cannot debit quota.
+An ambiguous response is reconciled through the original receipts; exact retry
+cannot debit twice. Ordinary refresh without the option retains its behavior.
+
+An in-flight recommendation does not require keeping a completed Todo open.
+Validate its original declaration, use ordinary completion when satisfied, and
+write semantic closeout with an evidence-linked vision decision on the original
+Turn. Unfinished bounded progress may retain the open Todo. On a fresh Turn,
+an explicit prior closeout or typed `path_delta.outcome=replan` releases the old
+continuation preference for ordinary eligible selection; it does not complete
+the Todo, infer intent from prose, or override a committed same-Turn binding.
+
+中文：关闭 native 上下文差分传输时，CLI 捕获入口也将已有结算计划与命令表推迟到
+writeback 读取，避免重复交付；当前准入、选择与停止事实仍在入口。可选 full/delta
+展示和完整恢复沿用这份 CLI 视图，原始源包保留用于 checkpoint 资格与权限检查。
+`refresh-state --settle-turn` 在写回与交付后置条件通过后，执行原 Goal/Agent/
+Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重新 guard、换绑或
+完成 Todo。验证失败、检查点未满足、dry-run 与无扣额收尾不能扣额；响应不确定时
+按原回执恢复，精确重试不会重复扣额。不传此选项保持原 refresh 行为。
+
+执行中续跑建议不要求把已完成的 Todo 保持开放。原声明验收满足后可正常完成，并
+在原 Turn 上按语义收尾写入有证据的 vision；未完成的阶段进展仍可保留开放状态。
+新 Turn 尊重上轮明确收尾或结构化 `path_delta.outcome=replan`，放开旧续跑偏好，
+重新按现有资格选任务；不自动完成 Todo、不按文案猜意图，也不覆盖已提交的当轮绑定。
+
 对使用 `--decision-output-dir` 或 `--decision-output-root` 的成功 replan，CLI 和
 TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读取。两步绑定同一
 快照和来源哈希，不重新准入、不新增回执或授权，也不强制换路线。累计验收按完整
