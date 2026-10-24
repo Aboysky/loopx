@@ -24,7 +24,19 @@ or touch hardware. `LOOPX_NAVIGATION_CAPTURE_BASE=1` is only the baseline
 capture/reproduction mode; it does not run the new behavior assertions.
 
 Whole-page judgment: the stable lower row makes Settings discoverable while
-reading the archive and removes a competing navigation card. Optional help is
-visible on search hover/focus. The surrounding long Goal names and unrelated
-missing-state summaries are retained; this change does not redesign all Goal
-content or certify the full settings catalogue.
+reading the archive and removes a competing navigation card. Actual values,
+required permissions, action outcomes and recovery remain direct. Coverage,
+missing-observation and methodology explanations use contextual glyphs, with
+complete hover, focus and tap readback. The empty/partial Overview no longer
+stacks duplicate disclaimers. Help uses body text and stays within the viewport.
+Research captures use the real read-only HTTP owner with synthetic measurements
+and long analysis; judgments, unknown values and original citations are retained.
+The unanalysed-scope glyph sits beside the result heading. The expanded phone
+view shows the original full rationale and evidence. This is whole-page visual
+inspection and interaction evidence, not a human comprehension study or a
+qualification of every setting, platform or native input method.
+
+The glyph and research phone captures are 390×844. The research desktop is
+1280×900. Reproduce research views with the packaged `research-history` browser
+scenario. Both before and after captures are synthetic; archived source names
+are fixture labels, not a claim that benchmark work was executed.
