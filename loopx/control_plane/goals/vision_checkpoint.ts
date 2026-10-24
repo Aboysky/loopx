@@ -101,6 +101,12 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       "For todo_delta, use retain:todo_<id> for existing work; supported verbs are activate, create, reopen, resume and retain. " +
       "Replace todo_<id> with a verified Todo ID after normal authoring/readback. Entries record plans, not Todo mutations, claims or execution authority. " +
       "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
+      (autonomousReplan
+        ? "JSON replaces the complete packet; the sparse minimal_example is not an update to an existing Vision. " +
+          "Start from the current Agent's complete packet and full vision_patch, then replace only deliberately reviewed fields and the fresh path_delta. " +
+          "Preserve every other field and the current state; path_delta.retained text does not merge omitted fields. " +
+          "Reuse the known current packet, or read it from canonical status/history if unavailable; never reconstruct missing intent from summaries. "
+        : "") +
       "checkpoint-context is only for recovery after the original committed Turn writeback; " +
       "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
     total_text_limit: GOAL_VISION_TOTAL_LIMIT,

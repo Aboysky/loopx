@@ -12,7 +12,10 @@ from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_projected_autonomous_example_updates_evidence_without_changing_goal(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("complete_prior", [False, True])
+def test_projected_autonomous_example_updates_evidence_without_changing_goal(
+    tmp_path, monkeypatch, provider, complete_prior,
+):
     from canonical_authority_fixture import isolate_sqlite_runtime
 
     if provider == "sqlite":
@@ -27,7 +30,17 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(tmp
     state.write_text(state.read_text().replace("## Next Action", original_goal + "## Next Action"))
     import_fixture_authority(registry, fixture.GOAL_ID, provider=provider)
     document = tmp_path / "vision.json"
-    fixture.write_json(document, {"vision_patch": {"acceptance_summary": "Original evidence pending."}})
+    prior_patch = {"acceptance_summary": "Original evidence pending."}
+    if complete_prior:
+        prior_patch.update({
+            "vision_summary": "Verify the whole original delivery with evidence.",
+            "role_scope": "Own this bounded verification; do not change peer work.",
+            "advancement_policy": "repeat_until_closed",
+            "replan_trigger_summary": "Keep the remaining evidence frontier visible.",
+            "dreaming_policy": "Propose only evidence-backed alternatives.",
+            "last_patch_summary": "Retain the existing role and continuation intent.",
+        })
+    fixture.write_json(document, {"vision_patch": prior_patch})
     fixture.run_cli(registry, runtime, vision_path=document, check=True,
                     dry_run=False, autonomous_replan_recorded=False)
 
@@ -36,6 +49,18 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(tmp
     assert guard["requires_user_action"] is False
     contract = guard["replan_action_packet"]["writeback_contract"]["vision_authoring"]
     packet = copy.deepcopy(contract["minimal_example"])
+    assert "JSON replaces the complete packet" in contract["authoring_hint"]
+    assert "full vision_patch" in contract["authoring_hint"]
+    if complete_prior:
+        # Follow the returned authoring procedure using the complete current
+        # Agent packet from a separate read, not fields reconstructed by a model.
+        current = fixture.run_status(registry, runtime)
+        goal = next(g for g in current["run_history"]["goals"] if g["id"] == fixture.GOAL_ID)
+        current_packet = copy.deepcopy(goal["latest_runs"][0]["agent_vision"])
+        assert current_packet["agent_id"] == fixture.AGENT_ID
+        current_packet["vision_patch"].update(packet["vision_patch"])
+        current_packet["path_delta"] = packet["path_delta"]
+        packet = current_packet
     fixture.write_json(document, packet)
     result = fixture.run_cli(registry, runtime, vision_path=document,
         check=False, dry_run=False, autonomous_replan_recorded=True)
@@ -45,9 +70,19 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(tmp
     assert accepted["agent_vision"]["path_delta"]["outcome"] == "replan"
     assert original_goal in state.read_text()
 
+    # A separate CLI read must preserve every existing field, not merely echo
+    # an accepted summary while discarding direction, role or repeat policy.
+    expected_patch = prior_patch | packet["vision_patch"]
+    cold = fixture.run_status(registry, runtime)
+    goal = next(g for g in cold["run_history"]["goals"] if g["id"] == fixture.GOAL_ID)
+    assert goal["latest_runs"][0]["agent_vision"]["vision_patch"] == expected_patch
+    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
+    assert json.loads(index.read_text().splitlines()[-1])["agent_vision"]["vision_patch"] == expected_patch
+    if complete_prior:
+        assert goal["latest_runs"][0]["agent_vision"]["state"] == current_packet["state"]
+
     # Updating evidence is still a durable change under the existing rule.
     # A caller replacing the projected disposition must fail before writing.
-    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
     before = index.read_bytes()
     packet["vision_patch"]["acceptance_summary"] = "Another evidence update."
     packet["path_delta"]["outcome"] = "continue"
