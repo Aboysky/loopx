@@ -7,11 +7,14 @@ outside policy input and browser projections. Run only through the opt-in host.
 from __future__ import annotations
 
 import hashlib
+import ctypes
 import importlib
 import json
 import math
 import os
 from pathlib import Path
+import plistlib
+import re
 import selectors
 import shutil
 import signal
@@ -34,6 +37,27 @@ class HostError(Exception):
 # idle. They are product-owned clients of that home, so an unattended handoff
 # pauses them instead of treating them as an unrelated CLI hold.
 CHAT_AGENTS = ("com.loopx.personal-bots.chat",)
+
+
+def process_identity(pid: int) -> tuple[int, str, int, int] | None:
+    """Kernel executable/start identity; command text is not process ownership."""
+    class BSDInfo(ctypes.Structure):
+        _fields_ = ([(name, ctypes.c_uint32) for name in (
+            "flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid",
+            "rgid", "svuid", "svgid", "reserved")]
+            + [("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)]
+            + [("tail", ctypes.c_uint32 * 6), ("seconds", ctypes.c_uint64),
+               ("microseconds", ctypes.c_uint64)])
+    try:
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+        info, path = BSDInfo(), ctypes.create_string_buffer(4096)
+        if (lib.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info)
+                or info.pid != pid or info.uid != os.getuid()
+                or lib.proc_pidpath(pid, path, len(path)) <= 0):
+            return None
+        return info.ppid, os.fsdecode(path.value), info.seconds, info.microseconds
+    except (OSError, ValueError):
+        return None
 
 
 # Address one inspected process, not an App bundle id shared by other routes.
@@ -120,6 +144,8 @@ class NativeHost:
             self.home, self.spec, idle, lambda: str(self.codex),
             lambda selected: self.apps.clean_env(selected, self.home),
         )
+        if sys.platform == "darwin" and (self.manager.root / "chat-recovery.json").exists():
+            self.resume_chat_agents()
 
     def revision(self) -> str:
         # last.json also changes for a manual re-selection of the same slot.
@@ -138,9 +164,13 @@ class NativeHost:
             result["client_running"] = self.apps.running(exe, self.spec) is not None
         return result
 
-    def close_client(self, expected: str, *, timeout: float = 25, force: bool = False) -> bool:
+    def close_client(self, expected: str, *, timeout: float = 25, force: bool = False,
+                     inspected: tuple | None = None) -> bool:
         exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
         pid = self.apps.running(exe, self.spec)
+        if inspected is not None and (pid != inspected[0] or
+                (pid is not None and process_identity(pid) != inspected[1])):
+            raise HostError("client_changed")
         if self.revision() != expected:
             raise HostError("selection_changed")
         if pid is None:
@@ -253,25 +283,89 @@ class NativeHost:
         return [int(line[1:]) for line in result.stdout.splitlines()
                 if line.startswith("p") and line[1:].isdigit()]
 
-    def retire_app_helpers(self) -> None:
-        """Stop orphaned App-bundle helpers that still hold the GPT home."""
+    def inspect_client_helpers(self) -> tuple[tuple, dict]:
+        """Freeze descendants of the inspected launch BEFORE requesting quit."""
         bundle = str(self.apps.app_bundle(self.spec, "gpt", self.home))
+        exe = self.apps.executable(Path(bundle))
+        pid = self.apps.running(exe, self.spec)
+        if pid is None:
+            return (None, None), {}
+        root = process_identity(pid)
+        if root is None or root[1] != str(exe):
+            raise HostError("ownership_unverified")
+        result = subprocess.run(["/bin/ps", "-axo", "pid="],
+                                capture_output=True, text=True, check=True, timeout=5)
+        processes = {int(p): process_identity(int(p)) for p in result.stdout.split() if p.isdigit()}
+        descendants, helpers = {pid}, {}
+        while True:
+            added = {p for p, identity in processes.items()
+                     if identity is not None and identity[0] in descendants and p not in descendants}
+            if not added:
+                break
+            descendants.update(added)
+        for child in descendants - {pid}:
+            identity = processes[child]
+            if identity[1].startswith(bundle + "/"):
+                helpers[child] = identity[1:]  # Reparenting after quit is expected.
+        if process_identity(pid) != root or self.apps.running(exe, self.spec) != pid:
+            raise HostError("client_changed")
+        return (pid, root), helpers
+
+    def retire_app_helpers(self, helpers: dict) -> None:
+        """Retire only still-identical, previously observed launch descendants."""
+        exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
+        if self.apps.running(exe, self.spec) is not None:
+            raise HostError("client_changed")
         for pid in self._home_owners():
-            try:
-                command = subprocess.run(["/bin/ps", "-o", "command=", "-p", str(pid)],
-                                         capture_output=True, text=True, timeout=5)
-            except (OSError, subprocess.SubprocessError):
+            if pid not in helpers:
                 continue
-            if not command.stdout.strip().startswith(bundle + "/"):
+            identity = process_identity(pid)
+            if identity is None or identity[1:] != helpers[pid]:
                 continue
+            if self.revision() != self.expected:
+                raise HostError("selection_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
             try:
                 os.kill(pid, signal.SIGTERM)
             except OSError:
                 pass
 
-    def pause_chat_agents(self) -> list[Path]:
+    def _chat_recovery(self) -> tuple[Path, dict]:
+        from .native import SCHEMA, private_read
+        path = self.manager.root / "chat-recovery.json"
+        value = private_read(path) if path.exists() else {"schema_version": SCHEMA, "agents": {}}
+        if (not isinstance(value.get("agents"), dict) or
+                any(label not in CHAT_AGENTS or not isinstance(digest, str)
+                    for label, digest in value["agents"].items())):
+            raise HostError("state_untrusted")
+        if value["agents"]:
+            owner = value.get("owner", {})
+            identity = owner.get("identity") if isinstance(owner, dict) else None
+            if (not isinstance(owner, dict) or type(owner.get("pid")) is not int or owner["pid"] <= 1 or
+                    not isinstance(identity, list) or len(identity) != 3 or
+                    not isinstance(identity[0], str) or
+                    any(type(v) is not int or v < 0 for v in identity[1:])):
+                raise HostError("state_untrusted")
+        return path, value
+
+    def _chat_definition(self, plist: Path, label: str) -> str:
+        raw = trusted_file(plist).read_bytes()
+        try:
+            value = plistlib.loads(raw)
+            if not isinstance(value, dict) or value.get("Label") != label:
+                raise ValueError()
+        except (ValueError, plistlib.InvalidFileException):
+            raise HostError("state_untrusted") from None
+        return hashlib.sha256(raw).hexdigest()
+
+    def pause_chat_agents(self) -> None:
         """Unload known chat agents that keep this home attached while idle."""
-        stopped = []
+        from .native import atomic
+        self.accounts.private_dir(self.manager.root)
+        path, recovery = self._chat_recovery()
+        if recovery["agents"]:
+            raise HostError("chat_recovery_pending")
         for label in CHAT_AGENTS:
             plist = self.home / "Library/LaunchAgents" / f"{label}.plist"
             if not plist.is_file():
@@ -281,20 +375,111 @@ class NativeHost:
                                     capture_output=True, text=True, timeout=10)
             if loaded.returncode != 0:
                 continue
-            subprocess.run(["/bin/launchctl", "bootout", target],
-                           capture_output=True, text=True, timeout=20)
-            stopped.append(plist)
-        return stopped
+            match = re.search(r"^\s*pid = (\d+)\s*$", loaded.stdout, re.MULTILINE)
+            if match is None:
+                continue
+            service_pid = int(match[1])
+            service = process_identity(service_pid)
+            if service is None:
+                continue
+            # A product label alone is not enough: this loaded instance must
+            # actually own the inspected home, possibly through app-server.
+            owns_home = False
+            for owner in self._home_owners():
+                seen = set()
+                while owner > 1 and owner not in seen:
+                    seen.add(owner)
+                    identity = process_identity(owner)
+                    if identity is None:
+                        break
+                    if owner == service_pid:
+                        owns_home |= identity == service
+                        break
+                    owner = identity[0]
+            if not owns_home:
+                continue
+            digest = self._chat_definition(plist, label)
+            current = subprocess.run(["/bin/launchctl", "print", target],
+                                     capture_output=True, text=True, timeout=10)
+            if (current.returncode or process_identity(service_pid) != service or
+                    re.search(r"^\s*pid = " + str(service_pid) + r"\s*$", current.stdout, re.MULTILINE) is None):
+                raise HostError("client_changed")
+            if self.revision() != self.expected:
+                raise HostError("selection_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            # Retain recovery BEFORE an operation which can take effect and
+            # then time out. The detached worker's finally or the next native
+            # request reconciles this same intent, never another account swap.
+            recovery["agents"][label] = digest
+            owner = process_identity(os.getpid())
+            if owner is None:
+                raise HostError("ownership_unverified")
+            recovery["owner"] = {"pid": os.getpid(), "identity": list(owner[1:])}
+            atomic(path, recovery)
+            try:
+                result = subprocess.run(["/bin/launchctl", "bootout", target],
+                                        capture_output=True, text=True, timeout=20)
+                if result.returncode or self._chat_loaded(target):
+                    raise HostError("chat_pause_failed")
+            except (OSError, subprocess.SubprocessError):
+                raise HostError("chat_pause_failed") from None
 
-    def resume_chat_agents(self, plists: list[Path]) -> None:
-        for plist in plists:
-            subprocess.run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
-                           capture_output=True, text=True, timeout=20)
+    def _chat_loaded(self, target: str) -> bool:
+        return subprocess.run(["/bin/launchctl", "print", target],
+                              capture_output=True, text=True, timeout=10).returncode == 0
+
+    def resume_chat_agents(self) -> None:
+        from .native import atomic
+        path, recovery = self._chat_recovery()
+        if recovery["agents"]:
+            owner = recovery["owner"]
+            current = process_identity(owner["pid"])
+            if owner["pid"] != os.getpid():
+                if current is not None and list(current[1:]) == owner["identity"]:
+                    return  # A concurrent status read must not undo a live handoff.
+                if current is None:
+                    try:
+                        os.kill(owner["pid"], 0)
+                    except ProcessLookupError:
+                        pass
+                    except OSError:
+                        return
+                    else:
+                        return  # Unreadable identity does not prove worker exit.
+        failed = False
+        for label, digest in list(recovery["agents"].items()):
+            plist = self.home / "Library/LaunchAgents" / f"{label}.plist"
+            target = f"gui/{os.getuid()}/{label}"
+            try:
+                if self._chat_definition(plist, label) != digest:
+                    raise HostError("chat_resume_failed")
+                if not self._chat_loaded(target):
+                    try:
+                        subprocess.run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
+                                       capture_output=True, text=True, timeout=20)
+                    except (OSError, subprocess.SubprocessError):
+                        if not self._chat_loaded(target):
+                            raise HostError("chat_resume_failed") from None
+                    # A timeout/nonzero reply is ambiguous. Read the actual
+                    # service state before accepting or retrying restoration.
+                if not self._chat_loaded(target):
+                    raise HostError("chat_resume_failed")
+            except (HostError, OSError, subprocess.SubprocessError):
+                failed = True
+                continue  # Attempt every outstanding restoration.
+            del recovery["agents"][label]
+            atomic(path, recovery)
+        if failed:
+            raise HostError("chat_resume_failed")
 
     def switch(self, slot: str, expected: str, *, reopen: bool, restart_clients: bool = False,
                force_quit_clients: bool = False, not_after: float | None = None) -> dict:
         if sys.platform != "darwin":
             raise HostError("platform_unavailable")
+        self.resume_chat_agents()
+        if self._chat_recovery()[1]["agents"]:
+            raise HostError("chat_recovery_pending")
         self.expected = expected
         self.not_after = not_after
         before = self.status()
@@ -303,19 +488,21 @@ class NativeHost:
         # idle() is rechecked by the native owner under launch/account locks,
         # and immediately before its first mutation. This is the CAS fence,
         # including against manual selections outside LoopX.
-        paused: list[Path] = []
+        result, restore_error = None, None
         try:
             try:
                 if restart_clients:
                     if not_after is not None and time.time() >= not_after:
                         raise HostError("quota_stale")
-                    self.close_client(expected, **({"force": True} if force_quit_clients else {}))
+                    inspected, helpers = self.inspect_client_helpers()
+                    self.close_client(expected, inspected=inspected,
+                                      **({"force": True} if force_quit_clients else {}))
                     # Orphaned App helpers and idle chat transports are
                     # product-owned clients of this home. Retire or pause them;
                     # an unrelated CLI/file owner remains a hold, never a kill
                     # target.
-                    self.retire_app_helpers()
-                    paused = self.pause_chat_agents()
+                    self.retire_app_helpers(helpers)
+                    self.pause_chat_agents()
                     deadline = time.monotonic() + 15
                     while True:
                         try:
@@ -326,7 +513,7 @@ class NativeHost:
                                 raise
                             if time.monotonic() >= deadline:
                                 raise HostError("other_clients_busy") from None
-                            self.retire_app_helpers()
+                            self.retire_app_helpers(helpers)
                             time.sleep(0.2)
                 result = self.manager.switch(slot)
             except Exception:
@@ -343,7 +530,14 @@ class NativeHost:
                 raise
         finally:
             # Restore product-owned transports even when the handoff fails.
-            self.resume_chat_agents(paused)
+            try:
+                self.resume_chat_agents()
+            except HostError as error:
+                if result is None:
+                    raise
+                # A committed account still needs its App reopened. Report the
+                # retained service recovery after that original continuation.
+                restore_error = error
         value = self.status()
         if value["active_slot"] != slot or value["current_login_matches"] is not True:
             raise HostError("readback_failed")
@@ -357,6 +551,8 @@ class NativeHost:
         if after["selection_revision"] != value["selection_revision"]:
             raise HostError("selection_changed")
         value = after
+        if restore_error is not None:
+            raise restore_error
         return value | {"history_untouched": result["history_untouched"], "launch_failed": launch_failed}
 
     def recover(self, rollback: bool, expected: str) -> dict:
