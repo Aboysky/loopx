@@ -6,8 +6,8 @@
 
 **让 Agent 把长程目标做成可验证的成果。**
 
-面向 Agent 与团队的本地优先控制面和研究工作台。<br>
-<sub>跨会话保留目标、决策、分工与证据，连接你已经在用的 Codex、Claude Code、DeepSeek Harness 等运行时。</sub>
+面向长程 Agent 团队的本地优先[语义控制面](https://loopx-project.github.io/loopx/blog/zh/from-one-shot-agents-to-long-horizon-control/#control-plane)与[研究工作台](#research-workbench)，跨会话、跨运行时延续工作。<br>
+<sub>持久保留目标、决策、分工与证据，连接你已经在用的 Codex、Claude Code、DeepSeek Harness 等运行时。</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
@@ -55,11 +55,12 @@ Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升�
 证据会过期，多个 Agent 会交接。定时器能让任务继续运行，却不能保证仍在做有用的工作。
 
 - **接着做，不必重头交代。** 目标、已接受要求、决策与证据跨会话、跨重启保留。
-- **分工协作，责任始终清楚。** 串起委派、依赖产物、独立评审与结果返回，保留每个 Agent 的工作归属。
+- **[分工协作，责任始终清楚。](https://loopx-project.github.io/loopx/blog/zh/agent-facing-kanban/#walkthrough)** 串起委派、依赖产物、独立评审与结果返回，保留每个 Agent 的工作归属。
 - **看成果和依据，而不只看活动。** 检查交付物、支持与反驳证据、成本，以及下一步决策。
 
-模型与工具由你的 Agent 运行时提供；LoopX 延续工程、研究与运营的控制状态，
-不会替代运行时。受保护操作仍须遵守人类授权。
+模型与工具由你的 Agent 运行时提供。LoopX 的语义控制面跨会话、跨运行时保留目标、
+验收条件、决策、分工与证据，支撑工程、研究与运营中的持续协作。Agent 与人据此
+重新判断下一步；受保护操作仍须遵守人类授权。
 
 <a id="学习-loopx"></a>
 

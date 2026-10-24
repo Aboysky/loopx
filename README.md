@@ -6,8 +6,8 @@
 
 **Turn long-horizon goals into verifiable results.**
 
-A local-first control plane and research workbench for agents and teams.<br>
-<sub>Keep goals, decisions, ownership and evidence across sessions. Work with the runtimes you already use: Codex, Claude Code, DeepSeek Harness and others.</sub>
+A local-first [semantic control plane](https://loopx-project.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/#control-plane) and [research workbench](#research-workbench) for long-running agent teams, across sessions and runtimes.<br>
+<sub>Keep goals, decisions, ownership and evidence durable. Work with Codex, Claude Code, DeepSeek Harness and other runtimes you already use.</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
@@ -59,14 +59,16 @@ hand work to peers. A timer can keep a loop running without making it useful.
 
 - **Continue without starting over.** Keep the Goal, accepted requirements,
   decisions and evidence across sessions and restarts.
-- **Coordinate without losing ownership.** Connect delegated work, dependent
+- **[Coordinate without losing ownership.](https://loopx-project.github.io/loopx/blog/agent-facing-kanban/#walkthrough)** Connect delegated work, dependent
   artifacts, review and returned results while keeping responsibility explicit.
 - **Judge progress by what changed.** Inspect deliverables, supporting and
   refuting evidence, costs and the next decision—not just activity.
 
-Your Agent runtime supplies the model and tools. LoopX carries durable
-control state for long-horizon agents and personal agent teams across
-engineering, research and operations. Human authorization still governs protected actions.
+Your Agent runtime supplies the model and tools. LoopX’s semantic control plane
+preserves goals, acceptance, decisions, ownership and evidence across sessions
+and runtimes for engineering, research and operations. Agents and people use
+those facts to reassess what to do next. Human authorization still governs
+protected actions.
 
 <a id="learn-loopx"></a>
 
