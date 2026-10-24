@@ -68,7 +68,8 @@ def test_managed_directory_keeps_registered_identity_and_original_sessions(tmp_p
         assert request(path="/api/chat/sessions", query="?goal_id=sample-goal&managed_agent_id=codex")[0] == 409
         store.update_session(second["session_id"], status="closed")
         assert [row["session_id"] for row in request(path="/api/chat/sessions", query=query)[1]["sessions"]] == [first["session_id"]]
-        value = json.loads(registry.read_text()); value["goals"][0]["goal_instance_id"] = "replacement-lifetime"
+        value = json.loads(registry.read_text())
+        value["goals"][0]["goal_instance_id"] = "replacement-lifetime"
         registry.write_text(json.dumps(value))
         assert request(path="/api/chat/sessions", query=query)[1]["sessions"] == []
         assert store.load_session(legacy["session_id"]) == legacy
@@ -82,10 +83,14 @@ def test_managed_directory_refuses_changed_identity_without_host_work(tmp_path, 
         store = request.server.chat_store
         store.create_session(goal_id="sample-goal", agent_id="codex", adapter_kind="codex_app_server",
             managed_agent_id="worker", managed_workspace_path=str(tmp_path), channel_id="agent.worker", upstream_thread_id="original")
-        value = json.loads(registry.read_text()); goal = value["goals"][0]
-        if fault == "unregistered": goal["coordination"]["registered_agents"] = ["peer"]
-        if fault == "stopped": goal["status"] = "stopped"
-        if fault == "workspace": goal["repo"] = str(tmp_path / "different")
+        value = json.loads(registry.read_text())
+        goal = value["goals"][0]
+        if fault == "unregistered":
+            goal["coordination"]["registered_agents"] = ["peer"]
+        if fault == "stopped":
+            goal["status"] = "stopped"
+        if fault == "workspace":
+            goal["repo"] = str(tmp_path / "different")
         registry.write_text(json.dumps(value))
         status, result = request(path="/api/chat/sessions", query=f"?goal_id={'foreign' if fault == 'foreign-goal' else 'sample-goal'}&managed_agent_id=worker")
         if fault == "workspace":
