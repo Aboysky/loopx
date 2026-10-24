@@ -3,7 +3,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -13,11 +12,6 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
 const dshBin = (process.env.DSH_BIN || join(packageRoot, 'node_modules', '.bin', 'dsh'))
   .replaceAll('\\', '/')
-const require = createRequire(import.meta.url)
-// Windows cannot spawn the .bin shell shim directly. Match the registry smoke
-// for direct DSH operations; the shipped installer still runs through Bash.
-const dshScript = process.env.DSH_CLI_JS
-  || join(dirname(require.resolve('@deepseek-ai/dsh/package.json')), 'lib', 'bin.js')
 const installerSource = await readFile(join(packageRoot, 'install.sh'), 'utf8')
 const versionVerifier = installerSource.match(/exec node -e '([^']*)' "\$PACKAGE_VERSION"/u)?.[1]
 assert(versionVerifier, 'installer must verify the installed package version')
@@ -43,7 +37,9 @@ function expectSuccess(result) {
 }
 
 function runDsh(argv) {
-  return run(process.execPath, [dshScript, ...argv])
+  // Use the same selected executable as install.sh. Bash handles Windows .bin
+  // shims while "$@" preserves argument boundaries, including paths with spaces.
+  return run('bash', ['-c', 'exec "$@"', 'dsh-installer-smoke', dshBin, ...argv])
 }
 
 try {
