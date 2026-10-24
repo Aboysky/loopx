@@ -137,7 +137,14 @@ export const researchHistoryScenario = {
       const native = nativePage.getByRole('region', {name: '原生测量', exact: true});
       await native.waitFor();
       assert.match(await native.innerText(), /2 \/ 3.*项有效结果/s);
-      assert.match(await native.innerText(), /首次提交.*7.*窗口内最佳有效值.*3.*原生保留结果.*未知/s);
+      assert.equal(await native.locator('[data-native-point="best_valid"] strong').textContent(), '3');
+      assert.equal(await native.locator('[data-native-point="initial"] strong').textContent(), '7');
+      assert.match(await native.locator('[data-native-point="retained"]').innerText(), /未知/);
+      assert(await native.locator('[data-native-point="best_valid"] strong').evaluate(e => parseFloat(getComputedStyle(e).fontSize) >= 32));
+      assert(await native.locator('[data-native-point="initial"] strong').evaluate(e => parseFloat(getComputedStyle(e).fontSize) >= 16));
+      assert.match(await native.locator('.research-native-scope').innerText(), /UTC/);
+      assert.doesNotMatch(await native.locator('.research-native-scope').innerText(), /T00:00:00Z/);
+      assert.equal(await native.locator('.research-native-basis').evaluate(e => e.open), false);
       assert.equal(await nativePage.locator('.research-progress-basis').evaluate(e => e.open), false);
       assert.equal(await nativePage.locator('.research-effect-empty').isVisible(), true, 'Measured progress remains readable before model analysis');
       await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-desktop.png'), animations: 'disabled'});
@@ -149,6 +156,7 @@ export const researchHistoryScenario = {
       await original.press('Escape');
       assert.equal(await nativePage.locator('.research-analysis').count(), 0, 'Reading a native citation does not open or run model analysis');
       await nativePage.setViewportSize({width: 390, height: 844});
+      await native.getByRole('heading', {name: '原生测量', exact: true}).click();
       await nativePage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
       assert(await nativePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-mobile.png'), animations: 'disabled'});
@@ -202,6 +210,8 @@ export const researchHistoryScenario = {
       await synthesisPage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
       assert(await synthesisPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-ordinary-mobile.png'), animations: 'disabled'});
+      await reading.getByRole('button', {name: '汇报', exact: true}).click();
+      await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-report-mobile.png'), animations: 'disabled'});
       await synthesisPage.getByRole('button', {name: '深入解读', exact: true}).click();
       const analysis = synthesisPage.getByRole('region', {name: '轨迹深度分析', exact: true});
       await analysis.waitFor();
@@ -889,8 +899,11 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await improvement.locator('summary').click();
       await basis.locator(':scope > summary').click();
       const nativeResults = progress.getByRole('region', {name: '原生测量', exact: true});
-      assert.match(await nativeResults.innerText(), /首次提交.*7.*提交 1/s, 'Native measurements retain their source-bound endpoints');
-      assert.match(await nativeResults.innerText(), /原生保留结果.*3.*提交 3/s);
+      assert.equal(await nativeResults.locator('[data-native-point="initial"] strong').textContent(), '7', 'Native measurements retain their source-bound endpoints');
+      assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3');
+      await nativeResults.locator('.research-native-basis > summary').click();
+      assert.match(await nativeResults.locator('.research-native-basis').innerText(), /candidate-first.*提交 1/s, 'Exact submission identity is available on demand');
+      await nativeResults.locator('.research-native-basis > summary').click();
       assert.match(await nativeResults.innerText(), /越低越好/);
       await nativeResults.getByRole('button', {name: /首次提交.*查看原始证据/}).scrollIntoViewIfNeeded();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Native details remain readable on a narrow screen');
@@ -980,8 +993,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '0', 'A rejected candidate does not create realized gain');
       await basis.locator(':scope > summary').click();
       assert.match(await nativeResults.innerText(), /历史原生测量.*当前结果未核验/s, 'Stale measurements never appear current');
-      assert.match(await nativeResults.locator('[data-native-point="retained"]').innerText(), /3.*提交 3/s);
-      assert.match(await nativeResults.locator('[data-native-point="final_valid"]').innerText(), /5.*提交 4/s, 'The last submission is not silently presented as retained or best');
+      assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3');
+      assert.equal(await nativeResults.locator('[data-native-point="final_valid"] strong').textContent(), '5', 'The last submission is not silently presented as retained or best');
       await page.reload({waitUntil: "networkidle"});
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
       await page.setViewportSize({width: 390, height: 844});
@@ -1017,6 +1030,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
       await analysis.press("Escape");
       await analysis.waitFor({state: "hidden"});
+      await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "查看分析");
       assert.equal(await history.getByRole("button", {name: "查看分析", exact: true}).evaluate(button => button === document.activeElement), true);
       await progress.getByRole("combobox").focus();
       await progress.getByRole("combobox").selectOption("c".repeat(64));
@@ -1054,9 +1068,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '—', 'Missing comparison evidence is unknown, never zero');
       await basis.locator(':scope > summary').click();
-      assert.match(await nativeResults.innerText(), /原生保留结果.*3.*提交 3/s, 'Native facts do not require an analyzer result');
-      assert.match(await nativeResults.innerText(), /部分窗口，起点未知/);
-      assert.match(await nativeResults.locator('[data-native-point="initial"]').innerText(), /— 未知/);
+      assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3', 'Native facts do not require an analyzer result');
+      assert.match(await nativeResults.innerText(), /部分窗口 · 起点未知/);
+      assert.match(await nativeResults.locator('[data-native-point="initial"]').innerText(), /未知/);
       const nativeCitation = nativeResults.getByRole('button', {name: /原生保留结果.*查看原始证据/});
       await nativeCitation.focus(); await nativeCitation.press('Enter');
       await citedOriginal.waitFor();
