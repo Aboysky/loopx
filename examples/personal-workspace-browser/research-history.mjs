@@ -126,6 +126,39 @@ export async function startHistoryOwner(fixture) {
 export const researchHistoryScenario = {
   id: "research-history",
   async run({browser, collectCoverage, url}) {
+    // The ordinary journey uses the real source verifier and HTTP owner, with
+    // no intercepted analysis response and no analysis process or Goal writes.
+    const nativeOwner = await startHistoryOwner(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/research-native-readback.json"));
+    const nativePage = await browser.newPage({viewport: {width: 1280, height: 900}});
+    try {
+      await nativePage.addInitScript(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
+      const query = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research', statusUrl: '/status.json?goal_id=synthetic-research-readback'});
+      await nativePage.goto(`${nativeOwner.base}/chat/?${query}`, {waitUntil: 'domcontentloaded'});
+      const native = nativePage.getByRole('region', {name: '原生测量', exact: true});
+      await native.waitFor();
+      assert.match(await native.innerText(), /2 \/ 3.*项有效结果/s);
+      assert.match(await native.innerText(), /首次提交.*7.*窗口内最佳有效值.*3.*原生保留结果.*未知/s);
+      assert.equal(await nativePage.locator('.research-progress-basis').evaluate(e => e.open), false);
+      assert.equal(await nativePage.locator('.research-effect-empty').isVisible(), true, 'Measured progress remains readable before model analysis');
+      await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-desktop.png'), animations: 'disabled'});
+      await native.getByRole('button', {name: /首次提交.*查看原始证据/}).click();
+      const original = nativePage.getByRole('region', {name: '引用原文', exact: true});
+      await original.waitFor();
+      await original.getByText(/Synthetic baseline: candidate-one measured error 7 points/).waitFor();
+      assert.match(await original.innerText(), /Synthetic baseline: candidate-one measured error 7 points/);
+      await original.press('Escape');
+      assert.equal(await nativePage.locator('.research-analysis').count(), 0, 'Reading a native citation does not open or run model analysis');
+      await nativePage.setViewportSize({width: 390, height: 844});
+      await nativePage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
+      assert(await nativePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-mobile.png'), animations: 'disabled'});
+      const readback = await (await nativePage.request.get(`${nativeOwner.base}/fixture/readback`)).json();
+      assert.equal(readback.source_unchanged, true);
+      assert.equal(readback.mutation_attempts, 0);
+    } finally {
+      await nativePage.close();
+      await nativeOwner.close();
+    }
     const capture = JSON.parse(await readFile(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/edgebench-research-history.json")));
     let owner = await startHistoryOwner();
     let collisionOwner, emptyOwner, temporary;
@@ -584,6 +617,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await effects.waitFor();
       assert.equal(await effects.locator('.research-effect-metric').count(), 6, 'All six analyzer metrics are primary without opening analysis or cost details');
       assert.equal(await progress.locator('.research-progress-basis').evaluate(e => e.open), false, 'Sources and cost share one secondary disclosure by default');
+      const primaryNative = progress.getByRole('region', {name: '原生测量', exact: true});
+      assert.equal(await primaryNative.isVisible(), true, 'Ordinary reading exposes measured results without opening provenance or requesting a model');
+      assert.equal(await primaryNative.evaluate(native => Boolean(native.compareDocumentPosition(document.querySelector('.research-effect-metrics')) & Node.DOCUMENT_POSITION_FOLLOWING)), true,
+        'Measured task outcomes precede the separate model judgments');
       // Optional methodology must be reachable without crowding the results,
       // changing counts or invoking analysis. Exercise the same disclosure with
       // pointer, keyboard and touch-sized layout, including Escape in a panel.
@@ -607,7 +644,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await help.waitFor({state: 'visible'});
       const helpBounds = await help.boundingBox();
       assert(helpBounds.x >= 0 && helpBounds.x + helpBounds.width <= 390);
-      await progress.getByRole('heading', {name: '研究效果判读', exact: true}).click();
+      await progress.getByRole('heading', {name: '研究结果', exact: true}).click();
       await help.waitFor({state: 'hidden'});
       assert.match(await effects.locator('[data-metric="evidence_adoption"]').innerText(), /1 \/ 2.*未知 1/s);
       assert.doesNotMatch(await effects.locator('[data-metric="evidence_adoption"]').innerText(), /不适用/,
@@ -776,7 +813,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await improvement.locator('summary').click();
       await basis.locator(':scope > summary').click();
       const nativeResults = progress.getByRole('region', {name: '原生测量', exact: true});
-      assert.match(await nativeResults.innerText(), /首次提交.*7.*提交 1/s, 'Detailed native measurements use the existing source disclosure');
+      assert.match(await nativeResults.innerText(), /首次提交.*7.*提交 1/s, 'Native measurements retain their source-bound endpoints');
       assert.match(await nativeResults.innerText(), /原生保留结果.*3.*提交 3/s);
       assert.match(await nativeResults.innerText(), /越低越好/);
       await nativeResults.getByRole('button', {name: /首次提交.*查看原始证据/}).scrollIntoViewIfNeeded();
@@ -936,6 +973,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
       await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /所选范围尚未分析/);
+      assert.equal(await nativeResults.isVisible(), true, 'An unanalysed pack still exposes its recorded outcomes with cost details closed');
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '—', 'Missing comparison evidence is unknown, never zero');

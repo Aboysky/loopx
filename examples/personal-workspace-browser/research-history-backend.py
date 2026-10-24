@@ -90,7 +90,8 @@ def main():
                 input_path = source_root / "input.json"
                 input_path.write_text(json.dumps(analysis["input"], ensure_ascii=False))
                 scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
-                registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"])
+                registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
+                                           native_outcomes_json=analysis.get("native_outcomes_json"))
                 for language, output in analysis["outputs"].items():
                     provider = root / f"analysis-provider-{index}-{language}"
                     provider.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
