@@ -1,7 +1,8 @@
 # Managed steward monitoring and periodic reports
 
-Status: source-bound identity preparation, opt-in status monitoring and the
-original steward's periodic full-body report path are implemented. Installation,
+Status: source-bound identity preparation, opt-in status monitoring, the
+original steward's periodic full-body reports and explicitly configured local
+Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
@@ -82,6 +83,18 @@ In-flight work stays with its original accepted Turn; the upgrade waits for an
 eligible idle boundary. If host tools require a replacement upstream thread,
 preserve the visible conversation and history, and record that transport change.
 Do not claim to preserve a physical thread that was actually replaced.
+
+The macOS CLI update path checks every configured Chat store before switching
+its LaunchAgent services. Accepted, queued, completing or unreadable work defers
+the whole service switch; an empty Session summary is insufficient. Updated
+consumers and the updater share an admission lock through process replacement,
+so a new request cannot pass the idle check and begin on the retiring process.
+The first adoption from an older consumer without that fence still requires an
+independently established idle boundary. Installation readback remains visible
+when service activation is pending, including partial restart failures. The
+same-source update retry performs a fresh check; this adds no second consumer,
+automatic business replay or separate activation scheduler. The combined App
+upgrade also stops before restarting the App when this service switch is pending.
 
 Keep the steward's existing portfolio-read authority separate from its execution
 actor. Resolve both through their native owners on every admission. Registering
@@ -433,6 +446,160 @@ not production-message or real-phone proof.
 ![Report controls in a narrow viewport](../assets/personal-workspace/steward-reports/enabled-narrow.png)
 
 ## Acceptance boundaries
+
+### Managed Agent execution boundary
+
+A managed conversation must belong to the selected registered **Agent**, with
+its own original Session, execution state and return path. In the Goal's Agent
+view, managed and attached conversations are parallel sources; a Goal-wide
+Codex chat with an extra Agent selector does not establish that binding.
+The experimental **Advance LoopX tasks** control has therefore been withdrawn
+from ordinary Goal Chat. The existing general conversation, native Goal mode
+and original attached conversation entry retain their current owners.
+
+The native host groundwork remains separately qualified: an explicitly invoked
+local managed request can use the original Core worker and native Task/Turn
+owners for a finite source-validation task. It retains the same thread and
+sandbox, resolves the selected Task's immutable argv validation declaration
+before model execution, and checks its canonical digest/revision and lease
+before accepting completion. Missing validation starts no model; a failed
+postcondition cannot complete the Task or spend a delivery slot. The low-level
+request accepts no runtime profile or caller validation command. Stable Core
+operation identity retains failed or unknown requests without replay.
+
+The existing session creation API now accepts `managed_agent_id` for a local
+Goal. It binds the registered work identity separately from the executor
+(`agent_id`) and model. Core persists that immutable identity, Goal lifetime
+and original thread, with a distinct Agent channel. Resume selects only that
+Goal/Agent/executor channel; another Agent cannot execute its native work.
+Old Goal-wide conversations remain readable and unassigned, and cannot gain a
+native work identity through a request-time selector. Existing project,
+steward and attached entrypoints retain their original identities and workers.
+Registration removal, Goal stop, a changed lifetime or a mismatched workspace
+refuses continued execution rather than transferring the conversation.
+
+This is an API/host lifecycle slice, **not** the finished Agent workspace
+entry or arbitrary periodic-task journey. The Agent view still needs to expose this
+binding alongside attached sources, including all original history and honest
+unavailable states. Reuse existing Session, native Turn,
+monitor/calendar and periodic-report owners; do not add a second scheduler,
+task store or model worker. General writable execution, natural-language
+configuration and arbitrary recurring task composition remain unfinished.
+
+An explicitly bound local managed Session can also observe its Goal's native
+work through an existing `continuous_monitor` Todo. Use the existing Todo
+authoring path with `action_kind=local_runtime_observe`, `watch_only=true`,
+the registered Agent as `claimed_by`, and
+`target_key=managed-session-watch.<original-session-id>`. Its existing cadence,
+deadline and open/blocked lifecycle are authoritative. For example, after
+selecting an authorized existing Goal, Agent and bound Session:
+
+```sh
+loopx todo add --goal-id PROJECT --role agent \
+  --claimed-by WRITER --text 'Observe this Goal native work' \
+  --task-class continuous_monitor --action-kind local_runtime_observe \
+  --target-key managed-session-watch.ORIGINAL_SESSION_ID --watch-only \
+  --cadence 30m --next-due-at 2030-01-01T09:00:00+08:00 \
+  --required-capability filesystem --execute
+```
+
+Replace the illustrative identities and future deadline with the actual
+authorized task. Registration, opening a Session or installing the feature
+does not author or enable a watch. The existing idle wake producer admits a
+due watch into that Session's original Core worker; the shared observation
+adapter and native `monitor-poll` settle it without starting/resuming a model
+thread or spending a delivery slot. Other runnable work remains available.
+The original private steward retains its own portfolio source and provider
+checks; a local watch requires neither a private binding nor portfolio access.
+
+The local observation hashes canonical work fields from the complete native
+Agent Todo read in that Goal. Monitor bookkeeping and ordering do not create
+work transitions. This is current work-state observation, not a claim that the
+business or Goal has completed. Busy/queued user work wins; a paused watch,
+revoked Agent, stopped/replaced Goal or mismatched Session cannot poll. A host
+restart reads the original native deadline and Core operation, including a
+failed or unknown attempt, rather than replaying it. External Todo edits are
+observed within the existing one-minute wake hint; the hint is not authority.
+This watch does not generate a report, execute a business task, send an
+external reply or complete the natural-language/periodic-task user journey.
+
+Earlier packaged browser evidence demonstrated only the finite host/API path
+with disposable real Core/File data and a synthetic model/provider. It did not
+establish the correct Agent hierarchy, real-model adoption or natural-deadline
+acceptance. The UI withdrawal does not alter the original private steward's
+subscription, published reports, pending requests or publication route.
+
+### Calendar reports in an existing Agent Session
+
+In **Goal settings → Capability center → Periodic reports**, use the
+`weekly-progress` profile and choose an existing **Report conversation**.
+The selector lists only this Goal's already bound managed Agent Sessions. It
+does not create an Agent or assign a legacy Goal-wide conversation. Enable
+reports, set a daily or weekly calendar and optional first date, then use the
+existing preview/apply controls. Reload reads back the saved destination,
+calendar and original conversation's execution/delivery status. No calendar
+means no automatic local Session report; the status asks for a report time.
+After verified delivery, **Read this period's full report** opens the existing
+original-message report viewer, including its full body and **Copy Markdown**.
+The link is available only while that exact returned body is readable.
+
+This is an explicit Goal override. Machine defaults, registration, opening a
+Session and installation do not enroll a conversation. The reserved route
+`managed-session:<original-session-id>` is persisted in the existing
+periodic-report configuration; it is a destination reference, not an execution
+or permission grant. Other profiles and configured Goal Channel routes retain
+their existing path. Local Session reports do not enter the generic CLI
+report-consumption hook or gain a second Goal Channel delivery.
+
+The existing idle host wake admits the calendar window into the selected
+Session's original Core worker. Native periodic-report owns the finite
+generation Todo, fixed window, frozen source/editorial artifacts, validator,
+publication candidate and cursor. Native Turn owns the original executor,
+lease, validation, completion and quota. Busy or queued user work has priority;
+another registered Agent cannot claim this route. Paused/stopped Goals,
+removed registration and replaced Session/Goal identities refuse execution.
+
+The local source reads the complete original Goal's current native tasks and
+completed Agent history without a display limit, retaining full rows and
+observed times in the frozen source. The report distinguishes this fixed
+window's recorded completions from older history and current work. It does not
+reconstruct task state as of a past deadline, independently certify linked
+artifacts or read another Goal's portfolio. Source overflow or an unavailable
+complete read fails visibly rather than silently dropping trailing tasks.
+
+After native generation commits, the adapter writes one complete report to
+that original Core conversation and independently reads back its exact body,
+message and Turn identity. Only then does the existing publication cursor
+advance. The normal Core finalizer uses the same message identity. A lost
+append/cursor response reconciles that original body after restart without a
+second model call or duplicate publication. Cached validated generation can
+resume only the native journal's permitted remaining effects; an earlier
+partial/failed answer remains historical evidence.
+
+Use **Enable** to pause the same configuration; the original task, frozen
+window, failure and message history remain. Re-enable that exact plan to
+continue eligible native recovery. An unpublished frozen window prevents a
+schedule/destination change from stranding it. Failed/unknown generation is
+retained for repair by its original execution owner; toggling the setting does
+not replay it. This slice does not add cancellation of an invalid authored
+window, natural-language schedule authoring or arbitrary task profiles. Those
+remain part of the existing general recurring-task work.
+
+The packaged journey uses disposable Core/SQLite state and synthetic model
+and provider transports. It checks future-date inactivity, preview/apply/reload,
+one automatic full-body return, retained failure and pause. The 390×844 view is
+viewport emulation; this evidence does not establish real-model report quality,
+production backlog completion or a natural production deadline.
+
+| Before: raw route | After: original Agent conversation and verified return |
+| --- | --- |
+| ![Previous report settings](../assets/personal-workspace/steward-reports/session-before-desktop.png) | ![Report returned to the selected original conversation](../assets/personal-workspace/steward-reports/session-delivered-desktop.png) |
+
+| Temporarily unknown delivery state, narrow | Paused configuration |
+| --- | --- |
+| ![Unknown report delivery state on a narrow viewport](../assets/personal-workspace/steward-reports/session-unknown-narrow.png) | ![Paused original report configuration](../assets/personal-workspace/steward-reports/session-paused-desktop.png) |
+
+### Original private steward
 
 The original-Session host bridge now runs a bounded native Turn through the
 existing Chat worker and Codex app-server connection. It uses the explicit

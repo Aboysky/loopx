@@ -19,6 +19,7 @@ import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generat
 import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { monitorIsActive } from "../todos/summary_lanes.ts";
+import {compactSelectedTodoSource} from "../quota/context_delivery.ts";
 
 function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): JsonObject | null {
   const wait = jsonObject(request.vision_wait_state);
@@ -763,7 +764,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
     const matches = results.filter(result => result.command === read.command);
     if (matches.length === 0) { pending.push(read); continue; }
     const result = matches[0];
-    const content = jsonObject(result.content);
+    let content = jsonObject(result.content);
     let valid = matches.length === 1 && content !== null && content.ok !== false && !result.error_code;
     let selectedTodoRecord: JsonObject | null = null;
     if (valid && read.source === "selected_todo") {
@@ -788,6 +789,10 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
     }
     if (valid && read.source === "goal_acceptance") {
       valid = (!!configuredGoalChecks(jsonObject(content!.goal_acceptance_contract)) || !!jsonObject(content!.goal_acceptance_contract)?.outcome_requirements || !!jsonObject(content!.goal_acceptance_contract)?.goal_objective);
+    }
+    if (valid && read.source === "selected_todo") {
+      content = compactSelectedTodoSource(content!);
+      selectedTodoRecord = jsonObject(content.todo);
     }
     if (!valid) {
       pending.push(read);
