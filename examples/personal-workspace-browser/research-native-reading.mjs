@@ -19,6 +19,12 @@ export const researchNativeReadingScenario = {
       {id: "partial", values: [8, 7, 9], higher: true, retained: 1, partial: true, expected: [9, null, 9, 7]},
       {id: "empty", values: [], higher: true, retained: null, partial: true, expected: [null, null, null, null]},
       {id: "long-unit", values: [3, 1, 2], higher: false, retained: 0, unit: "synthetic-unit-".repeat(5), expected: [1, 3, 2, 3]},
+      {id: "decimal", values: [0.8123456789012345, 0.8765432109876543, 0.8123456789012345], higher: true, retained: 1,
+        expected: [0.8765432109876543, 0.8123456789012345, 0.8123456789012345, 0.8765432109876543], display: ["0.8765", "0.8123", "0.8123", "0.8765"], gain: "+0.0642"},
+      {id: "tiny", values: [0.0000001234567890123456, 0.0000001123456789012345], higher: true, retained: 1,
+        expected: [0.0000001234567890123456, 0.0000001234567890123456, 0.0000001123456789012345, 0.0000001123456789012345], display: ["1.235E-7", "1.235E-7", "1.123E-7", "1.123E-7"], gain: "-1.111E-8"},
+      {id: "large", values: [123456789.12345679], higher: true, retained: 0,
+        expected: [123456789.12345679, 123456789.12345679, 123456789.12345679, 123456789.12345679], display: ["1.235E8", "1.235E8", "1.235E8", "1.235E8"], gain: "0"},
     ];
     const root = await mkdtemp(resolve(tmpdir(), "loopx-native-reading-"));
     let owner, page;
@@ -40,6 +46,8 @@ export const researchNativeReadingScenario = {
           submitted_at: null, observed_at: `2026-01-01T00:0${index + 1}:00Z`, valid: value !== null, value,
           citation: {source_id: "facts", first_line: index + 1, last_line: index + 1},
         }));
+        if (c.gain) native.comparison = {baseline_result_id: "result-0",
+          retention_citation: {source_id: "facts", first_line: c.retained + 1, last_line: c.retained + 1}};
         const text = c.values.map((v, i) => `Synthetic observation ${i}: value ${v ?? "unknown"}; valid ${v !== null}.`).join("\n") || "No measurements captured.";
         a.artifacts["facts.txt"] = text;
         a.artifacts["native.json"] = JSON.stringify(native);
@@ -67,8 +75,12 @@ export const researchNativeReadingScenario = {
           if (c.expected[index] === null) {
             assert.equal(await reading.locator("button").count(), 0);
             assert.match(await reading.innerText(), /未知/);
-          } else assert.equal(await reading.locator("strong").textContent(), String(c.expected[index]));
+          } else {
+            assert.equal(await reading.locator("strong").textContent(), c.display?.[index] ?? String(c.expected[index]));
+            assert((await reading.locator("button").getAttribute("aria-label")).includes(String(c.expected[index])), "The exact native value remains bound to the evidence action");
+          }
         }
+        if (c.gain) assert.equal(await page.locator("[data-retained-improvement]").textContent(), c.gain);
         assert.match(await native.innerText(), c.higher ? /越高越好/ : /越低越好/);
         assert.match(await native.locator(".research-native-best .research-native-unit").textContent(), new RegExp(c.unit ?? "points"), "The raw unit remains visible even when no valid measurement exists");
         assert.match(await native.locator(".research-native-scope").innerText(), new RegExp(`${c.values.filter(v => v !== null).length} / ${c.values.length}.*有效结果`));
@@ -79,6 +91,7 @@ export const researchNativeReadingScenario = {
         await details.locator(":scope > summary").focus();
         await page.keyboard.press("Enter");
         assert.match(await details.innerText(), /2026-01-01T00:00:00Z/);
+        if (c.display) for (const value of c.expected) assert((await details.innerText()).includes(String(value)), "Expanded sources retain the full native precision");
         assert(await details.evaluate(e => parseFloat(getComputedStyle(e).fontSize) >= 14));
         assert(await native.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
         if (c.id === "lower-negative") {
@@ -113,6 +126,9 @@ export const researchNativeReadingScenario = {
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
       await page.reload({waitUntil: "domcontentloaded"});
       await page.getByRole("region", {name: "Native measurements", exact: true}).waitFor();
+      await selector.selectOption({label: "decimal"});
+      await page.waitForFunction(() => document.querySelector('[data-native-point="best_valid"] strong')?.textContent === "0.8765");
+      assert.equal(await page.locator("[data-retained-improvement]").textContent(), "+0.0642");
       await page.getByRole("button", {name: "About native measurements", exact: true}).focus();
       await page.getByRole("tooltip").waitFor({state: "visible"});
       await page.keyboard.press("Escape");
@@ -121,7 +137,7 @@ export const researchNativeReadingScenario = {
       assert.equal(readback.mutation_attempts, 0);
       assert.deepEqual(errors, []);
       return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [],
-        note: "real-owner native result roles: signed/zero/invalid/missing/partial, exact citations, readable desktop/390/200%, Chinese and English; no mutation"};
+        note: "real-owner native result roles: signed/zero/invalid/missing/partial, compact decimal/tiny/large values with full-precision details, exact citations, readable desktop/390/200%, Chinese and English; no mutation"};
     } finally {
       await page?.close();
       await owner?.close();

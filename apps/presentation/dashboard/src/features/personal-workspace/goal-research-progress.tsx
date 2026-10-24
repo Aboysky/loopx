@@ -98,12 +98,24 @@ export function episodeQuestionGroups<T extends {episode_id: string}>(result: Tr
   });
 }
 
+// Keep headline values readable without rounding a nonzero measurement to zero.
+// Full native precision remains available in the existing evidence/details.
+function formatNativeMeasurement(value: number, zh: boolean, signed = false) {
+  const magnitude = Math.abs(value);
+  const scientific = magnitude > 0 && (magnitude < 0.0001 || magnitude >= 1_000_000);
+  return new Intl.NumberFormat(zh ? "zh-CN" : "en", {
+    maximumFractionDigits: 4,
+    ...(scientific ? {notation: "scientific", maximumSignificantDigits: 4} : {}),
+    signDisplay: signed ? "exceptZero" : "auto",
+  }).format(value === 0 ? 0 : value);
+}
+
 // Format the native owner's existing projection, without deriving a gain,
 // deciding adoption, or borrowing values from another pack.
 function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<ResearchProgressPack["native_outcomes"]>; zh: boolean; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const outcomes = native.projection, improvement = outcomes.retained_improvement;
   if (!improvement) return null;
-  const format = (value: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumSignificantDigits: 10, signDisplay: "exceptZero"}).format(value);
+  const format = (value: number) => formatNativeMeasurement(value, zh, true);
   const label = zh ? "已采用成果增量" : "Retained improvement";
   return <section className="research-retained-improvement" aria-label={label}>
     <div className="research-progress-title"><h4>{label}</h4><ContextHelp label={zh ? "成果增量说明" : "About retained improvement"}>
@@ -113,7 +125,7 @@ function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<Rese
     {native.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获 · 当前结果未核验" : "Historical capture · current result unverified"}</p> : null}
     <details><summary aria-label={`${label}: ${improvement.value === null ? (zh ? "未知" : "Unknown") : `${format(improvement.value)} ${outcomes.metric.unit}`}`}>
       <strong data-retained-improvement>{improvement.value === null ? "—" : format(improvement.value)}</strong>
-      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit} · {outcomes.metric.name}{improvement.baseline ? ` · ${zh ? "基线" : "baseline"} ${improvement.baseline.value}` : ""}</span><ChevronDown size={14} aria-hidden/>
+      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit} · {outcomes.metric.name}{improvement.baseline ? ` · ${zh ? "基线" : "baseline"} ${formatNativeMeasurement(improvement.baseline.value, zh)}` : ""}</span><ChevronDown size={14} aria-hidden/>
     </summary><dl>
       {([[improvement.baseline, zh ? "比较基线" : "Comparison baseline"], [outcomes.retained, zh ? "实际保留" : "Actually retained"]] as const).map(([point, title]) => <div key={title}><dt>{title}</dt><dd>{point ? <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{String(point.value)} · {point.candidate_ref}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未知" : "Unknown")}</dd></div>)}
       <div><dt>{zh ? "保留依据" : "Retention evidence"}</dt><dd>{improvement.retention_citation ? <button type="button" onClick={event => onCitation(improvement.retention_citation!, event.currentTarget)}>{zh ? "查看原文" : "Read original evidence"}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未采集" : "Uncaptured")}</dd></div>
@@ -133,7 +145,7 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
     const point = outcomes[key];
     return <div key={key} data-native-point={key}><dt>{zh ? cn : en}</dt><dd>{point ?
       <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)} aria-label={`${zh ? cn : en}: ${String(point.value)} ${outcomes.metric.unit} · ${zh ? "查看原始证据" : "Read original evidence"}`}>
-        <strong>{String(point.value)}</strong>{key === "best_valid" ? <span className="research-native-unit">{outcomes.metric.unit}</span> : null}<FileText size={14} aria-hidden/>
+        <strong>{formatNativeMeasurement(point.value, zh)}</strong>{key === "best_valid" ? <span className="research-native-unit">{outcomes.metric.unit}</span> : null}<FileText size={14} aria-hidden/>
       </button> : <span className="research-native-unknown">{zh ? "未知" : "Unknown"}{key === "best_valid" ? <span className="research-native-unit"> · {outcomes.metric.unit}</span> : null}</span>}</dd></div>;
   };
   return <section className="research-native-results" aria-label={zh ? "原生测量" : "Native measurements"}>
@@ -158,7 +170,7 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
         <div><dt>{zh ? "来源" : "Source"}</dt><dd>{native.artifact}<br/><code>{native.artifact_sha256}</code></dd></div></dl>
       <dl>{points.map(([key, cn, en]) => {
         const point = outcomes[key];
-        return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submission"} {point.submission_index} · {zh ? "提交时间" : "Submitted at"}: {point.submitted_at ?? (zh ? "未知" : "Unknown")}<br/>{zh ? "收到结果" : "Result received"}: {point.observed_at}</dd></div> : null;
+        return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd>{String(point.value)} {outcomes.metric.unit}<br/><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submission"} {point.submission_index} · {zh ? "提交时间" : "Submitted at"}: {point.submitted_at ?? (zh ? "未知" : "Unknown")}<br/>{zh ? "收到结果" : "Result received"}: {point.observed_at}</dd></div> : null;
       })}</dl>
       <ul>{outcomes.limitations.map((line, i) => <li key={i}>{line}</li>)}</ul>
     </details>
