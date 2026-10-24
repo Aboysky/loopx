@@ -9,7 +9,7 @@ or scientific qualification.
 
 Ordinary reading now exposes the initial, best, retained and last valid result
 before model judgments. Unknown retention and invalid-result coverage remain
-visible; source and cost details remain collapsed. The 390px source view retains
+visible; source and cost details remain collapsed. The desktop source view retains
 the original citation in place. The `research-history` packaged scenario covers
 this real backend journey alongside its existing dense, historical, unavailable,
 scope-switching and language fixtures, and verifies zero mutation attempts.
