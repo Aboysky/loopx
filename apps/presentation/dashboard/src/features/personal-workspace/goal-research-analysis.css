@@ -28,7 +28,7 @@
 .analysis-episode > summary { min-height: 48px; padding-block: 12px; cursor: pointer; list-style: none; }
 .analysis-episode > summary::-webkit-details-marker { display: none; }
 .analysis-episode-name { min-width: 0; max-width: 76ch; font-weight: 500; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-.analysis-episode[open] > summary .analysis-episode-name { display: block; }
+.analysis-episode[open] > summary .analysis-episode-name { display: block; -webkit-line-clamp: unset; overflow: visible; }
 .analysis-verdict-label { display: none; }
 .analysis-episode-exceptions { display: flex; flex-direction: column; color: var(--pw-muted); }
 .analysis-episode > summary > svg { flex-shrink: 0; }
@@ -81,7 +81,9 @@
 
 /* Readback has one status surface, shared by the summary and its detail. */
 .analysis-read-error,.analysis-read-empty{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-block:12px;color:var(--pw-muted)}
-.analysis-read-error>button,.analysis-read-empty>button{display:inline-flex;align-items:center;gap:4px;min-height:44px;border:1px solid var(--pw-line);border-radius:6px;padding:8px 12px;color:var(--pw-text);background:var(--pw-bg);font:inherit;cursor:pointer}
+.analysis-read-empty{margin-block:0 16px;padding:10px 12px;border:1px solid var(--pw-line);border-radius:8px;background:var(--pw-hover);font-size:var(--text-body)}
+.analysis-read-empty>button{margin-inline-start:auto}
+.analysis-read-error>button,.analysis-read-empty>button{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:44px;border:1px solid var(--pw-line);border-radius:6px;padding:8px 12px;color:var(--pw-text);background:var(--pw-bg);font:inherit;cursor:pointer}
 .analysis-read-error>button:disabled,.analysis-read-empty>button:disabled{opacity:.5;cursor:default}
 .analysis-read-loading{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;padding-block:16px}
 .analysis-read-loading>span{height:5rem;border-radius:6px;background:var(--pw-line)}

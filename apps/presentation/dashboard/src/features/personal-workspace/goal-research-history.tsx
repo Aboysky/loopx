@@ -1,6 +1,6 @@
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
-import {ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
+import {AlertCircle, ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {ResearchRecordSearch} from "./research-record-browser";
 import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
@@ -368,6 +368,16 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const progressiveOverview = progressive && !readingSelection;
   const jump = (target: HTMLElement | null) => {target?.focus({preventScroll: true}); target?.scrollIntoView({block: "start"});};
   const showHistory = () => {analysis.close(); requestAnimationFrame(() => jump(detail.current ?? historyAnchor.current));};
+  const refresh = () => {
+    setRevision(n => n + 1);
+    void analysis.read().catch(() => undefined);
+  };
+  const focusResearchMode = () => {
+    const control = document.querySelector<HTMLElement>("[data-testid='goal-research-mode']");
+    control?.scrollIntoView({block: "nearest"});
+    control?.querySelector<HTMLElement>("button:not(:disabled)")?.focus({preventScroll: true});
+  };
+  const readFailure = error || history.error;
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     {progressiveOverview ? <>
       <nav className="research-reading-order" aria-label={zh ? "研究阅读" : "Research reading"}>
@@ -398,10 +408,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <div className="research-analysis-scoped-action">{!progressiveOverview ? <ResearchAnalysisButton analysis={analysis}/> : null}
           {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
         </div>
-        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => {
-          setRevision(n => n + 1);
-          void analysis.read().catch(() => undefined);
-        }}><RefreshCw size={15} aria-hidden/></button>
+        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={refresh}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
     <div className="research-history-meta">
       <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
@@ -409,12 +416,27 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p>
       {!readingSelection ? displayControl : null}
     </div>
-    {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
-    {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
+    {readFailure ? <div className="research-history-read-error" role="alert">
+      <AlertCircle size={18} aria-hidden/>
+      <div><strong>{read.events.length ? (zh ? "刷新失败，当前记录已保留" : "Refresh failed; current records are preserved") : copy.failure}</strong>
+        <p>{read.events.length ? (zh ? "可继续阅读，或重试获取最新记录。" : "Keep reading, or retry for the latest records.") : (zh ? "请检查本地服务后重试；技术详情默认收起。" : "Check the local service and retry. Technical details stay collapsed.")}</p>
+        <details><summary>{zh ? "技术详情" : "Technical details"}</summary><code>{readFailure}</code></details>
+      </div>
+      <button type="button" disabled={busy} onClick={refresh}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
+    </div> : null}
+    {!busy && !readFailure && read.total === 0 ? <div className="research-history-empty">
+      <FlaskConical size={22} aria-hidden/>
+      <div role="status"><strong>{zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet"}</strong><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></div>
+      <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
+    </div> : null}
     {!progressiveOverview ? <><ResearchAnalysisStatus analysis={analysis}/>
       {!readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}
       <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/></> : null}
-    {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
+    {busy && !read.events.length ? <div className="research-history-loading" role="status" aria-label={copy.loading}>
+      <span className="research-history-loading-label">{copy.loading}…</span>
+      <div className="research-history-loading-phases" aria-hidden>{Array.from({length: 3}, (_, index) => <span key={index}/>)}</div>
+      <div className="research-history-loading-chart" aria-hidden>{Array.from({length: 18}, (_, index) => <span key={index}/>)}</div>
+    </div> : null}
     {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
 
       {selected ? <div className="research-history-detail" ref={detail} role="region" aria-label={selected.latest.title} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>

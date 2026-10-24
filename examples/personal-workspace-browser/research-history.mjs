@@ -413,8 +413,12 @@ export const researchHistoryScenario = {
       await history.getByRole('button',{name:'刷新记录',exact:true}).click();
       await history.getByRole('alert').waitFor();
       assert.match(await history.textContent(),/76 \/ 76/,'A failed refresh retains the complete real capture');
+      const readError = history.locator('.research-history-read-error');
+      assert.match(await readError.innerText(), /刷新失败，当前记录已保留/);
+      assert.equal(await readError.locator('details').evaluate(element => element.open), false, 'Technical failure detail stays secondary');
+      await readError.screenshot({path:resolve(outputDir,'research-history-refresh-error.png'),animations:'disabled'});
       unavailable=false;
-      await history.getByRole('button',{name:'刷新记录',exact:true}).click();
+      await readError.getByRole('button',{name:'重试',exact:true}).click();
       await history.getByRole('alert').waitFor({state:'hidden'});
       await page.setViewportSize({width:390,height:844});
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
@@ -1098,6 +1102,11 @@ print(json.dumps([
       const previousOwner = owner; owner = emptyOwner; await previousOwner.close();
       await page.reload({waitUntil: "networkidle"});
       await history.getByRole("status").filter({hasText: "0 / 0"}).waitFor();
+      const emptyHistory = history.locator('.research-history-empty');
+      await emptyHistory.screenshot({path: resolve(outputDir, 'research-history-empty.png'), animations: 'disabled'});
+      await emptyHistory.getByRole('button', {name: '查看研究模式', exact: true}).click();
+      assert(await page.locator("[data-testid='goal-research-mode']").evaluate(element => element.contains(document.activeElement)),
+        'The empty-state action focuses the existing research-mode control');
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
 
       comparisonFixture = true;
@@ -1159,8 +1168,10 @@ print(json.dumps([
       await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison-mobile.png'), animations: 'disabled'});
       await rows.last().locator(':scope > summary').click();
       await rows.last().getByText(/Synthetic evidence connects/).waitFor();
-      assert(await rows.last().locator('.research-assessment-name').evaluate(element => element.clientHeight >= element.scrollHeight),
-        'Expanding the row restores the complete question without a second copy');
+      assert(await rows.last().locator('.research-assessment-name').evaluate(element => {
+        const style = getComputedStyle(element);
+        return style.display === 'block' && style.webkitLineClamp === 'none' && style.overflow === 'visible';
+      }), 'Expanding the row restores the complete question without a second copy');
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.screenshot({path: resolve(outputDir, 'research-assessment-expanded-mobile.png'), animations: 'disabled'});
       await metricDetail.getByRole('button', {name: '收起指标详情', exact: true}).click();
