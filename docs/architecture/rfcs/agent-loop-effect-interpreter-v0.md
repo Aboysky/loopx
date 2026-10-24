@@ -763,9 +763,16 @@ App consumers, and their full fallback. A standalone diff helper is insufficient
 | Turn adoption | Consume the same full/delta context owner while retaining Turn signatures and outer-executor effects. Host-only settlement execution remains distinct from a manual CLI agent's executable settlement obligations. |
 | Choice of representation | Emit a delta only when it is smaller after binding/removal metadata. Otherwise emit full context. Do not truncate values or change source selection to meet a byte target. |
 
-**Source and change boundaries.** Start with registered complete Goal narrative,
+**Source and change boundaries.** Include registered complete Goal narrative,
 canonical acceptance requirement bodies and selected Todo text/notes, retaining
-their exact strings and source identity. Eligibility comes from the existing
+their exact strings and source identity. The Explore typed owner also supplies
+its reusable evidence and instruction subtrees: recorded findings, measurement
+feedback and their provenance/applicability, plus guidance and writeback examples.
+Keep orchestration gates, selected/rejected branches, source health, pagination
+revisions and unknown fields fresh. Evidence status inside a finding is part of
+that exact evidence record, not live execution admission; any changed array is
+replaced completely. Do not ignore timestamps or revisions inside reusable data.
+Eligibility comes from the existing
 source adapter and typed field contract, never a classifier of sentence meaning.
 Keep current source revision, completeness, failures, status/claim, user gates,
 adoption and other execution-control fields in the fresh portion. An unknown or
@@ -777,6 +784,16 @@ unchanged requirement body. Inside a source payload, arrays remain atomic in
 the first version. A changed field is replaced completely, including any late
 constraint; deleted fields have explicit removal paths. The owner reconstructs
 and compares against the complete target before releasing a delta.
+
+Stable source identities are internal matching keys. On the wire, unchanged
+subtrees carry readable current paths and a prior path only when their position
+moved; replacements carry a path and complete value, and removals a prior path.
+Do not repeat a long entity identity plus a location map for every subtree.
+Validate these paths against the current typed split before reconstructing;
+wire paths cannot nominate additional reusable fields. Include all binding,
+path, replacement and removal overhead in the full-versus-delta comparison.
+A narrow body-only saving is not an estimate of the packet's total reusable
+content; report eligible bytes and metadata separately from total bytes.
 
 **First real consumer and the compaction race.** The current native Codex CLI
 session adapter observes session identity; its capture/handoff release occurs
@@ -884,6 +901,59 @@ by disabling compaction. The next integration proof belongs at the existing
 host's final input assembly boundary for each consumer, with the shared typed
 projection following that qualified seam. This checkpoint keeps phase one open
 and does not reinterpret synthetic usage counters as token or outcome savings.
+
+**Small lifecycle hooks and capture-file recovery (architecture refinement for review).**
+Keep the negative native-hook results above as evidence about bulk hook injection,
+not a dependency that blocks the shared implementation. A lifecycle event can
+invalidate a baseline without transporting a large requirement document. The
+proposed recovery route is an ordinary complete read of the immutable capture;
+a recovery control message may therefore precede the complete source read.
+Dependent business work still requires the complete current source. This refines
+the earlier requirement to place all recovered text in the first post-compaction
+model request; it adds no owner question, admission or debit.
+
+| Owner | Responsibility and boundary |
+|---|---|
+| Existing quota/Turn producer | Compute the full authoritative result once and persist the immutable capture before publishing a presentation. Preserve the existing required-source, signature, selection and settlement owners. |
+| Shared TypeScript context projector | Bind Goal/Agent/session/epoch, capture and digest; compare registered source bodies; keep current control/source facts fresh; choose smaller exact delta or full. Reconstruct against the complete target before release. |
+| Codex lifecycle adapter | Observe startup/resume/fork/compaction and invalidate session continuity. Carry a small event and capture recovery reference, never the complete packet. Hook configuration/trust and event coverage must be qualified on each actual host. |
+| Existing local capture/detail IO | Read the original capture in bounded pages, preserving complete text and validating target identity/digest. A preview or successful file write does not establish complete consumption. No new guard or quota operation is needed to recover presentation. |
+
+**Sequence and failure handling.** First use or unknown continuity selects full.
+Only an intact, observed delivery in the same session/epoch may become the warm
+baseline; a stored file alone cannot. Generate the next presentation against that
+baseline while retaining the current full capture. If the epoch moves during
+preparation, discard the pending delta and use full recovery. If the event arrives
+after publication, its small recovery reference points to that same current
+capture. A lost/truncated delta does not advance the confirmed baseline. Bound
+ancestry and force periodic full refresh; do not accumulate unbounded patch chains.
+
+The recovery wrapper catches primary-handler errors and emits a bounded full-read
+reference from the saved capture. Missing event observations or unknown wrapper
+health invalidate warm eligibility at the next ordinary entrypoint. Retry only
+presentation IO; never repeat admission or business effects. A missing/corrupt
+capture retains the existing source-recovery failure rather than fabricating a
+baseline. Treat event detection, intact delivery and complete file consumption as
+separate evidence. Recovery guidance does not become a new enforced user gate.
+
+**Implementation and qualification checkpoint.** The shared projector now has
+full/delta preparation and same-capture reconstruction through the existing Turn
+RPC, reused for ordinary quota context. Exact duplicate selected-Todo titles are
+elided only when the complete body is identical; distinct titles and source state
+remain intact. Real File/SQLite quota tests cover ordinary CLI and Codex App
+profiles, shared Turn source content, epoch loss, corrupt delta, unchanged source
+state and zero extra spend. This is a shipped-code proposal, not an enabled native
+warm adapter or installed App delivery.
+
+The native transport probe uses the actual shared projector, bounded tool reads
+and a small `SessionStart(compact)` reference. Its deterministic local provider
+requests the reads; it does not prove an autonomous solver follows the recovery
+route. Preserve the earlier bulk-hook and fail-open negatives. Qualify complete
+first read, warm delta, compaction, primary-handler failure and full target read
+from outgoing model inputs. Include every recovery page in cost and call counts;
+a smaller hook or packet alone is not a saving. The next integration is the
+existing ordinary quota capture/detail path plus the Codex lifecycle adapter for
+both phase-one consumers, without a second runner or a new approval flow.
 
 Qualification compares matched normal, replan and wait/recovery workloads with
 optional capability modes unchanged. Include first delivery, warm reuse, reset,
