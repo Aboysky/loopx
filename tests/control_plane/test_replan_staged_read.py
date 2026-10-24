@@ -56,6 +56,7 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     writer = _turn_envelope_result("replan_view", **params, stage="writeback")
     context = source["autonomous_replan_obligation"]["replan_context"]
     assert review["core_goal"] == context["core_goal"]
+    assert review["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
     assert review["planning_horizon"] == source.get("planning_horizon")
     assert review["uncovered_frontier"] == context["uncovered_frontier"]
     assert review["coverage_count"] == context["coverage_count"]
@@ -75,6 +76,82 @@ def test_staged_packet_budget_and_lossless_authority(stride):
         assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
         assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
     assert source == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("replan", [True, False])
+def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source(tmp_path, monkeypatch, provider, replan):
+    """Exercise the production preflight without a model or evaluator.
+
+    A full-source fixture alone missed the original bug: the model must be sent
+    the captured reader, while checkpoint selection still sees full context.
+    """
+    from benchmark.runtime import checkpoint
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    if not replan:
+        fixture["index"].write_text("")
+    wake = tmp_path / "wakes" / TURN
+    wake.mkdir(parents=True)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(tmp_path / "checkpoints"),
+        "components": [{"id": "code", "source_path": str(tmp_path / "code")}], "point_metadata": {}}))
+    executable = Path(sys.executable).with_name("loopx")
+    env = {**os.environ, "LOOPX_USAGE_PING": "0", "LOOPX_CLI": str(executable),
+        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_WAKE_LOG_DIR": str(wake.parent),
+        "LOOPX_PROJECT": str(fixture["project"]), "LOOPX_RUNTIME_ROOT": str(fixture["runtime"]),
+        "LOOPX_REGISTRY": str(fixture["registry"]), "LOOPX_GOAL_ID": GOAL, "LOOPX_AGENT_ID": AGENT,
+        "LOOPX_TURN_ENVELOPE": "0"}
+    # This boundary has no native session to capture. Stop only the optional
+    # artifact operation; real quota, selector and reader remain unmocked.
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_gate",
+        lambda *a, **k: {"capture_allowed": False, "reason": "synthetic_no_native_capture"})
+    run, commands = checkpoint.subprocess.run, []
+    def observe(command, **kwargs):
+        commands.append(command)
+        return run(command, **kwargs)
+    monkeypatch.setattr(checkpoint.subprocess, "run", observe)
+    receipt = {"turn_id": TURN, "mode": "heartbeat", "stage": "execute"}
+    try:
+        body = checkpoint.capture_before_replan(env, receipt, "original heartbeat instructions")
+        assert len(commands) == 1 and "--turn-envelope" not in commands[0]
+        assert "--decision-output-root" in commands[0]
+        source_path, view_path = wake / "checkpoint-start-guard.json", wake / "checkpoint-start-view.json"
+        source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
+        assert str(view_path) in body and str(source_path) not in body
+        assert body.endswith("original heartbeat instructions")
+        assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
+        assert source["heartbeat_receipt"] == view["heartbeat_receipt"]
+        assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
+        selection = view["interaction_contract"]["cli_channel"].get("selection_command")
+        if selection:
+            assert "--decision-output-root" in selection["command_args_template"]
+        selector = checkpoint.effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "select_replan", "quota": source, "goal_id": GOAL, "agent_id": AGENT,
+            "turn_instance_id": TURN}, large_local_snapshot=True)
+        assert selector["capture"] is replan
+        if not replan:
+            assert "replan_action_packet" not in view
+            return
+        assert source["autonomous_replan_obligation"]["replan_context"]["context_id"]
+        assert "replan_context" not in view["autonomous_replan_obligation"]
+        packet = view["replan_action_packet"]
+        assert "planning_guidance" not in packet
+        capture = Path(source["replan_read_path"])
+        assert capture.read_bytes() == source_path.read_bytes()
+        before = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
+        for stage in ("review", "writeback"):
+            result = run(shlex.split(packet[stage]), cwd=fixture["project"], env=env,
+                capture_output=True, text=True, timeout=60, check=True)
+            read = json.loads(result.stdout)
+            assert read["obligation_id"] == selector["obligation_id"]
+            assert read["stage"] == stage
+        assert {key: fixture[key].read_bytes() for key in before} == before
+        assert capture.read_bytes() == source_path.read_bytes()
+        assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
 
 
 def test_review_retains_scoped_dependencies_and_unknown_outcomes():
@@ -210,6 +287,33 @@ def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_p
     assert len(same_id) == 2 and same_id[0]["outcome_ref"] != same_id[1]["outcome_ref"]
     with pytest.raises(EffectRuntimeRejected, match="exact captured outcome reference"):
         _turn_envelope_result("replan_view", **params, stage="acceptance", outcome_ref="missing")
+
+
+def test_large_acceptance_is_not_repeated_in_cli_or_envelope_work_context(tmp_path):
+    from replan_packet_fixture import populated_replan_source
+
+    source = populated_replan_source(tmp_path, acceptance=True)
+    contract = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"]
+    other = copy.deepcopy(contract)
+    other["outcome_requirements"]["revision"] += 1
+    sources = [{"source": "goal_acceptance", "content": {"status": "loaded", "provider_revision": "fixture:1",
+        "goal_acceptance_contract": value}} for value in (contract, other)]
+    work = {"complete": True, "sources": sources}
+    source["interaction_contract"]["agent_channel"]["work_context"] = work
+    original = copy.deepcopy(source)
+    cli = _turn_envelope_result("replan_cli_view", payload=source)
+    envelope = build_turn_envelope(source)
+    for delivered in (cli["interaction_contract"]["agent_channel"]["work_context"], envelope["work_context"]):
+        matched, different = delivered["sources"]
+        assert matched["content"] == {"status": "loaded", "provider_revision": "fixture:1",
+            "context_read": cli["replan_action_packet"]["review"]}
+        assert different == sources[1]  # Another revision is not covered by this reader.
+        assert json_bytes(work) - json_bytes(delivered) > 200 * 1024
+    assert source == original
+    _, review, params = _views(source)
+    rows = review["acceptance_index"]["outcomes"]
+    for row, outcome in zip(rows, contract["outcome_requirements"]["outcomes"], strict=True):
+        assert _turn_envelope_result("replan_view", **params, stage="acceptance", outcome_ref=row["outcome_ref"])["outcome"] == outcome
 
 
 def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):

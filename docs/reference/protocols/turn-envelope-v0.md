@@ -103,7 +103,7 @@ objective, revision and requirement count remains visible; the acceptance read
 returns the complete original outcome. Identical IDs with different revisions
 or evidence remain distinct. Equal context/horizon copies share references;
 differing goal scopes remain separate. The full capture retains all evidence,
-legacy guidance and authoring examples. Explore has an optional, separately
+original guidance and authoring examples. Explore has an optional, separately
 readable basis; unavailable evidence remains unavailable. These views do not
 assess acceptance, infer execution from counts or make a dependency global.
 
@@ -114,6 +114,23 @@ fail without guard replay. Existing uncaptured calls and native journal captures
 without the CLI read route retain their prior delivery. The existing generic
 followthrough is now available with stride off; its result-class counts and
 observations remain evidence, not successful-work or goal-gain verdicts.
+
+Live decisions replace the previous method checklist and duplicate stride
+planning advice with compact goal, evidence and authority boundaries. Review
+delivers those boundaries once, with the facts; writeback delivers the existing
+format. Eligible Todo order and agent-proposed candidate rules remain revisable
+planning choices, while original priorities, constraints, budgets and stops
+remain binding. Old captures retain their original text. This is an intentional
+change to advisory prompting, not a lossless claim about model behavior.
+
+The benchmark checkpoint preflight uses the same CLI decision capture with
+TurnEnvelope off. It retains the complete captured source for checkpoint
+selection and verification, and sends the projected CLI view to the model.
+The view's review/writeback commands read that exact observation; capture does
+not rerun admission, change evaluation opportunities or select a strategy.
+Identical work-context acceptance copies use that same read; other revisions
+stay inline. A source exceeding the RPC request bound uses the existing bounded
+local-snapshot transport for pure projection, preserving both transport limits.
 
 对使用 `--decision-output-dir` 或 `--decision-output-root` 的成功 replan，CLI 和
 TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读取。两步绑定同一
@@ -129,6 +146,16 @@ TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读�
 移除预填的 Vision／stride 答案示例，保留字段限制、合法选项、来源绑定和结算规则。
 stride 的必需字段与 basis 选项独立展示，完整快照仍可用于按需查看示例与源材料。
 这是有意减少建议性提示，不删除验收、权限或停止义务，也不证明自主决策质量提升。
+
+新决定用精简的目标、证据和权限边界替换原方法清单及重复的 stride 规划建议：复盘
+一次交付这些边界与事实，写回提供既有格式。可执行 Todo 的次序和 agent 自拟候选
+规则可以调整，原有优先目标、硬约束、预算与停止仍须保留。旧快照保留原文；这是
+有意改变建议性提示，不能称为对模型行为无损。benchmark checkpoint 前置检查也
+使用同一 CLI 捕获入口，TurnEnvelope 关闭仍生效：完整源包供 checkpoint 选择和
+校验，模型读取投影视图，再从同一观察分段读取。不重复准入、不改变评测机会，
+也不替 agent 选择策略。
+work context 中完全相同的验收副本复用该读取，不同版本保留。超过 RPC 请求限额的
+完整源包用既有有界本地快照传输做纯投影；两种传输限额均不放宽。
 
 Regression budgets use compact UTF-8 JSON, separately from compute quota and
 provider tokens. The synthetic workload uses a real append index with 1,500

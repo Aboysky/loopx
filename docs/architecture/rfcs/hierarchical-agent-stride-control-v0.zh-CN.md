@@ -648,6 +648,9 @@ Todo 来源缺失和省略数量明确保留；缺少观测不等于没有执行
 File/SQLite 源码测试和真实规模 packet 预算验证传输与写回连续性；已安装采用、真实
 模型决策及可比成果/成本收益仍待资格化。不新增规划回执、模型 checkpoint 或强制
 改变方向的要求。
+读取入口用精简的语义边界和既有 stride 格式替换重复方法指导。benchmark 前置检查
+通过 CLI 捕获原决定，在 TurnEnvelope 关闭时也交付分段视图；仅保留完整 checkpoint
+源包不能证明模型实际收到了实验处理。
 
 下一轮输入还通过 `ordinary_work` 与各 Todo 的 `ordinary_evidence_refs` 返回已
 声明工作在决定之后的普通回写。详情最多六项，保留总数、省略数和稳定 history
