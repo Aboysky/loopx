@@ -9,6 +9,84 @@ import type { JsonObject } from "../runtime_decode.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import {goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
+
+/** Registration and current Goal lifetime are observed by the host, never by
+ * a message or the selected executor/model. This creates no scheduling grant. */
+export function admitManagedSessionIdentity(params: JsonObject): JsonObject {
+  const goal = requireJsonObject(params.goal, "original registered Goal");
+  const identity = goalAgentConversationIdentity({goal_id: goal.goal_id, managed_agent_id: params.managed_agent_id});
+  if (params.goal_active !== true || !Array.isArray(goal.registered_agents)
+      || !goal.registered_agents.includes(identity.managed_agent_id)
+      || goal.goal_instance_id != null && (typeof goal.goal_instance_id !== "string"
+        || !/^[A-Za-z0-9._-]{1,160}$/.test(goal.goal_instance_id))
+      || params.workspace_path !== goal.workspace_path) {
+    throw new EffectRuntimeRequestError("the managed Agent must belong to the active local Goal and workspace");
+  }
+  return {...identity, goal_instance_id: goal.goal_instance_id ?? null};
+}
+
+/** Local owner Sessions reuse the same governed Turn host. Registration is a
+ * selection, not a grant: the native Turn owner still admits the actual work.
+ * A bound steward keeps its stricter provider/source admission below.
+ */
+export function admitManagedSessionTurn(params: JsonObject): JsonObject {
+  const session = requireJsonObject(params.session, "managed Session");
+  const goal = requireJsonObject(params.goal, "original Goal");
+  const request = requireJsonObject(params.request, "native Turn request");
+  const actor = requireJsonObject(request.actor, "managed Session actor");
+  const turn = params.turn == null ? null : requireJsonObject(params.turn, "current Chat Turn");
+  if (resolveConversationScope(session).kind !== "owner_goal"
+      || session.project_context != null || session.steward_context != null
+      || session.session_mode !== "managed_runtime" || session.agent_id !== "codex" || session.executor_endpoint_id !== "codex"
+      || session.adapter_kind !== "codex_app_server" || session.upstream_mode === "goal"
+      || session.status === "closed" || params.goal_active !== true
+      || goal.goal_id !== session.goal_id || goal.goal_instance_id !== (session.goal_instance_id ?? null)
+      || !Array.isArray(goal.registered_agents) || !goal.registered_agents.includes(actor.agent_id)
+      || session.managed_agent_id !== actor.agent_id
+      || session.managed_workspace_path !== goal.workspace_path
+      || typeof goal.workspace_path !== "string" || !goal.workspace_path) {
+    throw new EffectRuntimeRequestError("select an active local Goal's managed Codex conversation and a registered Agent");
+  }
+  const fields = ["schema_version", "goal_id", "goal_instance_id", "agent_id", "session_id", "workspace_path"];
+  if (Object.keys(actor).some(key => !fields.includes(key))
+      || actor.schema_version !== "loopx_managed_session_actor_v0"
+      || actor.goal_id !== goal.goal_id || actor.goal_instance_id !== goal.goal_instance_id
+      || actor.workspace_path !== goal.workspace_path
+      || actor.session_id !== session.session_id
+      || typeof actor.agent_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(actor.agent_id)
+      || typeof actor.session_id !== "string" || !/^[a-f0-9]{32}$/.test(actor.session_id)) {
+    throw new EffectRuntimeRequestError("the native Turn must retain its original managed Session and Goal lifetime");
+  }
+  const observationOnly = request.work_kind === "monitor";
+  const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
+    ...(observationOnly ? ["monitor_deadline", "monitor_lease_version"] : [])];
+  if (Object.keys(request).some(key => !requestFields.includes(key))
+      || request.operation !== "native_turn" || request.host !== "codex-app-server" || !["native_turn", "monitor"].includes(String(request.work_kind))
+      || request.validation_command !== null
+      || typeof request.turn_instance_id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(request.turn_instance_id)
+      || request.todo_id !== null && (typeof request.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(request.todo_id))) {
+    throw new EffectRuntimeRequestError("managed work uses the native task's existing validation, without caller commands");
+  }
+  if (observationOnly) {
+    const monitor = requireJsonObject(params.monitor_todo, "original managed Session monitor");
+    if (monitor.target_key !== `managed-session-watch.${session.session_id}`
+        || monitor.task_class !== "continuous_monitor" || monitor.action_kind !== "local_runtime_observe"
+        || monitor.claimed_by !== actor.agent_id || ![true, "true"].includes(monitor.watch_only as boolean | string)
+        || monitor.status !== "open" || monitor.todo_id !== request.todo_id
+        || typeof request.monitor_deadline !== "string" || request.monitor_deadline !== monitor.next_due_at
+        || !Number.isSafeInteger(request.monitor_lease_version) || Number(request.monitor_lease_version) < 0) {
+      throw new EffectRuntimeRequestError("a local watch must retain its original Agent, Session, Todo and deadline");
+    }
+  }
+  if (turn ? turn.session_id !== session.session_id || turn.turn_id !== session.active_turn_id
+      || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
+      || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request)
+    : session.active_turn_id || params.queued_turn_count !== 0) {
+    throw new EffectRuntimeRequestError("the original conversation is busy or no longer owns this Turn; retain its current work");
+  }
+  return {actor, workspace_path: goal.workspace_path, host: "codex-app-server", observation_only: observationOnly};
+}
 
 export const STEWARD_MANAGED_ACTOR_SCHEMA = "loopx_steward_managed_actor_v0";
 const AGENT_ID = "steward";
@@ -276,6 +354,16 @@ export function observeStewardPortfolio(params: JsonObject): JsonObject {
   if (JSON.stringify(goals.map(row => String(row.goal_id)).sort()) !== JSON.stringify(expected)) {
     throw new EffectRuntimeRequestError("the portfolio observation omitted authorized Goals");
   }
+  const facts = goals.filter(row => row.goal_id !== params.actor_goal_id)
+    .sort((a, b) => String(a.goal_id).localeCompare(String(b.goal_id)))
+    .map(row => Object.fromEntries(["goal_id", "goal_instance_id", "activation_state", "quality",
+      "attention", "progress", "goal_lifecycle", "agents", "deliveries"].map(key => [key, row[key] ?? null])));
+  return {...monitorObservation(facts, params.previous_hash),
+    coverage: context.coverage ?? null, observed_goal_count: goals.length,
+    own_monitor_bookkeeping_excluded: true};
+}
+
+function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
   // These are diagnostic projection clocks, not source event timestamps.
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
     "collection_completed_at", "generated_at", "evaluated_at", "age_seconds"]);
@@ -286,14 +374,26 @@ export function observeStewardPortfolio(params: JsonObject): JsonObject {
       .map(([key, item]) => [key, canonical(item)]));
     return value;
   }
-  const facts = goals.filter(row => row.goal_id !== params.actor_goal_id)
-    .sort((a, b) => String(a.goal_id).localeCompare(String(b.goal_id)))
-    .map(row => Object.fromEntries(["goal_id", "goal_instance_id", "activation_state", "quality",
-      "attention", "progress", "goal_lifecycle", "agents", "deliveries"].map(key => [key, row[key] ?? null])));
   const resultHash = "sha256:" + createHash("sha256").update(JSON.stringify(canonical(facts))).digest("hex");
-  return {result_hash: resultHash, material_change: params.previous_hash != null && params.previous_hash !== resultHash,
-    coverage: context.coverage ?? null, observed_goal_count: goals.length,
-    own_monitor_bookkeeping_excluded: true};
+  return {result_hash: resultHash, material_change: previousHash != null && previousHash !== resultHash};
+}
+
+/** The local Agent watches its native work, never the private steward portfolio.
+ * Complete canonical Todo rows are supplied by the existing native reader.
+ * Other watches' clocks/receipts cannot manufacture a work transition. */
+export function observeManagedWork(params: JsonObject): JsonObject {
+  const goal = requireJsonObject(params.goal, "original Goal");
+  const actor = requireJsonObject(params.actor, "original managed Agent");
+  if (goal.goal_id !== actor.goal_id || goal.goal_instance_id !== actor.goal_instance_id || !Array.isArray(params.todos)) {
+    throw new EffectRuntimeRequestError("the complete original Goal work source is unavailable");
+  }
+  const tasks = params.todos.map(value => requireJsonObject(value, "native Todo"))
+    .filter(row => row.task_class !== "continuous_monitor")
+    .sort((a, b) => String(a.todo_id).localeCompare(String(b.todo_id)))
+    .map(row => Object.fromEntries(["todo_id", "status", "priority", "task_class", "action_kind", "claimed_by",
+      "title", "note", "evidence", "reason", "completion_receipt_id"].map(key => [key, row[key] ?? null])));
+  return {...monitorObservation({goal_id: goal.goal_id, goal_instance_id: goal.goal_instance_id, tasks}, params.previous_hash),
+    observed_task_count: tasks.length, own_monitor_bookkeeping_excluded: true};
 }
 
 export function planStewardManagedMode(params: JsonObject): JsonObject {

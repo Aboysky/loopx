@@ -84,6 +84,11 @@ def pack(tmp_path):
             )
         ],
         "limitations": ["Synthetic process; not model quality evidence"],
+        "synthesis": {
+            "summary": {"text": "A valid negative result narrows the next investigation.", "episode_ids": ["episode"],
+                        "citations": [dict(source_id="source", first_line=2, last_line=2)]},
+            "findings": [], "next_experiments": [],
+        },
     }
     executable = tmp_path / "codex-fixture"
     executable.write_text(
@@ -168,7 +173,8 @@ def test_continuation_reuses_identical_excerpts_despite_other_capture_bytes(pack
     completed = execute_pack(**new_operation, codex="must-not-run")
     assert completed["reused"] and completed["reused_from_analysis_key"] == operation["analysis_key"]
     reused_output = json.loads((old_directory.parent / successor["analysis_key"] / "model-output.json").read_text())
-    assert set(reused_output) == {"assessments", "limitations"}
+    assert set(reused_output) == {"assessments", "limitations", "synthesis"}
+    assert reused_output["synthesis"] == original["synthesis"]
     view = inspect_pack(**scope)
     assert view["result"]["scope"]["revision"] == "capture-2"
     assert view["result"]["metrics"] == original["metrics"]
@@ -196,6 +202,8 @@ def test_new_evidence_reassesses_old_judgments_and_complete_denominator(pack, tm
     assert before["continuation"]["reassessed_episode_ids"] == ["episode", "follow-up"]
     assert before["continuation"]["new_pair_count"] == 1
     revised = {"assessments": [dict(episode_id=e, metric="benefit_test", verdict=v, reason="Later evidence corrects the earlier interpretation", citations=[dict(source_id="later", first_line=1, last_line=1)] if v != "unknown" else []) for e, v in [("episode", "no"), ("follow-up", "unknown")]], "limitations": ["Synthetic counterevidence"]}
+    revised["synthesis"] = {"summary": {"text": "The earlier interpretation was refuted by later evidence.", "episode_ids": ["episode"],
+                                      "citations": [dict(source_id="later", first_line=1, last_line=1)]}, "findings": [], "next_experiments": []}
     executable = tmp_path / "reassessment"
     executable.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\nprompt=sys.stdin.read()\nassert 'The earlier proxy' in prompt and '原始测量' in prompt\nPath(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(revised)!r})\n")
     executable.chmod(0o700)
@@ -540,6 +548,7 @@ def translation(field):
     return "译文：" + field["text"]
 output = {"assessments":[{"episode_id":"episode","metric":"benefit_test","verdict":"unknown","reason":"合成过程测试，未验证实际收益。","citations":[]}],
           "limitations":["合成译文，非模型质量验收。"], "episode_questions":[{"episode_id":"episode","question":"是否有帮助？"}],
+          "synthesis":{"summary":{"text":"原生测量为负，不能推断更广泛的收益。","episode_ids":["episode"],"citations":[{"source_id":"source","first_line":2,"last_line":2}]},"findings":[],"next_experiments":[]},
           "display_translations":[{"field_id":f["field_id"], "text":translation(f)} for f in fields[:-1]]}
 Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output))
 print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_tokens":7}}))

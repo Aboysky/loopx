@@ -644,7 +644,7 @@ class ChatRequestHandler(
     def _create_session(self) -> None:
         try:
             body = self._read_json()
-            unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "agent_reasoning_effort", "mode", "context_kind", "project_ref"}
+            unknown = set(body) - {"goal_id", "agent_id", "managed_agent_id", "agent_model_id", "agent_reasoning_effort", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
             goal_id: str | None = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
@@ -697,6 +697,7 @@ class ChatRequestHandler(
                 mode=mode,
                 requested_endpoint=requested_endpoint,
                 agent_model_id=requested_model,
+                **({"managed_agent_id": body["managed_agent_id"]} if "managed_agent_id" in body else {}),
                 **({"agent_reasoning_effort": requested_effort} if requested_effort is not None else {}),
                 **({"project_ref": project_ref} if context_kind == "project" else {}),
             )
@@ -947,6 +948,24 @@ class ChatRequestHandler(
                 registry=self.server.registry_path))
         except KeyError:
             self._send_error("chat session was not found", status=404)
+
+    def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
+        from .capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+        service = ManagedSessionTurn(self.server.runtime_controller)
+        try:
+            if execute:
+                body = self._read_json()
+                if set(body) - {"agent_id", "operation_id", "todo_id"}:
+                    raise ValueError("unsupported managed Turn arguments")
+                turn, created = service.submit(session_id, **body)
+                return self._send_json({"ok": True, "session_id": session_id, "turn": turn, "created": created}, status=202)
+            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            self._send_json(service.inspect(session_id, agent_id=query.get("agent_id", [None])[0],
+                operation_id=query.get("operation_id", [None])[0]))
+        except KeyError:
+            self._send_error("chat session was not found", status=404)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self._send_error(str(exc), status=409, error_code="managed_turn_unavailable")
 
     def _list_sessions(self) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
@@ -1636,6 +1655,8 @@ class ChatRequestHandler(
         if len(action_parts) == 3 and action_parts[:2] == ["api", "actions"]:
             return self._action_snapshot(action_parts[2])
         session_parts = path.strip("/").split("/")
+        if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "native-turn":
+            return self._managed_native_turn(session_parts[3])
         if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "loopx":
             return handle_loopx_request(self, session_parts[3])
         if len(session_parts) == 4 and session_parts[:3] == ["api", "chat", "sessions"]:
@@ -1686,6 +1707,8 @@ class ChatRequestHandler(
         if path in post_dispatch:
             return post_dispatch[path]()
         session_action_parts = path.strip("/").split("/")
+        if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "native-turn":
+            return self._managed_native_turn(session_action_parts[3], execute=True)
         if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "loopx":
             return handle_loopx_request(self, session_action_parts[3], apply=True)
         if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "resume":

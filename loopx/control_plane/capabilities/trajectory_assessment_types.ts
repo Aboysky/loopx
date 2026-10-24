@@ -29,6 +29,16 @@ export interface EpisodeAssessment {
   episode_id: string; metric: TrajectoryMetric; verdict: AssessmentVerdict;
   reason: string; citations: AssessmentCitation[];
 }
+/** Observer interpretation of the declared sample, never a source finding,
+ * scientific qualification or an instruction to launch an experiment. */
+export interface TrajectoryResearchSynthesis {
+  summary: {text: string; episode_ids: string[]; citations: AssessmentCitation[]};
+  findings: Array<{title: string; observation: string; interpretation: string;
+    alternative_explanations: string[]; episode_ids: string[]; citations: AssessmentCitation[]}>;
+  next_experiments: Array<{question: string; why_priority: string; intervention: string;
+    controls: string; prediction: string; disconfirming_result: string;
+    episode_ids: string[]; citations: AssessmentCitation[]}>;
+}
 export interface TrajectoryAssessment {
   schema_version: 'trajectory_assessment_v1'; method_version: string; analysis_key: string;
   scope: TrajectoryInput['scope']; selection: TrajectoryInput['selection'];
@@ -39,6 +49,7 @@ export interface TrajectoryAssessment {
   limitations: string[];
   output_language?: TrajectoryOutputLanguage;
   episode_questions?: Array<{episode_id: string; question: string}>;
+  synthesis?: TrajectoryResearchSynthesis;
   display?: TrajectoryDisplay;
 }
 

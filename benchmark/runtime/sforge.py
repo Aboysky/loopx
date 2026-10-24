@@ -92,6 +92,7 @@ class SForgeWorker(CodexAgent):
                  task_objective: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
+                 context_delivery: str = "off",
                  native_goal_continue: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
@@ -108,6 +109,10 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
+        self.context_delivery = Execution(
+            mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
+            context_delivery=context_delivery,
+        ).context_delivery
         if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
@@ -276,6 +281,7 @@ class SForgeWorker(CodexAgent):
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
+                context_delivery=self.context_delivery,
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
