@@ -155,7 +155,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   };
   const execute = async (retry = false) => {
     if (readSourceUrl && snapshot?.execution_enabled !== true) return;
-    if (!pack || pack.availability !== "available" || submitting.current) return;
+    if (readError || !pack || pack.availability !== "available" || submitting.current) return;
     show(); submitting.current = true; setPending(true); setError("");
     const current = generation.current;
     try {
@@ -204,12 +204,14 @@ const reasonCopy = (reason: string | null | undefined, zh: boolean) => {
 
 export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
   const unavailable = a.readOnly || a.pack?.availability !== "available";
+  const sourceUnavailable = !a.loading && !a.readError && a.snapshot && (!a.pack || a.pack.availability !== "available");
   // The action keeps its separate-usage consequence visible. Further method
   // explanation is optional; cached results and unavailable states are reads.
-  const readOnly = unavailable || a.pack?.result || a.pending || a.recordedRunning;
-  return <div className="research-analysis-entry"><div className="research-analysis-entry-actions"><button ref={a.trigger} type="button" disabled={a.loading && !a.pack} onClick={() => readOnly ? a.show() : void a.execute(a.pack?.job?.status === "failed" || a.pack?.job?.status === "cancelled")} aria-expanded={a.location.open} title={unavailable && !a.loading && !a.readError ? reasonCopy(a.pack?.reason_code ?? a.snapshot?.catalog.reason_code, a.zh) : undefined}>
+  const readOnly = unavailable || a.readError || a.pack?.result || a.pending || a.recordedRunning;
+  return <div className="research-analysis-entry"><div className="research-analysis-entry-actions"><button ref={a.trigger} type="button" disabled={a.loading && !a.pack} onClick={() => readOnly ? a.show() : void a.execute(a.pack?.job?.status === "failed" || a.pack?.job?.status === "cancelled")} aria-expanded={a.location.open}>
     <Sparkles size={14} aria-hidden/>{a.pack?.result ? (a.zh ? "查看分析" : "View analysis") : analysisActionLabel(a.pack, a.zh)}
-  </button><ContextHelp label={a.zh ? "分析说明" : "About deep analysis"}>
+  </button><ContextHelp label={sourceUnavailable ? (a.zh ? "分析来源未就绪" : "Analysis source unavailable") : (a.zh ? "分析说明" : "About deep analysis")} icon={sourceUnavailable ? CircleHelp : undefined}>
+    {sourceUnavailable ? <p>{reasonCopy(a.pack?.reason_code ?? a.snapshot?.catalog.reason_code, a.zh)}</p> : null}
     {a.pack ? <p>{a.zh ? "分析请求设置（固定）：" : "Fixed analysis request: "}{a.pack.config.model} / {a.pack.config.effort} / {a.pack.config.service_tier}</p> : null}
     <p>{a.pack?.display_request
       ? (a.zh ? "本次分析同时生成固定历史快照的中文展示译文；问题、决策、结论与历史正文按字段核对版本，缺失项保留原文。" : "This analysis also translates the frozen history snapshot: questions, decisions, findings and historical text are version-bound field by field; missing translations retain their originals.")
@@ -266,9 +268,8 @@ function AnalysisReadState({analysis: a}: {analysis: Controller}) {
   </div>;
   if (!a.pack && a.loading && (!a.snapshot || a.snapshot.catalog.packs.length > 0)) return <div className="analysis-read-loading" role="status" aria-label={a.zh ? "正在读取分析" : "Reading analysis"}>
     {Array.from({length: 6}, (_, i) => <span key={i} aria-hidden/>)}</div>;
-  if (!a.pack) return <div className="analysis-read-empty"><span>{reasonCopy(a.snapshot?.catalog.reason_code, a.zh)}</span>
-    <button type="button" disabled={a.loading} aria-label={a.zh ? "刷新分析来源" : "Refresh analysis sources"} onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/></button></div>;
-  return !a.pack.result && a.pack.availability !== "available" ? <ContextHelp label={a.zh ? "分析来源未就绪" : "Analysis source unavailable"} icon={CircleHelp}><p className="research-history-note">{reasonCopy(a.pack.reason_code, a.zh)}</p></ContextHelp> : null;
+  if (!a.pack && a.location.open) return <p role="status">{a.zh ? "分析来源未就绪" : "Analysis source unavailable"}</p>;
+  return null;
 }
 
 export function ResearchAnalysisStatus({analysis: a}: {analysis: Controller}) {
@@ -404,14 +405,15 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
   const zh = a.zh, p = a.pack, result = p?.result;
   const resultJob = p?.result_job ?? p?.job;
   const failed = p?.job?.status === "failed" || p?.job?.status === "cancelled";
-  const available = p?.availability === "available" && !a.readOnly;
+  const sourceAvailable = p?.availability === "available" && !a.readOnly;
+  const available = sourceAvailable && !a.readError;
   const benefit = result?.metrics.find(m => m.metric === "benefit_test");
   const headline = !result ? null : benefit?.no ? (zh ? "仍有研究片段尚未检验原目标收益" : "Some episodes have not tested original-objective utility")
     : benefit?.unknown ? (zh ? "原目标收益的检验情况仍未知" : "Original-objective utility testing remains unknown")
       : benefit?.yes ? (zh ? "模型记录了收益检验；这不等于收益为正" : "The model identified a utility test; this does not imply positive utility")
         : (zh ? "此方法未覆盖原目标收益检验" : "This method does not cover original-objective utility testing");
   return <div className={`research-analysis${result?.synthesis ? " has-synthesis" : ""}`} ref={a.panel} tabIndex={-1} role="region" aria-label={zh ? "轨迹深度分析" : "Trajectory analysis"} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); a.close();}}}>
-    <header><div><h3>{result?.synthesis ? (zh ? "研究汇报" : "Research report") : (zh ? "轨迹深度分析" : "Trajectory analysis")}</h3><p>{p?.title ?? (zh ? "只分析已授权的固定轨迹，不改变研究历史。" : "Analyze an authorized fixed trajectory without changing its history.")}</p></div><div className="analysis-header-actions">{result?.synthesis && onHistory ? <button type="button" onClick={onHistory}>{zh ? "Goal 研究历程" : "Goal research history"}</button> : null}{result ? <button type="button" onClick={() => void a.read().catch(() => undefined)} aria-label={zh ? "刷新分析结果" : "Refresh analysis result"}><RefreshCw size={15} aria-hidden/></button> : null}<button type="button" onClick={a.close} aria-label={zh ? "关闭分析" : "Close analysis"}><X size={16} aria-hidden/></button></div></header>
+    <header><div><h3>{result?.synthesis ? (zh ? "研究汇报" : "Research report") : (zh ? "轨迹深度分析" : "Trajectory analysis")}</h3>{p?.title ? <p>{p.title}</p> : null}</div><div className="analysis-header-actions">{result?.synthesis && onHistory ? <button type="button" onClick={onHistory}>{zh ? "Goal 研究历程" : "Goal research history"}</button> : null}{result ? <button type="button" onClick={() => void a.read().catch(() => undefined)} aria-label={zh ? "刷新分析结果" : "Refresh analysis result"}><RefreshCw size={15} aria-hidden/></button> : null}<button type="button" onClick={a.close} aria-label={zh ? "关闭分析" : "Close analysis"}><X size={16} aria-hidden/></button></div></header>
     {a.error ? <div className="analysis-error" role="alert">{zh ? "分析请求未完成，已保存结果保留。" : "The analysis request did not complete; saved results are preserved."} <button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "重试读取" : "Retry reading"}</button><ContextHelp label={zh ? "失败详情" : "Failure details"}><p>{a.error}</p></ContextHelp></div> : null}
     {a.snapshot?.catalog.unreadable_pack_ids?.length && !p?.continuation_unavailable ? <p className="analysis-warning">{zh ? "部分历史分析暂不可读" : "Some historical analyses cannot be read"} · {a.snapshot.catalog.unreadable_pack_ids.length}</p> : null}
     <AnalysisReadState analysis={a}/>
@@ -423,7 +425,7 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
         <p>{zh ? "下方仍显示当前研究 Goal 的已记录历史。" : "The current research Goal’s recorded history remains below."}</p>
       </ContextHelp></div>
       <AnalysisContinuation pack={p} analysis={a}/>
-      {p.result && !available ? <p className="analysis-warning">{reasonCopy(p.reason_code, zh)}</p> : null}
+      {p.result && !sourceAvailable ? <p className="analysis-warning">{reasonCopy(p.reason_code, zh)}</p> : null}
       {p.result_attempt && p.result_attempt !== p.job?.attempt ? <ContextHelp label={zh ? "本次分析未完成" : "Current analysis incomplete"} icon={TriangleAlert}><p className="analysis-warning" role="status">{zh ? "当前重试尚未完成，显示上次已保存分析。" : "The current retry is incomplete; showing the previously saved analysis."}</p></ContextHelp> : null}
       {result?.display?.coverage.missing && !a.pending && !a.recordedRunning ? <div className="analysis-actions">
         <button type="button" disabled={!available} onClick={() => void a.execute(true)}>{zh ? "重新分析并补全译文" : "Reanalyze to complete translation"}</button>

@@ -419,8 +419,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     {readFailure ? <div className="research-history-read-error" role="alert">
       <AlertCircle size={18} aria-hidden/>
       <div><strong>{read.events.length ? (zh ? "刷新失败，当前记录已保留" : "Refresh failed; current records are preserved") : copy.failure}</strong>
-        <p>{read.events.length ? (zh ? "可继续阅读，或重试获取最新记录。" : "Keep reading, or retry for the latest records.") : (zh ? "请检查本地服务后重试；技术详情默认收起。" : "Check the local service and retry. Technical details stay collapsed.")}</p>
-        <details><summary>{zh ? "技术详情" : "Technical details"}</summary><code>{readFailure}</code></details>
+        <ContextHelp label={zh ? "研究记录读取详情" : "History read details"}><p>{readFailure}</p></ContextHelp>
       </div>
       <button type="button" disabled={busy} onClick={refresh}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
     </div> : null}
