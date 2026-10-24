@@ -43,6 +43,13 @@ guard、格式和 typed owner。这不新增领域规则、桥接操作或数据
 
 ### 产品对话与通用异步 inbox
 
+**Chat HTTP POST 作用域。** `ChatRequestHandler.do_POST` 现在为每次完整 HTTP
+分发复用既有 executable-revision 请求作用域。Session 创建／恢复及其他 POST
+路由的 typed 调用共用一个代码版本；下一次请求重新解析当前代码。Session、工作区
+授权、provider 与 authority 仍实时读取。后台 Turn worker 保留自己的作用域。
+这不新增桥接操作、语义 owner 或状态缓存。真实 HTTP 与 runtime 回归分别验证
+源码准入和撤销授权后的拒绝；安装后行为与真实模型响应延迟仍需独立验证。
+
 **公共 quota 读取作用域。** `quota/should_run.py` 现在为每次完整公共 quota 读取
 复用既有 executable-revision 请求作用域。兼容 facade 和全局视图共用该生命周期，
 不再在每次 typed 判定前重新解析代码树。已有外层作用域仍可组合；下一次独立读取

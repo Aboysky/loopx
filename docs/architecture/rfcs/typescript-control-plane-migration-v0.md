@@ -47,6 +47,15 @@ request-scope adoption separately rather than counting its gain again.
 
 ### Product conversations and asynchronous inbox
 
+**Chat HTTP POST scope.** `ChatRequestHandler.do_POST` now joins the existing
+executable-revision request scope for each complete HTTP dispatch. Session
+creation/resume and other POST routes reuse one code revision across their typed
+calls; the next request resolves current code again. Session, workspace grant,
+provider and authority observations remain live. Background Turn workers retain
+their own scope. This adds no bridge operation, semantic owner or state cache.
+Real HTTP and runtime regressions qualify source admission and revoked-grant
+refusal separately from installed behavior and real-model response latency.
+
 **Public quota read scope.** `quota/should_run.py` now reuses the existing
 executable-revision request scope for each complete public quota read. The
 compatibility facade and global views share that lifetime instead of resolving
