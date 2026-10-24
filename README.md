@@ -39,10 +39,12 @@ Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgr
 
 ## News
 
-<!-- Keep 2–3 reader-facing milestones, newest first, in both READMEs. Use published
-     dates (UTC) and primary sources; the full change history belongs in Releases. -->
+<!-- Curate major versions, substantial technical milestones and research releases.
+     Keep both READMEs aligned, newest first, with verified public dates (UTC)
+     and primary sources. Routine version updates belong in Releases. -->
 
 - **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript control plane and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
+- **2026-09-18 · [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/)** — A 46-task long-horizon agent study comparing Plain Codex, native Goal and LoopX Heartbeat, with task-level results, methodology and comparison limits.
 - **2026-09-06 · [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — A Personal Agent Workspace to follow agent work, act on decisions, and inspect delivered results across sessions. [Workspace guide](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md).
 
 [All releases](https://github.com/loopx-project/loopx/releases)
