@@ -83,6 +83,40 @@ the frontend does not present an unspecified or other-language result as a new
 analysis in the selected language. Output-language metadata records the request,
 not independent verification of a model's translation or judgments.
 
+### Native results as explicit analysis context
+
+`--native-outcomes-json` alone supplies display facts and preserves the existing
+analysis key. To let a new analysis interpret the same source-bound results,
+the curator also includes that complete JSON capture as a normal verified source
+in `input.sources`, then binds its source id:
+
+```json
+"native_outcomes_source_id": "native-capture"
+```
+
+The bound source starts at line 1 and contains a
+`trajectory_native_outcomes_v1` capture with the same Goal/case/run/revision/window.
+Use the same capture for `--native-outcomes-json`; conflicting readback is refused.
+The existing native-measurement owner validates scope, validity, direction,
+retention and citations. Its projection enters the ordinary observer request,
+including unknown retention and the distinction between best, last and retained
+results. A context-only JSON source is not repeated beside that projection.
+The context constrains interpretation; it does not expand the assessed sample
+or permit metric/synthesis citations outside their declared episode sources.
+
+This explicit input binding and its instructions participate in the analysis
+identity. Changing the binding or captured evidence requires reassessment through
+the existing explicit analysis action; registration, reading and language changes
+do not launch a model. Omission preserves old prompts, keys and results. Keep the
+old pack and observed failures; removing the binding in a new version disables
+this context without rewriting history. Source changes retain historical readback
+and block execution until a new verified pack is registered. Supplying correct
+context does not prove model entailment, causal validity or comprehension benefit.
+
+原生结果默认仍是展示资料；只有在新分析输入中明确绑定完整来源，才作为模型上下文。
+同一原生 owner 校验指标方向、范围、保留及引用，未知保持未知，最佳／最后值不代替
+实际保留。绑定变化需显式重新分析，浏览不执行；旧报告与失败保留，引用范围不扩大。
+
 ### Whole-history presentation language
 
 A trusted curator can include the complete authorized Explore history read as
