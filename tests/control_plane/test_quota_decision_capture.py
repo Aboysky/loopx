@@ -340,9 +340,9 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
                        '--available-capability', 'filesystem_read',
                        '--decision-output-dir', str(capture), '--decision-handoff-socket', str(endpoint)]
             if native_context:
-                command += ['--codex-context-dir', str(context)]
+                command += ['--context-delivery', 'on', '--codex-context-dir', str(context)]
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}) as process:
+                                  text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2]), **({'LOOPX_CONTEXT_DELIVERY': 'on', 'LOOPX_EXECUTION_MODE': 'heartbeat'} if native_context else {})}) as process:
                 try:
                     channel, _ = listener.accept()
                     with channel:

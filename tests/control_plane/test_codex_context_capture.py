@@ -98,12 +98,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     native_configuration = None
     if shared_root:
         prepared = subprocess.run(cli + ["--format", "json", "quota", "context-config",
-            context_option, str(lifecycle), "--goal-id", GOAL_ID, "--agent-id", AGENT_ID],
+            "--context-delivery", "on", "--codex-app", context_option, str(lifecycle), "--goal-id", GOAL_ID, "--agent-id", AGENT_ID],
             capture_output=True, text=True, timeout=15)
         assert prepared.returncode == 0, prepared.stderr
         native_configuration = json.loads(prepared.stdout)["native_config"]
     hook_command = (native_configuration["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        if native_configuration else shlex.join(cli + ["quota", "context-hook", context_option, str(lifecycle)]))
+        if native_configuration else shlex.join(cli + ["quota", "context-hook", "--context-delivery", "on", "--codex-app", context_option, str(lifecycle)]))
     if failed_primary:
         # Fault only the primary journal update. Production code must still
         # return the original full-read reference; no test recovery handler.
@@ -131,7 +131,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                f"os.environ['PYTHONPATH']={str(Path(__file__).resolve().parents[2])!r}\n"
                + f"os.execv({sys.executable!r}, [{sys.executable!r}, '-m', 'loopx.entrypoint', *sys.argv[1:]])\n"))
         wrapper.chmod(0o700)
-        hook_command = shlex.join([str(wrapper), "quota", "context-hook", context_option, str(lifecycle)])
+        hook_command = shlex.join([str(wrapper), "quota", "context-hook", "--context-delivery", "on", "--codex-app", context_option, str(lifecycle)])
     handler = {"type": "command", "command": hook_command, "timeout": 10}
     if host != "benchmark":
         (home / "hooks.json").write_text(json.dumps({"hooks": {
@@ -142,7 +142,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     command = [*cli, "--registry", str(registry), "--runtime-root", str(runtime),
         "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--turn-instance-id", "native-capture-turn", "--codex-app",
-        "--decision-output-root", str(root), context_option, str(lifecycle)]
+        "--decision-output-root", str(root), "--context-delivery", "on", "--codex-app", context_option, str(lifecycle)]
     if handoff_socket:
         command += ["--decision-handoff-socket", handoff_socket]
     if surface == "turn_envelope":
@@ -152,7 +152,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         generated = subprocess.run([*cli, "--registry", str(registry), "--runtime-root", str(runtime),
             "--format", "json", "heartbeat-prompt", "--thin", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--decision-output-root", str(root),
-            context_option, str(lifecycle), *(["--turn-envelope"] if surface == "turn_envelope" else [])],
+            "--context-delivery", "on", "--codex-app", context_option, str(lifecycle), *(["--turn-envelope"] if surface == "turn_envelope" else [])],
             capture_output=True, text=True, timeout=15)
         assert generated.returncode == 0, generated.stderr
         prompt = json.loads(generated.stdout)
@@ -389,7 +389,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             project_hooks = project / ".codex/hooks.json"
             project_hooks.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{
                 "type": "command", "command": shlex.join(["touch", str(unrelated)])}]}]}}))
-            env.update(LOOPX_CONTEXT_DELIVERY="1", LOOPX_TURN_ENVELOPE=str(int(surface == "turn_envelope")),
+            env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_TURN_ENVELOPE=str(int(surface == "turn_envelope")),
                 LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT="resume",
                 LOOPX_TASK_ENTRY="seeded-todo", LOOPX_TASK_STAGE="execute",
                 LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project), LOOPX_SHARED_SKILLS=str(skills),

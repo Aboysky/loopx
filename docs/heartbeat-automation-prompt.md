@@ -423,11 +423,32 @@ loopx-canary heartbeat-prompt \
 
 ### Opt-in native context delivery
 
+`--context-delivery {off,on}` is experimental and defaults to `off`. It reuses
+existing scheduler-owned host declarations and the benchmark worker's explicit
+execution settings; it does not guess a host from process names or ambient native
+session variables. Only two declared run modes can activate it:
+
+| Supported entry | Existing host declaration |
+| --- | --- |
+| Codex App heartbeat, same-session resume and recovery | `--codex-app`, equivalently `--runtime-profile codex_app_heartbeat` (or its complete explicit host tuple) |
+| Codex benchmark heartbeat worker | Existing `generic_cli` profile plus the worker-owned `LOOPX_EXECUTION_MODE=heartbeat` and `LOOPX_CONTEXT_DELIVERY=on` declarations; its execution owner rejects other modes |
+
+`--codex-app` is a shortcut for a complete runtime profile. `--host-surface` alone
+is only one field; incomplete, contradictory or unsupported declarations do not
+activate reuse. `on` with no supported declaration returns full delivery and an
+activation reason. `off` creates no native journal, hook configuration or input
+observation; directories alone never turn it on. This declaration check is not
+host authentication, execution authority or proof of retained input. Every warm
+delta still needs independently verified complete current-input evidence.
+Generic CLI, visible native Goals, Claude and other hosts remain outside this
+opt-in. Harbor/container and installed desktop adoption retain their separate
+unqualified boundaries; listing an entry does not certify live adoption.
+
 For a trusted Codex host, create private context/capture directories and render
 the native setup through the installed CLI:
 
 ```sh
-loopx --format json quota context-config \
+loopx --format json quota context-config --context-delivery on --codex-app \
   --codex-context-root <private-context-root> --goal-id <goal> --agent-id <agent>
 ```
 
@@ -442,7 +463,7 @@ different native sessions in separate journals, including interleaved sessions.
 
 Generate the normal bootstrap with `heartbeat-prompt --thin --codex-app
 --bootstrap`, its existing Goal/Agent/registry arguments, and
-`--decision-output-root <private-capture-root> --codex-context-root
+`--context-delivery on --decision-output-root <private-capture-root> --codex-context-root
 <private-context-root>`; optionally add `--turn-envelope`. The loader preserves
 these options without freezing a Turn ID. Each wake loads current instructions
 and binds the existing `LOOPX_TURN` before its generated guard. Selection keeps
@@ -471,7 +492,7 @@ For a host that already saved the quota decision before invoking Codex, present
 that immutable snapshot from the native tool instead of running its guard again:
 
 ```sh
-loopx --format json quota context-project \
+loopx --format json quota context-project --context-delivery on --codex-app \
   --capture-file <original-quota-json> --capture-sha256 <original-sha256> \
   --goal-id <goal> --agent-id <agent> --turn-instance-id <original-turn> \
   --codex-context-root <private-context-root> --decision-output-root <private-capture-root>
@@ -486,8 +507,11 @@ Goal/Agent/Turn refuses publication. This is integrity-checked presentation of
 the caller's snapshot, not fresh authority, registry lookup, installation,
 admission or accounting. The original file stays unchanged; generated caches
 remain private. A missing projection command can use `quota context-read` with
-the original file/hash. Disable the existing context opt-in to restore the host's
-ordinary full-read instruction; no stored decision or receipt is rewritten.
+the original file/hash. Set `--context-delivery off` and remove context options from generated host
+configuration to restore ordinary full-read instructions. Remove only these generated hook entries and
+appended recovery instruction from native configuration, and disable their
+owned diagnostics if enabled. Preserve unrelated hooks/settings; the CLI does
+not edit host configuration. No stored decision or receipt is rewritten.
 To roll back, remove the context/capture options from this bootstrap and remove
 only the generated hooks/recovery instruction from the native configuration.
 Existing captures remain private recovery evidence. This opt-in does not grant

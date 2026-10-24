@@ -1090,8 +1090,8 @@ installed adoption, trace/all-read overhead and real solver outcomes remain sepa
 question is added, and phase one remains open.
 
 The existing benchmark worker now consumes this production path through an
-explicit `context_delivery` heartbeat option, also exposed by EdgeBench/SForge
-as `--context-delivery`. Its private trial home stages the product hooks and
+explicit `context_delivery: "on"` heartbeat option (default `"off"`), also exposed by EdgeBench/SForge
+as `--context-delivery on`. Its private trial home stages the product hooks and
 uses native `hooks/list` to trust only their exact hashes for that process;
 unrelated workspace hooks remain untrusted. Opt-in private traces support the
 input observer. Setup failure continues ordinary full output; an existing
@@ -1156,7 +1156,22 @@ Lookup starts at offset zero. Every following `next_command` pins the original
 path and hash, so a concurrent newer publication cannot mix captures. Missing,
 changed or symlinked files retain the ordinary reader's refusal behavior.
 
-`quota context-config` renders the native hook/recovery configuration through
+The experimental switch is now `--context-delivery {off,on}`, default `off`.
+It reuses the existing declared host context: `--codex-app` / the equivalent
+`codex_app_heartbeat` profile, or the benchmark worker's existing `generic_cli`
+profile plus its explicit `LOOPX_EXECUTION_MODE=heartbeat` and
+`LOOPX_CONTEXT_DELIVERY=on` declarations. The worker's existing execution owner
+rejects non-heartbeat modes and propagates these settings to native tools; its
+scheduler declaration is unchanged. No process or ambient native-session
+heuristic authenticates a host. Unsupported, absent or
+contradictory declarations keep full presentation with a reason; they do not
+block otherwise authorized work. Hooks, configuration, saved presentation and
+reentry preserve this binary selection. Directory options or a host handoff
+alone cannot turn on deltas. Full original-capture recovery remains usable when
+off. These caller declarations select a supported adapter path, grant no
+execution authority and do not replace actual-input retention verification.
+
+`quota context-config --context-delivery on --codex-app` renders the native hook/recovery configuration through
 the CLI; the benchmark worker reuses that same provider helper. Shared Codex App
 configuration uses `--codex-context-root` to isolate journals by native session,
 while dedicated trial homes retain `--codex-context-dir`. Read-only lookup never

@@ -154,7 +154,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     guard_path.write_text(guard_run.stdout, encoding="utf-8")
     guard_path.chmod(0o600)
     reading = f"Read the complete packet at {guard_path} before work, then follow its interaction_contract. "
-    if env.get("LOOPX_CONTEXT_DELIVERY") == "1" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
+    if env.get("LOOPX_CONTEXT_DELIVERY") == "on" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
         from .context_delivery import preflight_context_instruction
 
         reading = preflight_context_instruction(env, guard_path,

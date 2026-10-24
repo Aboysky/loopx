@@ -25,10 +25,10 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp_path):
     from loopx.cli import build_parser
-    from loopx.control_plane.heartbeat.bootstrap_prompt import goal_bootstrap
+    from loopx.control_plane.heartbeat.bootstrap_prompt import goal_bootstrap, host_bootstrap_binding
 
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_heartbeat",
-        thin=True, decision_output_root=tmp_path, codex_context_root=str(tmp_path), turn_envelope=True)
+        thin=True, decision_output_root=tmp_path, codex_context_root=str(tmp_path), context_delivery="on", turn_envelope=True)
     prompt = build_heartbeat_prompt(**args)
     guard = prompt["quota_guard_command"]
     assert '--turn-instance-id "${LOOPX_TURN:?}"' in guard
@@ -42,13 +42,15 @@ def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp
     assert list(tmp_path.iterdir()) == []
     parser = build_parser()
     cli = ["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--decision-output-root", str(tmp_path), "--codex-context-root", str(tmp_path), "--turn-envelope", "--bootstrap"]
+        "--decision-output-root", str(tmp_path), "--context-delivery", "on", "--codex-app", "--codex-context-root", str(tmp_path), "--turn-envelope", "--bootstrap"]
     parsed = parser.parse_args(cli)
     bootstrap = goal_bootstrap(parsed, registry=tmp_path / "registry.json")
     command = shlex.split(bootstrap.split("```sh\n")[1].split("\n```")[0])
     assert "--bootstrap" not in command and "--turn-instance-id" not in command
     assert command[command.index("--codex-context-root") + 1] == str(tmp_path)
     assert "--turn-envelope" in command
+    binding = host_bootstrap_binding(bootstrap)
+    assert binding is not None and binding["context_delivery"] == "on" and binding["turn_envelope"] is True
 
 
 def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tmp_path):
@@ -241,7 +243,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     if context_delivery:
         # No native proof in this CLI fixture: composed capture must still
         # release ordinary full output and preserve reentry and settlement.
-        env.update(LOOPX_CONTEXT_DELIVERY='1', LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / 'context'))
+        env.update(LOOPX_CONTEXT_DELIVERY='on', LOOPX_EXECUTION_MODE='heartbeat', LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / 'context'))
     body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=private_handoff)
     # Execute the renderer's actual guard, preserving its route and flags.
     block = body.split('```sh\n', 1)[1].split('```', 1)[0]
@@ -357,25 +359,27 @@ def test_renderer_retains_owned_handoff_without_enabling_it_by_default(tmp_path)
         build_heartbeat_prompt(**args, decision_output_root=tmp_path, decision_handoff_socket=endpoint)
 
 
-def test_native_context_prompt_keeps_capture_on_reentry(tmp_path):
+def test_native_context_prompt_keeps_capture_on_reentry(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli",
                 turn_instance_id=TURN_ID, thin=True, decision_output_root=tmp_path)
     plain = build_heartbeat_prompt(**args)
     context = str(tmp_path / "private context")
-    enabled = build_heartbeat_prompt(**args, codex_context_dir=context)
-    suffix = " --codex-context-dir " + shlex.quote(context)
+    enabled = build_heartbeat_prompt(**args, context_delivery="on", codex_context_dir=context)
+    suffix = " --context-delivery on --codex-context-dir " + shlex.quote(context)
     assert enabled["quota_guard_command"] == plain["quota_guard_command"] + suffix
     assert suffix in enabled["thin_prompt_command"]
     assert enabled["task_body"].replace(suffix, "") == plain["task_body"]
     with pytest.raises(ValueError, match="capture root"):
-        build_heartbeat_prompt(**(args | {"decision_output_root": None}), codex_context_dir=context)
+        build_heartbeat_prompt(**(args | {"decision_output_root": None}), context_delivery="on", codex_context_dir=context)
     with pytest.raises(ValueError, match="invalid decision handoff socket"):
-        build_heartbeat_prompt(**args, codex_context_dir=context, decision_handoff_socket="unused")
+        build_heartbeat_prompt(**args, context_delivery="on", codex_context_dir=context, decision_handoff_socket="unused")
     with tempfile.TemporaryDirectory(prefix="context-handoff-", dir="/tmp") as short:
         endpoint = str(Path(short).resolve() / "host.sock")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(endpoint)
-            packet = build_heartbeat_prompt(**args, codex_context_dir=context, decision_handoff_socket=endpoint)
+            packet = build_heartbeat_prompt(**args, context_delivery="on", codex_context_dir=context, decision_handoff_socket=endpoint)
             for field in ("quota_guard_command", "thin_prompt_command"):
                 argv = shlex.split(packet[field])
                 assert argv[argv.index("--decision-output-root") + 1] == str(tmp_path)

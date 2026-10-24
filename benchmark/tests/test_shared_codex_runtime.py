@@ -780,7 +780,7 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     (False, "fresh_replan", None),
     (True, "fresh_replan", "explicit"),
 ])
-@pytest.mark.parametrize("context_delivery", [False, True])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
 def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected, context_delivery):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
@@ -843,8 +843,8 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
     assert ("turn_envelope" in receipt) is (expected is not None)
     assert receipt.get("turn_envelope_source") == expected
-    assert receipt.get("context_delivery") is (True if context_delivery else None)
-    assert agent._worker_env(cwd="/task").get("LOOPX_CONTEXT_DELIVERY") == ("1" if context_delivery else None)
+    assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
+    assert agent._worker_env(cwd="/task").get("LOOPX_CONTEXT_DELIVERY") == ("on" if context_delivery != "off" else None)
     if expected:
         assert receipt["turn_envelope"] is True
 
@@ -1101,15 +1101,15 @@ def test_horizon_setting_rejects_non_boolean_and_non_loopx_mode(tmp_path, settin
 @pytest.mark.parametrize("mode", ["plain", "native-goal", "turn", "loopx-goal"])
 def test_native_context_opt_in_is_only_a_heartbeat_treatment(mode):
     with pytest.raises(ValueError, match="context_delivery"):
-        Execution(mode=mode, context_delivery=True)
-    with pytest.raises(ValueError, match="boolean"):
+        Execution(mode=mode, context_delivery="on")
+    with pytest.raises(ValueError, match="context_delivery"):
         Execution(context_delivery="1")
 
 
 def test_context_transport_unavailable_preserves_ordinary_worker(tmp_path, monkeypatch):
     from benchmark.tests.test_resume_sessions import resume_env
     env = resume_env(tmp_path, monkeypatch)
-    env["LOOPX_CONTEXT_DELIVERY"] = "1"
+    env["LOOPX_CONTEXT_DELIVERY"] = "on"
     def unavailable(env, home):
         env["LOOPX_CODEX_CONTEXT_DIR"] = "not-ready"
         env["CODEX_ROLLOUT_TRACE_ROOT"] = "not-ready"
@@ -1135,7 +1135,7 @@ def test_context_transport_off_never_installs_or_trusts_ambient_args(tmp_path, m
 
 
 def test_context_selection_is_fixed_by_trial_home(tmp_path):
-    args = settings(tmp_path, execution=Execution(mode="heartbeat", context_delivery=True))
+    args = settings(tmp_path, execution=Execution(mode="heartbeat", context_delivery="on"))
     prepare_codex_home(**args)
     with pytest.raises(ValueError, match="settings changed"):
         prepare_codex_home(**(args | {"execution": Execution(mode="heartbeat")}))
@@ -1205,3 +1205,9 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     assert all("features.plugins" not in value and "features.remote_plugin" not in value
                and "features.plugin_sharing" not in value for value in trusted)
     assert config.read_bytes() == original_config
+
+
+@pytest.mark.parametrize("value", [True, False, "1", "codex_benchmark_heartbeat", "codex_app_heartbeat", "all"])
+def test_context_benchmark_setting_rejects_broad_or_other_host_activation(value):
+    with pytest.raises(ValueError, match="context_delivery"):
+        Execution(context_delivery=value)

@@ -32,9 +32,13 @@ def resolve_heartbeat_capture_root(
     decision_handoff_socket: str | None = None,
     codex_context_dir: str | None = None,
     codex_context_root: str | None = None,
+    context_delivery: str = "off",
     turn_envelope: bool = False,
 ) -> Path | None:
     """Validate capture transport for an already resolved host-owned Turn."""
+    enabled = context_delivery == "on"
+    if enabled and not (codex_context_dir or codex_context_root):
+        raise ValueError("context-delivery requires a native context location")
     if codex_context_dir is not None and codex_context_root is not None:
         raise ValueError("choose codex-context-dir or codex-context-root")
     if (codex_context_dir is not None or codex_context_root is not None) and root is None:

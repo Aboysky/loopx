@@ -17,6 +17,47 @@ import uuid
 
 from .decision_capture import write_decision_capture, project_captured_context, CONTEXT_CAPTURE_READ_GUIDANCE
 
+# Native adapter activation reuses scheduler-owned host declarations. These
+# settings are presentation opt-ins, never host authentication or authority.
+CONTEXT_DELIVERY_SETTINGS = ("off", "on")
+CONTEXT_DELIVERY_SCENARIOS = ("codex_benchmark_heartbeat", "codex_app_heartbeat")
+
+
+def context_delivery_activation(setting: str, *, runtime_profile: str | None = None,
+                                scheduler_execution_context: dict[str, Any] | None = None,
+                                benchmark_mode: str | None = None) -> dict[str, Any]:
+    from ..scheduler.execution_context import (
+        ExecutionMode, HostSurface, SchedulerOwner, resolve_scheduler_execution_context,
+        scheduler_execution_context_for_runtime_profile,
+    )
+
+    if setting not in CONTEXT_DELIVERY_SETTINGS:
+        raise ValueError("context-delivery must be off or on")
+    scenario = None
+    if setting == "on":
+        # Conflicting declarations cannot activate transport. The scheduler
+        # owner still validates execution; this adapter does not repair it.
+        if runtime_profile is not None and scheduler_execution_context is not None:
+            resolution = resolve_scheduler_execution_context(None)
+        elif runtime_profile is not None:
+            resolution = scheduler_execution_context_for_runtime_profile(runtime_profile)
+        else:
+            resolution = resolve_scheduler_execution_context(scheduler_execution_context)
+        context = resolution.context if resolution.ok else None
+        if context is not None:
+            if (context.host_surface is HostSurface.CODEX_APP
+                    and context.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
+                    and context.execution_mode is ExecutionMode.HOSTED_AUTOMATION):
+                scenario = "codex_app_heartbeat"
+            elif (context.host_surface is HostSurface.GENERIC_CLI
+                    and context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
+                    and context.execution_mode is ExecutionMode.INTERACTIVE
+                    and benchmark_mode == "heartbeat"):
+                scenario = "codex_benchmark_heartbeat"
+    return {"requested": setting, "enabled": scenario is not None, "scenario": scenario,
+        "reason": "supported_declared_run_mode" if scenario else "disabled" if setting == "off" else "unsupported_or_missing_run_mode",
+        "supported_scenarios": list(CONTEXT_DELIVERY_SCENARIOS)}
+
 
 def _read(path: Path, *, private: bool = True) -> dict[str, Any]:
     from ..effect_runtime import MAX_REQUEST_BYTES
@@ -137,7 +178,7 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
 
 
 def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
-                                 cli_argv: list[str], session_root: bool = False) -> dict[str, Any]:
+                                 cli_argv: list[str], scenario: str, session_root: bool = False) -> dict[str, Any]:
     """Native configuration data shared by the worker and CLI setup journey.
 
     This renders no trust hashes and writes no host configuration. The native
@@ -145,12 +186,17 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
     """
     import shlex
 
+    if scenario not in CONTEXT_DELIVERY_SCENARIOS:
+        raise ValueError("unsupported native context configuration scenario")
     if not goal_id or not agent_id:
         raise ValueError("context configuration requires exact goal-id and agent-id")
     directory = str(_private_root(directory))
     option = "--codex-context-root" if session_root else "--codex-context-dir"
     handler = {"type": "command", "command": shlex.join([
-        *cli_argv, "--format", "json", "quota", "context-hook", option, directory]), "timeout": 10}
+        *cli_argv, "--format", "json", "quota", "context-hook", "--context-delivery", "on",
+        *(["--codex-app"] if scenario == "codex_app_heartbeat" else
+          ["--runtime-profile", "generic_cli"]),
+        option, directory]), "timeout": 10}
     return {"hooks": {event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")},
         "developer_instructions": codex_context_recovery_instructions(directory, goal_id=goal_id,
             agent_id=agent_id, cli_argv=cli_argv, session_root=session_root)}

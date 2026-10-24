@@ -174,6 +174,13 @@ def register_heartbeat_control_commands(
         help="Retain the explicit private Host handoff on generated guards; requires --decision-output-root.",
     )
 
+    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
+
+    heartbeat_prompt_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS, default="off",
+        help="Experimental native packet reuse; off by default. On uses existing host declarations: "
+             "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
+             "(generic_cli plus its explicit heartbeat worker settings). Other or missing modes keep full delivery. "
+             "A directory alone never enables it; declarations are not retention proof.")
     context_location = heartbeat_prompt_parser.add_mutually_exclusive_group()
     context_location.add_argument(
         "--codex-context-dir",

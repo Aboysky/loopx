@@ -25,7 +25,7 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
     source = ["--capture-file", str(path), "--capture-sha256", digest]
     project = [*prefix, "context-project", *source,
         "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
-        "--turn-instance-id", turn_id, "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
+        "--turn-instance-id", turn_id, "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
         "--decision-output-root", str(path.parent / "decisions")]
     full = [*prefix, "context-read", *source]
     return ("Present that same immutable packet with:\n```sh\n" + shlex.join(project)
@@ -56,7 +56,7 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     env["CODEX_ROLLOUT_TRACE_ROOT"] = tempfile.mkdtemp(prefix="wake-", dir=traces)
     env["LOOPX_CODEX_CONTEXT_DIR"] = str(root)
     configuration = codex_context_configuration(str(root), goal_id=env["LOOPX_GOAL_ID"],
-        agent_id=env["LOOPX_AGENT_ID"], cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
+        agent_id=env["LOOPX_AGENT_ID"], scenario="codex_benchmark_heartbeat", cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
     content = json.dumps({"hooks": configuration["hooks"]})
     path = home / "hooks.json"
     if path.is_symlink() or (path.exists() and path.read_text() != content):

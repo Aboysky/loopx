@@ -943,10 +943,13 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
         changed = copy.deepcopy(turns)
         changed[-1]["items"][-1][field] = value
         variants.append(changed)
-    for option, value in [("--turn-instance-id", "wrong-turn"), ("--decision-handoff-socket", "/tmp/other"),
+    for option, value in [("--context-delivery", "on"), ("--turn-instance-id", "wrong-turn"), ("--decision-handoff-socket", "/tmp/other"),
                           ("--registry", "/other.json"), ("--goal-id", "other")]:
         altered = list(argv)
-        altered[altered.index(option) + 1] = value
+        if option in altered:
+            altered[altered.index(option) + 1] = value
+        else:
+            altered += [option, value]
         changed = copy.deepcopy(turns)
         changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(altered)])
         variants.append(changed)

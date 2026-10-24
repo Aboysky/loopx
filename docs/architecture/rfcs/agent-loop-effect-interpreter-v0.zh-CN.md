@@ -751,8 +751,8 @@ code-mode transport，不等于已安装桌面产品采用。下述常驻恢复�
 被杀；安装采用、trace 与全部补读开销及真实 solver 成果仍须独立验证；不开新 runtime/owner
 问询门，一期保持开放。
 
-既有 benchmark worker 现通过显式 `context_delivery` heartbeat 选项消费上述生产
-路径；EdgeBench/SForge 以 `--context-delivery` 暴露同一选择。trial 私有 home 放置
+既有 benchmark worker 现通过显式 `context_delivery: "on"` heartbeat 选项消费上述生产
+路径（默认 `"off"`）；EdgeBench/SForge 以 `--context-delivery on` 暴露同一选择。trial 私有 home 放置
 产品 hook，并用原生 `hooks/list` 获取精确 hash，仅在该进程信任这些 hook；无关
 workspace hook 仍不受信任。显式启用的私有 trace 支持输入 observer。设置失败继续
 普通全量，既有 checkpoint handoff 保留原 capture 所有权。run/install/wake receipt
@@ -797,7 +797,18 @@ code-mode 调用方可以直接转发成功的 CLI stdout，避免再次序列�
 查找从 offset 零开始，后续每个 `next_command` 固定到原路径和 hash，避免并发发布
 更新 capture 时混读。文件缺失、内容变化或符号链接继续沿既有 reader 拒绝。
 
-`quota context-config` 通过 CLI 生成原生 hook/恢复配置，benchmark worker 复用同一
+实验开关现为 `--context-delivery {off,on}`，默认 `off`。复用已有声明的宿主上下文：
+`--codex-app` / 等价 `codex_app_heartbeat` profile，或 benchmark worker 既有
+`generic_cli` profile 加显式 `LOOPX_EXECUTION_MODE=heartbeat` 与
+`LOOPX_CONTEXT_DELIVERY=on` 声明。worker 既有执行 owner 拒绝非 heartbeat 模式，
+并把这些设置传递给原生工具；scheduler 声明不变。不通过进程名或环境中的原生
+session 启发式认证宿主。声明缺失、
+矛盾或不受支持时保留全量并说明原因，不阻塞已有权限内的工作。hook、配置、已保存
+包展示和重入均传递这一二态选择。目录参数或 host handoff 本身不能开启差分。关闭时
+仍可回查原 capture 全量。这些调用方声明只选择受支持 adapter 路径，不授予执行权限，
+也不替代实际输入保留验证。
+
+`quota context-config --context-delivery on --codex-app` 通过 CLI 生成原生 hook/恢复配置，benchmark worker 复用同一
 provider helper。Codex App 共享配置使用 `--codex-context-root` 按原生 session 隔离
 journal，独立 trial home 保留 `--codex-context-dir`。只读查找不创建未知 session
 目录。心跳 bootstrap 保留 root/capture 参数，使用既有每次唤醒的 `LOOPX_TURN`

@@ -201,6 +201,13 @@ def register_quota_command(
               "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
     )
     quota_parser.add_argument("--capture-file", help="For context-read/context-project: original captured JSON file; no guard is evaluated.")
+    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
+
+    quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS, default="off",
+        help="Experimental native packet reuse; off by default. On uses existing host declarations: "
+             "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
+             "(generic_cli plus its explicit heartbeat worker settings). Other or missing modes keep full delivery. "
+             "A directory alone never enables it; declarations are not retention proof.")
     context_location = quota_parser.add_mutually_exclusive_group()
     context_location.add_argument("--codex-context-dir",
         help="Opt-in private native Codex lifecycle directory. For context-hook, consume one native hook event on stdin. "

@@ -119,7 +119,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="host-session", context_epoch="epoch-1")
     saved = []
 
-    def invoke(host_request, *, opt_in=True, native_context=False):
+    def invoke(host_request, *, opt_in=True, native_context=False, setting="on"):
         with tempfile.TemporaryDirectory(prefix="context-host-", dir="/tmp") as short:
             endpoint = Path(short).resolve() / "host.sock"
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
@@ -149,6 +149,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
                     code, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                         "--turn-instance-id", "host-context-delivery",
+                        "--context-delivery", setting,
                         "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint),
                         *(["--codex-context-dir", str(tmp_path / "unavailable-native-state")] if native_context else []),
                         *(["--turn-envelope"] if surface == "turn_envelope" else []), cwd=project)
@@ -196,6 +197,10 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
         full, directory = invoke(malformed)
         assert "target" not in full  # Automatic ordinary full output, not a gate.
         assert full == json.loads((directory / "projection.json").read_bytes())
+    # A host-side request cannot enable this feature when the caller is off.
+    disabled, disabled_directory = invoke({"scope": scope, "baseline": cold,
+        "retained": {"complete": True, "target": cold["target"]}}, setting="off")
+    assert "target" not in disabled and not (disabled_directory / "projection.json").exists()
     ordinary, directory = invoke(None, opt_in=False)
     assert "target" not in ordinary and not (directory / "projection.json").exists()
     assert state.read_bytes() == before_source and _spend_run_count(runtime) == 0
@@ -239,7 +244,7 @@ def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(t
     for _ in range(2):
         rc, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-full",
-            "--decision-output-root", str(captures), "--codex-context-dir", str(root), cwd=project)
+            "--decision-output-root", str(captures), "--context-delivery", "on", "--codex-context-dir", str(root), cwd=project)
         assert rc == 0 and wire["mode"] == "full", wire
         assert json.loads(Path(wire["recovery"]["path"]).read_text()) == wire["context"]
     assert _heartbeat_receipt_count(runtime, "native-full") == 1
@@ -253,7 +258,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
-        "--goal-id", "fixture", "--agent-id", "worker", "--codex-context-dir", str(tmp_path)])
+        "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
     original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"}}
     monkeypatch.setattr(quota, "handoff_decision", lambda *args: ({"scope": "host-request"}, "digest"))
     monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
@@ -275,3 +280,43 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         detail_sections=frozenset(), print_payload=lambda value, *args: printed.append(value)) == 0
     assert printed == [original if native_failure else {"native_projection": original}]
     assert json.loads((tmp_path / "decision.json").read_text()) == original
+
+
+@pytest.mark.parametrize("scenario", [None, "off"])
+def test_plain_quota_context_default_does_not_touch_transport(tmp_path, monkeypatch, scenario):
+    from loopx.control_plane.turn_driver import codex_context
+    from loopx.cli import build_parser
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("off must not observe native context or create transport state")
+    monkeypatch.setattr(codex_context, "project_codex_context", unexpected)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
+        state_path=state, provider="file")
+    args = ["quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "off-scenario"]
+    if scenario:
+        args += ["--context-delivery", scenario]
+    code, result = _run_cli(registry, runtime, *args, cwd=project)
+    assert code == 0 and result["ok"] and result.get("schema_version") != "context_delivery_v1", result
+    assert build_parser().parse_args(["quota", "should-run"]).context_delivery == "off"
+
+
+@pytest.mark.parametrize("activation", [[], ["--context-delivery", "off"], ["--context-delivery", "on"]])
+def test_unsupported_or_off_delivery_keeps_full_and_does_not_touch_native_cache(tmp_path, activation):
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
+        state_path=state, provider="file")
+    root = tmp_path / "never-create"
+    code, result = _run_cli(registry, runtime, "quota", "should-run", "--runtime-profile", "generic_cli",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "unsupported",
+        "--codex-context-dir", str(root), *activation, cwd=project)
+    assert code == 0 and result["ok"] and result.get("schema_version") != "context_delivery_v1", result
+    assert not root.exists()
+    if activation == ["--context-delivery", "on"]:
+        assert result["context_delivery"]["enabled"] is False
+        assert result["context_delivery"]["reason"] == "unsupported_or_missing_run_mode"

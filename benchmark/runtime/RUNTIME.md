@@ -46,9 +46,17 @@ do not change a running trial's treatment. Captures contain private Goal context
 Transport tests do not establish lower token cost or better model decisions.
 
 For an explicitly selected native context-delivery treatment, add
-`context_delivery: true` to the same heartbeat agent `kwargs` (default `false`).
+`context_delivery: "on"` to the same heartbeat agent `kwargs` (default `"off"`).
+Only the existing Codex heartbeat worker accepts `"on"`; booleans, other modes and
+scenario names are rejected. This is an experimental transport setting, separate
+from `turn_envelope`.
 The existing EdgeBench/SForge entry exposes the same selection through
-`--context-delivery` on a heartbeat worker.
+`--context-delivery on` on a heartbeat worker (`off` is the default).
+The worker preserves its existing `generic_cli` scheduler profile. Its execution
+owner requires `mode=heartbeat` and explicitly propagates `LOOPX_EXECUTION_MODE=heartbeat`
+and `LOOPX_CONTEXT_DELIVERY=on` into the native tool environment. Generic CLI
+without these worker declarations stays full. These are caller declarations,
+not host authentication or a new admission grant.
 It works with ordinary quota or the explicit TurnEnvelope view. The existing
 worker stages two product lifecycle hooks in the trial's private Codex home and
 queries native `hooks/list` without invoking a model. Only those exact native
@@ -81,7 +89,7 @@ earlier input replays did not include it. Count complete input, recovery reads, 
 IO in treatment cost, not just the delta bytes.
 
 Codex App setup uses the same product configuration renderer as the worker:
-`loopx --format json quota context-config --codex-context-root DIR --goal-id GOAL --agent-id AGENT`.
+`loopx --format json quota context-config --context-delivery on --codex-app --codex-context-root DIR --goal-id GOAL --agent-id AGENT`.
 It returns native hooks and persistent recovery instructions, without installing
 files or changing trust. A shared root isolates journals by native session;
 the trial-local single-session `--codex-context-dir` remains supported.
@@ -113,7 +121,7 @@ unchanged. Include the projection command, descriptor, recovery and page reads
 in subsequent total-cost comparisons.
 Across distinct worker wakes, settle the prior Turn before selecting new work;
 reading an old prompt from resumed history cannot supply the next wake's guard.
-Do not modify an active/frozen trial. Disable `context_delivery` for a new trial
+Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new trial
 to roll back; default runs install no hooks, trust or trace settings. No scorer,
 budget, task semantics or launch authority changes with this option.
 

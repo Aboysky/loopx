@@ -20,6 +20,22 @@ from ..control_plane.turn_driver.decision_capture import (
 )
 
 
+def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
+    from ..control_plane.turn_driver.codex_context import context_delivery_activation
+
+    fields = {key: getattr(args, key, None) for key in ("host_surface", "scheduler_owner", "execution_mode")}
+    profiles = [value for value in (getattr(args, "runtime_profile", None),
+        "codex_app_heartbeat" if getattr(args, "codex_app", False) else None,
+        "trae_app" if getattr(args, "trae_app", False) else None) if value is not None]
+    if len(profiles) > 1:
+        return context_delivery_activation(getattr(args, "context_delivery", "off"))
+    return context_delivery_activation(getattr(args, "context_delivery", "off"),
+        runtime_profile=profiles[0] if profiles else None,
+        scheduler_execution_context=fields if any(fields.values()) else None,
+        benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
+            if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None)
+
+
 def _read_capture(value: str, digest: str) -> tuple[Path, bytes, dict[str, Any]]:
     """One bounded physical-file/hash check for recovery and saved projection."""
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
@@ -125,6 +141,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
         from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
+        if not native_context_activation(args)["enabled"]:
+            raise ValueError("context delivery is off")
         root = Path(args.decision_output_root).expanduser().absolute()
         metadata = root.lstat()
         if root.resolve(strict=True) != root or not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
@@ -154,15 +172,20 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     return {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
         "recovery": full_reference,
         "capture_sha256": args.capture_sha256,
+        **({"context_delivery": native_context_activation(args)} if getattr(args, "context_delivery", "off") == "on" else {}),
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + CONTEXT_CAPTURE_READ_GUIDANCE}
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
+    enabled = native_context_activation(args)["enabled"]
+    if enabled and not (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
+                        or getattr(args, "decision_handoff_socket", None)):
+        raise QuotaCommandValidationError("context-delivery on requires a native context location or explicit host handoff")
     requested = getattr(args, "decision_output_dir", None)
     root = getattr(args, "decision_output_root", None)
     handoff = getattr(args, "decision_handoff_socket", None)
-    if (getattr(args, "codex_context_dir", None) is not None
+    if enabled and (getattr(args, "codex_context_dir", None) is not None
             or getattr(args, "codex_context_root", None) is not None) and (
             args.format != "json" or (requested is None and root is None)):
         raise QuotaCommandValidationError(
@@ -189,6 +212,7 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
             if parent.is_symlink() or not parent.is_dir():
                 raise OSError("capture root must be an existing directory, not a symlink")
             return Path(tempfile.mkdtemp(prefix="decision-", dir=parent))
+        assert requested is not None  # root is absent; exactly one destination was checked above.
         directory = Path(requested).expanduser().absolute()
         # A new directory per invocation prevents overwriting a prior observation,
         # including a prior invocation in the same Turn. Existing symlinks fail too.
@@ -238,6 +262,8 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         suffix += " --decision-handoff-socket " + shlex.quote(args.decision_handoff_socket)
     if getattr(args, "turn_envelope", False):
         suffix += " --turn-envelope"
+    if getattr(args, "context_delivery", "off") != "off":
+        suffix += " --context-delivery " + shlex.quote(args.context_delivery)
     if getattr(args, "codex_context_dir", None):
         suffix += " --codex-context-dir " + shlex.quote(args.codex_context_dir)
     if getattr(args, "codex_context_root", None):
@@ -245,7 +271,8 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     selection["command_args_template"] = template + suffix
 
 
-def handoff_decision(directory: Path | None, socket_path: str | None) -> tuple[dict[str, Any], str] | None:
+def handoff_decision(directory: Path | None, socket_path: str | None,
+                     context_delivery_enabled: bool = False) -> tuple[dict[str, Any], str] | None:
     """Withhold the original output until the Host releases these exact bytes.
 
     No second guard, admission, settlement or retry is performed here. A lost
@@ -277,9 +304,10 @@ def handoff_decision(directory: Path | None, socket_path: str | None) -> tuple[d
             "Decision handoff failed after guard evaluation; inspect the original "
             f"Turn receipt and {path}. Do not blindly rerun the guard."
         ) from exc
-    if response.get("context_delivery") is not True:
+    if response.get("context_delivery") is not True or not context_delivery_enabled:
         return None
-    # Only an explicit Host request opts in. The release itself does not prove
+    # Both the supported caller opt-in and explicit Host request are required.
+    # The release itself does not prove
     # delivery/retention. Read one private snapshot, never an arbitrary pathname
     # supplied by a response or a model. Invalid optimization input selects full.
     request_path = directory / "delivery-request.json"
@@ -308,17 +336,22 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         from ..control_plane.turn_driver.codex_context import codex_context_configuration
 
         try:
+            activation = native_context_activation(args)
+            if not activation["enabled"]:
+                payload = {"ok": True, "context_delivery": activation}
+                print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+                return 0
             directory = getattr(args, "codex_context_root", None) or args.codex_context_dir
             if not directory:
                 raise ValueError("context-config requires codex-context-root or codex-context-dir")
             config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
-                cli_argv=loopx_cli_argv(), session_root=bool(getattr(args, "codex_context_root", None)))
-            payload = {"ok": True, "native_config": config,
+                cli_argv=loopx_cli_argv(), scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)))
+            payload = {"ok": True, "context_delivery": activation, "native_config": config,
                 "activation": "Merge hooks and append developer_instructions to the existing native configuration; "
                     "review and trust only these exact hooks in Codex. Restart/resume with the resulting configuration. "
-                    "Pass this same context location and a decision-output-root to heartbeat-prompt/should-run. "
+                    "Pass --context-delivery on with the same declared host mode, context location and a decision-output-root to heartbeat-prompt/should-run. "
                     "For delta, the native process must already have CODEX_ROLLOUT_TRACE_ROOT pointing to private diagnostics; "
-                    "unavailable diagnostics preserve full delivery. Disabling the context options restores ordinary output. "
+                    "unavailable diagnostics preserve full delivery. Set --context-delivery off and remove context options to restore ordinary output. "
                     "This command installs nothing and grants no execution authority."}
         except (OSError, ValueError, TypeError) as exc:
             payload = {"ok": False, "reason": str(exc)}
@@ -332,6 +365,9 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
         # Native transport only: no registry discovery, guard or quota effects.
         try:
+            if not native_context_activation(args)["enabled"]:
+                print("{}")
+                return 0
             raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
             event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
             if (isinstance(event, dict) and isinstance(event.get("session_id"), str) and event["session_id"]

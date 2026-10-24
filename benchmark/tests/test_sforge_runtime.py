@@ -225,7 +225,7 @@ def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monk
 
 
 @pytest.mark.parametrize("capture_path", [None, "/control/checkpoint-request.json"])
-@pytest.mark.parametrize("context_delivery", [False, True])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
 def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profile(tmp_path, monkeypatch, capture_path, context_delivery):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -248,8 +248,8 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
     assert "turn_envelope" not in profile
     assert "turn_envelope_source" not in profile
     assert "LOOPX_TURN_ENVELOPE" not in env
-    assert env.get("LOOPX_CONTEXT_DELIVERY") == ("1" if context_delivery else None)
-    assert profile.get("context_delivery") is (True if context_delivery else None)
+    assert env.get("LOOPX_CONTEXT_DELIVERY") == ("on" if context_delivery != "off" else None)
+    assert profile.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
     assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
     with pytest.raises(ValueError, match="checkpoint_request_path"):
         SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
@@ -352,7 +352,7 @@ def test_native_goal_continue_is_a_native_goal_opt_in(tmp_path, monkeypatch, ena
     assert profile.get("native_goal_continue") is (True if enabled else None)
     with pytest.raises(ValueError, match="native-goal"):
         SForgeWorker(config, profile="heartbeat-resume", cwd="/task", native_goal_continue=True)
-    with pytest.raises(ValueError, match="boolean"):
+    with pytest.raises(ValueError, match="context_delivery"):
         SForgeWorker(config, profile="native-goal", cwd="/task", native_goal_continue="1")
 
 
@@ -1238,7 +1238,7 @@ def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("capture", [False, True])
-@pytest.mark.parametrize("context_delivery", [False, True])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
 def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_path, monkeypatch, capture, context_delivery):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -1274,8 +1274,8 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
     args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "storage", "--worker", "heartbeat-explore", "--model", "fixture",
             "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback", "native"]
-    if context_delivery:
-        args += ["--context-delivery"]
+    if context_delivery != "off":
+        args += ["--context-delivery", "on"]
     if capture:
         declaration = tmp_path / "request.json"
         declaration.write_text(json.dumps({"destination": "/logs/agent/checkpoints",
@@ -1284,4 +1284,4 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
     with pytest.raises(RuntimeError, match="validated before model execution"):
         run.main(args)
     receipt = json.loads((tmp_path / "runs/storage/fixture/runtime-receipt.json").read_text())
-    assert receipt.get("context_delivery") is (True if context_delivery else None)
+    assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)

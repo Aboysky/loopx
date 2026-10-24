@@ -58,7 +58,7 @@ def test_native_configuration_cli_is_read_only_and_usable_without_registry(tmp_p
     tmp_path.chmod(0o700)
     repo = Path(__file__).resolve().parents[2]
     command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "context-config",
-        "--codex-context-root", str(tmp_path), "--goal-id", "fixture", "--agent-id", "agent"]
+        "--context-delivery", "on", "--codex-app", "--codex-context-root", str(tmp_path), "--goal-id", "fixture", "--agent-id", "agent"]
     result = subprocess.run(command, cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(repo)},
         capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
@@ -219,7 +219,7 @@ def test_real_hook_cli_is_transport_only_without_registry_or_installation(tmp_pa
     directory.mkdir(mode=0o700)
     registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
     cmd = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(runtime),
-        "quota", "context-hook", "--codex-context-dir", str(directory)]
+        "quota", "context-hook", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(directory)]
     event = dict(session_id="session", cwd=str(tmp_path), hook_event_name="SessionStart", source="startup")
     result = subprocess.run(cmd, input=json.dumps(event), capture_output=True, text=True, timeout=20,
         cwd=Path(__file__).resolve().parents[2])
@@ -281,3 +281,75 @@ def test_lost_hook_reference_is_scoped_read_only_and_pins_later_pages(tmp_path, 
     assert rest["content"] == Path(args.capture_file).read_bytes()[args.offset:args.offset + len(rest["content"].encode())].decode()
     args.codex_context_dir = str(tmp_path)
     assert not read_context_capture(args)["ok"]  # no mixed moving and pinned selectors
+
+
+
+@pytest.mark.parametrize("setting", [None, "off", "on"])
+@pytest.mark.parametrize("host_args,expected", [
+    ([], None),
+    (["--codex-app"], "codex_app_heartbeat"),
+    (["--runtime-profile", "codex_app_heartbeat"], "codex_app_heartbeat"),
+    (["--host-surface", "codex_app", "--scheduler-owner", "host_automation", "--execution-mode", "hosted_automation"], "codex_app_heartbeat"),
+    (["--host-surface", "codex_cli", "--scheduler-owner", "outer_controller", "--execution-mode", "isolated_headless"], None),
+    (["--runtime-profile", "generic_cli"], None),
+    (["--runtime-profile", "claude_code"], None),
+    (["--runtime-profile", "codex_cli"], None),
+    (["--host-surface", "codex_app"], None),
+    (["--codex-app", "--host-surface", "codex_cli"], None),
+    (["--codex-app", "--runtime-profile", "generic_cli"], None),
+    (["--codex-app", "--trae_app"], None),
+])
+def test_activation_reuses_declared_host_mode_and_off_is_inert(tmp_path, monkeypatch, setting, host_args, expected):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import handle_native_context_command
+
+    # Ambient native environment is not an independent activation or mode proof.
+    monkeypatch.setenv("CODEX_THREAD_ID", "ambient-native-session")
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    tmp_path.chmod(0o700)
+    args = ["--format", "json", "quota", "context-config", "--codex-context-dir", str(tmp_path),
+            "--goal-id", "fixture", "--agent-id", "agent", *host_args]
+    if setting is not None:
+        args += ["--context-delivery", setting]
+    results = []
+    parsed = build_parser().parse_args(args)
+    assert handle_native_context_command(parsed, print_payload=lambda value, *_: results.append(value)) == 0
+    result = results[0]
+    activation = result["context_delivery"]
+    expected = expected if setting == "on" else None
+    assert activation["requested"] == (setting or "off")
+    assert activation["enabled"] is (expected is not None) and activation["scenario"] == expected
+    assert activation["supported_scenarios"] == ["codex_benchmark_heartbeat", "codex_app_heartbeat"]
+    if expected is None:
+        assert "native_config" not in result
+    else:
+        for entries in result["native_config"]["hooks"].values():
+            assert "--context-delivery on" in entries[0]["hooks"][0]["command"]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("setting", ["true", "generic_cli", "claude_code", "all", "codex_app_heartbeat"])
+def test_context_activation_rejects_non_binary_settings(setting):
+    from loopx.cli import build_parser
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["quota", "context-config", "--context-delivery", setting])
+
+
+@pytest.mark.parametrize("mode,setting,expected", [("heartbeat", "on", True), ("plain", "on", False),
+    (None, "on", False), ("heartbeat", "off", False)])
+def test_benchmark_activation_uses_existing_explicit_worker_declaration(monkeypatch, mode, setting, expected):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import native_context_activation
+
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    if mode is not None:
+        monkeypatch.setenv("LOOPX_EXECUTION_MODE", mode)
+    else:
+        monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    args = build_parser().parse_args(["quota", "context-config", "--runtime-profile", "generic_cli",
+        "--context-delivery", setting])
+    result = native_context_activation(args)
+    assert result["enabled"] is expected
+    assert result["scenario"] == ("codex_benchmark_heartbeat" if expected else None)

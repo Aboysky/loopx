@@ -178,6 +178,7 @@ def _heartbeat_prompt_commands(
     decision_handoff_socket: str | None,
     codex_context_dir: str | None,
     codex_context_root: str | None,
+    context_delivery: str,
     turn_envelope: bool,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
@@ -282,6 +283,8 @@ def _heartbeat_prompt_commands(
         capture_arg = " --decision-output-root " + shlex.quote(str(decision_output_root))
         if decision_handoff_socket is not None:
             capture_arg += " --decision-handoff-socket " + shlex.quote(decision_handoff_socket)
+        if context_delivery != "off":
+            capture_arg += " --context-delivery " + shlex.quote(context_delivery)
         if codex_context_dir is not None:
             capture_arg += " --codex-context-dir " + shlex.quote(codex_context_dir)
         if codex_context_root is not None:
@@ -323,6 +326,7 @@ def build_heartbeat_prompt(
     decision_handoff_socket: str | None = None,
     codex_context_dir: str | None = None,
     codex_context_root: str | None = None,
+    context_delivery: str = "off",
     turn_envelope: bool = False,
 ) -> dict[str, Any]:
     if not (full or compact or brief or thin):
@@ -381,6 +385,17 @@ def build_heartbeat_prompt(
         runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
     )
+    from ..turn_driver.codex_context import context_delivery_activation
+
+    import os
+
+    activation = context_delivery_activation(context_delivery, runtime_profile=runtime_profile,
+        scheduler_execution_context=scheduler_execution_context,
+        benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
+            if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None)
+    if not activation["enabled"]:
+        codex_context_dir = codex_context_root = None
+    effective_context_delivery = "on" if activation["enabled"] else "off"
     decision_output_root = resolve_heartbeat_capture_root(
         decision_output_root,
         thin=thin, full=full, compact=compact, brief=brief,
@@ -389,6 +404,7 @@ def build_heartbeat_prompt(
         decision_handoff_socket=decision_handoff_socket,
         codex_context_dir=codex_context_dir,
         codex_context_root=codex_context_root,
+        context_delivery=effective_context_delivery,
         turn_envelope=turn_envelope,
     )
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
@@ -480,6 +496,7 @@ def build_heartbeat_prompt(
         decision_handoff_socket=decision_handoff_socket,
         codex_context_dir=codex_context_dir,
         codex_context_root=codex_context_root,
+        context_delivery=effective_context_delivery,
         turn_envelope=turn_envelope,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)
@@ -558,6 +575,7 @@ def build_heartbeat_prompt(
         "agent_profile": agent_profile_prompt_projection(agent_profile),
         "registered_agents": normalized_registered_agents,
         "runtime_profile": runtime_profile,
+        **({"context_delivery": activation} if context_delivery == "on" else {}),
         "reward_memory_enabled": reward_memory_enabled,
         "scheduler_execution_context": scheduler_execution_context,
         **(

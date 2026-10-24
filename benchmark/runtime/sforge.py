@@ -92,7 +92,7 @@ class SForgeWorker(CodexAgent):
                  task_objective: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
-                 context_delivery: bool = False,
+                 context_delivery: str = "off",
                  native_goal_continue: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,

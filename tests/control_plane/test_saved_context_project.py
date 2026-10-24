@@ -63,7 +63,7 @@ def test_optional_cache_failure_returns_original_full_reference(tmp_path, root_k
     args = build_parser().parse_args(["--format", "json", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
         "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
-        "--decision-output-root", str(root), "--codex-context-dir", str(context)])
+        "--decision-output-root", str(root), "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context)])
     result = project_saved_context_capture(args)
     assert result["ok"] and result["mode"] == "full"
     assert result["path"] == str(path) and result["sha256"] == digest
@@ -124,7 +124,7 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
     program = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI") or str(Path(sys.executable).with_name("loopx"))
     cli = [program, "--cli-bin", program]
     from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
-    configuration = codex_context_configuration(str(context), goal_id=GOAL_ID, agent_id=AGENT_ID, cli_argv=cli)
+    configuration = codex_context_configuration(str(context), goal_id=GOAL_ID, agent_id=AGENT_ID, cli_argv=cli, scenario="codex_app_heartbeat")
     if host == "app_server":
         (home / "hooks.json").write_text(json.dumps({"hooks": configuration["hooks"]}))
     phase, queue, observed, errors = "cold", [], {}, []
@@ -149,7 +149,7 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
                     command = shlex.join([*cli, "--format", "json", "quota", "context-project",
                         "--capture-file", str(source), "--capture-sha256", hashlib.sha256(raw).hexdigest(),
                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "saved-native-turn",
-                        "--codex-context-dir", str(context), "--decision-output-root", str(cache)])
+                        "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(cache)])
                 phase += "_ready"
             elif phase.endswith("_ready"):
                 name = phase.split("_")[0]
@@ -193,7 +193,7 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
             declaration = workspace / "checkpoint-request.json"
             declaration.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(workspace / "checkpoints"),
                 "components": [{"id": "task", "source_path": str(state)}], "point_metadata": {}}))
-            env.update(LOOPX_CONTEXT_DELIVERY="1", LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT="resume",
+            env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT="resume",
                 LOOPX_TASK_ENTRY="seeded-todo", LOOPX_TASK_STAGE="execute", LOOPX_CHECKPOINT_REQUEST=str(declaration),
                 LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project), LOOPX_SHARED_SKILLS=str(skills),
                 LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
@@ -287,3 +287,23 @@ def test_native_discovery_keeps_plugins_out_of_probe_without_changing_solver(tmp
         assert all(features[key] is False for key in ("plugins", "remote_plugin", "plugin_sharing"))
     assert config.read_bytes() == original_config
     assert not list(home.rglob("*.pack")), "discovery must not clone a plugin catalog"
+
+
+def test_saved_projection_default_off_ignores_available_native_cache(tmp_path, monkeypatch):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import project_saved_context_capture
+    from loopx.control_plane.turn_driver import codex_context
+
+    path, root = tmp_path / "original.json", tmp_path / "uncreated"
+    raw = json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": {"turn_instance_id": "t"}}).encode()
+    path.write_bytes(raw)
+    def unexpected(*args, **kwargs):
+        pytest.fail("default-off saved presentation must not inspect/create native state")
+    monkeypatch.setattr(codex_context, "codex_context_directory", unexpected)
+    args = build_parser().parse_args(["quota", "context-project", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
+        "--turn-instance-id", "t", "--codex-context-dir", str(root), "--decision-output-root", str(root)])
+    result = project_saved_context_capture(args)
+    assert result["ok"] and result["mode"] == "full" and result["path"] == str(path)
+    assert not root.exists() and path.read_bytes() == raw
