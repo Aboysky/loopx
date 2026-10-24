@@ -5,6 +5,27 @@ import {compactSelectedTodoSource, prepareContextDelivery, restoreContextDeliver
 
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
 
+test("replacements and sparse edits own their values without mutating either capture", () => {
+  const original = {registry: {body: "Retain every original requirement. ".repeat(400), changed: {value: 1}},
+    current_control: {labels: ["original"]}};
+  const current = {...structuredClone(original), current_control: {labels: ["current"]}};
+  current.registry.changed.value = 2;
+  const before = structuredClone(original), after = structuredClone(current);
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "original", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "current", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  assert.deepEqual(inline(delta, ["current_control"]), {labels: ["current"]});
+  const restored = restoreContextDelivery({delivery: delta, baseline: initial, current: prepareContextDelivery(args)});
+  assert.deepEqual(restored.context, after);
+  // Publication must detach both a forced whole value and a sparse replacement.
+  (inline(delta, ["current_control"]) as {labels: string[]}).labels.push("wire-only");
+  (restored.context as typeof current).registry.changed.value = 3;
+  assert.deepEqual(original, before);
+  assert.deepEqual(initial.context, before);
+  assert.deepEqual(current, after);
+});
+
 const scope = {goal_id: "goal", agent_id: "agent", session_id: "session", context_epoch: "epoch-1"};
 const long = "Keep the original acceptance and stop before publication. ".repeat(400);
 function context(): JsonObject {

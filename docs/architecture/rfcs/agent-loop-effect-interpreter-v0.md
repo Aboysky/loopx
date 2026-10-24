@@ -1231,6 +1231,17 @@ the same trust identities, and discovery sends no inference request. The same
 test detects the old helper's enabled plugin features. The cost figures above
 precede this helper fix and do not measure its latency or disk savings.
 
+The shared codec also avoids copying unchanged/discarded replacement subtrees
+and canonicalizing identical requirement strings. A V8 capture identifies
+comparison, sizing and cloning work; a controlled intervention replays 31 fixed
+real captures through the loaded owner. Four counterbalanced process pairs,
+each with 12 measured replays after warmup, reduce mean prepare/recovery time
+from 347.30 to 303.06 ms (12.74%). Every emitted delivery remains byte-identical,
+and reconstruction plus detached-value checks preserve both source captures.
+This measures the loaded codec on one host, excluding startup, CLI/backend IO,
+native host, model and whole-Turn time. It changes neither packet bytes nor the
+input-token result; complete-cost and solver-outcome acceptance remain open.
+
 The native adapter now uses the existing Core original-capture IO owner for
 shared read guidance and projection, removing the reverse Core-to-CLI dependency.
 CLI presentation dispatch remains ahead of authority IO; event recording,

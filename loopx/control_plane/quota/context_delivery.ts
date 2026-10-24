@@ -11,8 +11,13 @@ const MAX_ANCESTRY = 32;
 type Path = (string | number)[];
 type Split = {fresh: JsonObject; valid: boolean};
 const clone = <T>(value: T): T => structuredClone(value);
-const equal = (a: unknown, b: unknown): boolean => a === undefined || b === undefined ? a === b
-  : JSON.stringify(canonicalAuthorityJson(a)) === JSON.stringify(canonicalAuthorityJson(b));
+const equal = (a: unknown, b: unknown): boolean => {
+  // Identical requirement strings need no canonical JSON allocation. Keep the
+  // existing type-sensitive comparison for every other value.
+  if (typeof a === "string" && a === b) return true;
+  return a === undefined || b === undefined ? a === b
+    : JSON.stringify(canonicalAuthorityJson(a)) === JSON.stringify(canonicalAuthorityJson(b));
+};
 const digest = (value: unknown): string => `sha256:${canonicalAuthoritySha256(value)}`;
 const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
 
@@ -239,8 +244,8 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
   const exact = new Set(forced.map(pathKey)), ancestors = new Set<string>();
   for (const path of forced) for (let i = 0; i < path.length; i++) ancestors.add(pathKey(path.slice(0, i)));
   const visit = (a: unknown, b: unknown, path: Path): Delta | null => {
-    const key = pathKey(path), replacement: Delta = {value: clone(b)};
-    if (exact.has(key)) return replacement;
+    const key = pathKey(path);
+    if (exact.has(key)) return {value: clone(b)};
     if (!ancestors.has(key) && equal(a, b)) return null;
     let delta: Delta;
     if (jsonObject(a) && jsonObject(b)) {
@@ -259,8 +264,10 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         if (child) items.push([String(i), child]);
       });
       delta = {items: Object.fromEntries(items), ...(a.length !== b.length ? {length: b.length} : {})};
-    } else return replacement;
-    return bytes(delta) < bytes(replacement) ? delta : replacement;
+    } else return {value: clone(b)};
+    // Sizing does not publish a value. Copy only a replacement that is chosen,
+    // rather than every unchanged subtree and every discarded ancestor value.
+    return bytes(delta) < bytes({value: b}) ? delta : {value: clone(b)};
   };
   return visit(before, after, []);
 }
