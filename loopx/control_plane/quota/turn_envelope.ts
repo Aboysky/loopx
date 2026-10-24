@@ -1,6 +1,7 @@
 import { EffectiveAction } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -998,6 +999,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
   if (operation === "build") return buildTurnEnvelope(request);
+  if (operation === "context_delivery") return prepareContextDelivery(request);
+  if (operation === "context_recovery") return restoreContextDelivery(request);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(
     requireJsonObject(request.envelope, "turn_envelope"), request.turn_instance_id,

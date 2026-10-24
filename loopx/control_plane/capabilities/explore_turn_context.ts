@@ -10,6 +10,21 @@ import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from 
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
+/** Reusable evidence and instructions in this owner's read model. Current
+ * selection, eligibility, source revisions and pagination stay outside this
+ * split. A changed evidence array is replaced in full, including its status,
+ * provenance and applicability; no timestamp or revision is normalized away. */
+export function exploreReusableContextPaths(): string[][] {
+  return [
+    ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback",
+      "path_delta_attachment_template", "linked_question_attachment_template",
+      "optional_question_evolution_example", "result_writeback_guidance",
+      "result_attachment_template", "optional_measurement_example", "measurement_guidance",
+      "record_node_template", "record_finding_template", "guidance"].map(key => ["graph", key]),
+    ["harness", "guidance"],
+  ];
+}
+
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
 }
