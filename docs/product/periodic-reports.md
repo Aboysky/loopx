@@ -454,13 +454,61 @@ postcondition cannot complete the Task or spend a delivery slot. The low-level
 request accepts no runtime profile or caller validation command. Stable Core
 operation identity retains failed or unknown requests without replay.
 
-This groundwork does **not** create an Agent-owned managed conversation or a
-finished user entry. The logical registered Agent must be bound to its actual
-managed Session independently of the executor endpoint before exposing that
-entry alongside attached sources. Reuse existing Session, native Turn,
+The existing session creation API now accepts `managed_agent_id` for a local
+Goal. It binds the registered work identity separately from the executor
+(`agent_id`) and model. Core persists that immutable identity, Goal lifetime
+and original thread, with a distinct Agent channel. Resume selects only that
+Goal/Agent/executor channel; another Agent cannot execute its native work.
+Old Goal-wide conversations remain readable and unassigned, and cannot gain a
+native work identity through a request-time selector. Existing project,
+steward and attached entrypoints retain their original identities and workers.
+Registration removal, Goal stop, a changed lifetime or a mismatched workspace
+refuses continued execution rather than transferring the conversation.
+
+This is an API/host lifecycle slice, **not** the finished Agent workspace
+entry or general periodic journey. The Agent view still needs to expose this
+binding alongside attached sources, including all original history and honest
+unavailable states. Reuse existing Session, native Turn,
 monitor/calendar and periodic-report owners; do not add a second scheduler,
 task store or model worker. General writable execution, natural-language
 configuration and recurring task composition remain unfinished.
+
+An explicitly bound local managed Session can also observe its Goal's native
+work through an existing `continuous_monitor` Todo. Use the existing Todo
+authoring path with `action_kind=local_runtime_observe`, `watch_only=true`,
+the registered Agent as `claimed_by`, and
+`target_key=managed-session-watch.<original-session-id>`. Its existing cadence,
+deadline and open/blocked lifecycle are authoritative. For example, after
+selecting an authorized existing Goal, Agent and bound Session:
+
+```sh
+loopx todo add --goal-id PROJECT --role agent \
+  --claimed-by WRITER --text 'Observe this Goal native work' \
+  --task-class continuous_monitor --action-kind local_runtime_observe \
+  --target-key managed-session-watch.ORIGINAL_SESSION_ID --watch-only \
+  --cadence 30m --next-due-at 2030-01-01T09:00:00+08:00 \
+  --required-capability filesystem --execute
+```
+
+Replace the illustrative identities and future deadline with the actual
+authorized task. Registration, opening a Session or installing the feature
+does not author or enable a watch. The existing idle wake producer admits a
+due watch into that Session's original Core worker; the shared observation
+adapter and native `monitor-poll` settle it without starting/resuming a model
+thread or spending a delivery slot. Other runnable work remains available.
+The original private steward retains its own portfolio source and provider
+checks; a local watch requires neither a private binding nor portfolio access.
+
+The local observation hashes canonical work fields from the complete native
+Agent Todo read in that Goal. Monitor bookkeeping and ordering do not create
+work transitions. This is current work-state observation, not a claim that the
+business or Goal has completed. Busy/queued user work wins; a paused watch,
+revoked Agent, stopped/replaced Goal or mismatched Session cannot poll. A host
+restart reads the original native deadline and Core operation, including a
+failed or unknown attempt, rather than replaying it. External Todo edits are
+observed within the existing one-minute wake hint; the hint is not authority.
+This watch does not generate a report, execute a business task, send an
+external reply or complete the natural-language/periodic-task user journey.
 
 Earlier packaged browser evidence demonstrated only the finite host/API path
 with disposable real Core/File data and a synthetic model/provider. It did not

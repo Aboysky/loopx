@@ -1,7 +1,63 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {planStewardReport} from "../../loopx/control_plane/collaboration/steward_reports.ts";
-import {admitStewardManagedTurn, bindStewardManagedActor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+import {admitManagedSessionIdentity, admitManagedSessionTurn, admitStewardManagedTurn, bindStewardManagedActor, observeManagedWork} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+import {resolveConversationScope} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+
+test("a managed work identity is registration-bound and never chosen from the executor or legacy history", () => {
+  const goal = {goal_id: "project", goal_instance_id: "original", registered_agents: ["writer", "reviewer"], workspace_path: "/workspace"};
+  const input = {goal, goal_active: true, workspace_path: "/workspace", managed_agent_id: "writer"};
+  const identity = admitManagedSessionIdentity(input);
+  assert.deepEqual(identity, {managed_agent_id: "writer", channel_id: "agent.writer", goal_instance_id: "original"});
+  assert.notDeepEqual(admitManagedSessionIdentity({...input, managed_agent_id: "reviewer"}), identity);
+  for (const changed of [{managed_agent_id: "codex"}, {managed_agent_id: ["writer"]}, {goal_active: false},
+    {workspace_path: "/other"}, {goal: {...goal, goal_instance_id: {unverified: true}}}]) {
+    assert.throws(() => admitManagedSessionIdentity({...input, ...changed}));
+  }
+  const session = {...identity, goal_id: goal.goal_id, session_id: "a".repeat(32), session_mode: "managed_runtime",
+    agent_id: "codex", executor_endpoint_id: "codex", adapter_kind: "codex_app_server", managed_workspace_path: "/workspace"};
+  assert.equal(resolveConversationScope(session).kind, "owner_goal");
+  assert.equal(resolveConversationScope({...session, channel_id: "goal.project"}).kind, "unavailable");
+  assert.equal(resolveConversationScope({...session, origin: "lark"}).kind, "unavailable");
+  const request = {operation: "native_turn", host: "codex-app-server", work_kind: "native_turn",
+    turn_instance_id: "one-operation", todo_id: null, validation_command: null,
+    actor: {schema_version: "loopx_managed_session_actor_v0", goal_id: goal.goal_id, goal_instance_id: "original",
+      agent_id: "writer", session_id: session.session_id, workspace_path: "/workspace"}};
+  const params = {goal, goal_active: true, session, request, queued_turn_count: 0};
+  assert.deepEqual(admitManagedSessionTurn(params).actor, request.actor);
+  for (const changed of [{managed_agent_id: "reviewer"}, {managed_agent_id: undefined, channel_id: "goal.project"},
+    {goal_instance_id: "replaced"}, {managed_workspace_path: "/other"}, {executor_endpoint_id: "other"}]) {
+    assert.throws(() => admitManagedSessionTurn({...params, session: {...session, ...changed}}));
+  }
+  const watch = {todo_id: "todo_watch", target_key: `managed-session-watch.${session.session_id}`,
+    task_class: "continuous_monitor", action_kind: "local_runtime_observe", claimed_by: "writer",
+    watch_only: true, status: "open", next_due_at: "2030-01-01T00:00:00Z"};
+  const watched = {...params, request: {...request, work_kind: "monitor", todo_id: watch.todo_id,
+    monitor_deadline: watch.next_due_at, monitor_lease_version: 0}, monitor_todo: watch};
+  assert.equal(admitManagedSessionTurn(watched).observation_only, true);
+  for (const changed of [{target_key: "steward-portfolio-watch"}, {claimed_by: "reviewer"},
+    {target_key: "managed-session-watch.other-session"}, {watch_only: false}, {status: "blocked"},
+    {action_kind: "business_work"}, {next_due_at: "2030-01-02T00:00:00Z"}]) {
+    assert.throws(() => admitManagedSessionTurn({...watched, monitor_todo: {...watch, ...changed}}));
+  }
+  assert.throws(() => admitManagedSessionTurn({...params, request: {...request, monitor_deadline: watch.next_due_at}}));
+});
+
+test("local native work observation excludes watch bookkeeping and retains real work changes", () => {
+  const goal = {goal_id: "project", goal_instance_id: "original"};
+  const task = {todo_id: "todo_work", task_class: "advancement_task", status: "open", title: "Useful work"};
+  const watch = {todo_id: "todo_watch", task_class: "continuous_monitor", next_due_at: "2030-01-01"};
+  const source = {goal, actor: {goal_id: goal.goal_id, goal_instance_id: goal.goal_instance_id}, todos: [task, watch]};
+  const first = observeManagedWork(source);
+  const unchanged = observeManagedWork({...source, previous_hash: first.result_hash,
+    todos: [{...watch, next_due_at: "2031-01-01", result_hash: "changed", material_change_generation: 99}, task]});
+  assert.equal(unchanged.result_hash, first.result_hash);
+  assert.equal(unchanged.material_change, false);
+  assert.equal(first.observed_task_count, 1);
+  assert.equal(observeManagedWork({...source, previous_hash: first.result_hash, todos: [{...task, status: "done"}]}).material_change, true);
+  assert.throws(() => observeManagedWork({...source, goal: {...goal, goal_instance_id: "replacement"}}));
+  assert.throws(() => observeManagedWork({...source, todos: undefined}));
+});
 
 function original() {
   const binding = {binding_id: "b".repeat(24), transport_ref: "private-steward", provider_ref: "c".repeat(24),
