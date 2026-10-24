@@ -152,6 +152,9 @@ Turn. Unfinished bounded progress may retain the open Todo. On a fresh Turn,
 an explicit prior closeout or typed `path_delta.outcome=replan` releases the old
 continuation preference for ordinary eligible selection; it does not complete
 the Todo, infer intent from prose, or override a committed same-Turn binding.
+New route changes still use semantic closeout under the existing Vision
+contract. Reading a prior typed replan is recovery of committed intent, not
+permission to author a route change as in-flight progress.
 
 中文：关闭 native 上下文差分传输时，CLI 捕获入口也将已有结算计划与命令表推迟到
 writeback 读取，避免重复交付；当前准入、选择与停止事实仍在入口。可选 full/delta
@@ -165,6 +168,8 @@ Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重�
 在原 Turn 上按语义收尾写入有证据的 vision；未完成的阶段进展仍可保留开放状态。
 新 Turn 尊重上轮明确收尾或结构化 `path_delta.outcome=replan`，放开旧续跑偏好，
 重新按现有资格选任务；不自动完成 Todo、不按文案猜意图，也不覆盖已提交的当轮绑定。
+新的路线变更仍须按既有 Vision 契约使用语义收尾；读取历史结构化 replan 是恢复已
+提交的意图，不是允许把路线变更伪装为执行中进展。
 
 对使用 `--decision-output-dir` 或 `--decision-output-root` 的成功 replan，CLI 和
 TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读取。两步绑定同一

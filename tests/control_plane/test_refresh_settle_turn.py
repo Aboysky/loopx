@@ -130,7 +130,7 @@ def test_fresh_turn_honors_the_written_route_and_keeps_unfinished_requirements(
     rc, result = _run_cli(registry, runtime, "refresh-state", *binding,
         "--classification", "experiment_answered", "--delivery-batch-scale", "implementation",
         "--delivery-outcome", "outcome_progress", "--delivery-boundary",
-        "in_flight_continuation" if decision == "replan" else "semantic_closeout",
+        "semantic_closeout",
         "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks", "--settle-turn")
     assert rc == 0, result
     rc, next_turn = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
