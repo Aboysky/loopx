@@ -93,6 +93,16 @@ export const researchDisplayLanguageScenario = {
       for (const width of [1440, 390]) {
         const page = await browser.newPage({viewport: {width, height: 1000}, reducedMotion: "reduce"});
         const context = page.context();
+        // Model an appended analysis version becoming visible in the same
+        // real owner's catalog after this page has already read its snapshot.
+        let newVersionVisible = false;
+        await page.route(url => url.pathname === "/api/chat/research-analysis", async route => {
+          if (route.request().method() !== "GET") return route.continue();
+          const response = await route.fetch();
+          const value = await response.json();
+          if (!newVersionVisible) value.catalog.packs = value.catalog.packs.filter(pack => pack.title !== "部分译文");
+          await route.fulfill({response, json: value});
+        });
         const url = `${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`;
         await page.goto(url, {waitUntil: "domcontentloaded"});
         await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
@@ -101,6 +111,19 @@ export const researchDisplayLanguageScenario = {
         const original = history.getByRole("button", {name: "查看原文", exact: true});
         await original.waitFor(); await page.waitForFunction(() => !document.querySelector(".research-display-language > button")?.disabled);
         assert.match(await history.locator(".research-route-caption").first().innerText(), /是否在固定预算/);
+        const scope = history.locator(".research-progress > header select").first();
+        assert.equal(await scope.locator("option").filter({hasText: "部分译文"}).count(), 0);
+        const beforeRefresh = await fetch(`${owner.base}/fixture/readback`).then(response => response.json());
+        const selectedScope = await scope.inputValue(), selectedUrl = page.url();
+        newVersionVisible = true;
+        await history.getByRole("button", {name: "刷新记录", exact: true}).click();
+        await scope.locator("option").filter({hasText: "部分译文"}).waitFor({state: "attached", timeout: 5000});
+        const afterRefresh = await fetch(`${owner.base}/fixture/readback`).then(response => response.json());
+        assert.ok(afterRefresh.history_reads > beforeRefresh.history_reads, "One refresh reloads history as well as the analysis catalog");
+        assert.equal(afterRefresh.mutation_attempts, beforeRefresh.mutation_attempts, "Refreshing never executes analysis");
+        assert.equal(await scope.inputValue(), selectedScope, "Refreshing preserves the selected analysis version");
+        assert.equal(page.url(), selectedUrl);
+        assert.equal(await history.getByRole("region", {name: "轨迹深度分析", exact: true}).count(), 0, "Refreshing does not open analysis");
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
         await page.screenshot({path: resolve(outputDir, `research-display-language-first-${width}.png`), animations: "disabled"});
         const metric = history.locator('[data-metric="goal_alignment"]');
@@ -178,7 +201,6 @@ export const researchDisplayLanguageScenario = {
         await allRecords.getByRole("button", {name: "清除筛选", exact: true}).click();
         assert.equal(await allRecords.locator(".research-history-records > li").count(), capture.events.length);
         await allRecords.locator(":scope > summary").click();
-        const scope = history.locator(".research-progress > header select").first();
         await scope.selectOption({label: "部分译文"});
         await history.locator(".research-display-language > span").filter({hasText: /译文 \d+ \/ \d+/}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/, "Missing/invalid title remains original");
