@@ -20,6 +20,7 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
 from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+from tests.control_plane.test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- shared private socket fixture
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
 
 pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
@@ -68,7 +69,7 @@ def _delivered(request, digest):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -142,6 +143,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--turn-instance-id", "native-capture-turn", "--codex-app",
         "--decision-output-root", str(root), context_option, str(lifecycle)]
+    if handoff_socket:
+        command += ["--decision-handoff-socket", handoff_socket]
     if surface == "turn_envelope":
         command.append("--turn-envelope")
     generated_guard = None
@@ -524,3 +527,10 @@ def test_native_shared_configuration_resume_and_lost_hook(tmp_path, monkeypatch,
 def test_native_benchmark_context_keeps_checkpoint_handoff(tmp_path, monkeypatch, surface):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         "benchmark", surface, False, True, True, "missing", checkpoint_handoff=True)
+
+
+@pytest.mark.parametrize("private_handoff", [True], indirect=True)
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_capture_release_preserves_delta_and_recovery(tmp_path, monkeypatch, private_handoff, surface):  # noqa: F811 -- fixture injection
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, handoff_socket=private_handoff)

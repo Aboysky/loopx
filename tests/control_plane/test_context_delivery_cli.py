@@ -119,7 +119,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="host-session", context_epoch="epoch-1")
     saved = []
 
-    def invoke(host_request, *, opt_in=True):
+    def invoke(host_request, *, opt_in=True, native_context=False):
         with tempfile.TemporaryDirectory(prefix="context-host-", dir="/tmp") as short:
             endpoint = Path(short).resolve() / "host.sock"
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
@@ -150,6 +150,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                         "--turn-instance-id", "host-context-delivery",
                         "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint),
+                        *(["--codex-context-dir", str(tmp_path / "unavailable-native-state")] if native_context else []),
                         *(["--turn-envelope"] if surface == "turn_envelope" else []), cwd=project)
                     path, raw = future.result(timeout=30)
         assert code == 0, wire
@@ -171,6 +172,12 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     assert warm["recovery"]["path"] == str(second / "projection.json")
     assert warm["target"]["capture_id"] == hashlib.sha256((second / "decision.json").read_bytes()).hexdigest()
     assert warm["recovery"]["sha256"] == hashlib.sha256((second / "projection.json").read_bytes()).hexdigest()
+    # Two consumers cannot compose nested envelopes or transfer retention
+    # authority. The explicitly selected native consumer has no proof here.
+    no_native_proof, _ = invoke({"scope": scope, "baseline": cold,
+        "retained": {"complete": True, "target": cold["target"]}}, native_context=True)
+    assert "target" not in no_native_proof and "context" not in no_native_proof
+    assert no_native_proof["ok"] and no_native_proof.get("schema_version") != "context_delivery_v1"
     before_receipts = _heartbeat_receipt_count(runtime, "host-context-delivery")
     # Compaction between preparation and dispatch: the Host can select the exact
     # full projection without a second CLI call, admission or state mutation.

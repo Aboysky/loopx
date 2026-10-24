@@ -593,7 +593,8 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN") or os.name != "posix",
                    reason="Requires the real native CLI and private Unix transport")
 @pytest.mark.parametrize("capture", ["files", "native", "full", "off", "controller"])
-def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(tmp_path, capture, context_delivery=False):
+@pytest.mark.parametrize("context_delivery", [False, True])
+def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(tmp_path, capture, context_delivery):
     """Use run_once, its renderer/listener/session owner and the actual quota CLI."""
     import sys
     import tomllib
@@ -739,7 +740,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
         if capture == "off":
             assert "checkpoint_handoffs" not in result
             assert "--decision-handoff-socket" not in guards[0]
-            assert not list(logs.glob("*/decisions"))
+            assert bool(list(logs.glob("*/decisions"))) is context_delivery
             return
         assert len(result["checkpoint_handoffs"]) == 1
         assert '--turn-envelope' not in shlex.split(guards[0])
@@ -807,11 +808,3 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
         # The private endpoint belongs to this wake and is gone after readback.
         argv = shlex.split(guards[0])
         assert not Path(argv[argv.index("--decision-handoff-socket") + 1]).exists()
-
-
-@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN") or os.name != "posix",
-                   reason="Requires the real native CLI and private Unix transport")
-@pytest.mark.parametrize("capture", ["files", "native"])
-def test_context_delivery_preserves_actual_midwake_checkpoint(tmp_path, capture):
-    test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(
-        tmp_path, capture, context_delivery=True)

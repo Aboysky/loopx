@@ -214,8 +214,9 @@ def private_handoff(request):
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('enabled', [False, True])
 @pytest.mark.parametrize('private_handoff', [False, True], indirect=True)
+@pytest.mark.parametrize('context_delivery', [False, True])
 def test_real_worker_generated_guard_selection_reentry_and_settle_once(
-    tmp_path, monkeypatch, provider, enabled, private_handoff,
+    tmp_path, monkeypatch, provider, enabled, private_handoff, context_delivery,
 ):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -237,6 +238,10 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
                LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                LOOPX_PROJECT=str(project), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
                LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_TURN_ENVELOPE='1' if enabled else '0')
+    if context_delivery:
+        # No native proof in this CLI fixture: composed capture must still
+        # release ordinary full output and preserve reentry and settlement.
+        env.update(LOOPX_CONTEXT_DELIVERY='1', LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / 'context'))
     body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=private_handoff)
     # Execute the renderer's actual guard, preserving its route and flags.
     block = body.split('```sh\n', 1)[1].split('```', 1)[0]
@@ -247,7 +252,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
     root = logs / TURN_ID / 'decisions'
-    captured = enabled or private_handoff is not None
+    captured = enabled or private_handoff is not None or context_delivery
     if captured:
         captures = list(root.glob('*/decision.json'))
         assert len(captures) == 1
