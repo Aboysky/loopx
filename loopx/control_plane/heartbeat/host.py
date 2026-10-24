@@ -30,9 +30,12 @@ def resolve_heartbeat_capture_root(
     native_goal_host: bool,
     turn_instance_id: str | None,
     decision_handoff_socket: str | None = None,
+    codex_context_dir: str | None = None,
     turn_envelope: bool = False,
 ) -> Path | None:
     """Validate capture transport for an already resolved host-owned Turn."""
+    if codex_context_dir is not None and (root is None or decision_handoff_socket is not None):
+        raise ValueError("native context delivery requires a capture root without a second handoff socket")
     if root is None:
         if decision_handoff_socket is not None:
             raise ValueError("decision handoff requires an explicit decision capture root")

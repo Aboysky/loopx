@@ -17,7 +17,9 @@ from ..control_plane.turn_driver.decision_capture import validate_handoff_socket
 
 
 def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096) -> str:
-    return shlex.join(["loopx", "--format", "json", "quota", "context-read",
+    from ..command_invocation import loopx_cli_argv
+
+    return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes)])
 

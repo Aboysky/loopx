@@ -742,6 +742,19 @@ capture 的完整读取命令，跨 session 不借用旧引用。生成候选和
 `exec_command` 资格套用于 Codex App 的 code-mode。不开新 runtime/owner 问询门，
 一期保持开放。
 
+既有 benchmark worker 现通过显式 `context_delivery` heartbeat 选项消费上述生产
+路径；EdgeBench/SForge 以 `--context-delivery` 暴露同一选择。trial 私有 home 放置
+产品 hook，并用原生 `hooks/list` 获取精确 hash，仅在该进程信任这些 hook；无关
+workspace hook 仍不受信任。显式启用的私有 trace 支持输入 observer。设置失败继续
+普通全量，既有 checkpoint handoff 保留原 capture 所有权。run/install/wake receipt
+记录选择，设置可用不等于保留回执。默认运行不新增 hook、trace 或 trust 配置；改变
+treatment 须另起 trial。产品 renderer 与恢复分页保留原 Turn、capture 和固定 CLI
+路由。确定性原生测试驱动真实 worker，覆盖 quota 与 Turn 两种视图的完整初读、温态
+差分、自动压缩及同 capture 完整恢复，零额外 guard/扣额。启动/resume 仍重置 epoch，
+因此只验证单次 wake 内复用，不证明跨 resume 节省。Harbor/container 安装、Codex App
+code-mode、hook 完全丢失和完整 solver/成本资格仍开放；成本比较须计入原生发现、
+trace IO 和所有补读。
+
 Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
 重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout
 则抑制该捕获。真实 CLI fixture 和 typed selector 现分别验证这些事实，不再从

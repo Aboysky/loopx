@@ -48,8 +48,10 @@ def _delivered(request, digest):
     return "".join(parts).rstrip("\n")
 
 
-@pytest.mark.parametrize("host,surface", [("exec", "quota_packet"), ("app_server", "turn_envelope")])
-@pytest.mark.parametrize("failed_primary", [False, True])
+@pytest.mark.parametrize("host,surface,failed_primary", [
+    (host, surface, failed) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope")]
+    for failed in [False, True]
+] + [("benchmark", surface, False) for surface in ("quota_packet", "turn_envelope")])
 def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
@@ -89,8 +91,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             "print(json.dumps(result))\n")
         hook_command = shlex.join(cli[:3] + [str(hook)])
     handler = {"type": "command", "command": hook_command, "timeout": 10}
-    (home / "hooks.json").write_text(json.dumps({"hooks": {
-        event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")}}))
+    if host != "benchmark":
+        (home / "hooks.json").write_text(json.dumps({"hooks": {
+            event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")}}))
     errors, snapshots = [], []
     stages = {"phase": "start", "pages": [], "baseline_confirmed": False, "compact_response": None}
     wires, page_digests, read_paths = {}, {}, {}
@@ -119,7 +122,20 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 offsets.append(start)
                 count = 0
             count += size
-        return [shlex.join(command[:5] + ["--format", "json", "quota", "context-read",
+        if host == "benchmark" and name in {"cold", "recovery"}:
+            # Execute the shipped original recovery route, including its pinned
+            # executable; no fixture substitute for installed command routing.
+            recovery = wires["cold" if name == "cold" else "warm"]["recovery"]
+            routed = shlex.split(recovery["command"])
+            assert routed[:3] == [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]]
+            assert routed[routed.index("--capture-file") + 1] == str(path)
+            routed[routed.index("--page-bytes") + 1] = "5000"
+            commands = []
+            for offset in offsets:
+                routed[routed.index("--offset") + 1] = str(offset)
+                commands.append(shlex.join(routed))
+            return commands
+        return [shlex.join(cli + ["--format", "json", "quota", "context-read",
             "--capture-file", str(path), "--capture-sha256", digest,
             "--offset", str(offset), "--page-bytes", "5000"]) for offset in offsets]
 
@@ -127,10 +143,24 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         return _delivered(request, page_digests[name])
 
     def response(request, number, message):
+        nonlocal command, root
         phase = stages["phase"]
         if stages["pages"]:
             cmd = stages["pages"].pop(0)
         elif phase == "start":
+            if host == "benchmark":
+                # Read the actual worker-rendered guard, including its original
+                # wake/capture identity. No substitute dispatcher or guard.
+                line = next(line for line in _input_text(request).splitlines()
+                            if " quota should-run " in line and "--codex-context-dir" in line)
+                native_guard = shlex.split(line)
+                assert native_guard[0] == env["LOOPX_CLI"]
+                assignment = next(line for line in _input_text(request).splitlines()
+                                  if line.startswith("LOOPX_TURN="))
+                turn_id = shlex.split(assignment)[0].split("=", 1)[1]
+                command = [turn_id if arg == "${LOOPX_TURN:?}" else arg for arg in native_guard]
+                command += ["--todo-id", TODO_ID]
+                root = Path(command[command.index("--decision-output-root") + 1])
             stages["phase"] = "cold_ready"
             cmd = invoke("cold")
         elif phase in {"cold_ready", "warm_ready"}:
@@ -158,6 +188,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             return message
         elif phase == "recovery_ready":
             assert "LoopX context baseline invalidated." in _input_text(request)
+            assert wires["warm"]["recovery"]["command"] in _input_text(request)
             assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
             stages["phase"] = "recovered"
             stages["pages"] = pages("recovery", Path(wires["warm"]["recovery"]["path"]))
@@ -172,7 +203,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             "name": "exec_command", "arguments": json.dumps({"cmd": cmd, "max_output_tokens": 2000})}
 
     def usage(request, number):
-        count = 30000 if number == stages["compact_response"] else 1
+        count = (2000000 if host == "benchmark" else 30000) if number == stages["compact_response"] else 1
         return {"input_tokens": count, "output_tokens": 1, "total_tokens": count + 1}
 
     def observed_response(request, number, message):
@@ -185,17 +216,41 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             return message
 
     with local_inference_provider(observed_response, usage) as (url, calls, observed):
-        _configure_provider(home, url)
+        if host != "benchmark":
+            _configure_provider(home, url)
         # The real CLI talks to its isolated local TS Effect process.
         # Native sandbox networking is disabled by default; allow this
         # synthetic workspace's loopback transport explicitly.
-        with (home / "config.toml").open("a") as config:
-            config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
+        if host != "benchmark":
+            with (home / "config.toml").open("a") as config:
+                config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
         if host == "exec":
             result = subprocess.run([binary, "exec", "--dangerously-bypass-hook-trust",
                 "--skip-git-repo-check", "--json", "-s", "workspace-write", "-C", str(workspace),
                 "Synthetic CLI context-delivery fixture."], env=env, capture_output=True, text=True, timeout=90)
             assert result.returncode == 0, result.stderr
+        elif host == "benchmark":
+            from benchmark.runtime.worker import run_once
+            skills = workspace / "skills"
+            skills.mkdir()
+            unrelated = project / "unrelated-hook-executed"
+            project_hooks = project / ".codex/hooks.json"
+            project_hooks.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{
+                "type": "command", "command": shlex.join(["touch", str(unrelated)])}]}]}}))
+            env.update(LOOPX_CONTEXT_DELIVERY="1", LOOPX_TURN_ENVELOPE=str(int(surface == "turn_envelope")),
+                LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT="resume",
+                LOOPX_TASK_ENTRY="seeded-todo", LOOPX_TASK_STAGE="execute",
+                LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project), LOOPX_SHARED_SKILLS=str(skills),
+                LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
+                LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID, LOOPX_WAKE_LOG_DIR=str(workspace / "wakes"),
+                LOOPX_CLI=str(Path(sys.executable).with_name("loopx")), CODEX_BIN=binary,
+                MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=url,
+                OPENAI_API_KEY="synthetic-loopback-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="90")
+            result = run_once(env)
+            assert result["ok"] and result["host_invoked"], result
+            assert result["context_transport"] == {"available": True}
+            assert result["session"]["session_id"]
+            assert not unrelated.exists()  # only exact trial-owned hooks received trust
         else:
             _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
     assert not errors, errors

@@ -45,6 +45,37 @@ fail before execution. Set it back to `false` for the next run to roll back;
 do not change a running trial's treatment. Captures contain private Goal context.
 Transport tests do not establish lower token cost or better model decisions.
 
+For an explicitly selected native context-delivery treatment, add
+`context_delivery: true` to the same heartbeat agent `kwargs` (default `false`).
+The existing EdgeBench/SForge entry exposes the same selection through
+`--context-delivery` on a heartbeat worker.
+It works with ordinary quota or the explicit TurnEnvelope view. The existing
+worker stages two product lifecycle hooks in the trial's private Codex home and
+queries native `hooks/list` without invoking a model. Only those exact native
+hashes receive per-process trust; workspace/plugin hooks are not trusted and no
+bypass flag or operator settings are used. Private native trace-v1 diagnostics
+are enabled only in this opted-in trial. Install and wake receipts record the
+selection; `context_transport.available` records setup, **not** warm eligibility
+or delivery/benefit. Unsupported native setup continues ordinary full output.
+
+The product heartbeat renderer carries `--codex-context-dir` and the original
+capture root into guard/reentry commands. The product observer proves intact
+baseline content in the current model input before warm reuse; uncertainty
+selects full. Startup/resume/fork/compaction reset the epoch, so this currently
+qualifies reuse within a wake, not guaranteed savings between resumed wakes.
+The small recovery hook reads the original full capture after compaction, with
+no replacement admission or debit. Wholly missing/killed hooks and App code-mode
+remain unqualified; deterministic native transport tests are not autonomous
+solver outcomes. Count complete input, recovery reads, native discovery and trace
+IO in treatment cost, not just the delta bytes.
+
+A simultaneous `fresh_replan` checkpoint listener retains its existing capture
+ownership and reports this context treatment unavailable; it continues the
+original checkpoint path. Choose separate newly pinned trials to compare the
+features. Do not modify an active/frozen trial. Disable `context_delivery` for a
+new trial to roll back; default runs install no hooks, trust or trace settings.
+No scorer, budget, task semantics or launch authority changes with this option.
+
 Checkpoint capture is independent of this display experiment. A `fresh_replan`
 declaration may establish a private capture/handoff socket while
 `turn_envelope` remains false: the worker keeps the ordinary dispatcher and quota

@@ -92,7 +92,10 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         command += ["--turn-instance-id", turn_id]
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
-    if env.get("LOOPX_TURN_ENVELOPE") == "1" or decision_handoff_socket is not None:
+    context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "1" else None
+    if context_dir and decision_handoff_socket is not None:
+        raise ValueError("native context delivery and checkpoint handoff need separate trials")
+    if env.get("LOOPX_TURN_ENVELOPE") == "1" or decision_handoff_socket is not None or context_dir:
         if native_goal:
             raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
         # Wake identity comes from this worker, never from model-authored text.
@@ -103,6 +106,8 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
             command += ["--turn-envelope"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
+        if context_dir:
+            command += ["--codex-context-dir", context_dir]
     result = subprocess.run(
         command,
         cwd=env["LOOPX_PROJECT"],
@@ -382,6 +387,8 @@ def native_command(env, execution, stage, wake, session_wake):
         session_id=session_wake.session_id if session_wake else None,
         mcp_server=None,
     )
+    if execution.context_delivery:
+        command[-1:-1] = json.loads(env.get("LOOPX_CODEX_CONTEXT_TRUST_ARGS", "[]"))
     if stage == "plan":
         command[-1:-1] = ["-c", "features.goals=false"]
     return command
@@ -409,6 +416,8 @@ def _phase_timeout(timeout: float | None, deadline: float | None) -> tuple[float
 
 
 def run_once(env: dict[str, str]) -> dict:
+    if env.get("LOOPX_CONTEXT_DELIVERY", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_CONTEXT_DELIVERY must be 0 or 1")
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
     execution = Execution(
@@ -420,6 +429,7 @@ def run_once(env: dict[str, str]) -> dict:
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY"),
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
+        context_delivery=env.get("LOOPX_CONTEXT_DELIVERY", "0") == "1",
     )
     stage = env.get("LOOPX_TASK_STAGE", "execute")
     if stage not in {"plan", "execute"} or (stage == "plan" and execution.task_entry != "loopx-planned"):
@@ -435,6 +445,9 @@ def run_once(env: dict[str, str]) -> dict:
     wake.mkdir(parents=True, exist_ok=False)
     home = Path(env["LOOPX_CODEX_HOME"])
     env = process_environment(home, base=env)
+    # Internal transport arguments are derived afresh, never ambient authority.
+    env.pop("LOOPX_CODEX_CONTEXT_DIR", None)
+    env.pop("LOOPX_CODEX_CONTEXT_TRUST_ARGS", None)
     env["LOOPX_TURN"] = turn_id
     receipt = {
         "turn_id": turn_id,
@@ -445,6 +458,7 @@ def run_once(env: dict[str, str]) -> dict:
            if observation_producer is not None else {}),
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
+        **({"context_delivery": True} if execution.context_delivery else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,
@@ -496,6 +510,25 @@ def run_once(env: dict[str, str]) -> dict:
             checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
         else:
             checkpoint_wake = _InertCheckpointWake()
+        if execution.context_delivery and checkpoint_wake.socket_path is not None:
+            receipt["context_transport"] = {"available": False, "reason": "checkpoint_handoff_owns_capture"}
+        elif execution.context_delivery:
+            from benchmark.runtime.context_delivery import prepare_context_delivery
+
+            prior_trace = env.get("CODEX_ROLLOUT_TRACE_ROOT")
+            try:
+                prepare_context_delivery(env, home)
+                receipt["context_transport"] = {"available": True}
+            except Exception as exc:
+                # Optional presentation cannot block an otherwise admitted
+                # trial. Unsupported hooks/diagnostics keep ordinary full IO.
+                env.pop("LOOPX_CODEX_CONTEXT_DIR", None)
+                env.pop("LOOPX_CODEX_CONTEXT_TRUST_ARGS", None)
+                if prior_trace is None:
+                    env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
+                else:
+                    env["CODEX_ROLLOUT_TRACE_ROOT"] = prior_trace
+                receipt["context_transport"] = {"available": False, **_error_tail(exc)}
         body = "Finish the task."
         if stage == "plan":
             from benchmark.runtime.planning import render_planning_prompt, task_plan_packet

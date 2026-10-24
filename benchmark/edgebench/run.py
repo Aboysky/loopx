@@ -126,6 +126,8 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
+    parser.add_argument("--context-delivery", action="store_true",
+                        help="Opt-in native heartbeat subtree reuse with original-capture recovery")
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
@@ -190,6 +192,8 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
+    if args.context_delivery and not args.worker.startswith("heartbeat-"):
+        parser.error("--context-delivery requires a heartbeat worker")
     if args.native_goal_continue and args.worker != "native-goal":
         parser.error("--native-goal-continue requires --worker native-goal")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
@@ -320,6 +324,7 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
+                         context_delivery=args.context_delivery,
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
@@ -383,6 +388,7 @@ def main(argv=None):
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
+        **({"context_delivery": True} if args.context_delivery else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,

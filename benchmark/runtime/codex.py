@@ -28,8 +28,11 @@ class Execution:
     validation_command: tuple[str, ...] = ()
     task_entry: str | None = None
     turn_envelope: bool = False
+    context_delivery: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.context_delivery, bool) or (self.context_delivery and self.mode != "heartbeat"):
+            raise ValueError("context_delivery requires heartbeat execution and a boolean opt-in")
         if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
             raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
         if self.mode not in MODES or self.context not in CONTEXTS:
@@ -182,6 +185,7 @@ def prepare_codex_home(
             # policy explicitly so model tools cannot silently lose it.
             "[shell_environment_policy.set]",
             'LOOPX_USAGE_PING = "0"',
+            *(['LOOPX_CONTEXT_DELIVERY = "1"'] if execution.context_delivery else []),
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",

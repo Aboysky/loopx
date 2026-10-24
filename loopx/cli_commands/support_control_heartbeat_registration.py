@@ -173,6 +173,11 @@ def register_heartbeat_control_commands(
         help="Retain the explicit private Host handoff on generated guards; requires --decision-output-root.",
     )
 
+    heartbeat_prompt_parser.add_argument(
+        "--codex-context-dir",
+        help="Carry the opt-in native context directory into guards; requires --decision-output-root. Does not install hooks or enable tracing.",
+    )
+
     heartbeat_prequota_parser = subparsers.add_parser(
         "heartbeat-prequota",
         help=(

@@ -322,3 +322,19 @@ def test_renderer_retains_owned_handoff_without_enabling_it_by_default(tmp_path)
                 build_heartbeat_prompt(**args, decision_handoff_socket=endpoint)
     with pytest.raises(ValueError, match='invalid decision handoff socket'):
         build_heartbeat_prompt(**args, decision_output_root=tmp_path, decision_handoff_socket=endpoint)
+
+
+def test_native_context_prompt_keeps_capture_on_reentry(tmp_path):
+    args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli",
+                turn_instance_id=TURN_ID, thin=True, decision_output_root=tmp_path)
+    plain = build_heartbeat_prompt(**args)
+    context = str(tmp_path / "private context")
+    enabled = build_heartbeat_prompt(**args, codex_context_dir=context)
+    suffix = " --codex-context-dir " + shlex.quote(context)
+    assert enabled["quota_guard_command"] == plain["quota_guard_command"] + suffix
+    assert suffix in enabled["thin_prompt_command"]
+    assert enabled["task_body"].replace(suffix, "") == plain["task_body"]
+    with pytest.raises(ValueError, match="capture root"):
+        build_heartbeat_prompt(**(args | {"decision_output_root": None}), codex_context_dir=context)
+    with pytest.raises(ValueError, match="second handoff"):
+        build_heartbeat_prompt(**args, codex_context_dir=context, decision_handoff_socket="unused")

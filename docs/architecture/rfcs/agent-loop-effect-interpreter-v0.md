@@ -1076,6 +1076,24 @@ independent qualification. Ordinary app-server `exec_command` evidence must not
 be transferred to Codex App code-mode. No runtime/owner question is added, and
 phase one remains open.
 
+The existing benchmark worker now consumes this production path through an
+explicit `context_delivery` heartbeat option, also exposed by EdgeBench/SForge
+as `--context-delivery`. Its private trial home stages the product hooks and
+uses native `hooks/list` to trust only their exact hashes for that process;
+unrelated workspace hooks remain untrusted. Opt-in private traces support the
+input observer. Setup failure continues ordinary full output; an existing
+checkpoint handoff keeps its original capture ownership. Selection appears in
+run/install/wake receipts, while setup availability is not a retention receipt.
+Default runs add no hooks, trace or trust configuration, and changing treatment
+requires a new trial. The product renderer and recovery pages preserve the
+original Turn, capture and pinned CLI route. Deterministic native tests drive
+the actual worker with both quota and Turn views through cold read, warm delta,
+automatic compaction and complete same-capture recovery without extra guard or
+debit. Startup/resume still reset the epoch: this qualifies within-wake reuse,
+not savings across resumed wakes. Harbor/container installation, Codex App
+code-mode, wholly lost hooks and complete solver/cost qualification remain open.
+Native discovery, trace IO and all recovery reads belong in that cost comparison.
+
 Capture regression qualification also distinguishes settlement binding from
 closeout: an upgraded receipt with an outstanding semantic replan still permits
 an inert replan capture and grants no delivery authority. Explicit pending

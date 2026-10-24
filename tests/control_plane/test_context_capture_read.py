@@ -98,3 +98,16 @@ def test_capture_reader_accepts_parent_directory_alias(tmp_path):
     (original / "projection.json").write_bytes(raw)
     result = read_context_capture(_args(alias / "projection.json", raw))
     assert result["ok"] and result["eof"] and result["content"].encode() == raw
+
+
+def test_recovery_page_keeps_invocation_executable_and_resets_afterwards(tmp_path):
+    from loopx.command_invocation import loopx_cli_route
+    path = tmp_path / "projection.json"
+    raw = json.dumps({"requirements": "preserve " * 100}).encode()
+    path.write_bytes(raw)
+    executable = str(tmp_path / "pinned release" / "loopx")
+    with loopx_cli_route(executable):
+        page = read_context_capture(_args(path, raw))
+    assert shlex.split(page["next_command"])[:3] == [executable, "--cli-bin", executable]
+    plain = read_context_capture(_args(path, raw))
+    assert shlex.split(plain["next_command"])[:3] == ["loopx", "--format", "json"]

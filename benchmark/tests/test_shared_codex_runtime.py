@@ -780,7 +780,8 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     (False, "fresh_replan", None),
     (True, "fresh_replan", "explicit"),
 ])
-def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected):
+@pytest.mark.parametrize("context_delivery", [False, True])
+def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected, context_delivery):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     from benchmark.runtime.checkpoint_wake import CheckpointWake
@@ -798,6 +799,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         checkpoint_args = {"checkpoint_request_path": str(request),
                            "checkpoint_request": request.read_bytes()}
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled,
+                           context_delivery=context_delivery,
                            **checkpoint_args)
     with CheckpointWake({"LOOPX_WAKE_LOG_DIR": str(wake_root),
             **({"LOOPX_CHECKPOINT_REQUEST": str(request)} if trigger else {})},
@@ -841,6 +843,8 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
     assert ("turn_envelope" in receipt) is (expected is not None)
     assert receipt.get("turn_envelope_source") == expected
+    assert receipt.get("context_delivery") is (True if context_delivery else None)
+    assert agent._worker_env(cwd="/task").get("LOOPX_CONTEXT_DELIVERY") == ("1" if context_delivery else None)
     if expected:
         assert receipt["turn_envelope"] is True
 
@@ -1092,3 +1096,71 @@ def test_horizon_setting_rejects_non_boolean_and_non_loopx_mode(tmp_path, settin
     from benchmark.runtime.harbor import BenchmarkCodex
     with pytest.raises(ValueError, match="planning_horizon_goal"):
         BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+
+
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "turn", "loopx-goal"])
+def test_native_context_opt_in_is_only_a_heartbeat_treatment(mode):
+    with pytest.raises(ValueError, match="context_delivery"):
+        Execution(mode=mode, context_delivery=True)
+    with pytest.raises(ValueError, match="boolean"):
+        Execution(context_delivery="1")
+
+
+def test_context_transport_unavailable_preserves_ordinary_worker(tmp_path, monkeypatch):
+    from benchmark.tests.test_resume_sessions import resume_env
+    env = resume_env(tmp_path, monkeypatch)
+    env["LOOPX_CONTEXT_DELIVERY"] = "1"
+    def unavailable(env, home):
+        env["LOOPX_CODEX_CONTEXT_DIR"] = "not-ready"
+        env["CODEX_ROLLOUT_TRACE_ROOT"] = "not-ready"
+        raise ValueError("unsupported native host")
+    monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unavailable)
+    result = run_once(env)
+    assert result["ok"], result
+    assert result["context_delivery"] and result["context_transport"]["available"] is False
+    assert result["session"]["session_id"]
+
+
+def test_context_transport_off_never_installs_or_trusts_ambient_args(tmp_path, monkeypatch):
+    from benchmark.tests.test_resume_sessions import resume_env
+    env = resume_env(tmp_path, monkeypatch)
+    env["LOOPX_CODEX_CONTEXT_DIR"] = "ambient-not-authority"
+    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = '["--invalid-untrusted-override"]'
+    def unexpected(*args):
+        pytest.fail("disabled transport must not stage hooks or diagnostics")
+    monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unexpected)
+    result = run_once(env)
+    assert result["ok"] and "context_delivery" not in result and "context_transport" not in result
+    assert not (Path(env["LOOPX_CODEX_HOME"]) / "hooks.json").exists()
+
+
+def test_context_selection_is_fixed_by_trial_home(tmp_path):
+    args = settings(tmp_path, execution=Execution(mode="heartbeat", context_delivery=True))
+    prepare_codex_home(**args)
+    with pytest.raises(ValueError, match="settings changed"):
+        prepare_codex_home(**(args | {"execution": Execution(mode="heartbeat")}))
+
+
+@pytest.mark.parametrize("kind", ["public_directory", "symlink_directory", "existing_hooks"])
+def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
+    from benchmark.runtime.context_delivery import prepare_context_delivery
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {"LOOPX_CLI": "loopx"}
+    if kind == "existing_hooks":
+        protected = home / "hooks.json"
+        protected.write_text('{"operator": "unchanged"}')
+    else:
+        protected = home / "context-traces"
+        if kind == "public_directory":
+            protected.mkdir(mode=0o755)
+            protected.chmod(0o755)
+        else:
+            target = tmp_path / "outside"
+            target.mkdir()
+            protected.symlink_to(target, target_is_directory=True)
+    before = protected.read_bytes() if protected.is_file() else protected.lstat().st_mode
+    with pytest.raises(ValueError, match="private|changed within"):
+        prepare_context_delivery(env, home)
+    assert (protected.read_bytes() if protected.is_file() else protected.lstat().st_mode) == before
+    assert "LOOPX_CODEX_CONTEXT_TRUST_ARGS" not in env
