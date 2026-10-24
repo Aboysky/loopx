@@ -296,14 +296,14 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
 }
 
 /** These reads stay on one captured observation; they never re-enter the guard. */
-function replanReadCommands(payload: JsonObject): JsonObject | null {
-  const path = payload.replan_read_path;
+function replanReadCommands(payload: JsonObject, path = payload.replan_read_path,
+  argv = payload.replan_read_argv ?? ["loopx"]): JsonObject | null {
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
+      payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
       !packet.obligation_id || packet.settlement_only === true) return null;
   // Retain the renderer's executable across reads. A different ambient LoopX
   // may not understand this captured contract. Legacy captures keep their route.
-  const argv = payload.replan_read_argv ?? ["loopx"];
   if (!Array.isArray(argv) || !argv.length || argv.some(arg => typeof arg !== "string" || !arg || /[\x00-\x1f]/.test(arg))) {
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
@@ -311,6 +311,71 @@ function replanReadCommands(payload: JsonObject): JsonObject | null {
     ` --source-hash ${canonicalHash(payload)}`;
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
+}
+
+/** One entry lens for CLI and Turn. The executor still receives the signed
+ * identity; authoring and executable settlement commands have one later read.
+ */
+function deferredReplanWriteback(writeback: JsonObject): JsonObject {
+  const {settlement_plan: plan, next_cli_actions: actions, ...facts} = writeback;
+  if (!Object.keys(object(plan)).length && !(Array.isArray(actions) && actions.length)) return writeback;
+  const identity = object(object(plan).identity);
+  return {...facts, settlement_read_ref: "$.replan_action_packet.writeback",
+    ...(Object.keys(identity).length ? {settlement_identity: identity} : {})};
+}
+
+/** Keep the current Goal and work horizon in every entry, indexing only
+ * cumulative outcome details behind the same immutable acceptance reader.
+ */
+function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRef = "$.core_goal") {
+  const context = object(object(payload.autonomous_replan_obligation).replan_context);
+  const outcomes = new Map<string, JsonObject>();
+  function indexedGoal(value: unknown): JsonObject {
+    const core = {...object(value)};
+    if (!("acceptance_contract" in core) && "acceptance_contract_ref" in core) {
+      const match = typeof core.acceptance_contract_ref === "string"
+        ? /^\$\.interaction_contract\.agent_channel\.work_context\.sources\[(0|[1-9]\d*)\]\.content\.goal_acceptance_contract$/.exec(core.acceptance_contract_ref) : null;
+      const sources = object(object(object(payload.interaction_contract).agent_channel).work_context).sources;
+      const source = object(match && Array.isArray(sources) ? sources[Number(match[1])] : null);
+      const content = object(source.content);
+      if (!match || source.source !== "goal_acceptance"
+        || content.status != null && content.status !== "loaded"
+        || !Object.keys(object(content.goal_acceptance_contract)).length) {
+        throw new EffectRuntimeRequestError("Goal acceptance reference must resolve to complete inline work context");
+      }
+      delete core.acceptance_contract_ref;
+      core.acceptance_contract = content.goal_acceptance_contract;
+    }
+    const acceptance = {...object(core.acceptance_contract)};
+    const requirements = object(acceptance.outcome_requirements);
+    if (!Array.isArray(requirements.outcomes) || !requirements.outcomes.length || !reads) return core;
+    const refs = requirements.outcomes.map(value => {
+      const outcome = requireJsonObject(value, "captured acceptance outcome");
+      const ref = canonicalHash(outcome);
+      outcomes.set(ref, outcome);
+      return ref;
+    });
+    const {outcomes: _outcomes, ...metadata} = requirements;
+    delete acceptance.outcome_requirements;
+    return {...core, acceptance_contract: acceptance,
+      outcome_requirements_index: {...metadata, outcome_refs: refs}};
+  }
+  const core = indexedGoal(context.core_goal);
+  const horizon = {...object(payload.planning_horizon)};
+  if (horizon.core_goal) {
+    const horizonCore = indexedGoal(horizon.core_goal);
+    if (canonicalHash(horizonCore) === canonicalHash(core)) {
+      delete horizon.core_goal;
+      horizon.core_goal_ref = coreRef;
+    } else horizon.core_goal = horizonCore;
+  }
+  const acceptanceIndex = outcomes.size ? {
+    read_action_template: `${reads!.acceptance} --outcome-ref {outcome_ref}`,
+    outcomes: [...outcomes].map(([ref, outcome]) => ({outcome_ref: ref, id: outcome.id,
+      objective: outcome.objective, revision: outcome.revision,
+      requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null})),
+  } : null;
+  return {core, horizon, outcomes, acceptanceIndex};
 }
 
 /** Move only an identical acceptance copy behind the existing captured read.
@@ -344,34 +409,13 @@ function replanView(request: JsonObject): JsonObject {
   const common = {ok: true, goal_id: payload.goal_id, agent_id: payload.agent_id ?? object(payload.agent_identity).agent_id,
     obligation_id: packet.obligation_id, context_id: context.context_id, source_hash: request.source_hash,
     stage: request.stage};
-  const reads = replanReadCommands(payload);
-  const sourceRead = reads ? {source_read: `cat -- ${shellQuote(payload.replan_read_path as string)}`} : {};
-  const outcomes = new Map<string, JsonObject>();
-  function indexedGoal(value: unknown): JsonObject {
-    const core = {...object(value)};
-    const acceptance = {...object(core.acceptance_contract)};
-    const requirements = object(acceptance.outcome_requirements);
-    if (!Array.isArray(requirements.outcomes) || !requirements.outcomes.length || !reads) return core;
-    const outcomeRefs = requirements.outcomes.map(value => {
-      const outcome = requireJsonObject(value, "captured acceptance outcome");
-      const ref = canonicalHash(outcome);
-      outcomes.set(ref, outcome);
-      return ref;
-    });
-    const {outcomes: _outcomes, ...metadata} = requirements;
-    delete acceptance.outcome_requirements;
-    return {...core, acceptance_contract: acceptance,
-      outcome_requirements_index: {...metadata, outcome_refs: outcomeRefs}};
-  }
-  const core = indexedGoal(context.core_goal);
-  const horizon = {...object(payload.planning_horizon)};
-  if (horizon.core_goal) {
-    if (canonicalHash(horizon.core_goal) === canonicalHash(context.core_goal)) {
-      delete horizon.core_goal;
-      horizon.core_goal_ref = "$.core_goal";
-    } else horizon.core_goal = indexedGoal(horizon.core_goal);
-  }
+  // A native journal binds its path after planning. The CLI supplies that same
+  // physical source route without modifying the captured observation or hash.
+  const path = request.captured_decision_path ?? payload.replan_read_path;
+  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"]);
+  const sourceRead = reads ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
   if (request.stage === "acceptance") {
+    const {outcomes} = replanGoalContext(payload, reads);
     const outcome = outcomes.get(String(request.outcome_ref));
     if (!outcome) throw new EffectRuntimeRequestError("acceptance read requires an exact captured outcome reference");
     return {...common, outcome_ref: request.outcome_ref, outcome};
@@ -388,7 +432,7 @@ function replanView(request: JsonObject): JsonObject {
       delete authoring.minimal_example;
       contract.vision_authoring = authoring;
     }
-    const writeback = actionProjection(payload).writeback;
+    const writeback = actionProjection(payload, false).writeback;
     const plan = object(object(writeback).settlement_plan);
     const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
     const refresh = steps.find(step => step.kind === "durable_writeback");
@@ -400,18 +444,12 @@ function replanView(request: JsonObject): JsonObject {
         settlement_command: `${refresh.command_template} --settle-turn`,
         settlement_usage: "After validation, fill this refresh command from the actual result. It follows only the verified owed quota step on this same binding. " +
           "Do not also execute a quota step after settled readback; retain the original plan for completion, blocked/no-spend closeout and failure recovery.",
-      } : {}),
-      context_read: reads?.review ?? null};
+      } : {})};
   }
   if (request.stage !== "review") throw new EffectRuntimeRequestError("unsupported replan read stage");
+  const {core, horizon, acceptanceIndex} = replanGoalContext(payload, reads);
   // Index every captured outcome, including differing context/horizon revisions.
   // Full-content equality alone shares a row; identical IDs do not erase edits.
-  const acceptanceIndex = outcomes.size ? {
-    read_action_template: `${reads!.acceptance} --outcome-ref {outcome_ref}`,
-    outcomes: [...outcomes].map(([ref, outcome]) => ({outcome_ref: ref, id: outcome.id,
-      objective: outcome.objective, revision: outcome.revision,
-      requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null})),
-  } : null;
   const coverage = Array.isArray(context.coverage_ledger) ? context.coverage_ledger.map(object) : [];
   const follow = {...object(context.decision_followthrough)};
   delete follow.guidance;
@@ -450,10 +488,9 @@ function replanView(request: JsonObject): JsonObject {
   };
 }
 
-function replanActionPacket(payload: JsonObject): JsonObject | null {
+function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payload)): JsonObject | null {
   const source = object(payload.replan_action_packet);
   if (Object.keys(source).length === 0) return null;
-  const reads = replanReadCommands(payload);
   if (reads) return {...compactFields(source, ["schema_version", "decision", "obligation_id", "required_outcome", "allowed_terminal"]),
     review: reads.review, writeback: reads.writeback,
     guidance: "Read review state and applicable acceptance/evidence; choose the next work and route before reading writeback for its format. Reads grant no authority and require no acknowledgement."};
@@ -743,7 +780,7 @@ function contractCapsule(payload: JsonObject): JsonObject {
   return capsule;
 }
 
-function actionProjection(payload: JsonObject): JsonObject {
+function actionProjection(payload: JsonObject, deferSettlement = true): JsonObject {
   const agentIdentity = object(payload.agent_identity);
   const semanticAgentId = scalarString(
     payload.agent_id || agentIdentity.agent_id,
@@ -785,10 +822,12 @@ function actionProjection(payload: JsonObject): JsonObject {
   if (turn.observation.action_portfolio !== null) {
     action.action_portfolio = { ...turn.observation.action_portfolio };
   }
-  if (turn.observation.planning_horizon !== null) {
-    action.planning_horizon = replanReadCommands(payload)
-      ? {context_read: replanReadCommands(payload)!.review}
-      : { ...turn.observation.planning_horizon };
+  const reads = capabilityIntent ? null : replanReadCommands(payload);
+  if (turn.observation.planning_horizon !== null) action.planning_horizon = {...turn.observation.planning_horizon};
+  if (reads && deferSettlement) {
+    const goal = replanGoalContext(payload, reads, "$.action.core_goal");
+    action.core_goal = goal.core;
+    if (turn.observation.planning_horizon !== null) action.planning_horizon = goal.horizon;
   }
   const user = userChannel(interaction, payload);
   const schedulerValue = scheduler(payload, turn);
@@ -862,7 +901,7 @@ function actionProjection(payload: JsonObject): JsonObject {
     replan_action_packet: replanPacket,
     boundary: boundary(payload),
     execution_policy: executionPolicy(payload),
-    writeback,
+    writeback: reads && deferSettlement ? deferredReplanWriteback(writeback) : writeback,
     scheduler: schedulerValue,
   };
   projection.contract_capsule = contractCapsule(payload);
@@ -989,7 +1028,8 @@ function turnActionProjection(payload: JsonObject): JsonObject {
 }
 
 function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): string {
-  if (Object.keys(object(object(envelope.writeback).settlement_plan)).length > 0) return ACTION_SIGNATURE_COVERAGE_V5;
+  if (Object.keys(object(object(envelope.writeback).settlement_plan)).length > 0
+    || Object.keys(object(object(envelope.writeback).settlement_identity)).length > 0) return ACTION_SIGNATURE_COVERAGE_V5;
   if (Object.keys(object(envelope.agent_context)).length > 0) return ACTION_SIGNATURE_COVERAGE_V4;
   const action = object(envelope.action);
   if (Object.keys(object(action.planning_horizon)).length > 0) return ACTION_SIGNATURE_COVERAGE_V3;
@@ -1147,8 +1187,14 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("Turn decision capture identity does not match the journal");
   }
   const capture = object(coldPath(payload, String(envelope.agent_id), "", path).captured_decision);
+  const readerArgv = detail.replan_read_argv ?? request.reader_argv;
+  const reads = readerArgv ? replanReadCommands(payload, path, readerArgv) : null;
+  const goal = reads ? replanGoalContext(payload, reads) : null;
   const bound = {...envelope, detail_ref: {...detail,
     full_decision: `cat -- ${shellQuote(path)}`,
+    ...(reads ? {replan_action_packet: replanActionPacket(payload, reads), replan_read_argv: readerArgv,
+      core_goal: goal!.core, planning_horizon: payload.planning_horizon == null ? null : goal!.horizon,
+    } : {}),
     captured_decision: {...capture, turn_instance_id: turnId, turn_key: turnKey,
       instruction: "Read this original observation for omitted context. Validate its Goal/Agent and source hash; " +
         "Turn identity comes from this journal-bound reference, not a fabricated quota receipt. " +
@@ -1171,17 +1217,14 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const obligation = {...object(payload.autonomous_replan_obligation)};
     delete obligation.replan_context;
     const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
-    const cli = {...object(interaction.cli_channel)};
+    const cli = object(interaction.cli_channel);
     // Defer only authoring/settlement format, not admission or stop facts.
     // This default captured path needs no optional native delta transport.
-    if (Object.keys(object(cli.settlement_plan)).length || Array.isArray(cli.next_cli_actions) && cli.next_cli_actions.length) {
-      delete cli.settlement_plan;
-      delete cli.next_cli_actions;
-      cli.settlement_read = reads.writeback;
-    }
+    const goal = replanGoalContext(payload, reads);
     return {...payload,
-      ...(payload.planning_horizon ? {planning_horizon: {context_read: reads.review}} : {}),
-      interaction_contract: {...interaction, cli_channel: cli, agent_channel: {...agent,
+      core_goal: goal.core,
+      ...(payload.planning_horizon ? {planning_horizon: goal.horizon} : {}),
+      interaction_contract: {...interaction, cli_channel: deferredReplanWriteback(cli), agent_channel: {...agent,
         work_context: replanWorkContext(payload, object(agent.work_context))}},
       autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};
@@ -1207,7 +1250,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
  */
 export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
   assertSupportedQuotaPacket(envelope);
-  const plan = object(object(envelope.writeback).settlement_plan);
+  const writeback = object(envelope.writeback);
+  const plan = Object.keys(object(writeback.settlement_plan)).length ? object(writeback.settlement_plan)
+    : {identity: writeback.settlement_identity};
   const raw = object(plan.identity);
   if (raw.replan_obligation_id == null && raw.binding_kind !== "autonomous_replan") return null;
   const parsed = settlementIdentityFromPlan({settlement_plan: plan});

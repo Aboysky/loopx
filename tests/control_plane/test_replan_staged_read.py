@@ -15,7 +15,7 @@ from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, restart_effect_runtime
 from loopx.control_plane.quota.turn_envelope import (
     _turn_envelope_result, build_turn_envelope, quota_action_signature_document,
-    turn_envelope_action_signature_document,
+    turn_envelope_action_signature_document, prepare_context_delivery, restore_context_delivery,
 )
 from test_replan_host_context_projection import _quota_payload
 from test_replan_progress_native_cli import (
@@ -47,13 +47,19 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     assert "planning_guidance" not in packet and "stride_control" not in packet
     assert json_bytes(packet) <= 2048
     assert json_bytes(packet) < json_bytes(legacy["replan_action_packet"]) / 2
-    assert envelope["writeback"] == legacy["writeback"]
+    assert "settlement_plan" not in envelope["writeback"]
+    assert "next_cli_actions" not in envelope["writeback"]
+    assert envelope["writeback"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
+    for field in ("spend_allowed_now", "spend_after_validation", "spend_policy"):
+        assert envelope["writeback"][field] == legacy["writeback"][field]
     for field in ("boundary", "effective_action", "user", "scheduler"):
         assert envelope.get(field) == legacy.get(field)
     assert turn_envelope_action_signature_document(envelope) == quota_action_signature_document(source)
     params = {"payload": source, "source_hash": envelope["action_signature"]["source_decision_hash"]}
     review = _turn_envelope_result("replan_view", **params, stage="review")
     writer = _turn_envelope_result("replan_view", **params, stage="writeback")
+    assert writer["writeback"] == legacy["writeback"]
+    assert "context_read" not in writer  # No unused instruction to repeat review.
     context = source["autonomous_replan_obligation"]["replan_context"]
     assert review["core_goal"] == context["core_goal"]
     assert review["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
@@ -214,9 +220,12 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         packet = guard["replan_action_packet"]
         if not envelope:
             assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
-            assert "--replan-stage writeback" in guard["interaction_contract"]["cli_channel"]["settlement_read"]
+            assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
         saved = (capture / "decision.json").read_bytes()
         source = json.loads(saved)
+        entry_writeback = guard["writeback"] if envelope else guard["interaction_contract"]["cli_channel"]
+        assert "settlement_plan" not in entry_writeback and "next_cli_actions" not in entry_writeback
+        assert entry_writeback["settlement_identity"] == source["heartbeat_receipt"]["settlement_identity"]
         original_files = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
         # Executable commands come from the production packet. Deliberately use
         # an absent registry: the reader must never collect state or re-admit.
@@ -234,6 +243,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             assert result.returncode == expected_code, (result.stdout, result.stderr)
             return json.loads(result.stdout)
         review, writer = read("review"), read("writeback")
+        assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert writer["settlement_command"].endswith(" --settle-turn")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
@@ -242,10 +252,21 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         assert {key: fixture[key].read_bytes() for key in original_files} == original_files
         assert not reader_fixture["registry"].exists()
         # Changed bytes cannot masquerade as the admitted observation.
-        source["goal_id"] = "another-goal"
-        (capture / "decision.json").write_text(json.dumps(source))
-        rejected = read("review", expected_code=1)
-        assert "source hash" in rejected["reason"]
+        original_source = copy.deepcopy(source)
+        for carrier, field, value in [
+            ((), "goal_id", "another-goal"),
+            (("agent_identity",), "agent_id", "another-agent"),
+            (("heartbeat_receipt",), "turn_instance_id", "another-turn"),
+            (("autonomous_replan_obligation", "replan_context"), "core_goal", {"objective": "Changed acceptance"}),
+        ]:
+            source = copy.deepcopy(original_source)
+            target = source
+            for key in carrier:
+                target = target[key]
+            target[field] = value
+            (capture / "decision.json").write_text(json.dumps(source))
+            rejected = read("review", expected_code=1)
+            assert "source hash" in rejected["reason"]
         (capture / "decision.json").write_bytes(saved)
         # A valid next operation still reaches the existing writer and semantic gate.
         result = call_progress_cli(fixture, *fixture["refresh"])
@@ -286,8 +307,16 @@ def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_p
     large_envelope, expanded, params = _views(large)
     # Assert the complete emitted envelope too: moving the payload into a second
     # hot carrier would satisfy a packet-only budget while defeating the fix.
-    assert abs(json_bytes(large_envelope) - json_bytes(envelope)) <= 512
-    assert "context_read" in large_envelope["action"]["planning_horizon"]
+    # The Goal itself is replayed each Turn. Only cumulative outcome detail is
+    # indexed; it must not become a second 200 KiB inline carrier.
+    assert 0 < json_bytes(large_envelope) - json_bytes(envelope) <= 4 * 1024
+    assert large_envelope["action"]["core_goal"]["objective"] == base["autonomous_replan_obligation"]["replan_context"]["core_goal"]["objective"]
+    assert large_envelope["action"]["planning_horizon"]["core_goal_ref"] == "$.action.core_goal"
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
+    authority = extract_turn_authority({"turn_envelope": large_envelope})
+    assert authority["planning_horizon"]["core_goal_ref"] == "$.core_goal"
+    assert authority["core_goal"] == large_envelope["action"]["core_goal"]
+    assert large_envelope["action"]["planning_horizon"]["core_goal_ref"] == "$.action.core_goal"
     original = large["autonomous_replan_obligation"]["replan_context"]["core_goal"]
     assert json_bytes(original) > 200 * 1024
     assert expanded["planning_horizon"]["core_goal_ref"] == "$.core_goal"
@@ -335,6 +364,87 @@ def test_large_acceptance_is_not_repeated_in_cli_or_envelope_work_context(tmp_pa
     rows = review["acceptance_index"]["outcomes"]
     for row, outcome in zip(rows, contract["outcome_requirements"]["outcomes"], strict=True):
         assert _turn_envelope_result("replan_view", **params, stage="acceptance", outcome_ref=row["outcome_ref"])["outcome"] == outcome
+    # The ordinary quota owner can reference its identical inline acceptance.
+    # Index it before deferring that source so the horizon cannot dangle.
+    horizon_core = source["planning_horizon"]["core_goal"]
+    horizon_core.pop("acceptance_contract")
+    horizon_core["acceptance_contract_ref"] = "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract"
+    ref_entry = build_turn_envelope(source)
+    assert ref_entry["action"]["planning_horizon"]["core_goal_ref"] == "$.action.core_goal"
+    horizon_core["acceptance_contract_ref"] = "$.interaction_contract.agent_channel.work_context.sources[9].content.goal_acceptance_contract"
+    with pytest.raises(EffectRuntimeRejected, match="complete inline work context"):
+        build_turn_envelope(source)
+
+
+def test_staged_entry_replays_goal_and_changed_horizon_with_existing_delta_owner(tmp_path):
+    from replan_packet_fixture import populated_replan_source
+
+    source = populated_replan_source(tmp_path, acceptance=True)
+    entry = _turn_envelope_result("replan_cli_view", payload=source)
+    scope = {"goal_id": source["goal_id"], "agent_id": source["agent_identity"]["agent_id"],
+        "session_id": "synthetic-session", "context_epoch": "one"}
+    full = prepare_context_delivery(entry, scope=scope, capture_id="entry-a", surface="quota_packet")
+    for changed in (False, True):
+        current = copy.deepcopy(source)
+        if changed:
+            current["planning_horizon"]["work_items"][0].update(priority="P0", successor_todo_ids=["todo-new-dependency"])
+        value = _turn_envelope_result("replan_cli_view", payload=current)
+        candidate = prepare_context_delivery(value, scope=scope, capture_id="entry-b", surface="quota_packet",
+            baseline=full, retained={"complete": True, "target": full["target"]})
+        assert entry["core_goal"]["objective"] in json.dumps(candidate, ensure_ascii=False)
+        if changed:
+            assert "todo-new-dependency" in json.dumps(candidate)
+        recovery = prepare_context_delivery(value, scope=scope, capture_id="entry-b", surface="quota_packet")
+        assert restore_context_delivery(candidate, baseline=full, current=recovery)["context"] == value
+        assert restore_context_delivery(candidate, baseline=None, current=recovery)["context"] == value
+        reset = prepare_context_delivery(value, scope={**scope, "context_epoch": "two"}, capture_id="entry-b",
+            surface="quota_packet", baseline=full, retained={"complete": True, "target": full["target"]})
+        assert reset["mode"] == "full" and reset["context"] == value
+    # Feature absent, settlement-only and a higher-priority governed intent do
+    # not enter the staged replan lens merely because an old packet is present.
+    for patch in ({"replan_read_path": None}, {"ok": False},
+                  {"effective_action": "governed_capability_intent"},
+                  {"replan_action_packet": {**source["replan_action_packet"], "settlement_only": True}}):
+        legacy = {**source, **patch}
+        assert _turn_envelope_result("replan_cli_view", payload=legacy) == legacy
+
+
+def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tmp_path, monkeypatch):
+    from loopx.command_invocation import current_loopx_cli_argv
+    from loopx.control_plane.quota.turn_envelope import bind_turn_decision_capture
+    from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+
+    source = _quota_payload()
+    outcome = {"id": "original-outcome", "objective": "Deliver the original accepted artifact.",
+        "requirements": [{"id": "original-stop", "description": "Stop before publication."}]}
+    source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"] = {
+        "outcome_requirements": {"revision": 1, "outcomes": [outcome]}}
+    capture = tmp_path / "native.json"
+    write_decision_capture(capture, source)
+    original = capture.read_bytes()
+    envelope = build_turn_envelope(source)
+    args = {"captured_decision_path": str(capture), "turn_instance_id": "original-native-turn", "turn_key": "sha256:" + "0" * 64}
+    legacy = bind_turn_decision_capture(source, envelope, **args)
+    assert "read autonomous_replan_obligation.replan_context" in render_prompt(extract_turn_authority({"turn_envelope": legacy}))
+    bound = bind_turn_decision_capture(source, envelope, **args, reader_argv=current_loopx_cli_argv())
+    authority = extract_turn_authority({"turn_envelope": bound})
+    trap = tmp_path / "bin"
+    trap.mkdir()
+    (trap / "loopx").write_text("#!/bin/sh\nexit 73\n")
+    (trap / "loopx").chmod(0o700)
+    monkeypatch.setenv("PATH", str(trap) + os.pathsep + os.environ["PATH"])
+    def read(command):
+        result = subprocess.run(shlex.split(command), cwd=tmp_path, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+    review = read(authority["replan_action_packet"]["review"])
+    index = review["acceptance_index"]
+    acceptance = read(index["read_action_template"].replace("{outcome_ref}", index["outcomes"][0]["outcome_ref"]))
+    assert acceptance["outcome"] == outcome
+    assert read(review["next"]["writeback"])["context_id"] == review["context_id"]
+    assert bind_turn_decision_capture(source, bound, **args)["detail_ref"] == bound["detail_ref"]
+    assert bound["action_signature"] == envelope["action_signature"]
+    assert capture.read_bytes() == original and not (tmp_path / "registry.json").exists()
 
 
 def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):

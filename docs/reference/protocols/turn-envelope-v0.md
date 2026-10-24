@@ -90,6 +90,10 @@ read acknowledgement, mandatory model call or prescribed route change.
 
 Captured reads retain the caller's explicit `--cli-bin` route, including later
 acceptance and Explore reads; an ambient executable cannot silently replace it.
+Without an explicit route, new captured readers use the current installed Python
+interpreter's `-m loopx.entrypoint` route rather than an unrelated PATH executable.
+Native reads propagate that route through review, acceptance and writeback; the
+complete original observation is not rewritten to carry a new command.
 The review stage provides structured facts without a prescribed diagnostic
 method. Writeback omits filled-in Vision/stride examples while retaining field
 limits, legal options, source bindings and settlement rules. Stride exposes its
@@ -110,8 +114,11 @@ assess acceptance, infer execution from counts or make a dependency global.
 `quota replan-view --decision-file <file> --source-hash <hash>` defaults to
 `--replan-stage review`; `writeback`, `acceptance --outcome-ref <ref>` and
 `explore` read the corresponding original-source detail. Missing/mutated sources
-fail without guard replay. Existing uncaptured calls and native journal captures
-without the CLI read route retain their prior delivery. The existing generic
+fail without guard replay. Existing uncaptured calls, old native journals
+without a saved reader route, and direct structured Host requests without that
+route retain their prior full-source delivery. Those consumers can retire the
+legacy prompt only after retaining a valid original capture and executable
+reader; a missing source is never replaced by a fresh guard. The existing generic
 followthrough is now available with stride off; its result-class counts and
 observations remain evidence, not successful-work or goal-gain verdicts.
 
@@ -132,8 +139,37 @@ Identical work-context acceptance copies use that same read; other revisions
 stay inline. A source exceeding the RPC request bound uses the existing bounded
 local-snapshot transport for pure projection, preserving both transport limits.
 
-With native context delivery off, a captured CLI entry defers any existing
-settlement plan/command list to the writeback read instead of printing both.
+With native context delivery off, captured CLI and TurnEnvelope entries share
+one projection that defers the settlement plan/command list to the writeback
+read instead of printing both. The signed settlement identity stays inline for
+the outer Turn executor; the reader returns the complete canonical plan.
+Every entry retains the current Core Goal and planning horizon. Only cumulative
+acceptance detail is indexed; dependency, priority, blocker and plan changes
+remain visible. This uses the existing optional full/delta owner, not a new
+cache or acknowledgement. Its default-off path needs no retained baseline.
+
+New native Turn journals bind the same readers to their original observation
+without rewriting it or inventing a quota receipt. Native Codex and structured
+Hosts use the shared review-before-format instruction. The Codex model receives
+verified Turn authority and reader routes while its journal and executor retain
+the full signed envelope. The model returns a semantic result; it does not run
+the CLI settlement sequence. A canonical replan attempt permits that semantic
+slice even when ordinary delivery is closed; explicit delivery denial/null,
+missing attempt, user and Stop restrictions retain their existing precedence.
+Full-source fallback remains available on the same capture. Whole-path cost
+must include entry, detail reads and recovery; indexing alone does not establish
+lower total cost or better decisions.
+
+中文：关闭差分时，CLI 与短包入口也共享延后结算格式的投影，完整计划只在写回
+读取时交付；外层仍拿到签名结算身份。每轮显式保留当前 Core Goal 和规划窗口，
+累计验收明细才索引读取，依赖、优先级、阻塞与计划变化不可省略。新原生 journal
+绑定同源读取，模型使用事实审视后再读格式，执行器保留完整签名包并独占状态、
+额度与调度结算。规范 replan attempt 只允许该语义切片，不绕过显式拒绝、缺失
+attempt、用户或 Stop 限制。旧 journal 与没有安全读取路由的调用继续读原包；
+缺源只能恢复，不能重新准入补包。成本须计算全部读取及回退，不能只报告短包尺寸。
+未显式指定 CLI 时，新读取命令固定当前已安装 Python 的模块入口，后续验收和写回
+也沿用该路径，避免落到 PATH 中不支持该协议的另一份安装；原观察字节保持不变。
+
 Selection, current admission and stop facts stay inline. Optional native
 full/delta presentation and full recovery carry this same CLI view; the original
 source remains unchanged for checkpoint qualification and authority inspection.

@@ -449,6 +449,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 def read_replan_view(args: argparse.Namespace) -> dict:
     """Read a captured observation only; no registry, provider, guard or receipts."""
     from ..control_plane.quota.turn_envelope import _turn_envelope_result
+    from ..command_invocation import current_loopx_cli_argv
 
     if not args.decision_file or not args.source_hash:
         raise ValueError("replan-view requires --decision-file and --source-hash")
@@ -456,6 +457,7 @@ def read_replan_view(args: argparse.Namespace) -> dict:
     with path.open(encoding="utf-8") as stream:
         payload = json.load(stream)
     return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,
+                                 captured_decision_path=str(path), reader_argv=current_loopx_cli_argv(),
                                  stage=args.replan_stage, outcome_ref=args.outcome_ref)
 
 

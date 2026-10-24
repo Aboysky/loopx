@@ -789,6 +789,15 @@ The reader replaces repeated method guidance with compact semantic boundaries
 and the existing stride format. Benchmark preflight captures the original
 decision through the CLI and delivers its staged view even with TurnEnvelope
 off; retaining a full checkpoint packet alone does not qualify model exposure.
+Captured CLI and Turn entries now share delayed settlement-format delivery;
+new native journals deliver the same reader through actual Codex/structured
+Host inputs. The executor retains its signed identity and full source. Core Goal
+and the current horizon stay explicit each Turn, with only cumulative acceptance
+detail indexed. Legacy journals and uncaptured Host requests keep their original
+fallback until they possess the same immutable source/reader binding. No new
+cache, acknowledgement or planning owner is introduced. Qualification must count
+entry, applicable acceptance/evidence, writeback and recovery together; successful
+reader routing is not model adoption, scientific benefit or a total-cost pass.
 
 The next-review input also exposes causally later ordinary writebacks for the
 declared work in `ordinary_work`, with per-Todo `ordinary_evidence_refs`. Its

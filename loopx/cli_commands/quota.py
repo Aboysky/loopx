@@ -479,10 +479,10 @@ def _emit_quota_result(
     delivery_request = None
     decision_identity = ("", "")
     if capture_directory is not None and payload.get("replan_action_packet"):
-        from ..command_invocation import loopx_cli_argv
+        from ..command_invocation import current_loopx_cli_argv
 
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
-            "replan_read_argv": loopx_cli_argv()}
+            "replan_read_argv": current_loopx_cli_argv()}
     try:
         capture_decision(capture_directory, payload)
         if payload.get("ok") is True:
