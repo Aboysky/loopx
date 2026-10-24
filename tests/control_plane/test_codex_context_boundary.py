@@ -121,6 +121,12 @@ def _native_fixture(tmp_path):
     workspace.mkdir()
     env = {k: v for k, v in os.environ.items() if k in {
         "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT"}}
+    # Authority fixtures isolate temp files below tmp_path. Native release
+    # helpers refuse a CODEX_HOME inside their temp root, which otherwise
+    # breaks Linux sandbox dispatch. Keep both private, as sibling directories.
+    temporary = tmp_path / "native-tmp"
+    temporary.mkdir(mode=0o700)
+    env.update({key: str(temporary) for key in ("TMPDIR", "TEMP", "TMP")})
     env["CODEX_HOME"] = str(home)
     return binary, env, workspace, home
 
