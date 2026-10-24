@@ -147,6 +147,7 @@ export const researchHistoryScenario = {
       assert.equal(await native.locator('.research-native-basis').evaluate(e => e.open), false);
       assert.equal(await nativePage.locator('.research-progress-basis').evaluate(e => e.open), false);
       assert.equal(await nativePage.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(), true, 'Measured progress remains readable before model analysis; the unknown analysis is contextual help');
+      assert.equal(await nativePage.locator('.research-progress > header .context-help-trigger').count(), 1, 'Result state and interpretation share one heading help entry');
       await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-desktop.png'), animations: 'disabled'});
       await native.getByRole('button', {name: /首次提交.*查看原始证据/}).click();
       const original = nativePage.getByRole('region', {name: '引用原文', exact: true});
@@ -1069,6 +1070,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await basis.locator(':scope > summary').click();
       assert.match(await nativeResults.innerText(), /历史原生测量/, 'Stale measurements retain their historical identity');
       const currentSource = nativeResults.getByRole('button',{name:'当前来源未核验',exact:true});
+      assert.equal(await nativeResults.locator(':scope > .research-progress-title .context-help-trigger').count(), 1, 'Historical measurement state and its basis share the owning heading');
+      assert.equal(await nativeResults.locator(':scope > .context-help').count(), 0, 'A historical warning is not an orphan glyph between the heading and data');
       await currentSource.focus();
       await page.getByRole('tooltip').getByText(/当前结果未核验/).waitFor();
       await page.keyboard.press('Escape');
