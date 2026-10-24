@@ -13,12 +13,21 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
   const inputRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const returnFocus = useRef<HTMLElement | null>(null);
+  const outsidePointer = useRef<number | null>(null);
+  const outsideClick = useRef(false);
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
   const matches = filterWorkspaceCommands(entries, query);
   const active = matches.find(entry => entry.id === activeId && !entry.disabled)
     ?? matches.find(entry => !entry.disabled);
   const activeIndex = matches.findIndex(entry => entry === active);
+
+  function restoreFocus() {
+    const target = returnFocus.current;
+    if (target && target !== document.body && target.isConnected && target.getClientRects().length) {
+      target.focus({preventScroll: true});
+    } else document.querySelector<HTMLElement>(".personal-mobile-menu")?.focus({preventScroll: true});
+  }
 
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
@@ -36,11 +45,13 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
     if (!open || !dialog) return;
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     composing.current = false;
+    outsidePointer.current = null;
+    outsideClick.current = false;
     setQuery("");
     setActiveId(null);
     dialog.showModal();
     inputRef.current?.focus();
-    return () => { dialog.close(); returnFocus.current?.focus({ preventScroll: true }); };
+    return () => { dialog.close(); restoreFocus(); };
   }, [open]);
 
   useEffect(() => {
@@ -52,16 +63,39 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
     const current = entries.find(candidate => candidate.id === entry.id);
     if (!current || current.disabled) return;
     dialogRef.current?.close();
-    returnFocus.current?.focus({ preventScroll: true });
+    restoreFocus();
     onClose();
     onSelect(current);
+  }
+
+  function outsideDialog(event: { clientX: number; clientY: number }) {
+    const bounds = dialogRef.current!.getBoundingClientRect();
+    return event.clientX < bounds.left || event.clientX > bounds.right
+      || event.clientY < bounds.top || event.clientY > bounds.bottom;
   }
 
   // Keep closed palette labels/results out of the workspace DOM.
   if (!open) return null;
 
   return <dialog ref={dialogRef} className="workspace-command-palette" aria-labelledby={`${id}-title`}
-    aria-describedby={`${id}-scope`} onCancel={event => { event.preventDefault(); if (!composing.current) onClose(); }}
+    aria-describedby={`${id}-scope`}
+    onPointerDown={event => {
+      outsideClick.current = false;
+      outsidePointer.current = event.isPrimary && event.button === 0 && outsideDialog(event) ? event.pointerId : null;
+    }}
+    onPointerUp={event => {
+      outsideClick.current = outsidePointer.current === event.pointerId && outsideDialog(event);
+      outsidePointer.current = null;
+    }}
+    onPointerCancel={() => { outsidePointer.current = null; outsideClick.current = false; }}
+    onClick={event => {
+      const close = outsideClick.current && outsideDialog(event);
+      outsideClick.current = false;
+      // Consume the completed click before removing the modal. Internal drags
+      // and whitespace are not backdrop activations.
+      if (close) { event.preventDefault(); event.stopPropagation(); onClose(); }
+    }}
+    onCancel={event => { event.preventDefault(); if (!composing.current) onClose(); }}
     onKeyDown={event => {
       // Do not let the underlying inspector consume keys from this modal.
       event.stopPropagation();

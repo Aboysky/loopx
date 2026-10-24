@@ -147,6 +147,7 @@ try {
   }});
   try {
     await remote.page.locator('.personal-goal-row').first().locator('.personal-goal-link').click();
+    assert.equal(await remote.page.getByRole('button', {name:/^(Settings|设置)$/}).count(), 0, 'a read-only host does not expose local management');
     await openPalette(remote.page);
     assert.match(await dialogFor(remote.page).innerText(), /Read-only source|只读来源/);
     assert.equal(await dialogFor(remote.page).getByRole('option', {name: /Review preview|查看预览/}).count(), 0);

@@ -204,7 +204,7 @@ export function WorkspaceSettingsPage({
                   <option value="">{t("capabilities.chooseGoal")}</option>
                   {initialGoalId && !selectedGoal ? <option value={initialGoalId} disabled>{t("settings.goalUnavailable")}</option> : null}
                   {goals.map(goal => <option key={goal.goalId} value={goal.goalId}>
-                    {goal.title}{goal.sourceAccess ? ` · ${goal.sourceAccess.label}` : ""}{goals.filter(item => item.title === goal.title).length > 1 ? ` · ${goal.goalId}` : ""}
+                    {goal.title}{goal.sourceAccess && goal.sourceAccess.label !== goal.title ? ` · ${goal.sourceAccess.label}` : ""}{goals.filter(item => item.title === goal.title).length > 1 ? ` · ${goal.goalId}` : ""}
                   </option>)}
                 </select>
               </label>}

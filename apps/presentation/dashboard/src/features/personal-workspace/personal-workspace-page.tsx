@@ -977,6 +977,7 @@ export function PersonalWorkspacePage({
   const sourceGoal = model.goals.find(goal => goal.goalId === (controlledGoalId === undefined ? localGoalId : controlledGoalId));
   const researchReadSourceUrl = sourceGoal?.sourceAccess ? `/status.json?source_namespace=${sourceGoal.sourceAccess.namespace}` : statusSourceControl?.activeSource.kind === "runtime" && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error" ? statusSourceControl.activeSource.statusUrl : undefined;
   const readOnly = sourceReadOnly || sourceGoal?.sourceAccess?.readOnly === true;
+  const hostReadOnly = statusSourceControl?.activeSource.readOnly ?? sourceReadOnly;
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
   const selectionScope = `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${controlledGoalId === undefined ? localGoalId : controlledGoalId}`;
   const runtimeSourceUnavailable = statusSourceControl?.activeSource.kind === "runtime"
@@ -1209,7 +1210,8 @@ export function PersonalWorkspacePage({
       else document.querySelector<HTMLElement>(".personal-mobile-menu")?.focus({ preventScroll: true });
     });
   }
-  const settingsOpen = selection?.kind === "settings" && !readOnly;
+  // Device settings belong to this host, even while a linked Goal is read-only.
+  const settingsOpen = selection?.kind === "settings" && !hostReadOnly;
   const managerProjectionId = selectedGoalId;
   const items = useMemo(() => {
     const heartbeatSchedules: WorkspaceTimelineItem[] = Object.values(proposals)
@@ -2524,7 +2526,7 @@ export function PersonalWorkspacePage({
         onOpenOriginalConversation={!readOnly && !rootGoalId && workspaceConversations?.onOpenOriginal ? target => {
           closeSettings(); workspaceConversations.onOpenOriginal!(target);
         } : undefined}
-        callbacks={effectiveDrawerCallbacks}
+        callbacks={drawerCallbacks}
         focusGoalConnection={Boolean(settingsTarget?.goalId && settingsTarget.tab === "lark")}
         goalNotifications={model.goalNotifications ?? []}
         goals={workspaceGoals}
@@ -2534,8 +2536,8 @@ export function PersonalWorkspacePage({
         onClose={closeSettings}
         onThemeChange={updateTheme}
         theme={theme}
-        attentionNotifications={readOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
-        onAttentionNotificationsChange={readOnly ? undefined : updateAttentionNotifications}
+        attentionNotifications={hostReadOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
+        onAttentionNotificationsChange={hostReadOnly ? undefined : updateAttentionNotifications}
       />
     </Suspense>
   ) : null;
@@ -3102,7 +3104,7 @@ export function PersonalWorkspacePage({
             ? () => void (callbacks.onRetryGoalArchive ?? callbacks.onRefresh)?.()
             : undefined}
           onOpenCommands={() => {setMobileSidebarOpen(false); setPaletteScope(paletteContext);}}
-          onOpenSettings={readOnly ? undefined : () => openSettings({ kind: "settings" })}
+          onOpenSettings={hostReadOnly ? undefined : () => openSettings({ kind: "settings" })}
           onSelectGoal={(goalId) => selectGoal(goalId,
             goalId && selectedGoalId && selectedGoalTab === "research" ? "research" : "overview")}
           selectedGoalId={selectedGoalId}
