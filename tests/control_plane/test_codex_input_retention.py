@@ -188,13 +188,16 @@ def test_unknown_stale_lossy_or_unbound_observation_never_reuses(tmp_path, failu
     assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
 
 
+@pytest.mark.parametrize("pragma", ["", '// @exec: {"max_output_tokens":12000}\n',
+    ' \t// @exec: {"yield_time_ms":1000}\r\n'])
 @pytest.mark.parametrize("failure", [None, "parent_missing", "parent_changed", "parent_ended", "parent_wrong_call",
-    "child_wrong_cell", "child_wrong_tool", "output_missing", "output_preview", "output_wrong_role"])
-def test_code_mode_requires_exact_live_parent_and_complete_model_visible_output(tmp_path, failure):
+    "child_wrong_cell", "child_wrong_tool", "output_missing", "output_preview", "output_wrong_role",
+    "malformed_pragma", "nonobject_pragma", "nonfinite_pragma", "other_comment", "second_pragma"])
+def test_code_mode_requires_exact_live_parent_and_complete_model_visible_output(tmp_path, failure, pragma):
     observation, baseline, request, rows = fixture(tmp_path)
     bundle = Path(observation["trace_bundle"])
     source = 'text(await tools.exec_command({cmd:"loopx quota should-run"}));'
-    output = {"output_items": [{"type": "custom_tool_call", "name": "exec", "call_id": "parent", "input": source}]}
+    output = {"output_items": [{"type": "custom_tool_call", "name": "exec", "call_id": "parent", "input": pragma + source}]}
     parent = {**rows[-1], "seq": 2, "payload": {"type": "code_cell_started", "runtime_cell_id": "cell",
         "model_visible_call_id": "parent", "source_js": source}}
     rows[-1]["seq"] = 3
@@ -225,6 +228,11 @@ def test_code_mode_requires_exact_live_parent_and_complete_model_visible_output(
         for item in request["input"]:
             item["type"] = "message"
             item["role"] = "assistant"
+    elif failure in ("malformed_pragma", "nonobject_pragma", "nonfinite_pragma", "other_comment", "second_pragma"):
+        prefix = {"malformed_pragma": "// @exec: {broken}\n", "nonobject_pragma": "// @exec: []\n",
+            "nonfinite_pragma": '// @exec: {"max_output_tokens":NaN}\n', "other_comment": "// other\n",
+            "second_pragma": "// @exec: {}\n// @exec: {}\n"}[failure]
+        output["output_items"][0]["input"] = prefix + source
     (bundle / "payloads/output.json").write_text(json.dumps(output))
     (bundle / "payloads/input.json").write_text(json.dumps(request))
     (bundle / "trace.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
