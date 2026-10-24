@@ -170,6 +170,14 @@ benefit separate. This proposal changes no stream priority, experiment budget,
 frozen treatment or scoring rule and must not block otherwise valid experiment
 preparation or the existing L1/R2 journey.
 
+The author proposal [#7233](https://github.com/loopx-project/loopx/pull/7233)
+connects the existing typed assessment's evidence-bound researcher synthesis to
+results → report → research history, with deeper comparison of explanations and
+proposed experiments, and preserves observed cost when output is rejected.
+Its packaged source/recovery and comprehension checks qualify that reading
+slice; independent scientific calibration, installed adoption and 2.0 release
+acceptance remain open. Proposed experiments are advice, not execution authority.
+
 ### Current priorities after research and acceptance integration
 
 This checkpoint is pinned to main `5550e91bab` (2026-10-23). It reconciles

@@ -7,6 +7,68 @@ These use the S5/S11
 [research episode assessment](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement).
 It does not change solver prompts, benchmark scoring, checkpoints or research budgets.
 
+## Researcher synthesis in the existing reader
+
+New registrations using the default configuration and CLI previews request
+`research_synthesis: true` in their
+frozen model configuration. Explicit analysis uses the same observer call to
+produce `research-episodes-synthesis-v1`: the six episode judgments plus a
+source-bound `synthesis`. There is no extra per-finding model call. The ordinary
+Goal view follows **results → research report → research history**. Native
+measurements and unknown retention appear first; the saved report adds a concise
+account, expandable findings and a prioritized question. **Read deeper** opens
+findings beside their interpretations and competing explanations. A separate
+report tab compares proposed interventions and controls with distinguishing
+predictions and disconfirming results. Wide layouts use two columns; narrow
+layouts preserve the same reading order vertically. Body text stays readable.
+Individual judgments and limitations remain available as secondary review.
+Direct citations open exact originals and return focus to their source control;
+the history action returns to the complete loaded research history without
+changing the selected evidence pack. Reading either layer, switching report
+tabs or opening an original never executes an analysis or experiment.
+
+The presentation draws on composable inspection in
+[Distill's interpretability article](https://distill.pub/2018/building-blocks/)
+and responsive comparison layouts in the
+[Observable Framework documentation](https://observablehq.github.io/framework/getting-started#layout).
+These inform the design; they do not establish a measured comprehension or
+reading-speed benefit for this reader. Fixed application templates render the
+qualified text; the observer does not generate executable HTML or JavaScript.
+
+The synthesis has at most three findings and two proposed next experiments.
+Each item names the supplied episodes and supporting absolute source lines.
+The typed owner rejects missing evidence, unknown episode/source identities and
+out-of-range citations. Cross-episode synthesis may use only the named episodes'
+evidence; individual metric citations retain their narrower episode scope.
+These checks verify binding, not entailment or causal validity. The result stays
+an uncalibrated Agent interpretation; proposals grant no execution authority.
+Insufficient evidence can yield no findings or experiments, with the gap stated
+in the summary. Useful negative evidence and observed late gains remain visible.
+
+Existing registered configurations without this field keep their original
+prompt, analysis key, schema and saved results. They are not automatically
+upgraded or rerun. For an explicitly requested synthesis of an older study,
+register a new version with `config.research_synthesis: true`; keep the previous
+pack and its failures. The Python preparation adapter also accepts
+`research_synthesis=False` to reproduce the legacy method. To disable new
+synthesis, register with that field false or an explicit legacy configuration;
+no source history is deleted. A language change retains the existing independent
+language-specific cache and execution boundary.
+
+Curators must admit relevant prior feedback into each episode that needs it.
+A source existing elsewhere in the pack does not authorize a metric to cite it.
+When prior context or submitted-code excerpts are missing, revise the frozen
+input and disclose the retrospective selection; do not weaken citation checks
+or relabel the old failed attempt. Provider-observed usage now survives output
+parsing and qualification failure. Missing usage stays unknown, and retry
+archives the failed output, receipt and observed usage before a new attempt.
+This does not reconstruct unmeasured historical usage or complete monetary cost.
+
+普通阅读依次呈现指标、研究汇报和完整研究历程；汇报先给概览和可展开结论，「深入解读」
+再用并排对照展开观察／竞争解释及实验条件／预期区分／反证，窄屏保持原顺序纵向阅读。
+两层复用同一结果和原文入口，浏览不触发模型。新分析仍使用既有授权、
+成本、取消与重试边界；旧方法及失败记录保留，引用完整性不代表机制已获证实。
+
 The Goal reader requests `output_language` (`zh` or `en`) from the current
 interface language on reads, explicit execution/retry, cancellation and citation
 readback. The typed assessment owner binds it and its presentation instructions

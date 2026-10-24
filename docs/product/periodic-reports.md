@@ -434,41 +434,87 @@ not production-message or real-phone proof.
 
 ## Acceptance boundaries
 
-### Ordinary managed Goal conversations
+### Managed Agent execution boundary
 
-In a local Goal's Codex conversation, **Advance LoopX tasks → Advance once**
-can submit one bounded native Turn for an explicitly selected registered
-Agent. It keeps the same Core Session, upstream thread, model settings and
-sandbox. Ordinary Goal Chat is currently read-only: this path qualifies source
-inspection and validation tasks, **not writable execution or a permission
-upgrade**. For example, a finite task may close only when its independently
-declared readiness check passes against the original source.
+A managed conversation must belong to the selected registered **Agent**, with
+its own original Session, execution state and return path. In the Goal's Agent
+view, managed and attached conversations are parallel sources; a Goal-wide
+Codex chat with an extra Agent selector does not establish that binding.
+The experimental **Advance LoopX tasks** control has therefore been withdrawn
+from ordinary Goal Chat. The existing general conversation, native Goal mode
+and original attached conversation entry retain their current owners.
 
-The native Turn still selects the task and owns admission, writeback and quota.
-The host resolves the selected task's existing immutable argv validation
-declaration before model execution, retains its canonical digest/revision, and
-rechecks that source and the execution lease before accepting completion.
-The normal Todo completion owner runs its declared check as well. Missing
-validation waits without starting a model; a failed check cannot complete the
-task or spend a delivery slot. Model-reported progress alone is insufficient.
-The API accepts only the registered Agent, operation identity and optional
-existing Todo reference; it accepts no validation command or runtime profile.
+The native host groundwork remains separately qualified: an explicitly invoked
+local managed request can use the original Core worker and native Task/Turn
+owners for a finite source-validation task. It retains the same thread and
+sandbox, resolves the selected Task's immutable argv validation declaration
+before model execution, and checks its canonical digest/revision and lease
+before accepting completion. Missing validation starts no model; a failed
+postcondition cannot complete the Task or spend a delivery slot. The low-level
+request accepts no runtime profile or caller validation command. Stable Core
+operation identity retains failed or unknown requests without replay.
 
-The control reads back the original Core Turn. Reload, an unknown POST response
-and retry retain one operation identity; a failed or unknown execution is never
-replayed. Busy/queued user work wins admission. Attached, external and private
-steward conversations retain their own admission paths; stopped/replaced Goals,
-changed validation and late results fail closed. Existing continuous Goal mode
-is a separate path and is not converted by this action.
+The existing session creation API now accepts `managed_agent_id` for a local
+Goal. It binds the registered work identity separately from the executor
+(`agent_id`) and model. Core persists that immutable identity, Goal lifetime
+and original thread, with a distinct Agent channel. Resume selects only that
+Goal/Agent/executor channel; another Agent cannot execute its native work.
+Old Goal-wide conversations remain readable and unassigned, and cannot gain a
+native work identity through a request-time selector. Existing project,
+steward and attached entrypoints retain their original identities and workers.
+Registration removal, Goal stop, a changed lifetime or a mismatched workspace
+refuses continued execution rather than transferring the conversation.
 
-This is a staged execution prerequisite. General writable managed execution,
-natural-language task configuration and arbitrary calendar/monitor/report
-composition remain unfinished. This control enables no recurring work and
-does not change the original steward's subscription or publication route.
-Packaged browser evidence uses a disposable real Core/File backend with a
-synthetic model/provider; it does not certify real-model or natural-deadline
-acceptance. See the [baseline](../assets/personal-workspace/steward-reports/managed-session-before.png)
-and [validated readback](../assets/personal-workspace/steward-reports/managed-session-after.png).
+This is an API/host lifecycle slice, **not** the finished Agent workspace
+entry or general periodic journey. The Agent view still needs to expose this
+binding alongside attached sources, including all original history and honest
+unavailable states. Reuse existing Session, native Turn,
+monitor/calendar and periodic-report owners; do not add a second scheduler,
+task store or model worker. General writable execution, natural-language
+configuration and recurring task composition remain unfinished.
+
+An explicitly bound local managed Session can also observe its Goal's native
+work through an existing `continuous_monitor` Todo. Use the existing Todo
+authoring path with `action_kind=local_runtime_observe`, `watch_only=true`,
+the registered Agent as `claimed_by`, and
+`target_key=managed-session-watch.<original-session-id>`. Its existing cadence,
+deadline and open/blocked lifecycle are authoritative. For example, after
+selecting an authorized existing Goal, Agent and bound Session:
+
+```sh
+loopx todo add --goal-id PROJECT --role agent \
+  --claimed-by WRITER --text 'Observe this Goal native work' \
+  --task-class continuous_monitor --action-kind local_runtime_observe \
+  --target-key managed-session-watch.ORIGINAL_SESSION_ID --watch-only \
+  --cadence 30m --next-due-at 2030-01-01T09:00:00+08:00 \
+  --required-capability filesystem --execute
+```
+
+Replace the illustrative identities and future deadline with the actual
+authorized task. Registration, opening a Session or installing the feature
+does not author or enable a watch. The existing idle wake producer admits a
+due watch into that Session's original Core worker; the shared observation
+adapter and native `monitor-poll` settle it without starting/resuming a model
+thread or spending a delivery slot. Other runnable work remains available.
+The original private steward retains its own portfolio source and provider
+checks; a local watch requires neither a private binding nor portfolio access.
+
+The local observation hashes canonical work fields from the complete native
+Agent Todo read in that Goal. Monitor bookkeeping and ordering do not create
+work transitions. This is current work-state observation, not a claim that the
+business or Goal has completed. Busy/queued user work wins; a paused watch,
+revoked Agent, stopped/replaced Goal or mismatched Session cannot poll. A host
+restart reads the original native deadline and Core operation, including a
+failed or unknown attempt, rather than replaying it. External Todo edits are
+observed within the existing one-minute wake hint; the hint is not authority.
+This watch does not generate a report, execute a business task, send an
+external reply or complete the natural-language/periodic-task user journey.
+
+Earlier packaged browser evidence demonstrated only the finite host/API path
+with disposable real Core/File data and a synthetic model/provider. It did not
+establish the correct Agent hierarchy, real-model adoption or natural-deadline
+acceptance. The UI withdrawal does not alter the original private steward's
+subscription, published reports, pending requests or publication route.
 
 ### Original private steward
 
