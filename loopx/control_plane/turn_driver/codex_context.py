@@ -180,7 +180,12 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         "(including compaction or a failed hook), recover before dependent work with: " + command + ". "
         "Follow the returned next_command through eof; verify complete bytes and digest. "
         "If lookup fails, restore the original capture/reference; do not guess, readmit or ask the owner. "
-        "Recovery never renews authority/freshness or proves retention. Independent authorized work can continue."
+        "Recovery never renews authority/freshness or proves retention. Independent authorized work can continue. "
+        "For code-mode reads, size batches against both direct-result and retained-history output limits; "
+        "max_output_tokens alone does not establish the latter. Start with at most two default pages when "
+        "the effective history limit is unknown. With a known sufficient limit, larger batches can reduce "
+        "round trips; emit each stdout separately and check complete model-visible bytes. This advice "
+        "grants no authority to change host limits or treat complete runtime output as retention proof."
     )
 
 

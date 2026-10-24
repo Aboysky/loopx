@@ -69,7 +69,7 @@ def _delivered(request, digest):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -323,20 +323,21 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
 
     def tool(cmd, number):
         if host == "code_mode":
+            pragma = '// @exec: {"max_output_tokens":12000}\n' if native_pragma else ""
             # Exercise the shipped default page size and bounded batching for
             # both output forms. One model round per page can exhaust the
             # unchanged native turn deadline before same-capture recovery ends.
             commands = [cmd]
-            if stages["pages"]:
+            while stages["pages"] and len(commands) < native_read_batch:
                 commands.append(stages["pages"].pop(0))
             if adaptive:
                 code = "".join("{const r=await tools.exec_command(" + json.dumps({
                     "cmd": command, "max_output_tokens": 2400})
                     + ");text(r.exit_code === 0 ? r.output : r);}" for command in commands)
                 return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
-                    "name": "exec", "input": code}
+                    "name": "exec", "input": pragma + code}
             return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
-                "name": "exec", "input": "".join("text(await tools.exec_command(" + json.dumps({
+                "name": "exec", "input": pragma + "".join("text(await tools.exec_command(" + json.dumps({
                     "cmd": command, "max_output_tokens": 2000}) + "));" for command in commands)}
         return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
             "name": "exec_command", "arguments": json.dumps({"cmd": cmd, "max_output_tokens": 2000})}
@@ -360,6 +361,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             if host == "code_mode":
                 config = home / "config.toml"
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
+                if native_history_tokens is not None:
+                    config.write_text(f"tool_output_token_limit={native_history_tokens}\n" + config.read_text())
             if native_configuration:
                 config = home / "config.toml"
                 config.write_text("developer_instructions=" + json.dumps(native_configuration["developer_instructions"])
@@ -480,6 +483,21 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     assert len(captured) == 2
     assert wire_paths["warm"].stat().st_size < wire_paths["cold"].stat().st_size
     assert len(calls) == len(observed) and stages["baseline_confirmed"]
+    if native_read_batch > 2:
+        visible_batches = []
+        for request in observed:
+            for item in request["input"]:
+                if item.get("type") != "custom_tool_call_output" or not isinstance(item.get("output"), list):
+                    continue
+                pages_in_output = 0
+                for part in item["output"]:
+                    try:
+                        page = json.loads(part.get("text", ""))
+                    except ValueError:
+                        continue
+                    pages_in_output += isinstance(page, dict) and page.get("schema_version") == "context_capture_page_v1"
+                visible_batches.append(pages_in_output)
+        assert max(visible_batches, default=0) > 2  # complete bytes were independently checked above
     if host == "benchmark":
         trace_roots = list((home / "context-traces").glob("wake-*"))
         assert len(trace_roots) == (2 if resumed else 1)
@@ -522,6 +540,22 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
 def test_native_missing_hook_recovers_from_persistent_cli_route(tmp_path, monkeypatch, host, surface, hook_loss):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         host, surface, False, True, True, hook_loss)
+
+
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_code_mode_pragma_retains_delta_and_recovers(tmp_path, monkeypatch, surface):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, native_pragma=True)
+
+
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_known_history_budget_keeps_larger_batches_and_recovery(tmp_path, monkeypatch, surface):
+    # The unknown loopback model otherwise inherits a byte-based fallback.
+    # Match a declared 10k-token history budget only in this separate case;
+    # existing low-budget/truncation coverage and host defaults stay intact.
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, "missing", shared_root=True,
+        native_pragma=True, native_read_batch=8, native_history_tokens=10000)
 
 
 @pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])

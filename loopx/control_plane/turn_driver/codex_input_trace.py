@@ -45,6 +45,29 @@ def _encoded_native_document(value: object) -> str:
     return json.dumps(_canonical_native_json(value), sort_keys=True, ensure_ascii=False, allow_nan=False)
 
 
+def _code_mode_source_matches(model_source: object, executed_source: str) -> bool:
+    if not isinstance(model_source, str):
+        return False
+    if model_source == executed_source:
+        return True
+    # Native code mode removes its optional first-line JSON pragma before
+    # recording the executable cell. Preserve the exact remaining source;
+    # arbitrary comments, substrings and additional rewrites prove nothing.
+    first, newline, body = model_source.partition("\n")
+    first = first.lstrip(" \t")
+    prefix = "// @exec:"
+    if not newline or body != executed_source or not first.startswith(prefix):
+        return False
+    try:
+        options = json.loads(first[len(prefix):])
+        json.dumps(options, allow_nan=False)
+    except (ValueError, TypeError):
+        return False
+    # Settings and execution remain native-owned. This only binds the body
+    # recorded by the live cell to the model's exact tool call.
+    return isinstance(options, dict)
+
+
 def _native_tool_is_bound(tail: list[dict[str, Any]], completed: list[dict[str, Any]], tools: list[dict[str, Any]], output: dict[str, Any], tool_id: str) -> bool:
     tool = tools[0]["payload"]
     if tool.get("requester") == {"type": "model"}:
@@ -71,7 +94,7 @@ def _native_tool_is_bound(tail: list[dict[str, Any]], completed: list[dict[str, 
                              and row["payload"].get("runtime_cell_id") == cell_id for row in tail)
                  and any(item.get("type") == "custom_tool_call" and item.get("name") == "exec"
                          and item.get("call_id") == cells[0]["payload"].get("model_visible_call_id")
-                         and item.get("input") == cells[0]["payload"].get("source_js")
+                         and _code_mode_source_matches(item.get("input"), cells[0]["payload"]["source_js"])
                          for item in output.get("output_items", [])))
     return bound
 
