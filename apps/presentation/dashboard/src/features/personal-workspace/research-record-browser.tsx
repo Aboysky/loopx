@@ -1,3 +1,5 @@
+import {CircleHelp} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import {useMemo, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import {searchResearchRecords} from "./research-record-search";
@@ -31,9 +33,9 @@ export function ResearchRecordSearch({events, displayEvents, renderBody, complet
       {!complete ? (zh ? " · 历史不完整" : " · History incomplete") : ""}
       {busy ? (zh ? " · 正在读取历史" : " · Reading history") : stale ? (zh ? " · 刷新失败，显示上次读取的记录" : " · Refresh failed; showing previously read records")
         : ""}</p>
-    {!matches.length ? <p>{complete && !stale && !busy
+    {!matches.length ? <ContextHelp label={zh ? "已读范围无匹配记录" : "No matches in loaded records"} icon={CircleHelp}><p>{complete && !stale && !busy
       ? (zh ? "没有匹配的记录。尝试其他文字或清除筛选。" : "No matching records. Try another term or clear the filters.")
-      : (zh ? "已读部分没有匹配记录；其余历史尚未核验。" : "No matches in the loaded records; the remaining history is not verified.")}</p> : null}
+      : (zh ? "已读部分没有匹配记录；其余历史尚未核验。" : "No matches in the loaded records; the remaining history is not verified.")}</p></ContextHelp> : null}
     <ol className="research-history-records">{matches.slice(0, limit).map(event => {
       const shown = displayed.get(event.event_id) ?? event;
       return <li key={event.event_id}>

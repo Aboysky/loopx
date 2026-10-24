@@ -1,3 +1,5 @@
+import {AlertCircle, Bot, CalendarClock, CircleHelp, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route";
 import {hasConfiguredGoalChecks} from "../../data/goal-acceptance-observation";
 import {useDeliveryReview} from "./delivery-review-state";
@@ -19,7 +21,6 @@ import {
 import { refreshAttention } from "./attention-details";
 import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
-import { AlertCircle, Bot, CalendarClock, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X } from "lucide-react";
 
 import {
   applyTypedAction,
@@ -977,6 +978,7 @@ export function PersonalWorkspacePage({
   const sourceGoal = model.goals.find(goal => goal.goalId === (controlledGoalId === undefined ? localGoalId : controlledGoalId));
   const researchReadSourceUrl = sourceGoal?.sourceAccess ? `/status.json?source_namespace=${sourceGoal.sourceAccess.namespace}` : statusSourceControl?.activeSource.kind === "runtime" && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error" ? statusSourceControl.activeSource.statusUrl : undefined;
   const readOnly = sourceReadOnly || sourceGoal?.sourceAccess?.readOnly === true;
+  const hostReadOnly = statusSourceControl?.activeSource.readOnly ?? sourceReadOnly;
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
   const selectionScope = `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${controlledGoalId === undefined ? localGoalId : controlledGoalId}`;
   const runtimeSourceUnavailable = statusSourceControl?.activeSource.kind === "runtime"
@@ -1209,7 +1211,8 @@ export function PersonalWorkspacePage({
       else document.querySelector<HTMLElement>(".personal-mobile-menu")?.focus({ preventScroll: true });
     });
   }
-  const settingsOpen = selection?.kind === "settings" && !readOnly;
+  // Device settings belong to this host, even while a linked Goal is read-only.
+  const settingsOpen = selection?.kind === "settings" && !hostReadOnly;
   const managerProjectionId = selectedGoalId;
   const items = useMemo(() => {
     const heartbeatSchedules: WorkspaceTimelineItem[] = Object.values(proposals)
@@ -2524,7 +2527,7 @@ export function PersonalWorkspacePage({
         onOpenOriginalConversation={!readOnly && !rootGoalId && workspaceConversations?.onOpenOriginal ? target => {
           closeSettings(); workspaceConversations.onOpenOriginal!(target);
         } : undefined}
-        callbacks={effectiveDrawerCallbacks}
+        callbacks={drawerCallbacks}
         focusGoalConnection={Boolean(settingsTarget?.goalId && settingsTarget.tab === "lark")}
         goalNotifications={model.goalNotifications ?? []}
         goals={workspaceGoals}
@@ -2534,8 +2537,8 @@ export function PersonalWorkspacePage({
         onClose={closeSettings}
         onThemeChange={updateTheme}
         theme={theme}
-        attentionNotifications={readOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
-        onAttentionNotificationsChange={readOnly ? undefined : updateAttentionNotifications}
+        attentionNotifications={hostReadOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
+        onAttentionNotificationsChange={hostReadOnly ? undefined : updateAttentionNotifications}
       />
     </Suspense>
   ) : null;
@@ -2844,9 +2847,9 @@ export function PersonalWorkspacePage({
               </section>
             ) : null}
             {selectedGoal && !selectedGoal.loadState && readOnly && routedTodoId
-              && !selectedGoal.agentTodos.some(todo => todo.todoId === routedTodoId) ? <p className="goal-overview-source-note" role="status">
+              && !selectedGoal.agentTodos.some(todo => todo.todoId === routedTodoId) ? <ContextHelp label={locale === "zh-CN" ? "链接任务未读到" : "Linked task unavailable"} icon={CircleHelp}><p className="goal-overview-source-note" role="status">
                 {locale === "zh-CN" ? "链接中的任务未出现在此来源的当前快照中；暂时无法查看其详情。" : "The linked task is not in this source’s current snapshot; its details are unavailable."}
-              </p> : null}
+              </p></ContextHelp> : null}
             {selectedGoal?.loadState ? (
               <section className="personal-manager-greeting" role="status" data-testid="goal-status-loading">
                 <div><strong>{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</strong>
@@ -2866,7 +2869,7 @@ export function PersonalWorkspacePage({
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   research: !readOnly || researchReadSourceUrl
                     ? <GoalResearchWorkbench goalId={selectedGoal.goalId} active={!settingsOpen && selectedGoalTab === "research"} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl} />
-                    : <p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p>,
+                    : <ContextHelp label={locale === "zh-CN" ? "来源无研究读取入口" : "Research source unavailable"} icon={CircleHelp}><p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p></ContextHelp>,
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
                     onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}/> : (<>
@@ -3102,7 +3105,7 @@ export function PersonalWorkspacePage({
             ? () => void (callbacks.onRetryGoalArchive ?? callbacks.onRefresh)?.()
             : undefined}
           onOpenCommands={() => {setMobileSidebarOpen(false); setPaletteScope(paletteContext);}}
-          onOpenSettings={readOnly ? undefined : () => openSettings({ kind: "settings" })}
+          onOpenSettings={hostReadOnly ? undefined : () => openSettings({ kind: "settings" })}
           onSelectGoal={(goalId) => selectGoal(goalId,
             goalId && selectedGoalId && selectedGoalTab === "research" ? "research" : "overview")}
           selectedGoalId={selectedGoalId}
