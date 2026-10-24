@@ -77,7 +77,7 @@ def _input_text(request):
     return "\n".join(text)
 
 
-def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only"):
+def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only", resume=None):
     with (home / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
         [binary, "app-server", "--listen", "stdio://"], cwd=str(workspace), env=env,
         stderr=stderr, response_timeout_sec=20,
@@ -96,7 +96,9 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
             assert all(h["sourcePath"] == str((home / "hooks.json").resolve()) for h in handlers)
             params["config"] = {"hooks.state": {
                 h["key"]: {"trusted_hash": h["currentHash"]} for h in handlers}}
-        source = native.request("thread/start", params)["thread"]["id"]
+        if resume:
+            params["threadId"] = resume
+        source = native.request("thread/resume" if resume else "thread/start", params)["thread"]["id"]
         turn_params = {"threadId": source,
             "input": [{"type": "text", "text": "Synthetic context-delivery fixture."}]}
         if additional_context is not None:
@@ -108,7 +110,7 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
             if event and event.get("method") == "turn/completed":
                 assert event["params"]["turn"]["id"] == turn
                 assert event["params"]["turn"]["status"] == "completed"
-                return
+                return source
         raise AssertionError("Native context fixture did not finish")
 
 

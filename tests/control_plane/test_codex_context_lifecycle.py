@@ -21,16 +21,17 @@ def setup(root, monkeypatch):
     return event
 
 
-def project(root, capture_id="one"):
+def project(root, capture_id="one", *, payload=None):
     directory = root / capture_id
     directory.mkdir(mode=0o700)
-    payload = {"ok": True, "goal_id": "fixture", "requirements": "Preserve final stop condition."}
+    if payload is None:
+        payload = {"ok": True, "goal_id": "fixture", "requirements": "Preserve final stop condition."}
     result = context.project_codex_context(payload, directory=str(root), capture_directory=directory,
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=capture_id)
     return payload, result
 
 
-@pytest.mark.parametrize("event_name,source", [("SessionStart", "compact"), ("SessionStart", "resume"),
+@pytest.mark.parametrize("event_name,source", [("SessionStart", "compact"),
     ("SessionStart", "startup"), ("PreCompact", None)])
 def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_path, monkeypatch, event_name, source):
     event = setup(tmp_path, monkeypatch)
@@ -49,6 +50,54 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
         assert result == {}
     _, second = project(tmp_path, "two")
     assert second["mode"] == "full" and second["target"]["context_epoch"] == after["context_epoch"]
+
+
+def test_resume_keeps_only_an_unconfirmed_candidate_and_never_borrows_old_call(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    _, first = project(tmp_path)
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PreToolUse", "tool_use_id": "old"})
+    before = context._state(tmp_path)
+    result = context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    after = context._state(tmp_path)
+    assert after["candidate"] == before["candidate"] and after["context_epoch"] == before["context_epoch"]
+    assert after["active_call"] is None
+    assert first["recovery"]["command"] in result["hookSpecificOutput"]["additionalContext"]
+    assert "unconfirmed" in result["hookSpecificOutput"]["additionalContext"]
+    # No current-input proof: even a complete private candidate remains full.
+    _, second = project(tmp_path, "two")
+    assert second["mode"] == "full"
+
+
+@pytest.mark.parametrize("case", ["closed_old", "duplicate_live", "abandoned_old", "missing_input", "discovery_overflow"])
+def test_resumed_bundle_needs_unique_current_input_not_latest_file(tmp_path, monkeypatch, case):
+    from test_codex_input_retention import fixture
+
+    event = setup(tmp_path, monkeypatch)
+    requirements = "Preserve the whole source and final stop condition. " * 1000
+    payload = {"ok": True, "goal_id": "fixture", "plan_summary": {"requirements": requirements}}
+    _, first = project(tmp_path, payload=payload)
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    for number in (1, 2):
+        parent = tmp_path / str(number)
+        parent.mkdir()
+        observation, _, _, rows = fixture(parent)
+        bundle = Path(observation["trace_bundle"])
+        if number == 1 and case not in {"duplicate_live", "abandoned_old"}:
+            rows.append({**rows[-1], "seq": 3, "payload": {"type": "tool_call_ended", "tool_call_id": "guard"}})
+        (bundle / "trace.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+        missing = case == "missing_input" or (case == "abandoned_old" and number == 2)
+        (bundle / "payloads/input.json").write_text(json.dumps({"input": [] if missing else [
+            {"type": "function_call_output", "output": json.dumps(first)}]}))
+        bundle.rename(traces / f"trace-{number}")
+    if case == "discovery_overflow":
+        for number in range(3, 130):
+            (traces / f"trace-{number}").mkdir()
+    monkeypatch.setenv("CODEX_ROLLOUT_TRACE_ROOT", str(traces))
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PreToolUse", "tool_use_id": "guard"})
+    _, second = project(tmp_path, "two", payload=payload)
+    assert second["mode"] == ("delta" if case == "closed_old" else "full")
 
 
 def test_missing_observer_or_hook_never_reuses_candidate_and_other_sessions_do_not_borrow(tmp_path, monkeypatch):

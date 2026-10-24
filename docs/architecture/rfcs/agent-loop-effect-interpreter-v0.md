@@ -927,7 +927,7 @@ model request; it adds no owner question, admission or debit.
 |---|---|
 | Existing quota/Turn producer | Compute the full authoritative result once and persist the immutable capture before publishing a presentation. Preserve the existing required-source, signature, selection and settlement owners. |
 | Shared TypeScript context projector | Bind Goal/Agent/session/epoch, capture and digest; compare registered source bodies; keep current control/source facts fresh; choose smaller exact delta or full. Reconstruct against the complete target before release. |
-| Codex lifecycle adapter | Observe startup/resume/fork/compaction and invalidate session continuity. Carry a small event and capture recovery reference, never the complete packet. Hook configuration/trust and event coverage must be qualified on each actual host. |
+| Codex lifecycle adapter | Observe startup/resume/fork/compaction and invalidate prior continuity observations. Resume may keep an unconfirmed candidate only; fresh actual-input evidence is required for reuse. Carry a small event and capture recovery reference, never the complete packet. Hook configuration/trust and event coverage must be qualified on each actual host. |
 | Existing local capture/detail IO | Read the original capture in bounded pages, preserving complete text and validating target identity/digest. A preview or successful file write does not establish complete consumption. No new guard or quota operation is needed to recover presentation. |
 
 **Sequence and failure handling.** First use or unknown continuity selects full.
@@ -1057,8 +1057,14 @@ Removing the opt-in argument restores the ordinary path. Existing arguments and
 legacy rendezvous behavior remain unchanged; selection commands carry the same
 transport argument without another human step.
 
-Startup, resume, fork and compact events invalidate the epoch. Same-session
-recovery carries only the latest immutable capture's complete-read command;
+Startup, fork and compact events invalidate the epoch. A same-session/workspace
+resume clears the active call but retains an unconfirmed candidate and its epoch;
+this is a lookup hint, never a continuity receipt. The new still-active call must
+independently prove the entire baseline in its actual model input. Missing or
+pruned input still selects full. Multiple native bundles for a resumed session
+are resolved only by a unique valid current-call/input observation, never by
+mtime or the latest saved file; ambiguous or excessive discovery selects full.
+Same-session recovery carries only the latest immutable capture's complete-read command;
 a different session never borrows the old reference. Preparation and publication
 of the latest recovery reference share a private lock, so post-publication
 compaction also recovers that capture. A primary journal write failure still
@@ -1096,8 +1102,13 @@ requires a new trial. The product renderer and recovery pages preserve the
 original Turn, capture and pinned CLI route. Deterministic native tests drive
 the actual worker with both quota and Turn views through cold read, warm delta,
 automatic compaction and complete same-capture recovery without extra guard or
-debit. Startup/resume still reset the epoch: this qualifies within-wake reuse,
-not savings across resumed wakes. Harbor/container and Codex App installation,
+debit. A second real worker invocation and a second code-mode app-server process
+now resume the same native session, demonstrate intact prior input and select
+warm delta without another cold read, for both quota and Turn views. A subsequent
+native compaction still recovers the original full capture. Each benchmark wake
+uses a private trace subdirectory so earlier wakes do not enter its hot-path
+diagnostic scan. These deterministic checks qualify cross-wake transport,
+not net solver savings. Harbor/container and Codex App installation,
 wholly lost hooks and complete solver/cost qualification remain open.
 Native discovery, trace IO and all recovery reads belong in that cost comparison.
 

@@ -61,11 +61,14 @@ or delivery/benefit. Unsupported native setup continues ordinary full output.
 The product heartbeat renderer carries `--codex-context-dir` and the original
 capture root into guard/reentry commands. The product observer proves intact
 baseline content in the current model input before warm reuse; uncertainty
-selects full. Startup/resume/fork/compaction reset the epoch, so this currently
-qualifies reuse within a wake, not guaranteed savings between resumed wakes.
+selects full. Startup/fork/compaction reset the epoch. Same-session resume clears
+the active call and keeps only an unconfirmed candidate; reuse requires the new
+call's complete actual input, never a saved session or file. Each worker wake
+uses a separate private trace directory, avoiding repeated scans of old wakes.
 The small recovery hook reads the original full capture after compaction, with
-no replacement admission or debit. Wholly missing/killed hooks and App code-mode
-remain unqualified; deterministic native transport tests are not autonomous
+no replacement admission or debit. Native worker and app-server code-mode tests
+cover resumed warm reuse for both packet views. Wholly missing/killed hooks and
+installed App adoption remain unqualified; deterministic native transport tests are not autonomous
 solver outcomes. Count complete input, recovery reads, native discovery and trace
 IO in treatment cost, not just the delta bytes.
 

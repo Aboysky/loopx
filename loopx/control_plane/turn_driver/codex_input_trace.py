@@ -10,6 +10,24 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
+    from ..effect_runtime import MAX_REQUEST_BYTES
+
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or (metadata.st_size > MAX_REQUEST_BYTES and not tail):
+            raise ValueError("native observation is not a bounded regular file")
+        offset = max(0, metadata.st_size - MAX_REQUEST_BYTES) if tail else 0
+        stream.seek(offset)
+        raw = stream.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("native observation exceeds the transport limit")
+    # Only the latest in-flight inference is relevant. Bound IO even for a
+    # long-running trace, discarding its cut first row, never its last row.
+    return raw.split(b"\n", 1)[-1] if offset else raw
+
+
 def codex_context_in_active_input(observation: dict, *, baseline: dict, session_id: str) -> bool:
     """Cross-check a host's retention claim against a native in-flight tool call.
 
@@ -22,8 +40,6 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
     dispatch. The caller still owns lifecycle invalidation and same-capture
     recovery. It must not use this function as a standalone continuity lease.
     """
-    from ..effect_runtime import MAX_REQUEST_BYTES
-
     def canonical(value):
         # JSON has one number type; native Python projection may spell 1.0
         # where the TS codec spells 1. Preserve booleans and numeric values.
@@ -38,21 +54,6 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
     def encoded(value):
         return json.dumps(canonical(value), sort_keys=True, ensure_ascii=False, allow_nan=False)
 
-    def read(path: Path, *, tail: bool = False) -> bytes:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(descriptor, "rb") as stream:
-            metadata = os.fstat(stream.fileno())
-            if not stat.S_ISREG(metadata.st_mode) or (metadata.st_size > MAX_REQUEST_BYTES and not tail):
-                raise ValueError("native observation is not a bounded regular file")
-            offset = max(0, metadata.st_size - MAX_REQUEST_BYTES) if tail else 0
-            stream.seek(offset)
-            raw = stream.read(MAX_REQUEST_BYTES + 1)
-        if len(raw) > MAX_REQUEST_BYTES:
-            raise ValueError("native observation exceeds the transport limit")
-        # Only the latest in-flight inference is relevant. Bound IO even for a
-        # long-running trace, discarding its cut first row, never its last row.
-        return raw.split(b"\n", 1)[-1] if offset else raw
-
     try:
         if baseline.get("mode") != "full" or baseline.get("target", {}).get("session_id") != session_id:
             return False
@@ -61,7 +62,7 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
         expected = encoded(baseline)
         context = encoded(baseline.get("context"))
         bundle = Path(observation["trace_bundle"]).resolve(strict=True)
-        manifest = json.loads(read(bundle / "manifest.json"))
+        manifest = json.loads(read_native_trace_file(bundle / "manifest.json"))
         if (manifest.get("schema_version") != 1 or manifest.get("root_thread_id") != session_id
                 or manifest.get("rollout_id") != session_id):
             return False
@@ -73,9 +74,9 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
                 raise ValueError("native payload reference escapes its bundle")
             path = bundle / relative
             path.resolve(strict=True).relative_to(bundle)
-            return json.loads(read(path))
+            return json.loads(read_native_trace_file(path))
 
-        raw_events = read(bundle / "trace.jsonl", tail=True)
+        raw_events = read_native_trace_file(bundle / "trace.jsonl", tail=True)
         if not raw_events.endswith(b"\n"):
             return False  # a partial writer tail cannot establish the current cursor
         rows = [json.loads(line) for line in raw_events.splitlines()]
@@ -137,7 +138,7 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
         request = payload(tail[0]["payload"]["request_payload"])
         if request.get("previous_response_id"):
             return False  # implicit server-side history is outside this observer
-        raw = read(Path(observation["capture_file"]))
+        raw = read_native_trace_file(Path(observation["capture_file"]))
         digest = hashlib.sha256(raw).hexdigest()
         captured = encoded(json.loads(raw))
         if digest != observation["capture_sha256"] or captured not in (expected, context):

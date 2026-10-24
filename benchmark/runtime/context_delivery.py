@@ -10,6 +10,7 @@ import os
 import stat
 from pathlib import Path
 import shlex
+import tempfile
 
 
 def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
@@ -24,7 +25,10 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
             raise ValueError("context diagnostics require private, physical trial directories")
     # Opt-in diagnostics are private to this trial, never global or a retention
     # assertion. Include all IO/model-input costs when comparing this treatment.
-    env["CODEX_ROLLOUT_TRACE_ROOT"] = str(traces)
+    # Keep candidate references across resumed wakes, but inspect only this
+    # native invocation's diagnostics. Older traces are evidence, not a growing
+    # hot-path scan or a reason to distrust intact current model input.
+    env["CODEX_ROLLOUT_TRACE_ROOT"] = tempfile.mkdtemp(prefix="wake-", dir=traces)
     env["LOOPX_CODEX_CONTEXT_DIR"] = str(root)
     command = shlex.join([env["LOOPX_CLI"], "--format", "json", "quota", "context-hook",
                           "--codex-context-dir", str(root)])

@@ -70,8 +70,9 @@ def _save(root: Path, state: dict) -> None:
 def codex_context_hook(directory: str, event: dict) -> dict:
     """Consume native lifecycle events; emit only same-capture recovery refs.
 
-    SessionStart/PreCompact invalidate, including resume/fork/restart. PreToolUse
-    supplies the native call id; it is not retention proof. Failure to update the
+    Compaction/fork/restart invalidate. Same-session resume keeps only a candidate:
+    the new active call's actual input must prove every byte before reuse.
+    PreToolUse supplies the native call id; it is not retention proof. Failure to update the
     primary journal still returns the existing recovery ref when available.
     Trust/enablement and complete event delivery remain native host concerns.
     """
@@ -87,7 +88,10 @@ def codex_context_hook(directory: str, event: dict) -> dict:
                 recovery = state.get("recovery")
             else:
                 state = {"session_id": session, "cwd": event.get("cwd")}
-            if name in ("SessionStart", "PreCompact"):
+            resumed = name == "SessionStart" and event.get("source") == "resume" and same
+            if resumed:
+                state["active_call"] = None
+            elif name in ("SessionStart", "PreCompact"):
                 state.update(context_epoch=uuid.uuid4().hex, active_call=None)
                 state.pop("candidate", None)
             elif name == "PreToolUse" and same and state.get("context_epoch"):
@@ -100,6 +104,12 @@ def codex_context_hook(directory: str, event: dict) -> dict:
         # It also cannot manufacture a fresh active-call observation.
         pass
     if name == "SessionStart" and isinstance(recovery, dict) and recovery.get("command"):
+        if event.get("source") == "resume":
+            return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
+                "LoopX resumed context is unconfirmed. Reuse prior context only when complete in current input. "
+                "If missing before continuing the captured decision, read the original full capture through eof; "
+                "do not repeat admission or ask the owner. Recovery does not renew authority or freshness. "
+                + recovery["command"]}}
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
             "LoopX context baseline invalidated. Before dependent work, read this original full capture "
             "and follow next_command through eof, combining every content page. Do not rerun admission "
@@ -108,13 +118,16 @@ def codex_context_hook(directory: str, event: dict) -> dict:
     return {}
 
 
-def _trace_bundle(session: str) -> str | None:
+def _trace_bundle(session: str, tool_id: str) -> str | None:
+    from .codex_input_trace import read_native_trace_file
+
     value = os.environ.get("CODEX_ROLLOUT_TRACE_ROOT")
     if not value:
         return None  # never enable tracing implicitly
     matches = []
     # Native diagnostics are optional. Bound discovery instead of scanning a
-    # long session archive; ambiguity or an unsupported store selects full.
+    # long session archive. Resume can create another bundle for the same
+    # session; the active-call/input verifier, never mtime, selects its source.
     for index, path in enumerate(Path(value).glob("trace-*")):
         if index >= 128:
             return None
@@ -123,7 +136,20 @@ def _trace_bundle(session: str) -> str | None:
         except (OSError, ValueError):
             continue
         if manifest.get("root_thread_id") == session and manifest.get("rollout_id") == session:
-            matches.append(str(path))
+            try:
+                raw = read_native_trace_file(path / "trace.jsonl", tail=True)
+                if not raw.endswith(b"\n"):
+                    return None
+                events = [json.loads(line)["payload"] for line in raw.splitlines()]
+                calls = [event for event in events if event.get("tool_call_id") == tool_id
+                         and event.get("type") in ("tool_call_started", "tool_call_ended")]
+                if calls and calls[-1]["type"] == "tool_call_started":
+                    matches.append(str(path))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                return None
+    # Count live call identities before checking retained content. Otherwise an
+    # abandoned old call could win when a resumed call with the same id lost its
+    # input. The selected bundle still needs the complete independent verifier.
     return matches[0] if len(matches) == 1 else None
 
 
@@ -149,15 +175,17 @@ def project_codex_context(payload: dict, *, directory: str, capture_directory: P
                 return payload
             scope = dict(goal_id=goal_id, agent_id=agent_id, session_id=session, context_epoch=epoch)
             request = {"scope": scope}
-            candidate, trace = state.get("candidate"), _trace_bundle(session)
-            if isinstance(candidate, dict) and trace and isinstance(state.get("active_call"), str):
+            candidate = state.get("candidate")
+            if isinstance(candidate, dict) and isinstance(state.get("active_call"), str):
                 try:
                     baseline = _read(Path(candidate["path"]))
-                    observation = dict(trace_bundle=trace, tool_call_id=state["active_call"],
-                        capture_file=candidate["capture_file"], capture_sha256=candidate["capture_sha256"])
-                    if codex_context_in_active_input(observation, baseline=baseline, session_id=session):
-                        request.update(baseline=baseline, retained={"complete": True, "target": baseline["target"]},
-                            native_input=observation)
+                    trace = _trace_bundle(session, state["active_call"])
+                    if trace:
+                        observation = dict(trace_bundle=trace, tool_call_id=state["active_call"],
+                            capture_file=candidate["capture_file"], capture_sha256=candidate["capture_sha256"])
+                        if codex_context_in_active_input(observation, baseline=baseline, session_id=session):
+                            request.update(baseline=baseline, retained={"complete": True, "target": baseline["target"]},
+                                native_input=observation)
                 except (OSError, ValueError, KeyError, TypeError, RecursionError):
                     pass  # Missing candidate: publish a new full capture, never an old recovery ref.
             result = project_captured_context(payload, directory=capture_directory, request=request,

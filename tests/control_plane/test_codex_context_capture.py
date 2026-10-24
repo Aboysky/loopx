@@ -54,12 +54,14 @@ def _delivered(request, digest):
     return "".join(parts).rstrip("\n")
 
 
-@pytest.mark.parametrize("host,surface,failed_primary", [
-    (host, surface, failed) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope"),
+@pytest.mark.parametrize("host,surface,failed_primary,resumed", [
+    (host, surface, failed, False) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope"),
                                                 ("code_mode", "quota_packet"), ("code_mode", "turn_envelope")]
     for failed in [False, True]
-] + [("benchmark", surface, False) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary):
+] + [("benchmark", surface, False, False) for surface in ("quota_packet", "turn_envelope")]
+  + [(host, surface, False, True) for host in ("benchmark", "code_mode")
+     for surface in ("quota_packet", "turn_envelope")])
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -154,7 +156,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         phase = stages["phase"]
         if stages["pages"]:
             cmd = stages["pages"].pop(0)
-        elif phase == "start":
+        elif phase in {"start", "resuming"}:
             if host == "benchmark":
                 # Read the actual worker-rendered guard, including its original
                 # wake/capture identity. No substitute dispatcher or guard.
@@ -168,8 +170,11 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 command = [turn_id if arg == "${LOOPX_TURN:?}" else arg for arg in native_guard]
                 command += ["--todo-id", TODO_ID]
                 root = Path(command[command.index("--decision-output-root") + 1])
-            stages["phase"] = "cold_ready"
-            cmd = invoke("cold")
+            name = "cold" if phase == "start" else "warm"
+            stages["phase"] = name + "_ready"
+            if phase == "resuming":
+                assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
+            cmd = invoke(name)
         elif phase in {"cold_ready", "warm_ready"}:
             name = phase.split("_")[0]
             wires[name] = json.loads(wire_paths[name].read_text())
@@ -183,6 +188,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         elif phase == "cold_read":
             assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
             stages.update(baseline_confirmed=True, phase="warm_ready")
+            if resumed:
+                stages["phase"] = "resuming"
+                return message
             cmd = invoke("warm")
         elif phase == "warm_read":
             assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
@@ -264,9 +272,18 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             assert result["ok"] and result["host_invoked"], result
             assert result["context_transport"] == {"available": True}
             assert result["session"]["session_id"]
+            if resumed:
+                session_id = result["session"]["session_id"]
+                result = run_once(env)
+                assert result["ok"] and result["host_invoked"], result
+                assert result["context_transport"] == {"available": True}
+                assert result["session"]["session_id"] == session_id
             assert not unrelated.exists()  # only exact trial-owned hooks received trust
         else:
-            _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
+            session_id = _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
+            if resumed:
+                assert _app_server(binary, env, workspace, home, True, sandbox="workspace-write",
+                                   resume=session_id) == session_id
     assert not errors, errors
 
     assert stages["phase"] == "done"
@@ -274,6 +291,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     assert len(list(root.glob("*/decision.json"))) == 2
     assert wire_paths["warm"].stat().st_size < wire_paths["cold"].stat().st_size
     assert len(calls) == len(observed) and stages["baseline_confirmed"]
+    if host == "benchmark":
+        trace_roots = list((home / "context-traces").glob("wake-*"))
+        assert len(trace_roots) == (2 if resumed else 1)
+        assert all(path.stat().st_mode & 0o077 == 0 for path in trace_roots)
+    elif resumed:
+        assert len(list((workspace / "traces").glob("trace-*/manifest.json"))) >= 2
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},

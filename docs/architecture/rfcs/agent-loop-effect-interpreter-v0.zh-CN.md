@@ -637,7 +637,7 @@ oracle 检查实际发出的模型输入，而非 hook 日志或 stdout。这只
 |---|---|
 | 既有 quota/Turn producer | 只计算一次完整权威结果，先持久化不可变捕获，再发布展示形式。保留既有必读来源、签名、选择和结算 owner。 |
 | 共享 TypeScript 上下文投影 | 绑定 Goal/Agent/session/epoch、capture 和摘要；比较已注册来源正文；每次保留新鲜控制与来源事实；选择较小的精确差分或全量，发布前按完整目标重建核对。 |
-| Codex 生命周期 adapter | 观察 startup/resume/fork/compaction，使会话连续性失效；只携带小事件和捕获恢复引用，不传整个 packet。每种真实宿主分别验证 hook 配置、信任与事件覆盖。 |
+| Codex 生命周期 adapter | 观察 startup/resume/fork/compaction，使先前连续性观察失效；resume 只可保留未确认候选，复用仍须新的实际输入证据。只携带小事件和捕获恢复引用，不传整个 packet。每种真实宿主分别验证 hook 配置、信任与事件覆盖。 |
 | 既有本地 capture/detail IO | 有边界地分段读取原捕获，保留完整正文，核对目标身份和摘要。预览或写文件成功不证明完整消费。恢复展示不需要新 guard 或 quota 操作。 |
 
 **时序与失败处理。** 首次使用或连续性未知时走全量；只有同会话、同 epoch 内
@@ -730,7 +730,11 @@ Goal 状态或决策 owner；TS 继续持有差分、绑定和回退语义。
 参数即可恢复原路径；普通参数和旧 rendezvous 行为保持不变。selection 命令继续携带
 同一 transport 参数，不增加人工步骤。
 
-启动、resume、fork、压缩事件使 epoch 失效；同一 session 的恢复提示只带最新不可变
+启动、fork、压缩事件使 epoch 失效。同 session/workspace 的 resume 清除 active call，
+只保留未确认候选及其 epoch；这是查找线索，不是连续性回执。新的仍在执行的调用必须
+独立证明完整基线存在于实际模型输入；输入缺失或裁剪仍全量。同 session 的多个原生
+bundle 只由唯一有效的当前调用/输入观察选择，不使用 mtime 或最新文件；歧义或发现
+范围超限仍全量。同一 session 的恢复提示只带最新不可变
 capture 的完整读取命令，跨 session 不借用旧引用。生成候选和保存最新恢复引用使用同一
 私有锁；发布之后的压缩也能恢复同 capture。主 journal 写入失败时，handler 仍返回已知
 恢复引用；生产发布无法记录引用时返回原全量。候选文件从不等于 ACK，完整模型输入需在
@@ -755,8 +759,11 @@ workspace hook 仍不受信任。显式启用的私有 trace 支持输入 observ
 记录选择，设置可用不等于保留回执。默认运行不新增 hook、trace 或 trust 配置；改变
 treatment 须另起 trial。产品 renderer 与恢复分页保留原 Turn、capture 和固定 CLI
 路由。确定性原生测试驱动真实 worker，覆盖 quota 与 Turn 两种视图的完整初读、温态
-差分、自动压缩及同 capture 完整恢复，零额外 guard/扣额。启动/resume 仍重置 epoch，
-因此只验证单次 wake 内复用，不证明跨 resume 节省。Harbor/container 与 Codex App
+差分、自动压缩及同 capture 完整恢复，零额外 guard/扣额。第二次真实 worker 调用和
+第二个 code-mode app-server 进程现恢复同一原生 session，核验先前完整输入，直接
+选择温态差分而不再初读；quota 与 Turn 两种视图均覆盖。之后的原生压缩仍恢复原始
+全量 capture。benchmark 每次 wake 使用独立私有 trace 子目录，旧 wake 不进入热路径
+诊断扫描。这些确定性检查验证跨唤醒传递，不证明 solver 净收益。Harbor/container 与 Codex App
 安装、hook 完全丢失和完整 solver/成本资格仍开放；成本比较须计入原生发现、
 trace IO 和所有补读。
 
