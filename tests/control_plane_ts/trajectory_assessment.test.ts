@@ -34,8 +34,83 @@ const displayInput = () => {
   return x;
 };
 const displayPrepared = () => prepareTrajectoryAssessment({input: displayInput(), config: {...config, output_language: 'zh'}});
+const contextInput = () => {
+  const x = displayInput(), source = x.sources.at(-1)!, page = JSON.parse(source.text);
+  page.items[0].summary = page.items[2].summary = 'Complete24paired checks; native benefit remains unknown.';
+  source.text = JSON.stringify(page);
+  source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
+  x.sources.push({id: 'validation', artifact: 'validation.txt', artifact_sha256: 'c'.repeat(64), first_line: 40,
+    text: 'The first record counts diagnostic calls, not independent experiments.\nThe later record counts independent input pairs, not diagnostic calls.'});
+  x.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v1';
+  x.display_snapshot!.contexts = [
+    {event_id: 'q-old', field: 'summary', citations: [{source_id: 'validation', first_line: 40, last_line: 40}]},
+    {event_id: 'q-new', field: 'summary', citations: [{source_id: 'validation', first_line: 41, last_line: 41}]},
+  ];
+  return x;
+};
 const translatedOutput = (p = displayPrepared()) => ({...output(), episode_questions: [{episode_id: 'e1', question: 'A 是否有帮助？'}, {episode_id: 'e2', question: 'B 是否有帮助？'}],
   display_translations: JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!).map((row: {field_id: string; text: string}) => ({field_id: row.field_id, text: `【译文】${row.text}`}))});
+
+test('field-bound evidence disambiguates identical notes without sharing translations or changing source authority', () => {
+  const input = contextInput(), p = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
+  const contextual = rows.filter((row: {context_citations?: unknown}) => row.context_citations);
+  assert.equal(contextual.length, 2);
+  assert.equal(contextual[0].text, contextual[1].text);
+  assert.notEqual(contextual[0].field_id, contextual[1].field_id);
+  assert.match(p.prompt, /40: The first record counts diagnostic calls/);
+  assert.match(p.prompt, /Translate the field, not the context/);
+  const raw = translatedOutput(p);
+  for (const [index, row] of contextual.entries()) {
+    raw.display_translations.find((translated: {field_id: string}) => translated.field_id === row.field_id)!.text =
+      `${index ? '完成24组独立输入对' : '完成24次配对诊断调用'}（⟪LX0⟫）；原生收益仍未知。`;
+  }
+  const result = qualifyTrajectoryAssessment({...p, output: raw});
+  const summaries = result.display!.fields.filter(row => row.field === 'summary' && row.context_citations);
+  assert.deepEqual(summaries.map(row => row.context_citations), input.display_snapshot!.contexts!.map(row => row.citations));
+  assert.match(summaries[0]!.text, /配对诊断调用/);
+  assert.match(summaries[1]!.text, /独立输入对/);
+  assert.deepEqual(result.assessments, output().assessments);
+  const events = parseExploreHistoryPage(JSON.parse(input.sources.find(s => s.id === 'history')!.text), 'goal').items;
+  assert.equal(projectTrajectoryDisplay(events, result.display, result.display!.snapshot_key, 'zh').events[0]!.summary, summaries[0]!.text);
+  assert.equal(events[0]!.summary, 'Complete24paired checks; native benefit remains unknown.');
+  // Literal integrity and provenance do not independently verify translation.
+  assert.equal(result.calibration, 'uncalibrated_model');
+});
+
+test('display context rejects absent fields, duplicate bindings and evidence outside supplied ranges', () => {
+  const mutations: Array<(x: TrajectoryInput) => void> = [
+    x => {x.display_snapshot!.contexts![0]!.event_id = 'missing';},
+    x => {x.display_snapshot!.contexts![0]!.field = 'status';},
+    x => {x.display_snapshot!.contexts!.push(x.display_snapshot!.contexts![0]!);},
+    x => {x.display_snapshot!.contexts![0]!.citations = [];},
+    x => {x.display_snapshot!.contexts![0]!.citations.push(x.display_snapshot!.contexts![0]!.citations[0]!);},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.source_id = 'unverified';},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.first_line = 39;},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.last_line = 42;},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.last_line = 39;},
+  ];
+  for (const mutate of mutations) {
+    const input = contextInput(); mutate(input);
+    assert.throws(() => prepareTrajectoryAssessment({input, config}), /display context/);
+  }
+});
+
+test('context edits, removal and source corrections invalidate reuse; old artifacts retain provenance', () => {
+  const input = contextInput(), p = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  const previous = {...p, output: translatedOutput(p)}, saved = qualifyTrajectoryAssessment(previous);
+  for (const edit of [
+    (x: TrajectoryInput) => {x.display_snapshot!.contexts![0]!.citations[0]!.last_line = 41;},
+    (x: TrajectoryInput) => {delete x.display_snapshot!.contexts;},
+    (x: TrajectoryInput) => {x.sources.find(s => s.id === 'validation')!.text += ' Corrected uncertainty.';},
+  ]) {
+    const changed = structuredClone(input); edit(changed);
+    const next = prepareTrajectoryAssessment({input: changed, config: p.config});
+    assert.notEqual(next.analysis_key, p.analysis_key);
+    assert.equal(compareTrajectoryAssessments({...next, previous}).can_reuse, false);
+  }
+  assert.deepEqual(qualifyTrajectoryAssessment(previous), saved);
+});
 
 test('whole-history translation includes old revisions and decisions; versions, statuses and citations remain source facts', async () => {
   const p = displayPrepared(), result = qualifyTrajectoryAssessment({...p, output: translatedOutput(p)});
@@ -238,6 +313,16 @@ test('explicit literal-value encoding restores source-bound numbers without chan
   output.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!.text =
     '第4次尝试有2项检查未通过（⟪LX0⟫）；仅限本地（⟪LX1⟫）的证据仍属初步。';
   const result = qualifyTrajectoryAssessment({...p, output});
+  const revised = structuredClone(input);
+  revised.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v2';
+  const next = prepareTrajectoryAssessment({input: revised, config: p.config});
+  assert.notEqual(next.analysis_key, p.analysis_key, 'Quantity rendering is explicitly versioned rather than relabelling saved translations');
+  assert.deepEqual(next.display_request, p.display_request, 'The captured history and eligible fields are unchanged');
+  assert.equal(compareTrajectoryAssessments({...next, previous: {...p, output}}).can_reuse, false, 'A new display version cannot reuse the old translation');
+  const nextResult = qualifyTrajectoryAssessment({...next, output});
+  assert.deepEqual(nextResult.assessments, result.assessments, 'Display encoding does not change the assessment oracle');
+  assert.deepEqual(nextResult.display!.fields, result.display!.fields, 'Exact permitted source numbers remain readable');
+  assert.deepEqual(prepareTrajectoryAssessment({input, config: p.config}), p, 'Preparing the new encoding preserves the prior request');
   const original = parseExploreHistoryPage(page, 'goal').items;
   const shown = projectTrajectoryDisplay(original, result.display, result.display!.snapshot_key, 'zh');
   assert.equal(shown.events[0]!.summary, '第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步。');
@@ -409,4 +494,53 @@ test('artifact digests retain bare lowercase syntax, original bytes and error se
     const x=input() as unknown as {sources: Record<string,unknown>[]}; x.sources[0]!.artifact_sha256=digest;
     assert.throws(()=>prepareTrajectoryAssessment({input:x,config}), error => error instanceof Error && error.message === message);
   }
+});
+
+test('research synthesis is grounded across named episodes without widening metric evidence', () => {
+  const x = input();
+  x.sources.push({id: 'other', artifact: 'other.txt', artifact_sha256: 'b'.repeat(64), first_line: 4, text: 'A competing explanation remains open'});
+  x.episodes[1]!.source_ids = ['other'];
+  const p = prepareTrajectoryAssessment({input: x, config: {...config, research_synthesis: true, output_language: 'zh'}});
+  const citation = {source_id: 's', first_line: 10, last_line: 10};
+  const synthesis = {
+    summary: {text: 'Negative evidence narrowed the question; the mechanism remains unresolved.', episode_ids: ['e1'], citations: [citation]},
+    findings: [{title: 'The negative result is informative', observation: 'A did not improve the measurement.',
+      interpretation: 'The route may not address the bottleneck.', alternative_explanations: ['Noise may hide a smaller gain.'],
+      episode_ids: ['e1', 'e2'], citations: [citation, {source_id: 'other', first_line: 4, last_line: 4}]}],
+    next_experiments: [{question: 'Does A change the bottleneck under matched conditions?', why_priority: 'It separates the remaining explanations.',
+      intervention: 'Change only A.', controls: 'Same checkpoint, inputs, random sequence and total budget.',
+      prediction: 'A repeatable gain with the bottleneck change supports the interpretation.',
+      disconfirming_result: 'No bottleneck change despite matched repeated gains refutes it.', episode_ids: ['e1'], citations: [citation]}],
+  };
+  const raw = {...output(), episode_questions: x.episodes.map(e => ({episode_id: e.id, question: e.question})), synthesis};
+  const result = qualifyTrajectoryAssessment({...p, output: raw});
+  assert.deepEqual(result.synthesis, synthesis);
+  assert.equal(result.calibration, 'uncalibrated_model');
+  assert.notEqual(p.analysis_key, prepareTrajectoryAssessment({input: x, config: {...config, output_language: 'zh'}}).analysis_key);
+  const previous = {...prepared(), output: output()};
+  assert.equal(compareTrajectoryAssessments({...p, previous}).can_reuse, false);
+  for (const mutate of [
+    (s: typeof synthesis) => {s.summary.citations = [];},
+    (s: typeof synthesis) => {s.summary.episode_ids = ['missing'];},
+    (s: typeof synthesis) => {s.summary.episode_ids = ['e1', 'e1'];},
+    (s: typeof synthesis) => {s.summary.citations[0]!.first_line = 9;},
+    (s: typeof synthesis) => {s.findings[0]!.episode_ids = ['e1'];},
+    (s: typeof synthesis) => {s.next_experiments[0]!.disconfirming_result = '';},
+    (s: typeof synthesis) => {s.findings.push(...s.findings, ...s.findings, ...s.findings);},
+  ]) {
+    const invalid = structuredClone(raw); mutate(invalid.synthesis);
+    assert.throws(() => qualifyTrajectoryAssessment({...p, output: invalid}));
+  }
+  const invalidMetric = structuredClone(raw);
+  invalidMetric.assessments[0]!.citations = [{source_id: 'other', first_line: 4, last_line: 4}];
+  assert.throws(() => qualifyTrajectoryAssessment({...p, output: invalidMetric}), /outside episode evidence/);
+  assert.throws(() => qualifyTrajectoryAssessment({...p, output: {...raw, synthesis: undefined}}), /synthesis/);
+});
+
+test('synthesis off preserves legacy prompt, schema, key and qualified output', () => {
+  const original = prepared(), off = prepareTrajectoryAssessment({input: input(), config: {...config, research_synthesis: false}});
+  assert.deepEqual(off, original);
+  assert.deepEqual(qualifyTrajectoryAssessment({...off, output: output()}), qualifyTrajectoryAssessment({...original, output: output()}));
+  assert.equal(qualifyTrajectoryAssessment({...original, output: output()}).synthesis, undefined);
+  assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config, research_synthesis: 'yes'}}), /must be boolean/);
 });

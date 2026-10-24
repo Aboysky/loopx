@@ -84,6 +84,11 @@ def pack(tmp_path):
             )
         ],
         "limitations": ["Synthetic process; not model quality evidence"],
+        "synthesis": {
+            "summary": {"text": "A valid negative result narrows the next investigation.", "episode_ids": ["episode"],
+                        "citations": [dict(source_id="source", first_line=2, last_line=2)]},
+            "findings": [], "next_experiments": [],
+        },
     }
     executable = tmp_path / "codex-fixture"
     executable.write_text(
@@ -168,7 +173,8 @@ def test_continuation_reuses_identical_excerpts_despite_other_capture_bytes(pack
     completed = execute_pack(**new_operation, codex="must-not-run")
     assert completed["reused"] and completed["reused_from_analysis_key"] == operation["analysis_key"]
     reused_output = json.loads((old_directory.parent / successor["analysis_key"] / "model-output.json").read_text())
-    assert set(reused_output) == {"assessments", "limitations"}
+    assert set(reused_output) == {"assessments", "limitations", "synthesis"}
+    assert reused_output["synthesis"] == original["synthesis"]
     view = inspect_pack(**scope)
     assert view["result"]["scope"]["revision"] == "capture-2"
     assert view["result"]["metrics"] == original["metrics"]
@@ -196,6 +202,8 @@ def test_new_evidence_reassesses_old_judgments_and_complete_denominator(pack, tm
     assert before["continuation"]["reassessed_episode_ids"] == ["episode", "follow-up"]
     assert before["continuation"]["new_pair_count"] == 1
     revised = {"assessments": [dict(episode_id=e, metric="benefit_test", verdict=v, reason="Later evidence corrects the earlier interpretation", citations=[dict(source_id="later", first_line=1, last_line=1)] if v != "unknown" else []) for e, v in [("episode", "no"), ("follow-up", "unknown")]], "limitations": ["Synthetic counterevidence"]}
+    revised["synthesis"] = {"summary": {"text": "The earlier interpretation was refuted by later evidence.", "episode_ids": ["episode"],
+                                      "citations": [dict(source_id="later", first_line=1, last_line=1)]}, "findings": [], "next_experiments": []}
     executable = tmp_path / "reassessment"
     executable.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\nprompt=sys.stdin.read()\nassert 'The earlier proxy' in prompt and '原始测量' in prompt\nPath(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(revised)!r})\n")
     executable.chmod(0o700)
@@ -502,7 +510,8 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
 
 
 @pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1"])
-def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding):
+@pytest.mark.parametrize("context", [False, True])
+def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding, context):
     scope, _, _, input_path, sources, _ = pack
     data = json.loads(input_path.read_text())
     history = {"ok": True, "goal_id": "solver", "total": 2, "next_cursor": None, "items": [
@@ -519,6 +528,9 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
     data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="source-a")
     if encoding is not None:
         data["display_snapshot"]["translation_encoding"] = encoding
+    context_citation = dict(source_id="source", first_line=2, last_line=2)
+    if context:
+        data["display_snapshot"]["contexts"] = [dict(event_id="question-old", field="summary", citations=[context_citation])]
     input_path.write_text(json.dumps(data))
     registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic")
     current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
@@ -536,6 +548,7 @@ def translation(field):
     return "译文：" + field["text"]
 output = {"assessments":[{"episode_id":"episode","metric":"benefit_test","verdict":"unknown","reason":"合成过程测试，未验证实际收益。","citations":[]}],
           "limitations":["合成译文，非模型质量验收。"], "episode_questions":[{"episode_id":"episode","question":"是否有帮助？"}],
+          "synthesis":{"summary":{"text":"原生测量为负，不能推断更广泛的收益。","episode_ids":["episode"],"citations":[{"source_id":"source","first_line":2,"last_line":2}]},"findings":[],"next_experiments":[]},
           "display_translations":[{"field_id":f["field_id"], "text":translation(f)} for f in fields[:-1]]}
 Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output))
 print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_tokens":7}}))
@@ -545,6 +558,14 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
     assert execute_pack(**operation, codex=str(provider))["status"] == "succeeded"
     result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
     assert result["result"]["display"]["coverage"] == dict(eligible=4, translated=3, missing=1, invalid=0)
+    if context:
+        field = next(field for field in result["result"]["display"]["fields"] if field["field"] == "summary")
+        assert field["context_citations"] == [context_citation]
+        assert read_citation(**operation, **context_citation)["text"] == data["sources"][0]["text"]
+        with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+            read_citation(**operation, source_id="history", first_line=1, last_line=1)
+    else:
+        assert not any("context_citations" in field for field in result["result"]["display"]["fields"])
     if encoding == "source_text_aliases_with_literal_values_v1":
         assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
                    for field in result["result"]["display"]["fields"])

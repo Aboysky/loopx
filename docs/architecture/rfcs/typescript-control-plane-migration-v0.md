@@ -45,6 +45,29 @@ resolution, guards, formatting and typed owners. This adds no domain rule, bridg
 operation or data cache. Incremental qualification accounts for pending quota
 request-scope adoption separately rather than counting its gain again.
 
+### Agent collaboration CLI caller adoption
+
+`agent-context`, `agent-directory` and `agent-capabilities` now use the existing
+selected parser and shared dispatcher. Full-parser compatibility callers use
+the same dispatcher; their old handler branches are removed. Each command keeps
+its original registration, handler, registry/runtime resolution, native-controller
+guard and output. The dispatcher reuses the existing executable-revision request
+scope; source and capability observations remain live. No new module, bridge,
+semantic owner or state cache is introduced. This is bounded caller adoption;
+it does not qualify peer execution, model outcomes or the complete native CLI.
+
+### Lifecycle CLI caller adoption
+
+`refresh-state`, `checkpoint-context`, `read-only-map`, `reward` and
+`operator-gate` reuse the selected parser and shared dispatcher. Both CLI
+entrypoints use the existing lifecycle registration, handlers and writeback-hook
+composition; the old full-CLI dispatch branch is removed. The command set lives
+with routing and remains available through its lifecycle-module import. Existing
+help, diagnostics, registry/runtime selection and native-controller guards stay
+on their established paths. This adds no domain rule, bridge operation or state
+cache. Complete command cost and real write/recovery behavior qualify separately
+from import timing; installed and live-provider behavior need their own evidence.
+
 ### Product conversations and asynchronous inbox
 
 **Chat HTTP POST scope.** `ChatRequestHandler.do_POST` now joins the existing

@@ -19,12 +19,25 @@ export interface TrajectoryInput {
   /** Trusted curator's complete Explore history capture, already in sources.
    * Omission keeps the existing assessment contract and identity unchanged. */
   display_snapshot?: {schema_version: 'research_display_snapshot_v1'; source_id: string; source_namespace: string;
-    translation_encoding?: 'source_text_aliases_v1' | 'source_text_aliases_with_literals_v1' | 'source_text_aliases_with_literal_values_v1'};
+    translation_encoding?: 'source_text_aliases_v1' | 'source_text_aliases_with_literals_v1' | 'source_text_aliases_with_literal_values_v1' | 'source_text_aliases_with_literal_values_v2';
+    /** Curator-selected evidence that explains a particular captured field.
+     * References only existing verified sources; never free-form instructions. */
+    contexts?: Array<{event_id: string; field: string; citations: AssessmentCitation[]}>};
 }
 export interface AssessmentCitation {source_id: string; first_line: number; last_line: number}
 export interface EpisodeAssessment {
   episode_id: string; metric: TrajectoryMetric; verdict: AssessmentVerdict;
   reason: string; citations: AssessmentCitation[];
+}
+/** Observer interpretation of the declared sample, never a source finding,
+ * scientific qualification or an instruction to launch an experiment. */
+export interface TrajectoryResearchSynthesis {
+  summary: {text: string; episode_ids: string[]; citations: AssessmentCitation[]};
+  findings: Array<{title: string; observation: string; interpretation: string;
+    alternative_explanations: string[]; episode_ids: string[]; citations: AssessmentCitation[]}>;
+  next_experiments: Array<{question: string; why_priority: string; intervention: string;
+    controls: string; prediction: string; disconfirming_result: string;
+    episode_ids: string[]; citations: AssessmentCitation[]}>;
 }
 export interface TrajectoryAssessment {
   schema_version: 'trajectory_assessment_v1'; method_version: string; analysis_key: string;
@@ -36,12 +49,16 @@ export interface TrajectoryAssessment {
   limitations: string[];
   output_language?: TrajectoryOutputLanguage;
   episode_questions?: Array<{episode_id: string; question: string}>;
+  synthesis?: TrajectoryResearchSynthesis;
   display?: TrajectoryDisplay;
 }
 
 /** Presentation sidecar only. Original events, statuses, references and metrics
  * remain authoritative; a translation is never a new finding or acceptance. */
-export interface TrajectoryDisplayField {event_id: string; field: string; source_text: string}
+export interface TrajectoryDisplayField {
+  event_id: string; field: string; source_text: string;
+  context_citations?: AssessmentCitation[];
+}
 export interface TrajectoryDisplay {
   schema_version: 'research_display_v1'; snapshot_key: string; source_id: string; source_namespace: string;
   language: TrajectoryOutputLanguage;

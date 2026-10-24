@@ -37,6 +37,17 @@ covers the preceding full interval. Leaving the date empty retains the existing
 calendar behavior. This setting does not enable the steward's daily portfolio
 report integration by itself.
 
+New scheduled reports appear as independent full-body messages in the original
+owner's private conversation. The retained source message verifies the original
+App, chat and read grant; an unrelated historical question does not become the
+new report's reply parent. Rich parts use the same frozen placement and delivery
+journal, and readback verifies the private chat and main-conversation position.
+An existing delivery record without explicit placement retains its original
+source-context behavior, including pending or unknown sends. Upgrading neither
+retargets those attempts nor republishes a report already verified as delivered.
+Ordinary replies keep their existing source-context/thread behavior; this does
+not enable chat-root delivery for group conversations.
+
 The synthetic packaged settings journey below uses real preview/apply/readback
 over local HTTP. It preserves the date across frequency, time and timezone
 edits and reload. The narrow view is a 390×844 viewport emulation.
@@ -251,6 +262,16 @@ priority, replan, budget, stop and settlement policies remain effective. Pausing
 the steward prevents new scheduled model Turns without discarding accepted work
 or historical results.
 
+A native status watch calls the existing monitor-poll owner under its original
+Chat Turn and task lease. It does not select a continuous monitor as a heartbeat
+advancement task, so open executable work does not prevent a due observation.
+Fresh source, user-gate, capability, deadline and lease checks still apply; the
+poll keeps its stable Turn identity and does not invoke a model or spend a slot.
+The earlier adapter's exact pre-poll selection rejection can receive one
+separately correlated attempt only when its failed Turn has no native start,
+answer, delta or poll event. The original failure remains; unknown failures,
+interruptions and a failed recovery do not trigger a retry loop.
+
 ## Daily portfolio report
 
 Configure the original steward's daily report for 09:00 `Asia/Shanghai`. At
@@ -286,6 +307,63 @@ browser nor the model can supply another Goal, App or recipient. The generic
 single-Goal report consumer cannot consume this private portfolio preset.
 This preset requires a calendar; its switch cannot select the generic
 stage-boundary reporting mode. Pause or cancel through the report actions.
+
+Portfolio evidence collection finishes before the governed driver captures its
+launch authority. A long read can then observe legitimate registry rewrites
+without immediately invalidating an earlier launch witness. The original
+source and execution lease are checked after collection and again at dispatch;
+authority changes after plan capture still reject the launch. This ordering
+does not authorize replay of a historical attempt with unknown host effects.
+
+The original pump can resume one retained report after the first-party launch
+owner's exact `stale_goal_authority` refusal. That owner rejects before publishing
+`turn/start`; a missing answer or missing events alone is insufficient. The
+typed admission checks the original Chat request, canonical native transaction,
+one recorded attempt, no generation or settlement, and the current original
+subscription and grant. A separately correlated Chat attempt resumes the same
+native journal, window, Todo and settlement identity through `run-once` recovery.
+The historical outer response is retained. A failed recovery, unknown transport
+outcome, real model start, changed identity or revoked permission cannot trigger
+another automatic model attempt. Existing no-model settlement recovery and
+independent full-body delivery readback still apply.
+
+Frozen generation is checked independently inside the original host using the
+same installed report provider. An embedded Python host's bootstrap does not
+imply that its bare child interpreter can import LoopX; no second installation
+or ambient import path is required. Ordinary CLI command validators are unchanged.
+
+If the original model has returned and the frozen generation validates, the
+original pump can resume a failed native **validation** phase without invoking
+the model again. The typed owner requires the same live subscription, actor,
+window and open generation Todo, the canonical cached host/result phases, and
+an explicit no-host recovery decision. The native driver revalidates the frozen
+artifacts and current authorization, reacquires the original task lease and
+performs ordinary completion and settlement. A paused subscription, changed
+identity or grant, invalid generation or unknown model effect stays blocked.
+The historical Chat response is retained; only the native committed receipt
+allows the existing original-audience sender to proceed.
+
+Once generation is frozen, delivery checks the original source Goal identities
+against the current authorized scope. Adding an authorized Goal does not revoke
+the frozen report or rewrite its source/body; later windows include the new
+Goal. Removing a frozen Goal, replacing its identity, revoking the original
+grant or changing frozen artifacts still blocks delivery, including after a
+partial or uncertain send. Existing provider readback decides which original
+parts remain unsent; scope growth never authorizes another model run or resend.
+
+Read coverage and authorization are separate. A partial source may omit an
+unreadable or oversized Goal without revoking the original report grant. New
+private editorial requests freeze the complete authorized Goal identities
+alongside their existing authorization digest. Delivery checks this immutable
+witness, including unread Goals; it never upgrades partial coverage to complete.
+Later authorized additions belong to a future report, while removal or identity
+replacement of an original authorized Goal still blocks publication.
+
+Older frozen requests remain immutable. When their readable Goal list does not
+reconstruct the original authorization digest, recovery requires the complete
+current authorized scope to match that original digest exactly. An absent
+identity witness never permits guessing which Goals were originally authorized;
+an ambiguous later scope change remains retained, without another model run.
 
 The existing idle Chat wake producer admits one calendar window and creates
 one native finite generation Todo for it. The original Chat worker and native
@@ -355,6 +433,42 @@ not production-message or real-phone proof.
 ![Report controls in a narrow viewport](../assets/personal-workspace/steward-reports/enabled-narrow.png)
 
 ## Acceptance boundaries
+
+### Managed Agent execution boundary
+
+A managed conversation must belong to the selected registered **Agent**, with
+its own original Session, execution state and return path. In the Goal's Agent
+view, managed and attached conversations are parallel sources; a Goal-wide
+Codex chat with an extra Agent selector does not establish that binding.
+The experimental **Advance LoopX tasks** control has therefore been withdrawn
+from ordinary Goal Chat. The existing general conversation, native Goal mode
+and original attached conversation entry retain their current owners.
+
+The native host groundwork remains separately qualified: an explicitly invoked
+local managed request can use the original Core worker and native Task/Turn
+owners for a finite source-validation task. It retains the same thread and
+sandbox, resolves the selected Task's immutable argv validation declaration
+before model execution, and checks its canonical digest/revision and lease
+before accepting completion. Missing validation starts no model; a failed
+postcondition cannot complete the Task or spend a delivery slot. The low-level
+request accepts no runtime profile or caller validation command. Stable Core
+operation identity retains failed or unknown requests without replay.
+
+This groundwork does **not** create an Agent-owned managed conversation or a
+finished user entry. The logical registered Agent must be bound to its actual
+managed Session independently of the executor endpoint before exposing that
+entry alongside attached sources. Reuse existing Session, native Turn,
+monitor/calendar and periodic-report owners; do not add a second scheduler,
+task store or model worker. General writable execution, natural-language
+configuration and recurring task composition remain unfinished.
+
+Earlier packaged browser evidence demonstrated only the finite host/API path
+with disposable real Core/File data and a synthetic model/provider. It did not
+establish the correct Agent hierarchy, real-model adoption or natural-deadline
+acceptance. The UI withdrawal does not alter the original private steward's
+subscription, published reports, pending requests or publication route.
+
+### Original private steward
 
 The original-Session host bridge now runs a bounded native Turn through the
 existing Chat worker and Codex app-server connection. It uses the explicit
