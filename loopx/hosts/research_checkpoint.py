@@ -144,11 +144,12 @@ def _context_session(env, metadata, timeout=30, *, checkpoint_sha256=None):
     native = metadata["native_session"]
     expected_profile = metadata.get("session", {}).get("session_profile_digest")
     expected_config = native["config_sha256"]
-    transition = (wake.binding or {}).get("checkpoint_model_transition")
+    binding = wake.binding or {}
+    transition = binding.get("checkpoint_model_transition")
     if transition is not None:
         from loopx.control_plane.turn_driver.codex_sessions import validate_checkpoint_model_transition
         validate_checkpoint_model_transition(transition)
-        if (not checkpoint_sha256 or wake.binding.get("checkpoint_artifact_sha256") != checkpoint_sha256 or
+        if (not checkpoint_sha256 or binding.get("checkpoint_artifact_sha256") != checkpoint_sha256 or
                 transition["source_profile_digest"] != expected_profile or
                 transition["source_config_sha256"] != expected_config):
             raise ValueError("context adoption model transition does not match the captured source")

@@ -277,7 +277,7 @@ def _native_thread_ids(home: Path) -> set[str]:
 
 
 def checkpoint_destination_config(config_path: Path, source_sha256: str,
-                                  destination_config: Path | None = None) -> tuple[bytes, dict | None]:
+                                  destination_config: Path | None = None) -> tuple[bytes, dict[str, str] | None]:
     """Verify sealed source settings and an explicit model/effort-only change.
 
     A destination is a new isolated receiver, never permission to change an
@@ -529,14 +529,16 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         binary = shutil.which(env["CODEX_BIN"])
         if binary is None:
             raise ValueError("Codex CLI executable is unavailable")
-        profile = dict(project=Path(env["LOOPX_PROJECT"]), codex_bin=binary,
-                       home=Path(env["CODEX_HOME"]), sandbox=sandbox)
-        observed_source = codex_session_profile_digest(**profile,
+        observed_source = codex_session_profile_digest(
+            project=Path(env["LOOPX_PROJECT"]), codex_bin=binary,
+            home=Path(env["CODEX_HOME"]), sandbox=sandbox,
             model=transition["source_model"], reasoning_effort=transition["source_effort"],
             config_bytes=config_path.read_bytes())
         if observed_source != source_profile:
             raise ValueError("checkpoint source session profile changed")
-        target_profile = codex_session_profile_digest(**profile,
+        target_profile = codex_session_profile_digest(
+            project=Path(env["LOOPX_PROJECT"]), codex_bin=binary,
+            home=Path(env["CODEX_HOME"]), sandbox=sandbox,
             model=env["MODEL_NAME"], reasoning_effort=env["REASONING_EFFORT"], config_bytes=config)
         transition = {**transition, "source_profile_digest": source_profile,
                       "destination_profile_digest": target_profile}

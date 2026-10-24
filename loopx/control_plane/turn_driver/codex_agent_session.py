@@ -201,7 +201,7 @@ class CodexAgentSession:
                 require_absent=True,
                 checkpoint_artifact_sha256=checkpoint_artifact_sha256,
                 checkpoint_artifact_root=checkpoint_artifact_root,
-                **({"checkpoint_model_transition": model_transition} if model_transition is not None else {}),
+                checkpoint_model_transition=model_transition,
             )
         )
         self.session_id = session_id
