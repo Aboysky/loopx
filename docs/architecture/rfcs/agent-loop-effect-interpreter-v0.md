@@ -1021,9 +1021,13 @@ inference that produced the still-active, model-originated `exec_command` call.
 It requires a matching session, ordered trace, completed response containing
 that call, and either an intact full tool result or every digest-bound context
 page. Earlier inference history, partial pages, previews, other item roles,
-completed calls, code-mode children and implicit server-side history do not
-qualify. Missing, malformed, oversized or incompatible observations discard the
-retention claim and choose full automatically; ordinary callers are unchanged.
+completed calls and implicit server-side history do not qualify. Code-mode
+`exec_command` children additionally require one still-live native cell whose
+model-visible call id and exact JavaScript match the current inference response.
+The complete body/pages must appear in actual model-visible custom-tool text
+blocks, directly or in the native exec result envelope; private child results
+and unforwarded output never qualify. Missing, malformed, oversized or
+incompatible observations discard the retention claim and choose full automatically; ordinary callers are unchanged.
 The reader only consumes already enabled private traces, with the existing
 transport size bound. It reads a bounded event-log tail rather than the whole
 session; if the active inference is outside that window it selects full. It
@@ -1070,11 +1074,14 @@ hook rather than a test lifecycle controller. They cover complete cold read,
 warm delta, automatic post-publication compaction, primary-handler write failure,
 same-capture complete recovery and zero extra guard/debit. The deterministic
 loopback provider still does not prove an autonomous model follows recovery or
-achieves lower total cost. Mid-session wholly unexecuted/killed hooks, code-mode,
-installed adoption, trace/all-read overhead and real solver outcomes need
-independent qualification. Ordinary app-server `exec_command` evidence must not
-be transferred to Codex App code-mode. No runtime/owner question is added, and
-phase one remains open.
+achieves lower total cost. The same production path is also exercised through
+native app-server code-mode for both quota and Turn views, including the parent
+cell/child binding, forwarded output, compaction and primary-write failure.
+Missing, mismatched or ended cells and incomplete custom-tool output remain full.
+This qualifies the native code-mode transport, not installed desktop adoption.
+Mid-session wholly unexecuted/killed hooks, installed adoption, trace/all-read
+overhead and real solver outcomes still need qualification. No runtime/owner
+question is added, and phase one remains open.
 
 The existing benchmark worker now consumes this production path through an
 explicit `context_delivery` heartbeat option, also exposed by EdgeBench/SForge
@@ -1090,8 +1097,8 @@ original Turn, capture and pinned CLI route. Deterministic native tests drive
 the actual worker with both quota and Turn views through cold read, warm delta,
 automatic compaction and complete same-capture recovery without extra guard or
 debit. Startup/resume still reset the epoch: this qualifies within-wake reuse,
-not savings across resumed wakes. Harbor/container installation, Codex App
-code-mode, wholly lost hooks and complete solver/cost qualification remain open.
+not savings across resumed wakes. Harbor/container and Codex App installation,
+wholly lost hooks and complete solver/cost qualification remain open.
 Native discovery, trace IO and all recovery reads belong in that cost comparison.
 
 Capture regression qualification also distinguishes settlement binding from

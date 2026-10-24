@@ -150,3 +150,46 @@ def test_unknown_stale_lossy_or_unbound_observation_never_reuses(tmp_path, failu
         trace.rename(original)
         trace.symlink_to(original)
     assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
+
+
+@pytest.mark.parametrize("failure", [None, "parent_missing", "parent_changed", "parent_ended", "parent_wrong_call",
+    "child_wrong_cell", "child_wrong_tool", "output_missing", "output_preview", "output_wrong_role"])
+def test_code_mode_requires_exact_live_parent_and_complete_model_visible_output(tmp_path, failure):
+    observation, baseline, request, rows = fixture(tmp_path)
+    bundle = Path(observation["trace_bundle"])
+    source = 'text(await tools.exec_command({cmd:"loopx quota should-run"}));'
+    output = {"output_items": [{"type": "custom_tool_call", "name": "exec", "call_id": "parent", "input": source}]}
+    parent = {**rows[-1], "seq": 2, "payload": {"type": "code_cell_started", "runtime_cell_id": "cell",
+        "model_visible_call_id": "parent", "source_js": source}}
+    rows[-1]["seq"] = 3
+    rows[-1]["payload"].update(requester={"type": "code_cell", "runtime_cell_id": "cell"},
+        model_visible_call_id=None, code_mode_runtime_tool_id="tool-1")
+    rows.insert(2, parent)
+    request["input"] = [{"type": "custom_tool_call_output", "call_id": f"read-{i}", "output": [
+        {"type": "input_text", "text": "Script completed\nOutput:\n"},
+        {"type": "input_text", "text": json.dumps({"chunk_id": "fixture", "exit_code": 0,
+            "output": page["output"].split("\nOutput:\n")[1]})}]} for i, page in enumerate(request["input"])]
+    if failure == "parent_missing":
+        rows.remove(parent)
+    elif failure == "parent_changed":
+        parent["payload"]["source_js"] += "text('different');"
+    elif failure == "parent_ended":
+        rows.append({**parent, "seq": 4, "payload": {"type": "code_cell_ended", "runtime_cell_id": "cell"}})
+    elif failure == "parent_wrong_call":
+        output["output_items"][0]["call_id"] = "different"
+    elif failure == "child_wrong_cell":
+        rows[-1]["payload"]["requester"]["runtime_cell_id"] = "other-cell"
+    elif failure == "child_wrong_tool":
+        rows[-1]["payload"]["kind"] = {"type": "other"}
+    elif failure == "output_missing":
+        request["input"].pop(1)
+    elif failure == "output_preview":
+        request["input"][1]["output"][1]["text"] = request["input"][1]["output"][1]["text"][:200]
+    elif failure == "output_wrong_role":
+        for item in request["input"]:
+            item["type"] = "message"
+            item["role"] = "assistant"
+    (bundle / "payloads/output.json").write_text(json.dumps(output))
+    (bundle / "payloads/input.json").write_text(json.dumps(request))
+    (bundle / "trace.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert codex_context_in_active_input(observation, baseline=baseline, session_id="session") is (failure is None)

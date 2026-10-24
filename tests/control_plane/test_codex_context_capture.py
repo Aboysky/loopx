@@ -30,7 +30,13 @@ def _delivered(request, digest):
     pages = {}
     for item in request["input"]:
         output = item.get("output")
-        if item.get("type") != "function_call_output" or not isinstance(output, str):
+        if item.get("type") == "custom_tool_call_output" and isinstance(output, list):
+            # Native code-mode preserves text() emissions as separate blocks.
+            output = next((part["text"] for part in output if part.get("type") == "input_text"
+                           and part.get("text", "").startswith('{"chunk_id"')), "")
+            if output:
+                output = json.loads(output)["output"]
+        if not isinstance(output, str):
             continue
         try:
             page = json.loads(output[output.index("{"):output.rindex("}") + 1])
@@ -49,7 +55,8 @@ def _delivered(request, digest):
 
 
 @pytest.mark.parametrize("host,surface,failed_primary", [
-    (host, surface, failed) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope")]
+    (host, surface, failed) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope"),
+                                                ("code_mode", "quota_packet"), ("code_mode", "turn_envelope")]
     for failed in [False, True]
 ] + [("benchmark", surface, False) for surface in ("quota_packet", "turn_envelope")])
 def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary):
@@ -199,6 +206,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             assert recovered == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
             stages["phase"] = "done"
             return message
+        if host == "code_mode":
+            return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
+                "name": "exec", "input": "text(await tools.exec_command(" + json.dumps({
+                    "cmd": cmd, "max_output_tokens": 2000}) + "));"}
         return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
             "name": "exec_command", "arguments": json.dumps({"cmd": cmd, "max_output_tokens": 2000})}
 
@@ -218,6 +229,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     with local_inference_provider(observed_response, usage) as (url, calls, observed):
         if host != "benchmark":
             _configure_provider(home, url)
+            if host == "code_mode":
+                config = home / "config.toml"
+                config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
         # The real CLI talks to its isolated local TS Effect process.
         # Native sandbox networking is disabled by default; allow this
         # synthetic workspace's loopback transport explicitly.

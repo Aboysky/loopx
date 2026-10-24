@@ -704,7 +704,10 @@ delta 校验。包括恢复在内的全部分页仍属于成本边界；这些�
 产生当前仍在执行的、由模型发起的 `exec_command` 调用的那次推理输入，是否包含精确
 全量基线；要求 session 匹配、trace 顺序有效、已完成 response 包含该调用，并观察到
 完整工具结果或全部摘要绑定的 context 分页。更早的推理历史、部分分页、预览、其他
-消息角色、已完成调用、code-mode 子调用及隐式服务端历史均不具备资格。观察缺失、
+消息角色、已完成调用及隐式服务端历史均不具备资格。code-mode 的 `exec_command`
+子调用还须绑定唯一仍在执行的原生 cell，其模型可见 call id 与完整 JavaScript 必须
+匹配当前推理 response。完整正文/分页须实际出现在模型可见 custom-tool 文本块中，
+可以是正文或原生 exec 结果封装；私有子调用结果及未转发的输出不具备资格。观察缺失、
 格式错误、超限或不兼容时，丢弃保留声明并自动全量；普通调用方保持不变。
 Reader 只读取已经启用的私有 trace，复用既有传输大小上限；读取有界事件日志尾部，
 不读整份 session，当前推理已超出该窗口时自动全量。不启用诊断或改变原生 session。
@@ -737,10 +740,12 @@ capture 的完整读取命令，跨 session 不借用旧引用。生成候选和
 原生 exec/quota 与 app-server/Turn 测试现执行上述生产 CLI 和 hook，而非测试侧
 生命周期 controller；覆盖完整初读、温态差分、发布后自动压缩、主 handler 写入失败、
 同 capture 完整补读和零额外 guard/扣额。它们仍使用确定性 loopback provider，不证明
-真实模型自主遵循恢复提示或总成本收益。中途整个 hook 未执行/被杀、code-mode、安装
-采用、trace 与全部补读开销以及真实 solver 成果仍须独立验证；不得将普通 app-server
-`exec_command` 资格套用于 Codex App 的 code-mode。不开新 runtime/owner 问询门，
-一期保持开放。
+真实模型自主遵循恢复提示或总成本收益。同一生产路径也通过原生 app-server 的
+code-mode 验证 quota 与 Turn 两种视图，覆盖父 cell/子调用绑定、输出转发、压缩和
+主 journal 写入失败。cell 缺失、错配或结束以及输出不完整时仍全量。这验证原生
+code-mode transport，不等于已安装桌面产品采用。中途整个 hook 未执行/被杀、安装
+采用、trace 与全部补读开销及真实 solver 成果仍须独立验证；不开新 runtime/owner
+问询门，一期保持开放。
 
 既有 benchmark worker 现通过显式 `context_delivery` heartbeat 选项消费上述生产
 路径；EdgeBench/SForge 以 `--context-delivery` 暴露同一选择。trial 私有 home 放置
@@ -751,8 +756,8 @@ workspace hook 仍不受信任。显式启用的私有 trace 支持输入 observ
 treatment 须另起 trial。产品 renderer 与恢复分页保留原 Turn、capture 和固定 CLI
 路由。确定性原生测试驱动真实 worker，覆盖 quota 与 Turn 两种视图的完整初读、温态
 差分、自动压缩及同 capture 完整恢复，零额外 guard/扣额。启动/resume 仍重置 epoch，
-因此只验证单次 wake 内复用，不证明跨 resume 节省。Harbor/container 安装、Codex App
-code-mode、hook 完全丢失和完整 solver/成本资格仍开放；成本比较须计入原生发现、
+因此只验证单次 wake 内复用，不证明跨 resume 节省。Harbor/container 与 Codex App
+安装、hook 完全丢失和完整 solver/成本资格仍开放；成本比较须计入原生发现、
 trace IO 和所有补读。
 
 Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义

@@ -99,16 +99,40 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
         if len(completed) != 1 or len(tools) != 1 or not tail[0]["seq"] < completed[0]["seq"] < tools[0]["seq"]:
             return False
         tool = tools[0]["payload"]
-        if (tool.get("requester") != {"type": "model"} or tool.get("kind") != {"type": "exec_command"}
-                or tool.get("model_visible_call_id") != tool_id or tool.get("code_mode_runtime_tool_id") is not None):
+        if tool.get("kind") != {"type": "exec_command"}:
             return False
         if any(row.get("codex_turn_id") != turn or row["payload"].get("type") == "codex_turn_ended"
                or (row["payload"].get("type") == "tool_call_ended" and row["payload"].get("tool_call_id") == tool_id)
                for row in tail):
             return False
         output = payload(completed[0]["payload"]["response_payload"])
-        if not any(item.get("type") == "function_call" and item.get("call_id") == tool_id
-                   and item.get("name") == "exec_command" for item in output.get("output_items", [])):
+        if tool.get("requester") == {"type": "model"}:
+            bound = (tool.get("model_visible_call_id") == tool_id
+                     and tool.get("code_mode_runtime_tool_id") is None
+                     and any(item.get("type") == "function_call" and item.get("call_id") == tool_id
+                             and item.get("name") == "exec_command" for item in output.get("output_items", [])))
+        else:
+            # A code-mode child has no model-visible call id of its own. Bind
+            # the live child to its native cell and that cell's exact model
+            # output; a child id or a saved source string alone proves nothing.
+            requester = tool.get("requester", {})
+            cell_id = requester.get("runtime_cell_id")
+            cells = [row for row in tail if row["payload"].get("type") == "code_cell_started"
+                     and row["payload"].get("runtime_cell_id") == cell_id]
+            bound = (requester.get("type") == "code_cell" and isinstance(cell_id, str) and bool(cell_id)
+                     and isinstance(tool.get("code_mode_runtime_tool_id"), str)
+                     and bool(tool["code_mode_runtime_tool_id"])
+                     and tool.get("model_visible_call_id") is None and len(cells) == 1
+                     and completed[0]["seq"] < cells[0]["seq"] < tools[0]["seq"]
+                     and isinstance(cells[0]["payload"].get("source_js"), str)
+                     and isinstance(cells[0]["payload"].get("model_visible_call_id"), str)
+                     and not any(row["payload"].get("type") == "code_cell_ended"
+                                 and row["payload"].get("runtime_cell_id") == cell_id for row in tail)
+                     and any(item.get("type") == "custom_tool_call" and item.get("name") == "exec"
+                             and item.get("call_id") == cells[0]["payload"].get("model_visible_call_id")
+                             and item.get("input") == cells[0]["payload"].get("source_js")
+                             for item in output.get("output_items", [])))
+        if not bound:
             return False
         request = payload(tail[0]["payload"]["request_payload"])
         if request.get("previous_response_id"):
@@ -119,14 +143,28 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
         if digest != observation["capture_sha256"] or captured not in (expected, context):
             return False
         pages: dict[int, bytes] = {}
-        for item in request["input"]:
-            if item.get("type") != "function_call_output" or not isinstance(item.get("output"), str):
-                continue
+
+        def texts():
+            for item in request["input"]:
+                if item.get("type") == "function_call_output" and isinstance(item.get("output"), str):
+                    yield item["output"]
+                elif item.get("type") == "custom_tool_call_output" and isinstance(item.get("output"), list):
+                    for part in item["output"]:
+                        if part.get("type") == "input_text" and isinstance(part.get("text"), str):
+                            yield part["text"]
+
+        for text in texts():
             # The qualified exec transport wraps complete output after this
             # delimiter. Ignore prose/quoted JSON, previews and other item roles.
-            text = item["output"].split("\nOutput:\n", 1)[-1]
+            text = text.split("\nOutput:\n", 1)[-1]
             try:
                 page = json.loads(text)
+                # text(await tools.exec_command(...)) preserves the native
+                # result envelope as one text block. Unwrap once, never scan
+                # arbitrary quoted prose or use the trace's private result.
+                if (isinstance(page, dict) and type(page.get("exit_code")) is int
+                        and page["exit_code"] == 0 and isinstance(page.get("output"), str)):
+                    page = json.loads(page["output"])
             except ValueError:
                 continue
             document = encoded(page)
