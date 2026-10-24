@@ -1,19 +1,8 @@
+import {Bot, Check, CircleHelp, ExternalLink, Loader2, MessageSquareText, Plus, RefreshCw, Search, Settings2, Unlink, X} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import {PrivateConversationPanel} from "./private-conversation-panel";
 import {useLarkApps} from "../../data/use-lark-apps";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Bot,
-  Check,
-  ExternalLink,
-  Loader2,
-  MessageSquareText,
-  Plus,
-  RefreshCw,
-  Search,
-  Settings2,
-  Unlink,
-  X,
-} from "lucide-react";
 
 import {
   ChatApiError,
@@ -210,7 +199,7 @@ export function LarkSettingsPage({
   onClose: () => void;
   onOpenOriginalConversation?: (target: import("../../data/chat").BoundConversationTarget) => void;
 }) {
-  const { t } = useWorkspaceI18n();
+  const { locale, t } = useWorkspaceI18n();
   const [tab, setTab] = useState<Tab>("connections");
   const {apps, loading: appsLoading, error: appsError, refresh: refreshApps} = useLarkApps();
   const appCount = appsLoading || appsError !== null ? "…" : apps.length;
@@ -581,7 +570,7 @@ export function LarkSettingsPage({
                 <p>{t("lark.goalConnections", { count: connections.filter((connection) => connection.app_ref === app.app_ref).length })}{app.ready && !app.reply_ready ? ` · ${t("lark.autoReplyUnavailable")}` : ""}</p>
               </article>
             ))}
-            {appsLoading ? <p role="status">{t("lark.loading")}</p> : apps.length === 0 && !appsError ? <p className="personal-lark-empty">{t("lark.noProfiles")}</p> : null}
+            {appsLoading ? <p role="status">{t("lark.loading")}</p> : apps.length === 0 && !appsError ? <ContextHelp label={locale === "zh-CN" ? "暂无飞书应用档案" : "No Lark app profiles"} icon={CircleHelp}><p className="personal-lark-empty">{t("lark.noProfiles")}</p></ContextHelp> : null}
           </div>
         </div>
       ) : null}
@@ -620,7 +609,7 @@ export function LarkSettingsPage({
                 </span>
               </div>;
             })}
-            {filteredConnections.length === 0 ? <p className="personal-lark-empty">{t("lark.noConnections")}</p> : null}
+            {filteredConnections.length === 0 ? <ContextHelp label={locale === "zh-CN" ? "暂无 Goal 连接" : "No Goal connections"} icon={CircleHelp}><p className="personal-lark-empty">{t("lark.noConnections")}</p></ContextHelp> : null}
           </div>
         </div>
       ) : null}

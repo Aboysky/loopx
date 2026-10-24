@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
   changePrivateAgentTarget, changeOwnerNotifications, prepareManagedSteward, configureStewardMonitor, configureStewardReport, fetchChatProjects, fetchChatCapabilities, fetchLarkGroupChats, type PrivateConversation,
@@ -116,7 +117,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   }
   return <section className="personal-detail-card personal-private-conversation" aria-label={zh ? "飞书项目助手与管家" : "Lark project assistants and steward"}>
     <h3>{zh ? "飞书 · 项目助手与管家" : "Lark · Project assistants and steward"}</h3>
-    <p>{zh ? "每个 App 单独核验本人。项目助手默认支持工作区读写，按项目规则与 skills 执行编辑；可选只读。普通聊天不创建隐藏 Goal。本人管家默认读取本机已注册的 Goal 与 Agent；没有注册工作时显示空态。旧连接保留原范围，需明确升级授权。交办不提升执行或发布权限。" : "Verify the owner independently for each App. Project Chat defaults to workspace writes under project rules and skills; read-only remains available without hidden Goals. A personal steward defaults to the registered local Goals and Agents, including an honest empty state. Existing connections retain their scope until explicitly upgraded. Handoff does not elevate execution or publishing permissions."}</p>
+    <ContextHelp label={zh ? "会话来源与访问范围" : "Conversation source and access scope"}><p>{zh ? "每个 App 单独核验本人。项目助手默认支持工作区读写，按项目规则与 skills 执行编辑；可选只读。普通聊天不创建隐藏 Goal。本人管家默认读取本机已注册的 Goal 与 Agent；没有注册工作时显示空态。旧连接保留原范围，需明确升级授权。交办不提升执行或发布权限。" : "Verify the owner independently for each App. Project Chat defaults to workspace writes under project rules and skills; read-only remains available without hidden Goals. A personal steward defaults to the registered local Goals and Agents, including an honest empty state. Existing connections retain their scope until explicitly upgraded. Handoff does not elevate execution or publishing permissions."}</p></ContextHelp>
     {rows.map(row => <article key={row.binding_id}>
       <strong>{row.app_ref} · {row.context_available ? row.project_title : (zh ? "工作区不可用" : "Workspace unavailable")}</strong>
       {onOpenOriginal && row.audience === "owner" ? <button type="button" disabled={!row.context_available || opening !== null}
@@ -197,7 +198,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       {!loadingGroups && !groups.length && !groupError ? <p>{zh ? "此 App 尚无可见群。先将 Bot 加入调试群，再刷新。" : "This App has no visible groups. Add the Bot to a trial group, then refresh."}</p> : null}
       {groupError ? <p role="alert">{groupError}</p> : null}
       <button type="button" disabled={busy || loadingGroups || !app} onClick={() => setGroupRefresh(value => value + 1)}>{zh ? "刷新群列表" : "Refresh groups"}</button>
-      <p>{zh ? "新话题需 @此 Bot；回复留在原话题。工作区、历史和工具保持隔离，模型认证可复用可信宿主账号。连接成功不代表已通过公开群准出。" : "Mention this Bot to start; replies stay in the original topic. Workspace, history and tools remain isolated; model authentication can use the trusted host account. Connection is not public release qualification."}</p>
+      <ContextHelp label={zh ? "话题使用方式" : "Topic usage"}><p>{zh ? "新话题需 @此 Bot；回复留在原话题。工作区、历史和工具保持隔离，模型认证可复用可信宿主账号。连接成功不代表已通过公开群准出。" : "Mention this Bot to start; replies stay in the original topic. Workspace, history and tools remain isolated; model authentication can use the trusted host account. Connection is not public release qualification."}</p></ContextHelp>
     </fieldset> : null}
     <label>{zh ? "角色" : "Role"}<select aria-label={zh ? "私聊角色" : "Private Chat role"} value={role} disabled={busy || audience === "group"} onChange={event => setRole(event.target.value as "project" | "steward")}>
       <option value="project">{zh ? "普通项目助手" : "Project assistant"}</option><option value="steward">{zh ? "LoopX 管家（全部已注册工作）" : "LoopX steward (all registered work)"}</option>
