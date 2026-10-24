@@ -5,7 +5,10 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .quota_capture import bind_capture_selection_transport, capture_decision, handoff_decision, prepare_decision_capture
+from .quota_capture import (
+    bind_capture_selection_transport, capture_decision, handoff_decision,
+    prepare_decision_capture, project_captured_context,
+)
 from ..usage_goal import observe_quota_result
 
 from ..capabilities.explore.composition_frontier import (
@@ -464,10 +467,12 @@ def _emit_quota_result(
             started_at=usage_quota_started,
         )
     bind_capture_selection_transport(payload, args)
+    delivery_request = None
+    decision_identity = ("", "")
     try:
         capture_decision(capture_directory, payload)
         if payload.get("ok") is True:
-            handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None))
+            delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None))
     except QuotaDecisionTransportError as exc:
         # The guard already ran. Report that typed fact with the durable receipt
         # and saved decision, never a new collection failure that could replace
@@ -477,6 +482,10 @@ def _emit_quota_result(
         )
         print_payload(failure, args.format, _quota_renderer(args))
         return 1
+    if delivery_request is not None:
+        agent = payload.get("agent_identity")
+        decision_identity = (str(payload.get("goal_id") or ""),
+            str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
     payload = _project_quota_cli_payload(
         payload, args, detail_sections,
         context.scheduler_context if context is not None else None,
@@ -491,8 +500,14 @@ def _emit_quota_result(
             payload,
             registry_path=registry_path,
         )
+    succeeded = bool(payload.get("ok"))
+    if args.format == "json" and succeeded and delivery_request is not None:
+        payload = project_captured_context(payload, directory=capture_directory,
+            request=delivery_request[0], capture_id=delivery_request[1],
+            goal_id=decision_identity[0], agent_id=decision_identity[1],
+            surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
     print_payload(payload, args.format, _quota_renderer(args))
-    return 0 if payload.get("ok") else 1
+    return 0 if succeeded else 1
 
 
 def handle_quota_command(

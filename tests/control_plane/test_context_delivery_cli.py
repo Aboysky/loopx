@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -89,3 +90,117 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
     rc, readback = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0 and readback["todo"]["text"] == body, readback
     assert readback["todo"]["status"] == "open"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+@pytest.mark.skipif(os.name != "posix", reason="Unix local Host transport")
+def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_path, monkeypatch, provider, surface):
+    """The ordinary CLI really uses the codec; the listener models a Host,
+    not a claim that a particular installed Codex has observed retention."""
+    import hashlib
+    import socket
+    import tempfile
+    from concurrent.futures import ThreadPoolExecutor
+    from test_quota_settlement_cli import _heartbeat_receipt_count
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    body = "Retain full task evidence and permission boundaries. " * 800 + "Stop before publication."
+    todos = read_fixture_todos(state)
+    todos[0].update(text=body, title=body)
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
+        state_path=state, provider=provider)
+    before_source = state.read_bytes()
+    root = tmp_path / "captures"
+    root.mkdir()
+    scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="host-session", context_epoch="epoch-1")
+    saved = []
+
+    def invoke(host_request, *, opt_in=True):
+        with tempfile.TemporaryDirectory(prefix="context-host-", dir="/tmp") as short:
+            endpoint = Path(short).resolve() / "host.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                server.bind(str(endpoint))
+                server.listen(1)
+                server.settimeout(30)
+                def release():
+                    connection, _ = server.accept()
+                    with connection:
+                        connection.settimeout(30)
+                        with connection.makefile("rb") as stream:
+                            observed = json.loads(stream.readline(4096))
+                        path = Path(observed["path"])
+                        raw = path.read_bytes()
+                        assert hashlib.sha256(raw).hexdigest() == observed["sha256"]
+                        if opt_in:
+                            request = path.parent / "delivery-request.json"
+                            request.write_text(host_request if isinstance(host_request, str) else json.dumps(host_request))
+                            request.chmod(0o600)
+                        response = {"released": True, "sha256": observed["sha256"]}
+                        if opt_in:
+                            response["context_delivery"] = True
+                        connection.sendall(json.dumps(response).encode() + b"\n")
+                        return path, raw
+                with ThreadPoolExecutor(max_workers=1) as workers:
+                    future = workers.submit(release)
+                    code, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+                        "--turn-instance-id", "host-context-delivery",
+                        "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint),
+                        *(["--turn-envelope"] if surface == "turn_envelope" else []), cwd=project)
+                    path, raw = future.result(timeout=30)
+        assert code == 0, wire
+        assert path.read_bytes() == raw
+        saved.append((path, raw))
+        return wire, path.parent
+
+    cold, first = invoke({"scope": scope})
+    assert cold["mode"] == "full"
+    assert json.loads((first / "projection.json").read_bytes()) == cold["context"]
+    warm, second = invoke({"scope": scope, "baseline": cold,
+        "retained": {"complete": True, "target": cold["target"]}})
+    assert warm["mode"] == "delta"
+    projection = json.loads((second / "projection.json").read_bytes())
+    current = prepare_context_delivery(projection, scope=scope,
+        capture_id=warm["target"]["capture_id"], surface=surface)
+    assert restore_context_delivery(warm, baseline=cold, current=current)["context"] == projection
+    assert len(json.dumps(warm)) < len(json.dumps(current))
+    assert warm["recovery"]["path"] == str(second / "projection.json")
+    assert warm["target"]["capture_id"] == hashlib.sha256((second / "decision.json").read_bytes()).hexdigest()
+    assert warm["recovery"]["sha256"] == hashlib.sha256((second / "projection.json").read_bytes()).hexdigest()
+    before_receipts = _heartbeat_receipt_count(runtime, "host-context-delivery")
+    # Compaction between preparation and dispatch: the Host can select the exact
+    # full projection without a second CLI call, admission or state mutation.
+    recovered = restore_context_delivery(warm, baseline=None, current=current)
+    assert recovered["mode"] == "full" and recovered["context"] == projection
+    assert _heartbeat_receipt_count(runtime, "host-context-delivery") == before_receipts
+    reset, _ = invoke({"scope": {**scope, "context_epoch": "compacted"}, "baseline": cold,
+        "retained": {"complete": True, "target": cold["target"]}})
+    assert reset["mode"] == "full"
+    for malformed in ["{truncated", "[" * 2000 + "]" * 2000,
+                      {"scope": {**scope, "agent_id": "another-agent"}}]:
+        full, directory = invoke(malformed)
+        assert "target" not in full  # Automatic ordinary full output, not a gate.
+        assert full == json.loads((directory / "projection.json").read_bytes())
+    ordinary, directory = invoke(None, opt_in=False)
+    assert "target" not in ordinary and not (directory / "projection.json").exists()
+    assert state.read_bytes() == before_source and _spend_run_count(runtime) == 0
+    assert all(path.read_bytes() == raw for path, raw in saved)
+
+
+def test_optional_capture_projection_failure_falls_back_without_hiding_source(tmp_path, monkeypatch):
+    from loopx.cli_commands.quota_capture import project_captured_context
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+    payload = {"ok": True, "goal_id": "fixture", "requirements": "Keep late stop conditions."}
+    (tmp_path / "decision.json").write_text(json.dumps(payload))
+    def unavailable(*args, **kwargs):
+        raise EffectRuntimeStartupError("synthetic unavailable codec")
+    monkeypatch.setattr(turn_envelope, "prepare_context_delivery", unavailable)
+    assert project_captured_context(payload, directory=tmp_path, request={"scope": {
+        "goal_id": "fixture", "agent_id": "agent", "session_id": "session", "context_epoch": "epoch"}},
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="fixture-capture") is payload
+    assert json.loads((tmp_path / "projection.json").read_bytes()) == payload

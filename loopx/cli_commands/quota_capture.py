@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import socket
+import stat
 import tempfile
 from pathlib import Path
 
@@ -92,7 +93,7 @@ def bind_capture_selection_transport(payload: dict, args: argparse.Namespace) ->
     selection["command_args_template"] = template + suffix
 
 
-def handoff_decision(directory: Path | None, socket_path: str | None) -> None:
+def handoff_decision(directory: Path | None, socket_path: str | None) -> tuple[dict, str] | None:
     """Withhold the original output until the Host releases these exact bytes.
 
     No second guard, admission, settlement or retry is performed here. A lost
@@ -114,7 +115,8 @@ def handoff_decision(directory: Path | None, socket_path: str | None) -> None:
             with channel.makefile("rb") as stream:
                 line = stream.readline(1025)
             response = json.loads(line)
-            if response != {"released": True, "sha256": digest}:
+            ordinary_release = {"released": True, "sha256": digest}
+            if response not in (ordinary_release, {**ordinary_release, "context_delivery": True}):
                 raise ValueError("Host did not release the original decision digest")
         if path.read_bytes() != raw:
             raise ValueError("captured decision changed during handoff")
@@ -123,3 +125,64 @@ def handoff_decision(directory: Path | None, socket_path: str | None) -> None:
             "Decision handoff failed after guard evaluation; inspect the original "
             f"Turn receipt and {path}. Do not blindly rerun the guard."
         ) from exc
+    if response.get("context_delivery") is not True:
+        return None
+    # Only an explicit Host request opts in. The release itself does not prove
+    # delivery/retention. Read one private snapshot, never an arbitrary pathname
+    # supplied by a response or a model. Invalid optimization input selects full.
+    request_path = directory / "delivery-request.json"
+    try:
+        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+        descriptor = os.open(request_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as source:
+            metadata = os.fstat(source.fileno())
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077 or
+                    metadata.st_size > MAX_REQUEST_BYTES or metadata.st_uid != os.getuid()):
+                return {}, digest
+            raw = source.read(MAX_REQUEST_BYTES + 1)
+        if len(raw) > MAX_REQUEST_BYTES:
+            return {}, digest
+        request = json.loads(raw)
+        return (request if isinstance(request, dict) else {}), digest
+    except (OSError, ValueError, RecursionError):
+        return {}, digest
+
+
+def project_captured_context(
+    payload: dict, *, directory: Path | None, request: dict | None,
+    goal_id: str, agent_id: str, surface: str, capture_id: str,
+) -> dict:
+    """Adapt an admitted capture to the shared TS presentation owner.
+
+    The caller-owned rendezvous may supply a continuity observation. It must
+    still recheck the candidate at final model-input assembly and ACK only intact
+    delivery. Unsupported ordinary CLI clients never supply this request. Every
+    opt-in attempt saves the complete projected JSON for same-capture recovery;
+    neither malformed requests nor optimization failures rerun the guard.
+    """
+    if request is None or directory is None:
+        return payload
+    from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+    from ..control_plane.quota.turn_envelope import prepare_context_delivery
+    from ..control_plane.turn_driver.decision_capture import write_decision_capture
+
+    try:
+        projection = directory / "projection.json"
+        write_decision_capture(projection, payload)
+        scope = request.get("scope")
+        if not isinstance(scope, dict) or scope.get("goal_id") != goal_id or scope.get("agent_id") != agent_id:
+            return payload
+        delivery = prepare_context_delivery(payload, scope=scope,
+            capture_id=capture_id, surface=surface,
+            baseline=request.get("baseline"), retained=request.get("retained"))
+        delivery["recovery"] = {
+            "path": str(projection), "sha256": hashlib.sha256(projection.read_bytes()).hexdigest(),
+            "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
+                "truncated or uncertain, use this full projection before dependent work. Read bounded pages "
+                "if necessary; do not rerun admission or ask the owner. This file is not retention proof.",
+        }
+        return delivery
+    except (OSError, ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        # The original full payload is already available. An unavailable optional
+        # codec/capture must not convert safe full delivery into an execution gate.
+        return payload
