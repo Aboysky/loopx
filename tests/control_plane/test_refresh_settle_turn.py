@@ -5,7 +5,6 @@ import json
 import copy
 import shlex
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -25,8 +24,6 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider)
-    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID, cwd=project)
     assert rc == 0, guard
