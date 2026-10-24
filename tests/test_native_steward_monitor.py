@@ -217,9 +217,12 @@ def test_local_native_watch_denials_keep_original_deadline_and_invoke_no_model(s
     elif fault in {"revoked", "stopped", "lifetime"}:
         data = json.loads(runtime.registry_path.read_text())
         goal = next(g for g in data["goals"] if g["id"] == actor["goal_id"])
-        if fault == "revoked": goal["coordination"]["registered_agents"] = ["peer"]
-        elif fault == "stopped": goal["status"] = "stopped"
-        else: goal["goal_instance_id"] = "replacement"
+        if fault == "revoked":
+            goal["coordination"]["registered_agents"] = ["peer"]
+        elif fault == "stopped":
+            goal["status"] = "stopped"
+        else:
+            goal["goal_instance_id"] = "replacement"
         runtime.registry_path.write_text(json.dumps(data))
     elif fault == "busy":
         store.update_session(session["session_id"], active_turn_id="original-busy")
@@ -249,8 +252,10 @@ def test_local_watch_rechecks_native_authority_after_collection_before_poll(stew
         else:
             data = json.loads(runtime.registry_path.read_text())
             goal = next(g for g in data["goals"] if g["id"] == actor["goal_id"])
-            if fault == "revoke": goal["coordination"]["registered_agents"] = ["peer"]
-            else: goal["status"] = "stopped"
+            if fault == "revoke":
+                goal["coordination"]["registered_agents"] = ["peer"]
+            else:
+                goal["status"] = "stopped"
             runtime.registry_path.write_text(json.dumps(data))
         return original_commit(monitor, host, request, turn, context, argv)
     monkeypatch.setattr(StewardMonitor, "_commit_poll", changed)
