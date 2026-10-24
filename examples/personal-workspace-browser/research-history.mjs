@@ -326,14 +326,15 @@ export const researchHistoryScenario = {
     let unavailable = false;
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
-    let unavailableAnalysis = false, episodeMetadataLimit = null, comparisonFixture = false;
-    let analysisWrites = 0, localizedFixture = false, continuationFixture = false, equivalentContinuation = false;
+    let unavailableAnalysis = false, failedAnalysisPack = "a", episodeMetadataLimit = null, comparisonFixture = false;
+    let analysisWrites = 0, analysisReads = 0, localizedFixture = false, continuationFixture = false, equivalentContinuation = false;
     let unavailableTask = false;
     const taskReads = [];
     try {
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_, page) => {
         await page.route("**/api/chat/research-analysis**", async route => {
           if (route.request().method() !== "GET") {analysisWrites++; return route.fulfill({status: 403, json: {error: "Read-only presentation fixture"}});}
+          analysisReads++;
           if (!analysisFixture) return route.fulfill({json: {ok: true, catalog: {availability: "unavailable", reason_code: "no_available_pack", default_pack_id: null, packs: []}, pack: null}});
           const query = new URL(route.request().url()).searchParams;
           const language = query.get('output_language');
@@ -388,7 +389,7 @@ export const researchHistoryScenario = {
               sources: {added: [], revised: [], removed: []}, episodes: {added: [], revised: [], removed: []}, reassessed_episode_ids: [], verdict_changes: []});
             readback.pack.result = null; readback.pack.job = null;
           }
-          await route.fulfill(unavailableAnalysis && selected === "a"
+          await route.fulfill(unavailableAnalysis && selected === failedAnalysisPack
             ? {status: 503, json: {error: "Synthetic analysis read unavailable"}}
             : {json: readback});
           if (holdOldAnalysis && selected === "a") oldDelivered();
@@ -432,6 +433,43 @@ export const researchHistoryScenario = {
       await history.getByRole("status").filter({hasText: "76 / 76"}).waitFor();
       assert.equal(pages.length, 2, "The complete Portfolio checkpoint requires every bounded HTTP page");
       assert.deepEqual(pages.flatMap(value => value.items).map(row => row.event_id), capture.events.map(row => row.event_id));
+      assert.equal(await history.locator('.analysis-read-empty').count(), 0,
+        'No analysis source must not add another explanation card above the recorded history');
+      const sourceHelp = history.getByRole('button', {name: '分析来源未就绪', exact: true});
+      await sourceHelp.waitFor();
+      assert.equal(await history.getByRole('button', {name: '分析说明', exact: true}).count(), 0,
+        'Source state and optional analysis guidance share one contextual entry');
+      assert.doesNotMatch(await history.innerText(), /尚无可分析的授权轨迹包/);
+      await sourceHelp.hover();
+      const sourceExplanation = page.locator('.context-help-popover:popover-open');
+      await sourceExplanation.hover();
+      assert.match(await sourceExplanation.innerText(), /尚无可分析的授权轨迹包/);
+      await page.keyboard.press('Escape');
+      await sourceHelp.focus();
+      await sourceExplanation.waitFor({state: 'visible'});
+      await page.keyboard.press('Escape');
+      assert(await sourceHelp.evaluate(e => e === document.activeElement));
+      const readsBeforeRefresh = analysisReads;
+      const analysisRefreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/chat/research-analysis');
+      await history.getByRole('button', {name: '刷新记录', exact: true}).click();
+      await analysisRefreshed;
+      await sourceHelp.waitFor();
+      assert(analysisReads > readsBeforeRefresh, 'The shared research refresh still reads the analysis owner');
+      await page.setViewportSize({width: 390, height: 844});
+      await sourceHelp.click();
+      await sourceExplanation.waitFor({state: 'visible'});
+      const sourceBounds = await sourceExplanation.boundingBox();
+      assert(sourceBounds.x >= 0 && sourceBounds.x + sourceBounds.width <= 390);
+      await history.getByRole('heading', {name: '研究历程', exact: true}).click();
+      await sourceExplanation.waitFor({state: 'hidden'});
+      await history.getByRole('button', {name: '深度分析', exact: true}).click();
+      const unavailablePanel = history.getByRole('region', {name: '轨迹深度分析', exact: true});
+      await unavailablePanel.getByRole('status').filter({hasText: '分析来源未就绪'}).waitFor();
+      assert.equal(await unavailablePanel.locator('header p').count(), 0, 'An empty reader does not repeat analysis instructions');
+      await unavailablePanel.press('Escape');
+      assert(await history.getByRole('button', {name: '深度分析', exact: true}).evaluate(e => e === document.activeElement));
+      assert.equal(analysisWrites, 0, 'Unavailable analysis, help and recovery are reads');
+      await page.setViewportSize({width: 1280, height: 900});
       await history.locator(".research-phases").waitFor();
       const early = history.locator(".research-phase").first();
       await early.click();
@@ -487,7 +525,11 @@ export const researchHistoryScenario = {
       assert.match(await history.textContent(),/76 \/ 76/,'A failed refresh retains the complete real capture');
       const readError = history.locator('.research-history-read-error');
       assert.match(await readError.innerText(), /刷新失败，当前记录已保留/);
-      assert.equal(await readError.locator('details').evaluate(element => element.open), false, 'Technical failure detail stays secondary');
+      assert.equal(await readError.getByRole('tooltip').isVisible(), false, 'Technical failure detail stays secondary');
+      assert.doesNotMatch(await readError.innerText(), /可继续阅读|技术详情默认收起/);
+      await readError.getByRole('button', {name: '研究记录读取详情', exact: true}).focus();
+      assert.match(await readError.getByRole('tooltip').innerText(), /Isolated history transport unavailable/);
+      await page.keyboard.press('Escape');
       await readError.screenshot({path:resolve(outputDir,'research-history-refresh-error.png'),animations:'disabled'});
       unavailable=false;
       await readError.getByRole('button',{name:'重试',exact:true}).click();
@@ -1149,6 +1191,20 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '—', 'Missing comparison evidence is unknown, never zero');
+      failedAnalysisPack = "d"; unavailableAnalysis = true;
+      await tabs.getByRole('button', {name: '概览', exact: true}).click();
+      await tabs.getByRole('button', {name: '研究', exact: true}).click();
+      await history.locator('.analysis-read-error').waitFor();
+      assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3', 'A failed same-scope refresh keeps recorded native facts');
+      await history.getByRole('button', {name: '深度分析', exact: true}).click();
+      await analysis.waitFor();
+      assert(await analysis.getByRole('button', {name: '分析所选范围', exact: true}).isDisabled(), 'A stale unanalysed pack cannot start a model while its refresh is unavailable');
+      assert.equal(analysisWrites, 0, 'The entry opens recovery instead of executing from a stale snapshot');
+      unavailableAnalysis = false; failedAnalysisPack = "a";
+      await analysis.getByRole('button', {name: '重试读取', exact: true}).click();
+      await analysis.getByRole('alert').waitFor({state: 'hidden'});
+      assert(await analysis.getByRole('button', {name: '分析所选范围', exact: true}).isEnabled(), 'A successful owner read restores the existing explicit analysis action');
+      await analysis.press('Escape');
       await basis.locator(':scope > summary').click();
       assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3', 'Native facts do not require an analyzer result');
       assert.match(await nativeResults.innerText(), /部分窗口 · 起点未知/);
