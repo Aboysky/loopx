@@ -16,7 +16,7 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtim
 from ...file_lock import exclusive_file_lock
 from .trajectory_assessment import _digest, _write, execute, read_job, request_cancel
 
-DEFAULT_CONFIG = {"model": "gpt-6.1-sol", "effort": "max", "service_tier": "fast"}
+DEFAULT_CONFIG = {"model": "gpt-6.1-sol", "effort": "max", "service_tier": "fast", "research_synthesis": True}
 
 
 class PackUnavailable(ValueError):
@@ -655,6 +655,10 @@ def read_citation(
     citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
     citations.extend(c for field in ((result or {}).get("display") or {}).get("fields", [])
                      for c in field.get("context_citations", []))
+    synthesis = (result or {}).get("synthesis")
+    if synthesis:
+        citations.extend(c for item in [synthesis["summary"], *synthesis["findings"], *synthesis["next_experiments"]]
+                         for c in item["citations"])
     native = (view.get("native_outcomes") or {}).get("projection") or {}
     native_citations = [native[key]["citation"] for key in ("initial", "best_valid", "retained", "final_valid") if native.get(key)]
     improvement = native.get("retained_improvement") or {}

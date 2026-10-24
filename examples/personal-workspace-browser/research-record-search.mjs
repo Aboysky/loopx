@@ -7,6 +7,12 @@ import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {startHistoryOwner} from "./research-history.mjs";
 
+async function readEmptyScope(page, results, message) {
+  await results.getByRole('button',{name:'No matches in loaded records',exact:true}).focus();
+  await page.getByRole('tooltip').getByText(message,{exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+}
+
 export const researchRecordSearchScenario = {
   id: "research-record-search",
   async run({browser, collectCoverage}) {
@@ -59,7 +65,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.doesNotMatch(await results.locator("li").innerText(), /amber-v2|Later observation/);
       const status = results.getByRole("combobox", {name: "Recorded status"});
       await status.selectOption("confirmed");
-      await results.getByText("No matching records. Try another term or clear the filters.", {exact: true}).waitFor();
+      await readEmptyScope(page, results, "No matching records. Try another term or clear the filters.");
       await status.selectOption("refuted");
       await results.getByText("1 matches in 78 loaded records", {exact: true}).waitFor();
       await results.locator("li summary").click();
@@ -82,7 +88,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await results.getByRole("button", {name: /Show more records/}).click();
       assert.equal(await results.locator("li").count(), 78);
       await search.fill("no such evidence");
-      await results.getByText(/No matching records/).waitFor();
+      await readEmptyScope(page, results, "No matching records. Try another term or clear the filters.");
       await results.getByRole("button", {name: "Clear filters"}).click();
       assert.equal(await results.locator("li").count(), 50, "A changed query resets display paging");
       // Fresh interrupted load searches only the explicitly partial snapshot.
@@ -91,7 +97,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await page.reload();
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await search.fill("amber-v1");
-      await results.getByText("No matches in the loaded records; the remaining history is not verified.", {exact: true}).waitFor();
+      await readEmptyScope(page, results, "No matches in the loaded records; the remaining history is not verified.");
       await page.unroute("**/api/chat/explore-results?*");
       await history.getByRole("button", {name: "Refresh history", exact: true}).click();
       await results.getByText("1 matches in 78 loaded records", {exact: true}).waitFor();
@@ -101,7 +107,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await search.inputValue(), "", "Another Goal starts with its own search scope");
       assert.doesNotMatch(await results.innerText(), /amber|Earlier negative/);
       await search.fill("amber-v1");
-      await results.getByText(/No matching records/).waitFor();
+      await readEmptyScope(page, results, "No matching records. Try another term or clear the filters.");
       await page.goto(url);
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await search.fill("amber-v1");
