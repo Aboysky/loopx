@@ -30,7 +30,7 @@ def git(root: Path, *args: str) -> str:
 @pytest.fixture
 def repository(tmp_path, monkeypatch):
     # Git hooks/CI may otherwise lend these disposable fixtures another identity.
-    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("LOOPX_RESOLVED_SOURCE_GIT_COMMIT", raising=False)
     root = tmp_path / "仓库"
