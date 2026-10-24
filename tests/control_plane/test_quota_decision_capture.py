@@ -526,9 +526,21 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
     code, selected, observed, saved, _ = _replan_selection_hop(tmp_path, typed_host)
     assert observed['decision']['ok'] is True
     assert observed['decision']['heartbeat_receipt']['status'] == 'upgraded'
-    # The binding hop is the same Turn's pending closeout, not a new point.
-    assert observed['intent'] == {'capture': False, 'reason': 'turn_closeout_pending',
-                                  'execution_authority_granted': False}
+    # Binding a Todo does not discharge the original semantic replan. This
+    # fixture has not admitted delivery or produced work/closeout evidence.
+    # Preserve that boundary instead of inferring closeout from "upgraded".
+    decision = observed['decision']
+    receipt = decision['heartbeat_receipt']
+    assert receipt.get('closeout_required') is not True
+    assert decision['interaction_contract']['agent_channel']['delivery_allowed'] is False
+    assert decision['replan_action_packet']['decision'] == 'replan_required'
+    assert decision['replan_action_packet'].get('settlement_only') is not True
+    assert observed['intent'] == {
+        'capture': True,
+        'obligation_id': receipt['semantic_replan_obligation_id'],
+        'settlement_effect_id': receipt['settlement_identity']['effect_id'],
+        'execution_authority_granted': False,
+    }
     assert code == 0 and selected['ok'] is True, selected
     assert selected['schema_version'] == 'loopx_turn_envelope_v0'
     assert len(saved) == 1 and json.loads(saved[0].read_text()) == observed['decision']
