@@ -798,7 +798,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-machine-unavailable { display: grid; justify-items: start; gap: 8px; min-height: 180px; padding: 26px; border: 1px dashed var(--pw-line-strong); border-radius: 14px; background: #fff; color: var(--pw-muted); }
 .personal-machine-unavailable strong { color: var(--pw-text); font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-machine-unavailable p { max-width: 540px; margin: 0; font-size: var(--text-caption); line-height: var(--leading-caption); }
-.personal-lark-loading, .personal-lark-empty { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 130px; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-lark-loading { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 130px; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-lark-apps { max-width: 1180px; margin: 0 auto; }
 .personal-lark-app-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-lark-app-actions { display: flex; align-items: center; gap: 8px; }

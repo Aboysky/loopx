@@ -570,7 +570,7 @@ export function LarkSettingsPage({
                 <p>{t("lark.goalConnections", { count: connections.filter((connection) => connection.app_ref === app.app_ref).length })}{app.ready && !app.reply_ready ? ` · ${t("lark.autoReplyUnavailable")}` : ""}</p>
               </article>
             ))}
-            {appsLoading ? <p role="status">{t("lark.loading")}</p> : apps.length === 0 && !appsError ? <ContextHelp label={locale === "zh-CN" ? "暂无飞书应用档案" : "No Lark app profiles"} icon={CircleHelp}><p className="personal-lark-empty">{t("lark.noProfiles")}</p></ContextHelp> : null}
+            {appsLoading ? <p role="status">{t("lark.loading")}</p> : apps.length === 0 && !appsError ? <ContextHelp label={locale === "zh-CN" ? "暂无飞书应用档案" : "No Lark app profiles"} icon={CircleHelp}><p>{t("lark.noProfiles")}</p></ContextHelp> : null}
           </div>
         </div>
       ) : null}
@@ -609,7 +609,7 @@ export function LarkSettingsPage({
                 </span>
               </div>;
             })}
-            {filteredConnections.length === 0 ? <ContextHelp label={locale === "zh-CN" ? "暂无 Goal 连接" : "No Goal connections"} icon={CircleHelp}><p className="personal-lark-empty">{t("lark.noConnections")}</p></ContextHelp> : null}
+            {filteredConnections.length === 0 ? <ContextHelp label={locale === "zh-CN" ? "暂无 Goal 连接" : "No Goal connections"} icon={CircleHelp}><p>{t("lark.noConnections")}</p></ContextHelp> : null}
           </div>
         </div>
       ) : null}
