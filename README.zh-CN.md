@@ -39,9 +39,10 @@ Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升�
 
 ## 最新动态
 
-<!-- Curate major product/architecture releases, research findings and consequential
-     engineering lessons. Each item needs a public source and a distinct reader
-     takeaway; version bumps or PR merges alone are not news. Keep both languages
+<!-- Curate major product/architecture releases, research findings, consequential
+     engineering lessons and substantive community milestones. Each needs a public
+     source and a distinct reader takeaway; version bumps or PR merges alone are
+     not news. Keep both languages
      aligned, newest first, using verified publication dates (UTC). -->
 
 - **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共享 TypeScript 控制面与长程研究工作台。[迁移指南](docs/product/releases/v2.0.0.md#中文指南) · [重构历程](https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/)。
@@ -51,6 +52,7 @@ Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升�
 - **2026-09-26 · [五次证据时效失效复盘](https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/)** — 复盘健康检查全绿时仍使用陈旧、残缺证据的失败，提炼来源时效、覆盖率与恢复边界的教训。
 - **2026-09-18 · [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/?lang=zh)** — 46 个长程任务的 Agent 对照研究：比较 Plain Codex、原生 Goal 与 LoopX Heartbeat，公开逐任务结果、方法与适用边界。
 - **2026-09-06 · [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — 个人 Agent 工作区：跨会话跟进 Agent 工作、处理待决事项、核对交付结果。[工作区指南](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md)。
+- **2026-08-02 · [200+ 小时长程轨迹在 X 公开分享](https://x.com/huangruiteng/status/2083904257494024425)** — 早期 owner-run 案例跨越 200+ 小时自然时长，展示执行、等待、人工决策与恢复的衔接，并在 X 获得广泛传播。[轨迹与边界](#开源-issue-fix)。
 
 [全部发布记录](https://github.com/loopx-project/loopx/releases)
 

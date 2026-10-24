@@ -39,9 +39,10 @@ Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgr
 
 ## News
 
-<!-- Curate major product/architecture releases, research findings and consequential
-     engineering lessons. Each item needs a public source and a distinct reader
-     takeaway; version bumps or PR merges alone are not news. Keep both languages
+<!-- Curate major product/architecture releases, research findings, consequential
+     engineering lessons and substantive community milestones. Each needs a public
+     source and a distinct reader takeaway; version bumps or PR merges alone are
+     not news. Keep both languages
      aligned, newest first, using verified publication dates (UTC). -->
 
 - **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript control plane and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
@@ -51,6 +52,7 @@ Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgr
 - **2026-09-26 · [Five freshness incidents](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)** — A postmortem of stale and incomplete evidence behind green health checks, with lessons for source freshness, coverage and recovery.
 - **2026-09-18 · [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/)** — A 46-task long-horizon agent study comparing Plain Codex, native Goal and LoopX Heartbeat, with task-level results, methodology and comparison limits.
 - **2026-09-06 · [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — A Personal Agent Workspace to follow agent work, act on decisions, and inspect delivered results across sessions. [Workspace guide](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md).
+- **2026-08-02 · [200+ hour trajectories shared on X](https://x.com/huangruiteng/status/2083904257494024425)** — Early owner-run examples spanning 200+ elapsed hours drew broad attention on X, showing work across execution, waits, human decisions and recovery. [Trajectories and limits](#open-source-issue-fix).
 
 [All releases](https://github.com/loopx-project/loopx/releases)
 
