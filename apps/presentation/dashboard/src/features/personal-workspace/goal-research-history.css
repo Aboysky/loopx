@@ -221,3 +221,11 @@
 .research-display-language {display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-block: 8px; font-size: var(--text-body);}
 .research-display-language > span {color: var(--pw-muted);}
 .research-display-language > button {min-height: 44px; color: var(--pw-blue-ink); border: 0; padding: 0; background: none; font: inherit; cursor: pointer;}
+
+/* One ordered reading journey; navigation changes focus, never research state. */
+.research-reading-order { display: flex; align-items: center; gap: 12px; border-block-end: 1px solid var(--pw-line); padding-block: 0 8px; margin-block-end: 8px; }
+.research-reading-order button { min-height: 44px; padding: 6px 0; background: none; border: 0; color: var(--pw-text); font: inherit; font-size: var(--text-body); cursor: pointer; }
+.research-reading-order > span { color: var(--pw-muted); }
+.research-reading-layer { min-width: 0; scroll-margin-block-start: 16px; }
+.research-reading-layer .research-synthesis { margin-block: 24px 32px; }
+.research-reading-layer:focus, .research-history-heading:focus { outline: none; }
