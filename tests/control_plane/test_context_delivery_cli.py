@@ -180,6 +180,10 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     reset, _ = invoke({"scope": {**scope, "context_epoch": "compacted"}, "baseline": cold,
         "retained": {"complete": True, "target": cold["target"]}})
     assert reset["mode"] == "full"
+    unobserved, directory = invoke({"scope": scope, "baseline": cold,
+        "retained": {"complete": True, "target": cold["target"]}, "native_input": {}})
+    assert unobserved["mode"] == "full" and unobserved["reason"] == "baseline_unavailable"
+    assert unobserved["context"] == json.loads((directory / "projection.json").read_bytes())
     for malformed in ["{truncated", "[" * 2000 + "]" * 2000,
                       {"scope": {**scope, "agent_id": "another-agent"}}]:
         full, directory = invoke(malformed)

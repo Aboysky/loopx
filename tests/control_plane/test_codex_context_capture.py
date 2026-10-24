@@ -56,6 +56,7 @@ def _delivered(request, digest):
 def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
+    env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
     env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
     project, runtime, registry = _write_fixture(workspace)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -121,11 +122,16 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                                 session_id=json.loads(identity.read_text())["session_id"], context_epoch="initial")
                             request = {"scope": scope}
                             if index:
-                                # This is observed *post-processing* native model input,
-                                # not a release/file/session-id acknowledgement.
-                                assert stages["baseline_confirmed"] is True
+                                # Production CLI checks the native trace for the
+                                # active guard's model input. The loopback provider
+                                # remains an independent oracle, not its ACK source.
+                                bundle, = (workspace / "traces").glob("trace-*")
                                 request.update(baseline=wires["cold"],
-                                    retained={"complete": True, "target": wires["cold"]["target"]})
+                                    retained={"complete": True, "target": wires["cold"]["target"]},
+                                    native_input={"trace_bundle": str(bundle),
+                                        "tool_call_id": stages["guard_call"],
+                                        "capture_file": str(wire_paths["cold"]),
+                                        "capture_sha256": page_digests["cold"]})
                             request_path = path.parent / "delivery-request.json"
                             request_path.write_text(json.dumps(request))
                             request_path.chmod(0o600)
@@ -211,6 +217,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                     assert recovered == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
                     stages["phase"] = "done"
                     return message
+                if cmd.startswith(shlex.join(command)):
+                    stages["guard_call"] = f"call_{number}"
                 return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
                     "name": "exec_command", "arguments": json.dumps({"cmd": cmd, "max_output_tokens": 2000})}
 

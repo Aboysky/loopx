@@ -1007,12 +1007,38 @@ a warm baseline. Codex exec covers ordinary quota; app-server covers the Turn
 envelope. Both recover the same immutable CLI projection after automatic
 compaction, including primary recovery-handler failure, without a third guard
 or quota debit. This closes a producer-to-native transport test gap; the input
-observer is still the deterministic loopback provider, not a production Codex
-continuity adapter. The source text, source state and original captures are
+oracle independently inspects the deterministic loopback provider's input.
+The source text, source state and original captures are
 checked independently of the delta. All pages, including recovery, remain part
 of the cost boundary. These reads now execute `quota context-read`, including
 digest checks, rather than ad-hoc file slicing. Installed adoption and autonomous
 outcomes remain open.
+
+The existing CLI rendezvous also accepts an optional `native_input` cross-check:
+`trace_bundle`, `tool_call_id`, `capture_file` and `capture_sha256`. Its native
+Codex trace-v1 reader verifies the exact full baseline in the input of the
+inference that produced the still-active, model-originated `exec_command` call.
+It requires a matching session, ordered trace, completed response containing
+that call, and either an intact full tool result or every digest-bound context
+page. Earlier inference history, partial pages, previews, other item roles,
+completed calls, code-mode children and implicit server-side history do not
+qualify. Missing, malformed, oversized or incompatible observations discard the
+retention claim and choose full automatically; ordinary callers are unchanged.
+The reader only consumes already enabled private traces, with the existing
+transport size bound. It reads a bounded event-log tail rather than the whole
+session; if the active inference is outside that window it selects full. It
+does not enable diagnostics or change native sessions.
+Python owns this provider-specific IO; the shared TS projector still validates
+baseline identity, freshness and exact reconstruction.
+
+This check can narrow a caller's retention claim, never mint one or establish
+future dispatch ordering. A full baseline may be reused while every original
+byte is observable; this reader does not infer a patch chain from saved files.
+The native CLI/SQLite composition now uses this reader for warm selection, with
+the loopback provider retained as an independent oracle. The recovery hook and
+rendezvous controller are still fixtures: production lifecycle installation,
+post-publication compaction recovery, trace overhead and autonomous outcomes
+remain unqualified. No runtime or owner gate is added, and phase one stays open.
 
 Capture regression qualification also distinguishes settlement binding from
 closeout: an upgraded receipt with an outstanding semantic replan still permits

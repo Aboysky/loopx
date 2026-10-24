@@ -4,9 +4,139 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+
+def codex_context_in_active_input(observation: dict, *, baseline: dict, session_id: str) -> bool:
+    """Cross-check a host's retention claim against a native in-flight tool call.
+
+    Native trace v1 is an optional, provider-specific IO boundary. Only an
+    already enabled trace is read; this neither enables tracing nor modifies a
+    session. A saved history, an earlier inference or a completed tool is not
+    current-input evidence. Missing/partial/unknown data returns false.
+
+    This observes the input that produced this tool call, not a future model
+    dispatch. The caller still owns lifecycle invalidation and same-capture
+    recovery. It must not use this function as a standalone continuity lease.
+    """
+    from ..effect_runtime import MAX_REQUEST_BYTES
+
+    def read(path: Path, *, tail: bool = False) -> bytes:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or (metadata.st_size > MAX_REQUEST_BYTES and not tail):
+                raise ValueError("native observation is not a bounded regular file")
+            offset = max(0, metadata.st_size - MAX_REQUEST_BYTES) if tail else 0
+            stream.seek(offset)
+            raw = stream.read(MAX_REQUEST_BYTES + 1)
+        if len(raw) > MAX_REQUEST_BYTES:
+            raise ValueError("native observation exceeds the transport limit")
+        # Only the latest in-flight inference is relevant. Bound IO even for a
+        # long-running trace, discarding its cut first row, never its last row.
+        return raw.split(b"\n", 1)[-1] if offset else raw
+
+    try:
+        if baseline.get("mode") != "full" or baseline.get("target", {}).get("session_id") != session_id:
+            return False
+        # Python equality conflates booleans and numbers; source observation
+        # must retain their JSON types, as the shared projection owner does.
+        expected = json.dumps(baseline, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        bundle = Path(observation["trace_bundle"]).resolve(strict=True)
+        manifest = json.loads(read(bundle / "manifest.json"))
+        if (manifest.get("schema_version") != 1 or manifest.get("root_thread_id") != session_id
+                or manifest.get("rollout_id") != session_id):
+            return False
+
+        def payload(ref: dict) -> dict:
+            relative = Path(ref["path"])
+            if (relative.is_absolute() or len(relative.parts) != 2 or relative.parts[0] != "payloads"
+                    or ".." in relative.parts):
+                raise ValueError("native payload reference escapes its bundle")
+            path = bundle / relative
+            path.resolve(strict=True).relative_to(bundle)
+            return json.loads(read(path))
+
+        raw_events = read(bundle / "trace.jsonl", tail=True)
+        if not raw_events.endswith(b"\n"):
+            return False  # a partial writer tail cannot establish the current cursor
+        rows = [json.loads(line) for line in raw_events.splitlines()]
+        if any(row.get("schema_version") != 1 or type(row.get("seq")) is not int
+               or row.get("rollout_id") != session_id for row in rows):
+            return False
+        if any(a["seq"] >= b["seq"] for a, b in zip(rows, rows[1:])):
+            return False
+        rows = [row for row in rows if row.get("thread_id") == session_id]
+        starts = [i for i, row in enumerate(rows) if row["payload"].get("type") == "inference_started"]
+        if not starts:
+            return False
+        tail = rows[starts[-1]:]
+        turn = tail[0]["codex_turn_id"]
+        inference = tail[0]["payload"]["inference_call_id"]
+        tool_id = observation["tool_call_id"]
+        completed = [row for row in tail if row["payload"].get("type") == "inference_completed"
+                     and row["payload"].get("inference_call_id") == inference]
+        tools = [row for row in tail if row["payload"].get("type") == "tool_call_started"
+                 and row["payload"].get("tool_call_id") == tool_id]
+        if len(completed) != 1 or len(tools) != 1 or not tail[0]["seq"] < completed[0]["seq"] < tools[0]["seq"]:
+            return False
+        tool = tools[0]["payload"]
+        if (tool.get("requester") != {"type": "model"} or tool.get("kind") != {"type": "exec_command"}
+                or tool.get("model_visible_call_id") != tool_id or tool.get("code_mode_runtime_tool_id") is not None):
+            return False
+        if any(row.get("codex_turn_id") != turn or row["payload"].get("type") == "codex_turn_ended"
+               or (row["payload"].get("type") == "tool_call_ended" and row["payload"].get("tool_call_id") == tool_id)
+               for row in tail):
+            return False
+        output = payload(completed[0]["payload"]["response_payload"])
+        if not any(item.get("type") == "function_call" and item.get("call_id") == tool_id
+                   and item.get("name") == "exec_command" for item in output.get("output_items", [])):
+            return False
+        request = payload(tail[0]["payload"]["request_payload"])
+        if request.get("previous_response_id"):
+            return False  # implicit server-side history is outside this observer
+        raw = read(Path(observation["capture_file"]))
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != observation["capture_sha256"] or json.dumps(json.loads(raw), sort_keys=True,
+                ensure_ascii=False, allow_nan=False) != expected:
+            return False
+        pages: dict[int, bytes] = {}
+        for item in request["input"]:
+            if item.get("type") != "function_call_output" or not isinstance(item.get("output"), str):
+                continue
+            # The qualified exec transport wraps complete output after this
+            # delimiter. Ignore prose/quoted JSON, previews and other item roles.
+            text = item["output"].split("\nOutput:\n", 1)[-1]
+            try:
+                page = json.loads(text)
+            except ValueError:
+                continue
+            if json.dumps(page, sort_keys=True, ensure_ascii=False, allow_nan=False) == expected:
+                return True
+            if not isinstance(page, dict) or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
+                continue
+            start, content = page.get("offset"), page.get("content")
+            if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
+                return False
+            data = content.encode("utf-8")
+            end = start + len(data)
+            if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
+                    or page.get("eof") is not (end == len(raw))
+                    or page.get("next_offset") != (None if end == len(raw) else end)
+                    or raw[start:end] != data or (start in pages and pages[start] != data)):
+                return False
+            pages[start] = data
+        cursor = 0
+        for start, data in sorted(pages.items()):
+            if start != cursor:
+                return False
+            cursor += len(data)
+        return cursor == len(raw)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return False
 
 
 def record_codex_input_source(

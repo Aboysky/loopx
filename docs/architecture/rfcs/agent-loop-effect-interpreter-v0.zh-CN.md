@@ -694,10 +694,29 @@ hook 或 packet 变小本身不等于节省。下一接入是让 Codex 生命周
 私有 rendezvous 和共享投影；在实际发出的模型输入中观察到完整分页输出后，才提供温态
 基线。Codex exec 覆盖普通 quota，app-server 覆盖 Turn envelope。两条路径均在自动
 压缩后恢复同一份不可变 CLI 投影，包含主恢复 handler 失败，且不触发第三次 guard 或
-quota 扣额。这补齐 producer 到原生传输的测试缺口；输入观察器仍是确定性 loopback
-provider，并非生产 Codex 连续性 adapter。来源正文、来源状态和原始 capture 独立于
+quota 扣额。这补齐 producer 到原生传输的测试缺口；独立 oracle 检查确定性 loopback
+provider 的实际输入。来源正文、来源状态和原始 capture 独立于
 delta 校验。包括恢复在内的全部分页仍属于成本边界；这些读取现执行带摘要校验的
 `quota context-read`，不再自行编写文件切片。安装采用和自主成果保持未完成。
+
+既有 CLI rendezvous 还接受可选的 `native_input` 交叉校验，字段为 `trace_bundle`、
+`tool_call_id`、`capture_file`、`capture_sha256`。原生 Codex trace-v1 reader 核对
+产生当前仍在执行的、由模型发起的 `exec_command` 调用的那次推理输入，是否包含精确
+全量基线；要求 session 匹配、trace 顺序有效、已完成 response 包含该调用，并观察到
+完整工具结果或全部摘要绑定的 context 分页。更早的推理历史、部分分页、预览、其他
+消息角色、已完成调用、code-mode 子调用及隐式服务端历史均不具备资格。观察缺失、
+格式错误、超限或不兼容时，丢弃保留声明并自动全量；普通调用方保持不变。
+Reader 只读取已经启用的私有 trace，复用既有传输大小上限；读取有界事件日志尾部，
+不读整份 session，当前推理已超出该窗口时自动全量。不启用诊断或改变原生 session。
+Python 持有 provider 特有的 IO；基线身份、新鲜度和精确重建仍由共享 TS
+投影器校验。
+
+该检查只能收窄调用方的保留声明，不能自行生成声明或证明未来 dispatch 的顺序。
+只有每个原始字节仍可观察时，才可复用全量基线；reader 不从已存文件推断 patch 链。
+原生 CLI/SQLite 组合现使用该 reader 选择温态交付，loopback provider 保留为独立
+oracle。恢复 hook 和 rendezvous controller 仍是 fixture：生产生命周期安装、发布
+后的压缩恢复、trace 开销及自主成果尚未取得资格。不新增 runtime 或 owner 问询门，
+一期仍保持开放。
 
 Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
 重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout

@@ -231,9 +231,21 @@ def project_captured_context(
         scope = request.get("scope")
         if not isinstance(scope, dict) or scope.get("goal_id") != goal_id or scope.get("agent_id") != agent_id:
             return payload
+        retained = request.get("retained")
+        if "native_input" in request:
+            from ..control_plane.turn_driver.codex_input_trace import codex_context_in_active_input
+
+            # An optional native observation can only narrow the caller's
+            # retention claim. It never mints an ACK or enables tracing, and a
+            # malformed/stale observation must not fall back to that claim.
+            observation, baseline = request["native_input"], request.get("baseline")
+            if (not isinstance(observation, dict) or not isinstance(baseline, dict)
+                    or not codex_context_in_active_input(observation, baseline=baseline,
+                        session_id=scope.get("session_id"))):
+                retained = None
         delivery = prepare_context_delivery(payload, scope=scope,
             capture_id=capture_id, surface=surface,
-            baseline=request.get("baseline"), retained=request.get("retained"))
+            baseline=request.get("baseline"), retained=retained)
         delivery["recovery"] = {
             "path": str(projection), "sha256": hashlib.sha256(projection.read_bytes()).hexdigest(),
             "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
