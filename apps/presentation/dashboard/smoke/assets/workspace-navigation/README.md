@@ -1,0 +1,30 @@
+# Workspace navigation reading evidence
+
+Synthetic populated workspace, including 30 Goals and a linked read-only archive.
+The packaged Chat bundle is served by the existing production Chat entrypoint;
+API discovery/permission descriptors are synthetic. These captures contain no
+private operating state and do not establish an installed App result.
+
+The baseline is `c10d8c2b4a20747e6eb77a188fd8e870b3be19de`. It reproduces the
+missing host Settings entry while viewing the archived Goal. The after views
+use the accompanying source and the same fixture. Desktop is 1440×900, low
+window 1280×540, and narrow 390×640. Narrow captures show the opened sidebar.
+The default footer now has Settings and a compact search icon on one row.
+The independent Goal list scrolls above it; update status retains its own row.
+Restriction views show an explicit Goal target and its original read-only
+boundary, without local management forms. Repeated matching target/source
+labels are shown once. Scope and source remain available.
+
+Reproduce after a Chat build with `npm run smoke:workspace-command-palette` in
+the dashboard package and `LOOPX_PERSONAL_WORKSPACE_PACKAGED=1`. The navigation
+scenario covers EN/ZH, low/narrow windows, real browser touch events, keyboard,
+IME-shaped events, focus, outside dismissal, internal selection/drag/scroll,
+no click-through and zero write requests. It does not certify native macOS IME
+or touch hardware. `LOOPX_NAVIGATION_CAPTURE_BASE=1` is only the baseline
+capture/reproduction mode; it does not run the new behavior assertions.
+
+Whole-page judgment: the stable lower row makes Settings discoverable while
+reading the archive and removes a competing navigation card. Optional help is
+visible on search hover/focus. The surrounding long Goal names and unrelated
+missing-state summaries are retained; this change does not redesign all Goal
+content or certify the full settings catalogue.
