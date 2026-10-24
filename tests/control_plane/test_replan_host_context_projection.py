@@ -239,7 +239,7 @@ def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(
     # warning and executable authority remain independent of that advice.
     assert envelope["compaction"]["within_budget"] == old_envelope["compaction"]["within_budget"]
     assert (envelope["compaction"]["envelope_json_bytes"]
-            - old_envelope["compaction"]["envelope_json_bytes"]) <= 3072
+            - old_envelope["compaction"]["envelope_json_bytes"]) <= 3000
     envelope["replan_action_packet"].pop("planning_guidance")
     assert envelope["replan_action_packet"] == old_envelope["replan_action_packet"]
 
