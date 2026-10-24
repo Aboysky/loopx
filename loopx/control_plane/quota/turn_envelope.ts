@@ -313,6 +313,23 @@ function replanReadCommands(payload: JsonObject): JsonObject | null {
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
 
+/** Move only an identical acceptance copy behind the existing captured read.
+ * Different revisions, other source fields and unavailable context stay intact.
+ */
+function replanWorkContext(payload: JsonObject, context: JsonObject): JsonObject {
+  const reads = replanReadCommands(payload);
+  const core = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
+  const acceptance = object(core.acceptance_contract);
+  if (!reads || !Object.keys(acceptance).length || !Array.isArray(context.sources)) return context;
+  return {...context, sources: context.sources.map(value => {
+    const source = object(value), content = object(source.content);
+    if (source.source !== "goal_acceptance" || content.status != null && content.status !== "loaded" ||
+        canonicalHash(content.goal_acceptance_contract) !== canonicalHash(acceptance)) return value;
+    const {goal_acceptance_contract: _contract, ...metadata} = content;
+    return {...source, content: {...metadata, context_read: reads.review}};
+  })};
+}
+
 function replanView(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured replan decision");
   if (request.source_hash !== canonicalHash(payload) || payload.ok !== true) {
@@ -375,7 +392,7 @@ function replanView(request: JsonObject): JsonObject {
       required_outcome: packet.required_outcome, allowed_terminal: packet.allowed_terminal,
       ...(packet.stride_control ? {stride_control: stride} : {}),
       writeback: actionProjection(payload).writeback,
-      context_read: replanReadCommands(payload)?.review ?? null};
+      context_read: reads?.review ?? null};
   }
   if (request.stage !== "review") throw new EffectRuntimeRequestError("unsupported replan read stage");
   // Index every captured outcome, including differing context/horizon revisions.
@@ -395,6 +412,7 @@ function replanView(request: JsonObject): JsonObject {
   }
   return {...common,
     core_goal: core,
+    planning_guidance: packet.planning_guidance ?? [],
     ...(acceptanceIndex ? {acceptance_index: acceptanceIndex} : {}),
     triggers: obligation.triggers,
     decision_followthrough: Object.keys(follow).length ? follow : null,
@@ -419,7 +437,7 @@ function replanView(request: JsonObject): JsonObject {
     uncovered_frontier: context.uncovered_frontier,
     // Facts and their provenance are the review input. Do not preselect a
     // diagnostic method, candidate route or judgment from observation counts.
-    next: {writeback: replanReadCommands(payload)?.writeback ?? null},
+    next: {writeback: reads?.writeback ?? null},
   };
 }
 
@@ -429,7 +447,7 @@ function replanActionPacket(payload: JsonObject): JsonObject | null {
   const reads = replanReadCommands(payload);
   if (reads) return {...compactFields(source, ["schema_version", "decision", "obligation_id", "required_outcome", "allowed_terminal"]),
     review: reads.review, writeback: reads.writeback,
-    guidance: "Read review state and applicable acceptance/evidence before deciding; writeback supplies the format. Reads grant no new authority and require no acknowledgement."};
+    guidance: "Read review state and applicable acceptance/evidence; choose the next work and route before reading writeback for its format. Reads grant no authority and require no acknowledgement."};
   const compact = compactFields(source, [
     "schema_version", "decision", "obligation_id", "uncovered_frontier",
     "required_outcome", "allowed_terminal", "bounded_frontier", "settlement_only", "successor_todo_id", "stride_control",
@@ -852,7 +870,7 @@ function actionProjection(payload: JsonObject): JsonObject {
     && (typeof object(action.selected_todo).text === "string"
       || object(action.selected_todo).text_ref === "action.recommended_action");
   if (Object.keys(workContext).length > 0 && !selectedTodoContextIsAlreadyInAction) {
-    projection.work_context = workContext;
+    projection.work_context = replanWorkContext(payload, workContext);
   }
   const orchestration = object(payload.task_orchestration_contract);
   if (Object.keys(orchestration).length > 0) projection.task_orchestration_contract = orchestration;
@@ -1139,12 +1157,16 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "replan_view") return replanView(request);
   if (operation === "replan_cli_view") {
     const payload = requireJsonObject(request.payload, "replan CLI payload");
-    if (!replanReadCommands(payload)) return payload;
+    const reads = replanReadCommands(payload);
+    if (!reads) return payload;
     const obligation = {...object(payload.autonomous_replan_obligation)};
     delete obligation.replan_context;
+    const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
     return {...payload,
-      ...(payload.planning_horizon ? {planning_horizon: {context_read: replanReadCommands(payload)!.review}} : {}),
-      autonomous_replan_obligation: {...obligation, context_read: replanReadCommands(payload)!.review},
+      ...(payload.planning_horizon ? {planning_horizon: {context_read: reads.review}} : {}),
+      interaction_contract: {...interaction, agent_channel: {...agent,
+        work_context: replanWorkContext(payload, object(agent.work_context))}},
+      autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};
   }
   if (operation === "build") return buildTurnEnvelope(request);

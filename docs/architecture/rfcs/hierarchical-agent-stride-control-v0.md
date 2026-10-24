@@ -785,6 +785,10 @@ full delivery. File/SQLite source tests and populated packet budgets qualify
 transport and writer continuity; installed adoption, real model decisions and
 matched outcome/cost benefit remain unqualified. This introduces no new planning
 receipt, model checkpoint or requirement to change direction.
+The reader replaces repeated method guidance with compact semantic boundaries
+and the existing stride format. Benchmark preflight captures the original
+decision through the CLI and delivers its staged view even with TurnEnvelope
+off; retaining a full checkpoint packet alone does not qualify model exposure.
 
 The next-review input also exposes causally later ordinary writebacks for the
 declared work in `ordinary_work`, with per-Todo `ordinary_evidence_refs`. Its
