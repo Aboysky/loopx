@@ -20,8 +20,10 @@ from .control_plane.goals.activation import (
     normalize_goal_activation_state,
 )
 from .control_plane.goals.legacy_event_source import LEGACY_TODO_EVENT_SOURCE_FIELDS
+from .control_plane.goals.path_resolution import resolve_goal_local_path
 from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
+from .control_plane.quota.host_poll_receipts import read_host_worker_observations
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
@@ -56,13 +58,16 @@ from .control_plane.runtime.time import chronology_key, now_local_iso
 from .doctor import PROMOTION_READINESS_CLASSIFICATIONS
 from .execution_profile import compact_execution_profile
 from .explore_graph import compact_explore_graph_policy
-from .paths import registry_project_root, resolve_runtime_root
+from .paths import (
+    registry_project_root,
+    resolve_runtime_root,
+    validate_goal_id_path_segment as validate_goal_id_path_segment,
+)
 from .presentation.markdown import (
     markdown_code,
     markdown_table_row,
     markdown_table_separator,
 )
-from .quota import goal_quota_with_spend_ledger
 from .registry import registry_goals
 
 STATUS_NEUTRAL_CLASSIFICATIONS = {
@@ -89,6 +94,43 @@ def goal_registry_digest(goal: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def host_worker_goal_observation_digest(goal: dict[str, Any], *, registry_path: Path) -> str | None:
+    """Bind a driver observation to its actual source Goal, not sync metadata.
+
+    A global row must still match the existing sanitizer/merge projection of
+    that source. Sync timestamps and consumed merge directives are incidental;
+    changed source routes, Goal lifetimes or configuration must not reuse the
+    old observation. This readback check never changes execution admission.
+    """
+    from .global_registry import preserve_attention_override, sanitize_goal_for_global
+
+    try:
+        selected_registry = registry_path.expanduser().resolve()
+        source_route = goal.get("source_registry")
+        source_registry, source_goal = selected_registry, goal
+        if source_route:
+            if not isinstance(source_route, str) or not Path(source_route).is_absolute():
+                return None
+            source_registry = Path(source_route).expanduser().resolve()
+            if source_registry != selected_registry:
+                candidates = [row for row in registry_goals(load_registry(source_registry))
+                              if row.get("id") == goal.get("id")]
+                if len(candidates) != 1:
+                    return None
+                source_goal = candidates[0]
+                # A global row has one owning source. Do not accept an
+                # unverified chain of projections as that source.
+                if source_goal.get("source_registry"):
+                    return None
+                expected = preserve_attention_override({}, sanitize_goal_for_global(
+                    source_goal, source_registry=source_registry, synced_at=""))
+                if preserve_attention_override({}, {**goal, "synced_at": ""}) != expected:
+                    return None
+        return goal_registry_digest({"source_registry": str(source_registry), "goal": source_goal})
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +187,7 @@ class RunIndexSnapshot:
     records: list[dict[str, Any]]
     raw_count: int
     digest: str | None
+    invalid_count: int = 0
 
 
 def now_local() -> str:
@@ -224,17 +267,6 @@ def write_reserved_run_artifacts(
         append_run_index_record(index_path, index_record, allow_nan=False)
 
 
-def validate_goal_id_path_segment(goal_id: str) -> str:
-    value = str(goal_id or "").strip()
-    if not value:
-        raise ValueError("goal id is required")
-    if value in {".", ".."} or "/" in value or "\\" in value:
-        raise ValueError("goal id must be a single path segment")
-    if Path(value).name != value:
-        raise ValueError("goal id must not include path traversal")
-    return value
-
-
 def discover_goal_ids(
     runtime_root: Path,
     registry: dict[str, Any],
@@ -259,7 +291,13 @@ def _indexed_artifact_exists(value: Any, *, artifact_root: Path | None) -> bool:
     path = Path(text).expanduser()
     if not path.is_absolute() and artifact_root is not None:
         path = artifact_root / path
-    return path.exists()
+    try:
+        return path.exists()
+    except OSError:
+        # Availability is a best-effort observation, not run-index authority.
+        # Match pathlib's Python 3.14 behavior on older supported interpreters:
+        # inaccessible or invalid artifact paths must not hide durable history.
+        return False
 
 
 def _observe_run_artifacts(
@@ -294,6 +332,7 @@ def load_index_snapshot(
     records: list[dict[str, Any]] = []
     positions: dict[tuple[str, str, str], int] = {}
     raw_count = 0
+    invalid_count = 0
     digest = hashlib.sha256()
 
     with stream:
@@ -306,8 +345,10 @@ def load_index_snapshot(
             try:
                 item = json.loads(line)
             except json.JSONDecodeError:
+                invalid_count += 1
                 continue
             if not isinstance(item, dict):
+                invalid_count += 1
                 continue
 
             key = (
@@ -330,6 +371,7 @@ def load_index_snapshot(
         records=records,
         raw_count=raw_count,
         digest=f"sha256:{digest.hexdigest()}",
+        invalid_count=invalid_count,
     )
 
 
@@ -369,6 +411,7 @@ def collect_history(
         project_goal_with_builtin_machine_configuration,
     )
     from .capabilities.machine_configuration.store import read_machine_configuration
+    from .quota import goal_quota_with_spend_ledger
 
     if registry is None:
         registry = load_registry(registry_path)
@@ -379,6 +422,10 @@ def collect_history(
     registry_goal_rows = registry_goals(registry)
     registry_goal_digests = {
         str(goal.get("id")): goal_registry_digest(goal)
+        for goal in registry_goal_rows
+    }
+    registry_goal_meta = {
+        str(goal.get("id")): goal
         for goal in registry_goal_rows
     }
     goal_meta = {
@@ -458,6 +505,12 @@ def collect_history(
             **goal_parent_fields(meta),
             "activation_state": activation_state.value,
             "registry_goal_digest": registry_goal_digests.get(current_goal_id),
+            "host_worker_observations": read_host_worker_observations(
+                meta, resolve_goal_local_path(meta.get("state_file"), meta, fallback_base=registry_path.parent),
+                registry_goal_digest=registry_goal_digests[current_goal_id], runtime_root=runtime_root,
+                source_goal_observation_digest=lambda: host_worker_goal_observation_digest(
+                    registry_goal_meta[current_goal_id], registry_path=registry_path),
+            ) if registry_member else None,
             "display_name": meta.get("display_name") if registry_member else None,
             "domain": meta.get("domain"),
             "status": meta.get("status") if registry_member else "legacy-runtime",

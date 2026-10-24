@@ -28,6 +28,9 @@ symlinks, and atomically publishes `decision.json` (0600 on POSIX) before printi
 the result. The file contains the unprojected decision and its original receipt;
 it excludes display-only host poll metadata. It can contain private Goal context:
 keep it out of public artifacts. No capture is created without a capture option.
+New captures use compact UTF-8 JSON with a final newline, retaining every value,
+including whitespace inside strings. Readers accept existing indented captures;
+recovery preserves their original bytes rather than rewriting their layout.
 
 If a tool truncates the displayed JSON, read this file instead of rerunning the
 guard merely to recover the observation. The file is **not fresh authority**:
@@ -51,12 +54,28 @@ not verify file integrity or make saved admission current. Missing, malformed,
 or mismatched files require recovery, never automatic guard replay. Consumers already referring to `full_decision`, such as compacted capability
 context and peer diagnostics, now read this same observation. Scheduler-specific
 legacy detail requests are unchanged. Replan obligations and fresh selection/lease/quota checks retain their existing owners.
-Without capture, the historical full-decision route and all default outputs are
-unchanged. This opt-in detail link does not change action-signature coverage.
+Without capture, the historical full-decision route remains available. Enabling
+capture does not enable TurnEnvelope or change admission/settlement defaults.
+This opt-in detail link does not change action-signature coverage.
 
 中文：同时开启短包和完整 decision 保存时，详情入口读取本次保存的文件，不再
 为补读上下文重跑 guard。读取前核对身份和源哈希；旧观察不提供新的执行权限。
 文件损坏或丢失不能自动重跑，选 Todo、lease 变化等仍需按原契约重新准入。
+
+The default ordinary quota CLI view may replace an exactly identical nested
+`heartbeat_recommendation.blocked_priority_fallback` diagnostic with
+`blocked_priority_fallback_ref="$.blocked_priority_fallback"`. Read the complete
+root field in that same packet; resolving this reference needs no new guard or
+detail command. Different mirrors remain inline. Raw decisions, saved captures
+and the existing `--include-detail agent-todos` view retain their original shape.
+Action dimensions remain equivalent; the raw source hash still identifies the
+specific original rendering and must not be substituted across views.
+The existing packet owner supplies this compatibility projection, keeping the
+CLI from becoming another reader of the legacy guidance field.
+
+中文：普通 quota CLI 热路径将完全相同的 fallback 副本改为本包根字段引用，完整
+事实仍在当前包内，不需再次执行 guard。不同副本和既有详细视图保留；原始决定与
+capture 不变。动作维度等价不意味着不同渲染可以共用原始 source hash。
 
 ### Native Turn Host capture
 
@@ -94,6 +113,12 @@ permitted. Downgrading code must preserve journals and captures; deleting them
 is not rollback. This transport qualification does not establish live model,
 packaged App/Lark or overall convergence acceptance.
 
+Repair and replan diagnostics remain in the journal's typed `host_result`,
+including its summary and follow-up action. They do not implicitly replace Todo
+notes or evidence, even when settlement succeeds. Semantic refusal and cached
+result recovery must preserve that task context; explicit Todo lifecycle
+operations retain their existing authority and validation.
+
 中文：原生 `turn run-once --execute` 在启动 Host 前保存完整原始决策，实际短包详情
 与失败重试均读取该快照，预览不写入。Turn 身份来自原 journal，不伪造 heartbeat
 准入记录。旧观察不授予新权限；缺失、损坏或身份／哈希不符时拒绝重新启动 Host。
@@ -129,13 +154,56 @@ command retain that explicit choice. Quota's existing explicit flag is unchanged
 
 With that display opt-in, execute its guard, read the short action/contract/writeback fields, and use
 `detail_ref.full_decision` to read the **same invocation** when selection, replan,
-capability context or truncation requires detail. Replan history remains with the
+an `agent_context.detail_ref` or truncation requires detail. Replan history remains with the
 existing owner; this option neither invents another history store nor chooses a
 strategy. The renderer rejects full/compact/brief modes, missing Turn identity,
 native Goal-owned Turns and invalid roots. Stable bootstrap prompts cannot pin a
 Turn. Omit `--turn-envelope` to use the ordinary dispatcher, including when
 checkpoint capture remains enabled. Captured files retain the full decision in
 both display modes.
+
+Capability planning context stays inline under the existing context owner's
+3 KiB bound, including when the envelope exceeds its diagnostic budget. Read it
+before planning; it is guidance, not permission. `delivery=projected` also labels
+complete context and does not itself require a detail read. The shared DSH/cloud
+Host adapter transports this signed context. For historical context with a
+`detail_ref`, it also retains the original capture route and source signature;
+only that saved observation may satisfy the missing context, never a fresh quota
+guard. Missing or invalid evidence holds dependent planning while independent
+work retains its authority. Capture validation and later mutation checks remain
+with their existing owners; prompt delivery does not prove model adoption.
+
+For admitted replans, the shared DSH/cloud adapter also carries the signed
+`replan_action_packet` and the original capture route/signature. Read that saved
+decision's `autonomous_replan_obligation.replan_context` before choosing the
+semantic outcome, preserving the existing full Goal read. Missing or invalid
+original evidence holds dependent replanning; never rerun admission to replace
+it. Return the typed candidate rather than executing the packet's writeback
+commands: the outer Turn executor owns state, quota and scheduler effects.
+This repairs an adapter omission without adding an evidence-read receipt or
+changing non-replan requests.
+
+中文：已准入的重规划通过共享 DSH/cloud adapter 传递签名 action packet，以及原捕获
+路由和签名。选择语义结果前从原决策读取既有 replan context，保留完整 Goal 必读；
+来源缺失或无效时暂停依赖它的重规划，不能重跑准入替代。返回 typed candidate，
+不执行 packet 内写回命令；状态、quota 和 scheduler 效果仍归外层 Turn executor。
+本修复不增加补读回执，也不改变非重规划请求。
+
+The unchanged public multi-subagent CLI fixture grows by 1,147 JSON characters
+and UTF-8 bytes when this context replaces its reference. Its differential
+allows 1,280 only for that reference-to-inline transition (133 headroom);
+absolute ceilings, line limits, later inline growth and the 8 KiB production
+diagnostic remain unchanged. This is an output qualification, not a full-cost SLO.
+
+中文：同一公开 multi-subagent CLI 夹具恢复完整内联后增加 1,147 个 JSON 字符／UTF-8
+字节；差分仅对该引用转内联的一次变化给予 1,280（余量 133），绝对上限、行数、后续
+内联增长检查及生产 8 KiB 诊断不改；这不是完整成本 SLO 验收。
+
+中文：能力规划上下文由既有 owner 限制在 3 KiB 内，短包超出诊断预算时仍完整内联。
+规划前读取它，但它不授予权限。`delivery=projected` 也用于完整上下文，不能仅据该值
+要求补读。共享 DSH/cloud Host 传递签名上下文；历史 `detail_ref` 保留原捕获路由与
+源签名，只能补读原观察，不能重跑 quota。证据缺失或失效时暂停依赖它的规划，独立
+工作保留原权限。捕获及后续写入校验仍归原 owner；输入到达不证明模型实际采用。
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
@@ -179,6 +247,30 @@ Ordinary product heartbeat consumes current task/acceptance/User sources from
 carrier; the CLI channel carries transitions. TurnEnvelope consumes and signs
 both as `work_context` and `required_reads`; it never independently synthesizes
 another policy. Already delivered content requires no second CLI invocation.
+
+The ordinary `quota should-run` display shares exact complete acceptance copies
+within that response. Its preferred carrier is a loaded Goal-acceptance source
+in `work_context`, otherwise the planning horizon (or the first available full
+copy). Duplicate `acceptance_contract` / `goal_acceptance_contract` fields become
+their corresponding `_ref` fields pointing to that inline carrier. Resolve them
+in the **same response**, including when reading replan context; do not fetch a
+new revision. Different revisions, scopes, sources, failures or JSON types stay
+inline. Nothing is truncated or removed from the retained contract, and no
+decision or acceptance verdict changes. Diagnostic detail options still share
+these copies; canonical state and saved full-decision captures retain their
+original structure. TurnEnvelope relocates the known work-context reference to
+its own signed `work_context` root and rejects an unavailable or dangling source.
+This reduces display bytes, not upstream authority reads, and does not by itself
+establish model adoption or end-to-end efficiency.
+
+中文：普通 `quota should-run` 在同一次响应内复用完全相同的完整验收内容，优先保留
+work context 中已加载的来源，其次保留 planning horizon 或第一份完整副本。重复字段
+改为对应的 `_ref`；读取重规划上下文时也必须沿同响应引用读取，不能另查新版本。
+版本、作用域、来源、失败或 JSON 类型不同则保留原文，不截短要求或改变验收判断。
+详情选项同样复用；权威状态和完整决策捕获不改。TurnEnvelope 将已知引用移到自己
+签名覆盖的 work context，拒绝缺失或不可用来源。这只证明展示成本下降，尚不证明
+上游读取减少、模型采用或完整任务效率提升。
+
 The selected-Todo display body is display-only and may be bounded; the typed
 owner validates the exact read against selected identity, lifecycle, claim and
 source revision. A supplied full-body snapshot must match before fulfilling the read. If the full body is already
@@ -216,10 +308,41 @@ captured full decision. Historical saved envelopes retain their original
 signatures; this projection change grants no closure or execution authority.
 The 8 KiB warning remains diagnostic when required meaning exceeds it.
 
+Shared DSH/cloud Host input forwards this audit from the signed capsule, with
+the original capture route and hash for additional acceptance/coverage evidence.
+Hosts read its ordered obligations and current judge before proposing closure;
+they return a semantic result while the outer Turn executor owns state, quota
+and scheduler effects. The same input carries the complete existing
+`execution_profile`, including outcome-floor and degradation rules, to size and
+qualify work. Display filtering must not discard those clauses or ordered
+requirements before signing. A new material result carrying `execution_profile`
+must return `work_evidence` and `validation_evidence` as separate arrays of
+1-8 non-empty public-safe strings, at most 240 characters per item and 1,200
+characters per field. The Host must preserve its actual
+`delivery_batch_scale` and `delivery_outcome` rather than replacing them with a
+fixed progress class. The outer Turn executor validates and retains this evidence
+in the typed host result; `turn run-once` projects it as `host_evidence`.
+Legacy journal replay may retain an older material result without these fields.
+Stop results omit both arrays. The profile does not transfer writeback or quota
+ownership. Historical profiles keep their original signature, and inputs without
+either contract retain their prompt.
+
 中文：验收 capsule 完整保留原来源的有序步骤、继续执行说明、当前结束／继续判断、
 认可的证据种类和不能作为证明的条件；展示裁剪不能丢掉条款或列表尾部。新投影使用
 既有签名维度，历史 envelope 的签名不重写。详细验收记录仍从同次捕获读取，体积
 超过 8 KiB 时保留 warning，不以缩短义务或放大预算替代语义验收。
+共享 DSH／云端 Host 输入也从签名 capsule 传递这份 audit，附原捕获路由与哈希，供
+补读验收／覆盖证据；提议收尾前须读取有序义务及当前 judge。Host 返回语义结果，
+状态、quota 和 scheduler 效果仍由外层 Turn executor 执行。同一输入也传递完整的既有
+`execution_profile`，包括成果底线、退化规则和有序要求，供确定工作规模及验收；不能
+在签名前按展示字段丢弃。携带 `execution_profile` 的新 material result 必须分别返回
+`work_evidence` 与 `validation_evidence` 字符串数组：各 1-8 项、每项不超过 240 字符、
+整字段不超过 1,200 字符，且公开安全。Host 必须保留实际
+`delivery_batch_scale` 与 `delivery_outcome`，不能改写成固定的 progress 分类。外层
+Turn executor 验证 typed result 并保留证据，`turn run-once` 以 `host_evidence`
+投影回读；旧 journal replay 可保留缺少这些字段的历史 material result，stop result
+不得返回两组证据。Host 不取得写回或扣额权。历史 profile 保留原签名；两种契约都不
+存在时保持原 prompt。
 
 No new frontend/Lark operation or configuration is introduced. Regenerate saved
 expanded heartbeat prompts to consume the new contract; bootstrap prompts reload
@@ -240,8 +363,9 @@ The envelope flag selects a projection of the full decision. The original v0
 contract left the default `quota should-run` output unchanged; the
 [PR-05 migration](protocol-action-packet-decision-v0.md) omits
 `protocol_action_packet` from new full decisions, including live, paused and
-recovery output, from the first release containing #4794. Historical v0 reads
-remain supported for the v0 reader lifetime. The v0 envelope keeps:
+recovery output, from the first release containing #4794. The subsequent
+reader retirement in #7161 explicitly rejects packet-bearing decisions and
+capsule witnesses. Packet-free v0 envelopes remain supported. The envelope keeps:
 
 - the selected todo, claim, and effective action;
 - the bounded action portfolio when the agent must choose among multiple
@@ -495,26 +619,21 @@ The compact envelope does not truncate those executable commands into unusable
 strings. It carries non-exhaustive `writeback.suggested_todo_ids` plus
 `selection_command_ref`; the full decision remains the authority for exact argv.
 
-Historical full decisions may carry `protocol_action_packet`. For those inputs,
-the envelope reconstructs its ordered semantic fields from `action`, `user`,
-work-lane, automation, and scheduler contracts, while carrying the explicit
-`llm_policy=no_api` invariant. Exact reconstruction retains the source summary
-hash and derivation status; a differing compact action retains field-level
-`residue`; an opaque summary follows `unverified_retain_summary`. These remain
-historical read paths and do not rewrite stored packets or envelopes.
+Packet-bearing historical decisions and `contract_capsule.protocol_action_packet`
+witnesses are unsupported under [the retirement contract](protocol-action-packet-decision-v0.md).
+Presence, even null or empty, fails before conversion, hashing, capture binding
+or Host admission. Ordered legacy reconstruction, residue and opaque-summary
+fallback are removed. No signed dimension is silently dropped and no historical
+record or signature is rewritten. Callers must acquire a fresh typed decision;
+this does not introduce a question or an additional admission workflow.
 
-Under PR-05, a new source without a packet produces no
-`contract_capsule.protocol_action_packet` witness. The ordered semantic
-projection `protocol_action_packet_fields` and historical summary renderer
-remain; packet absence does not remove typed obligations or their signature
-coverage. Source and envelope signature documents must match for that input.
-Compared with a packet-bearing source, the document may lack the capsule's
-packet witness and have a different hash. This is not a cross-version hash
-compatibility promise; existing signature checks and historical signatures
-remain intact. The v1.1.0 reader/host accepts the tested new and stored v0 examples.
-The [migration contract](protocol-action-packet-decision-v0.md) defines the
-release boundary, v0 reader lifetime, consumer set and rollback steps; unknown
-external readers and complete private archives are not implicitly qualified.
+Packet-free sources produce no packet witness. All other typed obligations and
+signature dimensions retain their existing interpretation, including frozen
+packet-free v0 records. Source and envelope canonical documents must agree;
+missing, mismatched or tampered signatures still fail. This is a deliberate
+input-format retirement, not a retirement of all Envelope v0 records. The
+contract defines the source/release boundary and recovery without promising a
+whole-store rollback or qualification of unknown external readers.
 
 Large todo summaries, frontier diagnostics, readiness history, compatibility
 fields, and warning collections stay on the referenced full-decision/status
@@ -523,6 +642,29 @@ not an execution-admission limit. `compaction.envelope_utf8_bytes` measures the
 final packet, including diagnostics. The historical `source_json_bytes` and
 `envelope_json_bytes` fields still count Unicode code points for v0 compatibility;
 do not use them as wire-byte measurements.
+
+### Execution boundary retention
+
+The envelope preserves complete `write_scope`, `available_capabilities`,
+`requires_parent_approval`, `guards` and `stop_condition` values, including
+literal path whitespace and explicit empty lists. Resolved checkpointed write
+approval retains every active scope; private approval entries stay on the
+authorized full-decision path. Display limits must not remove restrictions or
+change path patterns. The 8 KiB warning remains diagnostic.
+
+The shared DSH/cloud candidate prompt carries the remaining signed boundary
+under `boundary`. Its existing `write_scope` and `workspace_guard` fields keep
+their original locations and are not duplicated in that remainder. These are
+instructions for the Host, not a new enforcement mechanism or permission grant;
+owning admission, lease and mutation checks still apply. Boundary facts already
+belong to the action signature: new projections can change hashes, while saved
+signatures and receipts are not rewritten. Signature equality alone cannot
+prove source completeness when both sides use the same projection.
+
+中文：envelope 完整保留范围、能力、审批要求、守卫和停止条件，路径空白、空数组及
+已批准的全部范围也不裁剪。共享 DSH／云端提示传递其余签名边界，原范围和 workspace
+字段继续兼容且只传一份。它们是宿主指令，不替代准入、lease 或写入校验；8 KiB 仍只
+警告，不改写历史签名和回执。两边共用投影时，签名相等本身不能证明来源条款完整。
 
 ### Capability refusal facts
 
@@ -563,6 +705,71 @@ When enabled, bounded reflection validation, exact independent attestation and
 post-settlement ingest retain their existing rules. Provider failure remains
 fail-open. The host adapter is Python IO transport over the existing capability
 resolver and TypeScript envelope owner, not a new enablement policy.
+
+The capability layer registers post-selection context once for executing native
+Turn and quota/heartbeat guards. Internal `turn_context_contributions` carry
+bounded context fields, instructions and optional text-result schemas; they are
+not provider permissions. Hosts consume the generic `capability_context_fields`,
+`capability_instructions` and `capability_result_fields` projection. The existing
+`reward_memory_recall` readback and 2,400-character reflection limit remain.
+Programmatic callers contributing memory use the registered context path;
+inserting a legacy recall readback alone cannot activate a host contribution.
+An inactive binding leaves ordinary host input, prompt and result schema intact.
+The registered contribution carries the full optional recall only once, in
+host context; its readback retains bounded participation facts without a
+second context copy. If the complete recall would exceed the existing 64 KiB
+contribution budget, that recall context is omitted for the Turn while the
+verified binding, reflection schema and post-settlement ingest remain enabled.
+The hard budget is not raised and omission never grants action authority.
+
+Recovery also reads pre-registration journals that already contain a bounded
+reflection and its independent validation receipt. Without a contribution
+annotation, only this cached result field retains its existing 2,400-character
+wire decoding; new Host results still require registered context. Recovery
+preserves the original result, validation digest and plan without repeating the
+Host or task validator. Current ingest policy, independent evidence and the
+original settlement/idempotency owners still decide any provider effect.
+The cached reader and capability composition reuse the same verified automation
+fact projection in `control_plane/reward_memory.py`; provider policy is not
+copied into the executor.
+
+中文：恢复注册前的执行日志时，保留已准入的有界反思、原独立证明及原 plan；缺少
+贡献 annotation 的旧缓存仅沿用该结果字段原有的 2,400 字符解码，不重新启动 Host
+或 validator，也不为新 Host 输入开启旧接线。provider 效果仍由当前 ingest 策略、
+独立证据及原结算／去重 owner 判定。
+注册贡献只在 host context 中携带一份可选 recall，readback 只保留有界参与事实，
+不再重复正文。若完整 recall 会超过既有 64 KiB contribution 预算，则该 Turn
+省略召回正文，但仍保留已核验绑定、反思 schema 与结算后 ingest；不提高硬预算，
+省略正文也不授予任何 action authority。
+缓存 reader 和能力组合复用 `control_plane/reward_memory.py` 的同一参与事实投影，
+executor 不复制 provider 策略。
+
+TypeScript binds each contribution to the existing governing signature document
+and its source readback. Capture locations and size diagnostics may change;
+actor, authority, binding readback or contribution changes discard that optional
+context. Capabilities cannot overwrite core authority or result fields.
+Ingest-only input omits recalled context. Host adapters preserve enabled optional
+result values for outer bounds/material validation and independent attestation.
+Registered `PostSettlement` callbacks invoke the original ingest/sidecar owners
+after accountable settlement. `post_writeback` remains effect-free. Per-hook
+receipts preserve completed callbacks during partial recovery; provider receipts
+and idempotency remain with their existing owner. Unknown effects remain unknown.
+After terminal settlement, a resume leaves the journal and its original
+`post_settlement` receipt unchanged. When that receipt is uncertain, the owner
+may reconcile the same effect and return `post_settlement_recovery` as current
+readback. The owner retains the durable receipt; this projection grants no new
+work, validation, quota debit or scheduler action.
+
+中文：执行中的 native Turn 与 quota/heartbeat guard 通过注册的选择后上下文路径接入
+记忆；三种宿主消费统一贡献，不再各自判断记忆模式。原 recall 读回和反思大小限制保留，
+只有旧读回而无注册贡献不能开启宿主记忆输入。关闭保持普通输入／指导／schema 原样。
+TS 复用 governing 签名文档和来源绑定，允许捕获定位变化，拒绝 actor／权限／绑定／
+贡献变更及核心字段替换。独立精确证明和可记账结算后，注册的 `PostSettlement` 调用
+原 ingest owner；无副作用的 `post_writeback` 不变。逐 hook 回执与原 provider 去重
+共同恢复，不把不确定效果写成零。终态重放保留原 journal／`post_settlement`，通过原
+owner 对同一效果恢复的当前读回放入 `post_settlement_recovery`；持久回执仍由原 owner
+保管，不触发业务工作、验证、扣额或调度。隔离 File/SQLite／宿主／provider 验证不代表安装态
+App/Lark、模型采用或真实服务资格。
 
 This is a bounded shared-facts step. Heartbeat still has its existing full and
 compact rendering paths; it is not yet the same installed host journey. The

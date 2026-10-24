@@ -36,8 +36,7 @@ export const stewardGroupTriggerScenario = {
       ]) {
         Object.assign(connection, {event_count: 3, last_event_status: "context_only_captured", last_event_reason: reason});
         await page.reload();
-        await page.getByRole("button", {name: "设置", exact: true}).click();
-        await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
+        await page.locator(".personal-settings-page").getByRole("heading", {name: "Lark", exact: true}).waitFor();
         const feedback = row.getByText(detail, {exact: true});
         await feedback.waitFor();
         if (await feedback.evaluate((element) => getComputedStyle(element).whiteSpace) === "nowrap") throw new Error("Recovery feedback is visually truncated");
@@ -60,6 +59,9 @@ export const stewardGroupTriggerScenario = {
       if (api.larkWrites[1]?.turn_trigger !== "addressed") throw new Error("Trigger not restored");
       if (context.errors.length) throw new Error(context.errors.join(" | "));
       return {coverageEntries: await context.close(), note: "Steward group trigger opt-in/readback/revocation and typed non-execution feedback; desktop and narrow screen; scripted provider state only"};
-    } catch (error) { await context.close(); throw error; }
+    } catch (error) {
+      await context.close();
+      throw new Error(`${error.message}; page errors=${context.errors.join(" | ")}`, {cause: error});
+    }
   },
 };

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -25,6 +26,7 @@ from .control_plane.effect_runtime import (
     EffectRuntimeStartupError,
     effect_runtime_request_scope,
 )
+from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .control_plane.runtime.public_safety import (
     public_safe_compact_text,
     validate_public_safe_value,
@@ -41,7 +43,6 @@ from .control_plane.runtime.time import now_utc_iso
 from .feedback import validate_goal_id
 from .history import load_registry
 from .control_plane.projects.registry_codec import load_project_registry
-from .registry import registry_goals
 from .status import collect_status
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
@@ -197,19 +198,16 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
             )
             return
         try:
+            registry = {}
             if views is not None or requested_goals is not None or delivery_review:
                 # Discovery reads only metadata. Full status/runtime reads keep
                 # their existing lifecycle-only profile refusal.
                 registry = (_discovery_registry(self.server.registry_path) if views == ["workspace-directory"]
                     else load_registry(self.server.registry_path))
-                if goal_id and goal_id not in {
-                    str(g.get("id")) for g in registry_goals(registry)
-                }:
+                directory = workspace_goal_directory(registry, selected_goal_id=goal_id)
+                if goal_id and not directory["goals"]:
                     self._send_error("Goal is no longer registered.", status=404)
                     return
-                directory = workspace_goal_directory(
-                    registry, selected_goal_id=goal_id
-                )
                 if views == ["workspace-directory"]:
                     directory["contract"] = _discovery_contract(self.server.registry_path)
                     # Discovery stays metadata-only: redact with the roots this
@@ -227,17 +225,33 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     )
                     self._send_json(directory)
                     return
-            projection = collect_status(
+            linked = None
+            if goal_id and registry.get("goal_source_links"):
+                from .control_plane.status.goal_source import SourceScopeError
+                from .presentation.goal_source_routing import goal_source_catalog
+                catalog = goal_source_catalog(self.server)
+                if delivery_review and catalog.resolve(goal_id, registry):
+                    self._send_error("Execution review belongs to the original Goal runtime.", status=403)
+                    return
+                try:
+                    linked = catalog.status(goal_id, registry)
+                except SourceScopeError:
+                    self._send_error("The original Goal is no longer available in this source.",
+                                     status=409)
+                    return
+                except (OSError, subprocess.SubprocessError):
+                    self._send_error("The original Goal source is unavailable; its link is preserved.",
+                                     status=503, error_code="goal_source_unavailable")
+                    return
+            projection = linked if linked is not None else collect_status(
                 registry_path=self.server.registry_path,
                 # The Chat service already starts on an absent registry as an
                 # empty workspace (serve_chat); its status reports the same
                 # fact as a warning, so a fresh install is not a failed source.
                 allow_missing_registry=True,
                 runtime_root_override=self.server.runtime_root_override,
-                scan_roots=self.server.scan_roots,
                 limit=self.server.limit,
                 goal_id=goal_id,
-                include_public_boundary_scan=False,
                 include_zcode_goal_eligibility=not delivery_review,
                 include_task_graph=delivery_review,
                 activation_state_filter=activation_state_filter,
@@ -265,13 +279,16 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     "presentation_surfaces_url": DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
                     "presentation_detail_url": DEFAULT_EXTENSION_PROJECTION_PATH,
                 }
-                attach_host_thread_activity(
-                    projection, observers=codex_thread_observers()
-                )
-                attach_host_delivery_windows(
-                    projection,
-                    expectations=codex_delivery_expectations,
-                )
+                if linked is None:
+                    attach_host_thread_activity(
+                        projection, observers=codex_thread_observers(
+                            cache_root=self.server.runtime_root / "observation-cache" / "codex-activity",
+                        )
+                    )
+                    attach_host_delivery_windows(
+                        projection,
+                        expectations=codex_delivery_expectations,
+                    )
             if delivery_review:
                 if projection.get("ok") is not True:
                     self._send_error("Delivery review sources are unavailable.", status=503)
@@ -320,6 +337,15 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                 )
             )
         except Exception as exc:  # noqa: BLE001 - do not expose local projection failures.
+            # The storage owner already exposes inspection and reviewed import.
+            # Preserve its typed refusal, not private paths or migration payloads.
+            if isinstance(exc, LocalCoordinationAuthorityUnavailable) and exc.code == "canonical_authority_required":
+                self._send_error(
+                    "This Goal needs a storage upgrade. Open its storage settings to review recovery.",
+                    status=503,
+                    error_code=exc.code,
+                )
+                return
             self._send_error(
                 "LoopX status could not be projected for the workspace.",
                 status=500,

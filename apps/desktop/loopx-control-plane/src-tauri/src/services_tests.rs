@@ -124,6 +124,11 @@ fn finder_runtime_path_includes_tools_without_loading_shell_profiles() {
                 .unwrap()
     );
     assert!(paths.contains(&PathBuf::from("/usr/local/bin")));
+    for prefix in ["/opt/homebrew", "/usr/local"] {
+        for version in ["24", "22"] {
+            assert!(paths.contains(&PathBuf::from(format!("{prefix}/opt/node@{version}/bin"))));
+        }
+    }
     assert!(paths.contains(&PathBuf::from("/sbin")));
     let again = runtime_search_path(Some("/fixture/user".into()), Some(path.clone()));
     assert_eq!(again, path, "tool search must be idempotent");
@@ -610,7 +615,7 @@ fn private_recovery_fixture() -> (tempfile::TempDir, SelectedRuntime, ServiceEnd
     let identity = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",
         "package_version":"1.4.1","release_id":"fixture","source_revision":"1".repeat(40)});
     fs::write(&executable, format!(r#"#!/usr/bin/env python3
-import json, socket, sys
+import json, os, socket, sys
 kind = sys.argv[1]
 port = int(sys.argv[sys.argv.index('--port') + 1])
 payload = {{'runtime_identity': json.loads({identity:?})}}
@@ -623,6 +628,8 @@ server = socket.socket()
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(('127.0.0.1', port))
 server.listen(8)
+with open(__file__ + ('.chat.pid' if kind == 'chat' else '.status.pid'), 'w') as output:
+    output.write(str(os.getpid()))
 while True:
     connection, _ = server.accept()
     connection.recv(65536)
@@ -641,10 +648,31 @@ while True:
 }
 
 #[cfg(unix)]
+fn exit_private_service(root: &Path, kind: ServiceKind, services: &mut ServiceSet) {
+    // Kill the actual listener rather than assuming the supervised leader is
+    // the Core process. macOS's native lifetime helper is a separate parent.
+    let pid = fs::read_to_string(root.join(format!("loopx.{}.pid", kind.label()))).unwrap();
+    assert!(Command::new("kill")
+        .args(["-KILL", pid.trim()])
+        .status()
+        .unwrap()
+        .success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let failed = services.owned.iter_mut().find(|s| s.kind == kind).unwrap();
+    while failed.child.inner().try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "service exit did not reach its supervisor"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn exited_private_children_recover_individually_with_the_frozen_identity() {
     let _fixture = PRIVATE_RECOVERY_FIXTURE.lock().unwrap();
-    let (_root, runtime, endpoints) = private_recovery_fixture();
+    let (root, runtime, endpoints) = private_recovery_fixture();
     let mut services = ServiceSet::start(&runtime, &endpoints, |_| {}).unwrap();
     assert!(!services.recover_exited(&endpoints, Instant::now()).unwrap());
     for kind in SERVICE_KINDS {
@@ -657,8 +685,7 @@ fn exited_private_children_recover_individually_with_the_frozen_identity() {
             .id();
         let failed = services.owned.iter_mut().find(|s| s.kind == kind).unwrap();
         let old = failed.child.id();
-        failed.child.inner().kill().unwrap();
-        failed.child.inner().wait().unwrap();
+        exit_private_service(root.path(), kind, &mut services);
         services.last_recovery_attempt = None;
         let mut development = endpoints;
         development.isolated = false;
@@ -699,7 +726,7 @@ fn exited_private_children_recover_individually_with_the_frozen_identity() {
 #[test]
 fn private_recovery_keeps_foreign_listeners_and_healthy_peers_and_bounds_retry() {
     let _fixture = PRIVATE_RECOVERY_FIXTURE.lock().unwrap();
-    let (_root, runtime, endpoints) = private_recovery_fixture();
+    let (root, runtime, endpoints) = private_recovery_fixture();
     let mut services = ServiceSet::start(&runtime, &endpoints, |_| {}).unwrap();
     let peer = services
         .owned
@@ -708,13 +735,7 @@ fn private_recovery_keeps_foreign_listeners_and_healthy_peers_and_bounds_retry()
         .unwrap()
         .child
         .id();
-    let failed = services
-        .owned
-        .iter_mut()
-        .find(|s| s.kind == ServiceKind::Chat)
-        .unwrap();
-    failed.child.inner().kill().unwrap();
-    failed.child.inner().wait().unwrap();
+    exit_private_service(root.path(), ServiceKind::Chat, &mut services);
     let listener =
         std::net::TcpListener::bind(("127.0.0.1", endpoints.port(ServiceKind::Chat))).unwrap();
     let now = Instant::now();
@@ -738,6 +759,53 @@ fn private_recovery_keeps_foreign_listeners_and_healthy_peers_and_bounds_retry()
     assert!(services
         .recover_exited(&endpoints, now + Duration::from_secs(3))
         .unwrap());
+    assert_eq!(
+        probe_on_port(
+            ServiceKind::Chat,
+            endpoints.port(ServiceKind::Chat),
+            runtime.identity.as_ref()
+        ),
+        Probe::Matching
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn exited_native_lifetime_helper_drains_old_listener_before_recovery() {
+    let _fixture = PRIVATE_RECOVERY_FIXTURE.lock().unwrap();
+    let (root, runtime, endpoints) = private_recovery_fixture();
+    let mut services = ServiceSet::start(&runtime, &endpoints, |_| {}).unwrap();
+    let old_listener = fs::read_to_string(root.path().join("loopx.chat.pid")).unwrap();
+    let healthy = services
+        .owned
+        .iter()
+        .find(|service| service.kind == ServiceKind::Status)
+        .unwrap()
+        .child
+        .id();
+    let helper = services
+        .owned
+        .iter_mut()
+        .find(|service| service.kind == ServiceKind::Chat)
+        .unwrap();
+    helper.child.inner().kill().unwrap();
+    helper.child.inner().wait().unwrap();
+
+    assert!(services.recover_exited(&endpoints, Instant::now()).unwrap());
+    assert_ne!(
+        fs::read_to_string(root.path().join("loopx.chat.pid")).unwrap(),
+        old_listener
+    );
+    assert_eq!(
+        services
+            .owned
+            .iter()
+            .find(|service| service.kind == ServiceKind::Status)
+            .unwrap()
+            .child
+            .id(),
+        healthy
+    );
     assert_eq!(
         probe_on_port(
             ServiceKind::Chat,

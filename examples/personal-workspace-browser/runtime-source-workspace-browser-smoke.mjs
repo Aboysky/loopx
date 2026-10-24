@@ -19,7 +19,8 @@ from loopx.control_plane.status.goal_source import GoalSource
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_edge_event
 class Source(GoalSource):
     def __init__(self, name):
-        super().__init__(name,name,'/registry','/runtime','/cli','/python','/bin','local','host','same-goal')
+        goal_id = 'other-goal' if name == 'Distinct' else 'same-goal'
+        super().__init__(name,name,'/registry','/runtime','/cli','/python','/bin','local','host',goal_id)
     def read_status(self, goal_id=None):
         self.check_access(goal_id)
         if pathlib.Path(sys.argv[1]).exists() and self.id == 'Fresh': raise OSError('unavailable fixture')
@@ -37,7 +38,7 @@ class Source(GoalSource):
         events += [build_explore_edge_event(goal_id=self.goal_id,from_node='route'+str(i),to_node='route'+str(i+1),edge_type='depends_on',recorded_at='2026-01-01T23:%02d:00Z'%(i*30)) for i in range(2)]
         return events
 assets=pathlib.Path(sys.argv[2])
-servers=[RuntimeWorkspaceServer(Source(n),assets) for n in ('Retained','Fresh')]
+servers=[RuntimeWorkspaceServer(Source(n),assets,analysis_runtime_root=pathlib.Path(sys.argv[1]).parent / "analysis") for n in ('Retained','Fresh','Distinct')]
 catalog=[dict(id=s.source.id,label=s.source.label,status_url=s.status_url) for s in servers]
 for s in servers:
     s.catalog=catalog
@@ -60,11 +61,47 @@ try {
   page.on("pageerror", error => errors.push(String(error)));
   const url = new URL("/chat/", catalog[0].status_url);
   url.search = new URLSearchParams({ goalId: "same-goal", view: "overview", statusUrl: process.env.LOOPX_RUNTIME_READER_BEFORE === "1" ? catalog[0].status_url : "/status.json" });
+  let holdAnalysis = true, failAnalysis = false, releaseAnalysis, readStarted;
+  let analysisWrites = 0;
+  await page.route("**/api/chat/research-analysis?*", async route => {
+    if (route.request().method() !== "GET") {analysisWrites++; return route.abort();}
+    if (holdAnalysis) {readStarted(); await new Promise(resolve => {releaseAnalysis = resolve;});}
+    if (failAnalysis) return route.fulfill({status:503, json:{error:"Synthetic analysis transport failure"}});
+    return route.continue();
+  });
   await page.goto(url.toString());
   await page.getByRole("heading", { name: "Retained research", exact: true }).waitFor();
   if (process.env.LOOPX_RUNTIME_READER_BEFORE === "1") {
     await page.screenshot({path:resolve(output,"before-desktop.png")});
   } else {
+    const initialRead = new Promise(resolve => {readStarted = resolve;});
+    await page.locator(".personal-goal-tabs").getByRole("button", {name:"研究", exact:true}).click();
+    await initialRead;
+    await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
+    const history = page.getByRole("region", {name:"研究历程",exact:true});
+    await page.screenshot({path:resolve(output,"analysis-pending-desktop.png")});
+    assert.doesNotMatch(await history.innerText(),/尚未接入深度分析|尚无可分析/,
+      "A pending read does not prove an analysis connection is absent");
+    await history.getByRole("status",{name:"正在读取分析"}).waitFor();
+    failAnalysis = true; holdAnalysis = false; releaseAnalysis();
+    const failure = history.getByRole("alert");
+    await failure.waitFor();
+    assert.equal(await history.locator(".research-analysis").count(),0,"Retry is available without opening the analysis panel");
+    await page.screenshot({path:resolve(output,"analysis-failure-desktop.png")});
+    const retryRead = new Promise(resolve => {readStarted = resolve;});
+    holdAnalysis = true;
+    await failure.getByRole("button",{name:"重试读取",exact:true}).click();
+    await retryRead;
+    assert.equal(await failure.getByRole("button",{name:"重试读取",exact:true}).isDisabled(),true);
+    assert.doesNotMatch(await history.innerText(),/尚未接入深度分析|尚无可分析/);
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(output,"analysis-retry-phone.png")});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    failAnalysis = false; holdAnalysis = false; releaseAnalysis();
+    await failure.waitFor({state:"hidden"});
+    await history.locator(".analysis-read-loading").waitFor({state:"hidden"});
+    assert.equal(analysisWrites,0,"Read recovery never starts an analysis");
+    await page.setViewportSize({width:1512,height:982});
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     assert.equal(new URL(new URL(page.url()).searchParams.get("statusUrl")).searchParams.get("source_namespace"),new URL(catalog[0].status_url).searchParams.get("source_namespace"),"the initial relative entry binds its physical source before subsequent navigation");
     assert.equal(await page.getByText("运行来源 · 只读", {exact:true}).count(), 1);
@@ -75,23 +112,62 @@ try {
     assert.equal(await page.locator(".research-history-edges > g > path").count(),2);
     await page.locator(".research-history-node").filter({hasText:"Retained route 0"}).click();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0");
+    // Even an unavailable finding in a bookmarked URL belongs to this source.
+    const findingLink = new URL(page.url()); findingLink.searchParams.set("research_finding", "source-local-finding");
+    await page.goto(findingLink.href);
+    await page.locator(".research-history-detail").waitFor();
     await page.getByLabel("选择控制面来源", {exact:true}).click();
     await page.getByRole("option", {name:"Fresh",exact:true}).click();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),null,"a source switch must not rebind the same node id in another physical source");
+    assert.equal(new URL(page.url()).searchParams.get("research_finding"),null,"a source switch clears finding focus alongside node focus");
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"关系图",exact:true}).click();
     await page.locator(".research-history-node").filter({hasText:"Fresh route 0"}).waitFor();
     assert.equal(await page.locator(".research-history-node").filter({hasText:"Retained route"}).count(),0);
     await page.goBack();
+    assert.equal(await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"时间线",exact:true}).getAttribute("aria-pressed"), "true", "Back restores the previous lens before leaving the source");
+    await page.goBack();
     await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0","Back restores the original source-local selection");
+    assert.equal(new URL(page.url()).searchParams.get("research_finding"),"source-local-finding");
     await page.goForward();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     await page.reload();
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     await page.goBack();
     await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
+    // Different Goal ids exercise automatic selection cleanup as well as the
+    // source-local node fence above. Cleanup must not rewrite the old source's
+    // entry or add an extra entry that traps Back/Forward on the new source.
+    await page.getByLabel("选择控制面来源",{exact:true}).click();
+    await page.getByRole("option",{name:"Distinct",exact:true}).click();
+    await page.getByRole("button",{name:/Distinct research/}).first().waitFor();
+    await page.waitForFunction(()=>new URL(location.href).searchParams.get("goalId")==="");
+    await page.goBack();
+    await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor({timeout:10000});
+    assert.equal(new URL(page.url()).searchParams.get("goalId"),"same-goal");
+    assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0");
+    await page.screenshot({path:resolve(output,"source-return-desktop.png")});
+    await page.goForward();
+    await page.getByRole("button",{name:/Distinct research/}).first().waitFor();
+    await page.getByRole("button",{name:/Distinct research/}).first().click();
+    await page.getByRole("heading",{name:"Distinct research",exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("goalId"),"other-goal");
+    await page.reload();
+    await page.getByRole("heading",{name:"Distinct research",exact:true}).waitFor();
+    await page.getByLabel("选择控制面来源",{exact:true}).click();
+    await page.getByRole("option",{name:"Retained",exact:true}).click();
+    await page.getByRole("button",{name:/Retained research/}).first().waitFor();
+    await page.waitForFunction(()=>new URL(location.href).searchParams.get("goalId")==="");
+    await page.goBack();
+    await page.getByRole("heading",{name:"Distinct research",exact:true}).waitFor({timeout:10000});
+    assert.equal(new URL(page.url()).searchParams.get("goalId"),"other-goal");
+    await page.goForward();
+    await page.getByRole("button",{name:/Retained research/}).first().waitFor();
+    await page.getByRole("button",{name:/Retained research/}).first().click();
+    await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
+    await page.locator(".personal-goal-tabs").getByRole("button", {name:"研究", exact:true}).click();
     await writeFile(failFile, "unavailable");
     for (let attempt=0;attempt<40;attempt++) {
       if ((await fetch(catalog[1].status_url)).status === 503) break;
@@ -121,6 +197,7 @@ try {
     await page.setViewportSize({width:390,height:844});
     await page.screenshot({path:resolve(output,"phone.png")});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    assert.equal(analysisWrites,0);
     assert.deepEqual(errors,[]);
   }
   console.log("runtime source workspace browser smoke: ok");

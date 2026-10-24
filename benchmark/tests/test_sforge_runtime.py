@@ -382,7 +382,8 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
     expected_cadence = ({"replan_after_effective_turns": turns or 6}
                         if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
-    assert worker.runtime._replan_receipt() == expected_cadence
+    assert worker.runtime._replan_receipt() == {**expected_cadence,
+        **({"planning_horizon_goal": True} if profile.startswith("heartbeat-") else {})}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     if profile.startswith("heartbeat-"):
         assert all(receipt.get(k) == v for k, v in expected_cadence.items())
@@ -408,10 +409,13 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     def archive(handle, remote):
         copied.append(str(remote))
         payload = io.BytesIO()
+        event = json.dumps({"type": "event_msg", "payload": {"type": "task_complete",
+            "error": {"message": "PRIVATE-SENTINEL", "codex_error_info": {
+                "response_too_many_failed_attempts": {"http_status_code": 429}}}}}).encode() + b"\n"
         with tarfile.open(fileobj=payload, mode="w") as bundle:
-            member = tarfile.TarInfo("session.jsonl")
-            member.size = 2
-            bundle.addfile(member, io.BytesIO(b"{}"))
+            member = tarfile.TarInfo("sessions/fixture/session.jsonl")
+            member.size = len(event)
+            bundle.addfile(member, io.BytesIO(event))
         return payload.getvalue()
     monkeypatch.setattr(backend, "copy_from_container", archive)
     monkeypatch.setattr(DockerBackend, "cleanup_container",
@@ -425,6 +429,40 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     assert cleaned == ["fixture-container"]
     assert all(row["collected"] for row in json.loads(
         (backend.log_dir / "artifact-collection.json").read_text()))
+    assert backend.provider_failure_receipt == {
+        "schema_version": "codex_terminal_provider_failure_v0",
+        "kind": "response_too_many_failed_attempts",
+        "http_status_code": 429,
+    }
+    assert "PRIVATE-SENTINEL" not in json.dumps(backend.provider_failure_receipt)
+
+
+def test_provider_observation_failure_cannot_skip_native_cleanup(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.checkpoint = None
+    backend.log_dir = tmp_path / "artifacts"
+    backend.feedback = None
+    backend.provider_failure_receipt = None
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w"):
+        pass
+    monkeypatch.setattr(backend, "copy_from_container", lambda *args: payload.getvalue())
+    monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
+                        lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
+    cleaned = []
+    monkeypatch.setattr(DockerBackend, "cleanup_container",
+                        lambda self, handle, logger: cleaned.append(handle))
+
+    backend.cleanup_container("fixture-container")
+
+    assert cleaned == ["fixture-container"]
+    assert backend.provider_failure_receipt is None
+    observations = json.loads((backend.log_dir / "artifact-collection.json").read_text())
+    assert {"artifact": "provider-failure-observation", "collected": False,
+            "error_kind": "TypeError"} in observations
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -463,6 +501,7 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
     monkeypatch.setattr(DockerBackend, "create_network_isolation",
                         lambda self, handle, allowed_endpoints, logger: allowed_endpoints)
     env = {"SFORGE_TOKEN": "fixture", "SFORGE_JUDGE_URL": "http://judge:8080",
+           "SFORGE_FEEDBACK_URL": "http://judge:8080/api/v1/feedback/fixture",
            "HTTPS_PROXY": "http://api-proxy:9090", "SFORGE_PATCH_DIR": "/task"}
     assert backend._agent_environment(env) is env
     assert backend.create_network_isolation(None, [judge, api], None) == [judge, api]
@@ -594,7 +633,8 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
                           profile="heartbeat-explore", cwd="/task", task_entry=entry, planning_horizon_goal=horizon)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.runtime.execution.task_entry == entry
-    assert worker.runtime.planning_horizon_goal is horizon
+    expected_horizon = True if horizon is None else horizon
+    assert worker.runtime.planning_horizon_goal is expected_horizon
     assert worker.runtime.execution.turn_envelope is False
     worker.prepared = True  # Bootstrap is separately covered through real CLI fixtures.
     first = worker.format_run_cmd("/task.md")
@@ -605,8 +645,7 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
     assert profile["task_entry"] == entry
-    assert profile.get("planning_horizon_goal") is horizon
-    assert ("planning_horizon_goal" in profile) is (horizon is not None)
+    assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
 @pytest.mark.parametrize('enabled', [False, True])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
@@ -668,6 +707,7 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("native-goal", ["--checkpoint-request", "missing.json"]),
     ("heartbeat-explore", ["--checkpoint-retention-policy", "policy.json"]),
     ("heartbeat-explore", ["--no-checkpoint-retention"]),
+    ("heartbeat-explore", ["--checkpoint-export-root", "/unused-export"]),
     ("heartbeat-explore", ["--no-checkpoint-retention", "--checkpoint-retention-policy", "policy.json"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
@@ -704,7 +744,8 @@ def test_controller_handoff_cannot_be_partially_enabled(tmp_path, missing):
     assert error.value.code == 2 and not (tmp_path / "runs").exists()
 
 
-def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("host_callback", [False, True])
+def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(tmp_path, monkeypatch, host_callback):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -717,7 +758,21 @@ def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(t
                                     oauth_proxy=True, checkpoint=controller, client=SimpleNamespace())
     handle = SimpleNamespace(raw="exact-container")
     monkeypatch.setattr(DockerBackend, "create_container", lambda *a, **kw: handle)
-    backend.create_container("image", "name", environment={"SFORGE_TOKEN": "synthetic"})
+    def current_provider(*, host_registration_callback=None):
+        pass
+    def legacy_provider():
+        pass
+    provider = current_provider if host_callback else legacy_provider
+    options = backend.registration_options(provider)
+    env = {"SFORGE_FEEDBACK_URL": "http://judge/api/v1/feedback/synthetic-relay"}
+    if host_callback:
+        options["host_registration_callback"]("synthetic")
+    else:
+        assert options == {}
+        env["SFORGE_TOKEN"] = "synthetic"
+    original_env = dict(env)
+    backend.create_container("image", "name", environment=env)
+    assert env == original_env, "binding must not inject the host token into worker env"
     backend.execution_command = "solver"
     monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **kw:
         SimpleNamespace(exit_code=0, timed_out=False, elapsed_seconds=1))
@@ -725,6 +780,30 @@ def test_checkpoint_supervisor_is_bound_to_container_and_only_solver_execution(t
     assert calls == [("bind", "synthetic")]
     backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", "solver"])
     assert calls == [("bind", "synthetic"), ("start", "exact-container"), ("close",)]
+    with pytest.raises(ValueError, match="one native host registration"):
+        backend.bind_registration("another-registration")
+
+
+def test_host_registration_is_opt_in_shared_and_requires_nonempty_token(tmp_path):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+    backend = RecordingDockerBackend(log_dir=tmp_path, logger=None, oauth_proxy=True,
+                                     client=SimpleNamespace())
+    def provider(*, host_registration_callback=None):
+        pass
+    assert backend.registration_options(provider) == {}, "ordinary official runs retain native behavior"
+    calls = []
+    backend.feedback = SimpleNamespace(bind=lambda env: calls.append(("feedback", env["SFORGE_TOKEN"])))
+    backend.checkpoint = SimpleNamespace(bind=lambda env: calls.append(("checkpoint", env["SFORGE_TOKEN"])))
+    callback = backend.registration_options(provider)["host_registration_callback"]
+    for invalid in (None, "", 1, {}):
+        with pytest.raises(ValueError):
+            callback(invalid)
+    assert calls == [] and not backend.registration_bound
+    callback("synthetic")
+    assert calls == [("feedback", "synthetic"), ("checkpoint", "synthetic")]
 
 
 @pytest.mark.parametrize("protect_fails", [False, True])
@@ -823,13 +902,14 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
         assert kwargs["eval_interval"] == interval
         agent = kwargs["agent"]
         horizon = (True if "--planning-horizon-goal" in cadence_args else
-                   False if "--no-planning-horizon-goal" in cadence_args else None)
+                   False if "--no-planning-horizon-goal" in cadence_args else True)
         assert agent.planning_horizon_goal is horizon
         assert "total trial budget" not in agent.workspace_instructions
         assert agent.task_objective == "fixture task"
         assert agent.task_objective in agent.feedback_prompt
         assert agent.task_objective not in agent.workspace_instructions
-        assert "Continue researching" in agent.workspace_instructions
+        assert "The task defines candidate validity and acceptance" in agent.workspace_instructions
+        assert "continue seeking useful improvements" in agent.workspace_instructions
         assert agent.feedback_prompt.startswith(agent.workspace_instructions)
         raise RuntimeError("synthetic launch failure")
     monkeypatch.setattr(run, "run_agent", stop_before_solver)
@@ -846,9 +926,8 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     assert receipt["eval_interval"] == interval
     assert receipt[field] == count
     horizon = (True if "--planning-horizon-goal" in cadence_args else
-               False if "--no-planning-horizon-goal" in cadence_args else None)
-    assert receipt.get("planning_horizon_goal") is horizon
-    assert ("planning_horizon_goal" in receipt) is (horizon is not None)
+               False if "--no-planning-horizon-goal" in cadence_args else True)
+    assert receipt["planning_horizon_goal"] is horizon
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
@@ -937,7 +1016,7 @@ def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monke
                           profile=profile, cwd="/task", replan_after_todos=3)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.replan_after_turns is None
-    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3}
+    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3, "planning_horizon_goal": True}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["replan_after_completed_todos"] == 3
     assert "replan_after_effective_turns" not in receipt

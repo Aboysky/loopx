@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -27,7 +27,7 @@ from .team_plan_confirmation import (
 SnapshotProvider = Callable[[], Mapping[str, Any]]
 ProfilePoller = Callable[[str, threading.Event], None]
 ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
-ProfileWorkerFingerprint = tuple[str, str, tuple[str, ...]]
+ProfileWorkerFingerprint = tuple[str, str, str, tuple[str, ...]]
 ProfileWorker = tuple[threading.Event, threading.Thread, ProfileWorkerFingerprint]
 
 
@@ -87,6 +87,8 @@ class LarkGoalTopicRuntimeService:
         attempted: dict[Path, int] = {}
         attention: Future[int] | None = None
         attention_due = 0.0
+        reports: Future[int] | None = None
+        reports_due = 0.0
         ingress: Future[list[str]] | None = None
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
@@ -98,6 +100,13 @@ class LarkGoalTopicRuntimeService:
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
+                if reports is not None and reports.done():
+                    try:
+                        reports.result()
+                    except Exception:
+                        logging.getLogger(__name__).warning("Original private report delivery is pending")
+                    reports = None
+                    reports_due = time.monotonic() + 30
                 if ingress is not None and ingress.done():
                     try:
                         for profile in ingress.result():
@@ -130,24 +139,34 @@ class LarkGoalTopicRuntimeService:
                         logging.getLogger(__name__).warning("Private Chat delivery reconciliation is pending")
                 try:
                     paths = transport.pending_delivery_paths()
-                    attempted = {path: count for path, count in attempted.items() if path in paths}
+                    # Discovery can temporarily hide a durable request during
+                    # backoff. Retain its fairness count until the source is
+                    # actually removed, so earlier hints cannot starve later work.
+                    attempted = {path: count for path, count in attempted.items() if path.exists()}
                     owner_attention = getattr(transport, "owner_attention", None)
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())
                     observer = getattr(transport, "ingress", None)
                     ingress_ready = (observer is not None and ingress is None
                         and time.monotonic() >= ingress_due)
+                    report_provider = getattr(transport, "steward_reports", None)
+                    reports_ready = (report_provider is not None and reports is None
+                        and time.monotonic() >= reports_due and report_provider.pending())
+                    if report_provider is not None and reports is None and time.monotonic() >= reports_due:
+                        reports_due = time.monotonic() + 30
                     for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
-                        if (len(pending) + int(attention is not None or attention_ready)
+                        if (len(pending) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
                                 + int(ingress is not None or ingress_ready) >= 4 or self._closed.is_set()):
                             break
                         if path in pending:
                             continue
                         pending[path] = pool.submit(transport.reconcile_request, path)
                         attempted[path] = attempted.get(path, 0) + 1
-                    if attention_ready and len(pending) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                    if reports_ready and len(pending) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                        reports = pool.submit(report_provider.reconcile)
+                    if attention_ready and len(pending) + int(reports is not None) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
                         attention = pool.submit(owner_attention.reconcile)
-                    if ingress_ready and len(pending) + int(attention is not None) < 4 and not self._closed.is_set():
+                    if ingress_ready and len(pending) + int(reports is not None) + int(attention is not None) < 4 and not self._closed.is_set():
                         ingress = pool.submit(observer.observe, cancelled=self._closed.is_set)
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
@@ -223,6 +242,7 @@ class LarkGoalTopicRuntimeService:
         return (
             str(profile_config.get("cli_bin") or "lark-cli"),
             str(profile_config.get("bot_app_id") or profile_config.get("binding_id") or ""),
+            str(profile_config.get("consumer_ref") or ""),
             callback_chats,
         )
 
@@ -330,16 +350,20 @@ class LarkGoalTopicRuntimeService:
                     # servers can use different runtime roots or ports. The
                     # consumer lease must therefore be machine/App scoped.
                     app_id = str(profile_config.get("bot_app_id") or "")
-                    # Both paths lease the same App-scoped digest, so aliases
-                    # or a second server cannot start another consumer.
-                    digest = (hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]
-                              if app_id else str(profile_config.get("consumer_ref")
-                              or hashlib.sha256(profile.encode("utf-8")).hexdigest()[:32]))
-                    lease = Path.home() / ".loopx" / "lark-consumers" / digest
-                    with try_exclusive_file_lock(
-                        lease, operation="lark_event_consumer"
-                    ) as acquired:
-                        if acquired is None:
+                    # A composed legacy route explicitly retains its original
+                    # profile lease. Otherwise both paths use the App digest.
+                    digest = str(profile_config.get("consumer_ref") or (
+                        hashlib.sha256((app_id or profile).encode("utf-8")).hexdigest()[:32]))
+                    digests = {digest}
+                    if app_id:
+                        digests.add(hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32])
+                    # A legacy/shared consumer holds both identities: wait for
+                    # the old process and fence new aliases on other servers.
+                    with ExitStack() as leases:
+                        acquired = [leases.enter_context(try_exclusive_file_lock(
+                            Path.home() / ".loopx" / "lark-consumers" / key,
+                            operation="lark_event_consumer")) for key in sorted(digests)]
+                        if any(lease is None for lease in acquired):
                             self._update_health(
                                 profile,
                                 status="standby",
@@ -358,7 +382,7 @@ class LarkGoalTopicRuntimeService:
                             proposal_deliverer=deliver_proposals,
                             review_callback_handler=(
                                 handle_review_callback
-                                if self.action_service is not None and profile not in dict(self.snapshot_provider().get("private_profiles") or {})
+                                if self.action_service is not None and profile in runtime._active_group_profile_configs(self.snapshot_provider())
                                 else None
                             ),
                             health_sink=lambda update: self._update_health(

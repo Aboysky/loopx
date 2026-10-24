@@ -23,6 +23,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from ..content_digest import BARE_SHA256_PATTERN
 from ...chat_completed_todos import CompletedTodoPages
 from ...status_server import is_loopback_host
 from .ssh_host_catalog import configured_ssh_host_aliases
@@ -85,7 +86,7 @@ class GoalSource:
         elif self.host_alias is not None:
             raise ValueError("Local connections do not have an SSH alias")
         if self.environment == "container":
-            if not isinstance(self.container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", self.container_id):
+            if not isinstance(self.container_id, str) or not BARE_SHA256_PATTERN.fullmatch(self.container_id):
                 raise ValueError("A full pinned container id is required")
         elif self.container_id is not None:
             raise ValueError("Host environments do not have a container id")
@@ -119,7 +120,7 @@ class GoalSource:
             container_id = None
         elif environment.get("kind") == "container" and set(environment) == {"kind", "container_id"}:
             container_id = environment["container_id"]
-            if not isinstance(container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", container_id):
+            if not isinstance(container_id, str) or not BARE_SHA256_PATTERN.fullmatch(container_id):
                 raise ValueError("A full pinned container id is required")
         else:
             raise ValueError("Use a host or a pinned container environment")
@@ -192,6 +193,16 @@ class GoalSource:
             raise SourceScopeError("Only registered Goals are in this source scope")
         return status
 
+    def read_todo(self, goal_id, todo_id):
+        self.check_access(goal_id)
+        if not isinstance(todo_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}", todo_id):
+            raise SourceScopeError("Invalid source Task id")
+        return json.loads(self._execute([
+            self.cli, "--format", "json", "--registry", self.registry,
+            "--runtime-root", self.runtime_root, "todo", "list",
+            "--goal-id", goal_id, "--todo-id", todo_id,
+        ]))
+
     def read_events(self, goal_id):
         """Read JSON objects; the capability-owned projector verifies semantics."""
         selected = self.check_access(goal_id)
@@ -225,11 +236,11 @@ class GoalSourceReader:
         self._status = None
         self._pages = CompletedTodoPages()
 
-    def status(self, goal_id=None):
+    def status(self, goal_id=None, *, fresh=False):
         with self._lock:
             try:
                 selected = self.source.check_access(goal_id)
-                if (self._status is None or selected != self._selected
+                if (fresh or self._status is None or selected != self._selected
                         or monotonic() - self._read_at >= 2):
                     self._status = None
                     self._status = self.source.read_status(selected)
@@ -245,8 +256,19 @@ class GoalSourceReader:
                 "operations": {"goals": True, "status": True, "history": True,
                                "lifecycle": False, "conversation": False, "analysis": False}}
 
-    def goals(self, goal_id=None):
-        status = self.status(goal_id)
+    def registered_status(self, goal_id, *, fresh=False):
+        with self._lock:
+            status = self.status(goal_id, fresh=fresh)
+            if not any(goal["id"] == goal_id and goal.get("registry_member") is True
+                       for goal in status["run_history"]["goals"]):
+                # A runtime-only historical row must not poison a recovered
+                # registered Goal's display or model-admission cache.
+                self._invalidate()
+                raise SourceScopeError("The original Goal is no longer registered")
+            return status
+
+    def goals(self, goal_id=None, *, fresh=False):
+        status = self.status(goal_id, fresh=fresh)
         return {"ok": True, "source": self.source.describe(),
                 "items": status["run_history"]["goals"]}
 
@@ -267,10 +289,169 @@ class GoalSourceReader:
                     self._invalidate()
                 raise
 
+    def findings(self, goal_id, cursor="", *, projector):
+        """Read saved evidence; this transport has no complete task-list view."""
+        with self._lock:
+            if goal_id is None:
+                raise SourceScopeError("Choose a Goal before reading findings")
+            if not isinstance(cursor, str) or len(cursor) > 512:
+                raise ValueError("history_cursor_expired")
+            self.status(goal_id)
+            try:
+                page = self._pages.page(
+                    scope=(self.source.namespace, goal_id, "findings"), cursor=cursor,
+                    load=lambda: projector(self.source.read_events(goal_id),
+                                           None, goal_id=goal_id))
+                return {**page, "source": self.source.describe(), "goal_id": goal_id}
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                if str(exc) != "history_cursor_expired":
+                    self._invalidate()
+                raise
+
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):
         return None
+
+
+def linked_source_goals(registry):
+    """Project explicit source references without reading or creating a Goal."""
+    raw = registry.get("goal_source_links", [])
+    if not raw:
+        return []
+    if not isinstance(raw, list) or len(raw) > 32:
+        raise ValueError("Invalid Goal source catalog")
+    sources = []
+    for link in raw:
+        if not isinstance(link, dict) or set(link) != {"parent_goal_id", "source"}:
+            raise ValueError("Invalid Goal source link")
+        source = GoalSource.parse(link["source"])
+        if source.goal_id is None:
+            raise ValueError("A child link must select one original Goal")
+        sources.append({"goal_id": source.goal_id, "parent_goal_id": link["parent_goal_id"],
+                        "namespace": source.namespace, "label": source.label})
+    from ..effect_runtime import effect_runtime_result
+    from ...registry import registry_goals
+
+    return effect_runtime_result("presentation.goal_sources.project", {
+        "local_goal_ids": [goal["id"] for goal in registry_goals(registry)], "links": sources,
+    })["goals"]
+
+
+class GoalSourceCatalog:
+    """App IO over its existing registry's source links, not mirror Goals.
+
+    The TS presentation owner qualifies organization/identity. Native sources
+    retain all Task, state, history and execution authority. Analysis artifacts
+    live locally under the same physical namespace used by prepared readers.
+    """
+    def __init__(self, registry_path, runtime_root, *, history_projector):
+        self.registry_path = Path(registry_path)
+        self.runtime_root = Path(runtime_root)
+        self._history_projector = history_projector
+        self._readers = {}
+        self._lock = RLock()
+
+    def resolve(self, goal_id, registry=None):
+        from ...registry import load_registry
+
+        registry = load_registry(self.registry_path) if registry is None else registry
+        rows = linked_source_goals(registry)
+        row = next((row for row in rows if row["id"] == goal_id), None)
+        if row is None:
+            return None
+        raw = next(link["source"] for link in registry["goal_source_links"]
+                   if link["source"]["scope"].get("goal_id") == goal_id)
+        source = GoalSource.parse(raw)
+        with self._lock:
+            namespaces = {goal["source_access"]["namespace"] for goal in rows}
+            self._readers = {key: value for key, value in self._readers.items() if key in namespaces}
+            if source.namespace not in self._readers:
+                self._readers[source.namespace] = GoalSourceReader(source, history_projector=self._history_projector)
+            reader = self._readers[source.namespace]
+        return row, reader
+
+    def status(self, goal_id, registry=None):
+        resolved = self.resolve(goal_id, registry)
+        if resolved is None:
+            return None
+        row, reader = resolved
+        status = reader.registered_status(goal_id)
+        source_goal = next((goal for goal in status["run_history"]["goals"]
+                            if goal["id"] == goal_id and goal.get("registry_member") is True), None)
+        if source_goal is None:
+            raise SourceScopeError("The original Goal is no longer registered")
+        source_goal["native_parent_goal_id"] = source_goal.get("parent_goal_id")
+        source_goal.update({key: row[key] for key in ("parent_goal_id", "source_access")})
+        return status
+
+    def analysis_scope(self, goal_id, *, namespace, fresh, verify_source=True):
+        resolved = self.resolve(goal_id)
+        if resolved is None:
+            return None
+        row, reader = resolved
+        if namespace != reader.source.namespace:
+            raise SourceScopeError("Analysis source identity changed")
+        if verify_source:
+            reader.registered_status(goal_id, fresh=fresh)
+        return self.runtime_root / "goal-sources" / row["source_access"]["namespace"]
+
+    def update(self, *, parent_goal_id, raw_source):
+        from ...registry import load_registry
+        from ..projects.registry_codec import mutate_project_registry
+
+        source = GoalSource.parse(raw_source)
+        link = {"parent_goal_id": parent_goal_id, "source": raw_source}
+
+        def proposed(registry):
+            links = list(registry.get("goal_source_links", []))
+            existing = next((item for item in links
+                if item["source"]["scope"].get("goal_id") == source.goal_id), None)
+            if existing is not None and existing != link:
+                raise SourceScopeError("The original source identity and parent are already linked")
+            if existing is None:
+                links.append(link)
+            return links
+
+        def admitted(registry):
+            links = proposed(registry)
+            rows = linked_source_goals({**registry, "goal_source_links": links})
+            if not any(row["id"] == source.goal_id for row in rows):
+                raise SourceScopeError("Choose an existing local parent")
+            return links
+
+        before = load_registry(self.registry_path)
+        admitted(before)
+        # Qualify original membership after metadata admission, before writing.
+        reader = GoalSourceReader(source, history_projector=lambda rows, **_: rows)
+        rows = reader.goals(source.goal_id, fresh=True)["items"]
+        if source.goal_id is None or not any(
+            row["id"] == source.goal_id and row.get("registry_member") is True for row in rows
+        ):
+            raise SourceScopeError("Choose a registered original Goal")
+
+        def apply(registry):
+            registry["goal_source_links"] = admitted(registry)
+
+        mutate_project_registry(self.registry_path, operation="goal_source_links", reducer=apply)
+        return {"ok": True, "goals": linked_source_goals(load_registry(self.registry_path))}
+
+    def remove(self, *, parent_goal_id, goal_id, namespace):
+        from ..projects.registry_codec import mutate_project_registry
+
+        def apply(registry):
+            links = []
+            for link in registry.get("goal_source_links", []):
+                source = GoalSource.parse(link["source"])
+                if source.goal_id == goal_id and link["parent_goal_id"] == parent_goal_id:
+                    if source.namespace != namespace:
+                        raise SourceScopeError("The source link changed; read its current identity")
+                else:
+                    links.append(link)
+            registry["goal_source_links"] = links
+            linked_source_goals(registry)
+
+        mutate_project_registry(self.registry_path, operation="goal_source_unlink", reducer=apply)
 
 
 def read_endpoint(endpoint, operation, *, goal_id=None, cursor="", source_namespace=None):
@@ -318,7 +499,7 @@ def read_endpoint(endpoint, operation, *, goal_id=None, cursor="", source_namesp
     description = read(base)
     source = description.get("source")
     namespace = source.get("namespace") if isinstance(source, dict) else None
-    if not isinstance(namespace, str) or not re.fullmatch(r"[0-9a-f]{64}", namespace):
+    if not isinstance(namespace, str) or not BARE_SHA256_PATTERN.fullmatch(namespace):
         raise ValueError("The reader did not expose a source identity")
     if source_namespace is not None and source_namespace != namespace:
         raise ValueError("Goal source changed; do not reuse the previous selection")

@@ -1,4 +1,5 @@
-import {ArrowUpRight, ChevronDown} from "lucide-react";
+import {useId, useRef, useState} from "react";
+import {ArrowUpRight, ChevronDown, X} from "lucide-react";
 import {TRAJECTORY_METRICS} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, TrajectoryEpisode, TrajectoryInput, TrajectoryMetric, TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
@@ -26,6 +27,69 @@ export function verdictLabel(metric: TrajectoryMetric, verdict: AssessmentVerdic
   if (metric === "redundancy") return verdict === "yes" ? (zh ? "发现无益重复" : "Repetition found") : (zh ? "未见无益重复" : "No repetition found");
   if (metric === "benefit_test") return verdict === "yes" ? (zh ? "已做收益检验" : "Utility tested") : (zh ? "尚未检验收益" : "Utility not tested");
   return verdict === "yes" ? (zh ? "有依据" : "Supported") : (zh ? "未建立" : "Not established");
+}
+
+function LoopXInputShare({usage, zh}: {usage: TrajectorySolverUsage | undefined; zh: boolean}) {
+  const attribution = usage?.loopx_input;
+  const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 1}).format(n);
+  const measured = attribution && attribution.status !== "unavailable" ? attribution : null;
+  const estimated = attribution?.method === "tiktoken_o200k_base_input_estimate_v1";
+  return <section className="research-request-coverage" aria-label={zh ? "LoopX 结构开销" : "LoopX input overhead"}>
+    <div className="research-usage-heading"><h4>{estimated ? (zh ? "LoopX Turn packet · 估计" : "LoopX Turn packet · estimate") : (zh ? "LoopX 输入占比" : "LoopX input share")}</h4><ContextHelp label={zh ? "结构输入占比口径" : "Input share basis"}>
+      <p>{zh ? "同一捕获窗口内，LoopX packet 进入各次模型请求的 token 总量 ÷ 全部请求输入 token 总量，包含缓存输入。重复消费按各次请求计算，同一响应的重复回执只计一次。" : "LoopX packet tokens processed across requests divided by all request input tokens in the same capture, including cached input. Reprocessed context counts in each request; duplicate receipts for one response count once."}</p>
+      <p>{estimated ? (zh ? "分子仅计宿主明确记录的 Turn packet 文本，使用 o200k_base 分词估计；分母是同请求的原生输入计数。尚未核验原生模型分词器，不含其他 LoopX 命令输出、封装或压缩摘要，缓存归属未知；这是已记录部分的估计，不是 provider 实测或净效率损失。" : "Only explicitly recorded Turn packet text is estimated with o200k_base; the denominator is native input for the same requests. The provider model's tokenizer is unverified. Other LoopX tool output, framing and compacted summaries are excluded; cache allocation is unknown. This estimates the recorded component, not provider-measured attribution or net efficiency loss.") : (zh ? "需要宿主提供逐请求 token 归因；包字节、字符数和命令次数不能替代。缺失归因保持未知；上下文压缩也不自动全部归为 LoopX。这个比例衡量结构开销，不能单独证明净效率损失或因果影响。" : "Requires host-supplied per-request token attribution, not packet bytes, characters or command counts. Missing attribution stays unknown; compaction is not automatically all attributed to LoopX. This measures input overhead, not net efficiency loss or causal impact.")}</p>
+    </ContextHelp></div>
+    <p className="research-input-share-value"><strong data-loopx-input-share>{measured?.input_fraction == null ? "—" : percent(measured.input_fraction)}</strong>
+      {measured ? <span>{measured.attributed_requests} / {measured.total_requests} {estimated ? (zh ? "次请求已匹配" : "requests matched") : (zh ? "次请求已归因" : "requests attributed")}</span> : null}
+    </p>
+    {!attribution ? <p>{zh ? "未采集 packet 的 token 归因" : "Packet token attribution was not captured"}</p>
+      : attribution.status === "unavailable" ? <p className="research-progress-warning" role="status">{estimated ? (zh ? "输入估计暂不可用，占比未知。" : "Input estimate unavailable; share is unknown.") : (zh ? "归因记录未通过核对，占比未知。" : "Attribution records could not be reconciled; share is unknown.")}</p>
+      : attribution.status === "partial" ? <p>{estimated ? (zh ? "部分请求已匹配 · 全窗口占比未知" : "Some requests matched · whole-capture share unknown") : (zh ? "部分归因 · 全窗口占比未知" : "Partial attribution · whole-capture share unknown")}</p>
+        : attribution.total_input_tokens === 0 ? <p>{zh ? "捕获输入为零，比例不适用。" : "Captured input is zero; the ratio is undefined."}</p> : null}
+    {attribution ? <details className="research-usage-detail"><summary>{estimated ? (zh ? "估计明细" : "Estimate details") : (zh ? "归因明细" : "Attribution details")}</summary>
+      {measured ? <dl className="research-usage-basis">
+        <dt>{estimated ? (zh ? "已记录 packet 文本估计" : "Recorded packet text estimate") : (zh ? "已归因 LoopX 输入" : "Attributed LoopX input")}</dt><dd>{measured.loopx_input_tokens.toLocaleString()} tokens</dd>
+        <dt>{zh ? "全部请求输入" : "All request input"}</dt><dd>{measured.total_input_tokens.toLocaleString()} tokens</dd>
+        <dt>{zh ? "已覆盖请求输入" : "Input in attributed requests"}</dt><dd>{measured.attributed_input_tokens.toLocaleString()} tokens</dd>
+        <dt>{zh ? "LoopX 输入中的缓存" : "Cached subset of LoopX input"}</dt><dd>{measured.loopx_cached_input_tokens?.toLocaleString() ?? "—"} tokens</dd>
+        <dt>{zh ? "占未缓存输入" : "Share of uncached input"}</dt><dd>{measured.uncached_input_fraction == null ? "—" : percent(measured.uncached_input_fraction)}</dd>
+        {measured.status === "partial" && measured.input_fraction_bounds ? <><dt>{zh ? "缺失归因的可能范围" : "Possible range with missing attribution"}</dt><dd>{measured.input_fraction_bounds.map(percent).join(" – ")}<p>{zh ? "假定未归因请求全非 LoopX / 全为 LoopX；不是置信区间。" : "Unattributed requests treated as none / all LoopX; not a confidence interval."}</p></dd></> : null}
+      </dl> : <p>{attribution.status === "unavailable" ? attribution.reason : null}</p>}
+      {measured?.estimate_basis ? <p>{measured.estimate_basis.tokenizer} {measured.estimate_basis.version} · {measured.estimate_basis.encoding}<br/>{measured.estimate_basis.models.join(", ")}</p> : null}
+      <p><code>{attribution.method}</code></p>
+    </details> : null}
+  </section>;
+}
+
+// The assessment owner supplies localized questions. Both readers use that
+// copy without inventing short titles or translating the original evidence.
+export const episodeQuestion = (result: TrajectoryAssessment, id: string, episode?: TrajectoryEpisode) =>
+  result.episode_questions?.find(question => question.episode_id === id)?.question ?? episode?.question ?? id;
+
+// Factor only an exact, single occurrence of the declared episode identity.
+// This is lossless presentation, not a short-title generator or prose classifier.
+function assessmentGroups(result: TrajectoryAssessment, assessments: TrajectoryAssessment["assessments"], episodes: TrajectoryEpisode[] | undefined) {
+  const groups: Array<{before: string; after: string; exact: boolean; items: Array<{assessment: typeof assessments[number]; question: string}>}> = [];
+  for (const assessment of assessments) {
+    const id = assessment.episode_id;
+    const question = episodeQuestion(result, id, episodes?.find(episode => episode.id === id));
+    const index = question.indexOf(id);
+    const exact = index >= 0 && question.lastIndexOf(id) === index
+      && !/[\w./-]/u.test(question[index - 1] ?? "") && !/[\w./-]/u.test(question[index + id.length] ?? "");
+    const before = exact ? question.slice(0, index) : question, after = exact ? question.slice(index + id.length) : "";
+    const prior = groups.at(-1);
+    if (exact && prior?.exact && prior.before === before && prior.after === after) prior.items.push({assessment, question});
+    else groups.push({before, after, exact, items: [{assessment, question}]});
+  }
+  // Factor repeated prose only when it outweighs the identities. This also
+  // serves a pair of long questions; preserve source order and every verdict.
+  return groups.flatMap(group => {
+    const shared = group.before.length + group.after.length;
+    const identities = group.items.reduce((sum, item) => sum + item.assessment.episode_id.length, 0);
+    return group.items.length >= 2 && shared * (group.items.length - 1) > identities
+      ? [{...group, shared: true}]
+      : group.items.map(item => ({before: "", after: "", items: [item], shared: false}));
+  });
 }
 
 // Format the native owner's existing projection, without deriving a gain,
@@ -83,10 +147,82 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
   </section>;
 }
 
-export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelect, onCitation}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; error: string; zh: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
-  const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
+function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack & {result: TrajectoryAssessment}; zh: boolean; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+  const [selected, setSelected] = useState<TrajectoryMetric | null>(null);
+  const panelId = useId(), panel = useRef<HTMLDivElement>(null);
+  const origin = useRef<HTMLButtonElement | null>(null);
+  const result = p.result;
   const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
   const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 0}).format(n);
+  const rows = TRAJECTORY_METRICS.map(metric => {
+    const label = metricCopy[metric], row = result.metrics.find(item => item.metric === metric);
+    const assessments = result.assessments.filter(item => item.metric === metric);
+    // Only complete, declared eligibility can establish exclusions.
+    const excluded = row && p.episodes?.length === p.episode_count
+      ? p.episodes.filter(episode => !episode.eligible_metrics.includes(metric)) : [];
+    const notes = [row?.no ? `${zh ? "否" : "No"} ${number(row.no)}` : "", row?.unknown ? `${zh ? "未知" : "Unknown"} ${number(row.unknown)}` : "", excluded.length ? `${zh ? "不适用" : "Ineligible"} ${number(excluded.length)}` : ""].filter(Boolean);
+    const unavailable = !row ? (zh ? "没有此指标记录" : "No metric record") : !row.eligible && !excluded.length ? (zh ? "不适用" : "N/A") : "";
+    return {metric, label, row, assessments, excluded, notes, unavailable};
+  });
+  const active = rows.find(item => item.metric === selected);
+  const close = () => {setSelected(null); origin.current?.focus({preventScroll: true}); origin.current?.scrollIntoView({block: "nearest"});};
+  return <div className="research-process-counts">
+    <div className="research-effect-metrics">
+      {rows.map(({metric, label, row, notes, unavailable}) => <button type="button" className="research-effect-metric" data-metric={metric} key={metric}
+        aria-expanded={metric === selected} aria-controls={metric === selected ? panelId : undefined}
+        aria-label={[label[zh ? 0 : 1], row?.eligible ? `${number(row.yes)} / ${number(row.eligible)} ${zh ? "是 / 适用片段" : "yes / eligible episodes"}` : unavailable, ...notes].filter(Boolean).join(" · ")}
+        onClick={event => {
+          if (selected === metric) {close(); return;}
+          origin.current = event.currentTarget; setSelected(metric);
+          requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "nearest"});});
+        }}>
+        <span className="research-effect-title">{label[zh ? 0 : 1]}<ChevronDown size={13} aria-hidden/></span>
+        <strong className="research-effect-number">{row?.eligible ? <>{number(row.yes)}<span> / {number(row.eligible)}</span></> : "—"}</strong>
+        {unavailable ? <span className="research-effect-verdict">{unavailable}</span> : null}
+        {notes.length ? <small>{notes.join(" · ")}</small> : null}
+      </button>)}
+    </div>
+    {active ? <div className="research-effect-evidence" id={panelId} ref={panel} role="region" tabIndex={-1} aria-labelledby={`${panelId}-heading`}
+      key={active.metric} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); close();}}}>
+      {(() => {
+        const {metric, label, row, assessments, excluded} = active;
+        return <>
+                <header className="research-effect-detail-heading"><div className="research-progress-title"><h4 id={`${panelId}-heading`}>{label[zh ? 0 : 1]}</h4><ContextHelp label={`${label[zh ? 0 : 1]} · ${zh ? "判读口径" : "Interpretation"}`}>
+                  <p>{label[zh ? 2 : 3]}</p>
+                  {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
+                  {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
+                  {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
+                </ContextHelp></div><button type="button" onClick={close} aria-label={zh ? "收起指标详情" : "Close metric details"}><X size={16} aria-hidden/></button></header>
+                {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episodeQuestion(result, episode.id, episode)}</li>)}</ul></div> : null}
+                <div className="research-assessments">{assessmentGroups(result, assessments, p.episodes).map(group => <div className="research-assessment-group" key={group.items[0]!.assessment.episode_id}>
+                  {group.shared ? <p className="research-assessment-shared-question">{group.before}<span>{zh ? "〔研究片段〕" : "[episode]"}</span>{group.after}</p> : null}
+                  {group.items.map(({assessment, question}) => {
+                  const episode = p.episodes?.find(item => item.id === assessment.episode_id);
+                  return <details className="research-assessment" key={assessment.episode_id}>
+                    <summary aria-label={`${question} · ${verdictLabel(metric, assessment.verdict, zh)}`}><span className="research-assessment-name">{group.shared ? assessment.episode_id : question}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
+                    <div className="research-assessment-body">
+                      <p className="research-assessment-reason">{assessment.reason}</p>
+                      <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
+                      {group.shared || (episode && episode.question !== question) ? <details className="research-assessment-original"><summary>{group.shared ? (zh ? "完整问题" : "Full question") : (zh ? "原始研究问题" : "Original research question")}</summary>
+                        {group.shared ? <p className="research-assessment-question">{question}</p> : null}
+                        {episode && episode.question !== question ? <>{group.shared ? <h5>{zh ? "原文" : "Original"}</h5> : null}<p>{episode.question}</p></> : null}
+                      </details> : null}
+                    </div>
+                  </details>;
+                })}</div>)}</div>
+                {!row?.eligible ? <p>{zh ? "所选片段没有此指标的适用判读；未记作零。" : "No eligible judgment for this metric in the selected episodes; not recorded as zero."}</p> : null}
+
+        </>;
+      })()}
+    </div> : null}
+  </div>;
+}
+
+export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; zh: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+  const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
+  const incomplete = usage?.incomplete_turn;
+  const coverage = usage?.request_coverage;
+  const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
   const duration = (s: number) => `${number(s / 60)} ${zh ? "分钟" : "min"}`;
   const stamp = (s: string) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false}).format(new Date(s));
   return <section className="research-progress" aria-label={zh ? "长程效果与用量" : "Long-horizon results and usage"}>
@@ -98,74 +234,83 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
       <p>{p?.selection.exhaustive ? (zh ? "仅覆盖声明的固定分析范围，不等于覆盖全部研究。" : "Covers the declared fixed analysis scope, not necessarily the whole study.") : p?.selection.population_episodes == null ? (zh ? "定向抽样，全程覆盖未知。" : "Purposive sample; whole-run coverage is unknown.") : (zh ? "定向抽样，不代表全程。" : "Purposive sample, not the whole run.")}</p>
       <p>{zh ? "原生测量缺失时保持未采集；分析器判读不能补成实际收益。完整取样规则与版本在“来源与用量”中。" : "Missing native measurements remain uncaptured; judgments cannot supply realized utility. Full selection rules and revisions are under Sources and usage."}</p>
     </ContextHelp></div>{p ? <p className="research-progress-scope" data-pack-id={p.pack_id}>{number(p.episode_count)} {zh ? "个片段" : "episodes"} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}{result ? (zh ? " · 未校准" : " · Uncalibrated") : ""}</p> : null}</div>{packs.length > 1 ? <label>{zh ? "评估范围" : "Evaluation scope"}<select value={selectedId} onChange={e => onSelect(e.target.value)}>{packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}</select></label> : null}</header>
-    {error ? <p className="research-progress-warning" role="alert">{p
-      ? (zh ? "无法核对本次来源；已显示的值仅为上次读回。" : "The source could not be refreshed. Displayed values are from the last readback.")
-      : (zh ? "所选来源暂不可读，未显示其他范围的结果。" : "The selected source could not be read. No result from another scope is shown.")} {error}</p> : null}
     {p ? <>
       {p.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史分析：来源或方法已变化，不能当作当前判断。" : "Historical analysis: the source or method changed; these are not current judgments."}</p> : null}
       {p.native_outcomes ? <RetainedImprovement native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
-      {result ? <div className="research-process-counts">
-        <div className="research-effect-metrics" key={p.pack_id}>
-          {TRAJECTORY_METRICS.map(metric => {
-            const label = metricCopy[metric], row = result.metrics.find(item => item.metric === metric);
-            const assessments = result.assessments.filter(item => item.metric === metric);
-            // Format declared eligibility only when the complete episode list
-            // is present. Counts or missing assessments cannot establish exclusion.
-            const excluded = row && p.episodes?.length === p.episode_count
-              ? p.episodes.filter(episode => !episode.eligible_metrics.includes(metric)) : [];
-            const notes = [row?.no ? `${zh ? "否" : "No"} ${number(row.no)}` : "", row?.unknown ? `${zh ? "未知" : "Unknown"} ${number(row.unknown)}` : "", excluded.length ? `${zh ? "不适用" : "Ineligible"} ${number(excluded.length)}` : ""].filter(Boolean);
-            const unavailable = !row ? (zh ? "没有此指标记录" : "No metric record") : !row.eligible && !excluded.length ? (zh ? "不适用" : "N/A") : "";
-            return <details className="research-effect-metric" data-metric={metric} key={metric}>
-              <summary aria-label={[label[zh ? 0 : 1], row?.eligible ? `${number(row.yes)} / ${number(row.eligible)} ${zh ? "是 / 适用片段" : "yes / eligible episodes"}` : unavailable, ...notes].filter(Boolean).join(" · ")}><span className="research-effect-title">{label[zh ? 0 : 1]}<ChevronDown size={13} aria-hidden/></span>
-                <strong className="research-effect-number">{row?.eligible ? <>{number(row.yes)}<span> / {number(row.eligible)}</span></> : "—"}</strong>
-                {unavailable ? <span className="research-effect-verdict">{unavailable}</span> : null}
-                {notes.length ? <small>{notes.join(" · ")}</small> : null}
-              </summary>
-              <div className="research-effect-evidence"><p>{label[zh ? 2 : 3]}</p>
-                {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
-                {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
-                {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
-                {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episode.question}</li>)}</ul></div> : null}
-                {assessments.map(assessment => <article key={assessment.episode_id}>
-                  <h4>{p.episodes?.find(episode => episode.id === assessment.episode_id)?.question ?? assessment.episode_id}</h4>
-                  <span>{verdictLabel(metric, assessment.verdict, zh)}</span><p>{assessment.reason}</p>
-                  <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
-                </article>)}
-                {!row?.eligible ? <p>{zh ? "所选片段没有此指标的适用判读；未记作零。" : "No eligible judgment for this metric in the selected episodes; not recorded as zero."}</p> : null}
-              </div>
-            </details>;
-          })}
-        </div>
-      </div> : <p className="research-effect-empty" role="status">{zh ? "所选范围尚未分析" : "No analysis for the selected scope"}</p>}
-      <details className="research-progress-basis"><summary>{zh ? "来源与用量" : "Sources and usage"}<span>{p.native_outcomes ? "" : (zh ? " · 原生测量未采集" : " · Native measurements uncaptured")}{zh ? " · 完整成本未知" : " · Total cost unknown"}</span></summary><dl>
-        <dt>{zh ? "题目 / 运行" : "Case / run"}</dt><dd>{p.scope.case_id}<br/>{p.scope.run_id}</dd><dt>{zh ? "证据窗口" : "Evidence window"}</dt><dd>{p.scope.window}</dd><dt>{zh ? "取样规则" : "Selection rule"}</dt><dd>{p.selection.rule}</dd>
-        <dt>{zh ? "总体研究片段数" : "Population of episodes"}</dt><dd>{p.selection.population_episodes == null ? (zh ? "未知" : "Unknown") : number(p.selection.population_episodes)}</dd>
-        {result ? <><dt>{zh ? "分析方法" : "Analysis method"}</dt><dd>{result.method_version} · {zh ? "Agent 判读未校准" : "Uncalibrated Agent judgment"}</dd><dt>{zh ? "结果标识" : "Result key"}</dt><dd><code>{result.analysis_key}</code></dd><dt>{zh ? "分析限制" : "Limitations"}</dt><dd>{result.limitations.map((line, i) => <p key={i}>{line}</p>)}</dd></> : null}
-        <dt>{zh ? "来源版本" : "Source revision"}</dt><dd><code>{p.scope.revision}</code></dd>
-      </dl>
-      {p.native_outcomes ? <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
-      <section className="research-usage"><h4>{zh ? "用量与成本" : "Usage and cost"}{measured?.applicability === "historical" ? (zh ? " · 历史捕获" : " · Historical capture") : ""}</h4>
-        <p>{zh ? "只读捕获，窗口可能与以上判读片段及下方 Explore 历史不同。" : "Read-only capture; its window can differ from the judgments above and Explore history below."}</p>
-        <dl className="research-usage-basis">
-          <dt>{zh ? "分析尝试开销" : "Analysis attempt cost"}</dt><dd>{p.job?.usage ? <>
-            {zh ? "第" : "Attempt"} {p.job.attempt ?? "—"} · {zh ? "输入" : "input"} {p.job.usage.input_tokens == null ? "—" : number(p.job.usage.input_tokens)} · {zh ? "输出" : "output"} {p.job.usage.output_tokens == null ? "—" : number(p.job.usage.output_tokens)} tokens
-            {p.job.config ? ` · ${p.job.config.model}` : ""}
-            {p.job.analysis_wall_seconds != null ? ` · ${duration(p.job.analysis_wall_seconds)}` : ""}
-          </> : (zh ? "— 本次分析尝试未测得，不记零" : "— No measurement for this analysis attempt; not zero")}</dd>
-          <dt>{zh ? "合计边界" : "Aggregation boundary"}</dt><dd>{zh ? "分析仅显示当前回执的本次尝试；不含更早失败、恢复、评测或操作者开销。不与求解捕获盲目相加，金额及完整研究成本仍未知。" : "Analysis is this attempt's receipt only; earlier failures, recovery, evaluation and operator work are excluded. It is not blindly added to solver capture. Monetary and complete study costs remain unknown."}</dd>
-        </dl>
-        <dl className="research-progress-values">
-          <div><dt>{zh ? "捕获窗口跨度" : "Captured elapsed time"}</dt><dd>{usage ? duration(usage.elapsed_seconds) : "—"}</dd><small>{usage ? `${number(usage.completed_turns)} ${zh ? "轮完整记录，不是全程总成本" : "complete Turns, not total study cost"}` : (zh ? "尚无完整用量捕获" : "No complete usage capture")}</small></div>
-          <div><dt>{zh ? "未缓存输入" : "Uncached input"}</dt><dd>{usage ? number(usage.uncached_input_tokens) : "—"}</dd><small>{usage ? "tokens" : (zh ? "未测，不记零" : "Unmeasured, not zero")}</small></div>
-          <div><dt>{zh ? "输出" : "Output"}</dt><dd>{usage ? number(usage.output_tokens) : "—"}</dd><small>{usage ? (zh ? "tokens，已含推理" : "tokens, includes reasoning") : (zh ? "未测，不记零" : "Unmeasured, not zero")}</small></div>
-        </dl>
-        {usage && measured ? <><p className="research-progress-window"><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time> UTC</p>
-          {measured.applicability === "historical" ? <p className="research-progress-warning">{zh ? "用量来源已变化或不可读；保留历史捕获值，当前用量未核验。" : "The usage source changed or is unavailable. Historical values are retained; current usage is unverified."}</p> : null}
-          <dl className="research-usage-basis"><dt>{zh ? "轮内时间合计" : "Time within Turns"}</dt><dd>{duration(usage.turn_elapsed_seconds)} · {zh ? "含工具和编排；不等于CPU、生成时间或可节省时间。" : "Includes tools and orchestration; not CPU, generation or avoidable time."}</dd>
-            <dt>{zh ? "输入总量" : "Total input"}</dt><dd>{number(usage.input_tokens)} tokens · {zh ? "其中缓存" : "including cached"} {number(usage.cached_input_tokens)}</dd><dt>{zh ? "用量来源" : "Usage source"}</dt><dd>{measured.artifact}<br/><code>{measured.artifact_sha256}</code><br/>{usage.method}</dd>
-            <dt>{zh ? "覆盖边界" : "Coverage limits"}</dt><dd>{zh ? "仅本次完整捕获；继承前缀、设置、原生评测、操作者及后续未完成轮不包含。金额与全研究总成本未知。" : "This complete capture only. Inherited prefixes, setup, native evaluation, operator work and later incomplete Turns are excluded. Dollar and total study costs are unknown."}</dd>
-          </dl></> : null}
-      </section></details>
-    </> : !error ? <p role="status">{zh ? "正在核对此范围的分析来源…" : "Checking analysis sources for this scope…"}</p> : null}
+      {result ? <ResearchMetrics key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={{...p, result}} zh={zh} onCitation={onCitation}/>
+        : <p className="research-effect-empty" role="status">{zh ? "所选范围尚未分析" : "No analysis for the selected scope"}</p>}
+      <details className="research-progress-basis"><summary>{zh ? "来源与用量" : "Sources and usage"}<span>{p.native_outcomes ? "" : (zh ? " · 原生测量未采集" : " · Native measurements uncaptured")}{zh ? " · 完整成本未知" : " · Total cost unknown"}</span></summary>
+        <section className="research-usage" aria-label={zh ? "求解用量" : "Solver usage"}>
+          <div className="research-usage-heading"><h4>{zh ? "求解用量" : "Solver usage"}</h4><ContextHelp label={zh ? "用量范围与成本" : "Usage scope and cost"}>
+            <p>{zh ? "只读捕获，窗口可能与判读片段及 Explore 历史不同。金额与完整研究成本未测得，不能从 token 数推算。" : "Read-only capture; its window can differ from the judgments and Explore history. Monetary and complete study costs are unmeasured, not inferred from token counts."}</p>
+            {usage ? <p>{usage.method === "codex_observed_session_counters_v1" ? (zh ? "仅已观测计数；未记录的请求、后续用量、继承前缀、设置、评测和操作者成本未知。" : "Observed counters only. Unrecorded requests, later usage, inherited prefixes, setup, evaluation and operator costs remain unknown.") : (zh ? "仅本次完整捕获；继承前缀、设置、原生评测、操作者及后续未完成轮不包含。" : "This complete capture only; inherited prefixes, setup, native evaluation, operator work and later incomplete Turns are excluded.")}</p> : null}
+          </ContextHelp></div>
+          {measured?.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获：用量来源已变化或不可读，当前用量未核验。" : "Historical capture: the usage source changed or is unavailable; current usage is unverified."}</p> : null}
+          {usage ? <p className="research-usage-scope">{zh ? "会话计数" : "Session counters"} · {number(usage.completed_turns)} {zh ? "轮完整记录" : "complete Turns"}{incomplete ? (zh ? " · 末轮未完成" : " · final Turn incomplete") : ""}</p> : <p className="research-usage-scope">{zh ? "尚无用量捕获 · 未测，不记零" : "No usage capture · unmeasured, not zero"}</p>}
+          <dl className="research-progress-values">
+            <div><dt>{zh ? "捕获窗口跨度" : "Captured elapsed time"}</dt><dd>{usage ? duration(usage.elapsed_seconds) : "—"}</dd></div>
+            <div><dt>{zh ? "未缓存输入" : "Uncached input"}</dt><dd>{usage ? number(usage.uncached_input_tokens) : "—"}<span> tokens</span></dd></div>
+            <div><dt>{zh ? "输出（含推理）" : "Output (includes reasoning)"}</dt><dd>{usage ? number(usage.output_tokens) : "—"}<span> tokens</span></dd></div>
+          </dl>
+          {incomplete ? <div className="research-usage-tail">
+            <p>{incomplete.usage ? <>{zh ? "其中末轮" : "Of which, unfinished Turn"} · {zh ? "输入" : "input"} <strong>{number(incomplete.usage.input_tokens)}</strong> · {zh ? "输出" : "output"} <strong>{number(incomplete.usage.output_tokens)}</strong> tokens</> : (zh ? "末轮尚无计数观测，不记零" : "No counter observation for the unfinished Turn; not zero")}</p>
+            <p>{zh ? "仅含已持久化用量，不能据此判定运行已结束。" : "Persisted usage only; this does not establish termination."}</p>
+          </div> : null}
+          <LoopXInputShare usage={usage} zh={zh}/>
+          {usage ? <div className="research-request-coverage">
+            <div className="research-usage-heading"><h4>{zh ? "请求覆盖" : "Request coverage"}</h4><ContextHelp label={zh ? "请求计数口径" : "Request counter basis"}>
+              <p>{zh ? "逐响应去重后，核对轮次与会话累计量、上下文压缩记录及会话计数。以下是独立核对口径，与上方会话计数不相加，也不改写 Goal 账本。" : "Deduplicated responses are reconciled against Turn and session totals, compaction records and session counters. This separate basis is not added to the session counters above and does not rewrite the Goal ledger."}</p>
+              <p>{zh ? "仅含捕获中已记录的请求；未记录请求及完整费用仍未知。" : "Persisted requests in this capture only; unrecorded requests and complete cost remain unknown."}</p>
+            </ContextHelp></div>
+            {coverage?.status === "verified" ? <>
+              <p>{number(coverage.unique_requests)} {zh ? "次请求" : "requests"} · {number(coverage.compaction_requests)} {zh ? "次上下文压缩" : "context compactions"}</p>
+              <p>{coverage.counter_basis === "all_requests"
+                ? (zh ? "会话计数含压缩请求" : "Session counters include compaction requests")
+                : coverage.counter_basis === "ordinary_requests"
+                  ? (zh ? "会话计数不含压缩请求" : "Session counters exclude compaction requests")
+                  : (zh ? "会话计数口径未确定" : "Session counter basis undetermined")}</p>
+              <dl className="research-request-values">
+                <div><dt>{zh ? "全部请求 · 未缓存输入" : "All requests · uncached input"}</dt><dd>{number(coverage.all_requests.input_tokens - coverage.all_requests.cached_input_tokens)} <span>tokens</span></dd></div>
+                <div><dt>{zh ? "全部请求 · 输出" : "All requests · output"}</dt><dd>{number(coverage.all_requests.output_tokens)} <span>tokens</span></dd></div>
+                <div><dt>{zh ? "其中压缩 · 未缓存输入" : "Of which compaction · uncached input"}</dt><dd>{number(coverage.compaction.input_tokens - coverage.compaction.cached_input_tokens)} <span>tokens</span></dd></div>
+                <div><dt>{zh ? "其中压缩 · 输出" : "Of which compaction · output"}</dt><dd>{number(coverage.compaction.output_tokens)} <span>tokens</span></dd></div>
+              </dl>
+            </> : <p className="research-progress-warning" role="status">{coverage ? (zh ? "请求记录未通过核对；压缩用量与请求总量未知。" : "Request records could not be reconciled; compaction usage and request totals are unknown.") : (zh ? "请求覆盖未核对；上方会话计数不能代表全部请求用量。" : "Request coverage has not been checked; session counters above do not establish all-request usage.")}</p>}
+          </div> : null}
+          {usage && measured ? <details className="research-usage-detail"><summary>{zh ? "计数明细与来源" : "Counter details and source"}</summary>
+            <dl className="research-usage-basis">
+              <dt>{zh ? "捕获时间（UTC）" : "Capture window (UTC)"}</dt><dd><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time></dd>
+              <dt>{zh ? "轮内时间合计" : "Time within Turns"}</dt><dd>{duration(usage.turn_elapsed_seconds)}<p>{zh ? "含工具和编排；不等于 CPU、生成时间或可节省时间。" : "Includes tools and orchestration; not CPU, generation or avoidable time."}</p></dd>
+              <dt>{zh ? "输入总量" : "Total input"}</dt><dd>{number(usage.input_tokens)} tokens · {zh ? "其中缓存" : "including cached"} {number(usage.cached_input_tokens)}</dd>
+              <dt>{zh ? "用量来源" : "Usage source"}</dt><dd>{measured.artifact}<code>{measured.artifact_sha256}</code></dd>
+              <dt>{zh ? "计数方法" : "Counter method"}</dt><dd><code>{usage.method}</code></dd>
+              {coverage ? <><dt>{zh ? "请求核对" : "Request reconciliation"}</dt><dd><code>{coverage.method}</code>{coverage.status === "unavailable" ? <p>{coverage.reason}</p> : <>
+                <p>{zh ? "请求观测截至（UTC）" : "Requests observed through (UTC)"} {stamp(coverage.observed_through)}</p>
+                <p>{coverage.counter_observations} {zh ? "次会话计数核对" : "session counter checks"} · {coverage.duplicate_records} {zh ? "条重复响应已去重" : "duplicate response records excluded"}</p>
+                <p>{zh ? "全部请求输入" : "All request input"} {number(coverage.all_requests.input_tokens)} · {zh ? "其中缓存" : "including cached"} {number(coverage.all_requests.cached_input_tokens)} tokens</p>
+                <p>{zh ? "压缩输入" : "Compaction input"} {number(coverage.compaction.input_tokens)} · {zh ? "其中缓存" : "including cached"} {number(coverage.compaction.cached_input_tokens)} tokens</p>
+              </>}</dd></> : null}
+            </dl>
+          </details> : null}
+          <div className="research-analysis-cost">
+            <div className="research-usage-heading"><h4>{zh ? "分析尝试" : "Analysis attempt"}</h4><ContextHelp label={zh ? "分析开销范围" : "Analysis cost scope"}>
+              <p>{zh ? "仅当前回执的本次尝试，不含更早失败、恢复、评测或操作者开销。不与求解捕获相加。" : "This attempt's receipt only; earlier failures, recovery, evaluation and operator work are excluded. Not added to solver capture."}</p>
+            </ContextHelp></div>
+            <p>{p.job?.usage ? <>{zh ? "第" : "Attempt"} {p.job.attempt ?? "—"} · {zh ? "输入" : "input"} {p.job.usage.input_tokens == null ? "—" : number(p.job.usage.input_tokens)} · {zh ? "输出" : "output"} {p.job.usage.output_tokens == null ? "—" : number(p.job.usage.output_tokens)} tokens
+              {p.job.analysis_wall_seconds != null ? ` · ${duration(p.job.analysis_wall_seconds)}` : ""}
+            </> : (zh ? "未测得，不记零" : "Unmeasured, not zero")}</p>
+          </div>
+        </section>
+        {p.native_outcomes ? <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
+        <details className="research-source-detail"><summary>{zh ? "分析范围与来源" : "Analysis scope and sources"}</summary><dl className="research-usage-basis">
+          <dt>{zh ? "题目 / 运行" : "Case / run"}</dt><dd>{p.scope.case_id}<br/>{p.scope.run_id}</dd>
+          <dt>{zh ? "证据窗口" : "Evidence window"}</dt><dd>{p.scope.window}</dd><dt>{zh ? "取样规则" : "Selection rule"}</dt><dd>{p.selection.rule}</dd>
+          <dt>{zh ? "总体研究片段数" : "Population of episodes"}</dt><dd>{p.selection.population_episodes == null ? (zh ? "未知" : "Unknown") : number(p.selection.population_episodes)}</dd>
+          {result ? <><dt>{zh ? "分析方法" : "Analysis method"}</dt><dd>{result.method_version} · {zh ? "Agent 判读未校准" : "Uncalibrated Agent judgment"}</dd><dt>{zh ? "结果标识" : "Result key"}</dt><dd><code>{result.analysis_key}</code></dd><dt>{zh ? "分析限制" : "Limitations"}</dt><dd>{result.limitations.map((line, i) => <p key={i}>{line}</p>)}</dd></> : null}
+          {p.job?.config ? <><dt>{zh ? "分析模型" : "Analysis model"}</dt><dd>{p.job.config.model}</dd></> : null}
+          <dt>{zh ? "来源版本" : "Source revision"}</dt><dd><code>{p.scope.revision}</code></dd>
+        </dl></details>
+      </details>
+    </> : null}
   </section>;
 }

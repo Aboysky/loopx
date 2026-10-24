@@ -127,8 +127,17 @@ struct OwnedService {
 
 impl OwnedService {
     fn stop(&mut self) {
+        #[cfg(target_os = "macos")]
+        let group = self.child.id();
         let _ = self.child.kill();
         let _ = self.child.wait();
+        #[cfg(target_os = "macos")]
+        if let Err(error) = crate::service_lifetime::wait_for_group_exit(group) {
+            eprintln!(
+                "LoopX owned {} stop not confirmed: {error}",
+                self.kind.label()
+            );
+        }
     }
 }
 
@@ -255,6 +264,28 @@ impl ServiceSet {
     }
 }
 
+// Ownership transfer (adopt, update handoff, stop) is exercisable without a
+// real runtime: the set owns exactly the groups a test hands it, so a reclaim
+// is observable on the same job objects production uses.
+#[cfg(test)]
+pub(crate) fn owned_set_for_test(children: Vec<GroupChild>) -> ServiceSet {
+    ServiceSet {
+        owned: children
+            .into_iter()
+            .map(|child| OwnedService {
+                child,
+                kind: ServiceKind::Status,
+            })
+            .collect(),
+        runtime: SelectedRuntime {
+            executable: String::new(),
+            identity: None,
+        },
+        last_recovery_attempt: None,
+        healed: false,
+    }
+}
+
 /// One service's connection attempt. The child this App spawned travels with
 /// the outcome even when the attempt failed, so `ServiceSet` can stop it
 /// instead of leaking a process that no longer has an owner.
@@ -350,7 +381,11 @@ fn connect_owned_service(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = command.group_spawn().map_err(|error| {
+    #[cfg(target_os = "macos")]
+    let child = crate::service_lifetime::spawn(&command);
+    #[cfg(not(target_os = "macos"))]
+    let child = command.group_spawn();
+    let child = child.map_err(|error| {
         ServiceError(format!(
             "could not start private LoopX {}: {error}",
             kind.label()
@@ -873,6 +908,14 @@ fn runtime_search_path(
         paths.extend([
             PathBuf::from("/opt/homebrew/bin"),
             PathBuf::from("/usr/local/bin"),
+            // Homebrew's supported LTS Node formulae are keg-only. Finder
+            // does not inherit the shell PATH that activates those runtimes.
+            // Use the same bounded search for the private installer and the
+            // services it starts; Core still qualifies the actual version.
+            PathBuf::from("/opt/homebrew/opt/node@24/bin"),
+            PathBuf::from("/usr/local/opt/node@24/bin"),
+            PathBuf::from("/opt/homebrew/opt/node@22/bin"),
+            PathBuf::from("/usr/local/opt/node@22/bin"),
         ]);
     }
     for path in inherited
@@ -904,6 +947,31 @@ pub(crate) fn python3_environment() -> (bool, Option<String>) {
         timed_output(probe)
             .filter(|output| output.status.success())
             .and_then(|output| parse_python_version(&output))
+    });
+    (found, version)
+}
+
+pub(crate) fn node_environment() -> (bool, Option<String>) {
+    let path = runtime_search_path(env::var_os("HOME"), env::var_os("PATH"));
+    let executable = resolve_executable_path("node", Some(path.as_os_str()));
+    let found = executable.is_some();
+    let version = executable.and_then(|node| {
+        let mut probe = Command::new(node);
+        probe.arg("--version");
+        timed_output(probe)
+            .filter(|output| output.status.success())
+            .and_then(|output| {
+                let text = std::str::from_utf8(&output.stdout)
+                    .ok()?
+                    .trim()
+                    .strip_prefix('v')?;
+                let fields: Vec<_> = text.split('.').collect();
+                (fields.len() == 3
+                    && fields.iter().all(|field| {
+                        !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit())
+                    }))
+                .then(|| text.to_owned())
+            })
     });
     (found, version)
 }

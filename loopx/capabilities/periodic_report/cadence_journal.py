@@ -14,7 +14,7 @@ from typing import Any
 
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
 from ...registry import atomic_write_json
-from .cadence import report_cadence_window
+from .cadence import report_cadence_next_due_at, report_cadence_window
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...control_plane.digest_envelope import sha256_envelope
 
@@ -75,7 +75,7 @@ def read_cadence_journal(*, runtime_root: Path, goal_id: str) -> dict[str, Any] 
     fields = {
         "schema_version", "goal_id", "window", "admitted_at", "publication",
     }
-    if not isinstance(value, dict) or set(value) not in (fields, fields | {"supersedes"}) or value["schema_version"] != JOURNAL_SCHEMA or value["goal_id"] != goal_id:
+    if not isinstance(value, dict) or set(value) - {"supersedes", "retirement"} != fields or value["schema_version"] != JOURNAL_SCHEMA or value["goal_id"] != goal_id:
         raise ValueError("cadence journal contract is invalid")
     if "supersedes" in value and not re.fullmatch(r"cadence_[0-9a-f]{64}", str(value["supersedes"])):
         raise ValueError("cadence journal predecessor is invalid")
@@ -89,7 +89,50 @@ def read_cadence_journal(*, runtime_root: Path, goal_id: str) -> dict[str, Any] 
         or any(not isinstance(item, str) or not item for item in publication.values())
     ):
         raise ValueError("cadence journal publication reference is invalid")
+    retirement = value.get("retirement")
+    if retirement is not None and (publication is not None or not isinstance(retirement, dict)
+            or set(retirement) != {"reason", "source_receipt_id", "retired_at"}
+            or retirement["reason"] != "owner_cancelled_failed_generation"
+            or any(not isinstance(item, str) or not item for item in retirement.values())):
+        raise ValueError("cadence journal retirement reference is invalid")
     return value
+
+
+def retire_failed_cadence_window(*, runtime_root: Path, goal_id: str,
+                                expected_window_id: str, source_receipt_id: str) -> dict[str, Any]:
+    """Retain an explicitly cancelled known failure; never invent publication.
+
+    The original execution owner must prove a terminal failed generation with
+    no generated report or delivery attempt before calling this transition.
+    This retires admission only; it neither retries a model nor drops evidence.
+    """
+    path = cadence_journal_path(runtime_root, goal_id)
+    if not isinstance(source_receipt_id, str) or not source_receipt_id:
+        raise ValueError("failed cadence retirement requires its original receipt")
+    with exclusive_file_lock(path, policy=LockAcquisitionPolicy.MUTATION,
+                             operation="retire_failed_report_window"):
+        current = read_cadence_journal(runtime_root=runtime_root, goal_id=goal_id)
+        if not current or current["window"]["window_id"] != expected_window_id or current["publication"] is not None:
+            raise ValueError("the unpublished failed report window changed")
+        if current.get("retirement"):
+            if current["retirement"]["source_receipt_id"] != source_receipt_id:
+                raise ValueError("the failed window retirement changed its source")
+            return current
+        current["retirement"] = {"reason": "owner_cancelled_failed_generation",
+            "source_receipt_id": source_receipt_id, "retired_at": datetime.now(timezone.utc).isoformat()}
+        atomic_write_json(path, current)
+        return current
+
+
+def _archive_predecessor(path: Path, previous: dict[str, Any]) -> str:
+    identity = previous["window"]["window_id"]
+    archive = path.parent / "superseded-cadence" / (identity + ".json")
+    if archive.exists():
+        if json.loads(archive.read_text(encoding="utf-8")) != previous:
+            raise ValueError("cadence predecessor archive conflicts with active window")
+    else:
+        atomic_write_json(archive, previous)
+    return identity
 
 
 def admit_cadence_window(
@@ -132,7 +175,6 @@ def _admit_cadence_window_locked(
     if subscription.get("enabled") is not True or subscription.get("schedule") is None:
         return {"status": "disabled", "mutated": False, "window": None}
     calculated = report_cadence_window(subscription["schedule"], now=now)
-    assert calculated is not None
     from .presets import build_periodic_report_preset_activation
     activation = build_periodic_report_preset_activation(str(subscription.get("profile_preset") or ""))
     profile = activation.get("profile")
@@ -148,15 +190,16 @@ def _admit_cadence_window_locked(
                         "profile_digest": activation["profile_digest"]},
         "trigger_policy": profile["trigger_policy"],
         **calculated,
-    }
-    proposed["window_id"] = "cadence_" + _digest(proposed).split(":")[1]
-    validate_cadence_window(proposed)
+    } if calculated is not None else None
+    if proposed is not None:
+        proposed["window_id"] = "cadence_" + _digest(proposed).split(":")[1]
+        validate_cadence_window(proposed)
     previous = read_cadence_journal(runtime_root=runtime_root, goal_id=goal_id)
     mutated = False
     supersedes = None
     if previous is not None:
         old = previous["window"]
-        if previous["publication"] is None:
+        if previous["publication"] is None and not previous.get("retirement"):
             # Import lazily to keep the pure calendar evaluator independent
             # of subscription and generation composition.
             from .incremental import read_periodic_report_publication_cursor
@@ -169,7 +212,7 @@ def _admit_cadence_window_locked(
                 atomic_write_json(path, previous)
                 mutated = True
             else:
-                if old["subscription_revision"] == proposed["subscription_revision"]:
+                if old["subscription_revision"] == subscription.get("effective_revision"):
                     return {"status": "pending", "mutated": False, "window": old}
                 from .pending_intent import _attempt_dir
                 # Admission and consumption share this lock. Once any
@@ -177,19 +220,23 @@ def _admit_cadence_window_locked(
                 # window rather than silently replacing its authority.
                 if _attempt_dir(runtime_root, goal_id, cadence_intent(old)).exists():
                     return {"status": "configuration_changed", "mutated": False, "window": old}
-                archive = path.parent / "superseded-cadence" / (old["window_id"] + ".json")
-                if archive.exists():
-                    if json.loads(archive.read_text(encoding="utf-8")) != previous:
-                        raise ValueError("cadence predecessor archive conflicts with active window")
-                else:
-                    atomic_write_json(archive, previous)
+                if proposed is None:
+                    return {"status": "not_due", "mutated": False, "window": None,
+                            "next_due_at": report_cadence_next_due_at(subscription["schedule"], now=now)}
                 # Archive first. A crash before the replacement is written
                 # can safely repeat admission without creating two reports.
-                supersedes = old["window_id"]
+                supersedes = _archive_predecessor(path, previous)
+        if previous.get("retirement"):
+            if proposed is None or old["due_at"] >= proposed["due_at"]:
+                return {"status": "retired", "mutated": False, "window": old}
+            supersedes = _archive_predecessor(path, previous)
         # A route/profile edit is not a second report for the same due
         # boundary. Clock rollback likewise cannot replay a delivered one.
-        if supersedes is None and old["due_at"] >= proposed["due_at"]:
+        if proposed is not None and supersedes is None and old["due_at"] >= proposed["due_at"]:
             return {"status": "already_published", "mutated": mutated, "window": old}
+    if proposed is None:
+        return {"status": "not_due", "mutated": mutated, "window": None,
+                "next_due_at": report_cadence_next_due_at(subscription["schedule"], now=now)}
     entry = {
         "schema_version": JOURNAL_SCHEMA, "goal_id": goal_id,
         "window": proposed, "admitted_at": now.astimezone(timezone.utc).isoformat(),

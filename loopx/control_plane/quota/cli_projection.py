@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .decision_summary import compact_quota_decision
+from .should_run_packet import reference_duplicate_fallback_guidance
 
 QUOTA_CLI_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_todo_summary_compaction_v0"
@@ -703,6 +705,106 @@ def _promote_interaction_contract(payload: dict[str, Any]) -> dict[str, Any]:
     return promoted
 
 
+def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]:
+    """Share exact JSON copies in this display only; never trim the contract.
+
+    Work context is the preferred full carrier, then the planning horizon.
+    This Python CLI adapter only changes serialization after owner decisions;
+    canonical state, captures and replan context construction remain untouched.
+    """
+    paths: list[tuple[str | int, ...]] = []
+    interaction = payload.get("interaction_contract")
+    channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
+    context = channel.get("work_context") if isinstance(channel, dict) else None
+    sources = context.get("sources") if isinstance(context, dict) else None
+    for index, source in enumerate(sources if isinstance(sources, list) else []):
+        if (isinstance(source, dict) and source.get("source") == "goal_acceptance"
+                and isinstance(source.get("content"), dict)
+                and source["content"].get("status", "loaded") == "loaded"
+                and isinstance(source["content"].get("goal_acceptance_contract"), dict)
+                and source["content"]["goal_acceptance_contract"]):
+            paths.append(("interaction_contract", "agent_channel", "work_context",
+                          "sources", index, "content", "goal_acceptance_contract"))
+            break
+    paths.extend([
+        ("planning_horizon", "core_goal", "acceptance_contract"),
+        ("autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
+        ("agent_todo_summary", "goal_acceptance_contract"),
+    ])
+    carriers: dict[str, str] = {}
+    result = payload
+    for path in paths:
+        parent: Any = result
+        for part in path[:-1]:
+            if isinstance(parent, dict) and isinstance(part, str):
+                parent = parent.get(part)
+            elif isinstance(parent, list) and isinstance(part, int) and part < len(parent):
+                parent = parent[part]
+            else:
+                parent = None
+                break
+        field = str(path[-1])
+        value = parent.get(field) if isinstance(parent, dict) else None
+        if not isinstance(value, dict) or not value or field + "_ref" in parent:
+            continue
+        # Python equality conflates True/1 and False/0. Compare JSON types and
+        # the complete content, including revision, scope, failures and sources.
+        encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        reference = carriers.get(encoded)
+        if reference is None:
+            carriers[encoded] = "$" + "".join(
+                f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
+            continue
+        if len(encoded) <= len(reference) + 8:
+            continue
+        # Copy only the affected spine, so callers retain their original facts.
+        result = dict(result)
+        target: Any = result
+        for part in path[:-1]:
+            child = target[part]
+            target[part] = list(child) if isinstance(child, list) else dict(child)
+            target = target[part]
+        del target[field]
+        target[field + "_ref"] = reference
+    return result
+
+
+def _reference_explore_writeback_guidance(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep identical optional instructions once in this same CLI packet.
+
+    This is transport-only reference projection, after all decisions. Preserve
+    standalone Explore reads, differing text and the complete settlement owner.
+    """
+    contract = payload.get("interaction_contract", {})
+    agent = contract.get("agent_channel", {})
+    context = agent.get("work_context", {})
+    sources = context.get("sources", [])
+    steps = contract.get("cli_channel", {}).get("settlement_plan", {}).get("ordered_steps", [])
+    for step_index, step in enumerate(steps):
+        if step.get("kind") != "durable_writeback":
+            continue
+        for attachment_index, attachment in enumerate(step.get("optional_attachments", [])):
+            guidance = attachment.get("guidance")
+            if attachment.get("capability_id") != "explore" or not isinstance(guidance, str) or not guidance:
+                continue
+            ref = (f"$.interaction_contract.cli_channel.settlement_plan.ordered_steps[{step_index}]"
+                   f".optional_attachments[{attachment_index}].guidance")
+            updated = list(sources)
+            for index, source in enumerate(sources):
+                content = source.get("content", {})
+                graph = content.get("graph", {})
+                if source.get("kind") != "explore_turn_context" or graph.get("result_writeback_guidance") != guidance:
+                    continue
+                graph = dict(graph)
+                graph.pop("result_writeback_guidance")
+                graph["result_writeback_guidance_ref"] = ref
+                updated[index] = {**source, "content": {**content, "graph": graph}}
+            if updated != sources:
+                return {**payload, "interaction_contract": {**contract, "agent_channel": {
+                    **agent, "work_context": {**context, "sources": updated}}}}
+    return payload
+
+
 def compact_quota_should_run_cli_payload(
     payload: dict[str, Any],
     *,
@@ -790,12 +892,16 @@ def compact_quota_should_run_cli_payload(
             compact = dict(compact)
             compact["goal_route_hint"] = _compact_goal_route_hint(goal_route_hint)
         compact = _compact_shadowed_action_projections(compact)
+        compact = reference_duplicate_fallback_guidance(compact)
     agent_lane_next_action = compact.get("agent_lane_next_action")
     if isinstance(agent_lane_next_action, dict) and "content_revision" in agent_lane_next_action:
         compact = dict(compact)
         agent_lane_next_action = dict(agent_lane_next_action)
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
+    compact = _reference_inline_goal_acceptance(compact)
+    if not include_vision_detail:
+        compact = _reference_explore_writeback_guidance(compact)
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )

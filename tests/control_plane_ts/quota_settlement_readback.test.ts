@@ -183,6 +183,14 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
     assert.equal((accepted.progress as any).closeout_kind, "typed_blocked_writeback_no_spend");
     assert.equal((accepted.spend as any).payload.ok, false);
     assert.equal((accepted.terminal_closeout as any).payload.ok, false);
+    const history = async (runs: unknown[]) => (await readQuotaSettlement({
+      schema_version: "loopx_quota_history_qualification_request_v0", runs,
+    })).accepted_indexes;
+    assert.deepEqual(await history([base, {...base, administrative_blocked_replan: true,
+      autonomous_replan_ack: null}]), [0]);
+    const compactCheckpoint = {...checkpoint} as Record<string, unknown>;
+    delete compactCheckpoint.delivery_boundary;
+    assert.deepEqual(await history([{...base, vision_checkpoint: compactCheckpoint}]), [0]);
     await writeFile(index, JSON.stringify({...base, autonomous_replan_ack: {...ack,
       semantic_delta: {...semantic, satisfying_outcomes: ["fresh_vision_path_outcome"]}}}) + "\n");
     assert.equal((await read()).replay_phase, "settled");
@@ -202,6 +210,7 @@ test("a service-qualified blocked replan closes only its exact Turn without debi
         {triggers: []}].map(patch => ({...base, vision_checkpoint: {...checkpoint, ...patch}})),
     ];
     for (const changed of invalid) {
+      assert.deepEqual(await history([changed]), []);
       await writeFile(index, JSON.stringify(changed) + "\n");
       assert.notEqual((await read()).replay_phase, "settled");
     }
@@ -976,6 +985,35 @@ test("monitor closeout requires the exact committed effect, not a matching obser
   }
 });
 
+test("a prior committed monitor poll never blocks a later unbound Turn rebind", async () => {
+  const priorTurn = "turn-prior-monitor";
+  const currentTurn = "turn-current-work";
+  const prior = await fixture({monitor: true, turnId: priorTurn});
+  const current = await fixture({guardUnbound: true, turnId: currentTurn});
+  try {
+    const priorLog = join(prior, "goals", goalId, "rollout-event-log.jsonl");
+    const priorEvents = (await readFile(priorLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    priorEvents[0].details.closeout_required = true;
+    await writeFile(
+      priorLog,
+      `${priorEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    );
+    await appendHistory(prior, current);
+    const result = await readQuotaSettlement(request(prior, {
+      turn_instance_id: currentTurn,
+    }));
+    const failure = (result.identity as any).result.failure;
+    assert.equal(failure.kind, "receipt_unbound");
+    assert.equal(failure.details.owed_prior_turn, undefined);
+  } finally {
+    await rm(prior, {recursive: true, force: true});
+    await rm(current, {recursive: true, force: true});
+  }
+});
+
 test("refresh recovery admission never survives a failed Turn identity", async () => {
   const root = await fixture({ guard: false, writeback: true });
   try {
@@ -1491,7 +1529,8 @@ test("does not pair a spend row with malformed persisted settlement identity", a
   }
 });
 
-test("causal no-spend closeout retains exact receipt identity and historical debits", async () => {
+for (const kind of ["causal", "lifecycle"]) {
+test(`${kind} no-spend closeout retains exact receipt identity and historical debits`, async () => {
   const target = { todo_id: "todo_dependency", role: "agent", status: "open",
     task_class: "continuous_monitor", material_change_generation: 2 };
   const waiting = { todo_id: todoId, role: "agent", status: "open",
@@ -1504,7 +1543,9 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
   const condition = (evaluated.conditions as Record<string, unknown>[])[0].condition;
   const proof = prepareBlockedWait({ schema_version: BLOCKED_WAIT_REQUEST_SCHEMA,
     todo_id: todoId, observed_at: "2026-09-24T10:00:00Z",
-    todos: [{ ...waiting, resume_condition: condition }, target] });
+    todos: kind === "lifecycle" ? [{todo_id: todoId, role: "agent", status: "blocked", done: false,
+      task_class: "advancement_task", archive_state: "active"}]
+      : [{ ...waiting, resume_condition: condition }, target] });
   const options = { writeback: true, writebackOutcome: "outcome_gap", blockedRetry: proof,
     progressObservation: { schema_version: "typed_progress_observation_v0",
       result_class: "blocked", work_item_id: todoId,
@@ -1515,7 +1556,7 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
     assert.equal((result.progress as any).state, "settled");
     assert.equal((result.progress as any).closeout_kind, "typed_blocked_writeback_no_spend");
     assert.equal(result.replay_phase, "settled");
-    // Frozen historical facts stay closed after a later dependency observation.
+    // Frozen historical facts stay closed after a later observation.
     await appendFile(join(runtime, "goals", goalId, "runs", "index.jsonl"),
       `${JSON.stringify({ classification: "quota_monitor_poll", goal_id: goalId,
         agent_id: agentId, todo_id: target.todo_id, turn_instance_id: "later-turn",
@@ -1541,7 +1582,8 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
   const missingWriteback = await fixture(options);
   const spent = await fixture({ ...options, spend: true });
   const malformed = await fixture({ ...options, blockedRetry: { ...proof,
-    waiting_todo: { ...waiting, resume_monitor_generation: 3 } } });
+    ...(kind === "lifecycle" ? {blocked_todo: {...proof.blocked_todo as object, status: "done"}}
+      : {waiting_todo: { ...waiting, resume_monitor_generation: 3 }}) } });
   try {
     assert.notEqual((await readQuotaSettlement(request(missing))).replay_phase, "settled");
     const log = join(missingWriteback, "goals", goalId, "rollout-event-log.jsonl");
@@ -1557,6 +1599,7 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
       rm(path, { recursive: true, force: true })));
   }
 });
+}
 
 test("accepts only an attributable typed blocker as an outcome-gap writeback", async () => {
   const qualifiedRuntime = await fixture({
@@ -2032,3 +2075,59 @@ test(
     );
   },
 );
+
+test("history retry qualification preserves its original aware clock and exact expiry", async () => {
+  const run = {todo_id: "todo_pending001", turn_instance_id: "turn-pending",
+    delivery_outcome: "outcome_gap", progress_observation: {result_class: "blocked"},
+    blocked_retry: {schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+      todo_id: "todo_pending001", observed_at: "2026-01-01T00:00:00.000001Z",
+      due_at: "2026-01-01T00:05:00.000001Z", resume_when: "resume_at:2026-01-01T00:05:00.000001Z"}};
+  const read = (runs: unknown[], observed_at: unknown) => readQuotaSettlement({
+    schema_version: "loopx_quota_history_qualification_request_v0", runs, observed_at,
+  });
+  assert.deepEqual((await read([run], "2026-01-01T00:05:00Z")).active_retry_indexes, [0]);
+  assert.deepEqual((await read([run], "2026-01-01T00:05:00.000001Z")).active_retry_indexes, []);
+  assert.deepEqual((await read([run], "2026-01-01T08:05:00+08:00")).active_retry_indexes, [0]);
+  for (const clock of [undefined, null, "2026-01-01T00:01:00", "2026-01-01", "2026-02-30T00:01:00Z",
+    "2026-01-01T00:01:00z"]) {
+    assert.deepEqual((await read([run], clock)).active_retry_indexes, []);
+  }
+  for (const patch of [{source: "todo"}, {todo_id: "todo_other001"}, {resume_when: null},
+    {observed_at: "2026-01-01T00:00:00"}, {due_at: "2026-02-30T00:05:00Z"}]) {
+    const bad = {...run, blocked_retry: {...run.blocked_retry, ...patch}};
+    assert.deepEqual((await read([bad], "2026-01-01T00:01:00Z")).active_retry_indexes, []);
+  }
+  for (const patch of [{delivery_outcome: "outcome_progress"}, {progress_observation: null},
+    {todo_id: null}, {turn_instance_id: null}, {turn_instance_id: {}},
+    {turn_instance_id: true}, {turn_instance_id: 1}, {turn_instance_id: " "}]) {
+    assert.deepEqual((await read([{...run, ...patch}], "2026-01-01T00:01:00Z")).active_retry_indexes, []);
+  }
+  // Historical Python datetime inputs retain ISO-week dates and offset seconds.
+  const legacy = {...run, blocked_retry: {...run.blocked_retry,
+    observed_at: "2026-W01-4T00:00:00+00:00:01", due_at: "2026-W01-4T00:05:00+00:00:01",
+    resume_when: "resume_at:2026-W01-4T00:05:00+00:00:01"}};
+  assert.deepEqual((await read([legacy], "2026-01-01T00:01:00Z")).active_retry_indexes, [0]);
+  const legacySeparator = {...run, blocked_retry: {...run.blocked_retry,
+    observed_at: "2026-01-01z00:00:00Z", due_at: "2026-01-01z00:05:00Z",
+    resume_when: "resume_at:2026-01-01z00:05:00Z"}};
+  assert.deepEqual((await read([legacySeparator], "2026-01-01T00:01:00Z")).active_retry_indexes, [0]);
+  // Aware Python comparisons need not normalize the instant into a UTC datetime.
+  for (const start of ["0001-01-01T00:00:00+08:00", "9999-12-31T23:00:00-08:00"]) {
+    const due = start.replace(":00:00", ":05:00"), now = start.replace(":00:00", ":01:00");
+    const edge = {...run, blocked_retry: {...run.blocked_retry,
+      observed_at: start, due_at: due, resume_when: `resume_at:${due}`}};
+    assert.deepEqual((await read([edge], now)).active_retry_indexes, [0]);
+    assert.deepEqual((await read([edge], due)).active_retry_indexes, []);
+  }
+  for (const [observed_at, due_at, expected] of [
+    ["2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", [0]],
+    ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", [0]],
+    ["2026-01-01T00:00:00.000001Z", "2026-01-01T00:01:00Z", []],
+    ["2026-01-01T00:00:00Z", "2026-01-01T00:30:00.000001Z", []],
+  ] as const) {
+    const bounded = {...run, blocked_retry: {...run.blocked_retry, observed_at, due_at,
+      resume_when: `resume_at:${due_at}`}};
+    assert.deepEqual((await read([bounded], "2026-01-01T00:00:30Z")).active_retry_indexes, expected);
+  }
+  await assert.rejects(read([run], 123), /observation clock/);
+});

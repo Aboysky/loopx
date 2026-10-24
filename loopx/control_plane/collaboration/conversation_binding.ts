@@ -1,8 +1,10 @@
 import type {JsonObject} from "../effect_program.ts";
+import {isDeepStrictEqual} from "node:util";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
 import {normalizeProjectContext, normalizeStewardContext, normalizeStewardGoalScope} from "./conversation_scope.ts";
+import {bindStewardManagedActor, normalizeStewardManagedActor} from "./steward_managed_mode.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
  * opaque identity observations; neither a message nor a model selects them.
@@ -154,6 +156,9 @@ function binding(value: unknown): JsonObject {
       throw new EffectRuntimeRequestError("ambiguous Agent target grant");
     }
   }
+  if (row.managed_actor !== undefined && (row.context_kind !== "steward" || group || row.executor_endpoint_id !== "codex")) {
+    throw new EffectRuntimeRequestError("managed identity requires a private native steward");
+  }
   return {
     schema_version: BINDING_SCHEMA, binding_id: ref(row.binding_id, "binding identity"),
     transport_ref: token(row.transport_ref, "transport reference"),
@@ -166,6 +171,7 @@ function binding(value: unknown): JsonObject {
     ...(row.context_kind === "steward" ? {goal_ids: normalizeStewardGoalScope(row.goal_ids),
       ...(row.goal_scope !== undefined ? {goal_scope: row.goal_scope} : {})} : {}),
     ...(agents.length ? {agent_targets: agents} : {}),
+    ...(row.managed_actor !== undefined ? {managed_actor: normalizeStewardManagedActor(row.managed_actor)} : {}),
   };
 }
 
@@ -270,6 +276,14 @@ export function planConversationBinding(params: JsonObject): JsonObject {
     const goals = normalizeStewardGoalScope([...(previous.goal_ids as string[]), goal.goal_id]);
     if (JSON.stringify(goals) === JSON.stringify(previous.goal_ids)) return {changed: false, state: current};
     rows = current.bindings.map(row => row.binding_id === id ? {...row, goal_ids: goals} : row);
+  } else if (params.operation === "bind_managed_actor") {
+    const id = ref(params.binding_id, "binding identity");
+    const previous = current.bindings.find(row => row.binding_id === id);
+    if (!previous) throw new EffectRuntimeRequestError("the original steward binding is unavailable");
+    const actor = bindStewardManagedActor({...params, binding: previous});
+    if (JSON.stringify(actor) === JSON.stringify(previous.managed_actor)) return {changed: false, state: current};
+    if (previous.managed_actor !== undefined) throw new EffectRuntimeRequestError("retain the original managed steward identity");
+    rows = current.bindings.map(row => row.binding_id === id ? {...row, managed_actor: actor} : row);
   } else if (params.operation === "disconnect") {
     const id = ref(params.binding_id, "binding identity");
     rows = current.bindings.filter(row => row.binding_id !== id);
@@ -328,19 +342,35 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
     const saved = requireJsonObject(params.session_context, "bound Session context");
     // New commissions may extend the same owner's scope. Workspace, role and
     // audience remain frozen; all evidence reads use the fresh binding scope.
+    // JSON object member order is not identity. Preserve every value and field
+    // check while accepting equivalent contexts from another JSON writer.
     const matches = row.context_kind === "steward"
-      ? JSON.stringify({...saved, goal_ids: []}) === JSON.stringify({...context, goal_ids: []})
+      ? isDeepStrictEqual({...saved, goal_ids: []}, {...context, goal_ids: []})
         && (row.goal_scope === "all_registered" || normalizeStewardGoalScope(saved.goal_ids).every(g => (row.goal_ids as string[]).includes(g)))
-      : JSON.stringify(saved) === JSON.stringify(context);
+      : isDeepStrictEqual(saved, context);
     if (!matches) throw new EffectRuntimeRequestError("bound Session context changed");
+  }
+  const channel = row.context_kind === "steward"
+    ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`;
+  if (params.session !== undefined) {
+    const session = requireJsonObject(params.session, "canonical bound Session");
+    const steward = row.context_kind === "steward";
+    sessionIdentity(session.session_id, "bound Session identity");
+    if (session.status === "closed" || session.channel_id !== channel
+        || session.goal_id !== (steward ? "loopx-manager" : null)
+        || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
+        || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null
+        || params.session_context === undefined
+        || !isDeepStrictEqual(steward ? session.steward_context : session.project_context, params.session_context)) {
+      throw new EffectRuntimeRequestError("canonical bound Session identity changed");
+    }
   }
   // This is an audience proof, not a host-tool grant. Only the independently
   // verified owner in this private source may inherit an explicit machine
   // owner grant. Portfolio scope and project write grants do not imply it.
   return {binding: row, context, owner_manager_audience: row.context_kind === "steward"
       && project.filesystem_scope !== "workspace_only",
-    channel_id: row.context_kind === "steward"
-    ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`};
+    channel_id: channel};
 }
 
 /** Discover existing private targets from canonical metadata. This is a read
@@ -363,13 +393,9 @@ export function listLocalBoundSessions(params: JsonObject): JsonObject {
         && (value as JsonObject).binding_id === id) || session.status === "closed") continue;
     const steward = row.context_kind === "steward";
     const saved = requireJsonObject(steward ? session.steward_context : session.project_context, "bound Session context");
-    const selected = resolveBoundConversation({...params, source_ref: saved.source_ref,
+    resolveBoundConversation({...params, source_ref: saved.source_ref,
+      session,
       sender_ref: row.operator_ref, private_human_message: false, origin: "web", session_context: saved});
-    if (session.channel_id !== selected.channel_id || session.goal_id !== (steward ? "loopx-manager" : null)
-        || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
-        || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null) {
-      throw new EffectRuntimeRequestError("canonical bound Session identity changed");
-    }
     ids.push(sessionIdentity(session.session_id, "bound Session identity"));
   }
   if (new Set(ids).size !== ids.length) throw new EffectRuntimeRequestError("canonical bound Session identity is ambiguous");
@@ -391,6 +417,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
   const current = params.current_session === null ? null : requireJsonObject(params.current_session, "current Session");
+  if (params.context_recovery !== undefined) {
+    return planContextRecovery(params, row, current);
+  }
   const target = row.target_recorded === true ? row : current;
   const session = target?.session_id ?? null;
   const turn = row.target_recorded === true ? row.turn_id ?? null : current?.active_turn_id ?? null;
@@ -448,6 +477,191 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       response_code: command === "new" ? "new_session" : turn || background.length ? "stop_requested" : "no_active_turn"};
   }
   return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
+}
+
+/** A new, correlated continuation after an observed pre-execution failure.
+ * A delivered failure notice is not a completed business request. This bounded
+ * migration path never reopens the failed Turn or retries unknown effects.
+ */
+function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonObject | null): JsonObject {
+  const recovery = requireJsonObject(params.context_recovery, "context recovery observation");
+  const version = requireInteger(recovery.version, "context representation version");
+  if (version < 1) throw new EffectRuntimeRequestError("invalid context representation version");
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true
+      || row.agent_target != null || current.session_id !== row.session_id || current.agent_id !== "codex"
+      || current.upstream_mode !== "chat" || current.status === "closed"
+      || current.session_mode === "attached_host") return no;
+  const selected = binding(params.binding);
+  if (selected.audience === "group") return no;
+  const steward = selected.context_kind === "steward";
+  if (selected.executor_endpoint_id !== "codex" || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
+  const saved = steward ? normalizeStewardContext(current.steward_context)
+    : normalizeProjectContext(current.project_context);
+  const source = requireJsonObject(row.source, "original conversation source");
+  if (row.binding_id !== selected.binding_id || saved.binding_id !== selected.binding_id
+      || saved.source_ref !== source.source_ref || saved.provider_ref !== selected.provider_ref
+      || saved.operator_ref !== selected.operator_ref || source.sender_ref !== selected.operator_ref
+      || source.private_human_message !== true
+      || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
+      || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
+  const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
+  // A failed review cannot fall through to routing/quota business retries.
+  if ((previous?.read_only_review === true && previous.failed_turn_id !== row.turn_id)
+      || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
+        requireJsonObject(value, "prior recovery").read_only_review === true))) return no;
+  if (!steward && failed.error_code === "server_restarted") {
+    return planResultReview(recovery, row, current, failed, previous, version);
+  }
+  if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
+      || recovery.steering_observed !== false
+      || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded", "usage_limit_exceeded"].includes(String(failed.error_code))
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+  const retryKind = failed.error_code === "usage_limit_exceeded" ? "quota" : "routing";
+  const attemptKey = `${retryKind}_attempt`;
+  if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
+      && Number.isSafeInteger(previous[attemptKey]) && Number(previous[attemptKey]) >= 1
+      && Number(previous[attemptKey]) <= 3 && previous.version === version) {
+    // A crash after queue admission must adopt that exact canonical Turn,
+    // even if it has already executed. This branch never creates model work.
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted recovery Turn");
+    const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${retryKind}-${previous[attemptKey]}`;
+    if (previous.client_turn_id !== client || admitted.client_turn_id !== client
+        || admitted.session_id !== current.session_id || admitted.turn_id === failed.turn_id
+        || typeof row.message !== "string" || typeof row.origin !== "string"
+        || admitted.message !== row.message || admitted.origin !== row.origin
+        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {operation: "admit_turn", recovery_candidate: true,
+      recovery_eligible: recovery.source_verified === true, client_turn_id: client,
+      admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted recovery Turn"),
+      session_id: current.session_id, native_thread_ids: []};
+  }
+  const routing = planRoutingRecovery(recovery, row, current, failed, previous, version);
+  if (routing !== null) return routing;
+  if (!steward) return no;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
+  if (previous && (previous.version !== version || previous.failed_turn_id !== row.turn_id
+      || previous.client_turn_id !== client)) return no;
+  const history = current.upstream_context_history ?? [];
+  if (!Array.isArray(history)) throw new EffectRuntimeRequestError("invalid native context provenance");
+  const oldThreads = history.map(value => requireJsonObject(value, "native context provenance"))
+    .filter(item => Number.isSafeInteger(item.manager_context_version) && Number(item.manager_context_version) < version)
+    .map(item => sessionIdentity(item.thread_id, "original native thread"));
+  if (Number.isSafeInteger(current.manager_context_version) && Number(current.manager_context_version) < version) {
+    oldThreads.push(sessionIdentity(current.upstream_thread_id, "original native thread"));
+  }
+  const currentHostFailure = current.manager_context_version === version && failed.error_code === "host_gate";
+  const nativeThreads = currentHostFailure
+    ? [sessionIdentity(current.upstream_thread_id, "current native thread"), ...oldThreads] : oldThreads;
+  if (!nativeThreads.length) return no;
+  const candidate = {...no, recovery_candidate: true, client_turn_id: client,
+    session_id: current.session_id, failed_turn_id: failed.turn_id, native_thread_ids: [...new Set(nativeThreads)]};
+  if (recovery.native_observation == null) return candidate;
+  const observed = requireJsonObject(recovery.native_observation, "native failure readback");
+  if (!nativeThreads.includes(String(observed.thread_id)) || observed.turn_id !== failed.upstream_turn_id
+      || observed.only_original_user_item !== true || recovery.source_verified !== true) return candidate;
+  const info = observed.codex_error_info;
+  let transient = (oldThreads.includes(String(observed.thread_id))
+    && ["contextWindowExceeded", "serverOverloaded", "internalServerError"].includes(String(info)))
+    || (currentHostFailure && observed.thread_id === current.upstream_thread_id && info === "other");
+  if (info && typeof info === "object" && !Array.isArray(info)) {
+    const entries = Object.entries(info);
+    if (entries.length === 1 && ["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(entries[0][0])) {
+      const detail = requireJsonObject(entries[0][1], "native connection readback");
+      transient = Object.hasOwn(detail, "httpStatusCode") && (detail.httpStatusCode === null
+        || Number.isSafeInteger(detail.httpStatusCode) && Number(detail.httpStatusCode) >= 500 && Number(detail.httpStatusCode) <= 599);
+    }
+  }
+  return {...candidate, recovery_eligible: transient};
+}
+
+/** Interrupted work may have effects. Never retry it. The original worker may
+ * reserve one read-only review of existing results, with its own presentation.
+ * The adapter enforces the existing workspace-only read policy, without tools
+ * which could send, write, delegate or repeat the original business operation.
+ */
+function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || failed.response !== null
+      || !Number.isSafeInteger(failed.delta_count) || Number(failed.delta_count) <= 0
+      || recovery.steering_observed !== false || recovery.stop_observed !== false
+      || recovery.attachments_present !== false
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
+  if (previous?.read_only_review === true && (previous.failed_turn_id !== failed.turn_id
+      || previous.version !== version || previous.client_turn_id !== client)) return no;
+  if (recovery.admitted_turn != null && previous?.read_only_review === true) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted result review");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === failed.turn_id || admitted.message !== row.message
+        || admitted.origin !== row.origin || (admitted.attachments != null
+          && (!Array.isArray(admitted.attachments) || admitted.attachments.length))) return no;
+    return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
+      read_only_review: true, client_turn_id: client, session_id: current.session_id,
+      admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted result review"), native_thread_ids: []};
+  }
+  if (current.active_turn_id != null || current.status !== "ready") return no;
+  const now = Date.parse(String(recovery.observed_at)), completed = Date.parse(String(failed.completed_at));
+  if (!Number.isFinite(now) || !Number.isFinite(completed) || now < completed + 60_000) return no;
+  const native = sessionIdentity(current.upstream_thread_id, "original native thread");
+  const candidate = {...no, recovery_candidate: true, read_only_review: true,
+    client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
+    native_thread_ids: [native]};
+  if (recovery.native_observation == null) return candidate;
+  const observed = requireJsonObject(recovery.native_observation, "interrupted result inventory");
+  return {...candidate, recovery_eligible: recovery.source_verified === true
+    && observed.thread_id === native && observed.turn_id === failed.upstream_turn_id
+    && observed.read_only_review === true && observed.no_final_answer === true
+    && observed.effects_observed === true};
+}
+
+/** Routing outages outlive one worker or context migration. Reserve at most
+ * three separately correlated continuations, with a persisted failure clock.
+ * Provider IO must prove a latest, terminal, pre-execution request every time.
+ */
+function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
+  const quota = failed.error_code === "usage_limit_exceeded";
+  const kind = quota ? "quota" : "routing";
+  const attemptKey = `${kind}_attempt`;
+  if (!quota && !["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
+  // An unfinished older reservation must finish under its original identity.
+  if (previous !== null && previous.failed_turn_id === failed.turn_id && previous[attemptKey] === undefined) return null;
+  const observed = recovery.native_observation == null ? null
+    : requireJsonObject(recovery.native_observation, "native failure readback");
+  if (observed && !quota && observed.pre_execution_routing_timeout !== true) return null;
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const reserved = previous?.failed_turn_id === failed.turn_id;
+  const priorAttempt = previous?.[attemptKey] ?? 0;
+  if (!Number.isSafeInteger(priorAttempt) || Number(priorAttempt) < 0) return no;
+  const attempt = Number(priorAttempt) + (reserved ? 0 : 1);
+  if (attempt < 1 || attempt > 3 || typeof current.upstream_thread_id !== "string"
+      || !current.upstream_thread_id || current.active_turn_id != null || current.status !== "ready") return no;
+  const now = typeof recovery.observed_at === "string" ? Date.parse(recovery.observed_at) : NaN;
+  const completed = typeof failed.completed_at === "string" ? Date.parse(failed.completed_at) : NaN;
+  const notBefore = completed + 60_000 * 2 ** (attempt - 1);
+  if (!Number.isFinite(now) || !Number.isFinite(completed) || now < notBefore) {
+    // Preserve the existing context-migration path when no routing diagnostic
+    // has been established. A proven routing timeout always obeys backoff.
+    return observed ? no : null;
+  }
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${kind}-${attempt}`;
+  if (reserved && (previous?.client_turn_id !== client || previous.version !== version)) return no;
+  const candidate = {...no, recovery_candidate: true, client_turn_id: client,
+    [attemptKey]: attempt, not_before: new Date(notBefore).toISOString(),
+    session_id: current.session_id, failed_turn_id: failed.turn_id,
+    native_thread_ids: [sessionIdentity(current.upstream_thread_id, "current native thread")]};
+  if (!observed) return candidate;
+  return {...candidate, recovery_eligible: recovery.source_verified === true
+    && observed.thread_id === current.upstream_thread_id && observed.turn_id === failed.upstream_turn_id
+    && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
+      && observed.quota_available === true && typeof observed.quota_observed_at === "number"
+      && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
+      : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
 }
 
 /** A labelled observation of the same authorized context and canonical queue.

@@ -12,13 +12,45 @@ desktop release workflow succeeds:
 - macOS: `.dmg` plus a zipped `.app` bundle;
 - Windows: `.msi` plus an NSIS `.exe` installer.
 
-On Apple Silicon macOS, the App checks its current official channel on launch,
-verifies a newer App's updater signature, installs it and restarts automatically.
+On Apple Silicon macOS, the App opens its qualified local runtime first, then
+checks its current official channel and downloads a newer App in the background.
+It verifies the updater signature and prepares the archive locally. The next
+normal open verifies that archive again and installs it before starting services;
+ordinary background preparation never replaces or restarts an active workspace.
+Windows NSIS installs follow the signed-update journey on the main channel: the
+App checks on launch, verifies the minisign signature, runs the installer
+passively and restarts automatically. On Windows the stable channel, MSI
+installs and App rollback/repair remain manual or unavailable for now, and the
+installer carries no Authenticode certificate, so Windows may show a SmartScreen
+prompt.
 An offline or failed check keeps the installed App usable; it does not certify
 that the App is current. Main points to the latest complete signed build,
 not arbitrary Git HEAD. Builds without the updater need a one-time replacement.
 Windows preview retains manual CLI installation; browser/PWA users continue
 with `loopx update`.
+
+Background network requests do not hold service supervision. A slow or failed
+check/download cannot prevent local startup or recovery of an owned child.
+Manual **Check for updates** also leaves service supervision available while
+reading the feed. Its result remains in the existing update panel after the
+local workspace opens; an available update does not require installation to
+finish startup. A newer check or an explicit maintenance action supersedes a
+late response before it can admit a candidate. Apply, repair, rollback and
+restart retain their exclusive native transaction and recovery boundaries.
+Startup failures and feed results remain separate: an unusable local runtime
+keeps its recovery message while a successful check still offers Install.
+The existing update panel reports background progress or a prepared update;
+manual actions cancel/supersede background work and retain their original
+installation, restart, backup and rollback controls. A CLI-requested App upgrade
+remains an explicit transaction with its original channel and service-ready
+readback. A permission-restricted prepared installation stays on the verified
+current App; use the existing explicit update action for native authorization.
+The disposable cache is not an update authority: its signed bytes, channel,
+version order and sealed bundle version are checked again before replacement.
+Rejected cached signatures and verified-safe replacement failures keep local
+startup moving, with the failure retained in diagnostics. They do not display
+a stopped-startup state while services are connecting. An incomplete target,
+failed journal retirement or unknown installation failure still requires recovery.
 
 ## Updates And Recovery
 
@@ -30,10 +62,41 @@ to the App. A private request receipt contains versions, source revisions,
 update phase and the qualified service runtime identity; it contains no Goal
 content or credentials. An update check failure remains a failed terminal
 upgrade even when the workspace can still open. Normal launches without that
-request retain their existing three-second optional startup check; an explicit
-terminal upgrade uses the existing thirty-second interactive check budget.
+request perform their network check after local services are ready; an explicit
+terminal upgrade retains its thirty-second interactive check budget.
 The existing update panel shows the same native maintenance phases and recovery
 actions. Main is the latest complete signed build, which can lag Git HEAD.
+
+Release archive downloads share one native transfer policy for manual updates
+and background preparation: a ten-second connection deadline, thirty seconds
+without a response read, and a thirty-minute total ceiling. Steady progress may
+continue beyond thirty seconds; stalled headers or body reads remain bounded.
+The archive client limits apply only after feed discovery; the feed keeps its
+existing check deadline (45 seconds manually, 30 seconds in the background).
+Signature verification still precedes cache publication or installation.
+The existing recovery and workspace update panels distinguish a download timeout,
+an interrupted network request, an unavailable package and a rejected signature.
+They keep the coarse cause and retry action without exposing transport URLs or
+signature diagnostics. Unclassified failures retain the general download/verification
+message; a failure never certifies that an update was installed.
+Progress and failures use the
+existing update panel; background IO does not hold the service supervisor or
+restart a running workspace.
+
+手动「检查更新」的网络等待也不占用本地服务启动或恢复锁。已有合格组件时，
+工作区照常打开，检查结果与重试入口保留在原更新面板；发现更新不要求先安装
+才能进入。较新的检查或明确维护操作使迟到响应失效，不能覆盖当前候选。
+安装、修复、回滚与重启仍遵守原生独占事务及恢复边界。
+
+手动与后台下载复用原生更新器：连接上限十秒、单次读取无响应上限三十秒、完整下载
+上限三十分钟。持续有进展的下载可超过三十秒；下载的连接和读取期限仅在清单检查后
+启用，清单仍保留手动四十五秒、后台三十秒的原期限。签名通过后
+才写入准备缓存或安装。现有更新面板显示进度与失败，后台下载不阻塞服务监督或重启
+正在使用的工作区。
+
+启动恢复页与工作区更新面板分别提示下载超时、网络请求失败、安装包不可用和签名
+校验失败，只展示可操作的原因与重试入口，不暴露传输地址或签名内部错误。
+无法分类的失败仍保留通用提示，失败不会被显示为已安装。
 
 Startup automatically uses the newest qualified local runtime it can establish.
 It compares package versions; equal versions with source revisions use ancestry
@@ -162,6 +225,15 @@ are allowed to finish; boot pages retain the framework's reload behavior.
 This changes post-crash navigation only; other platforms keep their existing
 handoff policy.
 
+The macOS App's two private Core services also follow the native process's
+lifetime after an abrupt App crash. Each runs with a helper from the same
+native executable. Losing the App's private pipe stops only that helper's own
+process group; reopening does not leave an additional pair of services behind.
+A service exit still reaches the existing supervisor for recovery. Shared
+development services and other platforms keep their existing process policy.
+This process cleanup does not establish the cause or visual recovery of a
+WebContent blank screen, and it does not replay a failed task.
+
 The opt-in macOS regression uses a hidden incognito window, a synthetic local
 server and a separate App identifier. It terminates only that window's own
 WebContent process, simulates a temporary backend failure and a slow response,
@@ -231,6 +303,14 @@ against the local source. Vite development navigation is unchanged. Explicit
 runtime repair retains its existing root handoff; WebContent crash recovery
 continues to retain the current in-process route.
 
+Research uses this same saved-view path. The macOS capture below is a packaged
+QA build with the real backend and a disposable synthetic Goal, reopened
+directly in Research after a normal quit and a loopback-port change. Window
+close/reopen, an explicit return to Manager and a corrupt preference were also
+checked. It does not demonstrate model execution or an official App upgrade.
+
+![Packaged QA reopening the same synthetic Goal in Research](docs/assets/research-reopen-qa.jpg)
+
 For native qualification, use a separately identified packaged App with the
 real backend: select a local Goal and Agent page, quit normally, reopen, and
 check the same selection on the new port. Also check window-close, an explicit
@@ -278,13 +358,13 @@ secret. Updater signing does not provide Apple notarization. It also does not
 change Goal authority, grant capabilities, or stop running agents on behalf of
 the user. Services may briefly disconnect during reconciliation.
 
-The optional startup feed check has a three-second deadline so an unavailable
-update server cannot hold workspace startup indefinitely. A manual **Check for updates**
-allows 45 seconds for the same official feed, including redirects; the panel
-keeps showing its checking state while the existing workspace remains readable.
+The background feed check has a thirty-second deadline and is outside local
+workspace startup. A manual **Check for updates** allows 45 seconds for the same
+official feed, including redirects; the panel keeps showing its checking state
+while the existing workspace remains readable.
 A timeout remains an explicit retryable error, never a claim that the App is
-current. The separate 30-second download/signature-verification deadline and
-installation/recovery boundaries are unchanged.
+current. Archive downloads use the separate connection, idle-read and total
+deadlines described above. Installation and recovery boundaries are unchanged.
 
 Published macOS preview artifacts use ad-hoc code signing to verify bundle
 integrity without requiring an Apple Developer account. They are not signed
@@ -387,6 +467,16 @@ updates through the actual App, then terminate its exact owned Chat and Status
 children separately. Read back both HTTP identities, unchanged peer PID, exact
 registry, retained Session and update failure, then normal quit/reopen cleanup.
 Never substitute an installed App, real Goal or shared listener as a fixture.
+Bind isolation at the QA bundle's executable entrypoint, so a window tool or OS
+relaunch cannot drop a caller-only environment. The native services request
+`--global-registry`; `LOOPX_REGISTRY` only changes the project default and does
+not override that explicit selection. A QA-only CLI launcher must route through
+Core's explicit `--registry` and `--runtime-root` arguments instead of that flag.
+Fail closed when its fixture binding is absent. Before any UI operation or
+public capture, read both service identities, the actual registry/runtime route
+and the empty Goal set. A source mismatch invalidates the sample; retain it
+privately and stop rather than operating on or publishing the real workspace.
+Do not change the user's default registry or `HOME` to obtain isolation.
 This qualifies child-exit recovery, not an interrupted model Turn, an
 unresponsive process, a signed update installation or cross-OS operation.
 
@@ -423,6 +513,26 @@ cd ..
 ./scripts/dashboard.sh build
 npm run build
 ```
+
+The updater's real loopback HTTP/signature checks run with `cargo test`. Its
+slow-transfer regressions deliberately exceed thirty seconds and are opt-in:
+
+```sh
+cargo test --lib maintenance::transfer_tests -- --ignored --nocapture --skip released_archive
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test --lib \
+  released_archive_survives_slow_native_transport_and_cache_reopen -- --ignored --nocapture
+```
+
+They cover manual feed headers and bodies arriving between 30 and 45 seconds,
+a progressing signed download, stalled archive headers and a mid-body stall
+through the same native download owner, while service recovery remains usable.
+The window runtime is a test runtime; the transport and signature verifier are
+real. The ordinary fixture's signed bytes are not an installable App. The
+artifact-backed check additionally transfers a complete released archive and
+reopens its verified cache using the shipped public key; keep its `.sig` file
+beside it. Neither check installs the archive or qualifies signed App
+replacement, installed adoption or a real network's throughput. Never point
+them at a live registry or workspace.
 
 To qualify the native supervisor against an actual installed Core, first build
 the runtime bundle as above with `LOOPX_USAGE_PING=0`, then run from `src-tauri`:

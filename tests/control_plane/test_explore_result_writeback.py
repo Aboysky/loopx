@@ -1,3 +1,4 @@
+from canonical_authority_fixture import assert_todo_read_unchanged, read_fixture_todos
 from copy import deepcopy
 import json
 
@@ -199,7 +200,7 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     config = json.loads(path.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": case not in {"disabled", "off-without-result", "path-disabled"}}
     path.write_text(json.dumps(config))
-    todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    todos = read_fixture_todos(project / config["goals"][0]["state_file"])
     initialize_canonical_authority(
         runtime,
         GOAL_ID,
@@ -216,7 +217,7 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID)
     rc, guard = _run_cli(path, runtime, "quota", "should-run", "--codex-app",
-                        *binding, "--scan-path", str(project), cwd=project)
+                        *binding,  cwd=project)
     assert rc == 0, guard
     packet = {"schema_version": "goal_vision_replan_contract_v0",
               "state": "vision_patch_proposed",
@@ -298,7 +299,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         "explore_harness": {"enabled": True},
     }
     path.write_text(json.dumps(config))
-    todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    todos = read_fixture_todos(project / config["goals"][0]["state_file"])
     if source_mode == "linked_path_delta":
         target = next(todo for todo in todos if todo["todo_id"] == TODO_ID)
         target["explore_result_node_refs"] = [ATTACHMENT["node_id"]]
@@ -370,8 +371,6 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         "should-run",
         "--codex-app",
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard
@@ -635,7 +634,7 @@ def test_completed_work_can_attach_evidence_without_reopening_or_changing_comple
     config["goals"][0]["explore_graph"] = {"enabled": True}
     path.write_text(json.dumps(config))
     runtime = tmp_path / "runtime"
-    todos = list_goal_todos(registry_path=path, goal_id="goal-a")["todos"]
+    todos = read_fixture_todos(state)
     initialize_canonical_authority(
         runtime,
         "goal-a",
@@ -752,7 +751,7 @@ def test_hard_lease_is_required_for_new_delivery_but_not_successful_readback(
     config["goals"][0]["explore_graph"] = {"enabled": True}
     path.write_text(json.dumps(config))
     runtime = tmp_path / "runtime"
-    todos = list_goal_todos(registry_path=path, goal_id="goal-a")["todos"]
+    todos = read_fixture_todos(state)
     projection = build_todo_runtime_shadow_projection(
         goal_id="goal-a", todos=todos, handoff_mode="hard_lease"
     )
@@ -816,7 +815,7 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
         assert rc == 0, packet
         return packet
 
-    source_todos = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
+    source_todos = read_fixture_todos(project / config["goals"][0]["state_file"])
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=source_todos, handoff_mode="hard_lease"),
         state_path=project / config["goals"][0]["state_file"], provider=provider)
@@ -830,7 +829,7 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     guard_command = ["quota", "should-run", "--codex-app", *binding,
-                     "--scan-path", str(project)]
+                     ]
     guard = run(*guard_command)
     hint = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]
     assert "release only after explore_result_delivery.ok=true" in hint["guidance"]
@@ -994,7 +993,7 @@ def test_corrupt_graph_cannot_report_success_on_replay_and_recovers_after_repair
     assert not result["ok"], "A partial log must not become a successful delivery receipt"
     assert result["primary_committed"] and result["retryable"]
     assert log.read_bytes() == corrupt
-    assert list_goal_todos(registry_path=args["registry_path"], goal_id=args["goal_id"]) == before
+    assert_todo_read_unchanged(list_goal_todos(registry_path=args["registry_path"], goal_id=args["goal_id"]), before)
     log.write_bytes(valid)
     assert deliver_result_attachment(payload=payload(), **args)["idempotent_replay"]
     assert log.read_bytes() == valid

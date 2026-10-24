@@ -313,7 +313,9 @@ assert.doesNotMatch(page, /personal-worker-strip/, "Manager home omits the redun
 assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Workspace header does not expose theme switching");
 assert.match(workspaceTheme, /workspaceThemeStorageKey = "loopx-pw-theme"/, "Theme preference persists across reloads");
 assert.doesNotMatch(dashboard, /isManagerProjectionQuestion/, "Ordinary manager questions do not silently bypass the selected model by matching phrases");
-assert.match(dashboard, /if \(\(selectedRoute\.agentId === "status-only" && targetContext\.kind !== "project"\)\s*\|\| \(targetContext\.kind === "goal" && !targetGoal\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback; a workspace conversation never answers from the Goal projection");
+// Context eligibility is exercised by the typed bound-conversation smoke;
+// this source assertion only protects the explicit caller-selected route.
+assert.match(dashboard, /selectedRoute\.agentId === "status-only" && conversationSupportsStatusProjection\(targetContext\)/, "Only the explicit status-only route can use an eligible context's projection");
 assert.match(attentionActions, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
@@ -373,7 +375,7 @@ assert.match(page, /t\("home\.blockingSummary", \{ count: managerBlockingCount \
 assert.match(dashboard, /function personalGoalState[\s\S]*hasOpenUserTodo[\s\S]*if \(\["user_or_controller", "controller"\][\s\S]*if \(personalGoalNeedsRepair/, "User gates outrank agent-owned health repair in Goal state projection");
 assert.match(dashboard, /if \(goal\.registry_member === false\)[\s\S]*return \[\]/, "Unregistered historical Goals are excluded from the interactive workspace");
 assert.match(status, /runGoalSchema[\s\S]*display_name:\s*z\.string\(\)/, "Run history preserves the registered Goal display name");
-assert.match(dashboard, /title:\s*personalGoalTitle\(goal\.id,\s*goal\.display_name\)/, "Personal workspace prefers the registered Goal display name");
+assert.match(dashboard, /title:\s*personalGoalTitle\(goal\.id,\s*goal\.source_access\?\.label \?\? goal\.display_name\)/, "Personal workspace prefers the configured source label and falls back to the registered Goal display name");
 assert.match(dashboard, /function personalGoalHasPendingOperatorGate/, "Pending operator gates have a durable state projection helper");
 assert.match(dashboard, /personalGoalHasPendingOperatorGate\(row\)/, "Pending operator gates project into the needs-you state");
 assert.match(dashboard, /explicitUserWait/, "Explicit user-approval language repairs incomplete gate projections");
@@ -444,7 +446,6 @@ assert.match(machineSettings, /selected\.capability_id === "pull_request_review"
 assert.match(machineSettings, /previewMachineConfiguration\(/, "Machine settings require a preview before apply");
 assert.match(machineSettings, /applyMachineConfiguration\([\s\S]*preview\.plan_revision/, "Machine settings apply the exact reviewed revision");
 assert.match(machineSettings, /previewMachineConfigurationRollback\(/, "Machine settings preview rollback before execution");
-assert.match(machineSettings, /liveDefaultDescription/, "Live defaults and Goal overrides are explained together");
 assert.match(machineSettings, /inspection\?\.capability_catalog\.capabilities/, "Machine settings discover capabilities from the shared registry catalog");
 assert.match(machineSettings, /inspection\?\.invalid_namespaces\[0\]/, "Invalid machine state identifies the affected namespace without reading its stored values");
 assert.match(machineSettings, /machine-invalid-repair[\s\S]*role="alert"/, "Invalid machine state exposes a visible guided repair path");
@@ -472,7 +473,7 @@ assert.match(machineSettings, /<CapabilityCatalogNavigation/, "Machine settings 
 assert.match(goalCapabilitySettings, /<CapabilityCatalogNavigation/, "Goal settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /capability_id === "lark_event_inbox"[\s\S]*<GoalAutoNotifyToggle/, "Lark inbox capability exposes the independent human-gate notification control");
 assert.match(notificationSettings, /disabled=\{busy \|\| notification\?\.configured !== true/, "Gate notification control stays disabled until a Goal Channel is configured");
-assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === capabilityGoalId\)/, "Goal capability settings receive the selected Goal Channel notification state");
+assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === editableGoal\.goalId\)/, "Goal capability settings receive the selected Goal Channel notification state");
 assert.match(machineSettings, /<CapabilityDetailHeader/, "Machine settings use the shared capability detail header");
 assert.match(goalCapabilitySettings, /<CapabilityDetailHeader/, "Goal settings use the shared capability detail header");
 assert.match(capabilityWorkbench, /localizeCapability\(rawCapability, locale\)/, "Shared navigation localizes capability metadata without changing capability ids");
@@ -577,7 +578,8 @@ assert.match(larkSettings, /fetchLarkAppSetup/, "Registration polls the local se
 assert.match(larkSettings, /window\.open\(/, "Registration opens the provider flow from a user gesture");
 assert.match(larkSettings, /window\.open\(window\.location\.href,\s*"_blank"\)/, "Registration never leaves a blank waiting tab");
 assert.match(larkSettings, /setAppRef\(snapshot\.app_ref\)/, "Completed registration selects the new App");
-assert.match(larkSettings, /loading \? "…" : apps\.length/, "Lark App count does not flash a false zero while loading");
+// Loading/empty App counts are exercised against the rendered page in the
+// progressive-loading browser scenario, independently of local state names.
 assert.match(larkSettings, /openConnectionEditor\(connection\)/, "Every Lark connection settings button opens a scoped editor");
 assert.match(larkSettings, /focusGoalConnection[\s\S]*openConnectionEditor\(connection\)[\s\S]*openConnect\(goals\.find/, "Goal-level Lark entry opens the scoped connection editor or create flow");
 
@@ -695,6 +697,11 @@ for (const key of ["suggestions.openDecisions", "suggestions.explainBlocked", "s
 const router = source("../../router.tsx");
 assert.match(page, /const WorkspaceSettingsPage = lazy\(\(\) => import\("\.\/workspace-settings-page"\)/, "Settings load on demand");
 assert.doesNotMatch(page, /^import \{ WorkspaceSettingsPage \}/m, "No eager import undoes the boundary");
+const machineConfigurationSettings = source("./machine-configuration-settings.tsx");
+assert.doesNotMatch(machineConfigurationSettings, /DshHostReadiness|dsh-host-readiness/,
+  "Steward settings do not expose DSH or managed-host topology");
+assert.doesNotMatch(machineConfigurationSettings, /goals = \[\]|onOpenProviderSettings/,
+  "Steward settings consume only machine configuration capabilities");
 assert.match(page, /^import \{ GoalTeamResults \} from "\.\/goal-team-results";/m, "Team results load eagerly so their single list request keeps its timing");
 for (const route of ["./views/frontstage-developer-page", "./views/benchmark-study-page", "./features/personal-workspace/answer-report-page"]) {
   assert.match(router, new RegExp(`lazy\\(\\(\\) => import\\("${route.replace(/[./]/g, (ch) => `\\${ch}`)}"\\)`), `${route} loads on demand`);

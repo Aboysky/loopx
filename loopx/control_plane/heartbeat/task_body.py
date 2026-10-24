@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...project_prompt import render_turn_bootstrap
 from .rules import (
     CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE,
     DEFAULT_MATERIAL_QUEUE_RULE,
@@ -16,6 +17,7 @@ from .rules import (
     HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE,
     HOST_LOOP_TODO_CLOSEOUT_RULE,
     OPERATOR_LANGUAGE_RULE,
+    OPERATOR_LANGUAGE_RULE_THIN,
     RUNTIME_CAPABILITY_PROJECTION_THIN_RULE,
     RUNTIME_EXECUTION_ROUTING_RULE,
     RUNTIME_REPAIR_ROUTING_RULE,
@@ -52,10 +54,15 @@ def bind_exact_turn_settlement_task_body(
 ) -> str:
     if turn_instance_id is None:
         return task_body
-    bound = task_body.replace(
+    bound = task_body
+    for placeholder in (
         "LOOPX_TURN=<current_time_iso>",
-        f"LOOPX_TURN={turn_instance_id}",
-    )
+        '$LOOPX_TURN = "<current_time_iso>"',
+    ):
+        bound = bound.replace(
+            placeholder,
+            render_turn_bootstrap(value=turn_instance_id),
+        )
     plan_path = ("writeback.settlement_plan.ordered_steps" if captured_envelope
                  else "interaction_contract.cli_channel.settlement_plan.ordered_steps")
     return (
@@ -102,7 +109,7 @@ Before spending delivery compute, make the CLI reachable.
 
 ```bash
 {cli_preflight}
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_block}{quota_guard_command}
 ```
 
@@ -272,7 +279,7 @@ Brief detail:
 
 ```bash
 {cli_preflight}
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_block}{quota_guard_command}
 ```
 
@@ -340,7 +347,7 @@ Detail: `{expanded_prompt_command}`.
 
 ```bash
 {cli_preflight}
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_block}{quota_guard_command}
 ```
 
@@ -495,6 +502,9 @@ def render_traex_visible_goal_task_body(
         permission_rule=permission_rule,
         agent_scope_instruction=agent_scope_instruction,
         host_wait_rule="",
+        # Keep the non-user-source authority clause without introducing the
+        # external wake vocabulary into this interactive host's objective.
+        work_rule=SCOPE_BOUNDED_WORK_RULE.replace("Heartbeat/", "Scheduled/"),
     )
 def _render_goal_task_body(
     *,
@@ -508,6 +518,7 @@ def _render_goal_task_body(
     permission_rule: str,
     agent_scope_instruction: str,
     host_wait_rule: str,
+    work_rule: str = SCOPE_BOUNDED_WORK_RULE,
 ) -> str:
     scope_block = f"\n{agent_scope_instruction}\n" if agent_scope_instruction else ""
     prequota_block = (
@@ -519,31 +530,26 @@ def _render_goal_task_body(
         material_queue_rule=material_queue_rule,
         permission_rule=permission_rule,
     )
-    return f"""Advance LoopX goal `{goal_id}` from `{active_state}` {host_preamble}
+    return f"""Advance goal `{goal_id}` from `{active_state}` {host_preamble}
 {scope_block}
 
 {RUNTIME_EXECUTION_ROUTING_RULE}
 {HOST_LOOP_SAFETY_RULE}
-{OPERATOR_LANGUAGE_RULE}
+{OPERATOR_LANGUAGE_RULE_THIN}
 
-{prequota_block}Each work iteration, read complete successful JSON from:
+{prequota_block}Each work iteration: read complete successful JSON:
 `{quota_guard_command}`
-Use the current `interaction_contract`, not remembered commands.
+Use current `interaction_contract`.
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
-Use `cli_channel.settlement_plan.ordered_steps` when present; preserve identities/flags
-and supply truthful evidence/actual outcomes.
-Do not reconstruct refresh/spend commands. Ambiguous writes need readback/recovery,
-not blind repeats. Repair local entrypoint failures within authority; while the
-contract is unavailable or incomplete, no work/spend and no claim of completion.
+Preserve command flags; truthful evidence.
+Repair entrypoints within authority. Unavailable/incomplete contract: no work/spend/completion claim.
 
-{SCOPE_BOUNDED_WORK_RULE}
-Continue allowed work within user/repository authority; notification controls
-output, not execution. A tool call or settlement is not a stopping target.
+{work_rule}
+Notification controls output only.
 Progress is not a new Goal boundary: do not create a new host Goal merely to
-continue. After settlement recheck quota; use current continuation/wait guidance,
-not repeated unchanged polling.
+continue. After settlement recheck quota; obey continuation/wait, no unchanged polls.
 Complete {completion_subject} only on `should_run=false` + terminal no-follow-up;
-otherwise obey the next action or wait guidance, not completion.{host_wait_rule}
+else next action/wait.{host_wait_rule}
 
 {policy_tail}"""
 def render_ark_managed_agent_goal_task_body(
@@ -628,8 +634,9 @@ def render_thin_heartbeat_task_body(
 Use TurnEnvelope: `action.must_attempt` requires work; `user.notify` controls
 output only. ok=false -> recovery, no delivery. Language=user. Honor `boundary`, `execution_policy`, `contract_capsule`,
 `work_context`, remaining `required_reads`, `agent_context`, and `replan_action_packet` when present.
-Read `detail_ref.full_decision` for selection, replan, capability context or
-missing/truncated commands: same-invocation observation, not fresh admission.
+When present, read inline `agent_context` before planning. Read `detail_ref.full_decision` for
+selection, replan, missing/truncated commands or an `agent_context.detail_ref`:
+same-invocation observation, not fresh admission.
 Selection uses the saved `interaction_contract.cli_channel.selection_command`.
 Keep all supplied guard transport flags (--turn-envelope, --decision-output-root,
 and --decision-handoff-socket when present) on every fresh selection/repair/replan
@@ -637,12 +644,13 @@ guard; each call saves its own immutable observation.
 After a workspace or state change, re-enter the guard before continuing work.
 
 ```sh
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_instruction}{quota_guard_command}
 ```
 {SCOPE_BOUNDED_WORK_RULE}
 Observed capabilities -> --available-capability, never a user gate.
-Apply `scheduler` as projected; read the saved full decision for exact ACK args.
+Apply `scheduler` as projected using inline ACK argv. Read saved scheduler detail
+only for a needed missing/truncated/referenced command; failure argv only after host update failure.
 Exact monitor settlement=no refresh/spend; auxiliary poll continues work.
 Validate work; execute `writeback.settlement_plan` and `writeback.next_cli_actions` with
 their exact identity. Do not guess commands from abbreviated previews.
@@ -663,7 +671,7 @@ P0 blocked -> admitted P1/P2; quiet polls do not spend.
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 {HEARTBEAT_TURN_BOOTSTRAP_RULE}
 ```sh
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_instruction}{quota_guard_command}
 ```
 {HEARTBEAT_NOTIFICATION_RULE_SHORT}
@@ -681,13 +689,23 @@ P0 blocked: admitted P1/P2; no wait spend.
 {policy_tail}"""
 def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
     interface_budget = payload.get("interface_budget") if isinstance(payload.get("interface_budget"), dict) else {}
+    active_state = payload.get("active_state")
+    resolved_active_state = payload.get("resolved_active_state")
+    state_lines = [
+        f"- active_state: `{active_state}`",
+        f"- active_state_source: `{payload.get('active_state_source')}`",
+    ]
+    # Keep both route identities and the complete path without printing an
+    # identical long native path twice. Different or unresolved routes stay explicit.
+    if active_state is not None and active_state == resolved_active_state:
+        state_lines[0] = f"- active_state = resolved_active_state: `{active_state}`"
+    else:
+        state_lines.append(f"- resolved_active_state: `{resolved_active_state}`")
     lines = [
         "## Generator Inputs",
         "",
         f"- goal_id: `{payload.get('goal_id')}`",
-        f"- active_state: `{payload.get('active_state')}`",
-        f"- active_state_source: `{payload.get('active_state_source')}`",
-        f"- resolved_active_state: `{payload.get('resolved_active_state')}`",
+        *state_lines,
         f"- compact: `{payload.get('compact')}`",
         f"- brief: `{payload.get('brief')}`",
         f"- thin: `{payload.get('thin')}`",
@@ -714,10 +732,13 @@ def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
                 f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`",
             ]
         )
+    if payload.get("pr_review_pre_quota_command") is not None:
+        lines.append(
+            "- pr_review_pre_quota_command: "
+            f"`{payload['pr_review_pre_quota_command']}`"
+        )
     lines.extend(
         [
-            "- pr_review_pre_quota_command: "
-            f"`{payload.get('pr_review_pre_quota_command')}`",
             f"- quota_guard_command: `{payload.get('quota_guard_command')}`",
             f"- quota_spend_command: `{payload.get('quota_spend_command')}`",
             f"- cli_preflight: `{payload.get('cli_preflight')}`",

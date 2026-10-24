@@ -439,6 +439,12 @@ exact disposable locator before requesting shutdown, including when pytest has
 already removed the fixture directory. Missing provenance remains unknown and
 cannot authorize cleanup. This observation is not a Goal or execution grant.
 
+Fixtures that model a Gitless project also need a temporary root outside any
+Git worktree. Git discovery walks parent directories, so an ignored directory
+inside a checkout still inherits that repository. Retain the local-workspace
+oracle and correct the fixture location rather than accepting the inherited
+repository identity.
+
 Process isolation still shares machine resources. Run matched timing arms
 sequentially without overlapping builds or recovery work. If interference is
 discovered, retain failures and durable-receipt evidence, mark latency samples
@@ -581,6 +587,104 @@ negative 或 mutation-style 断言，并让各 provider 复用同一 envelope �
 凭据或私有快照。PR 验证证据需报告 fixture schema、语义维度、provider arms 与有意差异。
 
 ### Local Validation Environment / 本地验证环境
+
+Choose dependencies for the validation scope before preparing a new worktree.
+Each checkout can retain its own `.venv` and several `node_modules` directories;
+installing every tool in every review checkout accumulates storage even when
+the change only needs a few Python tests.
+
+新建 worktree 时，先按验证范围选择依赖。每个检出目录都可能保留独立的
+`.venv` 和多份 `node_modules`；只验证几个 Python 测试时也安装全部工具，
+会随工作区数量持续累积占用。
+
+| Validation scope / 验证范围 | Setup / 安装范围 |
+| --- | --- |
+| Selected Python unit tests using pytest, JSON Schema or YAML / 指定的基础 Python 单元测试 | `uv sync --extra test-core` |
+| Full Python suite, lint, integration tests or premerge / 完整 Python 测试、静态检查、集成测试或提交前验证 | `uv sync --extra test` |
+| Full control-plane TypeScript tests or coverage / 完整控制面 TypeScript 测试或覆盖率 | Root `npm ci` plus `uv sync --extra test` for Python subprocesses / 根目录 Node 依赖及测试子进程所需的 Python 环境 |
+| Control-plane typecheck / 控制面类型检查 | `npm ci` at the repository root / 仓库根目录 |
+| Dashboard build or browser tests / Dashboard 构建或浏览器测试 | `npm ci --prefix apps/presentation/dashboard`; browser tests also require their documented browser and backend setup / 浏览器测试另需其文档指定的浏览器与后端环境 |
+| Site or desktop changes / 官网或桌面端改动 | Install in the affected app; include its documented build prerequisites / 在对应应用目录安装，并满足其构建前置条件 |
+
+For example, this targeted Python check needs neither the dashboard packages
+nor the full Python test extra:
+
+例如，以下定向 Python 检查无需安装 Dashboard 依赖或完整 Python 测试依赖：
+
+```bash
+uv sync --extra test-core
+uv run --extra test-core python -m pytest -q tests/test_file_lock.py tests/test_loopx_launcher_python_selection.py
+```
+
+`test-core` is an opt-in subset, not a full-suite qualification. Select explicit
+test files; MCP, Docker, image rendering, coverage and type-checking need the
+full `test` extra. Keep `--extra test-core` on subsequent `uv run` commands so
+the selected environment is synchronized consistently. `uv sync` can remove
+packages outside the selected extras: do not change a worktree's environment
+while another process is using it. Existing full-suite and CI commands below
+continue to use `test`.
+
+`test-core` 仅用于显式选择的测试文件，不代表完整测试通过。MCP、Docker、图片
+渲染、覆盖率和类型检查继续使用完整的 `test`。后续 `uv run` 也需指定
+`--extra test-core`，保持环境一致。`uv sync` 可能移除所选依赖组之外的包，
+因此不要修改正在被其他进程使用的工作区环境。下方完整验证及 CI 命令继续使用 `test`。
+
+Root `npm run test:control-plane` includes PostgreSQL tests that import `pg`,
+so the full command still needs root Node dependencies. It does not require
+installing dashboard, site and desktop dependencies indiscriminately. Preserve
+per-worktree environments: editable Python installs bind to a source checkout,
+and frontend builds write caches inside `node_modules`. Sharing one writable
+environment across branches can validate the wrong source or invalidate another
+task's dependencies. Package-manager download caches can be shared; removing
+retired environments requires a separate check for active users and recoverable
+dependency definitions.
+
+完整 `npm run test:control-plane` 包含导入 `pg` 的 PostgreSQL 测试，仍需根目录
+Node 依赖，但无需因此把 Dashboard、官网、桌面端依赖全部安装。保留工作区间的
+环境隔离：Python 可编辑安装绑定具体源码目录，前端构建也会向 `node_modules`
+写缓存。跨分支共用可写环境可能测试到错误源码，或破坏另一任务的依赖。
+可共享包管理器下载缓存；回收旧环境则应另行核实是否在用、依赖定义能否恢复。
+
+#### Manual dependency inspection / 手动检查依赖
+
+Prepare only the dependency scope needed for the task using the commands above.
+`uv sync` already checks the Python environment and installs incrementally.
+Avoid switching extras while another task is using the same environment.
+
+按上表仅安装当前任务需要的依赖。`uv sync` 本身会检查 Python 环境并增量安装；
+同一环境正在被其他任务使用时，不要切换依赖组。
+
+For an optional, read-only Node inspection:
+
+需要时可手动运行只读 Node 检查：
+
+```bash
+bash scripts/loopx-python.sh --exec scripts/development_dependencies.py --scope node --scope dashboard
+```
+
+Scopes are `node`, `dashboard`, `site` and `desktop`. On Windows, use a Python
+3.11+ interpreter directly. The tool reports missing directories or checks the
+lock records, package metadata, executable entries and npm dependency graph.
+Native modules, lifecycle scripts, linked environments and uncertain installs
+require manual validation. Exit code 0 means the limited pure-JS consistency
+checks passed; exit code 1 means attention is needed, not necessarily corruption.
+The tool cannot certify every package byte, runtime compatibility or build success.
+It does not install packages, write receipts, delete files or change build behavior.
+Use the app's existing installation and validation commands when required.
+
+范围包括 `node`、`dashboard`、`site`、`desktop`；Windows 可直接用 Python 3.11+
+运行。工具报告目录缺失，或核对锁记录、包元数据、可执行入口与 npm 依赖树。
+原生模块、安装脚本、链接环境及无法确认的安装需要人工验证。退出码 0 仅表示有限的
+纯 JavaScript 一致性检查通过；退出码 1 表示需要关注，不一定是安装损坏。
+检查不能保证包内每个文件、运行时兼容性或构建成功。工具不安装依赖、不写安装记录、
+不删除文件、不改变构建流程；需要安装或验证时，继续使用应用原有命令。
+
+Clean old dependency environments separately after checking worktree ownership,
+active users and recoverable dependency definitions. Age alone is not evidence
+that an environment is unused. Keep this an explicit maintenance operation.
+
+旧依赖环境另行清理：先核实工作区归属、使用中的进程，以及依赖定义能否恢复。
+目录较旧不能证明无人使用；清理应作为显式维护操作进行。
 
 `npm run typecheck:control-plane` discovers all TypeScript sources under
 `loopx/control_plane/` and `loopx/zcode_goal_mode/`, including standalone bridges
@@ -937,6 +1041,24 @@ running the command from another repository or one of its subdirectories.
 LoopX 已安装的 canary catalog 仍从自身可信 release root 运行。因此该命令也可从其他
 仓库或其子目录执行。
 
+Binary images are outside the public-boundary **text** scan. Premerge lists
+each changed raster image in `selection_inputs.visual_review_paths` and the
+existing `manual_holds`, including image-only changes outside documentation
+directories. Text checks can pass while the overall gate remains
+`manual_review_required`; this does not certify image privacy or permit merge.
+Inspect the exact revision's pixels, embedded metadata and source in the
+existing PR review, and retain public-safe first-screen evidence in the PR
+description. Do not add another presentation-confirmation round. Unknown
+binary formats and unreadable text remain scan failures; SVG remains text.
+`loopx check` itself retains its explicit-file, fail-closed text contract.
+
+二进制图片不在公开边界的**文本**扫描覆盖内。Premerge 把每张变更的位图同时列入
+`selection_inputs.visual_review_paths` 和既有 `manual_holds`；只改图片、图片位于文档
+目录之外也一样。文本检查可以通过，但整体仍为 `manual_review_required`，不认证图片
+隐私、不允许据此合并。沿既有 PR 评审检查准确版本的画面、嵌入元数据和来源，PR 描述
+保留公开安全的首屏证据，无需新增首屏确认轮次。未知二进制和不可读文本仍导致扫描
+失败，SVG 仍按文本扫描。`loopx check` 的显式文件失败关闭文本契约保持不变。
+
 The complete public sweep remains explicit and bounded:
 
 ```bash
@@ -1207,9 +1329,80 @@ spending or provider permissions and does not rewrite original failures as passe
 仅修正已超过的展示回归预算。时钟与生成回执元数据不作逐字节一致声明；每 Todo
 和固定增长、重复度、生产性能诊断及执行配额边界不变，原失败仍按失败记录保留。
 
+The cumulative-outcome guidance added 523 authored characters on the same
+`contract-fixture` / `worker-a` prompt workload, comparing
+`74dd179c44ba06dfa3c621d978c41dcd9a2f46f3` with
+`b9e60c59f3c367a63755d97f4595d9c2eef91947`. It preserves original requirements,
+inline acceptance reuse, direct-user refinement, milestone evidence review,
+batch writeback, unmet-outcome replanning and root stop/budget authority. These
+are distinct consumer decisions, not redundant copies. All four visible-Goal
+hosts and all four heartbeat modes retain the same line counts. For example,
+the Codex Goal body grew from 3,152 to 3,675 characters; the full heartbeat's
+normalized body grew from 12,285 to 12,808, exceeding its old 12,640 allowance.
+That original failure remains a failure.
+
+The matched current workload also covers zero and 320-character authored profile
+scopes with Reward Memory both disabled and enabled. The following values are
+normalized body characters, not JSON size, UTF-8 bytes, model tokens or transport
+limits. Only the exceeded mode budgets change; generated instructions and command
+routes remain byte-identical across this budget repair.
+
+| Mode / memory | No scope / 320-character scope | Previous / qualified ceiling |
+| --- | --- | --- |
+| Full / disabled | 12,388 / 12,688 | 12,000 / 12,800 |
+| Full / enabled | 12,808 / 13,108 | 12,640 / 13,440 |
+| Compact / disabled | 7,231 / 7,531 | 7,200 / 7,600 |
+| Compact / enabled | 7,486 / 7,786 | 7,840 / 8,240 |
+| Brief / disabled | 4,985 / 5,285 | 4,800 / 5,400 |
+| Brief / enabled | 5,240 / 5,540 | 5,440 / 6,040 |
+
+The disabled base budgets leave 112 / 69 / 115 characters above the measured
+full / compact / brief maximum. The fixed, feature-scoped 640-character Reward
+Memory allowance remains unchanged. Thin budgets, envelope limits, normalization,
+and the visible Goal host's existing 4,000-character limit remain unchanged; its
+obsolete 3,300-character test expectation now follows that existing host limit.
+Exact-limit and one-character-over cases still distinguish valid and overflowing
+bodies. No prompt clause, execution permission, quota, experiment threshold or
+model-compliance requirement changes.
+
+累计成果指引在相同输入上增加 523 字符；本次保留完整指令，仅按默认及 320 字符
+profile、memory 关闭和开启的实测结果调整受影响的展示回归预算。原超限失败保留，
+正文与命令逐字节不变；thin、信封、Goal 宿主硬边界及执行/费用权限不变。
+
+The native Windows run [39861887011](https://github.com/loopx-project/loopx/actions/runs/39861887011)
+measures the same crowded quota JSON fixture at 40,701 characters on both
+`e4246649719654213d52802b909e612d0afd13d6` and
+`948247e9adad99053b902d1ae7c4a88251116110`, above the existing 40,000 ceiling.
+The paired smoke now preserves bounded numeric base measurements before an
+enforced candidate failure; a failing base never waives candidate validation.
+Retain complete work context, canonical provenance and command routes, and
+calibrate only this emitted-text regression ceiling to 42,000 (1,299 characters
+above the native observation). There is no measured output reduction. Line,
+per-Todo/fixed growth, semantic comparison and all other ceilings remain active.
+The original failure and the pending new native qualification remain distinct;
+this calibration is neither a model-cost saving nor a frozen performance pass.
+
+原生 Windows 同轮 base/head 均为 40,701 字符，原 40,000 超限失败保留。
+先保留配对度量，再仅将该展示回归上限校准到 42,000；不删当前工作、来源或命令，
+不豁免候选检查，不改行数、增长及其他预算。输出未缩小，不能声称费用节省或
+冻结实验通过；修改后的原生验证仍需独立读回。
+
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
 it does not grant execution quota, spending, or provider authority.
+
+The native installed-profile smoke exposed duplicate settlement instructions
+inside the visible Goal body. On identical long installation routes and the
+same two capabilities, removing that duplicate changes 4,118 characters to
+3,934 under the unchanged 4,000-character host limit. The shared quota rule
+still requires selection/reentry, current ordered settlement with its fallback,
+exact identities/effect IDs, actual outcomes and recovery before ambiguous
+retries. Command flags, truthful evidence, unavailable-contract stops and
+cumulative Goal requirements remain explicit. The original overflow stays a
+failure; the installed-profile smoke and semantic assertions qualify the repair.
+
+原生安装 profile 的长路径复现为 4,118 → 3,934 字符；只移除重复结算说明，
+4,000 字符宿主硬边界、完整路由、当前合同、事实证据、恢复与停止条件均不变。
 
 先根据所属合同判断上限的性质，再选择修复方式。这适用于输出尺寸、结构和延迟
 回归预算，不授予执行配额、费用额度或 provider 权限。

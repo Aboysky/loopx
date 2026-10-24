@@ -96,6 +96,9 @@ MANAGER_AGENT_OBJECTIVE = (
     "Do not mistake old plans, quota events or an open record for newly completed work. "
     "For dated progress reports, inspect recent_delivery_history for every Goal within the requested and authorized coverage and join todo_id to current_todos.todos and completed_todos for concrete titles. "
     "Filter by the requested calendar date in the user timezone; distinguish recorded delivery time, actual completion, and independently verified artifacts. "
+    "For a fixed local report window, read deliveries with offset-aware window_start/window_end ([start,end)); do not substitute the days lookback. "
+    "Paginate every applicable Goal (include stopped Goals when requested), keep the same bounds and pass the first page's source.source_revision as expected_source_revision. "
+    "A conflicting source requires restarting that Goal's read, not combining revisions. Use an observed delivery_ref to recover truncated recorded_details before drawing conclusions; oversized or unavailable records remain coverage gaps. "
     "Do not let a newer delivery hide yesterday's receipts. Report useful recorded outcomes with their verification level, then name exact remaining gaps. "
     "For dated or coverage-sensitive reports, use evidence_window to state the relevant dates, sources and material omitted coverage. Explain configured/default windows, receipt limits and full-versus-compact coverage when they affect the conclusion or the user asks. Keep routine transport and limit details in the evidence records. Do not turn an unrelated question into a portfolio or source-health report. "
     "Receipts outside that window are outside coverage, not evidence of no progress. "
@@ -246,7 +249,7 @@ MANAGER_ENDPOINT_KINDS = {
 }
 
 MANAGER_MODEL_ENV_VAR = "LOOPX_MANAGER_MODEL"
-MANAGER_MODEL_DEFAULT = "gpt-6-astra"
+MANAGER_MODEL_DEFAULT = "gpt-6.1-sol"
 MANAGER_MODEL_SOURCE_ENV_OVERRIDE = "env_override"
 MANAGER_MODEL_SOURCE_VENDOR_DEFAULT = "vendor_default"
 # The machine configuration can name the model too, so an operator can select
@@ -257,7 +260,7 @@ MANAGER_MODEL_SOURCE_MACHINE_CONFIGURATION = "machine_configuration"
 # two different managed models.
 MANAGER_MODEL_SOURCE_MANAGED_PROFILE = "managed_execution_profile"
 MANAGER_REASONING_EFFORT_ENV_VAR = "LOOPX_MANAGER_REASONING_EFFORT"
-MANAGER_REASONING_EFFORT_DEFAULT = "high"
+MANAGER_REASONING_EFFORT_DEFAULT = "xhigh"
 MANAGER_REASONING_EFFORTS = REASONING_EFFORTS
 
 def steward_machine_defaults(controller: Any) -> Mapping[str, Any] | None:
@@ -1002,7 +1005,10 @@ def manager_session_model_allocation(
 # 18: resolve intent and current evidence before deciding whether work remains.
 # 19: default local attention evidence and semantic synthesis, independent of external channels.
 # 20: carry delivery amendments through question-form feedback; honor handoff-before-repair ordering.
-MANAGER_CONTEXT_VERSION = 20
+# 21: migrate the former transcript-in-objective representation to persisted
+#     native history. Merely removing it from new prompts leaves old upstream
+#     conversations overfull and unable to compact before their next request.
+MANAGER_CONTEXT_VERSION = 21
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any

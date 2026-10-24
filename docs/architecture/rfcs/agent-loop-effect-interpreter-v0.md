@@ -466,10 +466,110 @@ The existing R5 CLI captures full decisions before projection, with a private di
 
 Under existing M7.4 and roadmap S2/S3/S6/S8, converge the **execution facts**
 used by heartbeat and Turn hosts, while keeping host effect ownership separate.
+When an admitted Todo later waits on a timer, PR or capability, the typed
+receipt owner preserves its original writeback and settlement route. Reentry
+projects only that closeout, including for deferred work and after the wait
+becomes due; it cannot resume business work, select a successor or invent a
+retry clock. Recovery reuses the committed receipt's positive work admission
+and exact settlement binding. Workspace repair alone has no business result;
+the same Turn must first requalify freshly selected work on that exact Todo
+through the normal guard. Broad compatibility flags without that selection
+cannot turn a retained binding into work admission. A Turn with
+an original semantic replan keeps that decision instead of being mistaken for
+an existing business result. Real File/SQLite CLI coverage exercises generated commands, refused
+rebinding, one writeback/debit, preserved initial replan and settled replay.
+This source-path repair does not qualify installed host adoption or
+complete-cost acceptance.
+An explicitly selected CLI executable now remains in generated selection,
+required-read, scheduler and settlement/recovery routes through the shared
+invocation transport. The default route is unchanged; choosing an executable
+adds no admission or execution authority. Candidate installation and actual
+receiver adoption remain separate from this command-route qualification.
 Neither today's large quota packet nor the smaller TurnEnvelope is a target
 shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off
 isolation. This does not qualify installed heartbeat/App adoption or model value.
+
+Memory participation now uses a registered post-selection context contribution,
+composed in the capability layer for native Turn and executing quota/heartbeat
+guards. Codex, DSH and generic CLI hosts transport the same bounded context,
+instructions and optional result fields. The capability owns binding/mode checks;
+adapters retain only host formatting. TypeScript bounds contributions, prevents
+authority/result-field replacement and binds them to the existing governing
+signature document plus their source readback. Adding the original capture's
+location does not invalidate an unchanged decision; changed actors, authority,
+configuration readback or contributions do invalidate optional context.
+
+The generic Python contribution IO lives with the existing registrations and
+dispatchers in `loopx.control_plane.capability_hooks`; there is no parallel Python
+Turn-context module. It calls the TypeScript decoder for validation and source
+binding. Host adapters consume that same hook-owned projection.
+
+Registered `PostSettlement` callbacks call the existing ingest owner after
+independent exact-reflection attestation and accountable writeback/spend. The
+manual-host sidecar adapter uses that registration too. `post_writeback` remains
+effect-free. Per-hook receipts preserve completed work while an uncertain peer
+hook recovers; the provider owner retains write deduplication and reconciliation.
+Terminal replay preserves the original journal/receipt and returns recovered
+owner readback as `post_settlement_recovery`, without repeating settlement.
+File/SQLite native host and isolated provider cases qualify this source path.
+Installed App/Lark adoption, model benefit, complete costs and the three
+convergence acceptances below remain open.
+
+Pre-registration journal recovery retains the already admitted bounded
+reflection and independent validation digest without changing the saved plan,
+reinvoking the Host/validator or activating legacy input for new work. Provider
+effects still use the current ingest policy and original settlement owner;
+cached content alone does not authorize a write.
+
+PR dependency observation now uses the existing registered TurnStart lifecycle
+shared by executing quota guards, native Turns and compatibility prequota.
+Permission comes from the typed Goal/Agent capability owner, including remembered
+host observations and revocation; callers need no repeated flag when permission
+already exists. Capability-owned diagnostics preserve domain policy outside core
+Turn code. The existing complete-source TypeScript plan, merge-fact owner and
+normal execution admission remain authoritative. Goal-local single flight and
+durable per-dependency cadence prevent duplicate concurrent/due reads.
+File/SQLite qualification covers paused/stopped business, generated full/thin
+heartbeat commands, cross-entrypoint observation, revocation, unknown effects,
+unrelated validated work after provider failure and original-journal replay.
+App/Lark's shared context backend consumes canonical readiness without polling.
+Plans, read-only/status/context paths, missing permission and recovery add no
+observation. Installed executor adoption, legitimate recovery of existing live
+owners, sustained scheduling, model outcomes and the three convergence
+acceptances remain open. Installed memory lifecycle adoption remains a separate
+acceptance; post-writeback hooks retain their effect-free contract.
+
+The same captured decision now retains the selected Task's existing continuation
+condition and readiness through the full selection projection, signed envelope
+and actual protocol-host input. File/SQLite qualification distinguishes two
+repositories' identically numbered PRs, preserves the original event time and
+long requirement tail, validates subsequent work, and rejects proof tampering.
+Read-only managed-step and original-journal replay add no observation or debit.
+This closes that fact-delivery omission; installed adoption and model outcomes
+remain outside this qualification.
+
+Bounded planning context now remains inline instead of forcing a full-decision
+read under envelope budget pressure. Its existing owner retains the 3 KiB bound;
+the shared DSH/cloud adapter transports the signed contribution and, for saved
+historical references, the original capture route and hash. The thin renderer
+requires capability detail only for an actual `agent_context.detail_ref`, since
+`delivery=projected` also describes complete context. Source and actual Host-input
+oracles cover enabled/off, historical references and signature refusal through
+File/SQLite CLI and a protocol-only DSH subprocess. Keep the 8 KiB warning and
+count packet plus necessary detail/source IO before choosing a default. Live
+model behavior, installed adoption and the three acceptances below remain open.
+
+A bound native replan exposed a further shared Host adapter omission: it kept
+the generic action but dropped the signed replan packet and its evidence route.
+The DSH/cloud adapter now forwards both, retaining the existing full Goal read
+and same-capture replan context. File/SQLite selection-to-replan qualification
+checks actual DSH provider input with a protocol-only runner, signed mutation
+refusal and unchanged source/state; it does not invoke a model. The outer Turn
+executor retains writeback/quota/scheduler ownership. Ordinary requests retain
+their previous input. This qualifies that transport boundary only; installed
+adoption, subsequent model decisions, complete costs and the three acceptances
+below remain open.
 
 Current source-path audit for the first convergence slice:
 
@@ -482,6 +582,16 @@ Current source-path audit for the first convergence slice:
 | Replan / Goal closure | Replan action packet and the existing TS capsule preserve full audit steps/guidance, current closure assessment (judge) and evidence/non-proof conditions | Same captured File/SQLite decisions qualify clause retention and signature mutation; full evidence stays on authorized detail paths. Host/model adoption remains open; Todo completion is not Goal completion |
 | Settlement / scheduler | Intact typed settlement plan and explicit host-owned scheduler projection; omitted scheduler argv references resolve the same captured full decision | Unbound detail commands are retired in this projection. Actual host readback, stale mutation refusal and exactly-once recovery still need host adoption qualification |
 | Optional memory | Verified boundary participation plus fresh host binding | Off/recall/ingest/stale/provider-failure isolation remains mandatory; transport parity is not model value |
+
+The boundary projection now retains complete scope, approval, guard and stop
+clauses instead of applying display limits. The shared DSH/cloud candidate
+adapter also transports the signed restrictions that it previously omitted,
+keeping scope/workspace compatibility fields once. Independent source oracles
+and real File/SQLite CLI plus a protocol-only Host subprocess expose the old
+loss and exercise retention, tamper refusal and no-debit replay. This repairs
+one existing caller family's boundary delivery; it adds no enforcement owner.
+Keep the 8 KiB warning, disclose the cost of restored clauses, and qualify live
+model behavior, installed adoption and total costs separately before rollout.
 
 The capability-fact correction is a read-model change in the established
 TypeScript owner. Real captured File/SQLite decisions cover refusal and admission
@@ -501,6 +611,36 @@ and reject signature equivalence after a step/order/judge mutation. The existing
 8 KiB diagnostic remains unchanged; required text can exceed it with a warning.
 This closes that transport omission, not the three convergence acceptances or
 permission to retire their active Python/host adapters.
+
+Following the capsule through the actual shared Host input exposed a second
+loss: DSH/cloud retained only its unavailable-context field, so a valid signed
+audit never reached the provider. That adapter now forwards the existing audit
+and original capture route/hash. Real File/SQLite normal/replan captures through
+a protocol-only DSH subprocess cover ordered obligations, the continuing judge,
+insufficient-proof conditions, signature refusal and unchanged source/state.
+The same audit also found work qualification missing: the capsule filtered out
+outcome-floor/degradation rules, and that Host omitted the whole existing
+execution profile. The typed projection now retains it intact and the Host
+forwards it. A new material result carrying that profile returns typed,
+public-safe `work_evidence` and `validation_evidence` arrays and preserves its
+actual delivery scale/outcome; the outer executor validates and retains both.
+Native source oracles and signed mutations cover these rules. Inputs without
+either contract retain their prior prompt, and older journal replay remains
+readable. The outer executor keeps all state/quota/scheduler effects. This
+qualifies clause delivery at that caller, not model adherence, installed
+adoption or complete-cost improvement. Count the cost of restored requirements;
+the earlier incomplete input is not an accepted efficiency baseline.
+
+The complete execution profile adds 138–142 JSON characters/UTF-8 bytes and no
+lines to ordinary Turn plans on the unchanged 96-row public CLI fixture. The
+original base/head differential fails its 64/70-character and 128-byte growth
+allowances; this remains a recorded failure. Qualify the restored outcome-floor
+and degradation fields with a 160-character/byte one-time allowance only when
+the old four-field profile becomes complete, with unchanged signature coverage
+and no other JSON-shape change. Already complete, partial or unrelated changes
+receive no allowance. Keep absolute budgets, line limits, fixture populations,
+complete source/Host clause checks and the production 8 KiB diagnostic. This
+explains the required presentation cost, not model tokens or efficiency gains.
 
 中文：本批修复验收步骤、继续说明和当前判断在 capsule 中丢失的问题；签名一致曾只
 比较已经裁剪过的投影。File/SQLite 同次捕获验证完整条款和篡改后的签名差异；
@@ -544,13 +684,221 @@ changes no scheduler admission, execution grant, default or host effect.
 Real packaged transport qualification remains separate from live model outcomes,
 App adoption and the three convergence acceptances below.
 
-Remaining implementation Todos, in dependency order:
+The requirement-delivery (#5844), complete closeout-clause (#6337) and original
+Host decision-capture (#6350) source repairs have merged. Preserve those results;
+their completion does not close M7.4, R5 or the three acceptance streams below.
+Continue in this order using the existing owners and checkpoints:
 
 | Todo | Observable outcome and decisive acceptance |
 |---|---|
 | Reconcile execution/context requirements across heartbeat and TurnEnvelope | Same captured authoritative decision preserves actor/Goal/Todo, required full reads, claim/lease, action selection, replan/closure, conditional settlement and scheduler ownership. Inventory omitted/duplicated facts before deleting render branches. Include optional capabilities off, recall-only, ingest-only, stale binding and provider failure; private detail is accessed only through authorized references. |
 | Adopt one typed projection in real host renderers | Heartbeat full/thin and Turn host consume the same execution facts and per-Turn capture/detail route. Keep host-specific notification and scheduler transport explicit. Real File/SQLite CLI plus packaged Codex App tests cover reentry, source loss, refusal before required reads, late results, backoff and exactly-once settlement; no second admission from a detail read. Retire the replaced projection only after its last caller moves. |
 | Qualify the context shape and migration default | Compare the same normal, replan, wait/recovery and optional-capability workloads against both current full and compact paths. Measure payload/model tokens, detail IO, latency, resource growth, omissions and decision/outcome quality. Keep data loss, duplicate effects, identity and settlement errors as hard constraints. Preserve supported saved prompts/receipts and reversible rollout; change budgets or defaults only with that evidence. |
+
+**Context cost and projection convergence: next implementation slice**
+
+The current full-source delivery closes requirement omissions, but sharing
+`work_context` alone does not make either transport compact. Measure the same
+captured decision through both production projections before changing a default.
+Separate packet bytes from model input and distinguish operator/control-plane
+trajectories from solver trajectories. A large operator observation is not
+evidence that a solver consumed that observation. Count the initial response,
+truncation recovery and necessary detail reads together; cached input still
+occupies context. Historical incomplete inputs are not an efficiency baseline.
+
+The next slice stays within the existing three convergence acceptances above:
+
+1. **Make full-first, subtree-delta delivery the convergence target.** Prioritize
+   ordinary `quota should-run` input actually consumed by benchmark case solvers;
+   operator/control-plane and personal maintenance packets are secondary. The
+   shared projection delivers complete context on first use and exact changed
+   subtrees on supported warm turns. Solvers need not switch to TurnEnvelope.
+   In-packet deduplication and cold-start reduction complement this work; a
+   succession of small cleanups must not substitute for qualifying the repeated
+   input path. A smaller stored capture or import cleanup proves no model saving.
+2. **One projection owner, two transport consumers.** Extend the existing typed
+   interaction/work-context owner for full and delta context; quota and
+   TurnEnvelope consume it. Preserve original capture, required-source checks,
+   invocation, selection, settlement and detail routes. Python retains source IO;
+   hosts retain their effects and context-continuity observation. No independent
+   admission service, diff daemon or Python context-decision owner is needed.
+   Characterize callers and remove replaced projections after adoption. A host
+   transport acknowledgement before output is released proves neither complete
+   model delivery nor retained context. Existing capture/handoff is an integration
+   seam, not an already implemented continuity contract.
+3. **Retain full current authority and cold-start requirements.** Every response
+   supplies fresh identity, action, admission, scope/approval/stop conditions,
+   cancellation, selection, claim/lease, unresolved reads and settlement/scheduler
+   obligations. Only allowlisted source payloads are eligible for reuse;
+   current control results remain full even when their bytes are unchanged.
+   Reused requirement text remains binding, including its textual stop clauses;
+   it is neither a summary nor optional background. Preserve complete original
+   requirements in the reconstructed context. Treat
+   mixed Todo history and acceptance explanations at their structured owner
+   before changing mandatory reads. Age, owner, status, headings or length cannot
+   establish obsolescence. Moving mandatory text behind a reference and reading
+   it all back is not a saving; replacing accumulated notes changes state rather
+   than compressing delivery.
+4. **Automatic full fallback, with no new human gate.** The host supplies an
+   explicit context-continuity basis for the previously completely delivered
+   projection. Bind it to Goal/Agent, consumer session and context epoch,
+   projection version, source capture and projection digest. A file, matching
+   hash or past receipt alone is insufficient. Compaction, reset, restart without
+   proven continuity, delivery truncation, corruption, identity/version mismatch
+   or unknown retention selects the complete current projection automatically.
+   No approval, confirmation question, extra quota admission or quota debit is
+   introduced. Existing genuine stop and unavailable-source rules still apply.
+
+**Accepted incremental delivery design (implementation pending).** Phase one
+includes the shared projection, both the benchmark solver and productized Codex
+App consumers, and their full fallback. A standalone diff helper is insufficient.
+
+| Boundary | Proposed behavior |
+|---|---|
+| Baseline owner | The host tracks complete model-input delivery and context continuity. The typed projection validates the supplied binding and computes the delta; it cannot infer retention from storage. Unsupported hosts continue full delivery. No model self-attestation is required. |
+| Full capture | Retain the immutable complete current decision for audit, signatures and same-capture recovery. A delta is a presentation, never a new authority store or mutation patch against Goal state. |
+| Delta unit | Initially compare JSON object subtrees exactly, preserving scalar types, missing versus null, empty values and full strings. Replace changed arrays atomically; do not infer element identity or equivalence from prose. State removals explicitly. Give base/target identities and digests once, with readable paths and changed values; avoid nested reference chains and instructions that require the model to reconstruct the entire JSON mechanically. |
+| Consumer recovery | Missing or mismatched baseline, skipped/out-of-order delta or truncated delivery returns the full current projection from the original capture, without rerunning admission. A lost delta is never acknowledged as the next baseline. Reset the baseline after full delivery; bound incremental ancestry with a full refresh rather than an ever-growing patch chain. Source freshness and authority are still checked before execution; presentation recovery cannot revive a stale or cancelled decision. |
+| CLI adoption | Keep the ordinary quota entrypoint and existing capture/detail route. A host that can observe the active model context passes the optional baseline binding at that transport boundary. A bare CLI with no continuity observer returns full context; it must not silently trust a previous output file. Exact argument/wire shape follows caller characterization, not a new command family. |
+| Turn adoption | Consume the same full/delta context owner while retaining Turn signatures and outer-executor effects. Host-only settlement execution remains distinct from a manual CLI agent's executable settlement obligations. |
+| Choice of representation | Emit a delta only when it is smaller after binding/removal metadata. Otherwise emit full context. Do not truncate values or change source selection to meet a byte target. |
+
+**Source and change boundaries.** Start with registered complete Goal narrative,
+canonical acceptance requirement bodies and selected Todo text/notes, retaining
+their exact strings and source identity. Eligibility comes from the existing
+source adapter and typed field contract, never a classifier of sentence meaning.
+Keep current source revision, completeness, failures, status/claim, user gates,
+adoption and other execution-control fields in the fresh portion. An unknown or
+mixed source without a qualified split stays full. Give each known source slot
+a stable key derived from its existing source kind and canonical entity identity;
+ambiguous or duplicate identities fall back to full. Do not compare the whole
+`sources` array as one unit: a changing authority revision must not resend an
+unchanged requirement body. Inside a source payload, arrays remain atomic in
+the first version. A changed field is replaced completely, including any late
+constraint; deleted fields have explicit removal paths. The owner reconstructs
+and compares against the complete target before releasing a delta.
+
+**First real consumer and the compaction race.** The current native Codex CLI
+session adapter observes session identity; its capture/handoff release occurs
+before stdout delivery. Neither supplies the required model-input continuity
+proof. Reading saved native history or observing compaction after the model
+request is also too late. The proposed first consumer therefore needs an
+adapter at the existing host's model-input assembly boundary, with these
+properties before incremental delivery is enabled:
+
+1. Invalidate the context epoch on compaction, pruning, restore, fork or unknown
+   continuity, and observe complete output delivery rather than file creation.
+2. Bind the candidate presentation to the original capture and expected baseline.
+   Immediately before submitting model input, recheck that epoch and baseline
+   under the same ordering boundary. If either moved, substitute the full
+   projection from that capture. A CLI-output callback alone is insufficient.
+3. Advance the baseline only after that exact presentation has entered the
+   active model input intact. Failure or uncertain acknowledgement leaves the
+   previous baseline unconfirmed; the next request sends full context. This
+   transport acknowledgement proves delivery, never model understanding.
+
+This is a host-adapter qualification, not an Agent or owner question. Until the
+actual host exposes that boundary, its ordinary CLI stays full automatically;
+do not claim that an all-full pilot validates incremental savings. Do not disable
+native compaction to manufacture continuity or add a second model runner merely
+for this optimization. Use a paired host-boundary prototype to establish whether
+the existing transport can support the adapter; a negative result keeps basic
+packet reductions useful and records the concrete missing integration.
+
+| Situation | Automatic representation and effect behavior |
+|---|---|
+| First call or unsupported host | Full current control and complete context; establish no trusted warm baseline from an output file alone. |
+| Same epoch, confirmed baseline, smaller delta | Fresh control plus changed source subtrees and removals; unchanged requirements retain their original force. |
+| Reset/compaction between guard and model dispatch | Invalidate and replace the candidate delta with the same-capture full projection before dispatch; no new admission or spend. |
+| Missing, corrupt, truncated or out-of-order delivery | Invalidate the affected baseline and recover full from the original capture. If the host cannot deliver that body intact, use the existing complete-read path and do not acknowledge a warm baseline. |
+| Source unavailable or authority changed | Preserve the existing refusal/fresh-guard rule; a stored full capture cannot manufacture current permission. |
+| Delta metadata costs more than full | Send full; do not clip values, enlarge limits or ask the owner to choose. |
+
+**Phase-one consumers and delivery order.** Independently reviewable basic
+packet reductions feed the existing integration test first; that test does not
+wait for the new protocol. The accepted design must then qualify both consumers
+below in phase one, using the same typed projection and fallback contract.
+Benchmark adoption may land first, but does not close the phase while the
+productized Codex App path remains unqualified.
+
+| Consumer | Phase-one acceptance |
+|---|---|
+| Benchmark solver | The existing ordinary quota path delivers full first, then smaller exact subtree changes on a confirmed warm baseline. Measure all initial/follow-up model input and detail reads, tool calls, subsequent decisions and accepted outcomes in a matched authorized test. Management packets or offline byte counts do not substitute for solver adoption. |
+| Productized Codex App | The shipped heartbeat/bootstrap and quota continuation paths use the same owner, with actual packaged and installed readback. Demonstrate a warm incremental delivery and useful subsequent action, plus first use, restart/resume, compaction/pruning, lost baseline and same-capture full recovery. Inspect the existing product entrypoint and visible error/recovery result; a CLI fixture alone does not establish App adoption. |
+
+Each host must establish the model-input ordering and continuity boundary above;
+qualify its real adapter rather than transferring proof from the other host.
+If Codex App lacks that integration, record the concrete missing host boundary,
+continue safe full delivery and keep its phase-one acceptance open. An all-full
+App pilot is a correctness fallback, not completed incremental productization.
+This is an engineering evidence gap, never a runtime owner question or an extra
+admission gate. Preserve existing notification, scheduler, cancellation, claim,
+settlement and recovery ownership; do not create a second runner or authority.
+
+Reuse the owner in Turn transport and retire replaced projection branches only
+after their callers adopt it. Frozen campaigns retain their source/treatment;
+qualify new delivery on replay and an explicitly admitted subsequent run.
+Design acceptance does not itself authorize merges, releases, installations or
+additional benchmark runs. Runtime fallback remains automatic.
+
+**Native input-boundary characterization (partial, not enabled).** The opt-in
+`tests/control_plane/test_codex_context_boundary.py` exercises the existing
+Codex `exec` and `app-server` binaries against a deterministic loopback Responses
+provider. On `0.163.0-alpha.11.1`, both paths retain a complete first source plus
+a literal warm change, then deliver the complete target source in the first
+model request after automatic compaction through `SessionStart(compact)`.
+The oracle inspects actual outgoing model input, not the hook log or stdout.
+This qualifies a transport primitive only: the fixture does not implement the
+shared subtree owner, run a solver, or establish packaged/installed App adoption.
+
+The paired negative cases expose why this hook is not yet a sufficient adapter:
+
+- Default hook output spills to a short preview. Seeing both the first and last
+  requirement is insufficient proof that the middle reached the model.
+- Untrusted handlers do not run. Configuring a hook, or passing the CLI trust
+  bypass to an app-server launcher, is not delivery evidence. Tests trust only
+  their own isolated synthetic handlers; product installation must preserve the
+  host's existing trust policy.
+- When the compact recovery handler exits unsuccessfully, both tested hosts
+  still issue the next model request without the complete required source. The
+  qualification records this as an expected failure, not a passing recovery.
+
+The app-server's keyed `turn/start.additionalContext` is also tested without
+hooks, for both `untrusted` and `application` fragments. A small complete source
+reaches the initial and warm requests but is absent after automatic compaction.
+A large source is already incomplete in the initial request. An opaque source
+key therefore supplies neither an intact-delivery receipt nor a resident source
+that survives compaction. These cases remain expected qualification failures;
+they do not qualify a fallback or justify promoting source data to instructions.
+No current adapter may infer continuity from that field or repeatedly retry
+these unsupported routes as if a host boundary had become available.
+
+The [native hook contract](https://learn.chatgpt.com/docs/hooks) provides useful
+ordering and an explicit intact-output option, but a successful hook callback
+alone cannot establish the fail-safe input boundary. Keep production delivery
+full until the host-owned integration can verify the candidate after hook/output
+processing and automatically substitute the same-capture full source on failure,
+loss or epoch change. Hook trust, timeout, truncation and process failure must be
+covered by that fallback; do not compensate with a new Agent/owner question or
+by disabling compaction. The next integration proof belongs at the existing
+host's final input assembly boundary for each consumer, with the shared typed
+projection following that qualified seam. This checkpoint keeps phase one open
+and does not reinterpret synthetic usage counters as token or outcome savings.
+
+Qualification compares matched normal, replan and wait/recovery workloads with
+optional capability modes unchanged. Include first delivery, warm reuse, reset,
+deletion, array reordering, lost/duplicated/out-of-order deltas, partial output,
+source/identity mismatch and late requirement changes. Reconstruction must equal
+the complete current projection, and fresh control facts must never be omitted.
+Measure initial plus
+follow-up model input, context occupancy, cache/non-cache and complete cost,
+read count, latency and IO, then verify the subsequent action and accepted
+outcome. Keep exactly-once effects and required-source refusal as hard constraints.
+A serializer roundtrip or offline delta establishes representational feasibility
+only; it cannot settle installed adoption or the complete-cost acceptance.
+SQLite remains the default local performance qualification; preserve affected
+supported-backend correctness/recovery checks. This checkpoint changes no
+runtime default, budget, required-read rule, authorization or active experiment.
 
 Native Turn detail adoption now persists the real `run-once` producer's full
 observation and binds the Host request to it through the existing TS envelope
@@ -563,6 +911,103 @@ legacy cached-result recovery and terminal readback preserve original receipts.
 This closes the producer-to-detail transport gap only. Live models, packaged
 App/Lark, later authority checks and the remaining convergence matrix retain
 their independent acceptance; no Python projection is retired by this slice.
+
+New quota and native Turn captures now share compact JSON encoding, removing
+layout whitespace from stored detail without omitting decision values or string
+content. The original atomic publication, source signature and retry owners are
+unchanged. File/SQLite native Host qualification covers both new compact and
+historical indented observations, including source changes, missing/corrupt
+detail and exactly-once recovery. This is a lossless transport cost reduction,
+not evidence of model quality, complete Turn cost or a new convergence default.
+
+The shared Host result adapter now retains supplied text for the existing Turn
+validator instead of truncating it into a passing candidate. Over-limit next
+actions could lose a trailing approval constraint while still being accepted.
+JSON booleans, numbers and containers also retain their types for rejection by
+that validator; false/zero cannot disappear into sparse-field defaults. Legacy
+null/omitted optional text retains its existing absence semantics.
+Explicit delivery scale and outcome now retain their values and JSON types;
+only omitted metadata uses the existing sparse defaults. Previously a declared
+`surface_only`, unqualified `outcome_gap` or invalid value became
+`outcome_progress`, bypassing the existing refusal and recording a quota spend.
+The shared prompt uses the existing delivery vocabularies. Native File/SQLite
+tests preserve valid scale history. New material results also reuse the existing
+settlement rule before task validation or effect preparation: `surface_only`
+and `outcome_gap` produce a typed `validation_failed` without a prepared
+writeback. Previously vocabulary-valid but nonqualifying results reached
+refresh-state, raised a generic CLI error and left an in-progress prepared
+writeback that repeated the same refusal. The Host contract carries no typed
+blocker observation; ordinary CLI blocked settlement is unchanged. Historical
+cached results retain provider readback/recovery, including an unknown provider
+observation followed by a committed receipt, without relaunching the Host or
+repeating writeback. No settlement policy is added here.
+File/SQLite native CLI and actual DSH subprocess qualification cover rejection
+before task validation/writeback/spend/ACK, failed-result replay, and a corrected
+fresh Turn settling once. Boundary-length valid results retain their behavior.
+This is result-transport correctness; it does not qualify model adoption, undo
+Host work already performed, or close the three convergence streams.
+
+Turn completion now carries an exact text commitment from the admitted full
+Todo source to the existing atomic terminal owner. Changed requirements refuse
+completion; note-only and unrelated Todo changes remain valid. Provider CAS
+fences concurrent replacement, and historical receipt recovery precedes fresh
+source checks. Saved Turns without full-source proof refuse new completion;
+already accepted legacy receipts retain their fingerprints and recover first.
+File/SQLite CLI and shared File/SQLite/PostgreSQL conformance
+cover refusal and recovery. Final no-followup retains its existing settlement
+order: a terminal refusal preserves any earlier writeback/spend receipts.
+This qualifies task-body completion safety, not settlement-wide source atomicity,
+installed host adoption, live models or the remaining convergence acceptance.
+
+The first ordinary-CLI consolidation replaces an exactly identical
+`heartbeat_recommendation.blocked_priority_fallback` mirror with
+`blocked_priority_fallback_ref="$.blocked_priority_fallback"`. The complete root
+fact, notification, execution obligation and original capture remain intact;
+different mirrors are retained, including Boolean/number differences. The existing
+`--include-detail agent-todos` view retains the legacy mirror. File/SQLite CLI
+tests cover same-capture action dimensions and no-debit replay. Original source
+hashes intentionally distinguish renderings; this does not change signature
+coverage or make a rendered view a substitute for the original capture.
+Legacy-field access stays in the existing packet owner; the CLI invokes its
+projection function without adding another legacy migration consumer.
+
+The acceptance-context adapter now uses the existing exact Todo inspection for
+selected work. It retains the complete Goal acceptance basis and cumulative
+outcomes, while avoiding a second inventory of unrelated task-binding
+observations and a second selected-Todo body. File/SQLite CLI and actual DSH
+protocol input cover configured checks and outcomes without checks; Todo-less
+inspection still returns its original inventory. This qualifies the scoped IO
+boundary, not live model benefit, installed adoption or total Turn cost.
+
+The native acceptance/capture matrix also covers work added or changed after
+capture, a future resume condition and explicitly removed checks. The original
+synthetic work is validated and settled before a new managed Turn: current
+admission rejects unbound/stale work and pending waits, while removing checks
+does not create a new owner question. Cumulative requirements and their sources
+remain intact; current work status and its derived basis fingerprint may change.
+The original detail remains byte-for-byte readable without another admission or
+authority revision. These cases qualify the existing boundary, not a new
+execution default or any of the three complete convergence streams.
+
+The Goal source context now separates explicitly generated Todo regions using
+the existing writer's strict ownership parser. All remaining text is delivered
+verbatim through the shared typed context owner, with the full-file hash and
+excluded-region lineage. Unmarked/mixed documents retain their progressive read;
+malformed ownership fails closed. This changes default context delivery, not
+canonical Todo authority, source files or cumulative acceptance. File/SQLite
+native guard and signed DSH protocol-input checks qualify this source boundary;
+model adoption, installed App/Lark, full Turn cost and all three convergence
+streams remain open. Large arbitrary narrative is retained without truncation.
+
+Next, inventory authorized real Goal captures across active work, peer/replan,
+wait/recovery and optional-capability shapes, then map each retained clause to
+its shared typed owner and actual consumer. Migrate one complete caller family
+before retiring its replaced projection. Compare the same captured decision
+through full/thin heartbeat and Turn, counting required detail reads, tokens,
+serialization/IO, latency and resource growth. Byte savings from this mirror
+removal qualify only that rendering delta; model quality, complete costs,
+installed App/Lark adoption and migration defaults still require their own
+evidence. Keep private source material out of public fixtures and checkpoints.
 
 The earlier cost slice reproduced a regression-budget gap, rather than a
 missing fixture alias or permission to remove required context. Comparing
@@ -618,6 +1063,15 @@ gap, not M7.4: packaged host adoption, model token/IO/latency/outcome evidence
 and a reversible transport-default decision remain open. Execution quota,
 wire limits and frozen promotion criteria are unchanged; no runtime cost
 reduction is claimed.
+
+#7161 retires the old `protocol_action_packet` reader format: field selection,
+summary reconstruction, residue/opaque fallback and their transport inputs are
+removed. Effect/CLI/Envelope/Host consumers explicitly reject old packets and
+capsule witnesses before conversion or signature use. Frozen historical records
+remain unchanged; packet-free v0 signatures and execution checks retain their
+meaning. This bounded cleanup supersedes historical reader compatibility, not
+M7.4 or the benchmark/Codex App context-transport acceptance. See the
+[format boundary](../../reference/protocols/protocol-action-packet-decision-v0.md).
 
 Do not add a generic executor or lower an acceptance threshold to make a short
 packet pass. Preserve unsatisfied requirements and distinguish transport parity,

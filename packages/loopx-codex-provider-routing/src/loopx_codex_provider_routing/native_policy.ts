@@ -17,7 +17,8 @@ export type Account = {
   secondary_used: number | null;
   credits_available: boolean | null;
 };
-export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number; restart_clients?: boolean };
+export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number;
+  restart_clients?: boolean; force_quit_clients?: boolean };
 
 const number = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const percent = (v: unknown): number | null => number(v) && v >= 0 && v <= 100 ? v : null;
@@ -73,6 +74,8 @@ export function decide(input: {
   const output = (action: string, target: string | null = null, retry_at: number | null = null) =>
     ({ action, target, retry_at, accounts,
       restart_clients: action === "switch" && input.policy.restart_clients === true,
+      force_quit_clients: action === "switch" && input.policy.restart_clients === true
+        && input.policy.force_quit_clients === true,
       valid_until: action === "switch" && !input.manual_slot
         ? Math.min(...accounts.filter(a => a.slot === input.active || a.slot === target).map(a => a.observed_at + 120))
         : null });
@@ -89,9 +92,17 @@ export function decide(input: {
   const allowed = input.policy.slots;
   const index = allowed.indexOf(input.active);
   const order = [...allowed.slice(index + 1), ...allowed.slice(0, index + 1)];
-  const target = (input.manual_slot ? [input.manual_slot] : order).find(slot =>
-    slot !== input.active && allowed.includes(slot) && (input.manual_slot
-      || accounts.some(a => a.slot === slot && a.availability === "available")));
+  const candidates = order.flatMap(slot => {
+    const candidate = accounts.find(a => a.slot === slot && a.availability === "available");
+    const used = [candidate?.primary_used, candidate?.secondary_used].filter(number);
+    return slot !== input.active && candidate && used.length
+      ? [{ slot, remaining: 100 - Math.max(...used) }] : [];
+  });
+  // The most constrained reported window limits subscription work. Stable sort
+  // retains the configured ring for ties; missing observations never rank.
+  const target = input.manual_slot
+    ? [input.manual_slot].find(slot => slot !== input.active && allowed.includes(slot))
+    : candidates.sort((a, b) => b.remaining - a.remaining)[0]?.slot;
   if (target) return output("switch", target);
   const resets = accounts.filter(a => allowed.includes(a.slot) && a.availability === "exhausted")
     .flatMap(a => a.reset_at && a.reset_at > input.now ? [a.reset_at] : []);

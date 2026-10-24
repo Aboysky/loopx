@@ -1,6 +1,8 @@
 """Exact monitor closeout wins over an unrelated scoped user gate."""
 from __future__ import annotations
 
+from canonical_authority_fixture import assert_todo_read_unchanged
+
 import json
 
 import pytest
@@ -162,7 +164,7 @@ def test_primary_monitor_gate_rejects_new_write_but_preserves_committed_replay(
     before = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
     rc, denied = call("monitor-poll")
     assert rc == 1 and denied["error_code"] == "monitor_poll_admission_rejected", denied
-    assert list_goal_todos(registry_path=source, goal_id=GOAL_ID) == before
+    assert_todo_read_unchanged(list_goal_todos(registry_path=source, goal_id=GOAL_ID), before)
     index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     assert not index.exists()
     if gate_kind != "linked":
@@ -176,7 +178,7 @@ def test_primary_monitor_gate_rejects_new_write_but_preserves_committed_replay(
     committed = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
     rc, replay = call("monitor-poll")
     assert rc == 0 and replay["replayed"] is True and replay["appended"] is False
-    assert list_goal_todos(registry_path=source, goal_id=GOAL_ID) == committed
+    assert_todo_read_unchanged(list_goal_todos(registry_path=source, goal_id=GOAL_ID), committed)
     rows = [json.loads(line) for line in index.read_text().splitlines()]
     assert [row["classification"] for row in rows] == ["quota_monitor_poll"]
 
@@ -187,8 +189,8 @@ def _primary_record_invocation(registry, runtime, monitor, turn):
     run_json_cli(*_primary_monitor_args("should-run", turn, monitor),
         registry_path=registry, runtime_root=runtime)
     status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[registry.parent.parent], limit=20,
-        goal_id=GOAL_ID, include_public_boundary_scan=False)
+        limit=20,
+        goal_id=GOAL_ID)
     return lambda: record_quota_monitor_poll(status, goal_id=GOAL_ID,
         registry_path=registry, execute=True, agent_id=AGENT_ID,
         todo_id=monitor["todo_id"], target_key="primary-target",

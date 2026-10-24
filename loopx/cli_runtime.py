@@ -5,16 +5,18 @@ import json
 import os
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import __version__
+from .cli_commands.summary_all_registration import GLOBAL_READ_COMMANDS
 from .paths import default_registry_path, global_registry_path, select_default_runtime_root
 
 
 HOST_GLOBAL_REGISTRY_SELECTOR = "@host-global"
 
 
-GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format"})
+GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format", "--cli-bin"})
 GLOBAL_OPTIONS_WITH_EQUALS = tuple(
 	f"{option}=" for option in sorted(GLOBAL_OPTIONS_WITH_VALUE)
 )
@@ -65,9 +67,10 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 )
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
-_SELECTED_COMMANDS = _STATUS_COMMANDS | {
+_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+	"manager-inbox",
 }
 
 
@@ -142,6 +145,11 @@ def build_cli_parser(
 	)
 	parser.add_argument("--runtime-root", help="Override registry common_runtime_root.")
 	parser.add_argument("--format", choices=["markdown", "json"])
+	from .command_invocation import validate_cli_bin
+	parser.add_argument(
+		"--cli-bin", dest="control_cli_bin", type=validate_cli_bin,
+		help="Preserve this executable name/path in generated control commands; does not execute it or change permissions.",
+	)
 	return parser, parser.add_subparsers(dest="command", required=True)
 
 
@@ -256,12 +264,39 @@ def _top_level_command(argv: list[str]) -> str | None:
 	return None
 
 
+@contextmanager
+def cli_invocation_route(argv: list[str]):
+	"""Read the global route only; the canonical parser still validates argv."""
+	from .command_invocation import loopx_cli_route
+	program = None
+	index = 0
+	while index < len(argv):
+		value = argv[index]
+		option = value.split("=", 1)[0]
+		if option not in GLOBAL_OPTIONS_WITH_VALUE:
+			break
+		if "=" in value:
+			argument = value.split("=", 1)[1]
+		else:
+			index += 1
+			argument = argv[index] if index < len(argv) else None
+		if option == "--cli-bin":
+			program = argument
+		index += 1
+	with loopx_cli_route(program):
+		yield
+
+
 def _build_selected_parser(command: str) -> LoopXArgumentParser:
 	parser, subparsers = build_cli_parser(parser_class=_SelectedArgumentParser)
 	if command in _STATUS_COMMANDS:
 		from .cli_commands.status_registration import register_status_commands
 
 		register_status_commands(subparsers, add_subcommand_format)
+	elif command in GLOBAL_READ_COMMANDS:
+		from .cli_commands.summary_all_registration import register_summary_all_command
+
+		register_summary_all_command(subparsers, add_subcommand_format)
 	elif command == "todo":
 		from .cli_commands.todo_registration import register_todo_command
 
@@ -286,6 +321,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.turn_registration import register_turn_commands
 
 		register_turn_commands(subparsers, add_subcommand_format)
+	elif command == "manager-inbox":
+		from .cli_commands.manager_inbox import register_manager_inbox
+
+		register_manager_inbox(subparsers, add_subcommand_format)
 	elif command == "authority-archive":
 		from .cli_commands.authority_archive import register_authority_archive_command
 
@@ -321,6 +360,14 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "manager-inbox":
+		from .cli_commands.manager_inbox import handle_manager_inbox
+		from .control_plane.projects.registry_codec import load_project_registry
+		from .paths import resolve_runtime_root
+
+		return handle_manager_inbox(args, registry_path, resolve_runtime_root(
+			load_project_registry(registry_path), args.runtime_root, registry_path=registry_path,
+		))
 	if args.command == "task-lease":
 		from .cli_commands.task_lease import handle_task_lease_command
 
@@ -393,6 +440,13 @@ def _dispatch_common_command(
 		from .capabilities.repository_change_window.cli import handle_repository_change_window_command
 
 		return handle_repository_change_window_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command in GLOBAL_READ_COMMANDS:
+		from .cli_commands.summary_all import handle_summary_all_command
+
+		return handle_summary_all_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
@@ -555,7 +609,8 @@ def main(argv: list[str] | None = None) -> int:
 	code = 1
 	error = None
 	try:
-		code = _run_command(command, raw_argv)
+		with cli_invocation_route(raw_argv):
+			code = _run_command(command, raw_argv)
 		return code
 	except BaseException as exc:
 		error = exc

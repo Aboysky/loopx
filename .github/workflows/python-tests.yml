@@ -194,6 +194,25 @@ jobs:
         if: matrix.shard == 2
         working-directory: apps/presentation/dashboard
         run: npm run smoke:personal-workspace-packaged:team
+      - name: Qualify original-task revalidation with the real worker
+        if: matrix.shard == 2
+        env:
+          LOOPX_PLAYWRIGHT_PACKAGE: ${{ github.workspace }}/apps/presentation/dashboard/node_modules/playwright
+          LOOPX_USAGE_PING: "0"
+        run: |
+          python -m pip install --disable-pip-version-check -e ".[test]"
+          node apps/presentation/dashboard/smoke/team-task-revalidation-smoke.mjs
+      - name: Preserve synthetic original-task recovery views
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@v7
+        with:
+          name: task-revalidation-${{ github.sha }}
+          path: |
+            output/playwright/personal-workspace/team-original-worker-finishing-mobile.png
+            output/playwright/personal-workspace/team-original-worker-finishing-desktop.png
+            output/playwright/personal-workspace/team-original-recovery-mobile.png
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Qualify the Goal workspace craft composition
         if: matrix.shard == 3
         working-directory: apps/presentation/dashboard
@@ -838,12 +857,24 @@ jobs:
           python -m pytest -q
           tests/canary/test_repository_root.py::test_plan_renders_repository_paths_in_canonical_posix_form
 
+      - name: Qualify TypeScript shard paths on native Windows
+        run: python -m pytest -q tests/test_python_ci_workflow.py::test_typescript_shards_select_every_test_file_exactly_once
+
       - name: Qualify the canary premerge contract smoke on native Windows
         run: python examples/canary/premerge-validation-gate-smoke.py
+
+      - name: Qualify original-task recovery and interactive input on Windows
+        # These are process/authority cases; dedicated long-path cases remain below.
+        run: >-
+          python -m pytest -q --basetemp .t
+          tests/test_delegation_task_revalidation.py
+          tests/control_plane/test_validation_process_cleanup.py
+          -k "active_rejected_worker or preserves_an_internal_lock_timeout or original_task_revalidation_repairs or validation_process_cleanup"
 
       - name: Qualify native CLI output fixture and diagnostic boundaries
         run: >-
           python -m pytest -q
+          --basetemp "${{ runner.temp }}/lxb-${{ github.run_id }}-${{ github.run_attempt }}"
           tests/control_plane/test_cli_output_budget.py
           tests/control_plane/test_cli_output_differential.py
           -k "stable_budget_fixture or long_path_budget or probe_process_failure_preserves_utf8_diagnostics"
@@ -855,6 +886,7 @@ jobs:
       - name: Run native Windows lifecycle tests
         run: >-
           python -m pytest -q
+          tests/test_chat_manager_inspection.py
           tests/test_command_invocation.py
           tests/test_context_provider_service_ownership.py
           tests/test_doctor_git_encoding.py
@@ -863,6 +895,7 @@ jobs:
           tests/test_file_lock_cross_process.py
           tests/control_plane/test_effect_runtime_integration.py
           tests/control_plane/test_shadow_observation_retirement.py
+          tests/test_python_install_owner_platform.py
           tests/test_self_update_runtime_activation.py
           tests/test_self_update_download.py
           tests/test_windows_atomic_writes.py

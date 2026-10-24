@@ -12,7 +12,9 @@ import pytest
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import (
+    assert_todo_read_unchanged, initialize_canonical_authority, isolate_sqlite_runtime,
+)
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.coordination_state_contract import TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION, TODO_DOMAIN_RECORD_FIELDS
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
@@ -204,7 +206,7 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(
                  "--task-lease-expected-version", str(lease["lease"]["version"])]
         guard_args = ["quota", "should-run", "--goal-id", goal, "--agent-id", agent,
                       "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
-                      "--scan-path", str(project)]
+                      ]
         guard = command(*guard_args)
         assert guard["normal_delivery_allowed"] is True
         identity = guard["heartbeat_receipt"]["settlement_identity"]
@@ -238,7 +240,10 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(
         refusal = command("authority-archive", "plan-migration", "--goal-id", goal,
                           "--provider", "file", "--plan", str(refused_plan), expected_code=1)
         assert "settled task leases" in refusal["reason"]
-        assert not refused_plan.exists() and todos() == before_refusal
+        assert not refused_plan.exists()
+        # The projection envelope records when each read happened; the refused
+        # exit must leave every other read fact unchanged.
+        assert_todo_read_unchanged(todos(), before_refusal)
         command("task-lease", "release", "--goal-id", goal, "--todo-id", todo,
                 "--owner", agent, "--idempotency-key", "trial-work",
                 "--expected-version", str(lease["lease"]["version"]))
@@ -351,7 +356,7 @@ def test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit(
     command(*claim, *proof)
     guard = ["quota", "should-run", "--goal-id", goal, "--agent-id", agent,
              "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
-             "--available-capability", "filesystem_read", "--scan-path", str(project)]
+             "--available-capability", "filesystem_read", ]
     assert command(*guard)["normal_delivery_allowed"] is True
     update = ["todo", "update", "--goal-id", goal, "--todo-id", todo, "--agent-id", agent,
               "--note", "Keep the latest note 完整 🧭", "--update-operation-id", "ordinary-update", *proof]

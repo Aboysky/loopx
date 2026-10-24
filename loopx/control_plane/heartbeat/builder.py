@@ -589,6 +589,7 @@ def build_heartbeat_prompt(
             brief=brief,
             thin=thin,
             native_goal_host=native_goal_host,
+            captured_envelope=turn_envelope,
         ),
         "task_body": task_body,
     }
@@ -598,6 +599,13 @@ def build_heartbeat_prompt(
         payload["turn_granularity"] = TURN_GRANULARITY_FINE
         payload["turn_mode"] = "fine_grained"
     payload["agent_model"] = AgentRuntimeModel.PEER_V1.value
+    return _prune_prompt_metadata(payload, thin=thin, brief=brief)
+
+
+def _prune_prompt_metadata(
+    payload: dict[str, Any], *, thin: bool, brief: bool,
+) -> dict[str, Any]:
+    """Trim redundant transport metadata without changing the authored task body."""
     if thin:
         payload.pop("compact_prompt_command", None)
         payload.pop("brief_prompt_command", None)
@@ -623,6 +631,8 @@ def build_heartbeat_prompt(
         payload.pop("expanded_prompt_command", None)
         payload.pop("compact_prompt_command", None)
         payload.pop("thin_prompt_command", None)
+        if payload.get("pr_review_pre_quota_command") is None:
+            payload.pop("pr_review_pre_quota_command", None)
     return payload
 def build_heartbeat_prompt_error_payload(
     *,

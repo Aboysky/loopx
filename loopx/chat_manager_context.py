@@ -743,6 +743,7 @@ def collect_manager_turn_context(
     scope_resolver: Callable[[dict[str, Any]], list[str] | None] | None = None,
     *,
     include_details: bool = True,
+    include_stopped: bool = False,
     remote_evidence: bool = False,
     remote_runner=None,
 ) -> dict[str, Any]:
@@ -752,6 +753,7 @@ def collect_manager_turn_context(
             session,
             runtime_root,
             include_details=include_details,
+            include_stopped=include_stopped,
             remote_evidence=remote_evidence,
             remote_runner=remote_runner,
         )
@@ -804,6 +806,7 @@ def collect_manager_turn_context(
             runtime_root,
             authorized_goal_ids=before,
             include_details=include_details,
+            include_stopped=include_stopped,
             remote_evidence=remote_evidence,
             remote_runner=remote_runner,
             # Source reads and the Turn owner check the same exact authority.

@@ -17,6 +17,37 @@ from loopx.presentation.renderers.quota_markdown import (
 )
 
 
+@pytest.mark.parametrize("mirror", ["shared", "identical", "different", "boolean-number", "missing-root"])
+def test_fallback_reference_preserves_complete_same_packet_facts(mirror: str) -> None:
+    fallback = {"notify_user": False, "blocked_items": [
+        {"text": "保留完整原因和恢复条件。" * 200, "reason": "Wait for the original dependency"},
+    ], "selected_executable": {"todo_id": "todo_fallback", "claimed_by": "worker"}}
+    nested = fallback if mirror == "shared" else deepcopy(fallback)
+    if mirror == "different":
+        nested["blocked_items"][0]["reason"] = "A different dependency"
+    elif mirror == "boolean-number":
+        nested["notify_user"] = 0
+    payload = {"heartbeat_recommendation": {"notify": "DONT_NOTIFY", "agent_must_attempt": True,
+                                             "blocked_priority_fallback": nested}}
+    if mirror != "missing-root":
+        payload["blocked_priority_fallback"] = fallback
+    original = deepcopy(payload)
+    compact = compact_quota_should_run_cli_payload(payload)
+    recommendation = compact["heartbeat_recommendation"]
+    if mirror in {"shared", "identical"}:
+        assert "blocked_priority_fallback" not in recommendation
+        assert recommendation["blocked_priority_fallback_ref"] == "$.blocked_priority_fallback"
+        assert compact["blocked_priority_fallback"] == fallback
+        assert recommendation["agent_must_attempt"] is True
+        assert recommendation["notify"] == "DONT_NOTIFY"
+        assert len(json.dumps(compact, ensure_ascii=False)) < len(json.dumps(original, ensure_ascii=False))
+    else:
+        assert recommendation["blocked_priority_fallback"] == nested
+        assert "blocked_priority_fallback_ref" not in recommendation
+    assert payload == original
+    assert compact_quota_should_run_cli_payload(payload, include_todo_summary_detail=True) == original
+
+
 @pytest.mark.parametrize("inline", ["absent", "identical", "different", "wrong-step"])
 def test_replan_authoring_is_available_without_another_read(inline: str) -> None:
     authoring = {"schema_version": "goal_vision_replan_contract_v0",
@@ -56,6 +87,67 @@ def test_progress_only_replan_does_not_invent_a_vision_input() -> None:
     payload = {"replan_action_packet": {"obligation_id": "progress-fixture",
                                        "writeback_contract": {}}}
     assert compact_quota_should_run_cli_payload(payload) == payload
+
+
+@pytest.mark.parametrize("variant", ["identical", "different", "missing-owner", "wrong-capability", "wrong-step"])
+def test_explore_guidance_reference_preserves_every_clause_in_same_packet(variant: str) -> None:
+    guidance = "Keep the lease through evidence delivery. Preserve negative results. " * 80
+    attachment = {"capability_id": "other" if variant == "wrong-capability" else "explore",
+                  "guidance": guidance, "required": False}
+    graph = {"result_writeback_guidance": guidance + (" Preserve a new obligation." if variant == "different" else ""),
+             "writeback_results": [{"status": "refuted", "observation": "Measured negative result."}]}
+    source = {"kind": "explore_turn_context", "content": {"graph": graph}}
+    steps = [{"kind": "validation"}, {"kind": "validation" if variant == "wrong-step" else "durable_writeback",
+              "optional_attachments": [] if variant == "missing-owner" else [attachment]}]
+    payload = {"interaction_contract": {"agent_channel": {"must_attempt": True, "work_context": {"sources": [source]}},
+               "cli_channel": {"settlement_plan": {"ordered_steps": steps}}}}
+    before = deepcopy(payload)
+    compact = compact_quota_should_run_cli_payload(payload)
+    projected = compact["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["graph"]
+    if variant == "identical":
+        assert projected["result_writeback_guidance_ref"] == (
+            "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[1].optional_attachments[0].guidance")
+        assert "result_writeback_guidance" not in projected
+        restored = deepcopy(compact)
+        replacement = restored["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["graph"]
+        replacement.pop("result_writeback_guidance_ref")
+        replacement["result_writeback_guidance"] = restored["interaction_contract"]["cli_channel"][
+            "settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]["guidance"]
+        assert restored == before
+        assert len(json.dumps(compact)) < len(json.dumps(before)) - 4000
+        assert compact_quota_should_run_cli_payload(compact) == compact
+    else:
+        assert projected == graph
+    assert compact_quota_should_run_cli_payload(payload, include_vision_detail=True) == before
+    assert payload == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane import test_quota_settlement_cli as fixture
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["explore_graph"] = {"enabled": True}
+    registry.write_text(json.dumps(config))
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
+    rc, guard = fixture._run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        *binding, "--todo-id", fixture.TODO_ID, "--turn-instance-id", "guidance-read", cwd=project)
+    assert rc == 0, guard
+    sources = guard["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    graph = next(source["content"]["graph"] for source in sources if source.get("kind") == "explore_turn_context")
+    assert "result_writeback_guidance_ref" in graph
+    steps = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+    owner = next(attachment["guidance"] for step in steps if step["kind"] == "durable_writeback"
+                 for attachment in step["optional_attachments"] if attachment["capability_id"] == "explore")
+    rc, standalone = fixture._run_cli(registry, runtime, "explore", "turn-context", *binding, cwd=project)
+    assert rc == 0, standalone
+    assert owner == standalone["graph"]["result_writeback_guidance"]
+    assert fixture._spend_run_count(runtime) == 0
 
 
 def _items(count: int, *, prefix: str) -> list[dict[str, object]]:

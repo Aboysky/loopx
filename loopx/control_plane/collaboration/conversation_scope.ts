@@ -37,13 +37,20 @@ export function normalizeProjectContext(value: unknown): Record<string, string> 
 
 export function projectConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
   const context = normalizeProjectContext(input.context);
-  const writable = context.grant === "workspace_write";
-  const permissions = context.filesystem_scope === "workspace_only" ? {
+  // A Core-admitted result review narrows this one adapter. Keep the original
+  // grant/store/thread identity; never migrate an ordinary thread into a new
+  // isolated store merely to inspect work which already ran.
+  const review = input.read_only_review === true;
+  if (review && context.audience !== "bound_owner") throw new Error("result review requires the original private owner");
+  const writable = context.grant === "workspace_write" && !review;
+  const permissions = context.filesystem_scope === "workspace_only" || review ? {
     // Share authentication within this authorized workspace/owner binding,
     // never with another App or local-owner context. Source topics retain
     // separate threads without requiring a new login for every message.
-    host_store_key: [context.project_ref, ...(context.audience !== "local_owner"
-      ? [context.binding_id, context.provider_ref, context.operator_ref] : ["local"])].join("."),
+    ...(context.filesystem_scope === "workspace_only" ? {
+      host_store_key: [context.project_ref, ...(context.audience !== "local_owner"
+        ? [context.binding_id, context.provider_ref, context.operator_ref] : ["local"])].join("."),
+    } : {}),
     permissions_profile: `loopx_workspace_only_${writable ? "write" : "read"}`,
     host_config: {
       default_permissions: `loopx_workspace_only_${writable ? "write" : "read"}`,
@@ -60,6 +67,7 @@ export function projectConversationIdentity(input: Record<string, unknown>): Rec
       // Read project instructions/skills through the bounded native tools.
       skills: {include_instructions: false},
       project_doc_max_bytes: 0,
+      ...(review ? {features: {apps: false, multi_agent: false, multi_agent_v2: false}} : {}),
       permissions: {
         [`loopx_workspace_only_${writable ? "write" : "read"}`]: {
           extends: ":workspace",
@@ -127,6 +135,9 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
         return {kind: "project_workspace", goal_ids: [], private_conversation: false};
       }
     } catch { /* Incomplete host identity grants no context. */ }
+    // Explicit null identifies a project Session; a missing legacy Goal field
+    // is different and must not be manufactured by an observation adapter.
+    return {kind: "unavailable", goal_ids: [], private_conversation: false};
   }
   if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external" || input.origin === "web")) {
     try {
@@ -135,6 +146,11 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
         return {kind: "external_audience", goal_ids: [], private_conversation: false, bound_steward: true};
       }
     } catch { /* An incomplete steward identity cannot authorize a portfolio. */ }
+  }
+  // Declared context must match a typed identity above; a legacy channel cannot
+  // turn inconsistent recovered project metadata into broader authority.
+  if (input.project_context != null) {
+    return {kind: "unavailable", goal_ids: [], private_conversation: false};
   }
   if (channel === "manager") {
     return {kind: "owner_portfolio", goal_ids: null, private_conversation: true};

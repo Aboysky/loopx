@@ -57,6 +57,10 @@ class PrivateConversationRequestMixin:
                 and hasattr(self.server.lark_private_conversations, "ingress") else {}),
              **({"owner_attention": self.server.lark_private_conversations.owner_attention.health(row["binding_id"])}
                 if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner" else {}),
+             **({"managed_steward": self.server.lark_private_conversations.managed_steward.health(row["binding_id"])}
+                if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner"
+                and row["executor_endpoint_id"] == "codex"
+                and hasattr(self.server.lark_private_conversations, "managed_steward") else {}),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]],
             "stop_recoveries": [{**row,
@@ -71,8 +75,9 @@ class PrivateConversationRequestMixin:
             if set(body) - {"context_kind", "project_grant", "goal_scope", "audience", "group_ids"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
                 raise ValueError("select an App, authorized workspace and executor")
             profile = str(body["app_ref"])
-            existing = _active_profile_configs(build_lark_goal_topic_runtime_snapshot(
-                registry_path=self.server.registry_path, runtime_root_override=self.server.runtime_root_override))
+            snapshot = build_lark_goal_topic_runtime_snapshot(
+                registry_path=self.server.registry_path, runtime_root_override=self.server.runtime_root_override)
+            existing = _active_profile_configs(snapshot)
             from .conversation_identity import identity_ref
             observed = self.server.runtime_controller.project_contexts.conversation_bindings.observe(
                 profile, audience=body.get("audience") or "owner")
@@ -94,8 +99,19 @@ class PrivateConversationRequestMixin:
             group_apps = [str(config.get("bot_app_id") or _app_identity_for_private_guard(
                 other_profile, self._lark_runner(), self._require_lark_cli()))
                 for other_profile, config in existing.items()]
-            if profile in existing or any(identity_ref(app) == observed["provider_ref"] for app in group_apps):
-                raise ValueError("this App already owns a group listener; disconnect it first")
+            shared_group = existing.get(profile)
+            if shared_group is not None:
+                if body.get("audience", "owner") != "owner" or identity_ref(
+                    str(shared_group.get("bot_app_id") or _app_identity_for_private_guard(
+                        profile, self._lark_runner(), self._require_lark_cli()))
+                ) != observed["provider_ref"]:
+                    raise ValueError("shared listener requires the same verified App and a private owner audience")
+            elif any(identity_ref(app) == observed["provider_ref"] for app in group_apps):
+                raise ValueError("this App already has a group listener; select its existing profile to add private Chat")
+            # Compose the same transport configuration used by refresh before
+            # publishing a binding. Failure must leave the Core grant untouched.
+            _active_profile_configs({**snapshot, "private_profiles": {
+                profile: {**observed, "audience": body.get("audience", "owner")}}})
             endpoint = str(body["executor_endpoint_id"])
             if not any(row["agent_id"] == endpoint and row["available"] for row in self.server.runtime_controller.capabilities()):
                 raise ValueError("the selected executor is unavailable")
@@ -104,7 +120,8 @@ class PrivateConversationRequestMixin:
                 context_kind=str(body.get("context_kind", "project")),
                 project_grant=str(body["project_grant"]) if "project_grant" in body else None,
                 goal_scope=str(body["goal_scope"]) if "goal_scope" in body else None,
-                audience=body.get("audience"), group_refs=group_refs, available_group_refs=available_group_refs)
+                audience=body.get("audience"), group_refs=group_refs, available_group_refs=available_group_refs,
+                expected_provider_ref=observed["provider_ref"])
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
             self._send_error(str(exc), status=400)
@@ -124,6 +141,44 @@ class PrivateConversationRequestMixin:
             return
         self._private_conversations()
 
+    def _private_conversation_managed_steward(self) -> None:
+        try:
+            body = self._read_json()
+            if (set(body) - {"binding_id", "session_id", "plan_id", "execute"}
+                    or not isinstance(body.get("binding_id"), str)
+                    or not isinstance(body.get("execute", False), bool)
+                    or ("session_id" in body and not isinstance(body["session_id"], str))
+                    or ("plan_id" in body and not isinstance(body["plan_id"], str))):
+                raise ValueError("use the original steward's current preparation preview")
+            result = self.server.lark_private_conversations.managed_steward.prepare(
+                body["binding_id"], session_id=body.get("session_id"),
+                expected_plan_id=body.get("plan_id"), execute=body.get("execute", False))
+        except (ValueError, KeyError, OSError) as exc:
+            self._send_error(str(exc), status=409, error_code="managed_steward_preparation_unavailable")
+            return
+        self._send_json(result)
+
+    def _private_conversation_steward_monitor(self) -> None:
+        from ...capabilities.native_chat.steward_monitor import StewardMonitor
+        try:
+            body = self._read_json()
+            if (set(body) - {"binding_id", "operation", "cadence_minutes", "plan_id", "execute"}
+                    or not isinstance(body.get("binding_id"), str)
+                    or not isinstance(body.get("operation"), str)
+                    or body.get("operation") not in {"enable", "pause"}
+                    or type(body.get("cadence_minutes", 30)) is not int
+                    or type(body.get("execute", False)) is not bool
+                    or ("plan_id" in body and not isinstance(body["plan_id"], str))):
+                raise ValueError("use the original steward monitor setting")
+            result = StewardMonitor(self.server.runtime_controller).configure(body["binding_id"],
+                operation=body["operation"], cadence_minutes=body.get("cadence_minutes", 30),
+                expected_plan_id=body.get("plan_id"), execute=body.get("execute", False))
+        except (ValueError, KeyError, OSError, RuntimeError):
+            self._send_error("Native monitoring could not be changed. Refresh the original connection; existing work and receipts are retained.",
+                status=409, error_code="managed_steward_monitor_unavailable")
+            return
+        self._send_json(result)
+
     def _private_conversation_agent_target(self) -> None:
         try:
             body = self._read_json()
@@ -136,6 +191,30 @@ class PrivateConversationRequestMixin:
             self._send_error(str(exc), status=400)
             return
         self._private_conversations()
+
+    def _private_conversation_steward_report(self) -> None:
+        from ...capabilities.native_chat.steward_reports import PendingStewardReportError, StewardReports
+        try:
+            body = self._read_json()
+            if (set(body) - {"binding_id", "operation", "schedule", "plan_id", "execute"}
+                    or not isinstance(body.get("binding_id"), str)
+                    or body.get("operation") not in {"enable", "pause", "cancel"}
+                    or type(body.get("execute", False)) is not bool
+                    or "plan_id" in body and not isinstance(body["plan_id"], str)
+                    or "schedule" in body and (not isinstance(body["schedule"], dict) or body["operation"] != "enable")):
+                raise ValueError("use the original steward report setting")
+            result = StewardReports(self.server.runtime_controller).configure(body["binding_id"],
+                operation=body["operation"], schedule=body.get("schedule"),
+                expected_plan_id=body.get("plan_id"), execute=body.get("execute", False))
+        except PendingStewardReportError:
+            self._send_error("本期汇报已冻结，投递尚未核验；请先完成本期投递，再修改计划。可暂停、取消或恢复原计划，原回执继续保留。The frozen report still awaits verified delivery; finish it before changing its schedule.",
+                status=409, error_code="managed_steward_report_pending")
+            return
+        except (ValueError, KeyError, OSError, RuntimeError, TypeError):
+            self._send_error("The original report setting is unavailable. Refresh the original connection; existing windows, failed attempts and delivery receipts are retained.",
+                status=409, error_code="managed_steward_report_unavailable")
+            return
+        self._send_json(result)
 
     def _private_conversation_owner_notifications(self) -> None:
         try:

@@ -5,6 +5,49 @@ admission, permission, artifact, integrity, and reusable agent-runtime boundarie
 around benchmark experiments. It does not own benchmark-family runners, result
 ledgers, or scoring adapters.
 
+## Runner-owned capacity drain planning
+
+After adaptive concurrency lowers a target, a runner may still need to drain live
+runs. `rebalance-plan` selects one preclassified candidate group by the lowest
+numeric `reclaim_priority`, then chooses the newest active group at that priority:
+
+```bash
+loopx benchmark rebalance-plan \
+  --inventory-json .local/private-run/rebalance-inventory.json \
+  --format json
+```
+
+Each candidate groups one or more run ids that must be stopped together. The
+runner assigns priorities from its experiment design, so supplementary work can
+drain before a matched comparison group. A lower-priority group already in
+`stop_requested` blocks higher-priority reclamation until its closeout is
+observed; another active group at the same priority remains eligible.
+The inventory must also include `solver_reclaim_required`, computed by the runner
+from its current token-producing solver capacity and solver target. The planner
+must not derive this flag from the case reservation ledger or from
+`concurrency-status` reporting `drain_to_target`: a case reservation can remain
+active while its solver capacity has already been released.
+
+Once the runner has durably proved that the solver and its token-producing
+session stopped, it may mark the group `solver_capacity_released`. That group no longer
+blocks another reclaim decision even when an accepted evaluator or scorer still
+drains in the background. The runner must preserve that scoring process and its
+artifacts; process liveness alone neither proves live solver capacity nor proves
+capacity release.
+
+The command is read-only. It sends no signal, changes no concurrency envelope,
+and does not classify runtime liveness. The runner must build the complete live
+inventory, persist its exact process or remote-task reservation, revalidate that
+identity, request graceful stop, preserve artifacts and scoring evidence, observe
+solver-capacity release separately from scorer closeout, and only then release
+the corresponding solver concurrency slots. Scoring slots and terminal
+qualification remain runner-owned until their own closeout. This state never
+authorizes `concurrency-release`: the existing case reservation remains until a
+typed terminal or runner-invalid transition satisfies the concurrency-envelope
+contract. If solver capacity is already at or below its target, pass
+`solver_reclaim_required=false`; the planner returns `hold` even if the case
+reservation ledger still reports occupancy above its target.
+
 ## Runner execution boundary
 
 The former `loopx benchmark agent-phase` command and its external-agent v1
@@ -195,8 +238,8 @@ this capability; the DeepSWE research adapter is its first active caller. The
 summary carries only typed counts, status labels, and content-free notification
 kind counts. It never reopens event payloads, and it marks message and tool-call
 semantics unavailable rather than guessing them. Missing, malformed, or
-inconsistent lifecycle facts fail closed. The similarly named archived reducer
-under `deprecate/benchmark-legacy/` is historical evidence, not a dependency or
+inconsistent lifecycle facts fail closed. The similarly named retired reducer
+in Git history is historical evidence, not a dependency or
 compatibility entry point for this native-runner contract.
 
 ### Formal installed profile and skill discovery
@@ -1461,8 +1504,8 @@ Docker, runner, upload, submission, publication, or production authority.
 
 The active benchmark research program and current public-safe practice live under
 [`benchmark/`](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md). Retired implementations, superseded runners, and dated research
-packets are retained under [`deprecate/benchmark-legacy/`](https://github.com/loopx-project/loopx/blob/main/deprecate/benchmark-legacy/README.md)
-for source archaeology only.
+packets remain available in [Git history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
+for source archaeology only; the legacy tree is removed from the working tree.
 Immutable experiment snapshots follow the canonical
 [archive placement rules](../../../benchmark/README.md#archive-placement),
 which permit explicitly identified, inert snapshots in `benchmark/`.

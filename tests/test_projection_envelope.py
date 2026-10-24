@@ -38,7 +38,10 @@ from loopx.status import collect_status
 def _registry(tmp_path: Path, goal_ids: tuple[str, ...] = ("goal-a", "goal-b")) -> Path:
     registry_path = tmp_path / ".loopx" / "registry.json"
     registry_path.parent.mkdir(parents=True)
-    (tmp_path / "ACTIVE_GOAL_STATE.md").write_text("# Goal\n", encoding="utf-8")
+    (tmp_path / "ACTIVE_GOAL_STATE.md").write_text(
+        "# Goal\n\n## User Todo\n\n## Agent Todo\n\n## Next Action\n\n- Inspect current evidence.\n",
+        encoding="utf-8",
+    )
     registry_path.write_text(
         json.dumps(
             {
@@ -65,9 +68,7 @@ def _status(registry_path: Path, **kwargs):
     return collect_status(
         registry_path=registry_path,
         runtime_root_override=None,
-        scan_roots=[],
         limit=5,
-        include_public_boundary_scan=False,
         **kwargs,
     )
 
@@ -571,7 +572,6 @@ def _cache_args(registry_path: Path) -> dict:
     return {
         "registry_path": registry_path,
         "runtime_root": registry_path.parents[1] / "runtime",
-        "scan_roots": [],
         "limit": 5,
         "include_task_graph": False,
         "goal_id": None,
@@ -595,6 +595,24 @@ def test_cached_status_keeps_observed_at_and_restamps_staleness(tmp_path: Path, 
     assert envelope["age_seconds"] >= 900
     assert "stale_sources" in envelope["alert_reasons"]
     assert "(cached)" in render_status_markdown(cached)
+
+
+@pytest.mark.parametrize("content", [b"\xff", b'{"payload":"\xe2\x82', b'{"payload":'])
+def test_unreadable_cache_is_a_non_mutating_miss(tmp_path: Path, content: bytes) -> None:
+    args = _cache_args(_registry(tmp_path))
+    path = status_projection_cache_path(
+        args["runtime_root"], status_projection_cache_key(**args)
+    )
+    path.parent.mkdir(parents=True)
+    path.write_bytes(content)
+
+    cached, metadata = load_status_projection_cache(max_age_seconds=3600, **args)
+
+    assert cached is None
+    assert metadata["hit"] is False
+    assert metadata["miss_reason"] == "unreadable"
+    assert metadata["error"]
+    assert path.read_bytes() == content
 
 
 def test_cache_entry_without_an_envelope_is_a_miss(tmp_path: Path) -> None:
@@ -670,7 +688,6 @@ def test_global_summary_from_a_project_registry_is_marked_incomplete(tmp_path: P
     payload = summary_all.build_summary_all(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -697,7 +714,6 @@ def test_global_summary_from_the_global_registry_is_complete(tmp_path: Path, mon
     payload = summary_all.build_summary_all(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -720,7 +736,6 @@ def test_global_gates_counts_unavailable_quota_and_missing_status_envelope(tmp_p
     payload = summary_all.build_global_gates(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=5,
     )
@@ -760,7 +775,6 @@ def test_global_todos_discloses_global_membership_and_display_truncation(
     payload = global_todos.build_global_todos(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=1,
     )
@@ -802,7 +816,6 @@ def test_global_todos_missing_status_envelope_and_failed_quota_alert(
     payload = global_todos.build_global_todos(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=5,
     )
@@ -826,7 +839,6 @@ def test_global_todos_missing_attention_queue_alerts(
     envelope = global_todos.build_global_todos(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=5,
     )["projection_envelope"]
@@ -847,7 +859,6 @@ def test_global_risks_inherits_status_and_discloses_missing_global_membership(
     payload = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -864,7 +875,6 @@ def test_global_risks_inherits_status_and_discloses_missing_global_membership(
     missing = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -892,7 +902,6 @@ def test_global_risks_scan_truncation_is_an_incomplete_coverage_alert(
     payload = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=1,
@@ -915,7 +924,6 @@ def test_global_risks_empty_contract_container_is_a_read_source(
     envelope = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -982,7 +990,6 @@ def test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers(
     unreadable = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -1015,7 +1022,6 @@ def test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers(
     recovered = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -1083,7 +1089,10 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
     global_path = runtime / "registry.global.json"
     global_registry = json.loads(registry.read_text())
     second_state = tmp_path / "SECOND_GOAL_STATE.md"
-    second_state.write_text("# Second Goal\n")
+    second_state.write_text(
+        "# Second Goal\n\n## User Todo\n\n## Agent Todo\n\n## Next Action\n\n- Inspect current evidence.\n",
+        encoding="utf-8",
+    )
     global_registry["goals"].append({**global_registry["goals"][0], "id": "goal-b",
                                      "state_file": str(second_state)})
 

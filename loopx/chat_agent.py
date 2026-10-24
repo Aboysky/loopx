@@ -10,7 +10,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -33,6 +33,7 @@ class CodexChatAgentError(RuntimeError):
         self.gate = gate
         self.error_code = error_code
         self.native_error_info: dict[str, Any] | str | None = None
+        self.native_routing_timeout = False
 
 
 class CodexChatTimeoutError(CodexChatAgentError):
@@ -201,9 +202,31 @@ def _retry_error_details(error: Any) -> dict[str, Any]:
     return {"retry": {"codex_error_info": safe_info}}
 
 
+def _routing_discovery_timeout(error: Any) -> bool:
+    # A fixed native provider diagnostic, never a substring/prose retry grant.
+    return (isinstance(error, dict) and error.get("codexErrorInfo") == "other"
+            and error.get("message") in (
+                "workspace routing discovery timed out",
+                "Error running remote compact task: workspace routing discovery timed out",
+                "workspace routing discovery failed",
+                "Error running remote compact task: workspace routing discovery failed",
+            ))
+
+
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    if _routing_discovery_timeout(error):
+        failure = CodexChatAgentError(
+            "Codex 上游工作区路由暂时不可用，本轮未完成。",
+            error_code="upstream_transport_failure",
+            gate=_host_tool_gate(
+                "Codex 上游工作区路由暂时不可用，本轮未完成。",
+                "保留原请求；仅在独立核验原生执行项、原消息和授权后允许有界接续。",
+            ),
+        )
+        failure.native_routing_timeout = True
+        return failure
     # Some Responses providers return a structured error without an HTTP
     # status. The typed error still identifies a rejected request; arbitrary
     # nested prose may contain private request details and is never projected.
@@ -263,12 +286,14 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     if isinstance(safe_info, dict) and "activeTurnNotSteerable" not in safe_info:
         selected = ("upstream_transport_failure", "Codex 上游响应连接失败，本轮未完成。")
     if selected is None:
-        return CodexChatAgentError(
+        failure = CodexChatAgentError(
             fallback,
             gate=_host_tool_gate(
                 fallback, "Inspect the Codex host error before continuing."
             ),
         )
+        failure.native_routing_timeout = _routing_discovery_timeout(error)
+        return failure
     code, summary = selected
     policy = isinstance(info, str) and info in {"cyberPolicy", "misalignmentPolicyViolation"}
     return CodexChatAgentError(
@@ -677,6 +702,10 @@ class CodexChatAgentSession:
     _command_items_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _host_model_auth: Any = field(default=None, repr=False)
     _public_source_read_context: str = field(default="", repr=False)
+    read_only_review: bool = False
+    _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
+        default=None, repr=False
+    )
 
     @classmethod
     def start(
@@ -695,11 +724,13 @@ class CodexChatAgentSession:
         runtime_profile: str = "restricted",
         sandbox: str | None = None,
         project_context: dict[str, str] | None = None,
+        read_only_review: bool = False,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
         host_config: dict[str, Any] | None = None,
+        launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
         _compatibility_catalog_path: Path | None = None,
     ) -> "CodexChatAgentSession":
         resolved = shutil.which(codex_bin)
@@ -714,12 +745,15 @@ class CodexChatAgentSession:
         root = work_dir.resolve()
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Codex Chat runtime profile")
+        if read_only_review and (project_context is None or not resume_thread_id or dynamic_tools):
+            raise ValueError("result review must resume the original private thread without dynamic tools")
         if project_context is not None:
             from .control_plane.effect_runtime import effect_runtime_result
 
             if execution_mode or goal_id is not None or runtime_profile != "restricted":
                 raise ValueError("ordinary project runtime cannot borrow Goal or manager authority")
-            policy = effect_runtime_result("collaboration.project.session_identity", {"context": project_context})
+            policy = effect_runtime_result("collaboration.project.session_identity", {
+                "context": project_context, **({"read_only_review": True} if read_only_review else {})})
             if Path(policy["context"]["workspace_path"]).resolve() != root:
                 raise ValueError("project runtime workspace does not match its context")
             selected_sandbox = policy["sandbox"]
@@ -807,27 +841,38 @@ class CodexChatAgentSession:
                 ]
             )
         command.extend(["--listen", "stdio://"])
+        process = None
         try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(root),
-                env=runtime_env,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
-                start_new_session=isolate_process_tree and os.name == "posix",
-            )
-        except OSError as exc:
-            raise CodexChatAgentError(
-                "Codex app-server could not start",
-                gate=_host_tool_gate(
-                    "Codex app-server could not start for LoopX Chat.",
-                    "Verify the Codex CLI installation and app-server support.",
-                ),
-            ) from exc
+            # The admitting caller owns this short launch fence. Native startup
+            # RPCs and model execution must not hold the Goal writer lock.
+            with launch_guard() if launch_guard is not None else nullcontext():
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=str(root),
+                        env=runtime_env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        encoding="utf-8",
+                        bufsize=1,
+                        start_new_session=isolate_process_tree and os.name == "posix",
+                    )
+                except OSError as exc:
+                    raise CodexChatAgentError(
+                        "Codex app-server could not start",
+                        gate=_host_tool_gate(
+                            "Codex app-server could not start for LoopX Chat.",
+                            "Verify the Codex CLI installation and app-server support.",
+                        ),
+                    ) from exc
+        except BaseException:
+            # A guard can fail on exit after Popen succeeded, before a Session
+            # exists to own cleanup. Reap that same process on this path too.
+            if process is not None:
+                cls._close_process(process, process_tree_owned=isolate_process_tree)
+            raise
 
         messages: "queue.Queue[dict[str, Any] | Exception]" = queue.Queue()
         assert process.stdout is not None
@@ -849,10 +894,12 @@ class CodexChatAgentSession:
             runtime_profile=runtime_profile,
             sandbox=selected_sandbox,
             permissions_profile=permissions_profile,
+            read_only_review=read_only_review,
             project_context=policy["context"] if project_context is not None else None,
             model=model,
             reasoning_effort=reasoning_effort,
             model_catalog_compatibility_applied=_compatibility_catalog_path is not None,
+            _launch_guard=launch_guard,
         )
         try:
             session._request(
@@ -916,10 +963,11 @@ class CodexChatAgentSession:
                         **settings, "writable_roots": list(dict.fromkeys([*writable, *owner_git_write_roots]))}}
                 if permissions_profile:
                     host_config = codex_context.disable_mcp_servers(effective, host_config or {})
-                    try:
-                        host_config = codex_context.public_source_reader(effective, host_config)
-                    except ValueError as exc:
-                        raise session._runtime_error(str(exc)) from None
+                    if not read_only_review:
+                        try:
+                            host_config = codex_context.public_source_reader(effective, host_config)
+                        except ValueError as exc:
+                            raise session._runtime_error(str(exc)) from None
                     if session._host_model_auth is not None:
                         # Use public native transport defaults, not the
                         # account's configuration or environment. Reject a
@@ -948,6 +996,10 @@ class CodexChatAgentSession:
                         else {}
                     ),
                     "cwd": str(root),
+                    # An ordinary native thread can retain Git/skill roots
+                    # from earlier writable Turns. Replace, then verify the
+                    # exact root rather than inheriting that broader inventory.
+                    **({"runtimeWorkspaceRoots": [str(root)]} if read_only_review else {}),
                     **({"model": model} if model else {}),
                     **({"modelProvider": provider_override} if provider_override else {}),
                     **(
@@ -1026,6 +1078,8 @@ class CodexChatAgentSession:
                 )
             if permissions_profile:
                 session._public_source_read_context = codex_context.public_source_read_context(host_config or {})
+            if read_only_review and session._background_terminals(time.monotonic() + response_timeout_sec):
+                raise session._runtime_error("The interrupted conversation still has background work; result review stopped.")
             # Chat keeps its Goal binding in LoopX's local Session state and supplies
             # that public-safe context in each Turn prompt. Codex Goal mode is reserved
             # for autonomous execution; enabling it here causes conversational messages
@@ -1033,6 +1087,8 @@ class CodexChatAgentSession:
             session.next_request_id = 4 if read_native_config else 3
             if session._host_model_auth is not None:
                 session.next_request_id = 5
+            if read_only_review:
+                session.next_request_id = max(session.next_request_id, 6)
             return session
         except _LegacyModelCatalogSchemaError as exc:
             session.close()
@@ -1053,11 +1109,13 @@ class CodexChatAgentSession:
                     runtime_profile=runtime_profile,
                     sandbox=selected_sandbox,
                     project_context=project_context,
+                    read_only_review=read_only_review,
                     codex_home=base_home,
                     model=model,
                     reasoning_effort=reasoning_effort,
                     dynamic_tools=dynamic_tools,
                     host_config=host_config,
+                    launch_guard=launch_guard,
                     _compatibility_catalog_path=catalog_path,
                 )
         except Exception:
@@ -1073,17 +1131,64 @@ class CodexChatAgentSession:
             ),
         )
 
-    def _write(self, payload: dict[str, Any]) -> None:
+    def _write(
+        self, payload: dict[str, Any], *,
+        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        deadline: float | None = None,
+    ) -> None:
         if self.process.stdin is None:
             raise self._runtime_error("Codex app-server input stream is closed.")
+        frame = json.dumps(payload, ensure_ascii=False) + "\n"
         try:
+            if write_guard is not None:
+                self._guarded_write(frame, write_guard, deadline=deadline)
+                return
             with self._write_lock:
-                self.process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                self.process.stdin.write(frame)
                 self.process.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
             raise self._runtime_error(
                 "Codex app-server input stream closed unexpectedly."
             ) from exc
+
+    def _guarded_write(
+        self, frame: str, write_guard: Callable[[], AbstractContextManager[None]], *,
+        deadline: float | None,
+    ) -> None:
+        from .extensions.process_runtime import force_terminate_process, write_process_stdin_before_deadline
+
+        # Serialization, delivery and response share the original RPC/Turn
+        # deadline. No shorter send budget may reject an otherwise valid frame.
+        dispatch_deadline = deadline if deadline is not None else time.monotonic() + self.response_timeout_sec
+        if not self._write_lock.acquire(timeout=max(0, dispatch_deadline - time.monotonic())):
+            raise self._timeout_error("response_timeout", "Codex input dispatch timed out.")
+        try:
+            with write_guard():
+                process = self.process
+                try:
+                    if time.monotonic() >= dispatch_deadline:
+                        # Canonical admission itself can consume the remaining
+                        # budget. No writer started, but this Session still
+                        # retires its peer before releasing the launch fence.
+                        try:
+                            force_terminate_process(process, process_tree_owned=self.process_tree_owned)
+                        except Exception as error:
+                            raise RuntimeError("native input receiver cleanup unconfirmed") from error
+                        raise TimeoutError("native input dispatch deadline expired")
+                    write_process_stdin_before_deadline(
+                        process, frame, deadline=dispatch_deadline,
+                        cancel_and_reap=lambda: force_terminate_process(
+                            process, process_tree_owned=self.process_tree_owned,
+                        ),
+                    )
+                except TimeoutError as exc:
+                    raise self._timeout_error(
+                        "response_timeout", "Codex input dispatch timed out."
+                    ) from exc
+                except RuntimeError as exc:
+                    raise self._runtime_error("Codex native input cleanup could not be confirmed.") from exc
+        finally:
+            self._write_lock.release()
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
         self._write({"method": method, "params": params})
@@ -1239,6 +1344,7 @@ class CodexChatAgentSession:
         *,
         request_id: int | None = None,
         deadline: float | None = None,
+        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> dict[str, Any]:
         if request_id is None:
             with self._request_id_lock:
@@ -1248,19 +1354,34 @@ class CodexChatAgentSession:
         with self._response_waiters_lock:
             self._response_waiters[request_id] = waiter
         try:
-            self._write({"id": request_id, "method": method, "params": params})
             response_deadline = time.monotonic() + self.response_timeout_sec
             deadline = min(deadline, response_deadline) if deadline is not None else response_deadline
+            # A per-Turn guard replaces the session default. Acquire it only
+            # inside the actual write, after waiting for the native write lock.
+            if write_guard is None and method == "turn/start":
+                write_guard = self._launch_guard
+            self._write(
+                {"id": request_id, "method": method, "params": params},
+                **({"write_guard": write_guard, "deadline": deadline} if write_guard is not None else {}),
+            )
             while True:
                 if time.monotonic() >= deadline:
                     raise self._timeout_error("response_timeout", "Codex app-server timed out.")
                 try:
                     message = waiter.get_nowait()
                 except queue.Empty:
-                    # A streaming reader can route this RPC response while holding
-                    # the fence. Recheck our waiter instead of waiting for an event.
-                    if not self._message_dispatch_lock.acquire(timeout=0.1):
-                        continue
+                    # The reader can route our response while retaining the
+                    # dispatch fence for its next event. Wait on the response,
+                    # which wakes immediately, rather than on that reader's lock.
+                    if not self._message_dispatch_lock.acquire(blocking=False):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            continue
+                        try:
+                            message = waiter.get(timeout=min(0.1, remaining))
+                        except queue.Empty:
+                            continue
+                        break
                     try:
                         try:
                             message = waiter.get_nowait()
@@ -1299,21 +1420,22 @@ class CodexChatAgentSession:
                                 continue
                     finally:
                         self._message_dispatch_lock.release()
-                if message.get("id") == request_id:
-                    if message.get("error"):
-                        if method in {
-                            "thread/start",
-                            "thread/resume",
-                        } and _is_legacy_model_catalog_error(message.get("error")):
-                            raise _LegacyModelCatalogSchemaError
-                        raise self._runtime_error(
-                            f"Codex app-server rejected {method}."
-                        )
-                    result = message.get("result")
-                    return result if isinstance(result, dict) else {}
-                raise self._runtime_error(
-                    "Codex app-server returned an unexpected response."
-                )
+                break
+            if message.get("id") == request_id:
+                if message.get("error"):
+                    if method in {
+                        "thread/start",
+                        "thread/resume",
+                    } and _is_legacy_model_catalog_error(message.get("error")):
+                        raise _LegacyModelCatalogSchemaError
+                    raise self._runtime_error(
+                        f"Codex app-server rejected {method}."
+                    )
+                result = message.get("result")
+                return result if isinstance(result, dict) else {}
+            raise self._runtime_error(
+                "Codex app-server returned an unexpected response."
+            )
         finally:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)
@@ -1465,7 +1587,7 @@ class CodexChatAgentSession:
     def transport_retry_readback(self, turn_id: str) -> dict[str, Any] | None:
         """Read native terminal/effect facts; notification history is insufficient.
 
-        Only a failed, latest Turn with a typed connection/overload error and a complete
+        Only a failed, latest Turn with a known connection/overload error and a complete
         text-only inventory is eligible. Unknown items, tools (including reads),
         delivery, additional user input and unreadable inventories stop recovery.
         This is adapter IO evidence, never permission to reopen a Core Turn.
@@ -1497,6 +1619,8 @@ class CodexChatAgentSession:
             info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
             if info == "serverOverloaded":
                 return {"codex_error_info": info}
+            if _routing_discovery_timeout(error):
+                return {"codex_error_info": info, "pre_execution_routing_timeout": True}
             if not isinstance(info, dict) or len(info) != 1:
                 return None
             variant, detail = next(iter(info.items()))
@@ -1537,6 +1661,8 @@ class CodexChatAgentSession:
             # request. A second user item can be a correction; never drop it.
             if user_count != 1 or failed_turn() != terminal:
                 return None
+            if terminal.get("pre_execution_routing_timeout") and len(items) != 1:
+                return None
             return {"thread_id": self.thread_id, "turn_id": turn_id,
                     "item_count": len(items), **terminal}
         except (CodexChatAgentError, OSError, TypeError, ValueError):
@@ -1556,10 +1682,21 @@ class CodexChatAgentSession:
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         output_schema: dict[str, Any] | None = None,
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
+        turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> dict[str, Any]:
         text = " ".join(str(user_message or "").split())
         if not text:
             raise ValueError("user message is required")
+        if self.read_only_review:
+            text = (
+                "Review the existing results of the interrupted original request below. "
+                "Its earlier execution may have already changed files or external systems. "
+                "Use the original native history and current local artifacts to verify what actually happened. "
+                "This Turn is read-only: do not re-execute the business request, write, send, delegate or start background work. "
+                "Return a clear answer to the original user, distinguishing verified results from remaining gaps. "
+                "If verification is incomplete, report the concrete limitation; do not claim completion. "
+                "Original request: " + text
+            )
         if output_schema is not None and not self.execution_mode:
             raise ValueError("structured Turn output requires an execution session")
         with self._request_id_lock:
@@ -1584,6 +1721,12 @@ class CodexChatAgentSession:
             image_url = str(attachment.get("data_url") or "")
             if image_url:
                 turn_input.append({"type": "image", "url": image_url, "detail": "auto"})
+        # A running app-server is not permission for a new native Turn. Hold
+        # the caller's fence through its write, then release before waiting for
+        # the native acknowledgement or model output.
+        started_at = time.monotonic()
+        start_timeout = min(self.idle_timeout_sec, self.hard_timeout_sec
+                            if self.hard_timeout_sec is not None else self.idle_timeout_sec)
         turn_result = self._request(
             "turn/start",
             {
@@ -1599,6 +1742,8 @@ class CodexChatAgentSession:
                 ),
             },
             request_id=request_id,
+            deadline=started_at + start_timeout,
+            **({"write_guard": turn_start_guard} if turn_start_guard is not None else {}),
         )
         turn_id = _extract_id(turn_result, "turn", "turnId")
         self.current_turn_id = turn_id
@@ -1611,8 +1756,7 @@ class CodexChatAgentSession:
         display_filter = VisibleResponseStreamFilter(protected_paths=[self.work_dir])
         steps = CodexActivitySteps(protected_paths=[self.work_dir])
         visible_delta_count = 0
-        started_at = time.monotonic()
-        last_activity_at = started_at
+        last_activity_at = time.monotonic()
         while True:
             now = time.monotonic()
             if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:
@@ -1820,19 +1964,23 @@ class CodexChatAgentSession:
         )
 
     def close(self) -> None:
-        if self.process_tree_owned:
+        self._close_process(self.process, process_tree_owned=self.process_tree_owned)
+
+    @staticmethod
+    def _close_process(process: subprocess.Popen[str], *, process_tree_owned: bool) -> None:
+        if process_tree_owned:
             from .extensions.process_runtime import terminate_process_tree
 
-            terminate_process_tree(self.process, grace_seconds=0.1)
+            terminate_process_tree(process, grace_seconds=0.1)
             return
-        if self.process.poll() is not None:
+        if process.poll() is not None:
             return
-        self.process.terminate()
+        process.terminate()
         try:
-            self.process.wait(timeout=2)
+            process.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=2)
+            process.kill()
+            process.wait(timeout=2)
 
     def __enter__(self) -> "CodexChatAgentSession":
         return self

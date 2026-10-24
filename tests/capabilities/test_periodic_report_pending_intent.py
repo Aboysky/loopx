@@ -77,7 +77,7 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
         no_host,
     )
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
-    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--scan-path", str(tmp_path)]
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, ]
     with monkeypatch.context() as read_only:
         read_only.setattr("loopx.cli_commands.lark_inbox.dispatch_goal_lark_turn_start_hooks", no_host)
         read_only.setattr("loopx.capabilities.periodic_report.cadence_runtime.extend_cadence_turn_start_dispatch", no_host)
@@ -304,6 +304,32 @@ def test_inactive_goal_does_not_reactivate_an_admitted_report(tmp_path, field, v
     assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID) == original
 
 
+def test_canonically_stopped_goal_does_not_admit_periodic_report_window(tmp_path):
+    from datetime import datetime
+    from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+    from loopx.capabilities.periodic_report.pending_intent import _active_delivery_subscription
+
+    registry, runtime = _calendar_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["activation"] = {
+        "schema_version": "loopx_goal_activation_v1", "state": "stopped"
+    }
+    registry.write_text(json.dumps(config))
+
+    kwargs = dict(registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID)
+    dispatch = extend_cadence_turn_start_dispatch(
+        {}, **kwargs, agent_id=AGENT_ID,
+        now=datetime.fromisoformat("2026-09-11T10:00:00+00:00"),
+    )
+
+    assert (
+        dispatch["invoked_count"],
+        read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID),
+        _active_delivery_subscription(**kwargs),
+    ) == (0, None, None)
+
+
 def test_calendar_does_not_preempt_existing_stage_work(tmp_path):
     from datetime import datetime
     from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
@@ -439,12 +465,8 @@ def _fixture(
     finished_updated_at: str = "2026-08-30T09:00:00Z",
     provider: str = "file",
 ) -> tuple[Path, Path]:
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
-    )
-    from loopx.todos import list_goal_todos
     from tests.control_plane.canonical_authority_fixture import (
-        initialize_canonical_authority,
+        initialize_canonical_source_fixture,
     )
 
     project = tmp_path / "project"
@@ -495,16 +517,7 @@ status: active
         ),
         encoding="utf-8",
     )
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(
-        runtime,
-        GOAL_ID,
-        build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
-        ),
-        state_path=state,
-        provider=provider,
-    )
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     sidecar_dir = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
     sidecar_dir.mkdir(parents=True)
     sidecar = sidecar_dir / ("pwh_" + "a" * 64 + ".json")
@@ -817,7 +830,6 @@ def test_consumption_queues_authorized_delivery_and_exact_replay_does_not_duplic
     status = collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[registry.parent],
         limit=20,
         goal_id=GOAL_ID,
     )

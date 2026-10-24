@@ -1,3 +1,4 @@
+import {configuredGoalChecks} from "../goals/acceptance_contract.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {projectTurnStartUnavailableContext} from "../capability_hooks.ts";
 import { createHash } from "node:crypto";
@@ -16,10 +17,13 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
+import { monitorIsActive } from "../todos/summary_lanes.ts";
 
-function exactBlockedSuccessorWait(request: JsonObject): JsonObject | null {
+function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): JsonObject | null {
   const wait = jsonObject(request.vision_wait_state);
-  const exact = request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT &&
+  const exact = (request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT ||
+    monitorWait && request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP) &&
     wait?.schema_version === "goal_vision_wait_state_v0" && wait.state === "waiting" &&
     wait.reason_code === "exact_blocked_successor" && wait.automatic_resume === true &&
     typeof wait.selected_todo_id === "string" && !!wait.selected_todo_id &&
@@ -27,8 +31,24 @@ function exactBlockedSuccessorWait(request: JsonObject): JsonObject | null {
   return exact && wait ? wait : null;
 }
 
-/** Share the existing clock proof; a Turn binding always retains supervision. */
-function pendingDatedSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
+function hasScheduledMonitorSource(condition: JsonObject): boolean {
+  const time = (value: unknown): number | null => {
+    const micros = typeof value === "string" ? parseTodoTimestampMicros(value) : null;
+    return micros === null ? null : Number(micros) / 1_000_000;
+  };
+  const observed = time(condition.evaluated_at), due = time(condition.target_next_due_at);
+  const expiry = time(condition.target_expires_at);
+  if (condition.clock_provider !== "runtime_clock" || observed === null || due === null ||
+      !(condition.target_archive_state === null || condition.target_archive_state === "active") ||
+      condition.target_expires_at !== null && expiry === null) return false;
+  // A Monitor must still be able to reach a poll. The ordinary quota owner
+  // retains due-work priority; an expired or unscheduled source cannot keep
+  // an unchanged external worker alive indefinitely.
+  return monitorIsActive({expiresAt: expiry}, observed) && monitorIsActive({expiresAt: expiry}, due);
+}
+
+/** Share the resume owner's source proof; a Turn binding retains supervision. */
+function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
   const receipt = jsonObject(request.heartbeat_receipt);
   const unbound = request.heartbeat_receipt == null || (!!receipt &&
     ["committed", "replayed"].includes(String(receipt.status)) &&
@@ -37,30 +57,42 @@ function pendingDatedSuccessor(request: JsonObject, wait: JsonObject): JsonObjec
   if (unbound && typeof request.agent_id === "string" && !!request.agent_id &&
       wait.agent_id === request.agent_id && wait.waiting_todo_count === 1 &&
       ["open", "deferred"].includes(String(wait.selected_todo_status)) &&
-      condition?.kind === "resume_at") {
+      (wait.selected_todo_claimed_by == null || wait.selected_todo_claimed_by === "" ||
+        wait.selected_todo_claimed_by === request.agent_id) &&
+      condition && ["resume_at", "todo_done", "monitor_changed"].includes(String(condition.kind))) {
     try {
       if (resumeConditionHasKnownPendingTarget(condition, {
         todo_id: wait.selected_todo_id, resume_when: wait.resume_when,
-      })) return condition;
+        resume_monitor_generation: wait.resume_monitor_generation,
+      }) && (condition.kind !== "monitor_changed" || hasScheduledMonitorSource(condition))) return condition;
     } catch {
-      // An incomplete or malformed clock proof cannot relax the contract.
+      // An incomplete or malformed source proof cannot relax the contract.
     }
   }
   return null;
 }
 
-/** A clock-backed wait needs no observation before its scheduled instant.
+/** A proven pending automatic successor needs only fresh source rechecks.
  * This read model never relaxes an existing Turn binding or settlement fence.
- * Dependency waits retain their bounded observation/replan policy. */
+ * Unknown dependencies retain their bounded observation/replan policy. */
 export function projectBlockedSuccessorWaitObservation(request: JsonObject): JsonObject {
   const wait = exactBlockedSuccessorWait(request);
-  return {required: !!wait && pendingDatedSuccessor(request, wait) === null};
+  return {required: !!wait && pendingAutomaticSuccessor(request, wait) === null};
 }
 
 export const INTERACTION_CONTRACT_SCHEMA_VERSION =
   "loopx_interaction_contract_v0";
+export const INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION =
+  "interaction_execution_facts_v0";
+export const INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION =
+  "interaction_execution_decision_v0";
 
-const USER_CHANNEL_NOTIFICATION_POLICIES = ["NOTIFY", "DONT_NOTIFY"] as const;
+export const USER_CHANNEL_NOTIFICATION_POLICIES = ["NOTIFY", "DONT_NOTIFY"] as const;
+
+// Interaction mode names the obligation; derive its existing compatibility
+// spelling from the owner-generated effective-action value.
+const EXTERNAL_OBSERVATION_MODE =
+  EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE.replace("observe", "observation");
 
 export interface UserInteractionChannel extends JsonObject {
   action_required: boolean;
@@ -110,6 +142,297 @@ interface InteractionConsistencyFacts {
   quiet_noop_allowed: boolean;
   spend_allowed_now: boolean;
   spend_after_validation: boolean;
+}
+
+interface PermissionFact {
+  present: boolean;
+  value: boolean | null;
+}
+
+export interface InteractionExecutionDecision extends JsonObject {
+  schema_version: typeof INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION;
+  mode: string;
+  must_attempt: boolean;
+  delivery_allowed: boolean;
+  quiet_noop_allowed: boolean;
+  attempt_basis: string;
+  delivery_basis: string;
+  normalization_diagnostics: string[];
+}
+
+function optionalString(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new EffectRuntimeRequestError(`${label} must be a string or null`);
+  }
+  return value;
+}
+
+function permissionFact(
+  source: JsonObject,
+  field: string,
+  label: string,
+): PermissionFact {
+  if (!Object.hasOwn(source, field)) return {present: false, value: null};
+  const value = source[field];
+  if (value === null) return {present: true, value: null};
+  return {present: true, value: requireBoolean(value, label)};
+}
+
+function quietModeAllowsNoop(
+  mode: string,
+  agentScopeActions: ReadonlySet<string>,
+): boolean {
+  return agentScopeActions.has(mode) || [
+    "monitor_quiet_skip",
+    "mapped_noop_if_unchanged",
+    "quota_throttled",
+    "blocked_wait",
+    "user_gate_cooldown_wait",
+    "terminal_no_followup",
+    "peer_coordination_blocked",
+    "agent_monitor_only",
+    "skip",
+  ].includes(mode);
+}
+
+/**
+ * One domain owner for the selected interaction mode and its execution facts.
+ * Python transports bounded source facts and renders compatibility fields from
+ * this decision; it does not infer a second attempt/delivery permission.
+ */
+export function projectInteractionExecution(value: unknown): InteractionExecutionDecision {
+  const request = requireJsonObject(value, "interaction execution facts");
+  if (request.schema_version !== INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION) {
+    throw new EffectRuntimeRequestError(
+      `interaction_execution_facts.schema_version must be ${INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION}`,
+    );
+  }
+  const action = optionalString(request.effective_action, "effective_action") ?? "";
+  const state = optionalString(request.state, "state") ?? "";
+  const obligationValue = request.canonical_execution;
+  if (obligationValue !== undefined && obligationValue !== null
+      && (typeof obligationValue !== "object" || Array.isArray(obligationValue))) {
+    throw new EffectRuntimeRequestError("canonical_execution must be an object or null");
+  }
+  const obligation = obligationValue == null ? {} : obligationValue as JsonObject;
+  const attemptFact = permissionFact(
+    obligation,
+    "must_attempt_work",
+    "canonical_execution.must_attempt_work",
+  );
+  const canonicalDelivery = permissionFact(
+    obligation,
+    "delivery_allowed",
+    "canonical_execution.delivery_allowed",
+  );
+  const normalDelivery = permissionFact(
+    request,
+    "normal_delivery_allowed",
+    "normal_delivery_allowed",
+  );
+  const recoveryDelivery = permissionFact(
+    request,
+    "recovery_delivery_allowed",
+    "recovery_delivery_allowed",
+  );
+  const selfRepair = permissionFact(
+    request,
+    "self_repair_allowed",
+    "self_repair_allowed",
+  );
+  const userRequired = requireBoolean(request.user_required, "user_required");
+  const scopedFallback = requireBoolean(
+    request.scoped_user_gate_fallback,
+    "scoped_user_gate_fallback",
+  );
+  const notificationSuppressed = requireBoolean(
+    request.user_gate_notification_suppressed,
+    "user_gate_notification_suppressed",
+  );
+  const notifyUserOnGate = requireBoolean(
+    request.notify_user_on_gate,
+    "notify_user_on_gate",
+  );
+  const notifyUserOnOpenTodo = requireBoolean(
+    request.notify_user_on_open_todo,
+    "notify_user_on_open_todo",
+  );
+  const stopIfUnchanged = requireBoolean(
+    request.stop_if_unchanged,
+    "stop_if_unchanged",
+  );
+  const blockedSuccessorWaitObservation = requireBoolean(
+    request.blocked_successor_wait_observation,
+    "blocked_successor_wait_observation",
+  );
+  const observationRequired = requireBoolean(
+    request.observation_required,
+    "observation_required",
+  );
+  const replanRequired = requireBoolean(
+    request.replan_required,
+    "replan_required",
+  );
+  const agentScopeActions = new Set(
+    requireStringArray(
+      request.agent_scope_frontier_actions,
+      "agent_scope_frontier_actions",
+    ),
+  );
+
+  if (attemptFact.value === false && canonicalDelivery.value === true) {
+    throw new EffectRuntimeRequestError(
+      "canonical_execution.delivery_allowed cannot be true when must_attempt_work is false",
+      "interaction_contract.delivery_without_attempt",
+    );
+  }
+
+  let deliverySource = "none";
+  let rawDelivery = false;
+  if (canonicalDelivery.present) {
+    rawDelivery = canonicalDelivery.value === true;
+    deliverySource = canonicalDelivery.value === null ? "canonical_null" : "canonical";
+  } else if (normalDelivery.value === true) {
+    rawDelivery = true;
+    deliverySource = "compatibility_normal";
+  } else if (recoveryDelivery.value === true) {
+    rawDelivery = true;
+    deliverySource = "compatibility_recovery";
+  } else if (selfRepair.value === true) {
+    rawDelivery = true;
+    deliverySource = "compatibility_self_repair";
+  }
+  let rawAttempt = attemptFact.value === true;
+  if (action === EffectiveAction.GOVERNED_CAPABILITY_INTENT) {
+    rawDelivery = rawAttempt;
+    deliverySource = "canonical_attempt";
+  }
+
+  const fixedBeforeUserGate = ([
+    EffectiveAction.HEARTBEAT_SETTLED_SKIP,
+    EffectiveAction.GOVERNED_CAPABILITY_INTENT,
+    EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY,
+    EffectiveAction.AGENT_MONITOR_ONLY,
+    EffectiveAction.MONITOR_DUE,
+    EffectiveAction.TERMINAL_NO_FOLLOWUP,
+    EffectiveAction.PEER_COORDINATION_BLOCKED,
+    EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED,
+  ] as readonly string[]).includes(action)
+    || action === EffectiveAction.SCOPED_USER_GATE_FALLBACK || scopedFallback
+    || notificationSuppressed;
+  const userGateApplies = userRequired && !fixedBeforeUserGate;
+  const boundedNotice = userGateApplies && rawAttempt && rawDelivery;
+
+  let mustAttempt = rawAttempt;
+  let deliveryAllowed = rawDelivery;
+  if (userGateApplies && !boundedNotice) {
+    mustAttempt = false;
+    deliveryAllowed = false;
+  }
+  if (action === EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED) {
+    mustAttempt = true;
+  }
+  if (blockedSuccessorWaitObservation) {
+    mustAttempt = true;
+  }
+
+  let mode: string;
+  if (action === EffectiveAction.HEARTBEAT_SETTLED_SKIP) {
+    mode = "heartbeat_settled_skip";
+  } else if (action === EffectiveAction.GOVERNED_CAPABILITY_INTENT) {
+    mode = action;
+  } else if (action === EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY) {
+    mode = action;
+  } else if (action === EffectiveAction.AGENT_MONITOR_ONLY) {
+    mode = "agent_monitor_only";
+  } else if (action === EffectiveAction.MONITOR_DUE) {
+    mode = "monitor_due";
+  } else if (action === EffectiveAction.TERMINAL_NO_FOLLOWUP || state === "terminal_no_followup") {
+    mode = "terminal_no_followup";
+  } else if (action === EffectiveAction.PEER_COORDINATION_BLOCKED) {
+    mode = action;
+  } else if (scopedFallback) {
+    mode = "scoped_user_gate_fallback";
+  } else if (notificationSuppressed) {
+    mode = "user_gate_cooldown_wait";
+  } else if (action === EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED) {
+    mode = "automation_prompt_upgrade";
+  } else if (userRequired) {
+    if (boundedNotice) {
+      mode = "bounded_delivery_with_user_notice";
+    } else if (notifyUserOnGate || state === "operator_gate") {
+      mode = "user_gate";
+    } else if (notifyUserOnOpenTodo) {
+      mode = "user_todo_blocker_push";
+    } else {
+      mode = "user_action_required";
+    }
+  } else if (observationRequired) {
+    mode = EXTERNAL_OBSERVATION_MODE;
+  } else if (replanRequired) {
+    mode = "autonomous_replan";
+  } else if (action === EffectiveAction.COORDINATE_TASK_BUNDLE) {
+    mode = "task_orchestration";
+  } else if (agentScopeActions.has(action)) {
+    mode = action;
+  } else if (action === EffectiveAction.MONITOR_QUIET_SKIP) {
+    mode = "monitor_quiet_skip";
+  } else if (recoveryDelivery.value === true || action === EffectiveAction.OUTCOME_FLOOR_RECOVERY) {
+    mode = "outcome_floor_recovery";
+  } else if (action === EffectiveAction.CAPABILITY_BRIDGE_REPAIR) {
+    mode = "capability_bridge_repair";
+  } else if (action === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    mode = action;
+  } else if (action === EffectiveAction.BOUNDARY_PROJECTION_REPAIR) {
+    mode = "boundary_projection_repair";
+  } else if (selfRepair.value === true) {
+    mode = "control_plane_self_repair";
+  } else if (stopIfUnchanged) {
+    mode = "mapped_noop_if_unchanged";
+  } else if (deliveryAllowed) {
+    mode = "bounded_delivery";
+  } else if (state === "blocked_health") {
+    mode = "health_blocked";
+  } else if (state === "throttled") {
+    mode = "quota_throttled";
+  } else if (state === "waiting" || state === "focus_wait") {
+    mode = "blocked_wait";
+  } else {
+    mode = "skip";
+  }
+
+  if (mode === "mapped_noop_if_unchanged") {
+    deliveryAllowed = false;
+    deliverySource = "mapped_noop";
+  }
+  deliveryAllowed = mustAttempt && deliveryAllowed;
+  const normalizationDiagnostics: string[] = [];
+  if (rawDelivery && !mustAttempt) {
+    normalizationDiagnostics.push("interaction_contract.delivery_without_attempt");
+  }
+  const quietNoopAllowed = !userRequired && !mustAttempt && quietModeAllowsNoop(mode, agentScopeActions);
+  const attemptBasis = blockedSuccessorWaitObservation
+    ? "blocked_successor_observation"
+    : action === EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED
+      ? "automation_prompt_upgrade"
+      : attemptFact.present
+        ? "canonical"
+        : "none";
+  if (!deliveryAllowed && deliverySource !== "none") {
+    deliverySource = mustAttempt ? deliverySource : "attempt_required";
+  }
+
+  return {
+    schema_version: INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION,
+    mode,
+    must_attempt: mustAttempt,
+    delivery_allowed: deliveryAllowed,
+    quiet_noop_allowed: quietNoopAllowed,
+    attempt_basis: attemptBasis,
+    delivery_basis: deliverySource,
+    normalization_diagnostics: normalizationDiagnostics,
+  };
 }
 
 /** The scheduler and typed consumers share these rules, not independent copies. */
@@ -181,21 +504,24 @@ export function projectSchedulerArbitration(value: unknown): JsonObject {
   errors.push(...interactionConsistencyIssues(facts).map(issue => issue.code));
   const [disposition, reason] = schedulerDisposition(facts, modes,
     user.non_gating_notice === true && agent.wait_source === "turn_settlement");
-  const wait = exactBlockedSuccessorWait(request);
-  const condition = !errors.length && disposition === "agent_scope_wait" &&
+  const wait = exactBlockedSuccessorWait(request, disposition === "monitor_wait");
+  const waiting = disposition === "agent_scope_wait" &&
+      request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT ||
+    disposition === "monitor_wait" && request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP;
+  const condition = !errors.length && waiting &&
     !facts.must_attempt && !facts.user_required && facts.quiet_noop_allowed &&
-    !facts.spend_allowed_now && !facts.spend_after_validation && wait &&
-    (wait.selected_todo_claimed_by == null || wait.selected_todo_claimed_by === "" ||
-      wait.selected_todo_claimed_by === request.agent_id)
-    ? pendingDatedSuccessor(request, wait) : null;
+    !facts.spend_allowed_now && !facts.spend_after_validation && wait
+    ? pendingAutomaticSuccessor(request, wait) : null;
   // The resume-condition owner has verified both timestamps and a future target.
   // This private duration bounds host rechecks; it grants no execution/spend.
-  const scheduled = condition ? {scheduled_recheck_after_seconds: Math.ceil(
+  const scheduled = disposition === "agent_scope_wait" && condition?.kind === "resume_at" ? {scheduled_recheck_after_seconds: Math.ceil(
     (Date.parse(String(condition.scheduled_for)) - Date.parse(String(condition.evaluated_at))) / 1000,
   )} : {};
+  const dependency = condition && ["todo_done", "monitor_changed"].includes(String(condition.kind))
+    ? {pending_dependency_wait: true} : {};
   return {mode, errors: [...new Set(errors)],
     disposition: errors.length ? "consistency_repair" : disposition,
-    reason_code: errors.length ? "scheduler_interaction_contract_inconsistent" : reason, ...scheduled};
+    reason_code: errors.length ? "scheduler_interaction_contract_inconsistent" : reason, ...scheduled, ...dependency};
 }
 
 function decodeUserChannel(value: unknown): UserInteractionChannel {
@@ -349,7 +675,7 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   const selectionRequired = requireBoolean(request.selection_required, "selection_required");
   const hasReplan = requireBoolean(request.has_replan, "has_replan");
   const settlementOnly = requireBoolean(request.settlement_only, "settlement_only");
-  const acceptanceEnabled = requireBoolean(request.goal_acceptance_enabled, "goal_acceptance_enabled");
+  const checksPresent = requireBoolean(request.goal_acceptance_checks_present, "goal_acceptance_checks_present");
   const goalId = readArgument(request.goal_id, "goal_id");
   if (!shouldRun || !deliveryAllowed || selectionRequired || settlementOnly || !goalId
       || request.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT) {
@@ -358,13 +684,24 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   const prefix = requireNonEmptyString(request.command_prefix, "command_prefix");
   const goalArg = shellQuote(goalId);
   const add = (command: string, source: string, reason: string) => {
-    if (!reads.some(read => read.command === command)) reads.push({command, source, reason, ordering: "before_work"});
+    const existing = reads.find(read => read.command === command);
+    if (!existing) {
+      reads.push({command, source, reason, ordering: "before_work"});
+      return;
+    }
+    // One command is one read, but it may carry multiple independently
+    // applicable obligations. Merge guidance without duplicating replay.
+    const current = typeof existing.reason === "string" ? existing.reason : "";
+    if (!current) existing.reason = reason;
+    else if (!current.includes(reason)) existing.reason = `${current} ${reason}`;
   };
   const stateFile = readArgument(request.goal_state_file, "goal_state_file");
   if (stateFile) add(`cat -- ${shellQuote(stateFile)}`, "goal_state",
-    "Read complete Goal intent, acceptance and stops. Exact Todo reads own task state/claims. Source failure or changed requirements require a fresh guard; summaries cannot replace this read.");
-  if (acceptanceEnabled) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
-    "goal_acceptance", "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; disabled/changed criteria require a fresh guard.");
+    "Read complete Goal intent, acceptance and stops. A registered source may deliver all text outside explicitly generated Todo regions inline, with full-file revision and excluded-region lineage; exact canonical Todo reads own task state/claims. Otherwise consume this full progressive read. Source failure or changed requirements require a fresh guard; summaries cannot replace either read.");
+  if (request.goal_objective_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
+    "goal_acceptance", "Use the canonical goal_objective before the older source text. Only if your adoption is missing/stale, review your own work, reconcile Todo/Vision changes, then use adopt-objective with your Agent id, exact revision/digest, own objective_work_digest and review_summary. New execution is held until your adoption. Other peers adopt independently; existing Turn settlement/release remains available. Preserve root acceptance, permissions and stops. Adopt once per objective revision, never per Turn or work/peer update. Reuse complete inline context without extra reads/writes.");
+  if (checksPresent || request.goal_outcomes_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
+    "goal_acceptance", request.goal_outcomes_present === true ? "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard." : "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.");
   const todoId = hasReplan ? null : selectedWorkTodoId(request);
   if (todoId) add(`${prefix} --format json todo list --goal-id ${goalArg} --todo-id ${shellQuote(todoId)}`,
     "selected_todo", "Read full current requirements and status/claim. Require one matching active Todo; missing, ambiguous or changed work requires a fresh guard. A summary cannot replace this read.");
@@ -389,8 +726,28 @@ export function planInteractionWorkContext(request: JsonObject): JsonObject {
       && packet.effective_action !== EffectiveAction.HEARTBEAT_SETTLED_SKIP};
 }
 
-/** Deliver current task sources once; the mixed Goal document stays a progressive
- * read. Failed or changed sources forbid dependent work until a fresh guard. */
+/** The registered file adapter reuses the writer's strict region parser.
+ * No heading/prose classification here: its exact complement is Goal context,
+ * and canonical Todo readers retain task authority. Unknown/legacy input keeps
+ * the complete progressive read rather than pretending to fulfill it. */
+function completeGoalNarrative(content: JsonObject): boolean {
+  if (!Array.isArray(content.excluded_todo_regions) || !content.excluded_todo_regions.length
+      || typeof content.text !== "string" || typeof content.state_file !== "string" || !content.state_file
+      || typeof content.revision !== "string" || !ENVELOPED_SHA256_PATTERN.test(content.revision)) return false;
+  let end = 0;
+  return content.excluded_todo_regions.every(value => {
+    const region = jsonObject(value);
+    if (!region || !["user", "agent", "archive"].includes(String(region.role))
+        || !Number.isSafeInteger(region.start_line) || !Number.isSafeInteger(region.end_line)
+        || Number(region.start_line) <= end || Number(region.end_line) < Number(region.start_line)
+        || typeof region.revision !== "string" || !ENVELOPED_SHA256_PATTERN.test(region.revision)) return false;
+    end = Number(region.end_line);
+    return true;
+  });
+}
+
+/** Deliver full registered sources once. Unowned mixed Goal documents remain
+ * progressive reads; failed/changed sources forbid dependent work. */
 export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   if (!Array.isArray(request.required_reads) || !Array.isArray(request.source_results)) {
     throw new EffectRuntimeRequestError("context reads and source results must be arrays");
@@ -400,6 +757,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const pending: JsonObject[] = [], sources: JsonObject[] = [], failures: JsonObject[] = [];
   let selectedTodoRef = false;
   let selectedTodoAuthority: string | null = null;
+  let selectedTodoTextVerified = false;
   for (const value of request.required_reads) {
     const read = requireJsonObject(value, "required read");
     const matches = results.filter(result => result.command === read.command);
@@ -429,7 +787,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
         && sourceMatchesSelection;
     }
     if (valid && read.source === "goal_acceptance") {
-      valid = jsonObject(content!.goal_acceptance_contract)?.enabled === true;
+      valid = (!!configuredGoalChecks(jsonObject(content!.goal_acceptance_contract)) || !!jsonObject(content!.goal_acceptance_contract)?.outcome_requirements || !!jsonObject(content!.goal_acceptance_contract)?.goal_objective);
     }
     if (!valid) {
       pending.push(read);
@@ -441,11 +799,21 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       sources.push({...read, content: content!});
       pending.push(read);
     } else if (read.source === "goal_state") {
-      // This legacy document also contains other tasks and historical evidence.
-      // Checking its availability does not fulfill model consumption; retain the
-      // full read instead of guessing which prose is current Goal authority.
-      pending.push(read);
+      if (completeGoalNarrative(content!)) sources.push({...read, content: content!});
+      else {
+        pending.push(read);
+        if (Object.hasOwn(content!, "excluded_todo_regions")) failures.push({
+          source: read.source, command: read.command, error_code: "context_source_unavailable",
+          instruction: "Recover complete Goal source and rerun the guard; malformed region lineage cannot fulfill it.",
+        });
+      }
     } else {
+      if (read.source === "selected_todo" && typeof selectedTodoRecord?.text === "string") {
+        // Bind completion to the admitted full source, before body deduplication
+        // or display compaction. Provider-wide revisions also change for notes
+        // and unrelated work; those do not replace this task's requirements.
+        selectedTodoTextVerified = true;
+      }
       if (read.source === "selected_todo" && typeof selected.text === "string"
           && selectedTodoRecord?.text === selected.text
           && selectedTodoRecord?.todo_id === selected.todo_id) {
@@ -492,6 +860,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const includeUserTodos = users && !users.error_code
     && (!Array.isArray(users.todos) || users.todos.length > 0 || users.authority_read != null);
   return {required_reads: pending, work_context: {complete: failures.length === 0,
+    ...(selectedTodoTextVerified ? {selected_todo_text_verified: true} : {}),
     ...(selectedTodoRef ? {selected_todo_ref: "selected_todo"} : {}),
     ...(selectedTodoAuthority ? {selected_todo_authority: selectedTodoAuthority} : {}),
     ...(sources.length ? {sources} : {}),

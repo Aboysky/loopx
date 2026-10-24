@@ -19,6 +19,7 @@ from .chat_monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
 from .chat_todo_actions import ChatTodoActionMixin
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
+from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
 from .control_plane.goals.configure_goal_service import (
     bind_goal_agent_with_global_sync,
@@ -228,6 +229,7 @@ def _monitor_text(parameters: Mapping[str, Any]) -> str | None:
 
 
 class ChatActionService(
+    GoalObjectiveActionMixin,
     GoalAcceptanceActionMixin,
     ChatActionNormalizationMixin,
     ChatGoalLifecycleActionMixin,
@@ -840,7 +842,6 @@ class ChatActionService(
             status_payload = collect_status(
                 registry_path=self.registry_path,
                 runtime_root_override=str(runtime_root) if runtime_root else None,
-                scan_roots=[project],
                 limit=5,
                 goal_id=goal_id,
                 available_capabilities=(
@@ -848,7 +849,6 @@ class ChatActionService(
                     if self.runtime_controller is not None
                     else None
                 ),
-                include_public_boundary_scan=False,
             )
             guard = build_quota_should_run(
                 status_payload,
@@ -1261,10 +1261,20 @@ class ChatActionService(
             normalized["workspace_ref"] = workspace_binding["workspace_ref"]
         else:
             eligibility = None
-        if action_kind == "goal.acceptance.check":
+        if action_kind == "goal.update" and "reason" in normalized:
+            if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
+                raise ValueError("objective proposal context must match its Goal")
+            fingerprint, _ = self._objective_preview(normalized)
+            evidence = ["The typed Goal owner validated this current-objective revision. Root commitments, permissions and existing acceptance remain unchanged; peers must adopt the new revision before new execution."]
+            permission = "durable_write"
+        elif action_kind == "goal.acceptance.check":
             if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
                 raise ValueError("check plan context must match its target Goal")
-            fingerprint, _ = self._acceptance_preview(normalized)
+            fingerprint, preview = self._acceptance_preview(normalized)
+            if "resolved_document" in preview:
+                # Owner-produced review snapshot only; apply re-resolves the
+                # original reference against the native reviewed-context digest.
+                normalized["resolved_document"] = preview["resolved_document"]
             evidence = ["The existing typed acceptance owner validated this plan without changing configuration or executing commands."]
             permission = "local_command_execution"
         elif action_kind == "operation.execute":
@@ -1551,6 +1561,8 @@ class ChatActionService(
                 },
             )
         if action_kind == "goal.update":
+            if "reason" in parameters:
+                return self._apply_objective_revision(proposal_id)
             raise ProtectedActionGate(
                 action_kind,
                 gate={

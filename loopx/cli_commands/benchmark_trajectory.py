@@ -33,6 +33,7 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
     register.add_argument("--input-json", type=Path, required=True)
     register.add_argument("--source-root", type=Path, required=True)
     register.add_argument("--title", required=True)
+    register.add_argument("--base-pack-id", help="Existing frozen pack in this owner Goal and original case/run; links a successor without running analysis.")
     register.add_argument(
         "--usage-jsonl",
         help="Optional complete Codex session capture, relative to source-root; read-only cost facts, not model input.",
@@ -40,6 +41,14 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
     register.add_argument(
         "--usage-session-id",
         help="Expected captured solver session identity; required with --usage-jsonl.",
+    )
+    register.add_argument(
+        "--loopx-input-json",
+        help="Optional host-recorded LoopX input source beside its private native trace, relative to source-root; estimates recorded Turn packet text with the optional input-token-estimates provider. Requires usage capture; never starts a model.",
+    )
+    register.add_argument(
+        "--include-incomplete-usage", action="store_true",
+        help="Observe persisted counters through an unfinished final Turn; requires usage capture. Does not establish complete cost or solver termination.",
     )
     register.add_argument(
         "--native-outcomes-json",
@@ -91,7 +100,10 @@ def _handle_benchmark_trajectory_command(
                 title=args.title,
                 usage_jsonl=args.usage_jsonl,
                 usage_session_id=args.usage_session_id,
+                include_incomplete_usage=args.include_incomplete_usage,
+                loopx_input_json=args.loopx_input_json,
                 native_outcomes_json=args.native_outcomes_json,
+                base_pack_id=args.base_pack_id,
             )
             if args.benchmark_command == "trajectory-pack-register"
             else discover(**scope)

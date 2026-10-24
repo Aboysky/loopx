@@ -21,6 +21,10 @@ from ..todos.resume_planning import build_todo_resume_planning_request
 
 REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS = {
     "quota_slot_spent", "quota_slot_voided", "delivery_completion_spend_accounted_v0",
+    # A rejected/no-change review is an observation, not new work that can
+    # trigger or expire another review. Reuse these canonical writeback values
+    # for history projection, retained ACK windows and lane selection alike.
+    "replan_noop", "repair_noop",
 }
 
 
@@ -78,6 +82,9 @@ def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict
         "turn_id": _progress_turn_instance_id(run),
         "accepted_ack": ack_recorded(run),
         "progress": progress_observation_from_run(run),
+        **({"todo_id": run.get("todo_id"), "blocked_retry": run["blocked_retry"],
+            "delivery_outcome": run.get("delivery_outcome")}
+           if isinstance(run.get("blocked_retry"), dict) else {}),
         "monitor": {
             "target_id": str(target.get("target_id") or "").strip() or None,
             "mode": str(target.get("monitor_mode") or "").strip() or None,
@@ -182,6 +189,10 @@ def project_replan_history(
         # Carry one observation for the complete current source. Expiry is
         # interpreted by the shared TypeScript Monitor owner, not this codec.
         params["observed_at"] = now_utc().timestamp()
+    if operation in {"all", "periodic"}:
+        # Preserve the native retry's microsecond deadline; TS reuses the
+        # settlement owner instead of a second expiry policy or bridge call.
+        params["retry_observed_at"] = now_utc().isoformat()
     if effective_turn_cadence is not None:
         params["settlement_source"] = effective_turn_cadence["settlement_source"]
         params["periodic_threshold"] = effective_turn_cadence["threshold"]

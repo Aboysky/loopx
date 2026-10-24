@@ -36,9 +36,10 @@ deferred atomicity limit are specified in the versioned
 
 ## Install
 
-Requirements are Node.js 22.19+, `pnpm`, Python 3.11+ with `pip`, and network
-access for the first DSH start when no compatible LoopX CLI is already
-installed. LoopX itself is deliberately not a prerequisite. The initializer
+Requirements are stable Node.js 22.22.3+ (excluding Node.js 23), `pnpm`,
+Python 3.11+ with `pip`, and network access for the first DSH start when no
+compatible LoopX CLI is already installed. LoopX itself is deliberately not a
+prerequisite. The initializer
 honors an explicit `PYTHON_BIN`; otherwise it tries `python3`, then discovers
 `python3.<minor>` executables on the supplied `PATH` in descending numeric
 order, then tries the bare name `python`. The last name is what a python.org
@@ -71,6 +72,12 @@ The beta.6 package targets the qualified DSH 0.2.0-rc.2 API and retains the
 qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
 RPC registration remains available to explicit callers, but plugin startup
 always uses the shared API.
+
+The source candidate additionally qualifies DSH 0.2.1-rc.2. Its frozen source
+host uses MCP client 2.3.0 and SDK 1.32.0 to address
+[GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw).
+These dependency overrides do not patch an independently installed DSH binary;
+that host's owner must update its affected MCP dependencies separately.
 
 For a compatible DSH source build, use:
 
@@ -114,10 +121,48 @@ Driver to evaluate only when that exact live Session already contains typed
 `Pause` stops the Goal and retires only future queued/scheduled continuation;
 it does not abort a claimed or running turn.
 
+To start DSH from a terminal with this machine's stored LoopX provider
+credential without placing the value in argv, shell history, or output:
+
+```bash
+loopx dsh-launch web
+```
+
+The launcher uses `DSH_HOME` when set, otherwise
+`~/.local/state/loopx/dsh-home`. Ordinary DSH installation defaults to `~/.dsh`;
+launching the isolated home does not reuse that home's installed plugins. To
+reuse an ordinary installation, select its actual home explicitly:
+
+```bash
+loopx dsh-launch --dsh-home "${DSH_HOME:-$HOME/.dsh}" web
+```
+
+For a new isolated source installation, use the same home and package-local
+host for installation, readback, launch, and removal:
+
+```bash
+cd packages/dsh-loopx-plugin
+export DSH_HOME="$HOME/.local/state/loopx/dsh-home"
+./install.sh
+export DSH_BIN="$PWD/node_modules/.bin/dsh"
+"$DSH_BIN" --profile web --dump-config
+loopx dsh-launch --dsh-bin "$DSH_BIN" web
+# When removing this installation:
+"$DSH_BIN" plugin --profile web remove dsh-loopx-plugin
+```
+
+Use `--dsh-home <path>` to select profile and Session state,
+`--dsh-agents-home <path>` to isolate installed skills, and `--dsh-bin <path>`
+when `dsh` is not on `PATH`. Arguments after `--` are passed to DSH unchanged.
+The launcher resolves the same write-only machine credential used by the
+managed executor, then replaces itself with DSH so the credential exists only
+in the child process environment.
+
 Maintainers can validate the built and packed surfaces with:
 
 ```bash
 pnpm build
+pnpm smoke:mcp-transport
 pnpm smoke:artifact
 pnpm smoke:profile
 pnpm smoke:runtime
@@ -498,11 +543,12 @@ source and never satisfy a Driver reservation.
 
 Check `dsh --version` before choosing an artifact. The current source accepts
 DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
-qualified 0.1.7-rc.2 and 0.2.0-rc.2 candidates. It excludes earlier 0.2 candidates,
-0.2.1 alpha builds and other, unqualified prerelease tuples. A stable-version
-range alone does not admit every prerelease.
-The immutable beta.5 download above contains the earlier integration; building
-this checkout produces beta.6. A source build is not a published beta.6 release.
+qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2 candidates. It
+excludes earlier 0.2 candidates, stable 0.2.1, and other unqualified prerelease
+tuples. A stable-version range alone does not admit every prerelease.
+The immutable beta.6 download above is the published package. Building this
+checkout also produces version beta.6, but the local artifact is not the
+published release asset.
 
 If a marketplace reports `loopx-repository: entry file missing: index.js`, it
 selected the monorepo root instead of this plugin package. Installing
@@ -510,16 +556,28 @@ selected the monorepo root instead of this plugin package. Installing
 plugin. The marketplace's npm route requires a published `dsh-loopx-plugin`
 whose repository points here and whose keywords include `dsh-plugin`; otherwise
 older Hubs fall back to that invalid Git target.
-[Hub v1.4.14](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.4.14)
-also installs the catalog’s fixed GitHub release package without an npm
-publication. Upgrade the Hub with `dsh plugin --profile web add dsh-plugin`;
-the catalog still selects beta.5, and release-URL installed-state readback
-needs a further upstream repair. After the release operator completes
-the registry readback above, the platform-independent install command is
-`dsh plugin --profile web add dsh-loopx-plugin`. Replace `web` with `desktop`
-when that is your selected profile. Until publication is verified, use a
-compatible prebuilt plugin tarball, or build this package and
-install it with your supported DSH executable:
+The [source catalog entry](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
+points to the published beta.6 release tarball, though the live [marketplace listing](https://dsh-plugin.org/plugins/loopx-project/loopx?ref=hub)
+may still show the cached beta.5 install command until the site redeploys.
+[DSH Plugin Hub v1.6.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.6.0)
+or later provides profile-specific install guidance and includes the earlier
+fixes for release-package readback, stale npm targets, and desktop-profile
+installs. Upgrade the Hub in the profile you use:
+
+```bash
+dsh plugin --profile web add dsh-plugin
+```
+
+Replace `web` with `desktop` when using the desktop app. LoopX is not currently
+published to npm as `dsh-loopx-plugin`. While the web catalog entry redeploys its
+command, install the verified beta.6 release package directly from its immutable asset:
+
+```bash
+dsh plugin --profile web add https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.6/dsh-loopx-plugin-0.1.1-beta.6.tgz
+```
+
+To build from source instead, use the package installer with
+your supported DSH executable:
 
 ```bash
 cd packages/dsh-loopx-plugin

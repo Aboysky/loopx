@@ -64,9 +64,9 @@ scanning a chronological list.
 - [`host_mode_plan_v0`](host-mode-plan-v0.md): Host mode plan v0
 - [`local_agent_launch_plan_v1`](local-agent-launch-plan-v1.md): Local agent launch plan v1
 - [`openviking_session_memory_adapter_v0`](openviking-session-memory-adapter-v0.md): OpenViking session memory adapter v0
-- [`protocol_action_packet_codex_cli_wrapper_v0`](protocol-action-packet-codex-cli-wrapper-v0.md): Protocol action packet Codex CLI wrapper v0
-- [`protocol_action_packet_decision_v0`](protocol-action-packet-decision-v0.md): Protocol action packet decision v0
-- [`protocol_action_packet_router_comparison_v0`](protocol-action-packet-router-comparison-v0.md): Protocol action packet router comparison v0
+- [`protocol_action_packet_codex_cli_wrapper_v0`](protocol-action-packet-codex-cli-wrapper-v0.md): Historical synthetic Codex CLI wrapper
+- [`protocol_action_packet_decision_v0`](protocol-action-packet-decision-v0.md): Retired packet input format and recovery
+- [`protocol_action_packet_router_comparison_v0`](protocol-action-packet-router-comparison-v0.md): Historical synthetic router comparison
 - [`session_runtime_controlled_writeback_v0`](session-runtime-controlled-writeback-v0.md): Session runtime controlled writeback v0
 - [`session_runtime_loopx_projection_v0`](session-runtime-loopx-projection-v0.md): Session runtime to LoopX projection v0
 
@@ -84,6 +84,7 @@ scanning a chronological list.
 - [`content_ops_item_v0`](content-ops-item-lifecycle-v0.md): provider-neutral content item lifecycle v0
 - [`content_ops_queue_projection_v0`](content-ops-queue-v0.md): read-only managed content queue projection v0
 - [`content_ops_layout_plan_v0`](content-ops-layout-v0.md): typed content layout plan, template library, and acceptance check v0
+- [`content_ops_media_plan_v0`](content-ops-media-v0.md): private source-bound composition, optional rendering and packaged result readback
 
 ## Quality, Review, And Release
 

@@ -161,12 +161,12 @@ dashboard surfaces should prefer it over exposing raw `orchestration_mode` plus
 loopx --format json status > goal-status.json
 ```
 
-By default, `status` scans the LoopX install root for public/private
-contract health. Use narrow scan paths only when you intentionally want the
-status export to check a specific public-safe project surface:
+`status` reads execution and contract health with public-boundary scanning
+deferred. It does not accept scan-selection options. Check outgoing content
+explicitly; a deferred scan does not certify public safety:
 
 ```bash
-loopx --format json status \
+loopx --format json check \
   --scan-path README.md \
   --scan-path docs/ \
   --scan-path examples/
@@ -688,6 +688,20 @@ the live quota-backed queue item for the same `goal_id` when one exists, under
 `global_registry_shadow_findings`, so stale source shadows do not become a second
 quota health blocker while the fact remains visible in `global_registry.findings`.
 
+A Goal can therefore have both a health finding and a live read-model item in
+`attention_queue.items`. Match the required projection as well as `goal_id`:
+the first row for a Goal is not necessarily its Todo or Goal-channel view.
+When the declared Goal document is missing, available canonical Todo, lease and
+acceptance observations remain readable; the `state_file_missing` finding still
+blocks automatic delivery. Readback never reconstructs the document or replaces
+its intent and stop conditions. Restoring the document permits a fresh admission
+check; provider failure still refuses stale display fallback.
+
+同一个 Goal 可以同时有健康告警和权威状态的只读投影。读取 Todo 或 Goal channel
+时须同时匹配 `goal_id` 和所需投影字段，不能假定第一行就是该视图。Goal 文档缺失时，
+可用的 canonical Todo、lease 和验收仍可回读，但不授予自动执行，也不重建文档；恢复
+文档后重新准入，provider 不可用时继续拒绝旧显示数据回退。
+
 ## Contract Health
 
 `contract.ok=false` means the UI should show a blocking health state before
@@ -941,10 +955,12 @@ Item fields:
   `project_asset.user_todos` projection keeps legacy `next` / `next_index`
   fields and may also include up to three unfinished `items` for thin workers
   that need more than the first open todo.
-- `agent_todos`: optional checkbox summary parsed from `## Agent Todo`,
-  `## Codex Todo`, or `## Project Agent Todo`. Agent-facing consumers may use
-  it to choose implementation work after gates and quota allow execution; it is
-  not a user approval signal. Status, quota, and review-packet projections
+- `agent_todos`: checkbox summary parsed from `## Agent Todo`,
+  `## Codex Todo`, or `## Project Agent Todo`. The section may be empty, but a
+  readable legacy state must include its heading; absence is
+  `state_incomplete`. Agent-facing consumers may use it to choose
+  implementation work after gates and quota allow execution; it is not a user
+  approval signal. Status, quota, and review-packet projections
   should preserve up to three unfinished agent todo items so short heartbeats do
   not confuse "first visible item" with the whole backlog. Todo summaries also
   expose `first_executable_items` for advancement-class work and
@@ -1105,6 +1121,14 @@ goal that is not present in the registry. Dashboard consumers should show this
 as controller work: register the goal if it is active, or archive the runtime
 record if it is old. Watch-only legacy records remain visible in run history
 without entering the queue.
+
+`status=state_incomplete` is emitted when a legacy Markdown active state is
+readable but lacks its required `## Agent Todo` heading (or an accepted alias).
+The item carries `state_incomplete` with the missing sections and repair
+guidance. The same condition makes `loopx todo list` return `ok=false` with
+`error_code=state_incomplete`; consumers must not interpret its zero Todos as a
+goal with no open work. Canonical provider authority is unaffected because this
+check applies only to the legacy Markdown fallback.
 
 `status=state_refreshed` is emitted for registered goals when the latest compact
 run came from `loopx refresh-state`. Dashboard consumers should show it
@@ -1292,7 +1316,12 @@ the legal choice boundary separate from the displayed suggestions;
 `suggestions_exhaustive=false` makes that distinction machine-readable.
 `selection_policy.decision_owner=agent` and
 `recommendation_role=default_not_binding` make the priority order advisory at
-this boundary rather than silently binding the first Todo.
+this boundary rather than silently binding the first Todo. A ready deferred
+higher-priority successor remains planning context, but neither removes an
+otherwise eligible open alternative nor vetoes its explicit selection. Default
+successor-replan recommendations remain available; the selected deferred Todo's
+own resume condition still applies. See the
+[planning-horizon decision boundary](reference/protocols/quota-planning-horizon-v0.md#agent-decision-authority).
 
 Version 2 adds the optional `continuation_hint` field to each
 `suggested_actions[]` item so an agent can see the candidate's next execution
@@ -1867,11 +1896,22 @@ still observe every row by default. This is a caller filesystem optimization,
 independent of the Todo authority provider, not an index cache or a limit on
 decision history.
 
+An artifact that cannot be observed because its filesystem lookup fails (for
+example an overlong filename, permission denial or I/O error) has its existing
+availability flag set to `false`. This means availability was not confirmed,
+not that deletion was proven. The Run and its semantic evidence remain visible;
+the read does not rewrite the index or retain a negative result across requests.
+Errors reading the index itself still propagate.
+
 文件存在性是每次读取对返回记录的实时观测，不信任索引中保存的布尔值。先用完整索引
 完成去重、额度和语义历史归约，再检查近期记录、最新状态、Agent 窗口及保留语义证据
 的文件；即使 `--limit 0`，旧愿景、用户纠偏和有效阻塞重试也不会因此丢失。索引不变时，
 文件创建／删除仍在下次读取生效；底层完整索引接口默认保留逐条检查行为。这不改变
 File／SQLite 等 Todo provider 的权威，也不限制决策历史。
+
+若文件查询因文件名过长、权限不足或 I/O 错误而失败，对应可用性标记为 `false`，
+表示未确认可用，而非已证实删除。Run 及其语义证据仍保留；读取不会改写索引，
+也不会跨请求缓存失败结果。读取索引本身的错误仍会向上传递。
 
 On the `status`, `quota should-run`, and `history` read paths, relative
 `common_runtime_root` values, relative `--runtime-root` overrides, and relative
@@ -2298,6 +2338,13 @@ coverage; legacy runtime goals are extra. An unknown `--goal-id` is reported as
 `observed_at` and restamping `served_at` and staleness. Field semantics and
 the consumer rule are in the
 [projection envelope contract](reference/contracts/projection-envelope-contract.md).
+
+An unreadable optional cache (including invalid UTF-8 or malformed JSON) is a
+cache miss with `miss_reason=unreadable`, not a status-collection failure.
+`status` and `quota should-run` collect live source facts instead. Reading does
+not repair or delete the damaged cache; `--write-projection-cache` explicitly
+replaces it with the newly collected projection. Canonical source errors still
+retain their normal diagnostics and admission rules.
 
 ## Decision Freshness Summary
 

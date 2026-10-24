@@ -75,6 +75,10 @@ def read_canonical_snapshot(
                             "source_authority",
                             "decision_read_from_provider",
                             "legacy_fallback_used",
+                            "goal_id",
+                            "operation",
+                            "write_admitted",
+                            "recovery",
                         )
                         if key in page
                     },
@@ -131,6 +135,7 @@ def read_canonical_snapshot(
                 <= {
                     "todo_read_model",
                     "goal_acceptance_contract",
+                    "goal_acceptance_oracle_observation_basis",
                     "handoff_mode",
                     "projection_readback",
                 }

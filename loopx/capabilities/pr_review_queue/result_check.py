@@ -18,6 +18,7 @@ from .review_contract import (
     build_review_plan,
 )
 from .review_body import (
+    author_owned_review_title_matches,
     check_review_body,
     normalized_review_prose,
     review_section_text,
@@ -28,6 +29,7 @@ from .architecture_assessment import (
     architecture_publication_errors,
     check_architecture_assessment,
 )
+from .visual_assessment import check_visual_assessment, visual_publication_errors
 
 
 def _missing(value: object) -> bool:
@@ -203,6 +205,8 @@ def _check_outcome_impact(blockers: list[str], value: object) -> None:
         if not isinstance(row, Mapping):
             continue
         decision = row.get("decision")
+        if dimension == "user_experience":
+            blockers.extend(check_visual_assessment(row.get("visual_review"), experience_decision=decision))
         if decision not in contract["decision_values"]:
             blockers.append(f"{row_key}:invalid_decision")
         if decision == "not_applicable":
@@ -370,8 +374,9 @@ def _check_decision_text(blockers: list[str], value: object) -> None:
     if verdict == "not_applicable":
         return
     _require_fields(blockers, evidence_id=key, value=value, fields=contract["applicable_fields"])
-    if verdict == "intentional_change_validated":
-        _require_fields(blockers, evidence_id=key, value=value, fields=["authorization_basis"])
+    if isinstance(verdict, str):
+        _require_fields(blockers, evidence_id=key, value=value,
+                        fields=contract["fields_by_verdict"].get(verdict))
     for field, fields in (("clause_comparisons", contract["clause_fields"]),
                           ("counterfactuals", contract["counterfactual_fields"])):
         items = _require_items(blockers, evidence_id=f"{key}:{field}", row=value,
@@ -630,6 +635,10 @@ def check_review_result(
             ):
                 errors.append("reviewer:runtime_basis_not_published")
     problem_context = evidence.get("problem_context")
+    impact = problem_context.get("outcome_impact") if isinstance(problem_context, Mapping) else None
+    experience = impact.get("user_experience") if isinstance(impact, Mapping) else None
+    if isinstance(experience, Mapping):
+        errors.extend(visual_publication_errors(experience.get("visual_review"), body_text))
     proportionality = evidence.get("change_proportionality")
     if isinstance(proportionality, Mapping):
         errors.extend(architecture_publication_errors(
@@ -641,6 +650,10 @@ def check_review_result(
     ))
     if body["verdict"] is not None and body["verdict"] != verdict:
         errors.append("review_body:verdict_mismatch")
+    if matches[0].get("author_owned") is True and not author_owned_review_title_matches(
+        body_text, body["verdict"],
+    ):
+        errors.append("review_body:missing_author_owned_fallback_title")
     if verdict not in {"APPROVE", "REQUEST_CHANGES"}:
         errors.append("unsupported_verdict")
     if verdict == "APPROVE" and blockers:

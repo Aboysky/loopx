@@ -64,6 +64,7 @@ from .capabilities.manager_context.roundtrip import (
     project_chat_session_snapshot,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
+from .control_plane.effect_runtime import effect_runtime_request_scope
 from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .control_plane.status.ssh_host_catalog import (
     SSH_HOST_CATALOG_PATH,
@@ -101,6 +102,7 @@ from .extensions.runtime import (
 from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
+from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GoalSourceRequestMixin
 from .chat_todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
@@ -494,6 +496,7 @@ class ChatHTTPServer(ThreadingHTTPServer):
 
 
 class ChatRequestHandler(
+    GoalSourceRequestMixin,
     GoalAcceptanceRequestMixin,
     ZCodeGoalRequestMixin,
     PrivateConversationRequestMixin,
@@ -1599,6 +1602,8 @@ class ChatRequestHandler(
                 }
             )
         get_dispatch: dict[str, Callable[[], None]] = {
+            "/api/chat/request-inventory": self._request_inventory_read,
+            GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/goal-results": self._goal_results,
@@ -1645,6 +1650,7 @@ class ChatRequestHandler(
             return self._serve_asset(path)
         self._send_error("unknown path", status=404)
 
+    @effect_runtime_request_scope()
     def do_POST(self) -> None:
         if not self._require_loopback_origin():
             return
@@ -1652,6 +1658,7 @@ class ChatRequestHandler(
         if self._dispatch_zcode_goal(path, apply=True):
             return
         post_dispatch: dict[str, Callable[[], None]] = {
+            GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             RESEARCH_ANALYSIS_PATH: self._research_analysis_write,
             RESEARCH_ANALYSIS_PATH + "/cancel": self._research_analysis_write,
             CHAT_SESSIONS_PATH: self._create_session,
@@ -1669,6 +1676,9 @@ class ChatRequestHandler(
             PRIVATE_CONVERSATIONS_PATH: self._private_conversation_connect,
             PRIVATE_CONVERSATIONS_PATH + "/agent-targets": self._private_conversation_agent_target,
             PRIVATE_CONVERSATIONS_PATH + "/owner-notifications": self._private_conversation_owner_notifications,
+            PRIVATE_CONVERSATIONS_PATH + "/managed-steward": self._private_conversation_managed_steward,
+            PRIVATE_CONVERSATIONS_PATH + "/managed-steward/monitor": self._private_conversation_steward_monitor,
+            PRIVATE_CONVERSATIONS_PATH + "/managed-steward/report": self._private_conversation_steward_report,
             **self._configuration_post_routes(),
             **self._ssh_source_post_routes(),
         }
@@ -1813,7 +1823,8 @@ def serve_chat(
         return authorized_manager_goal_ids(
             build_lark_goal_topic_runtime_snapshot(
                 registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
-            ), session, runtime_root=runtime_root, registry_path=resolved_registry_path,
+            ), session, runtime_root=server.runtime_controller.coordination_runtime_root,
+            registry_path=resolved_registry_path, executor_runtime_root=runtime_root,
         )
 
     server.runtime_controller = ChatRuntimeController(

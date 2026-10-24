@@ -6,8 +6,81 @@ from typing import Any
 from .todos.contract import normalize_todo_claimed_by
 
 
+def reward_memory_automation_enabled(
+    payload: Mapping[str, Any] | None,
+    *,
+    operation: str,
+) -> bool:
+    """Project verified capability automation into the host IO contract.
+
+    The experiment resolver owns enablement, config/receipt verification and
+    provider policy. A recall packet's presence or old context is not opt-in.
+    """
+    if not isinstance(payload, Mapping):
+        return False
+    recall = payload.get("reward_memory_recall")
+    if not isinstance(recall, Mapping):
+        return False
+    experiment = recall.get("experiment")
+    envelope = payload.get("turn_envelope")
+    if (
+        not isinstance(experiment, Mapping)
+        or experiment.get("enabled") is not True
+        or experiment.get("available") is not True
+        or experiment.get("configured_for_agent") is not True
+        or experiment.get(operation) is not True
+    ):
+        return False
+    if isinstance(envelope, Mapping):
+        boundary = envelope.get("boundary")
+    elif "turn_envelope" not in payload:
+        # App guards carry the same verified capability projection directly;
+        # they are not host requests and do not contain a TurnEnvelope.
+        receipt = payload.get("heartbeat_receipt")
+        identity = payload.get("agent_identity")
+        if (
+            payload.get("ok") is not True
+            or payload.get("should_run") is not True
+            or not isinstance(receipt, Mapping)
+            or receipt.get("status") not in {"committed", "replayed"}
+            or not receipt.get("turn_instance_id")
+            or not isinstance(identity, Mapping)
+            or identity.get("registered") is not True
+        ):
+            return False
+        # Reuse the typed quota projection rather than interpreting another
+        # copy of the legacy quota boundary in this compatibility adapter.
+        from .quota.turn_envelope import quota_action_signature_document
+
+        boundary = quota_action_signature_document(payload).get("boundary")
+    else:
+        return False
+    try:
+        from .capability_hooks import turn_context_source
+
+        source = turn_context_source(payload)
+    except ValueError:
+        return False
+    capabilities = (
+        boundary.get("capabilities") if isinstance(boundary, Mapping) else None
+    )
+    memory = (
+        capabilities.get("reward_memory") if isinstance(capabilities, Mapping) else None
+    )
+    return (
+        isinstance(memory, Mapping)
+        and memory.get(operation) is True
+        # Recall resolves the binding again after admission. A stale envelope
+        # must not resurrect a now unavailable or disabled binding.
+        and bool(source.get("goal_id"))
+        and experiment.get("goal_id") == source.get("goal_id")
+        and bool(source.get("agent_id"))
+        and experiment.get("agent_id") == source.get("agent_id")
+    )
+
+
 def reward_memory_host_coverage() -> list[dict[str, str]]:
-    """Project actual host lifecycle wiring without inferring parity."""
+    """Project source lifecycle wiring, not Agent enablement or provider qualification."""
 
     return [
         {
@@ -18,12 +91,12 @@ def reward_memory_host_coverage() -> list[dict[str, str]]:
         {
             "host_id": "generic_cli_turn",
             "automatic_recall": "connected",
-            "automatic_ingest": "uncovered",
+            "automatic_ingest": "connected_post_settlement",
         },
         {
             "host_id": "dsh_turn",
-            "automatic_recall": "connected_task_body",
-            "automatic_ingest": "uncovered",
+            "automatic_recall": "connected",
+            "automatic_ingest": "connected_post_settlement",
         },
         {
             "host_id": "codex_app_quota",
@@ -128,6 +201,7 @@ def reward_memory_goal_policy(
 
 
 __all__ = [
+    "reward_memory_automation_enabled",
     "reward_memory_goal_policy",
     "reward_memory_host_coverage",
 ]

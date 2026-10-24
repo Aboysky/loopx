@@ -38,7 +38,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     density: "记录密度", densityHint: "柱高为事件数；浅红为无记录空档", ticks: "转向 / 继续",
     routes: "研究路线", routeHint: "仅由显式关联或父子分组相连", singles: "未关联研究项",
     trail: "决策轨迹", more: "显示更多决策", all: "全部时段",
-    span: "记录跨度", start: "起", end: "止", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
+    span: "记录跨度", start: "起点", end: "末端", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
     confirmed: "来源记为确认", refuted: "已反驳", tentative: "待检查", unlabeled: "无结论", phaseNote: "按记录时间三等分，仅为阅读分组，不是预声明的评估窗口。",
     noTime: "没有可用的记录时间，无法放上时间轴；下方记录仍可完整阅读。",
   } : {
@@ -48,7 +48,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     density: "Recording density", densityHint: "Bar height is events; pale red is a recording gap", ticks: "Replan / continue",
     routes: "Research routes", routeHint: "Connected only by recorded relationships or parent grouping", singles: "Unlinked research items",
     trail: "Decision history", more: "Show more decisions", all: "Whole history",
-    span: "Recorded span", start: "From", end: "To", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
+    span: "Recorded span", start: "Start", end: "End", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
     confirmed: "Recorded confirmation", refuted: "Refuted", tentative: "Tentative", unlabeled: "No finding", phaseNote: "Equal thirds of record time, for reading only; not a pre-declared evaluation window.",
     noTime: "No usable record time; the history cannot be placed on a time axis. All records remain readable below.",
   };
@@ -86,22 +86,24 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
   const groupedIds = new Set(dayGroups.flatMap(group => group.nodes.map(node => node.id)));
   const swarm = timeline.singles.filter(id => !groupedIds.has(id)).map(id => timeline.nodes.get(id)!).filter(item => item.first !== null);
   const unknownTime = [...timeline.nodes.values()].filter(item => item.first === null).length;
-  const phaseCard = (item: TimelinePhase) => {
-    const decision = item.lastDecision?.sections?.decision;
+  const phaseName = (item: TimelinePhase) => [copy.early, copy.middle, copy.late][item.index];
+  const phaseDescription = (item: TimelinePhase) => {
     const counts = Object.entries(item.decisions);
+    return [
+      `${timeLabel(item.start)} — ${timeLabel(item.end)}`,
+      `${item.nodes} ${copy.items} · ${item.findings} ${copy.findings}`,
+      LABELS.map(key => `${label(key)} ${item.labels[key] ?? 0}`).join(" · "),
+      timeline.decisions.length ? (counts.length ? `${copy.decisions} · ${counts.map(([key, value]) => `${label(key)} ${value}`).join(" · ")}` : (timeline.structuredCount ? copy.none : copy.unstructured)) : null,
+    ].filter(Boolean).join(" · ");
+  };
+  const phaseCard = (item: TimelinePhase) => {
     return <button key={item.index} type="button" aria-pressed={phase === item.index} onClick={() => onPhase(phase === item.index ? null : item.index)}
-      className={`research-phase${item.index === 2 ? " is-late" : ""}${phase === item.index ? " is-active" : ""}`}>
-      <span className="research-phase-head"><strong>{[copy.early, copy.middle, copy.late][item.index]}</strong><time>{timeLabel(item.start)} — {timeLabel(item.end)}</time></span>
-      <span className="research-phase-counts"><b>{item.nodes}</b> {copy.items}<b>{item.findings}</b> {copy.findings}</span>
+      aria-label={`${phaseName(item)} · ${phaseDescription(item)}`} title={`${phaseName(item)} · ${phaseDescription(item)}`}
+      className={`research-phase${phase === item.index ? " is-active" : ""}`}>
+      <span className="research-phase-head"><strong>{phaseName(item)}</strong><span>{item.findings} {copy.findings}</span></span>
       <span className="research-phase-bar" aria-label={LABELS.map(key => `${label(key)} ${item.labels[key] ?? 0}`).join(" · ")}>
         {LABELS.map(key => item.labels[key] ? <span key={key} className={tone(key)} style={{flexGrow: item.labels[key]}}>{item.labels[key]}</span> : null)}
       </span>
-      <span className="research-phase-legend">{LABELS.map(key => <span key={key}><i className={tone(key)} aria-hidden="true"/>{label(key)}</span>)}</span>
-      <span className="research-phase-decisions">{counts.length ? `${copy.decisions} · ${counts.map(([key, value]) => `${label(key)} ${value}`).join(" · ")}` : (timeline.structuredCount ? copy.none : copy.unstructured)}</span>
-      {decision ? <>
-        <span className="research-phase-line"><em>{copy.changed}</em>{decision.changed.join("；") || "—"}</span>
-        <span className="research-phase-line"><em>{copy.stopped}</em>{decision.stopped.join("；") || "—"}</span>
-      </> : null}
     </button>;
   };
   return <div className="research-timeline">
@@ -110,7 +112,9 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
       <p>{zh ? "未关联问题按首次记录 UTC 日期收纳，不推断路线或因果。决策轨迹保留各轮显式决策，最新记录在前。" : "Unlinked questions group by first-record UTC date, without inferring a route or cause. Decision history retains each explicit decision, newest record first."}</p>
+      <dl className="research-phase-details">{timeline.phases.map(item => <div key={item.index}><dt>{phaseName(item)}</dt><dd>{phaseDescription(item)}</dd></div>)}</dl>
     </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}</div>
+      <span className="research-phase-legend">{LABELS.map(key => <span key={key}><i className={tone(key)} aria-hidden="true"/>{label(key)}</span>)}</span>
     <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>
     <div className="research-timeline-grid">
       <div className="research-row-label"><strong>{copy.density}</strong><small>
@@ -146,7 +150,18 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
             <small>{dayLabel(route.first!)} – {dayLabel(route.last!)} · {copy.span} {hours(route.first!, route.last!)}</small>
             <small>{tally.map(([key, value]) => `${label(key)} ${value}`).join(" · ") || copy.unlabeled}</small></div>
           <div className="research-row-plot">
-            <p className="research-route-caption"><span>{copy.start}</span>{first.node.latest.title}{members.length > 1 ? <><span>{copy.end}</span><b className={tone(last.label)}>{last.node.latest.title}</b></> : null}</p>
+            <div className="research-route-caption">
+              {[first, ...(members.length > 1 ? [last] : [])].map((item, index) => <button key={item.node.id} type="button"
+                data-research-return={`${route.id}:${index}`} aria-pressed={selectedIds.includes(item.node.id)}
+                onClick={event => {
+                  // WebKit pointer/AX activation may leave focus on the canvas.
+                  // Give the reader the actual opener before it unmounts.
+                  event.currentTarget.focus({preventScroll: true});
+                  onSelect(item.node.id);
+                }}>
+                <span>{index ? copy.end : copy.start}</span><strong className={index ? tone(item.label) : undefined}>{item.node.latest.title}</strong>
+              </button>)}
+            </div>
             <div className="research-route-track">
               <svg viewBox="0 0 1000 44" preserveAspectRatio="none" aria-hidden="true" className="research-history-edges">
                 <line x1={x(first.node.id)} x2={x(last.node.id)} y1="32" y2="32" className="research-route-line"/>
@@ -183,7 +198,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
 }
 
 function TrailList({items, copy, label, timeLabel, selectedIds, onSelect}: {items: TimelineFinding[]; copy: Copy; label: (key: string) => string; timeLabel: (value: number) => string; selectedIds: readonly string[]; onSelect: (id: string) => void}) {
-  const [limit, setLimit] = useState(6);
+  const [limit, setLimit] = useState(3);
   return <>
     <ol className="research-trail-list">{items.slice(0, limit).map(item => {
       const decision = item.sections!.decision!;
@@ -192,10 +207,8 @@ function TrailList({items, copy, label, timeLabel, selectedIds, onSelect}: {item
           <span className="research-trail-meta"><b className={`research-outcome is-${decision.outcome}`}>{label(decision.outcome)}</b><time>{item.at !== null ? timeLabel(item.at) : ""}</time><span>{label(item.event.status)}</span></span>
           <strong>{item.event.title}</strong>
           <span><em>{copy.changed}</em>{decision.changed.join("；") || "—"}</span>
-          <span><em>{copy.stopped}</em>{decision.stopped.join("；") || "—"}</span>
-          <span className="is-muted"><em>{copy.retained}</em>{decision.retained.join("；") || "—"}</span>
         </button></li>;
     })}</ol>
-    {items.length > limit ? <button type="button" className="research-link" onClick={() => setLimit(items.length)}>{copy.more} · {items.length - limit}</button> : null}
+    {items.length > limit ? <button type="button" className="research-link" onClick={() => setLimit(value => value + 6)}>{copy.more} · {items.length - limit}</button> : null}
   </>;
 }

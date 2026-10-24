@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from .effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
 from .effect_program import ReceiptBoundReplayPhase
@@ -29,7 +30,6 @@ from ..agents.agent_scope import (
     _agent_scope_deferred_resume_candidates,
     _agent_scope_frontier_action,
     _agent_scope_no_candidate_frontier,
-    _selected_candidate_priority_frontier,
     _attach_agent_identity_contracts,
 )
 from ..agents.capability_gate import missing_required_capabilities
@@ -40,6 +40,7 @@ from ..agents.agent_scope_frontier import (
 from ..goals.goal_frontier import (
     AUTONOMOUS_REPLAN_REQUIRED_MODE,
 )
+from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..quota.decision_summary import (
     quota_decision_agent_id,
     refine_quota_recommended_action,
@@ -96,6 +97,7 @@ from ..todos.contract import (
     normalize_todo_claimed_by,
     normalize_todo_id,
 )
+from ..agents.workspace_guard import observe_goal_delivery_workspace_isolation
 from ..todos.todo_semantics import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
 )
@@ -145,12 +147,33 @@ from .settlement_precedence import (
     HEARTBEAT_SETTLED_REPLAY_REASON,
     clear_quota_action_projections,
 )
-from .should_run_prepare import _QuotaDecisionPreparation
+from .should_run_prepare import _QuotaDecisionPreparation, _blocked_priority_fallback
 from ._supporting_projections import (
     _attach_quota_supporting_projections,
     _attach_truthy_fields,
     _dict_field,
 )
+
+
+def reference_duplicate_fallback_guidance(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reference a CLI-only mirror through the existing legacy packet owner."""
+    fallback = payload.get("blocked_priority_fallback")
+    recommendation = payload.get("heartbeat_recommendation")
+    if not isinstance(fallback, dict) or not isinstance(recommendation, dict):
+        return payload
+    mirror = recommendation.get("blocked_priority_fallback")
+    if not isinstance(mirror, dict):
+        return payload
+    # Compare JSON types too: Python equality conflates False with 0.
+    if mirror is not fallback and (
+        json.dumps(mirror, sort_keys=True, ensure_ascii=False)
+        != json.dumps(fallback, sort_keys=True, ensure_ascii=False)
+    ):
+        return payload
+    recommendation = dict(recommendation)
+    recommendation.pop("blocked_priority_fallback")
+    recommendation["blocked_priority_fallback_ref"] = "$.blocked_priority_fallback"
+    return {**payload, "heartbeat_recommendation": recommendation}
 
 
 def _interaction_runtime_root(
@@ -460,22 +483,6 @@ def _delivery_preemptions_for_route(
         preemptions.append("control_repair")
     if not normal_delivery_allowed:
         preemptions.append("delivery_not_allowed")
-    requested_candidate = prepared.requested_action_candidate
-    agent_id = normalize_todo_claimed_by(
-        (prepared.agent_identity or {}).get("agent_id")
-    )
-    if (
-        not preemptions
-        and agent_id
-        and isinstance(prepared.agent_todo_summary, dict)
-        and isinstance(requested_candidate, dict)
-        and _selected_candidate_priority_frontier(
-            agent_id=agent_id,
-            summary=prepared.agent_todo_summary,
-            selected=requested_candidate,
-        )
-    ):
-        preemptions.append("ready_deferred_successor_priority_preemption")
     return preemptions
 
 
@@ -487,10 +494,12 @@ def _resolve_agent_lane_delivery_route(
     delivery_preemptions: list[str],
     should_run: bool,
     normal_delivery_allowed: bool,
-) -> dict[str, Any] | None:
-    """Project candidates once, then let TypeScript own their delivery route."""
+) -> tuple[dict[str, Any] | None, bool]:
+    """Return the selected route with its typed admission decision."""
 
     if prepared.requested_action_todo_id is not None:
+        scoped_fallback = prepared.scoped_user_gate_fallback or {}
+        scoped_selected = scoped_fallback.get("selected_executable") or {}
         qualification = qualify_action_selection_from_inventory(
             requested_todo_id=prepared.requested_action_todo_id,
             candidate=prepared.requested_action_candidate,
@@ -498,18 +507,27 @@ def _resolve_agent_lane_delivery_route(
             should_run=should_run,
             normal_delivery_allowed=normal_delivery_allowed,
             delivery_preemptions=delivery_preemptions,
+            scoped_fallback_todo_id=normalize_todo_id(scoped_selected.get("todo_id")),
+            quota_state=prepared.state,
+            goal_health_ok=prepared.goal_health_ok,
         )
         prepared.action_selection_qualification = qualification
+
+    if (prepared.action_selection_qualification or {}).get("state") == "qualified":
+        # The typed selection owner may admit this exact scoped fallback while
+        # the broader user-gated delivery lane remains closed. Keep selected
+        # workspace/boundary guards active without reopening normal delivery.
+        should_run = True
 
     if isinstance(prepared.guarded_agent_lane_next_action, dict):
         # Workspace/scope guards can change admission after initial selection.
         # Keep the selected identity frozen, but report the final qualification.
-        return prepared.guarded_agent_lane_next_action
+        return prepared.guarded_agent_lane_next_action, should_run
 
     if prepared.requested_action_todo_id is not None:
         qualification = prepared.action_selection_qualification or {}
         if qualification.get("state") != "qualified":
-            return None
+            return None, should_run
         if not isinstance(prepared.requested_action_candidate, dict):
             raise RuntimeError(
                 "qualified action selection is missing its projected candidate"
@@ -518,7 +536,7 @@ def _resolve_agent_lane_delivery_route(
             **prepared.requested_action_candidate,
             "selected_by": "agent_action_selection",
             "selection_binding": "pending_action_selection",
-        }
+        }, should_run
 
     item = prepared.item
     fallback = prepared.receipt_bound_agent_next_action
@@ -565,7 +583,7 @@ def _resolve_agent_lane_delivery_route(
         (prepared.agent_identity or {}).get("agent_id")
     )
     if not delivery_agent_id:
-        return fallback
+        return fallback, should_run
 
     continuity_todo = prepared.delivery_continuity_todo
     delivery_anchor = prepared.delivery_continuity_anchor
@@ -584,7 +602,7 @@ def _resolve_agent_lane_delivery_route(
         and fallback is None
         and replan_candidate is None
     ):
-        return None
+        return None, should_run
     delivery_route = evaluate_delivery_route(
         agent_id=delivery_agent_id,
         previous_todo_id=(
@@ -685,7 +703,7 @@ def _resolve_agent_lane_delivery_route(
         # The router may find an independent successor after the bound Todo
         # becomes unavailable.  That successor cannot replace an already
         # committed settlement identity inside the same heartbeat Turn.
-        return None
+        return None, should_run
 
     boundary = delivery_route.get("boundary")
     if (
@@ -696,8 +714,8 @@ def _resolve_agent_lane_delivery_route(
         return {
             **selected_action,
             "delivery_boundary": boundary["delivery_boundary"],
-        }
-    return selected_action
+        }, should_run
+    return selected_action, should_run
 
 
 def _selected_deferred_replan_frontier(
@@ -820,7 +838,7 @@ def _planning_projections(
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
         source_status=prepared.status_payload,
-        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", False),
+        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", DEFAULT_PLANNING_HORIZON_GOAL),
         replan_selection_context=(
             {
                 "has_turn_identity": bool(turn_instance_id),
@@ -1123,7 +1141,7 @@ def _resolve_quota_should_run_route(
         capability_repair_allowed=capability_repair_allowed,
         workspace_repair_allowed=workspace_repair_allowed,
     )
-    agent_lane_next_action = _resolve_agent_lane_delivery_route(
+    agent_lane_next_action, should_run = _resolve_agent_lane_delivery_route(
         prepared,
         due_monitor_attempt=due_monitor_attempt,
         receipt_bound_replan_decision=receipt_bound_replan_decision,
@@ -1158,10 +1176,16 @@ def _resolve_quota_should_run_route(
                 agent_todo_summary=prepared.agent_todo_summary,
                 agent_lane_next_action=agent_lane_next_action,
                 work_lane_contract=prepared.work_lane_contract,
-                candidate_should_run=bool(
-                    (should_run and normal_delivery_allowed)
-                    or ready_deferred_resume_candidates
-                ),
+                vision_wait_state=prepared.goal_frontier_projection.get("vision_wait_state"),
+                # A satisfied dependency is readiness, not admission. The
+                # existing scoped fallback above qualifies an independent
+                # successor under a user gate; an unqualified ready row must
+                # not resurrect delivery refused by the current quota owner.
+                candidate_should_run=bool(should_run and (
+                    normal_delivery_allowed
+                    or (ready_deferred_resume_candidates
+                        and prepared.goal_health_ok and state == "eligible")
+                )),
             )
         )
         if (
@@ -1350,6 +1374,15 @@ def _build_active_quota_payload(
     include_agent_todo_detail: bool = False,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
+    if route.normal_delivery_allowed and route.agent_lane_next_action and prepared.blocked_priority_fallback:
+        # Selection/receipt continuity is authoritative; the first executable
+        # summary row was only a provisional candidate. Reuse the notice owner
+        # for every downstream projection without changing admission or gates.
+        prepared.blocked_priority_fallback = _blocked_priority_fallback(
+            prepared.agent_todo_summary, selected_executable=route.agent_lane_next_action,
+        )
+        if "blocked_priority_fallback" in route.heartbeat_recommendation:
+            route.heartbeat_recommendation["blocked_priority_fallback"] = prepared.blocked_priority_fallback
     agent_scope_action = _agent_scope_frontier_action(route.effective_action)
     retry_deadline = (prepared.agent_todo_summary or {}).get("frontier_deadline") or {}
     user_summary = prepared.user_todo_summary or {}
@@ -1651,6 +1684,13 @@ def _build_quota_should_run_payload(
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)
     apply_settled_monitor_precedence(payload)
+    selected_todo = payload.get("selected_todo")
+    if isinstance(selected_todo, dict) and selected_todo.get("todo_id"):
+        # Retain current facts across contract rebuilds for hooks and selection.
+        # This preview neither admits a workspace nor replaces refresh checks.
+        payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
+            prepared.item, selected_todo,
+        )
     _attach_automation_cadence_readback(
         payload,
         goal_id=prepared.safe_goal_id,

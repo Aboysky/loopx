@@ -18,6 +18,7 @@ from ..capabilities.repository_change_window import (
     repository_delivery_interaction_hook,
 )
 from ..control_plane.effect_runtime import EffectRuntimeRejected
+from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.capability_hooks import InteractionProjectionHookRegistration
 from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
@@ -98,7 +99,10 @@ from .quota_failure_report import (
     should_log_quota,
 )
 from .quota_host_poll import attach_host_poll_receipt
-from .quota_monitor_poll import record_quota_monitor_poll_for_cli
+from .quota_monitor_poll import (
+    record_quota_monitor_poll_for_cli,
+    recover_quota_monitor_poll_for_cli,
+)
 from .quota_registration import (
     register_quota_command as register_quota_command,  # noqa: PLC0414
 )
@@ -242,7 +246,6 @@ def _record_automatic_heartbeat_stall(
     reloaded = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-        scan_roots=context.scan_roots,
         limit=context.status_limit,
         goal_id=context.status_goal_id,
         available_capabilities=args.available_capabilities,
@@ -306,14 +309,14 @@ def _dispatch_quota_turn_start_hooks(
     )
     if args.agent_id:
         from ..capabilities.manager_context import turn_start_hook
-        from ..control_plane.agents.capability_memory import (
-            extend_turn_start_dispatch as extend_capability_memory_dispatch,
+        from ..capabilities.turn_start import (
+            extend_turn_start_dispatch as extend_registered_capabilities,
         )
         from ..control_plane.capability_hooks import dispatch_turn_start_hooks
         from ..history import load_registry
         from ..paths import resolve_runtime_root
         root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg, registry_path=registry_path)
-        dispatch = extend_capability_memory_dispatch(
+        dispatch = extend_registered_capabilities(
             dispatch,
             registry_path=registry_path,
             runtime_root=root,
@@ -340,10 +343,10 @@ def _dispatch_quota_turn_start_hooks(
     if args.agent_id:
         from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
         dispatch = extend_explore(dispatch, registry_path=registry_path, runtime_root=root,
-            goal_id=args.goal_id, agent_id=args.agent_id)
-    local_private_state_mutated = any(
+            goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id)
+    local_private_state_mutated = bool(dispatch.get("uncertain_local_effects")) or any(
         isinstance(result, Mapping)
-        and result.get("local_private_state_mutated") is True
+        and result.get("local_private_state_mutated") is not False
         for result in (dispatch.get("results") or [])
     )
     return dispatch, local_private_state_mutated
@@ -386,9 +389,6 @@ def _attach_turn_start_hook_dispatch(
         payload["turn_start_capability_hook_dispatch"] = {
             key: value for key, value in dispatch.items() if key != "contexts"
         }
-
-
-
 def _project_quota_cli_payload(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -404,6 +404,9 @@ def _project_quota_cli_payload(
     renderer rejection keeps the typed diagnostic itself (with the skip reason)
     instead of masking it with a crash (issue #3687).
     """
+    from ..control_plane.effect_program import reject_retired_quota_format
+
+    reject_retired_quota_format(payload)
     if not bool(getattr(args, "turn_envelope", False)):
         if args.quota_command in {"status", "plan"}:
             return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
@@ -533,7 +536,6 @@ def handle_quota_command(
             heartbeat_turn_id,
             detail_sections,
             runtime_root,
-            scan_roots,
             status_limit,
             status_goal_id,
             status_payload,
@@ -544,7 +546,6 @@ def handle_quota_command(
             context.heartbeat_turn_id,
             context.detail_sections,
             context.runtime_root,
-            context.scan_roots,
             context.status_limit,
             context.status_goal_id,
             context.status_payload,
@@ -689,7 +690,6 @@ def handle_quota_command(
                 status_reloader=lambda: collect_status(
                     registry_path=registry_path,
                     runtime_root_override=runtime_root_arg,
-                    scan_roots=scan_roots,
                     limit=status_limit,
                     goal_id=status_goal_id,
                     available_capabilities=args.available_capabilities,
@@ -744,6 +744,11 @@ def handle_quota_command(
             payload = build_quota_plan(status_payload, mode=args.quota_command)
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
+    except CanonicalAuthorityRequired as exc:
+        payload = recover_quota_monitor_poll_for_cli(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            error=exc, goal_ref_loader=lambda: _quota_goal_ref(args, registry_path=registry_path),
+        )
     except QuotaCommandValidationError as exc:
         # Only typed CLI validation diagnostics are public-safe by contract.
         payload = quota_validation_failure_payload(

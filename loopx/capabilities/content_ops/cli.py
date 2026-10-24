@@ -27,6 +27,7 @@ from .layout import (
     render_layout_packet_markdown,
 )
 from .reference import content_reference_operation, inspect_reference_materials, write_reference_artifact
+from .media_cli import handle_media_command, register_media_commands
 from .surface import (
     build_content_ops_chatview_report_packet,
     build_content_ops_exploration_plan_packet,
@@ -140,6 +141,7 @@ def register_content_ops_commands(
         dest="content_ops_command",
         required=True,
     )
+    register_media_commands(content_ops_sub, add_subcommand_format)
     reference_parser = content_ops_sub.add_parser(
         "reference", help="Search, capture or prepare an attributed outline from a caller-owned private catalog.",
     )
@@ -563,6 +565,9 @@ def handle_content_ops_command(
         issue_fix_result = handle_content_ops_issue_fix_command(args)
         if issue_fix_result is not None:
             payload, renderer = issue_fix_result
+        elif args.content_ops_command in {"media", "generation", "image"}:
+            payload = handle_media_command(args)
+            renderer = lambda value: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
         elif args.content_ops_command == "reference":
             if args.operation == "inventory":
                 if not args.goal_id or not args.store_id or not args.observed_at or args.library_json == "-":

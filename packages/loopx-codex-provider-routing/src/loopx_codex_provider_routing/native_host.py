@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import selectors
@@ -19,6 +20,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 
 class HostError(Exception):
@@ -43,8 +45,22 @@ function run(argv) {
   } while (Date.now() < deadline);
   if (!app || !app.executableURL || !app.isFinishedLaunching) throw Error("Client startup is still incomplete");
   if (ObjC.unwrap(app.executableURL.path) !== argv[1]) throw Error("Client executable changed");
-  if (!app.terminate) throw Error("Client refused normal quit");
+  var started = Number(app.launchDate.timeIntervalSince1970);
+  if (argv.length > 2 && argv[2] !== "unknown" && started !== Number(argv[2])) throw Error("Client launch changed");
+  return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});
 }'''
+
+FORCE_QUIT = QUIT.replace(
+    'return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});',
+    'if (!app.forceTerminate) throw Error("Client force quit failed");',
+)
+
+# Freeze launch identity before graceful quit so a refused/timed-out quit can
+# escalate only against that same instance, without another confirmation.
+PROBE = QUIT.replace(
+    'return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});',
+    'return JSON.stringify({launch_time: started});',
+)
 
 
 def trusted_file(path: Path) -> Path:
@@ -115,23 +131,98 @@ class NativeHost:
             result["client_running"] = self.apps.running(exe, self.spec) is not None
         return result
 
-    def close_client(self, expected: str, *, timeout: float = 25) -> bool:
+    def close_client(self, expected: str, *, timeout: float = 25, force: bool = False) -> bool:
         exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
         pid = self.apps.running(exe, self.spec)
         if self.revision() != expected:
             raise HostError("selection_changed")
         if pid is None:
             return False
-        # Recheck exact ownership immediately before requesting a normal quit.
+        # Recheck exact ownership immediately before requesting a quit.
         if self.apps.running(exe, self.spec) != pid:
             raise HostError("client_changed")
+        if force:
+            try:
+                result = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)],
+                                        input=PROBE, text=True, check=True, capture_output=True, timeout=10)
+                receipt = json.loads(result.stdout)
+                launch_time = receipt["launch_time"]
+                # Launch Services can report a nil launchDate for an App started
+                # outside the normal Finder/open registration path. Fall back to
+                # the inspected PID + executable identity instead of stalling.
+                if launch_time is not None and (type(launch_time) not in (int, float)
+                                               or not math.isfinite(launch_time) or launch_time <= 0):
+                    raise ValueError()
+            except (OSError, subprocess.SubprocessError, AttributeError, KeyError, TypeError, ValueError, OverflowError):
+                if self.apps.running(exe, self.spec) is None:
+                    return True
+                raise HostError("client_quit_refused") from None
+            if self.revision() != expected:
+                raise HostError("selection_changed")
+            current = self.apps.running(exe, self.spec)
+            if current is None:
+                return True
+            if current != pid:
+                raise HostError("client_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            identity = str(launch_time) if launch_time is not None else "unknown"
+            try:
+                return self._graceful_quit(pid, exe, timeout, identity=identity)
+            except HostError as error:
+                if error.code not in ("client_quit_refused", "client_quit_timeout"):
+                    raise
+            # Opt-in covers fallback only; a quit dialog must not bypass a
+            # later selection/process/quota change before force termination.
+            if self.revision() != expected:
+                raise HostError("selection_changed")
+            current = self.apps.running(exe, self.spec)
+            if current is None:
+                return True
+            if current != pid:
+                raise HostError("client_changed")
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            try:
+                subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe), identity],
+                               input=FORCE_QUIT, text=True, check=True, capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                if self.apps.running(exe, self.spec) is None:
+                    return True
+                raise HostError("client_quit_refused") from None
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                current = self.apps.running(exe, self.spec)
+                if current is None:
+                    return True
+                if current != pid:
+                    raise HostError("client_changed")
+                time.sleep(0.1)
+            raise HostError("client_quit_timeout")
+        return self._graceful_quit(pid, exe, timeout)
+
+    def _graceful_quit(self, pid: int, exe: Path, timeout: float, *, identity: str | None = None) -> bool:
+        command = ["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)]
+        if identity is not None:
+            command.append(identity)
         try:
-            subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)],
-                           input=QUIT, text=True, check=True, capture_output=True, timeout=10)
+            result = subprocess.run(command,
+                                    input=QUIT, text=True, check=True, capture_output=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             raise HostError("client_quit_refused") from None
+        accepted = True
+        if getattr(result, "stdout", ""):
+            try:
+                receipt = json.loads(result.stdout)
+                accepted = receipt["accepted"]
+                if type(accepted) is not bool:
+                    raise ValueError()
+            except (AttributeError, KeyError, TypeError, ValueError):
+                raise HostError("client_changed") from None
+        if not accepted:
+            raise HostError("client_quit_refused")
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while accepted and time.monotonic() < deadline:
             current = self.apps.running(exe, self.spec)
             if current is None:
                 return True
@@ -148,7 +239,7 @@ class NativeHost:
         return self.status()
 
     def switch(self, slot: str, expected: str, *, reopen: bool, restart_clients: bool = False,
-               not_after: float | None = None) -> dict:
+               force_quit_clients: bool = False, not_after: float | None = None) -> dict:
         if sys.platform != "darwin":
             raise HostError("platform_unavailable")
         self.expected = expected
@@ -163,7 +254,7 @@ class NativeHost:
             if restart_clients:
                 if not_after is not None and time.time() >= not_after:
                     raise HostError("quota_stale")
-                self.close_client(expected)
+                self.close_client(expected, **({"force": True} if force_quit_clients else {}))
                 # Children may flush and exit just after their App root. An
                 # unrelated CLI/file owner remains a hold, never a kill target.
                 deadline = time.monotonic() + 10
@@ -178,11 +269,11 @@ class NativeHost:
                             raise HostError("other_clients_busy") from None
                         time.sleep(0.2)
             result = self.manager.switch(slot)
-        except Exception as error:
+        except Exception:
             # A refused/failed transaction must not unnecessarily leave a
             # normally closed source App down. Native preflight blocks opening
             # an incomplete credential journal; a later manual choice wins.
-            if restart_clients and before.get("client_running") and getattr(error, "code", None) != "client_changed":
+            if restart_clients and before.get("client_running"):
                 try:
                     if self.status().get("client_running") is False:
                         self.reopen(expected)
@@ -322,8 +413,13 @@ def read_usage(raw: bytes) -> dict:
             "Authorization": "Bearer " + token, "chatgpt-account-id": account_id,
             "User-Agent": "codex-cli", "Accept": "application/json",
         })
-        with urllib.request.build_opener(NoRedirect()).open(request, timeout=10) as response:
-            encoded = response.read(131073)
+        try:
+            with urllib.request.build_opener(NoRedirect()).open(request, timeout=10) as response:
+                encoded = response.read(131073)
+        except urllib.error.HTTPError:
+            raise  # Authentication/HTTP denials do not change transport.
+        except OSError:
+            encoded = socks_usage(token, account_id)
         if len(encoded) > 131072:
             raise HostError("quota_unavailable")
         value = json.loads(encoded)
@@ -335,6 +431,38 @@ def read_usage(raw: bytes) -> dict:
         raise HostError("auth_required" if error.code in (401, 403) else "quota_unavailable") from None
     except (KeyError, TypeError, ValueError, OSError):
         raise HostError("quota_unavailable") from None
+
+
+def socks_usage(token: str, account_id: str) -> bytes:
+    """Use an already configured SOCKS route after an HTTP transport failure.
+
+    urllib has no SOCKS transport. Keep credentials on stdin, verified HTTPS,
+    the fixed quota endpoint, no redirects and the original response bound.
+    A missing route/tool stays unknown; this never configures a proxy.
+    """
+    proxies = urllib.request.getproxies()
+    proxy = proxies.get("all") or proxies.get("socks", "")
+    if urllib.parse.urlsplit(proxy).scheme == "socks":
+        proxy = "socks5h:" + proxy.split(":", 1)[1]
+    binary = shutil.which("curl")
+    if not binary or urllib.parse.urlsplit(proxy).scheme not in {"socks5", "socks5h"}:
+        raise HostError("quota_unavailable")
+    headers = ["Authorization: Bearer " + token, "chatgpt-account-id: " + account_id,
+               "User-Agent: codex-cli", "Accept: application/json"]
+    if any("\n" in value or "\r" in value for value in headers):
+        raise HostError("auth_required")
+    config = "\n".join(["proxy = " + json.dumps(proxy),
+                         *("header = " + json.dumps(value) for value in headers)]) + "\n"
+    result = subprocess.run([str(trusted_file(Path(binary))), "-q", "--config", "-",
+        "--url", "https://chatgpt.com/backend-api/wham/usage", "--proto", "=https",
+        "--max-time", "10", "--max-filesize", "131072", "--silent", "--show-error",
+        "--write-out", "\n%{http_code}"], input=config.encode(), capture_output=True, timeout=12)
+    status = result.stdout[-3:]
+    if status in {b"401", b"403"}:
+        raise HostError("auth_required")
+    if result.returncode or status != b"200" or len(result.stdout) > 131076:
+        raise HostError("quota_unavailable")
+    return result.stdout[:-4]
 
 
 def app_server_usage(binary: str, env: dict) -> dict:
@@ -404,7 +532,8 @@ def main() -> int:
             value = host.observe(request["slots"], request["expected_revision"], request.get("auth_failures"))
         elif operation == "switch":
             value = host.switch(request["slot"], request["expected_revision"], reopen=request["reopen"],
-                                restart_clients=request.get("restart_clients", False), not_after=request.get("not_after"))
+                                restart_clients=request.get("restart_clients", False),
+                                force_quit_clients=request.get("force_quit_clients", False), not_after=request.get("not_after"))
         elif operation == "reopen":
             value = host.reopen(request["expected_revision"])
         elif operation in ("recover", "rollback"):

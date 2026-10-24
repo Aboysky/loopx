@@ -46,6 +46,12 @@ by itself establish a C2 uplift claim.
 
 ## Current work
 
+- [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)
+  covers independent local measurements with ordinary Goal/Todo planning and
+  stride selection, complete initial Goal retention, and migration from the
+  removed `research_loop` preset. Historical trials keep their original versions
+  and treatment definitions. Engineering checks do not establish autonomous
+  research benefit or efficiency.
 - **LHTB result highlight:** GPT-5.6 Sol + LoopX 1.0.3 Heartbeat reaches
   **0.4948 mean reward** on 46 tasks: **+17.3% vs Plain Codex** and
   **+10.6% vs native Codex Goal**. Strict solves are 7/46, matching Plain and
@@ -85,9 +91,10 @@ by itself establish a C2 uplift claim.
 This section owns benchmark archive placement. Two kinds of archive have
 different homes:
 
-- The retired benchmark implementation, legacy abstractions, and standalone
-  dated research packets belong under
-  [`deprecate/benchmark-legacy/`](../deprecate/benchmark-legacy/README.md).
+- Retired benchmark implementations, legacy abstractions, and standalone dated
+  research packets stay in Git history rather than the working tree. The removed
+  [legacy benchmark tree](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
+  remains available at its final retained revision for source archaeology.
 - A named, immutable experiment snapshot may live in a versioned directory
   under `benchmark/` when its exact source bytes are needed to inspect a
   historical result. This is a historical reference, not an active runner,
@@ -576,6 +583,16 @@ Its private controller configuration file has exactly `url`, `admin_secret` and
 `bank_root` (the native log directory's `checkpoints` directory). Keep this file,
 the bank and controller process outside every solver's filesystem/network authority.
 An owner-only mode is a storage precaution, not proof of solver exclusion.
+
+When the selected native runner supports `host_registration_callback`, the
+adapter binds enabled checkpoint/feedback observers through that host callback
+before container creation. It does not inject the registration token into the
+solver environment. Frozen older providers retain their original environment
+binding path; runs without either observer add no callback. Blind modes also
+remove the newer `SFORGE_FEEDBACK_URL` from the solver environment. A restored
+registration may include the native provider's nonempty `feedback_relay_id`;
+all original activation identities must still match, and unknown fields fail
+closed. Neither compatibility path changes scoring or grants solver authority.
 
 ```sh
 python -m benchmark.edgebench.checkpoint_controller \

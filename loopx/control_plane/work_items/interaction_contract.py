@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from ..goals.acceptance_readback import configured_checks
 from ..quota.blocked_transition_notice import blocked_priority_fallback_owner_reason
 from ..quota.effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
@@ -10,6 +12,7 @@ from typing import Any
 
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction, agent_scope_frontier_action as _agent_scope_frontier_action
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
+from ..agents.workspace_guard import delivery_workspace_refresh_hint
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
@@ -48,12 +51,8 @@ from . import action_selection_contract as selection
 from . import runtime_capability_reentry as capability_reentry_adapter
 from .primary_action import (
     build_primary_action_projection,
-    interaction_execution_flags,
-    interaction_quiet_noop_allowed,
     protocol_action_label as _protocol_action_label,
     protocol_action_text,
-    protocol_first_candidate_action as _protocol_first_candidate_action,
-    protocol_monitor_action as _protocol_monitor_action,
 )
 from .replan_settlement import project_replan_settlement_contract
 from .unsettled_host_turn_contract import recovery_cli_actions
@@ -61,7 +60,6 @@ from .user_action_frontier import user_action_owns_empty_agent_lane
 
 INTERACTION_CONTRACT_SCHEMA_VERSION = "loopx_interaction_contract_v0"
 INTERACTION_RESPONSE_PLAN_SCHEMA_VERSION = "interaction_response_plan_v0"
-PROTOCOL_ACTION_PACKET_LLM_POLICY = "no_api"
 AUXILIARY_MONITOR_POLL_CLI_SCHEMA_VERSION = "auxiliary_monitor_poll_cli_v0"
 AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION = (
     "auxiliary_monitor_observation_input_v0"
@@ -300,247 +298,71 @@ def attach_user_action_compat_fields(payload: dict[str, Any]) -> None:
     payload["open_count"] = open_todo_count(payload.get("user_todo_summary"))
 
 
-def protocol_action_packet_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the ordered semantic fields rendered by protocol_action_packet_v0."""
+def _project_interaction_execution(
+    payload: Mapping[str, object],
+    *,
+    user_required: bool,
+    blocked_successor_wait_observation: bool,
+    agent_scope_frontier_actions: Collection[str],
+) -> dict[str, Any]:
+    """Transport bounded facts; TypeScript owns mode and execution permission."""
 
-    execution_obligation = (
-        payload.get("execution_obligation")
-        if isinstance(payload.get("execution_obligation"), dict)
-        else {}
-    )
-    work_lane = (
-        payload.get("work_lane_contract")
-        if isinstance(payload.get("work_lane_contract"), dict)
-        else {}
-    )
-    automation_liveness = (
-        payload.get("automation_liveness")
-        if isinstance(payload.get("automation_liveness"), dict)
-        else {}
-    )
-    scheduler_hint = (
-        payload.get("scheduler_hint")
-        if isinstance(payload.get("scheduler_hint"), dict)
-        else {}
-    )
-    requires_user_action = user_channel_action_required(payload)
-    blocked_successor_wait_observation = (
-        _blocked_successor_wait_observation_required(payload)
-    )
-    must_attempt_work = bool(execution_obligation.get("must_attempt_work")) or (
-        blocked_successor_wait_observation
-    )
-    scoped_user_gate_fallback = isinstance(payload.get("scoped_user_gate_fallback"), dict)
-    bounded_delivery_with_user_notice = (
-        requires_user_action
-        and not scoped_user_gate_fallback
-        and must_attempt_work
-        and bool(
-            execution_obligation.get(
-                "delivery_allowed",
-                payload.get("normal_delivery_allowed")
-                or payload.get("recovery_delivery_allowed")
-                or payload.get("self_repair_allowed")
-                or payload.get("should_run"),
-            )
-        )
-    )
-    quiet_noop_allowed = (
-        not requires_user_action
-        and not must_attempt_work
-        and not scoped_user_gate_fallback
-    )
-
-    user_actions = projected_user_channel_actions(payload)
-
-    if requires_user_action and scoped_user_gate_fallback:
-        primary_actor = "agent_with_user_gate"
-        agent_action_required = True
-        agent_action = _protocol_first_candidate_action(payload) or (
-            "surface the scoped user gate, then advance one non-gated fallback"
-        )
-    elif bounded_delivery_with_user_notice:
-        primary_actor = "agent_with_user_gate"
-        agent_action_required = True
-        agent_action = _protocol_first_candidate_action(payload) or "advance scope-bounded work with validation"
-    elif requires_user_action:
-        primary_actor = "user"
-        agent_action_required = False
-        capability_gate = (
-            payload.get("capability_gate")
-            if isinstance(payload.get("capability_gate"), dict)
-            else {}
-        )
-        agent_action = (
-            capability_gate.get("owner_action")
-            if capability_gate.get("action") == "ask_owner"
-            and capability_gate.get("owner_action")
-            else "wait for user/owner action after surfacing the blocker or gate"
-        )
-    elif blocked_successor_wait_observation:
-        primary_actor = "agent"
-        agent_action_required = True
-        agent_action = (
-            "record one no-spend blocked-successor wait observation, then rerun quota"
-        )
-    elif must_attempt_work and payload.get("agent_work_mode") == "monitor_only":
-        primary_actor = "agent"
-        agent_action_required = True
-        agent_action = (
-            protocol_action_text(work_lane.get("action"), limit=220)
-            or "attempt the due monitor and write back only a material transition"
-        )
-    elif must_attempt_work:
-        primary_actor = "agent"
-        agent_action_required = True
-        if str(execution_obligation.get("kind") or "") == "outcome_floor_recovery":
-            agent_action = (
-                "produce the required outcome-floor evidence artifact or write "
-                "the concrete blocker"
-            )
-        else:
-            agent_action = _protocol_first_candidate_action(payload) or "advance scope-bounded work with validation"
+    obligation = payload.get("execution_obligation")
+    if isinstance(obligation, Mapping):
+        projected_obligation: object = {
+            field: obligation[field]
+            for field in ("must_attempt_work", "delivery_allowed")
+            if field in obligation
+        }
+        obligation_kind = str(obligation.get("kind") or "")
     else:
-        primary_actor = "agent"
-        agent_action_required = False
-        agent_action = _protocol_monitor_action(payload) or "quiet no-op; no material transition"
-
-    action_key = (
-        "agent_action"
-        if agent_action_required
-        else "user_action"
-        if requires_user_action
-        else "agent_action"
+        projected_obligation = obligation
+        obligation_kind = ""
+    heartbeat_recommendation = payload.get("heartbeat_recommendation")
+    heartbeat = (
+        heartbeat_recommendation
+        if isinstance(heartbeat_recommendation, Mapping)
+        else {}
     )
-    action_value = (
-        agent_action
-        if agent_action_required
-        else user_actions[0]
-        if requires_user_action and user_actions
-        else agent_action
-    )
-    fields: dict[str, Any] = {
-        "actor": primary_actor,
-        "user_action_required": requires_user_action,
-        "agent_action_required": agent_action_required,
-        "quiet_noop_allowed": quiet_noop_allowed,
+    request = {
+        "schema_version": "interaction_execution_facts_v0",
+        "effective_action": payload.get("effective_action"),
+        "state": payload.get("state"),
+        "canonical_execution": projected_obligation,
+        "normal_delivery_allowed": payload.get("normal_delivery_allowed"),
+        "recovery_delivery_allowed": payload.get("recovery_delivery_allowed"),
+        "self_repair_allowed": payload.get("self_repair_allowed"),
+        "user_required": user_required,
+        "scoped_user_gate_fallback": isinstance(
+            payload.get("scoped_user_gate_fallback"), Mapping
+        ),
+        "user_gate_notification_suppressed": _user_gate_notification_suppressed(payload),
+        "notify_user_on_gate": bool(payload.get("notify_user_on_gate")),
+        "notify_user_on_open_todo": bool(payload.get("notify_user_on_open_todo")),
+        "stop_if_unchanged": heartbeat.get("stop_if_unchanged") is True,
+        "blocked_successor_wait_observation": blocked_successor_wait_observation,
+        "observation_required": (
+            obligation_kind == "external_evidence_observation_required"
+        ),
+        "replan_required": obligation_kind == AUTONOMOUS_REPLAN_REQUIRED_MODE,
+        "agent_scope_frontier_actions": list(agent_scope_frontier_actions),
     }
-    if work_lane.get("lane"):
-        fields["lane"] = work_lane.get("lane")
-    if automation_liveness.get("automation_action"):
-        fields["automation"] = automation_liveness.get("automation_action")
-    if scheduler_hint.get("action"):
-        fields["scheduler"] = scheduler_hint.get("action")
-    if automation_liveness.get("pause_allowed") is False:
-        fields["pause_allowed"] = False
-    fields["llm"] = PROTOCOL_ACTION_PACKET_LLM_POLICY
-    if user_actions and (not requires_user_action or action_key != "user_action"):
-        fields["user_action_pending"] = True
-        text = protocol_action_text(user_actions[0], limit=80)
-        if text:
-            fields["user_action"] = text
-    text = protocol_action_text(action_value, limit=80)
-    if text:
-        fields[action_key] = text
-    return fields
-
-
-def render_protocol_action_packet_summary(fields: dict[str, Any]) -> str:
-    parts: list[str] = []
-    for key, value in fields.items():
-        if isinstance(value, bool):
-            rendered = str(value).lower()
-        else:
-            rendered = str(value)
-        parts.append(f"{key}={rendered}")
-    return " ".join(parts)
-
-
-def _interaction_mode(payload: dict[str, Any]) -> str:
-    execution_obligation = (
-        payload.get("execution_obligation")
-        if isinstance(payload.get("execution_obligation"), dict)
-        else {}
+    result = effect_runtime_result(
+        "work_item.interaction_execution.project", request
     )
-    heartbeat_recommendation = (
-        payload.get("heartbeat_recommendation")
-        if isinstance(payload.get("heartbeat_recommendation"), dict)
-        else {}
-    )
-    kind = str(execution_obligation.get("kind") or "")
-    effective_action = str(payload.get("effective_action") or "")
-    state = str(payload.get("state") or "")
-    if effective_action == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
-        return "heartbeat_settled_skip"
-    if effective_action == EffectiveAction.GOVERNED_CAPABILITY_INTENT.value:
-        return effective_action
-    if effective_action == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
-        return effective_action
-    if effective_action == EffectiveAction.AGENT_MONITOR_ONLY.value:
-        return "agent_monitor_only"
-    if effective_action == EffectiveAction.MONITOR_DUE.value:
-        return "monitor_due"
-    if effective_action == EffectiveAction.TERMINAL_NO_FOLLOWUP.value or state == "terminal_no_followup":
-        return "terminal_no_followup"
-    if effective_action == EffectiveAction.PEER_COORDINATION_BLOCKED.value:
-        return effective_action
-    if payload.get("scoped_user_gate_fallback"):
-        return "scoped_user_gate_fallback"
-    if _user_gate_notification_suppressed(payload):
-        return "user_gate_cooldown_wait"
-    if effective_action == EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value:
-        return "automation_prompt_upgrade"
-    if user_channel_action_required(payload):
-        if (
-            bool(execution_obligation.get("must_attempt_work"))
-            and bool(
-                execution_obligation.get(
-                    "delivery_allowed",
-                    payload.get("normal_delivery_allowed")
-                    or payload.get("recovery_delivery_allowed")
-                    or payload.get("self_repair_allowed")
-                    or payload.get("should_run"),
-                )
+    if not isinstance(result, dict):
+        raise TypeError("typed interaction execution returned an invalid projection")
+    mode = result.get("mode")
+    if result.get("schema_version") != "interaction_execution_decision_v0":
+        raise TypeError("typed interaction execution returned an invalid schema")
+    if not isinstance(mode, str) or not mode:
+        raise TypeError("typed interaction execution returned an invalid mode")
+    for field in ("must_attempt", "delivery_allowed", "quiet_noop_allowed"):
+        if type(result.get(field)) is not bool:
+            raise TypeError(
+                f"typed interaction execution returned invalid {field}"
             )
-        ):
-            return "bounded_delivery_with_user_notice"
-        if payload.get("notify_user_on_gate") or state == "operator_gate":
-            return "user_gate"
-        if payload.get("notify_user_on_open_todo"):
-            return "user_todo_blocker_push"
-        return "user_action_required"
-    if kind == "external_evidence_observation_required":
-        return "external_evidence_observation"
-    if kind == AUTONOMOUS_REPLAN_REQUIRED_MODE:
-        return "autonomous_replan"
-    if effective_action == EffectiveAction.COORDINATE_TASK_BUNDLE.value:
-        return "task_orchestration"
-    agent_scope_action = _agent_scope_frontier_action(effective_action)
-    if agent_scope_action is not None:
-        return agent_scope_action.value
-    if effective_action == EffectiveAction.MONITOR_QUIET_SKIP.value:
-        return "monitor_quiet_skip"
-    if payload.get("recovery_delivery_allowed") or effective_action == EffectiveAction.OUTCOME_FLOOR_RECOVERY.value:
-        return "outcome_floor_recovery"
-    if effective_action == EffectiveAction.CAPABILITY_BRIDGE_REPAIR.value:
-        return "capability_bridge_repair"
-    if effective_action == EffectiveAction.AGENT_WORKSPACE_REPAIR.value:
-        return effective_action
-    if effective_action == EffectiveAction.BOUNDARY_PROJECTION_REPAIR.value:
-        return "boundary_projection_repair"
-    if payload.get("self_repair_allowed"):
-        return "control_plane_self_repair"
-    if heartbeat_recommendation.get("stop_if_unchanged"):
-        return "mapped_noop_if_unchanged"
-    if payload.get("normal_delivery_allowed") or payload.get("should_run"):
-        return "bounded_delivery"
-    if state == "blocked_health":
-        return "health_blocked"
-    if state == "throttled":
-        return "quota_throttled"
-    if state in {"waiting", "focus_wait"}:
-        return "blocked_wait"
-    return "skip"
+    return result
 
 
 def _scoped_cli_args(
@@ -1107,7 +929,9 @@ def _interaction_reads_and_arbitration(
             if isinstance(reads, list) else [],
         "goal_id": payload.get("goal_id"),
         "goal_state_file": payload.get("goal_state_file"),
-        "goal_acceptance_enabled": acceptance.get("enabled") is True,
+        "goal_acceptance_checks_present": configured_checks(acceptance) is not None,
+        "goal_outcomes_present": bool(acceptance.get("outcome_requirements")),
+        "goal_objective_present": bool(acceptance.get("goal_objective")),
         "selected_todo": {"todo_id": selected.get("todo_id")},
         "task_orchestration_contract": {field: orchestration.get(field)
             for field in ("schema_version", "mode", "primary_todo_id")},
@@ -1120,6 +944,19 @@ def _interaction_reads_and_arbitration(
             runtime_root=runtime_root or payload.get("runtime_root"),
             registry_path=registry_path or payload.get("registry")),
     }
+    recommendation = payload.get("heartbeat_recommendation")
+    if isinstance(recommendation, dict) and (
+        "command" in recommendation or recommendation.get("source") == "interaction_contract"
+    ):
+        # Transport configured-command compatibility guidance and its readback.
+        # The existing typed quota projection uses interaction admission; neither
+        # this bridge nor later host projections choose another action.
+        projection_params.update({
+            "heartbeat_recommendation": recommendation,
+            "primary_action": contract["agent_channel"].get("primary_action"),
+            "notify": contract["user_channel"].get("notify"),
+            "spend_policy": contract["cli_channel"].get("spend_policy"),
+        })
     # With at most three generated reads and shell-quote expansion, replies fit
     # 16B + 8 KiB for B ASCII JSON bytes; 64 KiB inputs stay below the 2 MiB frame cap.
     try:
@@ -1134,6 +971,11 @@ def _interaction_reads_and_arbitration(
         not isinstance(item, dict) or not item.get("command") for item in projected
     ):
         raise RuntimeError("TypeScript interaction required reads are malformed")
+    if "heartbeat_recommendation" in result:
+        guidance = result["heartbeat_recommendation"]
+        if not isinstance(guidance, dict):
+            raise RuntimeError("TypeScript interaction heartbeat guidance is malformed")
+        payload["heartbeat_recommendation"] = guidance
     return projected, SchedulerArbitration.from_projection(result.get("arbitration"))
 
 
@@ -1359,6 +1201,7 @@ def _build_interaction_response_plan(
 
     if not (
         user_channel.get("action_required") is True
+        and user_channel.get("non_gating_notice") is not True
         and user_channel.get("notify") == "NOTIFY"
         and agent_channel.get("must_attempt") is False
         and agent_channel.get("delivery_allowed") is False
@@ -1592,10 +1435,8 @@ def _build_interaction_cli_channel(
     if spend_after_selection and selected_todo.get("todo_id"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
-            "refresh": (
-                "delivery_workspace; otherwise --delivery-workspace-path"
-                if selected_todo.get("task_repository")
-                else "registered local Goal target; when caller cwd differs, refresh with --delivery-workspace-path for the actual target; spend uses the recorded delivery workspace"
+            "refresh": delivery_workspace_refresh_hint(
+                payload.get("delivery_workspace_isolation") or {}
             ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",
@@ -1706,14 +1547,17 @@ def unadmitted_action_selection(payload: dict[str, Any]) -> bool:
     qualification = payload.get("action_selection_qualification")
     if not isinstance(qualification, Mapping):
         return False
-    mode = _interaction_mode(payload)
     user_required = False if payload.get("agent_work_mode") == "monitor_only" else user_channel_action_required(payload)
-    must_attempt, delivery_allowed = interaction_execution_flags(
-        payload, mode=mode, user_required=user_required,
+    decision = _project_interaction_execution(
+        payload,
+        user_required=user_required,
         blocked_successor_wait_observation=_blocked_successor_wait_observation_required(payload),
+        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
     )
     return selection.action_selection_needs_recovery(
-        payload, agent_must_attempt=must_attempt, agent_delivery_allowed=delivery_allowed,
+        payload,
+        agent_must_attempt=decision["must_attempt"],
+        agent_delivery_allowed=decision["delivery_allowed"],
     )
 
 
@@ -1739,20 +1583,20 @@ def _build_interaction_contract_projection(
         if isinstance(payload.get("heartbeat_recommendation"), dict)
         else {}
     )
-    mode = _interaction_mode(payload)
     monitor_only = payload.get("agent_work_mode") == "monitor_only"
     user_required = False if monitor_only else user_channel_action_required(payload)
-    must_attempt, delivery_allowed = interaction_execution_flags(
-        payload, mode=mode, user_required=user_required,
+    decision = _project_interaction_execution(
+        payload,
+        user_required=user_required,
         blocked_successor_wait_observation=_blocked_successor_wait_observation_required(payload),
+        agent_scope_frontier_actions=agent_scope_frontier_actions,
     )
+    mode = decision["mode"]
+    must_attempt = decision["must_attempt"]
+    delivery_allowed = decision["delivery_allowed"]
+    quiet_noop_allowed = decision["quiet_noop_allowed"]
     selection_recovery_required = selection.action_selection_needs_recovery(
         payload, agent_must_attempt=must_attempt, agent_delivery_allowed=delivery_allowed,
-    )
-    quiet_noop_allowed = interaction_quiet_noop_allowed(
-        mode=mode,
-        user_required=user_required,
-        must_attempt=must_attempt,
     )
     spend_after_validation = (
         _interaction_spend_after_validation(mode)

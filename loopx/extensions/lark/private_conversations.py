@@ -24,14 +24,15 @@ from ...presentation.renderers.conversation_status_markdown import render_conver
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .event_collector_runtime import enrich_lark_event_reply_context
-from .goal_channel_transport import call, json_payload, lark_args, lark_provider_mention_identities
+from .goal_channel_transport import call, json_payload, lark_args, lark_provider_mention_identities, record_event_timing
 from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
-from .private_progress import ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, project_progress
+from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
+                               presentation_phase, presentation_stream, project_progress)
 
 # Conservative transport budget, not a claim about the provider's maximum.
 # Reserve edits for a final/closing notice; continue long Turns on a new draft.
@@ -51,10 +52,16 @@ class LarkPrivateConversations:
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
+        self._context_recovery_probe_at: dict[Path, float] = {}
         from .owner_attention import LarkOwnerAttention
         self.owner_attention = LarkOwnerAttention(self)
         from .private_ingress import PrivateIngressObserver
         self.ingress = PrivateIngressObserver(self)
+        from ...capabilities.native_chat.steward_managed_mode import StewardManagedMode
+        self.managed_steward = StewardManagedMode(controller, self.bindings)
+        from .steward_reports import LarkStewardReports
+        self.steward_reports = LarkStewardReports(self)
+        controller.steward_report_provider = self.steward_reports
 
     def profiles(self) -> dict[str, dict[str, str]]:
         """Discover current App configuration, never authorize a conversation.
@@ -84,6 +91,7 @@ class LarkPrivateConversations:
                     or identity_ref(app_id) != row["provider_ref"]):
                 continue
             profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
+                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
                 "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
         return profiles
 
@@ -346,8 +354,36 @@ class LarkPrivateConversations:
                 or message_id != record["event"]["message_id"]):
             return None, False
         identity: dict[str, str] = {}
+        record_event_timing(profile, message_id, "outbound_source_check_started")
         verified = self._source_verified(record, sender_identity=identity)
+        record_event_timing(profile, message_id, "outbound_source_check_returned")
         return identity.get("bot_display_name"), verified
+
+    @staticmethod
+    def _group_control_hint(event: Mapping[str, Any]) -> str | None:
+        # Rendered event mentions only schedule readonly source IO. The raw
+        # provider text and current App identity still authorize the command.
+        text = event.get("content")
+        if not isinstance(text, str):
+            return None
+        text = text.strip()
+        if text in CHAT_CONTROL_COMMANDS:
+            return text
+        mentions = event.get("mentions")
+        if not isinstance(mentions, list):
+            return None
+        candidates = set()
+        for mention in mentions:
+            if not isinstance(mention, Mapping):
+                continue
+            name = mention.get("name")
+            for prefix in (mention.get("key"), "@" + name if isinstance(name, str) else None):
+                if (isinstance(prefix, str) and prefix and text.startswith(prefix)
+                        and text[len(prefix):len(prefix) + 1].isspace()):
+                    command = text[len(prefix):].strip()
+                    if command in CHAT_CONTROL_COMMANDS:
+                        candidates.add(command)
+        return next(iter(candidates)) if len(candidates) == 1 else None
 
     def _admitted_control_root(self, record: dict[str, Any], binding: dict[str, Any]) -> str | None:
         """Schedule readonly IO only for a topic already admitted by this Core."""
@@ -355,7 +391,7 @@ class LarkPrivateConversations:
         root = event.get("root_id")
         if (binding.get("enabled") is not True or binding.get("audience") != "group"
                 or event.get("message_type") != "text" or not isinstance(event.get("content"), str)
-                or event["content"] not in CHAT_CONTROL_COMMANDS
+                or self._group_control_hint(event) is None
                 or not isinstance(root, str) or not root or root == event["message_id"]):
             return None
         try:
@@ -377,13 +413,18 @@ class LarkPrivateConversations:
 
     def _admit_group_control(self, path: Path, record: dict[str, Any], binding: dict[str, Any],
                             root: str, *, defer_background_stop: bool) -> dict[str, Any] | None:
+        command_input = self._group_control_hint(record["event"])
+        if command_input is None:
+            return None
         checked = False
         source_verified = False
         # Read only the source and its locally admitted root. Fresh Core
         # identity resolution must follow this IO, inside both fences: an App
         # change while the provider reads run must not inherit an earlier check.
         try:
+            record_event_timing(record["profile"], record["event"]["message_id"], "control_source_read_started")
             envelopes = self._group_source_pair(record["profile"], record["event"]["message_id"], root)
+            record_event_timing(record["profile"], record["event"]["message_id"], "control_source_read_returned")
         except (KeyError, ValueError, OSError):
             return {"status": "source_verification_failed"}
         if any(message is None for message in envelopes):
@@ -391,6 +432,7 @@ class LarkPrivateConversations:
 
         def preflight(selected: dict[str, Any]) -> None:
             nonlocal checked, source_verified
+            record_event_timing(record["profile"], record["event"]["message_id"], "control_preflight_started")
             checked = True
             if selected["binding"] != binding:
                 raise ValueError("conversation binding changed during source read")
@@ -398,16 +440,19 @@ class LarkPrivateConversations:
                                            source_pair=envelopes)
             if message is None:
                 raise ValueError("canonical control source verification failed")
-            if message.get("_command_input") != record["event"]["content"]:
+            if message.get("_command_input") != command_input:
                 raise _ControlReadFallback
             source_verified = True
             _atomic_write_json(path, record)
+            record_event_timing(record["profile"], record["event"]["message_id"], "control_preflight_returned")
 
         try:
+            record_event_timing(record["profile"], record["event"]["message_id"], "core_admission_started")
             admitted = self.core.admit(binding_id=binding["binding_id"], source=record["source"],
                 request_ref=record["request_ref"], message=record["event"]["content"],
-                command=CHAT_CONTROL_COMMANDS[record["event"]["content"]],
+                command=CHAT_CONTROL_COMMANDS[command_input],
                 defer_background_stop=defer_background_stop, source_preflight=preflight)
+            record_event_timing(record["profile"], record["event"]["message_id"], "core_admission_returned")
         except _ControlReadFallback:
             return None
         except ValueError:
@@ -552,19 +597,37 @@ class LarkPrivateConversations:
 
     def admit(self, profile: str, event: dict[str, Any], *,
               defer_background_stop: bool = False) -> dict[str, Any]:
+        record_event_timing(profile, str(event.get("message_id") or ""), "admission_started")
         try:
             binding = self._binding(profile)
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
             request = identity_ref(binding["provider_ref"], event["message_id"])
             control_root = self._admitted_control_root({"request_ref": request, "source": source,
                                                        "event": event}, binding)
-            selected = (None if control_root else self.bindings.resolve(
-                binding_id=binding["binding_id"], **source, include_observation=True))
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
         request = identity_ref(binding["provider_ref"], event["message_id"])
         path = self.root / f"{request}.json"
+        record_event_timing(profile, event["message_id"], "binding_hint_ready")
         with exclusive_file_lock(path, operation="capture_private_chat_request"):
+            record_event_timing(profile, event["message_id"], "capture_lock_acquired")
+            # Retain a candidate from the locally bound owner before provider
+            # identity IO can fail. This private receipt grants no execution:
+            # recovery still verifies the App, current owner, source and Core
+            # grant before creating a Turn. Groups and other senders keep their
+            # existing pre-capture privacy boundary.
+            if (not path.exists() and binding.get("enabled") is True
+                    and binding.get("audience", "owner") == "owner"
+                    and source.get("private_human_message") is True
+                    and source["sender_ref"] == binding["operator_ref"]):
+                _atomic_write_json(path, {"schema_version": "lark_private_chat_delivery_v0",
+                    "request_ref": request, "profile": profile, "binding_id": binding["binding_id"],
+                    "source": source, "event": event, "deliveries": {}, "status": "captured"})
+            try:
+                selected = (None if control_root else self.bindings.resolve(
+                    binding_id=binding["binding_id"], **source, include_observation=True))
+            except (KeyError, StopIteration, ValueError):
+                return {"status": "audience_rejected"}
             if path.exists():
                 record = _read_json(path)
                 # event_id can change on redelivery; canonical message content
@@ -578,6 +641,11 @@ class LarkPrivateConversations:
                     "event": event, "deliveries": {}, "status": "captured"}
                 if binding.get("audience") != "group":
                     _atomic_write_json(path, record)
+            # A transport-only rejection never owned a Core request. Its
+            # verified notice stays terminal on provider redelivery too.
+            if (record["status"] == "delivered"
+                    and "session_id" not in record and "turn_id" not in record):
+                return {"status": "command_rejected"}
             if control_root:
                 result = self._admit_group_control(path, record, binding, control_root,
                                                   defer_background_stop=defer_background_stop)
@@ -663,9 +731,11 @@ class LarkPrivateConversations:
                 except (KeyError, ValueError, OSError):
                     return {"status": "source_verification_failed"}
             try:
+                record_event_timing(profile, event["message_id"], "core_admission_started")
                 admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                     request_ref=request, message=text, command=command, attachments=attachments,
                     defer_background_stop=defer_background_stop)
+                record_event_timing(profile, event["message_id"], "core_admission_returned")
             except ValueError:
                 return self._reject_command(path, record, binding)
             except RuntimeError as exc:
@@ -691,9 +761,10 @@ class LarkPrivateConversations:
         saved = session["steward_context"]
         selected = self.bindings.session_context(saved)
         client = str(turn.get("client_turn_id") or "")
-        request = client.removeprefix("external-")
-        if client != f"external-{request}" or not re.fullmatch(r"[a-f0-9]{24}", request):
+        match = re.fullmatch(r"external-([a-f0-9]{24})(?:-recovery-[1-9][0-9]*)?", client)
+        if match is None:
             raise ValueError("original private request unavailable")
+        request = match[1]
         record = _read_json(self.root / f"{request}.json")
         native = self.core.read_request(request)
         message_id = str(record.get("event", {}).get("message_id") or "")
@@ -723,7 +794,10 @@ class LarkPrivateConversations:
         Presentation failures never reject a persisted Turn. Existing reaction
         journals prevent uncertain provider writes from being repeated on replay.
         """
-        if not self.reaction_feedback:
+        if not self.reaction_feedback or record.get("context_recovery"):
+            # The original failure already acknowledged this Inbox source.
+            # Preserve its reaction journal; a continuation uses its own draft
+            # rather than trying to reopen the completed processing reaction.
             return
         phase = "processing" if processing else "received"
         feedback = record.setdefault("feedback", {})
@@ -739,9 +813,14 @@ class LarkPrivateConversations:
         feedback[phase] = result
         _atomic_write_json(path, record)
 
-    def _deliver(self, path: Path, record: dict[str, Any], phase: str, text: str, *, inbox: Callable[[], Path]) -> bool:
+    def _deliver(self, path: Path, record: dict[str, Any], phase: str, text: str, *, inbox: Callable[[], Path],
+                 edit_only: bool = False, authorization_check: Callable[[], bool] | None = None) -> bool:
         if not text:
             return False
+        if authorization_check is not None and not authorization_check():
+            return False
+        kind = phase.split(".", 1)[0]
+        phase = presentation_phase(record, phase)
         phase_state = record["deliveries"].get(phase, {})
         if phase_state.get("verified"):
             return True
@@ -752,20 +831,26 @@ class LarkPrivateConversations:
             text = _presentation_text(text)
         if phase_state.get("text") not in (None, text):
             raise ValueError("delivery content changed after an attempt")
+        record_event_timing(record["profile"], record["event"]["message_id"], "delivery_started")
         config = inbox()
+        record_event_timing(record["profile"], record["event"]["message_id"], "delivery_inbox_ready")
         kwargs = dict(project=self.runtime_root, config_path=config,
             message_id=record["event"]["message_id"], text=text, runner=self._reply_runner,
-            finalize_reactions=phase not in {"admission", "progress"} and not (phase == "terminal" and record.get("commission_resources")),
-            source_authority_verifier=lambda profile, chat, message: self._source_authority(record, profile, chat, message))
-        progress = record["deliveries"].get("progress") or {}
-        stream = record.get("stream") or {}
+            finalize_reactions=not edit_only and kind not in {"admission", "progress", "periodic_report"} and not (kind == "terminal" and record.get("commission_resources")),
+            source_authority_verifier=lambda profile, chat, message: (
+                self._source_authority(record, profile, chat, message)
+                if authorization_check is None or authorization_check() else (None, False)))
+        progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
+        stream = presentation_stream(record)
         edit = phase_state.get("edit_from")
-        if phase in {"terminal", "commission_result"} and progress.get("attempt") and not stream.get("closed") and not stream.get("edit_limit_reached") and not phase_state.get("started"):
+        if not edit_only and kind in {"terminal", "commission_result"} and progress.get("attempt") and not stream.get("closed") and not stream.get("edit_limit_reached") and not phase_state.get("started"):
             # Freeze the known message proof before the first final edit. Later
             # recovery can replace the same ID, never append another answer.
             edit = {"text": _presentation_text(stream.get("confirmed_text") or progress["text"]),
                     "attempt": stream.get("confirmed_attempt") or progress["attempt"]}
             phase_state["edit_from"] = edit
+        if edit_only and not edit:
+            return False
         if edit:
             def before_edit(_intent: str) -> dict[str, bool]:
                 phase_state.update(text=text, started=True)
@@ -779,14 +864,15 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, record)
 
             result = update_lark_inbox_reply(**kwargs, previous_text=edit["text"], attempt=edit["attempt"],
-                before_send=before_edit, delivery_attempt_recorder=edit_attempt)
-            if result.get("blocker") == "provider_update_edit_limit":
+                before_send=before_edit, delivery_attempt_recorder=edit_attempt,
+                require_previous_text_match=edit_only)
+            if not edit_only and result.get("blocker") == "provider_update_edit_limit":
                 # A confirmed edit rejection plus fresh non-matching readback
                 # proves this final did not reach the draft. Preserve its proof
                 # and use the existing source-bound, idempotent final sender.
                 # Recovery of older, already-started final edits takes this
                 # same path; an ambiguous failure must never take it.
-                record.setdefault("stream", {})["edit_limit_reached"] = True
+                stream["edit_limit_reached"] = True
                 phase_state["rejected_update"] = {"blocker": result["blocker"],
                     "edit_from": edit, "attempt": phase_state.get("attempt")}
                 for key in ("edit_from", "attempt", "started"):
@@ -794,17 +880,17 @@ class LarkPrivateConversations:
                 record["deliveries"][phase] = phase_state
                 _atomic_write_json(path, record)
                 return self._deliver(path, record, phase, text, inbox=inbox)
-            if result.get("blocker") in {"provider_update_too_large", "provider_update_format_unsupported"}:
+            if not edit_only and result.get("blocker") in {"provider_update_too_large", "provider_update_format_unsupported"}:
                 # Do not truncate long/mention-bearing final answers to fit a
                 # draft. Close it, then use the established full final sender.
-                if not self._close_progress(path, record, inbox=inbox) and not record.get("stream", {}).get("edit_limit_reached"):
+                if not self._close_progress(path, record, inbox=inbox) and not stream.get("edit_limit_reached"):
                     return False
                 phase_state.pop("edit_from", None)
                 record["deliveries"][phase] = phase_state
                 _atomic_write_json(path, record)
                 return self._deliver(path, record, phase, text, inbox=inbox)
         elif phase_state.get("attempt"):
-            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"])
+            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"], resume_parts=True)
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
             # the original source recoverable; never resend blindly.
@@ -822,21 +908,27 @@ class LarkPrivateConversations:
 
             result = reply_lark_event_inbox(**kwargs, execute=True, before_send=before_send,
                                            delivery_attempt_recorder=attempt, short_message_limit=None,
-                                           content_format="markdown")
+                                           content_format="markdown",
+                                           overlap_source_preflight=bool(kind == "terminal" and self._completed_stop_root(
+                                               record, next((row for row in self.bindings.read()["bindings"]
+                                                             if row.get("binding_id") == record["binding_id"]), {}))))
         # A verified intermediate reply is not completion. A final reply with
         # cleanup owed recovers its original attempt; it must never be resent.
         phase_state["verified"] = result.get("reply_verified") is True and result.get("ok") is True
         phase_state["blocker"] = result.get("blocker")
         record["deliveries"][phase] = phase_state
+        if not edit_only and record.get("context_recovery") and kind == "terminal" and phase_state["verified"]:
+            stream["closed"] = True
         _atomic_write_json(path, record)
+        record_event_timing(record["profile"], record["event"]["message_id"], "delivery_returned")
         return bool(phase_state["verified"])
 
     def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path], finalizing: bool = False) -> bool:
         text = _presentation_text(text)
-        progress = record["deliveries"].get("progress") or {}
+        progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
         if not progress.get("verified"):
             return self._deliver(path, record, "progress", text, inbox=inbox)
-        stream = record.setdefault("stream", {})
+        stream = presentation_stream(record)
         if stream.get("edit_limit_reached") or (not finalizing and int(stream.get("edit_attempts") or 0) >= PROGRESS_EDIT_BUDGET):
             return False
         confirmed: dict[str, Any] = {}
@@ -864,12 +956,35 @@ class LarkPrivateConversations:
         return result.get("ok") is True
 
     def _close_progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
+        if self._retire_progress_parts(path, record, inbox=inbox):
+            return True
         text = "回答已生成，完整结果将单独发送。"
         if not self._edit_progress(path, record, text, inbox=inbox, finalizing=True):
             return False
-        record["stream"]["closed"] = True
+        presentation_stream(record)["closed"] = True
         _atomic_write_json(path, record)
         return True
+
+    def _retire_progress_parts(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
+        """Verify every concrete draft post before retiring a split draft."""
+        from .post_delivery import POST_PARTS_LOCATOR
+
+        progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
+        stream = presentation_stream(record)
+        attempt = stream.get("confirmed_attempt") or progress.get("attempt") or {}
+        if not POST_PARTS_LOCATOR.fullmatch(str(attempt.get("message_ref") or "")):
+            return False
+        result = verify_lark_inbox_reply(project=self.runtime_root, config_path=inbox(),
+            message_id=record["event"]["message_id"],
+            text=stream.get("confirmed_text") or progress["text"], attempt=attempt,
+            runner=self._reply_runner, finalize_reactions=False,
+            source_authority_verifier=lambda profile, chat, message: self._source_authority(record, profile, chat, message))
+        stream["blocker"] = result.get("blocker")
+        verified = result.get("reply_verified") is True and result.get("ok") is True
+        if verified:
+            stream["closed"] = True
+        _atomic_write_json(path, record)
+        return verified
 
     def _continue_progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
         """Retire a verified draft before creating the next source-bound one.
@@ -878,23 +993,24 @@ class LarkPrivateConversations:
         permits rollover. An uncertain close/create keeps its frozen intent on
         replay; continuation never submits or restarts the Core Turn.
         """
-        progress = record["deliveries"].get("progress") or {}
+        progress_key = presentation_phase(record, "progress")
+        progress = record["deliveries"].get(progress_key) or {}
         if not progress.get("verified"):
             return False
-        stream = record["stream"]
-        if not stream.get("edit_limit_reached"):
+        stream = presentation_stream(record)
+        if not stream.get("edit_limit_reached") and not self._retire_progress_parts(path, record, inbox=inbox):
             closed = self._edit_progress(path, record, "仍在处理，后续进展见下一条消息。",
                                          inbox=inbox, finalizing=True)
             if not closed and not stream.get("edit_limit_reached"):
                 return False
         segment = int(stream.get("segment") or 0)
-        record["deliveries"][f"progress.{segment}"] = {
+        record["deliveries"][f"{progress_key}.{segment}"] = {
             **progress, "text": stream.get("confirmed_text") or progress["text"],
             "attempt": stream.get("confirmed_attempt") or progress["attempt"],
             "edit_attempts": int(stream.get("edit_attempts") or 0),
             "edit_limit_reached": bool(stream.get("edit_limit_reached")),
         }
-        record["deliveries"].pop("progress")
+        record["deliveries"].pop(progress_key)
         for key in ("confirmed_text", "confirmed_attempt", "edit_attempts", "edit_limit_reached", "blocker", "closed"):
             stream.pop(key, None)
         stream["segment"] = segment + 1
@@ -903,7 +1019,7 @@ class LarkPrivateConversations:
 
     def _progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path],
                   session_id: str | None = None, turn_id: str | None = None) -> None:
-        stream = record.setdefault("stream", {})
+        stream = presentation_stream(record)
         events = self.core.controller.store.events_after(session_id or record["session_id"],
             turn_id or record["turn_id"], stream.get("cursor"))
         text = project_progress(stream, events)
@@ -927,7 +1043,8 @@ class LarkPrivateConversations:
         _atomic_write_json(path, record)
         # A failed creation must resume its frozen intent rather than trying a
         # new body on an uncertain message. New chunks remain in the view.
-        progress = record["deliveries"].get("progress") or {}
+        progress_key = presentation_phase(record, "progress")
+        progress = record["deliveries"].get(progress_key) or {}
         if progress.get("verified") and (stream.get("edit_limit_reached")
                 or int(stream.get("edit_attempts") or 0) >= PROGRESS_EDIT_BUDGET):
             if not self._continue_progress(path, record, inbox=inbox):
@@ -937,7 +1054,7 @@ class LarkPrivateConversations:
         if not progress.get("verified"):
             initial = str(progress.get("text") or text)
             if self._deliver(path, record, "progress", initial, inbox=inbox):
-                stream.update(confirmed_text=initial, confirmed_attempt=progress.get("attempt") or record["deliveries"]["progress"]["attempt"])
+                stream.update(confirmed_text=initial, confirmed_attempt=progress.get("attempt") or record["deliveries"][progress_key]["attempt"])
                 _atomic_write_json(path, record)
         else:
             self._edit_progress(path, record, text, inbox=inbox)
@@ -945,13 +1062,88 @@ class LarkPrivateConversations:
             stream["confirmed_answer_digest"] = answer_digest
             _atomic_write_json(path, record)
 
+    def _repair_recovery_presentation(self, path: Path) -> None:
+        """Edit proven legacy drafts only; preserve execution and final receipts."""
+        with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+            record = _read_json(path)
+            repairs = legacy_recovery_repairs(record)
+            if record["status"] != "delivered" or not repairs:
+                return
+            try:
+                native = self.core.read_request(record["request_ref"])
+                turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
+                if (native.get("delivery_verified") is not True or not turn
+                        or turn["status"] not in TERMINAL_TURN_STATES
+                        or any(native.get(key) != record.get(key) for key in
+                            ("request_ref", "binding_id", "source", "session_id", "turn_id", "context_recovery"))):
+                    return
+                selected = self.bindings.resolve(binding_id=record["binding_id"],
+                    include_observation=True, **record["source"])
+                if self._recovery_source_observation(record, selected) is None:
+                    return
+                config: Path | None = None
+
+                def inbox() -> Path:
+                    nonlocal config
+                    if config is None:
+                        config = self._inbox(record)
+                    return config
+
+                for repair in repairs:
+                    state = record["deliveries"].setdefault(repair["phase"], {})
+                    state.setdefault("edit_from", repair["edit_from"])
+                    _atomic_write_json(path, record)
+                    self._deliver(path, record, repair["phase"], repair["text"], inbox=inbox, edit_only=True)
+            except (KeyError, ValueError, OSError):
+                return  # Unknown authority or provider effects stay pending.
+
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
-        return [path for path in sorted(self.root.glob("*.json"))
-                if _read_json(path)["status"] != "delivered"]
+        paths = []
+        for path in sorted(self.root.glob("*.json")):
+            row = _read_json(path)
+            if row["status"] != "delivered":
+                paths.append(path)
+            elif (row.get("session_id") and row.get("turn_id")
+                    and time.monotonic() >= self._context_recovery_probe_at.get(path, 0)):
+                # Only a discovery/backoff hint, never execution authority.
+                # The canonical request, provider effect inventory and source
+                # are independently re-read by recover_failed_request.
+                self._context_recovery_probe_at[path] = time.monotonic() + 60
+                if legacy_recovery_repairs(row) or self.core.context_recovery_candidate(row["request_ref"]):
+                    paths.append(path)
+        return paths
 
     def reconcile(self) -> int:
         return sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
+
+    def _recovery_source_observation(self, record: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any] | None:
+        source = self._source_message(record, selected=selected)
+        native = self.core.read_request(record["request_ref"])
+        expected = record.get("reply_context_source_text", native.get("message"))
+        # Resume the admitted text, never an edited/replaced source. Keep the
+        # original reply-context text when admission had added verified ancestry.
+        # An unavailable rendering is unknown, not permission to guess a body.
+        if source is None:
+            return None
+        message_type = record["event"].get("message_type")
+        if source.get("msg_type", source.get("message_type")) != message_type:
+            return None
+        if message_type == "post":
+            # A text-only post already froze its provider rendering at intake.
+            # Require that exact source and the same stripped model input; do
+            # not download resources or treat a partial media caption as text.
+            frozen = record.get("source_content")
+            if (record.get("attachments") != [] or native.get("attachments")
+                    or record.get("attachment_notice") or not isinstance(frozen, str)
+                    or frozen.strip() != expected):
+                return None
+            expected = frozen
+        elif message_type != "text":
+            return None
+        if not isinstance(source.get("content"), str) or source["content"] != expected:
+            return None
+        return dict(source)
 
     def _received_during_recovery(self, path: Path) -> None:
         """Acknowledge durable ordinary admission independently of recovery.
@@ -977,7 +1169,8 @@ class LarkPrivateConversations:
             saved = (session or {}).get("project_context") or (session or {}).get("steward_context")
             if (not session or not turn or not saved or session.get("status") == "closed"
                     or turn.get("session_id") != session["session_id"]
-                    or turn.get("client_turn_id") != f"external-{record['request_ref']}"
+                    or turn.get("client_turn_id") != (record.get("context_recovery", {}).get("client_turn_id")
+                        or f"external-{record['request_ref']}")
                     or identity_ref(saved["provider_ref"], record["event"]["message_id"]) != record["request_ref"]
                     or record["source"] != lark_private_source(
                         provider_ref=saved["provider_ref"], event=record["event"])):
@@ -994,6 +1187,29 @@ class LarkPrivateConversations:
         # Repair only this persisted source. Core still owns admission, recovery
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
+        record_event_timing(row["profile"], row["event"]["message_id"], "reconciliation_started")
+        if row["status"] == "delivered" and row.get("context_recovery"):
+            # Repair historical presentation first. A delivered failure of a
+            # continuation still needs Core's fresh recovery judgment; only a
+            # completed/ineligible request can stop at presentation repair.
+            self._repair_recovery_presentation(path)
+            if not self.core.context_recovery_candidate(row["request_ref"]):
+                return 0
+        if row["status"] == "delivered" and row.get("session_id") and row.get("turn_id"):
+            # Legacy terminal delivery may be only a verified failure notice.
+            # Core decides whether a migration continuation is safe; preserve
+            # the old Turn and every frozen/ambiguous provider attempt.
+            recovered = self.core.recover_failed_request(row["request_ref"],
+                source_observation=lambda selected: self._recovery_source_observation(row, selected))
+            if (recovered.get("context_recovery") and not recovered.get("delivery_verified")
+                    and recovered.get("turn_id") != row["turn_id"]):
+                with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+                    row = _read_json(path)
+                    if any(row.get(key) != recovered.get(key) for key in ("request_ref", "binding_id", "source", "session_id")):
+                        raise ValueError("original recovery source changed")
+                    row.update(status="accepted", turn_id=recovered["turn_id"],
+                        context_recovery=recovered["context_recovery"])
+                    _atomic_write_json(path, row)
         if row["status"] == "captured":
             # Intake may still own this capture. Wait on its existing fence and
             # read its result before retrying admission from a stale snapshot.
@@ -1008,7 +1224,9 @@ class LarkPrivateConversations:
                         # This source was already admitted and target-frozen.
                         # Core revalidates recovery; delivery below re-reads the
                         # provider source. No second content admission is needed.
+                        record_event_timing(row["profile"], row["event"]["message_id"], "core_recovery_started")
                         self.core.recover(request_ref=row["request_ref"])
+                        record_event_timing(row["profile"], row["event"]["message_id"], "core_recovery_returned")
                         native = self.core.read_request(row["request_ref"])
                         if native["status"] == "prepared":
                             return 0
@@ -1021,7 +1239,7 @@ class LarkPrivateConversations:
                 row = _read_json(path)
         native_path = self.core.root / f"{row['request_ref']}.json"
         if native_path.exists():
-            if (self.reaction_feedback and row["status"] == "accepted"
+            if (self.reaction_feedback and not row.get("context_recovery") and row["status"] == "accepted"
                     and not row.get("feedback", {}).get("received", {}).get("ok")):
                 # One bounded presentation job per existing reply worker. A
                 # slow host cannot delay Get, nor can slow provider feedback
@@ -1029,13 +1247,17 @@ class LarkPrivateConversations:
                 # the existing Inbox journal still owns uncertain writes.
                 with ThreadPoolExecutor(max_workers=1) as feedback:
                     received = feedback.submit(self._received_during_recovery, path)
+                    record_event_timing(row["profile"], row["event"]["message_id"], "core_recovery_started")
                     self.core.recover(request_ref=row["request_ref"])
+                    record_event_timing(row["profile"], row["event"]["message_id"], "core_recovery_returned")
                     try:
                         received.result()
                     except (KeyError, ValueError, OSError):
                         pass  # Presentation never suppresses durable recovery.
             else:
+                record_event_timing(row["profile"], row["event"]["message_id"], "core_recovery_started")
                 self.core.recover(request_ref=row["request_ref"])
+                record_event_timing(row["profile"], row["event"]["message_id"], "core_recovery_returned")
         with exclusive_file_lock(path, operation="deliver_private_chat_request"):
             record = _read_json(path)
             if record["status"] in {"captured", "delivered"}:
@@ -1091,7 +1313,7 @@ class LarkPrivateConversations:
                     # Get already acknowledges admission. Reserve a text
                     # notification for a real wait or unavailable feedback;
                     # resume any old attempt with its original exact text.
-                    admission = (record["deliveries"].get("admission") or {}).get("text")
+                    admission = (record["deliveries"].get(presentation_phase(record, "admission")) or {}).get("text")
                     if not admission:
                         if native.get("agent_target"):
                             admission = "已收到，等待原 Agent 宿主处理。/status 查看状态，/project 返回项目对话。"
@@ -1163,7 +1385,10 @@ class LarkPrivateConversations:
                     config = inbox()
                     acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config,
                         message_ids=[record["event"]["message_id"]], execute=True)
-                    self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"))
+                    if native_path.exists():
+                        self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"))
+                    elif record["status"] != "rejected":
+                        raise ValueError("delivery request journal unavailable")
                     record["status"] = "delivered"
                     _atomic_write_json(path, record)
                     return 1

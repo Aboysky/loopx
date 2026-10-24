@@ -324,10 +324,74 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 #### Heartbeat 与 TurnEnvelope 收敛
 
 沿用既有 M7.4 与 roadmap S2/S3/S6/S8，统一 heartbeat 和 Turn host 消费的
-**执行事实**，宿主效果的所有权仍分别保留。现有大 quota packet 与小 TurnEnvelope
+**执行事实**，宿主效果的所有权仍分别保留。已准入 Todo 随后等待定时、PR 或能力时，
+typed receipt owner 保留原回写与结算路径；即使工作已 deferred 或等待已到期，重入也
+只投影原收尾，不恢复业务执行、不选择后继、不创建重试时钟。恢复复用原回执中的正向
+工作准入和精确结算绑定；工作区修复本身没有业务结果，须先经同轮正常 guard 对精确
+同一 Todo 的新鲜选择重新准入。没有该选择的宽泛兼容标志不能把原结算绑定变成工作
+准入。原语义重规划轮次仍保留该决策，不会被误当成已有业务结果。真实 File/SQLite CLI 验证
+返回命令、拒绝换绑、一次回写与扣额、初始重规划及已结算重放。此源码路径修复不代表
+安装宿主采用或完整成本验收。
+显式选择的 CLI 程序现通过共享 invocation transport 保留到生成的工作选择、必读、
+调度及结算/恢复命令。默认路由不变；选择程序不新增准入或执行权限。候选安装和
+接收者实际采用仍须与命令路由资格分别验收。
+现有大 quota packet 与小 TurnEnvelope
 都不是仅凭大小就合理的目标形态。可选 memory 参与事实现进入一个有界、签名覆盖的
 envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat/App 或模型收益
 已验收。
+
+memory 参与现由能力层组合的选择后上下文 hook 注册接入 native Turn 和执行中的
+quota/heartbeat guard。Codex、DSH、generic CLI 传输相同的有界上下文、指导与可选
+结果字段；绑定和模式判断归能力，adapter 只保留宿主格式。TypeScript 限制贡献，拒绝
+替换权限／核心结果字段，复用既有 governing 签名文档及来源读回绑定上下文。只增加
+原捕获的定位信息不使未变决策失效；actor、权限、配置读回或贡献变化则丢弃可选上下文。
+
+通用 Python 贡献 IO 与既有注册和 dispatcher 共同归属
+`loopx.control_plane.capability_hooks`，不再保留平行的 Python Turn-context 模块。
+校验与来源绑定继续调用 TypeScript decoder，宿主 adapter 消费同一份 hook 投影。
+
+注册的 `PostSettlement` callback 在独立精确反思证明和可记账 writeback/spend 后调用
+既有 ingest owner，手动宿主的 sidecar adapter 也使用同一注册。`post_writeback` 继续
+无副作用；逐 hook 回执保留已完成工作，只恢复结果不确定的其他 hook，provider owner
+继续负责写入去重与对账。终态重放保留原 journal 与回执，从原 owner 回读的恢复结果
+通过 `post_settlement_recovery` 返回，不重新结算。File/SQLite 原生宿主及隔离 provider 用例只资格源码路径；
+安装态 App/Lark、模型收益、完整成本及以下三项收敛验收仍开放。
+
+注册前 journal 的恢复保留已准入的有界反思及独立验证 digest，不改写原 plan、不重启
+Host／validator，也不为新工作激活旧输入。provider 效果仍由当前 ingest 策略及原结算
+owner 决定，缓存内容本身不授予写入权限。
+
+PR 依赖观察现复用既有注册 TurnStart 生命周期，由执行性 quota guard、原生 Turn
+与兼容 prequota 共用。权限来自 typed Goal／Agent capability owner，包括已记住的
+宿主观察与撤销；已有授权时不必逐命令补 flag。能力自有诊断使 PR 业务规则留在 core
+Turn 之外；完整源 TS 计划、合并事实 owner 与正常执行准入仍为原权威。Goal 内
+single-flight 与每项依赖的持久节奏避免并发／到期读取重复。File/SQLite 验证覆盖业务
+额度暂停／停止、full/thin heartbeat 生成命令、跨入口观察、撤销、不确定效果、provider
+失败后的无关独立校验工作及原 journal 重放。App/Lark 共用上下文后端只消费 canonical
+就绪状态，不轮询。plan、只读／status／上下文、缺少权限与恢复路径均不添加观察。
+安装态执行器采用、既有真实 owner 的合法恢复、持续调度、模型结果与以下三批收敛验收
+仍开放。安装态 memory 生命周期采用仍单独验收；post-writeback hook 继续无效果。
+
+同次捕获决策中的所选 Task 继续条件与满足状态，现在沿完整选择投影、签名 envelope
+到实际协议宿主输入完整保留。File/SQLite 验证区分不同仓库的同号 PR，保留原事件时间
+和长要求尾部，独立验证后续工作并拒绝证明篡改。只读 managed-step 与原 journal
+重放不新增观察或扣费。本批补齐事实交付遗漏，安装采用与模型结果仍另行验收。
+
+有界规划上下文现在保持内联，不再因短包预算压力而强制读取整份决策；既有 owner 的
+3 KiB 限制保留。共享 DSH/cloud adapter 传递签名内容，历史引用同时保留原捕获路由和
+哈希。thin renderer 仅在存在 `agent_context.detail_ref` 时要求能力补读，不能把也用于
+完整上下文的 `delivery=projected` 当作省略标志。原始来源与实际 Host 输入 oracle 通过
+File/SQLite CLI 和无模型 DSH 子进程覆盖开启／关闭、历史引用及签名拒绝。8 KiB 警告
+保持；选择默认形态前须计算 packet 与必要补读／源 IO。真实模型行为、安装采用及以下
+三项验收仍未完成。
+
+真实绑定的重规划暴露了共享 Host adapter 的另一处遗漏：保留了泛化动作，却丢失
+签名 replan packet 及其证据路由。DSH/cloud adapter 现在同时传递两者，保留既有
+完整 Goal 必读和同次捕获的 replan context。File/SQLite 从选择到重规划的资格验证
+通过仅使用协议 fixture 的 runner 核对实际 DSH provider 输入、签名篡改拒绝及来源／
+状态未变，不调用模型。写回、quota 和 scheduler 仍归外层 Turn executor；普通请求
+保持原输入。本切片只验证该传输边界，安装采用、后续模型决策、完整成本及以下三项
+验收仍未完成。
 
 第一批收敛的当前源码路径核对：
 
@@ -341,6 +405,13 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 | 结算／scheduler | 完整 typed 结算计划及显式宿主调度投影；省略的调度 argv 引用同一捕获的完整决策 | 此投影退役未绑定的详情命令。实际宿主读回、过期写入拒绝与一次恢复仍待宿主采用验收 |
 | 可选 memory | 核验后的 boundary 参与事实及新鲜宿主绑定 | 关闭／recall／ingest／失效／provider 失败隔离持续保留；传输等价不是模型收益 |
 
+边界投影现完整保留范围、审批、守卫和停止条款，不再套用显示裁剪。共享 DSH／云端
+candidate 适配器也传递此前遗漏的签名限制，原范围／workspace 兼容字段各保留一份。
+独立来源 oracle、真实 File/SQLite CLI 和仅使用协议 fixture 的 Host 子进程能复现旧
+遗漏，并验证完整传递、篡改拒绝和不扣费回放。这只修复一个既有调用族的边界交付，
+不新增执行规则 owner。保留 8 KiB 警告，披露恢复条款的成本；live 模型行为、安装态
+采用和完整成本仍须在推广前分别验收。
+
 能力事实修复归既有 TS read-model owner。真实捕获的 File/SQLite 决策覆盖拒绝及
 准入，包含关闭、仅 recall、仅 ingest 与配置失效。新投影签名覆盖这些保留事实，
 不重写历史签名、不增覆盖版本、准入规则或 Python 策略。宿主 provider 失败和
@@ -352,6 +423,26 @@ envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat
 保留这些条款，修改步骤、顺序或 judge 后拒绝签名等价。既有 8 KiB 诊断阈值不变，
 必需文本可以超出并警告。这只关闭传输遗漏，不代表三项收敛验收通过，也不授权退役仍
 活跃的 Python/host adapter。
+
+沿 capsule 追到实际共享 Host 输入又暴露一处丢失：DSH／云端只传递其中的
+unavailable-context 字段，签名有效的 audit 没有到达 provider。适配器现传递既有
+audit 及原捕获路由／哈希。真实 File/SQLite 普通工作与 replan 捕获通过无模型 DSH
+子进程验证有序义务、继续执行的 judge、非证明条件、签名拒绝及来源／状态未变。
+同次核对还发现工作资格丢失：capsule 过滤了成果底线／退化规则，该 Host 又遗漏整份
+既有 execution profile。typed 投影现完整保留，Host 直接传递。携带该 profile 的新
+material result 返回公开安全的 typed `work_evidence` 与 `validation_evidence`
+数组，并保留实际 delivery scale／outcome；外层 executor 验证并保留两组证据及分类。
+原生来源 oracle 和签名篡改覆盖这些规则。两种契约都不存在的 prompt 保持原输入，旧
+journal replay 保持可读；所有状态、quota 和 scheduler 效果仍归外层 executor。本批
+只验证该调用方的条款交付，不证明模型遵守、安装采用或完整成本收益。应计入恢复要求
+的成本；旧的不完整输入不能作为已验收的效率基线。
+
+完整 execution profile 在原有 96 行公开 CLI 夹具中，令普通 Turn plan 增加
+138–142 个 JSON 字符／UTF-8 字节，不增加行数。原 base/head 差分超过 64／70
+字符和 128 字节增长额度，仍按原失败保留。仅当旧四字段 profile 补齐成果底线和
+退化字段、签名覆盖不变且无其他 JSON 结构变化时，给予一次性 160 字符／字节额度。
+已经完整、只补部分或无关变化均不适用。绝对预算、行数、夹具人口、完整来源／Host
+条款验证及生产 8 KiB 诊断保持。本结果说明必要展示成本，不代表模型 token 或效率收益。
 
 统一工作上下文现在由既有 TS interaction owner 选择并满足必读，注册的 Python
 adapter 核验来源，在普通 heartbeat/quota 与签名 envelope 中返回完整当前任务来源，
@@ -371,13 +462,157 @@ TurnEnvelope 投影，不能只用未绑定的合成 argv。适配器只为递�
 不改变 scheduler 准入、执行授权、默认值或宿主效果；打包后的传输验证不代表
 live 模型结果、App 采用或以下三项收敛验收完成。
 
-后续实施 Todo 按依赖顺序推进：
+完整要求交付（#5844）、完整收尾条款（#6337）和原始 Host 决策捕获（#6350）的
+源码修复已合入。保留这些成果；它们的完成不关闭 M7.4、R5 或下列三条验收线。
+后续沿既有 owner 和 checkpoint 按此顺序推进：
 
 | Todo | 可观察结果与决定性验收 |
 |---|---|
 | 核对 heartbeat 与 TurnEnvelope 的执行和上下文要求 | 同一捕获的权威决策保留 actor/Goal/Todo、必读全文、claim/lease、选择、replan/收尾、带条件结算和 scheduler 所有权。删除渲染分支前列明遗漏与重复事实。覆盖可选能力关闭、仅 recall、仅 ingest、绑定失效和 provider 失败；私有详情只经有权限的引用访问。 |
 | 在真实宿主 renderer 采用同一 typed 投影 | heartbeat full/thin 与 Turn host 消费同一执行事实及同 Turn 捕获/详情入口；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
 | 核验上下文形态及迁移默认 | 将相同的正常、replan、等待/恢复与可选能力负载同时对照当前完整和短包路径，测量载荷/model token、详情 IO、延迟、资源增长、遗漏、决策与结果质量。数据丢失、重复效果、身份和结算错误保持硬约束；保留受支持的已保存 prompt/回执与可逆 rollout，根据证据再改预算或默认。 |
+
+**上下文成本与投影融合：下一实现切片**
+
+现有完整来源交付修复了要求遗漏，但共享 `work_context` 并不意味着两种传输已经紧凑。
+改变默认值前，先用同次捕获的数据对照两条生产投影。区分包字节与模型输入，以及操作者/
+控制面轨迹与 solver 轨迹；操作者收到大包，不能证明 solver 消费了那个包。初次返回、
+截断后的恢复和必要详情读取应合计，缓存输入仍占上下文；历史上漏要求的短输入不能作为
+效率基线。
+
+下一切片继续归属上文已有三个融合验收流：
+
+1. **以完整首包、后续子树增量作为融合目标。** 优先优化 benchmark case 内 solver 实际
+   消费的普通 `quota should-run` 输入，实验操作者/控制面对话及个人维护包为次要项。
+   共享投影首次完整交付，支持温态复用时只交付精确变化子树，solver 无需切换 TurnEnvelope。
+   包内去重和冷启动缩减作为配套；连续做小清理不能替代重复输入路径的验收。存储 capture
+   缩小或 import 清理不能证明模型输入节省。
+2. **一个投影 owner，两个传输调用方。** 扩展已有 typed interaction/work-context owner，
+   同时生成完整和增量上下文，由 quota 与 TurnEnvelope 消费。保留原始捕获、required-source
+   校验、调用、选择、结算与详情入口；Python 保留来源 IO，host 保留效果执行和上下文连续性
+   观察。不新增独立准入服务、diff daemon 或 Python 上下文决策 owner。刻画调用方并在采用后
+   删除被替代投影。输出释放前的 host 传输 ACK 既不证明模型完整收到了内容，也不证明其仍被
+   保留。现有 capture/handoff 是接入位置，并非已经实现的连续性契约。
+3. **保留完整当前权限事实与冷启动要求。** 每次响应重新给出身份、动作、准入、范围/审批/停止
+   条件、取消、选择、claim/lease、未完成必读及结算/scheduler 义务。只有明确允许的来源正文
+   可以复用，当前控制结果即使字节未变也完整交付。复用的要求正文仍具有完整约束力，包括其中
+   的文字停止条件；它不是摘要或可选背景。重建后的上下文保留全部原始
+   要求。先在结构化 owner 理清混合 Todo 历史和验收解释，再改变必读范围；时间、owner、状态、
+   标题、长度均不能证明过时。把必读正文放到引用后再全读回来不是节省，替换累计备注是状态
+   变化而不是交付压缩。
+4. **自动全量回退，不增加人工 gate。** host 显式提供此前完整交付投影的上下文连续性依据，
+   绑定 Goal/Agent、消费 session 与 context epoch、投影版本、来源 capture 及投影 digest。
+   仅有文件、匹配 hash 或历史回执不够。compaction、reset、不能证明连续性的重启、输出截断、
+   损坏、身份/版本不匹配或保留状态未知，自动选择完整当前投影。不引入审批、确认问询、
+   第二次 quota 准入或扣额；已有真实停止和来源不可用规则继续生效。
+
+**已接受的增量交付设计（待实现）。** 一期须同时包含共享投影、benchmark solver 与
+产品化 Codex App 两个调用场景及各自的全量回退；单独增加 diff helper 不构成交付。
+
+| 边界 | 提议行为 |
+|---|---|
+| 基线归属 | host 跟踪模型输入的完整交付和上下文连续性；typed 投影核验所提供的绑定并计算 delta，不能从磁盘推断保留状态。不支持的 host 继续全量交付，不要求模型自行声明“仍然记得”。 |
+| 完整捕获 | 保留不可变的当前完整决策，供审计、签名与同次捕获恢复。delta 只是展示，不成为新的权威存储，也不用于修改 Goal 状态。 |
+| 增量单位 | 首版精确比较 JSON 对象子树，保留标量类型、缺失与 null、空值及完整字符串；数组改变时整段替换，不从正文猜测元素身份或等价性。删除须显式表达。基线/目标身份及 digest 只给一次，并附可读路径和变化值；避免嵌套引用链，也不要求模型机械重建整份 JSON。 |
+| 消费恢复 | 基线缺失/不匹配、跳过/乱序 delta 或输出截断，从原始 capture 返回完整当前投影，不重新准入。丢失的 delta 不能确认为下一基线；完整交付后重设基线，以全量刷新限制增量祖先链，避免无限累积 patch。执行前仍核验来源新鲜度与权限；展示恢复不能重新授权过时或已取消的决策。 |
+| CLI 采用 | 保持普通 quota 入口和现有 capture/detail 路径；能观察活跃模型上下文的 host 在传输边界提供可选基线绑定。没有连续性观察者的裸 CLI 返回全量，不能静默信任上次输出文件。具体参数/wire 形式在调用方刻画后确定，不新增命令族。 |
+| Turn 采用 | 消费同一完整/增量上下文 owner，同时保留 Turn 签名和外层 executor 效果归属。host 独占的结算执行与手动 CLI agent 的可执行结算义务仍有区别。 |
+| 表示选择 | 计入绑定和删除元数据后，只有更小才发送 delta，否则发送全量。不为字节目标截断值或改变来源选择。 |
+
+**来源与变化边界。** 首批面向注册的完整 Goal 叙述、canonical 验收要求正文及选中 Todo 的
+正文/备注，保留精确字符串与来源身份。可复用范围由现有 source adapter 和 typed 字段契约
+确定，不分类句子含义。当前来源版本、完整性、失败、status/claim、User gate、目标采用及
+其他执行控制字段仍每次完整给出。不能可靠拆分的未知或混合来源保持全量。每个已知来源槽
+按既有来源种类和 canonical 实体身份生成稳定 key，身份重复或不明确时回退全量。不能将整个
+`sources` 数组作为比较单位，否则 authority revision 变化会迫使未变要求全文重发。来源正文
+内部的数组在首版仍整体替换；字段改变时完整替换，包括迟到的约束，删除使用显式路径。
+owner 在释放 delta 前重建并与完整目标逐项比较。
+
+**首个真实调用方与压缩竞态。** 当前原生 Codex CLI session adapter 只观察会话身份，
+capture/handoff 的 release 发生在 stdout 交付之前，两者都不提供所需的模型输入连续性
+证明。读取保存的原生历史，或在模型请求发出后才观察到 compaction，也已经太迟。因此首个
+调用方需要在现有 host 的模型输入组装边界接入 adapter，具备下列性质后才启用增量：
+
+1. compaction、裁剪、restore、fork 或连续性未知时使 context epoch 失效，并观察完整输出
+   交付，而不是文件创建。
+2. 候选展示绑定原始 capture 与预期基线。在提交模型输入前，置于同一顺序边界内再次核对
+   epoch 和基线；若已变化，从该 capture 替换为完整投影。仅有 CLI stdout 回调不够。
+3. 只有该精确展示完整进入活跃模型输入后才推进基线。失败或 ACK 不确定时不能确认新基线，
+   下一次发送全量；该传输确认仅证明交付，不证明模型理解。
+
+这是 host adapter 的验证条件，不是向 Agent 或 owner 发问的步骤。真实 host 尚无该接入
+边界时，普通 CLI 自动保持全量；全部走 full 的 pilot 不能证明增量收益。不能禁用原生
+compaction 来制造连续性，也不为这项优化另建模型 runner。先通过成对的 host 边界原型
+验证现有传输能否支持 adapter；负结果保留基础包缩减的价值，并记录具体缺失的集成点。
+
+| 情况 | 自动表示选择与效果行为 |
+|---|---|
+| 首次调用或 host 不支持 | 完整当前控制与上下文；不能仅靠输出文件建立可信温态基线。 |
+| 同一 epoch、基线已确认且 delta 更小 | 当前控制全量，加变化来源子树和删除；未变要求保留原有约束力。 |
+| guard 到模型提交之间发生 reset/compaction | 使基线失效，在提交前将候选 delta 替换为同 capture 的完整投影；不重新准入或扣额。 |
+| 交付缺失、损坏、截断或乱序 | 使相应基线失效，从原 capture 恢复全量。host 无法完整交付正文时沿已有完整读取路径恢复，不确认温态基线。 |
+| 来源不可用或权限变化 | 保留既有拒绝/重新 guard 规则；存储的完整 capture 不能制造当前权限。 |
+| 增量元数据比全量更贵 | 发送全量，不裁剪值、放宽限制或要求 owner 选择。 |
+
+**一期调用方与交付顺序。** 可独立评审的基础包缩减先进入既有集成测试，该测试不等待
+新协议。已接受的设计须在一期同时验证下列两个场景，使用同一 typed 投影与回退契约。
+benchmark 可以先落地，但产品化 Codex App 尚未验收时不能关闭一期。
+
+| 调用方 | 一期验收 |
+|---|---|
+| Benchmark solver | 既有普通 quota 路径先交付全量，确认温态基线后交付更小的精确子树变化。在匹配且已授权的测试中统计首次及补读的全部模型输入、详情读取、工具调用、后续决策和验收成果；管理包或离线字节统计不能代替 solver 采用。 |
+| 产品化 Codex App | 已交付的 heartbeat/bootstrap 与 quota 续跑入口复用同一 owner，提供实际打包与安装态读回。验证温态增量及其后有效动作，并覆盖首次使用、重启/恢复、压缩/裁剪、基线丢失和同 capture 全量恢复。检查既有产品入口及可见错误/恢复结果；只有 CLI fixture 不证明 App 采用。 |
+
+每个 host 都须建立前述模型输入顺序与连续性边界，验证各自真实 adapter，不能借另一
+host 的证明替代。若 Codex App 缺少该接入点，记录具体缺失的 host 边界、继续安全全量
+交付，并保持该一期验收未完成；全部走 full 的 App pilot 只是正确性回退，不算增量
+产品化完成。这是工程证据缺口，不能变成运行时 owner 问询或新增准入 gate。保留现有
+通知、scheduler、取消、claim、结算与恢复归属，不另建 runner 或 authority。
+
+同一 owner 用于 Turn 传输后，只在调用方采用后退役被替代投影分支。冻结 campaign
+保留其来源/处理，通过回放和另行准入的后续运行验证新交付。设计接受本身不授予合并、
+发布、安装或新增 benchmark 运行权限；运行时回退保持自动。
+
+**原生输入边界刻画（局部验证，尚未启用）。** 显式选择运行的
+`tests/control_plane/test_codex_context_boundary.py` 使用真实 Codex `exec` 和
+`app-server` 二进制，连接确定性的本机 loopback Responses provider。在
+`0.163.0-alpha.11.1` 上，两条路径均能保留首次完整来源与一条字面温态变化，并通过
+`SessionStart(compact)` 在自动压缩后的第一条模型请求中交付完整目标来源。
+oracle 检查实际发出的模型输入，而非 hook 日志或 stdout。这只验证传输原语：fixture
+没有实现共享子树 owner、运行 solver，也不证明打包或安装态的 App 采用。
+
+成对负例说明了为何单靠该 hook 仍不足以构成 adapter：
+
+- 默认 hook 输出会溢写并缩成预览。首尾要求同时出现，仍不能证明中间正文进入模型。
+- 未信任的 handler 不运行。配置 hook，或给 app-server 启动器传 CLI 的信任跳过参数，
+  都不是交付证据。测试只信任其隔离环境内自建的合成 handler；产品安装须保留宿主
+  既有信任策略。
+- compact 恢复 handler 非成功退出后，两条受测宿主仍发送下一条模型请求，且完整
+  必需来源已缺失。验证将此记录为预期失败，不算恢复通过。
+
+还在不配置 hook 的条件下验证了 app-server 的键控
+`turn/start.additionalContext`，同时覆盖 `untrusted` 和 `application` 类型。
+小型完整来源能进入首次及温态请求，但在自动压缩后缺失；大型来源在首次请求中
+就已不完整。因此，不透明 source key 既不是完整交付回执，也不是压缩后仍保留的
+常驻来源。这些案例继续记为资格验证预期失败，不证明全量回退有效，也不构成将
+来源数据提升为指令的理由。当前 adapter 不得从该字段推断连续性，也不应在宿主
+边界未变化时反复尝试这些不受支持的路径。
+
+[原生 hook 契约](https://learn.chatgpt.com/docs/hooks) 提供了有用的执行顺序和显式完整
+输出选项，但 hook 成功回调本身不能建立故障安全的输入边界。生产交付继续保持全量，
+直到宿主集成能在 hook／输出处理后核对候选输入，并在失败、丢失或 epoch 改变时自动
+替换为同 capture 的完整来源。该回退须覆盖 hook 信任、超时、截断和进程失败；不能
+以新增 Agent／owner 问询或禁用 compaction 弥补。下一步须在每个调用方的既有宿主
+最终输入组装边界证明这一集成，再让共享 typed 投影采用已验证的接缝。本检查点保持
+一期未完成，不将合成 usage 计数解释为 token 或成果收益。
+
+在可选能力模式不变的条件下，比较匹配的普通执行、重规划和等待/恢复负载，覆盖首次交付、
+温态复用、reset、删除、数组重排、丢失/重复/乱序 delta、部分输出、来源/身份不匹配及迟到
+要求变化。重建结果须等于完整当前投影，fresh 控制事实始终不得省略。统计首次和补读的模型输入、上下文占用、
+cache/non-cache 与完整成本、读取次数、延迟和 IO，再验证后续动作与验收结果。恰好一次
+效果及 required-source 拒绝保持硬约束。序列化往返或离线 delta 仅证明表示可行，不能
+结算安装采用或完整成本验收。SQLite 继续承担默认本地性能资格，保留受影响支持后端的
+正确性/恢复验证。本检查点不改变 runtime 默认值、预算、必读规则、权限或活动实验。
 
 原生 Turn detail 采用现持久化真实 `run-once` producer 的完整 observation，由既有 TS
 envelope owner 将 Host 请求绑定到它。真实 File/SQLite CLI 检查实际 subprocess 输入，
@@ -386,6 +621,74 @@ fixture。只读规划与可选 quota capture 默认值不变，原生执行 Tur
 证据。证据缺失或不匹配拒绝再次调用 Host；legacy 缓存结果恢复与终态读回保留原 receipt。
 这只关闭 producer 到 detail 的传输缺口。真实模型、打包 App/Lark、后续 authority 检查
 及其余收敛矩阵仍独立验收，本切片不退役任何 Python 投影。
+
+新的 quota 与原生 Turn capture 共用紧凑 JSON 编码，去除所存详情的排版空白，
+完整保留决策值与字符串内容。原子发布、来源签名与重试仍由既有 owner 持有。
+File/SQLite 原生 Host 验证覆盖新紧凑格式与历史缩进观察，包括来源改变、详情
+缺失或损坏及恰好一次恢复。这是无损的传输成本缩减，不证明模型质量、完整
+Turn 成本或新的收敛默认值。
+
+共享 Host 结果适配器现在保留所提供文本，交给既有 Turn 校验器，而不通过截短使
+候选通过。超限后续行动原本可能丢失末尾审批约束却仍获接受。JSON 布尔值、数字和
+容器也保留原类型，交给同一校验器拒绝；false/零不能消失到
+稀疏字段默认值，旧 null/省略的可选文本仍按缺省处理。明确提供的交付规模与结果
+现在也保留原值及 JSON 类型，只有省略元数据时才沿用稀疏默认值。此前声明的
+`surface_only`、不满足条件的 `outcome_gap` 或非法值都会变成 `outcome_progress`，
+绕过既有拒绝并记入 quota 扣费。共享 prompt 使用既有交付词汇。原生 File/SQLite
+测试保留合法规模历史。新材料结果也在任务验证或效果准备前复用既有结算规则：
+`surface_only` 与 `outcome_gap` 返回 typed `validation_failed`，不留下 prepared
+写回。此前词汇合法但不满足结算条件的结果会进入 refresh-state，抛出通用 CLI
+错误，留下反复遭遇同一拒绝的 in-progress prepared 写回。Host 合同不携带 typed
+blocker observation；普通 CLI 的阻塞结算保持原行为。历史缓存结果仍走 provider
+读回／恢复，覆盖 provider 返回 unknown 后读到 committed receipt，不重启 Host 或
+重复写回；此处没有新增结算策略。
+File/SQLite 原生 CLI
+和实际 DSH 子进程验证任务校验、写回、扣费、ACK 前的拒绝、失败结果重放，以及
+修正后的新 Turn 只结算一次。边界长度的合法结果保持原行为。这只证明结果传输
+正确性，不证明模型采用、撤销 Host 已执行工作或关闭原三批收敛验收。
+
+Turn 完成写入现将已准入 Todo 全文的精确摘要交给既有原子终态 owner。正文要求
+变化拒绝完成，单独备注或其他 Todo 变化仍有效；provider CAS 阻止并发替换，历史
+receipt 恢复先于当前来源检查。已保存 Turn 缺少全文来源证明时拒绝新完成写入，
+已接受的旧 receipt 则保留原指纹并优先恢复。真实 File/SQLite CLI 和共享 File/SQLite/PostgreSQL
+conformance 覆盖拒绝与恢复。最终 no-followup 保留既有结算顺序：终态拒绝保留此前
+已经提交的 writeback/spend receipt。本批只证明任务正文的完成安全性，不证明整个
+结算的来源原子性、安装态宿主采用、真实模型或其余收敛验收完成。
+
+首个普通 CLI 整合将完全相同的
+`heartbeat_recommendation.blocked_priority_fallback` 副本替换为
+`blocked_priority_fallback_ref="$.blocked_priority_fallback"`。根字段的完整事实、
+通知、执行义务和原始 capture 保留；不同副本继续保留，包括 Boolean 与数字的差异。
+既有 `--include-detail agent-todos` 视图保留原副本。真实 File/SQLite CLI 覆盖同次
+捕获的动作维度及无扣费重放。原始 source hash 本就区分不同渲染；本批不改变签名
+覆盖，也不让渲染视图替代原始 capture。
+旧字段访问保留在既有 packet owner；CLI 调用其投影函数，不增加待迁移的旧字段消费者。
+
+验收上下文 adapter 现在对已选定工作复用既有精确 Todo 读取，保留完整 Goal 验收依据
+和累计 outcome，避免再次搬运无关任务的关联观察及选定 Todo 正文。真实 File/SQLite
+CLI 与 DSH 协议输入覆盖已配置检查、仅声明 outcome 两种情形；无选定工作的读取
+仍返回原列表。这只验证局部 IO 边界，不能替代真实模型收益、安装采用或整轮成本。
+
+原生验收／capture 矩阵还覆盖捕获后新增或修改工作、未来恢复条件以及显式移除检查。
+先验证并结算原合成工作，再进入新的 managed Turn：当前准入拒绝未关联／失效工作
+和待恢复任务；移除检查不会产生新的 owner 问询。累计要求及其来源完整保留，当前
+工作状态及其派生依据摘要可随实际变化更新。原详情仍可逐字节读取，不再次准入或
+改变 authority revision。这些案例验证既有边界，不确立新的执行默认，也不结清
+三条完整收敛验收。
+
+Goal 来源上下文现复用原 writer 的严格归属 parser，分离显式标记的生成 Todo 区域，
+通过共享 typed context owner 原样传递其余全部文字，附带完整文件摘要与被分离区域
+的来源记录。未标记／混合文档保留渐进式全文读取，归属错误拒绝。此处改变默认上下文
+交付，不改变 canonical Todo authority、源文件或累计验收。File/SQLite 原生 guard
+与签名 DSH 协议输入验证这一来源边界；模型采用、安装态 App/Lark、完整 Turn 成本
+及三条收敛验收仍未完成。任意大段正文完整保留，不做截断。
+
+下一步先调查获准真实 Goal 的活跃工作、peer/replan、等待/恢复和可选能力形态，
+将每条保留义务映射到共享 typed owner 与实际消费者，再完成一族调用方迁移，最后
+退役其旧投影。用同次捕获决策比较 full/thin heartbeat 与 Turn，将必需详情补读、
+token、序列化/IO、延迟及资源增长一并计入。此次移除副本的字节节省只证明该渲染
+差异；模型质量、完整成本、安装态 App/Lark 采用和迁移默认仍需独立证据。真实私有
+来源不进入公开 fixture 或 checkpoint。
 
 此前成本切片已复现回归预算缺口，不能归因于 fixture alias，也不授权删掉
 必需上下文。`aa87cc019` 与 `fc411c878` 使用相同公共 CLI fixture、临时 alias
@@ -427,6 +730,13 @@ JSON 仍为 3,122。既有 runner 测试仍拒绝真实 stdout 膨胀，不改�
 关闭有界源码预算缺口；M7.4 仍未完成，packaged host 采用、模型 token／IO／延迟／
 结果证据及可逆 transport 默认决策继续保留。执行 quota、wire 限制和冻结的
 promotion 条件不变，不声称运行成本下降。
+
+#7161 取消旧 `protocol_action_packet` reader 格式支持，删除字段选择、summary
+重建、residue／opaque fallback 及其传输输入。Effect／CLI／Envelope／Host
+在转换或使用签名前明确拒绝旧包及 capsule witness。冻结历史记录保持原样；
+不带旧包的 v0 签名与执行检查语义不变。本项有界清理替代旧兼容承诺，不关闭
+M7.4 或 benchmark／Codex App 上下文传输验收。见
+[格式边界](../../reference/protocols/protocol-action-packet-decision-v0.md)。
 
 不引入通用 executor，也不降低验收门槛来让短包通过。保留未满足要求，分别记录
 传输等价、安装态宿主采用和有效模型结果。见

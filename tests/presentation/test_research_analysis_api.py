@@ -4,6 +4,7 @@ The fixture executable is synthetic; this does not qualify model judgment.
 No active Goal, solver state, model account or evaluator is touched.
 """
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -18,6 +19,8 @@ import pytest
 
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import register_pack
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+from loopx.control_plane.status.goal_source import GoalSource
+from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
 
 
 @pytest.fixture
@@ -46,12 +49,21 @@ def workspace(tmp_path, monkeypatch):
     provider.write_text(f'''#!{sys.executable}
 from pathlib import Path
 import json,sys,time
-sys.stdin.read()
+prompt=sys.stdin.read()
 with Path({str(count)!r}).open('a') as stream: stream.write('started\\n')
 mode=Path({str(mode)!r}).read_text()
 if mode=='wait': time.sleep(15)
 if mode=='fail': raise SystemExit(2)
-Path(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(json.dumps(output))})
+output=json.loads({json.dumps(json.dumps(output))})
+if 'Output language:' in prompt:
+    zh='Output language: Simplified Chinese' in prompt
+    output['episode_questions']=[{{'episode_id':'episode','question':'诊断改善是否检验了原生收益？' if zh else 'Did diagnostic improvement test native utility?'}}]
+    output['assessments'][0]['reason']='只测量了诊断，尚未检验原生收益。' if zh else 'Only the diagnostic was measured; native utility was not tested.'
+    output['limitations']=['合成进程输出，并非模型质量验证。' if zh else 'Synthetic process, not model quality evidence.']
+if '\\n\\ndisplay_fields:\\n' in prompt:
+    fields=json.loads(prompt.split('\\n\\ndisplay_fields:\\n')[1])
+    output['display_translations']=[{{'field_id':field['field_id'],'text':field['text']}} for field in fields]
+Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output,ensure_ascii=False),encoding='utf-8')
 print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_tokens':2}}}}))
 ''')
     provider.chmod(0o700)
@@ -81,6 +93,163 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_t
         server.shutdown()
         worker.join(timeout=5)
         server.server_close()
+
+
+def test_display_context_uses_registered_sources_and_the_existing_http_reader(workspace):
+    w, read = workspace, workspace["request"]
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    page = dict(ok=True, goal_id="solver-goal", total=1, next_cursor=None, items=[dict(
+        schema_version="loopx_explore_result_event_v0", event_id="record", result_id="question",
+        goal_id="solver-goal", event_kind="node", node_kind="question", recorded_at="2026-01-01T00:00:00Z",
+        title="Did the diagnostic improve utility?", summary="Native benefit remains unknown.", status="tentative")])
+    text = json.dumps(page)
+    (w["sources"] / "history.json").write_text(text)
+    data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
+    citation = dict(source_id="facts", first_line=2, last_line=2)
+    data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="local",
+        contexts=[dict(event_id="record", field="summary", citations=[citation])])
+    path.write_text(json.dumps(data))
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner", input_path=path,
+                               source_root=w["sources"], title="Synthetic contextual display")
+    view = read(pack_id=registered["pack_id"], output_language="zh")["pack"]
+    assert view["job"] is None and not w["count"].exists()
+    operation = dict(goal_id="research-owner", pack_id=registered["pack_id"], analysis_key=view["analysis_key"], output_language="zh")
+    w["mode"].write_text("ok")
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    shown = read(pack_id=registered["pack_id"], output_language="zh")["pack"]
+    field = next(field for field in shown["result"]["display"]["fields"] if field["field"] == "summary")
+    assert field["context_citations"] == [citation]
+    query = {key: value for key, value in operation.items() if key != "goal_id"}
+    assert read(suffix="/citation", **query, **citation)["text"] == data["sources"][0]["text"]
+    for overrides in [dict(first_line=1), dict(source_id="history", first_line=1, last_line=1)]:
+        with pytest.raises(HTTPError) as denied:
+            read(suffix="/citation", **query, **{**citation, **overrides})
+        assert denied.value.code in (400, 409)
+    assert w["count"].read_text().splitlines() == ["started"]
+    assert json.loads(path.read_text()) == data
+
+
+def test_frontend_language_scopes_process_retry_cache_and_original_citations(workspace):
+    w, read = workspace, workspace["request"]
+    zh, en, legacy = read(output_language="zh")["pack"], read(output_language="en")["pack"], read()["pack"]
+    assert len({p["analysis_key"] for p in (zh, en, legacy)}) == 3
+    assert zh["pack_id"] == en["pack_id"] == legacy["pack_id"]
+    assert zh["episodes"] == en["episodes"] == legacy["episodes"]
+    assert not w["count"].exists()
+    operation = {**w["operation"], "analysis_key": zh["analysis_key"], "output_language": "zh"}
+    for language in ("fr", "", None, ["zh"]):
+        with pytest.raises(HTTPError) as invalid:
+            read(body={**operation, "output_language": language})
+        assert invalid.value.code == 400
+    assert not w["count"].exists()
+    with pytest.raises(HTTPError) as mismatch:
+        read(body={**operation, "output_language": "en"})
+    assert mismatch.value.code == 409 and not w["count"].exists()
+    w["mode"].write_text("fail")
+    with pytest.raises(HTTPError):
+        read(body=operation)
+    assert read(output_language="zh")["pack"]["job"]["status"] == "failed"
+    assert read(output_language="en")["pack"]["job"] is None
+    w["mode"].write_text("ok")
+    assert read(body={**operation, "retry": True})["job"]["status"] == "succeeded"
+    view = read(output_language="zh")["pack"]
+    assert view["result"]["output_language"] == "zh"
+    assert view["result"]["episode_questions"][0]["question"] == "诊断改善是否检验了原生收益？"
+    assert view["result"]["assessments"][0]["reason"] == "只测量了诊断，尚未检验原生收益。"
+    assert view["result"]["limitations"] == ["合成进程输出，并非模型质量验证。"]
+    assert view["episodes"][0]["question"] == "Did diagnostic improvement test native utility?"
+    calls = w["count"].read_text()
+    assert read(body=operation)["job"]["reused"] and w["count"].read_text() == calls
+    citation_query = {k: v for k, v in operation.items() if k != "goal_id"}
+    citation = read(suffix="/citation", **citation_query, source_id="facts", first_line=2, last_line=2)
+    assert citation["text"] == "Only the diagnostic was measured; native utility remains untested."
+    assert read(output_language="en")["pack"]["result"] is None
+    assert read()["pack"]["result"] is None
+    english_operation = {**operation, "analysis_key": en["analysis_key"], "output_language": "en"}
+    with pytest.raises(HTTPError) as wrong_cancel:
+        read(body={**operation, "output_language": "en"}, suffix="/cancel")
+    assert wrong_cancel.value.code == 409
+    assert read(body=english_operation)["job"]["status"] == "succeeded"
+    assert read(output_language="en")["pack"]["result"]["output_language"] == "en"
+    assert read(output_language="zh")["pack"]["result"] == view["result"]
+    assert all(path.read_bytes() == data for path, data in w["before"].items())
+
+
+def test_continuation_http_preserves_previous_analysis_through_cancel_retry_and_equivalent_reuse(workspace):
+    w, read = workspace, workspace["request"]
+    w["mode"].write_text("ok")
+    first = read(output_language="zh")["pack"]
+    operation = {**w["operation"], "analysis_key": first["analysis_key"], "output_language": "zh"}
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    previous = read(output_language="zh")["pack"]["result"]
+    source, path = w["sources"], w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    later = b"A late follow-up still has no representative utility test.\n"
+    (source / "later.txt").write_bytes(later)
+    data["sources"].append(dict(id="later", artifact="later.txt", artifact_sha256=hashlib.sha256(later).hexdigest(), first_line=1, text=later.decode().strip()))
+    data["episodes"][0]["source_ids"].append("later")
+    data["scope"]["revision"] = "later-evidence"
+    path.write_text(json.dumps(data))
+    scope = dict(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner")
+    second = register_pack(**scope, input_path=path, source_root=source, title="Later evidence", base_pack_id=first["pack_id"])
+    current = read(output_language="zh")["pack"]
+    assert current["result"] is None and current["job"] is None
+    assert current["continuation"]["sources"]["added"] == ["later"]
+    assert current["continuation"]["reassessed_episode_ids"] == ["episode"]
+    assert not current["continuation"]["can_reuse"]
+    successor = {**operation, "pack_id": second["pack_id"], "analysis_key": current["analysis_key"]}
+    w["mode"].write_text("wait")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(read, body=successor)
+        until = time.monotonic() + 8
+        while time.monotonic() < until:
+            view = read(output_language="zh")["pack"]
+            if view["job"] and view["job"]["status"] == "running":
+                break
+            time.sleep(.05)
+        else:
+            pytest.fail("successor never reached its actual process receipt")
+        assert read(body=successor)["job"]["status"] == "busy"
+        assert read(pack_id=first["pack_id"], output_language="zh")["pack"]["result"] == previous
+        assert read(body=successor, suffix="/cancel")["job"]["cancel_requested"]
+        assert running.result(timeout=8)["job"]["status"] == "cancelled"
+    assert read(pack_id=first["pack_id"], output_language="zh")["pack"]["result"] == previous
+    w["mode"].write_text("fail")
+    with pytest.raises(HTTPError):
+        read(body={**successor, "retry": True})
+    w["mode"].write_text("ok")
+    assert read(body={**successor, "retry": True})["job"]["attempt"] == 3
+    completed = read(output_language="zh")["pack"]
+    assert completed["result"]["metrics"][1]["eligible"] == 1
+    assert completed["continuation"]["verdict_changes"] == []
+    calls = w["count"].read_text()
+    assert read(output_language="en")["pack"]["result"] is None
+    assert w["count"].read_text() == calls  # locale and history reads never execute
+    # Capture metadata outside the selected excerpt is not new evidence.
+    evidence = (source / "facts.txt").read_bytes() + b"Additional unselected metadata\n"
+    (source / "facts.txt").write_bytes(evidence)
+    data["sources"][0]["artifact_sha256"] = hashlib.sha256(evidence).hexdigest()
+    data["scope"]["revision"] = "capture-only"
+    path.write_text(json.dumps(data))
+    third = register_pack(**scope, input_path=path, source_root=source, title="Equivalent capture", base_pack_id=second["pack_id"])
+    view = read(output_language="zh")["pack"]
+    assert view["continuation"]["can_reuse"] and view["result"] is None
+    reused = read(body={**successor, "pack_id": third["pack_id"], "analysis_key": view["analysis_key"]})["job"]
+    assert reused["reused_from_analysis_key"] == completed["analysis_key"]
+    assert w["count"].read_text() == calls
+    assert read(output_language="zh")["pack"]["result"]["scope"]["revision"] == "capture-only"
+    assert read(pack_id=second["pack_id"], output_language="zh")["pack"]["result"] == completed["result"]
+    base_path = next((scope["runtime_root"] / "benchmark" / "trajectory-assessments").glob(f"*/packs/{second['pack_id']}.json"))
+    captured = base_path.read_bytes()
+    base_path.unlink()
+    unavailable_base = read(output_language="zh")
+    assert unavailable_base["catalog"]["unreadable_pack_ids"] == [second["pack_id"]]
+    assert unavailable_base["pack"]["continuation_unavailable"] == {"base_pack_id": second["pack_id"]}
+    assert unavailable_base["pack"]["result"]["scope"]["revision"] == "capture-only"
+    assert w["count"].read_text() == calls
+    base_path.write_bytes(captured)
+    assert read(output_language="zh")["pack"]["continuation"]["base_available"]
 
 
 def test_registered_http_cancel_failure_retry_reuse_and_source_return(workspace):
@@ -173,3 +342,184 @@ def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(wor
     assert not w["count"].exists()
     with pytest.raises(HTTPError):
         w["request"](goal="other-owner", pack_id=registered["pack_id"])
+
+
+@contextmanager
+def source_analysis_workspace(w, name, *, enabled=True):
+    """Synthetic source transport; actual local store, HTTP and provider process."""
+    class Source(GoalSource):
+        failed = False
+        registered = True
+        reads = 0
+
+        def __init__(self):
+            super().__init__(name, name, "/registry", "/runtime", "/cli", "/python",
+                             "/bin", "local", "host", "research-owner")
+
+        def read_status(self, goal_id=None):
+            self.reads += 1
+            self.check_access(goal_id)
+            if self.failed:
+                raise OSError("Private source diagnostic")
+            return {"ok": True, "run_history": {"goals": [{"id": self.goal_id,
+                    "registry_member": self.registered}]}}
+
+    server = RuntimeWorkspaceServer(Source(), w["tmp_path"],
+        analysis_runtime_root=w["tmp_path"] / "source-analysis" if enabled else None)
+    data = json.loads((w["tmp_path"] / "input.json").read_text())
+    data["scope"].update(goal_id="research-owner", case_id=name)
+    path = w["tmp_path"] / f"input-{name}.json"
+    path.write_text(json.dumps(data))
+    pack = register_pack(runtime_root=server.analysis_runtime_root or w["tmp_path"] / "disabled",
+        owner_goal_id="research-owner", input_path=path, source_root=w["sources"], title=name)
+    operation = dict(goal_id="research-owner", pack_id=pack["pack_id"], analysis_key=pack["analysis_key"])
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+
+    def request(*, body=None, suffix="", namespace=server.source.namespace, method=None, headers=None, **query):
+        if namespace is not None:
+            query["source_namespace"] = namespace
+        if body is None:
+            query.setdefault("goal_id", "research-owner")
+        url = f"http://127.0.0.1:{server.server_port}/api/chat/research-analysis{suffix}?{urlencode(query)}"
+        req = Request(url, data=None if body is None else json.dumps(body).encode(), method=method,
+                      headers={"Content-Type": "application/json", **(headers or {})})
+        with urlopen(req, timeout=25) as response:
+            return json.load(response)
+
+    try:
+        yield dict(request=request, operation=operation, server=server, input_path=path)
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+
+def test_source_goal_analysis_reads_cancel_retry_and_reuse_do_not_mutate_source(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "retained") as s:
+        read, operation = s["request"], s["operation"]
+        snapshot = read()
+        assert snapshot["execution_enabled"] is True
+        assert snapshot["pack"]["scope"]["goal_id"] == "research-owner"
+        assert snapshot["pack"]["job"] is None and not w["count"].exists()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(read, body=operation)
+            until = time.monotonic() + 8
+            while time.monotonic() < until:
+                job = read()["pack"]["job"]
+                if job and job["status"] == "running":
+                    break
+                time.sleep(.05)
+            else:
+                pytest.fail("Local source-analysis process did not start")
+            assert read(body=operation)["job"]["status"] == "busy"
+            assert read(body=operation, suffix="/cancel")["job"]["cancel_requested"]
+            assert running.result(timeout=8)["job"]["status"] == "cancelled"
+        w["mode"].write_text("ok")
+        assert read(body={**operation, "retry": True})["job"]["status"] == "succeeded"
+        view = read()["pack"]
+        assert view["result"]["assessments"][0]["verdict"] == "no"
+        calls = w["count"].read_bytes()
+        assert read(body=operation)["job"]["reused"]
+        assert w["count"].read_bytes() == calls
+        citation = dict(pack_id=operation["pack_id"], analysis_key=operation["analysis_key"],
+                        source_id="facts", first_line=2, last_line=2)
+        assert read(suffix="/citation", **citation)["text"] == "Only the diagnostic was measured; native utility remains untested."
+        for path, original in w["before"].items():
+            assert path.read_bytes() == original
+        (w["sources"] / "facts.txt").write_text("changed source")
+        assert read()["pack"]["applicability"] == "historical"
+        assert read(suffix="/citation", **citation)["text"] == "Only the diagnostic was measured; native utility remains untested."
+        with pytest.raises(HTTPError) as changed:
+            read(body=operation)
+        assert changed.value.code == 409
+
+
+def test_source_analysis_requires_exact_namespace_goal_and_live_membership(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "retained") as a, source_analysis_workspace(w, "fresh") as b:
+        assert a["server"].analysis_runtime_root != b["server"].analysis_runtime_root
+        assert a["request"]()["pack"]["scope"]["case_id"] == "retained"
+        assert b["request"]()["pack"]["scope"]["case_id"] == "fresh"
+        for namespace in (None, "0" * 64, b["server"].source.namespace):
+            with pytest.raises(HTTPError):
+                a["request"](namespace=namespace)
+            with pytest.raises(HTTPError):
+                a["request"](namespace=namespace, body=a["operation"])
+        for body in (a["operation"], {**b["operation"], "goal_id": "another-goal"}):
+            with pytest.raises(HTTPError):
+                b["request"](body=body)
+        with pytest.raises(HTTPError):
+            b["request"](pack_id=a["operation"]["pack_id"])
+        source = a["server"].source
+        for registered, failed, code in ((False, False, 404), (True, True, 503)):
+            source.registered, source.failed = registered, failed
+            a["server"].reader._read_at = 0
+            with pytest.raises(HTTPError) as denied:
+                a["request"](body=a["operation"])
+            assert denied.value.code == code
+        source.registered, source.failed = True, False
+        a["server"].reader._read_at = 0
+        assert a["request"]()["pack"]["scope"]["case_id"] == "retained"
+        assert not w["count"].exists()
+
+
+@pytest.mark.parametrize("registered,failed,code", [(False, False, 404), (True, True, 503)])
+@pytest.mark.parametrize("retry", [False, True])
+def test_source_execution_rechecks_a_warm_source_before_start_or_retry(
+        workspace, monkeypatch, registered, failed, code, retry):
+    w = workspace
+    w["mode"].write_text("ok")
+    # Hold the display-cache clock inside its normal lifetime. Source facts
+    # change after a real GET; the test never alters private cache fields.
+    monkeypatch.setattr("loopx.control_plane.status.goal_source.monotonic", lambda: 100.0)
+    with source_analysis_workspace(w, "warm-source") as s:
+        read, operation, source = s["request"], s["operation"], s["server"].source
+        assert read()["pack"]["job"] is None
+        assert read()["pack"]["scope"]["goal_id"] == "research-owner"
+        assert source.reads == 1  # ordinary reads still share the display cache
+        source.registered, source.failed = registered, failed
+        with pytest.raises(HTTPError) as denied:
+            read(body={**operation, "retry": retry})
+        assert denied.value.code == code
+        assert source.reads == 2
+        assert not w["count"].exists()
+        source.registered, source.failed = True, False
+        assert read(body={**operation, "retry": retry})["job"]["status"] == "succeeded"
+        assert source.reads == 3
+        assert w["count"].read_text().splitlines() == ["started"]
+        assert read()["pack"]["scope"]["goal_id"] == "research-owner"
+        for path, original in w["before"].items():
+            assert path.read_bytes() == original
+
+
+def test_source_analysis_default_off_and_non_analysis_writes_stay_disabled(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "disabled", enabled=False) as s:
+        with pytest.raises(HTTPError) as unavailable:
+            s["request"]()
+        assert unavailable.value.code == 503
+        with pytest.raises(HTTPError) as unavailable_citation:
+            s["request"](suffix="/citation")
+        assert unavailable_citation.value.code == 404
+        with pytest.raises(HTTPError) as readonly:
+            s["request"](body=s["operation"])
+        assert readonly.value.code == 405
+    with source_analysis_workspace(w, "enabled") as s:
+        for method in ("PUT", "PATCH", "DELETE"):
+            with pytest.raises(HTTPError) as readonly:
+                s["request"](body=s["operation"], method=method)
+            assert readonly.value.code == 405
+        with pytest.raises(HTTPError) as origin:
+            s["request"](body=s["operation"], headers={"Origin": "https://unrelated.example"})
+        assert origin.value.code == 403
+        data = json.loads(s["input_path"].read_text())
+        data["scope"]["goal_id"] = "another-goal"
+        s["input_path"].write_text(json.dumps(data))
+        registered = register_pack(runtime_root=s["server"].analysis_runtime_root,
+            owner_goal_id="research-owner", input_path=s["input_path"], source_root=w["sources"], title="Wrong Goal")
+        for body in (None, dict(goal_id="research-owner", pack_id=registered["pack_id"], analysis_key=registered["analysis_key"])):
+            with pytest.raises(HTTPError):
+                s["request"](body=body)
+        assert not w["count"].exists()

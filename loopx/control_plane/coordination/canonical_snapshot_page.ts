@@ -1,13 +1,14 @@
+import {configuredGoalChecks} from "../goals/acceptance_contract.ts";
 /** Byte-bounded canonical reads. Continuations are positions in one immutable
  * provider revision, never permission to combine independently current heads. */
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {MAX_LOCAL_SNAPSHOT_BYTES} from "../effect_runtime_snapshot.ts";
-import {projectGoalAcceptanceWorkGuards} from "../goals/acceptance_contract.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
 import {authorityStoreSourceAuthority, type AuthorityStore} from "./authority_store.ts";
 import {canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {canonicalTodoCollection} from "./local_authority_read.ts";
+import {canonicalAuthorityRouteFailure, requireCanonicalAuthority} from "./local_authority_write.ts";
 import {openRuntimeAuthorityStore, requireLocalAuthorityRuntimeRoot, localAuthorityOpenFailure,
   type LocalAuthorityProviderDependencies} from "./local_authority_provider.ts";
 
@@ -94,7 +95,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
     after.snapshot.provider_revision === head.provider_revision && after.snapshot.cursor === head.cursor &&
     after.snapshot.query_sha256 === query,
   "canonical_snapshot_changed", "canonical snapshot changed; restart the complete read, never append a newer page");
-  const {projection, todoReadModel: readModel, leaseIndex: leases, acceptance} =
+  const {projection, todoReadModel: readModel, leaseIndex: leases, acceptance, oracleObservationBasis, projectWorkGuards} =
     canonicalTodoCollection(head.head, goal, input.include_leases);
   const snapshot: Snapshot = {goal_id: goal, store_identity: identity.store_identity,
     provider_revision: head.provider_revision, cursor: head.cursor, query_sha256: query,
@@ -106,7 +107,8 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
     "canonical_snapshot_changed", "store incarnation changed while loading the snapshot");
   const todoStart = after?.todo_offset ?? 0, leaseStart = after?.lease_offset ?? 0;
   const metadata = {todo_read_model: readModel,
-    ...(acceptance.enabled === true ? {goal_acceptance_contract: acceptance} : {}),
+    ...(!!configuredGoalChecks(acceptance) || acceptance.outcome_requirements || acceptance.goal_objective ? {goal_acceptance_contract: acceptance} : {}),
+    ...(oracleObservationBasis === null ? {} : {goal_acceptance_oracle_observation_basis: oracleObservationBasis}),
     ...(leases === null ? {} : {handoff_mode: head.head.handoff_mode ?? "legacy"}),
     ...(readback === null ? {} : {projection_readback: confirmProjectionReadback(readback, head.provider_revision)})};
   function result(chosenTodos: readonly string[], chosenLeases: readonly string[], guards: JsonObject): JsonObject {
@@ -114,7 +116,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
     return {...base, status: "page", snapshot, metadata,
       todos: chosenTodos.map(id => projection.todos.get(id)!),
       ...(leases === null ? {} : {leases: chosenLeases.map(id => leases.leases.get(id)!)}),
-      ...(acceptance.enabled !== true ? {} : {goal_acceptance_work_guards: Object.fromEntries(
+      ...(!configuredGoalChecks(acceptance) ? {} : {goal_acceptance_work_guards: Object.fromEntries(
         chosenTodos.filter(id => Object.hasOwn(guards, id)).map(id => [id, guards[id]]))}),
       next: todoEnd === snapshot.todo_count && leaseEnd === snapshot.lease_count ? null :
         {snapshot, todo_offset: todoEnd, lease_offset: leaseEnd}};
@@ -125,8 +127,8 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   // head between RPCs or substitute the older unguarded todo_list endpoint.
   let completeGuards: JsonObject | null = null;
   if (after === null && completeBytes > 0) {
-    completeGuards = acceptance.enabled === true
-      ? projectGoalAcceptanceWorkGuards(head.head, goal, projection.todo_ids) : {};
+    completeGuards = configuredGoalChecks(acceptance)
+      ? projectWorkGuards(projection.todo_ids) : {};
     const complete = result(projection.todo_ids, leases?.lease_todo_ids ?? [], completeGuards);
     if (bytes(complete) <= Math.min(completeBytes, CANONICAL_SNAPSHOT_LOCAL_BYTES)) return complete;
   }
@@ -134,8 +136,8 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   // bounds and continuation checks. No lost oversized response or retry occurs.
   const todoIds = projection.todo_ids.slice(todoStart, todoStart + CANONICAL_SNAPSHOT_PAGE_ITEMS);
   const leaseIds = leases?.lease_todo_ids.slice(leaseStart, leaseStart + CANONICAL_SNAPSHOT_PAGE_ITEMS - todoIds.length) ?? [];
-  const guards = completeGuards ?? (acceptance.enabled === true
-    ? projectGoalAcceptanceWorkGuards(head.head, goal, todoIds) : {});
+  const guards = completeGuards ?? (configuredGoalChecks(acceptance)
+    ? projectWorkGuards(todoIds) : {});
   const page = (size: number) => result(todoIds.slice(0, size),
     leaseIds.slice(0, Math.max(0, size - todoIds.length)), guards);
   const available = todoIds.length + leaseIds.length;
@@ -160,13 +162,15 @@ export async function readCanonicalSnapshotPage(value: unknown,
     const input = requireJsonObject(value, "canonical snapshot request");
     const root = requireLocalAuthorityRuntimeRoot(input.runtime_root);
     const goal = requireAuthorityStoreId(input.goal_id, "goal id");
+    await requireCanonicalAuthority(root, goal, "todo_snapshot");
     const store = await openRuntimeAuthorityStore(root, goal, dependencies, {existingOnly: true});
     return await readCanonicalSnapshotFromStore(input, store, completeBytes);
   } catch (error) {
     return {schema_version: CANONICAL_SNAPSHOT_PAGE_RESULT, status: "failed",
       reason_code: error instanceof SnapshotReadError ? error.code : "canonical_snapshot_request_invalid",
       reason: error instanceof Error ? error.message : "canonical snapshot read failed",
-      decision_read_from_provider: true, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
+      decision_read_from_provider: true, legacy_fallback_used: false,
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   }
 }
 

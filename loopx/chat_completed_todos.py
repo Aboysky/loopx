@@ -86,6 +86,12 @@ class CompletedTodoPages:
         self._lock = Lock()
 
     def page(self, *, scope, cursor, load):
+        # A slow source must not hold up unrelated cached pages.
+        if not cursor:
+            rows = load()
+            size = len(json.dumps(rows, ensure_ascii=False).encode("utf-8"))
+            if size > self.max_cache_bytes:
+                raise ValueError("history_snapshot_too_large")
         with self._lock:
             now = monotonic()
             for key, (created, _, _, _) in list(self._snapshots.items()):
@@ -101,10 +107,6 @@ class CompletedTodoPages:
                 except (ValueError, KeyError):
                     raise ValueError("history_cursor_expired") from None
             else:
-                rows = load()
-                size = len(json.dumps(rows, ensure_ascii=False).encode("utf-8"))
-                if size > self.max_cache_bytes:
-                    raise ValueError("history_snapshot_too_large")
                 key, offset = token_urlsafe(18), 0
                 while self._snapshots and (len(self._snapshots) >= self.max_snapshots or sum(snapshot[3] for snapshot in self._snapshots.values()) + size > self.max_cache_bytes):
                     self._snapshots.popitem(last=False)
@@ -186,7 +188,11 @@ class CompletedTodoRequestMixin:
         goal_id = query.get("goal_id", [""])[0]
         agent_id = query.get("agent_id", [""])[0]
         cursor = query.get("cursor", [""])[0]
+        search = query.get("q", [""])[0].strip()
         try:
+            if len(search) > 256:
+                raise ValueError("history_search_too_long")
+            search = search.casefold()
             self._registry_and_goal(goal_id)
 
             def load():
@@ -218,10 +224,12 @@ class CompletedTodoRequestMixin:
                     for _, item in ordered
                     if item.get("todo_id") and item.get("task_class") != "continuous_monitor"
                     and (not agent_id or item.get("claimed_by") == agent_id)
+                    and (not search or search in str(item["todo_id"]).casefold()
+                         or search in str(item.get("text") or item.get("title") or "").casefold())
                 ]
 
             self._send_json(self.server.completed_todo_pages.page(
-                scope=(goal_id, agent_id), cursor=cursor, load=load,
+                scope=(goal_id, agent_id, search), cursor=cursor, load=load,
             ))
         except ValueError as exc:
             expired = str(exc) == "history_cursor_expired"

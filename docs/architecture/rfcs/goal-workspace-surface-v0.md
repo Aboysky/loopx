@@ -438,6 +438,19 @@ encoded it as `supports` with `materialized_from=node_parent_id`; it is not
 scientific supporting evidence. Explicit source relationships retain their basis,
 without being promoted to independent verification.
 
+The history reader's recorded-evidence search filters the complete loaded
+snapshot before display pagination, including historical revisions, original
+text, source references and run/result identifiers. Literal terms and recorded
+status narrow the list without turning an older observation into the latest
+finding. Validated translations may be displayed, while matching still uses original
+text and each result retains full original text and provenance. Display-language
+toggles preserve the query. An
+interrupted load identifies partial coverage; failed refresh retains the previous
+snapshot with a stale-read warning and retry. This is a read-only S5/S11 discovery
+slice, not evidence of subsequent Agent adoption or scientific benefit. Packaged
+browser qualification uses the native paged history owner with synthetic records;
+installed native WebView and Lark search remain unqualified.
+
 **Layer 2 — requested Agent analysis.** This is the product consumer of the
 benchmark research owner's deep trajectory evaluation, not a second judge
 built into the frontend. Reuse its analysis method and versioned result
@@ -763,6 +776,18 @@ tests, not a live remote-host/container qualification. One local reader process
 serves multiple source listeners and invokes native IO on cache misses; no CPU or
 IO saving is established. This is a read-only increment: no management grant,
 new execution Goal/registry, automatic analysis-pack binding or V12 completion.
+
+
+**Command palette proposal (S5 / M4 keyboard slice).** Quick navigation (⌘K /
+Ctrl-K or the sidebar entry) searches Goals and the current loaded Goal's Todos,
+projected results and existing reviewable previews. It reuses selection, task
+deep links and drawers; search and navigation create no action preview, Agent
+request, quota spend or validation run. Source/Goal changes invalidate the
+palette; read-only sources expose no action previews. This bounded slice does
+not complete M4: the full keyboard map, new action preparation, dark/live-motion
+qualification and installed/live-team evidence retain their existing owners.
+V6/V9 evidence is the focused command-entry test and packaged command-palette
+browser smoke, including a disposable real Todo/status owner and read recovery.
 
 ## 12. Open decisions
 

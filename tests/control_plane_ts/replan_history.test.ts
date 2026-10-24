@@ -60,6 +60,31 @@ test("periodic work counts distinct logical turns and keeps the existing public 
   assert.equal(trigger(many(19)), null);
 });
 
+test("periodic count respects the latest lane retry without erasing the earned review", () => {
+  const due = "2026-01-01T00:05:00.123456Z";
+  const retry = run(21, {todo_id: "todo_feedback", delivery_outcome: "outcome_gap",
+    progress: {...observation, result_class: "blocked"}, blocked_retry: {
+      schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+      todo_id: "todo_feedback", observed_at: "2026-01-01T00:00:00.123456Z",
+      due_at: due, resume_when: `resume_at:${due}`,
+    }});
+  const rows = [retry, ...many(20)];
+  const before = {retry_observed_at: "2026-01-01T00:05:00.123455Z"};
+  const original = structuredClone(rows);
+  assert.equal(trigger(rows, before), null);
+  assert.equal(trigger(rows, {...before, operation: "periodic"}), null);
+  assert.equal(trigger(rows, {retry_observed_at: due})?.kind, "periodic_review_due");
+  assert.equal(trigger(rows)?.kind, "periodic_review_due", "legacy requests have no current clock proof");
+  assert.equal(trigger([{...retry, agent_id: "peer"}, ...many(20)], before)?.kind, "periodic_review_due");
+  assert.equal(trigger([run(22), ...rows], before)?.kind, "periodic_review_due", "new work supersedes the wait");
+  assert.equal(trigger([{...retry, delivery_outcome: "outcome_progress"}, ...many(20)], before)?.kind,
+    "periodic_review_due", "a bare retry field is not accepted blocked work");
+  assert.equal(trigger([retry, {...retry, turn_id: "previous"}, ...many(20)], before)?.kind,
+    "typed_progress_repeat", "a concrete repeated stall is independent evidence");
+  assert.equal(trigger([poll(22), ...rows], before), null, "quiet polls do not manufacture new evidence");
+  assert.deepEqual(rows, original);
+});
+
 test("periodic review counts material work, not quiet monitor receipts", () => {
   const quiet = many(20, n => poll(n, { mode: n > 18
     ? "due_monitor_observed_without_material_transition" : "monitor_quiet_until_material_transition" }));
@@ -68,6 +93,33 @@ test("periodic review counts material work, not quiet monitor receipts", () => {
   const materialPoll = poll(21, { mode: "due_monitor_material_transition", material_change: true });
   assert.equal(trigger([materialPoll, ...quiet, ...many(19)], { operation: "periodic" })?.kind,
     "periodic_review_due");
+});
+
+test("unsuccessful replan records cannot create or rotate a periodic work obligation", () => {
+  for (const classification of ["replan_noop", "repair_noop"]) {
+    const noops = many(200, n => run(n + 20, {classification,
+      ignored_text: `A renamed review description ${n}`}));
+    const project = (rows: JsonObject[]) => trigger(rows, {operation: "periodic"});
+    assert.equal(project(noops), null);
+    assert.equal(trigger(noops.map(row => ({...row, progress: observation}))), null,
+      "legacy callers cannot turn repeated no-op observations into a progress duty");
+    assert.equal(project([...noops, ...many(19)]), null);
+    const original = project(many(20));
+    assert.ok(original);
+    assert.deepEqual(project([...noops, ...many(20)]), original,
+      "observing an unresolved review cannot move its work window");
+    // A no-op sharing a real work Turn must not hide that Turn's work row.
+    assert.deepEqual(project(many(20).flatMap(row => [{...row, classification}, row])), original);
+    // Settlement alone does not turn a no-op into eligible review work.
+    const qualified = new Set(noops.map(row => JSON.stringify([row.agent_id, row.turn_id])));
+    assert.equal(projectReplanHistory(request(noops, {operation: "periodic"}), qualified).trigger, null);
+  }
+  const negative = many(20, n => run(n, {classification: "validated_negative_result",
+    progress: {...observation, result_class: "advanced", fingerprint: `negative-${n}`}}));
+  assert.equal(trigger(negative, {operation: "periodic"})?.run_count, 20,
+    "a useful negative experiment still contributes work");
+  assert.equal(trigger(many(20, n => run(n, {classification: "repair_noop_followup"})),
+    {operation: "periodic"})?.run_count, 20, "only the canonical no-op classifications are neutral");
 });
 
 test("ACK is a lane-scoped cutoff, including an ACK sharing the newest turn id", () => {

@@ -356,6 +356,16 @@ S11; this RFC does not silently enable a new acceptance policy. The next complet
 slice should map existing structured criteria through a work switch and restart,
 reject dropped coverage, and invalidate stale evidence under the same owner.
 
+**Supporting-outcome checkpoint:** [default outcome refinement](goal-outcome-refinement-v0.md)
+now proposes cumulative requirements and evidence-backed Agent review inside the
+same acceptance owner, inline work context and existing frontier replan. This
+adds no default enable switch; the legacy switch still controls executable checks.
+Self-review cannot bypass configured checks or close a root Goal. Additive
+requirements, File/SQLite recovery and runnable-research parity form this slice;
+general supersession, global closeout, cross-Agent reassignment and S11 model/
+benchmark adoption remain open. This is a disclosed default guidance change,
+not qualification of the complete R4 contract.
+
 ### 3.8 Invalid evidence and affected consumers
 
 Recovery and work switching must preserve the different observations defined
@@ -1164,6 +1174,13 @@ Acceptance and operational-objective commits are not the first runtime slice.
 They require demonstrated need and a separately reviewed automated policy and
 verifier contract. Permission expansion or escape from root intent cannot be
 auto-committed unless Goal creation explicitly delegated that exact class.
+
+The proposed [current operating objective](goal-outcome-refinement-v0.md#current-operating-objective)
+slice addresses stale source declarations through explicit owner apply and
+independent peer adoption. It does not enable automated root-intent, acceptance
+or permission amendments. The existing immutable work-template intent and
+its revision keep their meaning; the operating-objective history has its own
+versioned contract, and old `intent_basis` receipts are not upgraded in place.
 
 ## 11. Validation matrix
 
