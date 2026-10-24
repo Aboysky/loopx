@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import {GoalAcceptanceContractSection} from "./goal-acceptance-contract";
 import {GoalObjectiveSettings} from "./goal-objective-settings";
 import {goalAcceptanceContractCopy} from "./delivery-review-copy";
@@ -209,7 +210,7 @@ export function WorkspaceSettingsPage({
                 </select>
               </label>}
           </div>
-          {scopeHint ? <p className="personal-settings-effect">{scopeHint}</p> : null}
+          {scopeHint ? <ContextHelp label={locale === "zh-CN" ? "设置生效范围" : "Settings effect scope"}><p>{scopeHint}</p></ContextHelp> : null}
         </header>
         {scope === "goal" && initialGoalId && !editableGoal ? <p role="status" className="personal-settings-unavailable">
           {selectedGoal?.sourceAccess ? t("settings.goalReadOnly", {source: selectedGoal.sourceAccess.label})
@@ -293,7 +294,7 @@ export function WorkspaceSettingsPage({
                   />
                   <span>{t("settings.attentionNotificationsToggle")}</span>
                 </label>
-                <p className="personal-notification-hint">{t("settings.attentionNotificationsHint")}</p>
+                <ContextHelp label={t("settings.attentionNotifications")}><p className="personal-notification-hint">{t("settings.attentionNotificationsHint")}</p></ContextHelp>
                 <p className={attentionNotifications.support === "denied" ? "personal-notification-error" : "personal-notification-hint"} data-testid="attention-notification-permission" role="status">
                   {t(attentionNotificationSupportCopy[attentionNotifications.support])}
                 </p>

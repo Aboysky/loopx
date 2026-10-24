@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
 import { filterWorkspaceCommands, isPaletteShortcut, type WorkspaceCommandEntry } from "./workspace-command-entries";
@@ -7,7 +8,7 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
   entries: WorkspaceCommandEntry[]; open: boolean; enabled: boolean; readOnly: boolean; unavailable: boolean;
   onOpen: () => void; onClose: () => void; onSelect: (entry: WorkspaceCommandEntry) => void;
 }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
   const id = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -108,9 +109,11 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
       }
     }}>
-    <header><h2 id={`${id}-title`}>{t("palette.title")}</h2>
+    <header><div className="workspace-command-palette-title"><h2 id={`${id}-title`}>{t("palette.title")}</h2>
+      <ContextHelp label={locale === "zh-CN" ? "导航说明" : "Navigation help"}>
+        <p id={`${id}-scope`}>{t(readOnly ? "palette.readOnly" : "palette.scope")}</p><p>{t("palette.keys")}</p>
+      </ContextHelp></div>
       <button type="button" onClick={onClose} aria-label={t("common.close")}>Esc</button></header>
-    <p id={`${id}-scope`}>{t(readOnly ? "palette.readOnly" : "palette.scope")}</p>
     <label htmlFor={`${id}-search`}>{t("palette.search")}</label>
     <input id={`${id}-search`} ref={inputRef} role="combobox" aria-expanded={open}
       aria-controls={`${id}-list`} aria-autocomplete="list" autoComplete="off"
@@ -138,6 +141,5 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
       </li>)}
     </ul>
     {!matches.length ? <p role="status">{t(unavailable ? "palette.unavailable" : query.trim() ? "palette.noMatches" : "palette.empty")}</p> : null}
-    <footer>{t("palette.keys")}</footer>
   </dialog>;
 }

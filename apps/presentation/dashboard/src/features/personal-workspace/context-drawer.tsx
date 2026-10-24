@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import { ZCodeGoalControl } from "./zcode-goal-control";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { AttentionActions } from "./attention-actions";
@@ -822,11 +823,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   ) : (
                     <>
                       <h3>{t("drawer.larkNotConfigured")}</h3>
-                      <p>{t("drawer.larkNotConfiguredDescription")}</p>
+                      <ContextHelp label={t("drawer.larkNotConfigured")}><p>{t("drawer.larkNotConfiguredDescription")}</p></ContextHelp>
                     </>
                   )}
                   <button className="personal-secondary-action" onClick={() => callbacks.onOpenNotificationSettings?.(selection.item.goalId)} type="button"><Bell size={16} />{connection ? t("drawer.larkConfigure") : t("drawer.larkConnect")}</button>
-                  </section> : <section className="personal-detail-card personal-goal-notification"><small>{t("drawer.larkConnection")}</small><h3>{t("drawer.remoteDetailsUnavailable")}</h3><p>{t("drawer.remoteDetailsDescription")}</p></section>}
+                  </section> : <section className="personal-detail-card personal-goal-notification"><small>{t("drawer.larkConnection")}</small><h3>{t("drawer.remoteDetailsUnavailable")}</h3><ContextHelp label={t("drawer.remoteDetailsUnavailable")}><p>{t("drawer.remoteDetailsDescription")}</p></ContextHelp></section>}
                 </>
               );
             })()}
@@ -841,7 +842,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               ) : (
                 <>
                   <h3>{t("drawer.noRun")}</h3>
-                  <p>{t("drawer.noRunDescription")}</p>
+                  <ContextHelp label={t("drawer.noRun")}><p>{t("drawer.noRunDescription")}</p></ContextHelp>
                 </>
               )}
             </section>
@@ -975,7 +976,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   </label>
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel("gpt-5.6-luna"); setSubagentEffort("max"); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentLunaPreset")}</button>
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel(""); setSubagentEffort(""); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentClearModel")}</button>
-                  <p>{t("drawer.subagentModelHint")}</p>
+                  <ContextHelp label={t("drawer.subagentModel")}><p>{t("drawer.subagentModelHint")}</p></ContextHelp>
                   <label>
                     <span>{t("drawer.subagentExecutionConfig")}</span>
                     <input

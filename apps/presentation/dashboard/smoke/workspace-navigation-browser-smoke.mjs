@@ -68,6 +68,36 @@ try {
         if (width===390 && await page.locator('.personal-workspace-shell.mobile-sidebar-open').count()) await page.keyboard.press('Escape');
       }
       if (baseline) continue;
+      // Empty/partial snapshots keep their truth in contextual glyphs. Reading
+      // them cannot expand a parent disclosure, grant access or start work.
+      for (const [name,width,height] of [['desktop',1440,900],['narrow',390,844]]) {
+        await page.setViewportSize({width,height});
+        const now = page.locator('.goal-now');
+        const workHelp = now.getByRole('button',{name:locale==='en'?'Work coverage unconfirmed':'工作覆盖未确认',exact:true});
+        const acceptance = page.locator('.goal-observation-details');
+        const acceptanceHelp = acceptance.getByRole('button',{name:locale==='en'?'Acceptance observations unavailable':'验收观察未获取',exact:true});
+        await workHelp.waitFor();
+        assert.doesNotMatch(await now.innerText(), /当前快照|coverage is incomplete|没有可列出/,'No duplicate scope or empty-list paragraphs in the default view');
+        assert.equal(await acceptance.evaluate(e=>e.open),false);
+        await page.mouse.move(width-2,2);
+        await page.screenshot({path:resolve(outputDir,`glyph-default-${name}-${locale}.png`),animations:'disabled'});
+        await workHelp.hover();
+        const bubble=page.locator('.context-help-popover:popover-open');
+        await bubble.waitFor();
+        assert.match(await bubble.innerText(),locale==='en'?/coverage is incomplete/:/覆盖范围不完整/);
+        assert.ok(await bubble.evaluate(e=>parseFloat(getComputedStyle(e).fontSize)>=14),'Optional help uses reading text');
+        await page.keyboard.press('Escape'); await bubble.waitFor({state:'hidden'});
+        await acceptanceHelp.focus(); await bubble.waitFor();
+        assert.match(await bubble.innerText(),locale==='en'?/unknown/:/仍未知/,'Missing observations never become successful acceptance');
+        await page.keyboard.press('Escape'); await bubble.waitFor({state:'hidden'});
+        assert.equal(await acceptanceHelp.evaluate(e=>document.activeElement===e),true,'Escape keeps the help trigger focused');
+        await acceptanceHelp.tap(); await bubble.waitFor();
+        assert.equal(await acceptance.evaluate(e=>e.open),false,'Tapping help does not toggle the surrounding evidence disclosure');
+        const bounds=await bubble.boundingBox();
+        assert.ok(bounds.x>=0 && bounds.x+bounds.width<=width && bounds.y>=0 && bounds.y+bounds.height<=height,'Complete help fits desktop and phone');
+        await page.screenshot({path:resolve(outputDir,`glyph-help-${name}-${locale}.png`),animations:'disabled'});
+        await page.locator('.personal-channel-title').click(); await bubble.waitFor({state:'hidden'});
+      }
       await page.setViewportSize({width:1440,height:900});
       await launch.focus();
       await page.evaluate(() => {

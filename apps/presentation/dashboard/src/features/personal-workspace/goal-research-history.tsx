@@ -1,6 +1,6 @@
+import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
-import {AlertCircle, ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {ResearchRecordSearch} from "./research-record-browser";
 import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
@@ -425,8 +425,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       <button type="button" disabled={busy} onClick={refresh}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
     </div> : null}
     {!busy && !readFailure && read.total === 0 ? <div className="research-history-empty">
-      <FlaskConical size={22} aria-hidden/>
-      <div role="status"><strong>{zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet"}</strong><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></div>
+      <div role="status"><strong>{zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet"}</strong><ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></ContextHelp></div>
       <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
     </div> : null}
     {!progressiveOverview ? <><ResearchAnalysisStatus analysis={analysis}/>
@@ -468,7 +467,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           </nav> : null}
           {selected.findings.length > 1 && findingExceptions ? <p className="research-finding-exceptions">{findingExceptions}</p> : null}
           {selectedFinding ? findingElement(selectedFinding, selected.latest.title) : <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p>}
-        </> : <>{selected.latest.summary ? <p>{selected.latest.summary}</p> : null}<p className="research-history-note">{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p></>}
+        </> : <>{selected.latest.summary ? <p>{selected.latest.summary}</p> : null}<ContextHelp label={zh ? "暂无附属结论" : "No attached findings"} icon={CircleHelp}><p className="research-history-note">{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p></ContextHelp></>}
         <details className="research-node-provenance" key={selected.id}><summary>{zh ? "来源与历史" : "Sources and history"}</summary>
         {selectedContextCitations.length ? <><h4>{zh ? "译文依据" : "Translation context"}</h4>
           <div className="analysis-citations">{selectedContextCitations.map(citation => <button type="button" key={JSON.stringify(citation)}
@@ -503,10 +502,12 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </details> : historyView}
     </div> : null}
     {(selection.nodes.some(id => !value?.nodes.some(node => node.id === id)) || (selection.day !== null && !selectedGroup)) && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
-    {value?.events.length && !value.nodes.length ? <p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p> : null}
+    {value?.events.length && !value.nodes.length ? <ContextHelp label={zh ? "节点结构未记录" : "Node structure not recorded"} icon={CircleHelp}><p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p></ContextHelp> : null}
+    {value && (value.missingLinks.length || value.unknownTimeCount || value.unknownKindCount) ? <ContextHelp icon={CircleHelp} label={zh ? "研究记录覆盖缺口" : "Research record coverage gaps"}>
     {value?.missingLinks.length ? <p className="research-history-note">{copy.missing} · {value.missingLinks.length}</p> : null}
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
+    </ContextHelp> : null}
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
       {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} events={history.canonical?.events ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}

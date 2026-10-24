@@ -1,3 +1,5 @@
+import {CircleHelp} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import {useEffect, useRef} from "react";
 import {AttachedAgentConversations} from "./attached-agent-conversations";
 import {useWorkspaceI18n} from "./i18n";
@@ -31,11 +33,11 @@ export function GoalAgentWorkPage({goal, agentId, readOnly, onSelect, onClose}: 
     {!agentId ? <div className="agent-work-directory">
       {ids.map(id => <button type="button" key={id} onClick={() => onSelect(id)}>{goal.agentLanes?.find(item => item.agentId === id)?.label ?? id}</button>)}
       {!ids.length ? <p role="status">{zh ? "此 Goal 尚无已注册的 Agent。" : "This Goal has no registered Agents."}</p> : null}
-    </div> : readOnly ? <p className="agent-work-unavailable" role="status">{zh ? "此来源仅提供状态快照，无法在这里读取或回复原会话。" : "This source provides a status snapshot; original conversations cannot be read or replied to here."}</p>
+    </div> : readOnly ? <ContextHelp label={zh ? "来源仅有状态快照" : "Source contains a status snapshot only"} icon={CircleHelp}><p className="agent-work-unavailable" role="status">{zh ? "此来源仅提供状态快照，无法在这里读取或回复原会话。" : "This source provides a status snapshot; original conversations cannot be read or replied to here."}</p></ContextHelp>
       : !registered ? <p className="agent-work-unavailable" role="status">{zh ? "此 Agent 不在当前 Goal 的已注册列表中，请选择列表中的 Agent。" : "This Agent is not registered in the current Goal. Choose an Agent from its directory."}</p>
-      : !supported ? <p className="agent-work-unavailable" role="status">{hosts.length
+      : !supported ? <ContextHelp label={zh ? "会话来源未接入" : "Conversation source not connected"} icon={CircleHelp}><p className="agent-work-unavailable" role="status">{hosts.length
         ? (zh ? `来源：${hosts.join("、")}。此宿主的工作记录与回复尚未接入。` : `Source: ${hosts.join(", ")}. Work records and replies from this host are not connected yet.`)
-        : (zh ? "此 Agent 尚无已绑定的会话来源。" : "This Agent has no bound conversation source yet.")}</p>
+        : (zh ? "此 Agent 尚无已绑定的会话来源。" : "This Agent has no bound conversation source yet.")}</p></ContextHelp>
       : <AttachedAgentConversations key={`${goal.goalId}:${agentId}`} goalId={goal.goalId} targetAgentId={agentId} zh={zh}/>}
   </section>;
 }
