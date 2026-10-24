@@ -9,11 +9,12 @@ import shlex
 import socket
 import stat
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
+from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
@@ -205,6 +206,23 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         **({"context_delivery": activation} if activation["enabled"] else {}),
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + CONTEXT_CAPTURE_READ_GUIDANCE}
+
+
+def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
+    """Validate transport options before allocating a new guard capture."""
+    if directory is None and (
+        getattr(args, "decision_output_dir", None) is not None
+        or getattr(args, "decision_output_root", None) is not None
+        or getattr(args, "decision_handoff_socket", None) is not None
+        or getattr(args, "codex_context_dir", None) is not None
+        or getattr(args, "codex_context_root", None) is not None
+        or getattr(args, "context_delivery", "off") != "off"
+    ):
+        from .quota_context import validate_quota_command_context_request
+
+        validate_quota_command_context_request(args)
+        return prepare_decision_capture(args)
+    return directory
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
@@ -439,3 +457,16 @@ def read_replan_view(args: argparse.Namespace) -> dict:
         payload = json.load(stream)
     return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,
                                  stage=args.replan_stage, outcome_ref=args.outcome_ref)
+
+
+def handle_replan_view(
+    args: argparse.Namespace,
+    print_payload: Callable[[dict[str, object], str, Callable[[dict[str, object]], str]], None],
+) -> int:
+    """Render the captured read without entering live quota dispatch or recovery."""
+    try:
+        view = read_replan_view(args)
+    except (OSError, ValueError, EffectRuntimeRejected) as exc:
+        view = {"ok": False, "reason": str(exc)}
+    print_payload(view, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+    return 0 if view["ok"] else 1

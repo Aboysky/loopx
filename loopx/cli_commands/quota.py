@@ -9,7 +9,7 @@ from typing import Any
 
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
-    prepare_decision_capture, handle_native_context_command,
+    handle_native_context_command, handle_replan_view, prepare_quota_capture,
 )
 from ..control_plane.turn_driver.decision_capture import project_captured_context
 from ..usage_goal import observe_quota_result
@@ -631,13 +631,7 @@ def handle_quota_command(
     if native_result is not None:
         return native_result
     if args.quota_command == "replan-view":
-        from .quota_capture import read_replan_view
-        try:
-            view = read_replan_view(args)
-        except (OSError, ValueError, EffectRuntimeRejected) as exc:
-            view = {"ok": False, "reason": str(exc)}
-        print_payload(view, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
-        return 0 if view["ok"] else 1
+        return handle_replan_view(args, print_payload)
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
@@ -652,16 +646,7 @@ def handle_quota_command(
     context: QuotaCommandContext | None = None
     goal_ref: dict[str, str] | None = None
     try:
-        if capture_directory is None and (
-            getattr(args, "decision_output_dir", None) is not None
-            or getattr(args, "decision_output_root", None) is not None
-            or getattr(args, "decision_handoff_socket", None) is not None
-            or getattr(args, "codex_context_dir", None) is not None
-            or getattr(args, "codex_context_root", None) is not None
-            or getattr(args, "context_delivery", "off") != "off"
-        ):
-            validate_quota_command_context_request(args)
-            capture_directory = prepare_decision_capture(args)
+        capture_directory = prepare_quota_capture(args, capture_directory)
         goal_ref, turn_start_hook_dispatch, context = (
             _prepare_quota_command_execution(
                 args,
