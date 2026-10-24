@@ -969,6 +969,38 @@ class ChatRequestHandler(
 
     def _list_sessions(self) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        if "managed_agent_id" in query:
+            # Agent registration is distinct from the executor's agent_id.
+            # Reuse Core's exact original identity admission; an older service
+            # ignoring this selector must not look like a successful discovery.
+            from .capabilities.native_chat.steward_managed_mode import StewardManagedMode, managed_session_identity
+            if (set(query) != {"goal_id", "managed_agent_id"}
+                    or any(len(values) != 1 or not values[0] for values in query.values())):
+                return self._send_error("select one exact registered Goal and Agent", status=400)
+            goal_id, managed_agent_id = query["goal_id"][0], query["managed_agent_id"][0]
+            try:
+                goal = StewardManagedMode(self.server.runtime_controller, None)._goal(goal_id)
+                if not goal:
+                    raise ValueError("original Goal unavailable")
+                workspace = Path(goal["workspace_path"])
+                identity = managed_session_identity(self.server.runtime_controller,
+                    goal_id=goal_id, agent_id=managed_agent_id, workspace=workspace)
+                sessions = []
+                for row in self.server.chat_store.list_sessions(goal_id=goal_id, channel_id=identity["channel_id"]):
+                    session = self.server.chat_store.load_session(row["session_id"])
+                    if not session or session.get("managed_agent_id") != managed_agent_id:
+                        continue
+                    try:
+                        managed_session_identity(self.server.runtime_controller, goal_id=goal_id,
+                            agent_id=managed_agent_id, workspace=workspace, session=session)
+                    except (ValueError, RuntimeError):
+                        continue
+                    sessions.append(row)
+                return self._send_json({"ok": True, "schema_version": "loopx_chat_session_list_v1",
+                    "goal_id": goal_id, "managed_agent_id": managed_agent_id,
+                    "goal_instance_id": identity["goal_instance_id"], "sessions": sessions})
+            except (ValueError, RuntimeError, OSError, KeyError):
+                return self._send_error("The registered Agent's original managed conversations are unavailable.", status=409)
         if "conversation_binding_id" in query:
             if set(query) != {"conversation_binding_id"} or len(query["conversation_binding_id"]) != 1 or not query["conversation_binding_id"][0]:
                 return self._send_error("select one exact conversation binding without other Session filters", status=400)

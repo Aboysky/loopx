@@ -45,6 +45,56 @@ def body(binding, text="Owner follow-up"):
     }
 
 
+def test_managed_directory_keeps_registered_identity_and_original_sessions(tmp_path):
+    with fixture(tmp_path) as (request, _, methods, inputs, registry, _):
+        store = request.server.chat_store
+        args = dict(goal_id="sample-goal", agent_id="codex", adapter_kind="codex_app_server",
+            managed_agent_id="worker", managed_workspace_path=str(tmp_path), channel_id="agent.worker")
+        first = store.create_session(**args, upstream_thread_id="managed-first")
+        second = store.create_session(**args, upstream_thread_id="managed-second")
+        legacy = store.create_session(goal_id="sample-goal", agent_id="codex", adapter_kind="codex_app_server", upstream_thread_id="unmapped")
+        store.append_message(first["session_id"], role="agent", text="First independent original")
+        store.append_message(second["session_id"], role="agent", text="Second independent original")
+        query = "?goal_id=sample-goal&managed_agent_id=worker"
+        before = list(methods)
+        status, listed = request(path="/api/chat/sessions", query=query)
+        assert status == 200
+        assert listed["goal_id"] == "sample-goal" and listed["managed_agent_id"] == "worker"
+        assert listed["goal_instance_id"] is None
+        assert {row["session_id"] for row in listed["sessions"]} == {first["session_id"], second["session_id"]}
+        assert all(row["managed_agent_id"] == "worker" and row["agent_id"] == "codex" for row in listed["sessions"])
+        assert request(path="/api/chat/sessions", query=query + "&agent_id=codex")[0] == 400
+        assert request(path="/api/chat/sessions", query=query + "&managed_agent_id=worker")[0] == 400
+        assert request(path="/api/chat/sessions", query="?goal_id=sample-goal&managed_agent_id=codex")[0] == 409
+        store.update_session(second["session_id"], status="closed")
+        assert [row["session_id"] for row in request(path="/api/chat/sessions", query=query)[1]["sessions"]] == [first["session_id"]]
+        value = json.loads(registry.read_text()); value["goals"][0]["goal_instance_id"] = "replacement-lifetime"
+        registry.write_text(json.dumps(value))
+        assert request(path="/api/chat/sessions", query=query)[1]["sessions"] == []
+        assert store.load_session(legacy["session_id"]) == legacy
+        assert store.messages(first["session_id"])[0]["text"] == "First independent original"
+        assert list(methods) == before and not inputs
+
+
+@pytest.mark.parametrize("fault", ["unregistered", "stopped", "workspace", "foreign-goal"])
+def test_managed_directory_refuses_changed_identity_without_host_work(tmp_path, fault):
+    with fixture(tmp_path) as (request, _, methods, inputs, registry, _):
+        store = request.server.chat_store
+        store.create_session(goal_id="sample-goal", agent_id="codex", adapter_kind="codex_app_server",
+            managed_agent_id="worker", managed_workspace_path=str(tmp_path), channel_id="agent.worker", upstream_thread_id="original")
+        value = json.loads(registry.read_text()); goal = value["goals"][0]
+        if fault == "unregistered": goal["coordination"]["registered_agents"] = ["peer"]
+        if fault == "stopped": goal["status"] = "stopped"
+        if fault == "workspace": goal["repo"] = str(tmp_path / "different")
+        registry.write_text(json.dumps(value))
+        status, result = request(path="/api/chat/sessions", query=f"?goal_id={'foreign' if fault == 'foreign-goal' else 'sample-goal'}&managed_agent_id=worker")
+        if fault == "workspace":
+            assert status == 200 and result["sessions"] == []
+        else:
+            assert status == 409
+        assert not inputs and "thread-follower-start-turn" not in methods
+
+
 def opener_spy(monkeypatch, *, platform="darwin", failure=None):
     calls = []
 
