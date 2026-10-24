@@ -679,6 +679,19 @@ CLI 将 Goal/Agent 绑定到实际决策，保存不可变的 `projection.json`�
 hook 或 packet 变小本身不等于节省。下一接入是让 Codex 生命周期 adapter 消费
 既有普通 quota capture/detail 路径，覆盖一期两个调用方，不增加第二套 runner 或审批流程。
 
+组合原生 fixture 现通过 Codex 工具执行真实 `quota should-run` CLI，使用 SQLite、
+私有 rendezvous 和共享投影；在实际发出的模型输入中观察到完整分页输出后，才提供温态
+基线。Codex exec 覆盖普通 quota，app-server 覆盖 Turn envelope。两条路径均在自动
+压缩后恢复同一份不可变 CLI 投影，包含主恢复 handler 失败，且不触发第三次 guard 或
+quota 扣额。这补齐 producer 到原生传输的测试缺口；输入观察器仍是确定性 loopback
+provider，并非生产 Codex 连续性 adapter。来源正文、来源状态和原始 capture 独立于
+delta 校验。包括恢复在内的全部分页仍属于成本边界；安装采用和自主成果保持未完成。
+
+Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
+重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout
+则抑制该捕获。真实 CLI fixture 和 typed selector 现分别验证这些事实，不再从
+receipt status 推断 closeout。
+
 在可选能力模式不变的条件下，比较匹配的普通执行、重规划和等待/恢复负载，覆盖首次交付、
 温态复用、reset、删除、数组重排、丢失/重复/乱序 delta、部分输出、来源/身份不匹配及迟到
 要求变化。重建结果须等于完整当前投影，fresh 控制事实始终不得省略。统计首次和补读的模型输入、上下文占用、

@@ -985,6 +985,24 @@ a smaller hook or packet alone is not a saving. The next integration is the
 Codex lifecycle adapter consuming the ordinary quota capture/detail path for
 both phase-one consumers, without a second runner or a new approval flow.
 
+The composed native fixture now executes the real `quota should-run` CLI from
+Codex tools, using SQLite, its private rendezvous and the shared projector. It
+observes complete paged output in actual outgoing model input before supplying
+a warm baseline. Codex exec covers ordinary quota; app-server covers the Turn
+envelope. Both recover the same immutable CLI projection after automatic
+compaction, including primary recovery-handler failure, without a third guard
+or quota debit. This closes a producer-to-native transport test gap; the input
+observer is still the deterministic loopback provider, not a production Codex
+continuity adapter. The source text, source state and original captures are
+checked independently of the delta. All pages, including recovery, remain part
+of the cost boundary. Installed adoption and autonomous outcomes remain open.
+
+Capture regression qualification also distinguishes settlement binding from
+closeout: an upgraded receipt with an outstanding semantic replan still permits
+an inert replan capture and grants no delivery authority. Explicit pending
+closeout suppresses that capture. The real CLI fixture and the typed selector
+now test both facts instead of inferring closeout from the receipt status.
+
 Qualification compares matched normal, replan and wait/recovery workloads with
 optional capability modes unchanged. Include first delivery, warm reuse, reset,
 deletion, array reordering, lost/duplicated/out-of-order deltas, partial output,

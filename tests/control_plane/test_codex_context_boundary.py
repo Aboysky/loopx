@@ -77,7 +77,7 @@ def _input_text(request):
     return "\n".join(text)
 
 
-def _app_server(binary, env, workspace, home, trusted, additional_context=None):
+def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only"):
     with (home / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
         [binary, "app-server", "--listen", "stdio://"], cwd=str(workspace), env=env,
         stderr=stderr, response_timeout_sec=20,
@@ -85,7 +85,7 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None):
         native.request("initialize", {"clientInfo": {"name": "context_boundary_fixture", "version": "0.1.0"},
                                       "capabilities": {"experimentalApi": True}})
         native.notify("initialized", {})
-        params = {"cwd": str(workspace), "sandbox": "read-only", "approvalPolicy": "never"}
+        params = {"cwd": str(workspace), "sandbox": sandbox, "approvalPolicy": "never"}
         if trusted:
             # Trust only the exact synthetic handlers created by this test.
             # Never read/alter the operator's hook trust or treat a global CLI
@@ -193,7 +193,8 @@ def test_native_shared_delta_with_small_compact_recovery_reference(tmp_path, hos
     # Native tool feedback can impose its own cap even when max_output_tokens
     # is larger. Reconstruct from bounded pages, never a head/tail preview.
     page_size = 6000
-    page_count = lambda name: (len(saved[name].decode()) + page_size - 1) // page_size
+    def page_count(name):
+        return (len(saved[name].decode()) + page_size - 1) // page_size
     base_pages, target_pages = page_count("base"), page_count("target")
     compact_call = base_pages + 3
     final_call = compact_call + target_pages + 1
