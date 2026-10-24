@@ -1034,11 +1034,47 @@ baseline identity, freshness and exact reconstruction.
 This check can narrow a caller's retention claim, never mint one or establish
 future dispatch ordering. A full baseline may be reused while every original
 byte is observable; this reader does not infer a patch chain from saved files.
-The native CLI/SQLite composition now uses this reader for warm selection, with
-the loopback provider retained as an independent oracle. The recovery hook and
-rendezvous controller are still fixtures: production lifecycle installation,
-post-publication compaction recovery, trace overhead and autonomous outcomes
-remain unqualified. No runtime or owner gate is added, and phase one stays open.
+The native CLI/SQLite composition uses this reader for warm selection, with
+an independent loopback oracle. The production consumer now provides
+`quota context-hook --codex-context-dir <private-session-dir>` for native events
+on stdin. Ordinary `quota should-run` uses the same `--codex-context-dir` with
+its existing capture destination and calls the shared projector directly;
+a test-side rendezvous controller is no longer required. The Python module owns
+only Codex-specific event/private-file IO, not a new capability, runner, Goal
+state or decision owner. TS retains delta, binding and fallback semantics.
+
+The caller prepares a separate private directory per native session/workspace
+and registers that hook command for `SessionStart`, `PreToolUse` and `PreCompact`
+through the native configuration/trust flow. The CLI does not install hooks,
+alter trust or enable tracing. It checks the current `CODEX_THREAD_ID`, working
+directory and active call and requires complete input from already enabled
+traces; absent, incompatible or uncertain evidence selects full automatically.
+Removing the opt-in argument restores the ordinary path. Existing arguments and
+legacy rendezvous behavior remain unchanged; selection commands carry the same
+transport argument without another human step.
+
+Startup, resume, fork and compact events invalidate the epoch. Same-session
+recovery carries only the latest immutable capture's complete-read command;
+a different session never borrows the old reference. Preparation and publication
+of the latest recovery reference share a private lock, so post-publication
+compaction also recovers that capture. A primary journal write failure still
+returns a known recovery reference; a publication that cannot record its reference
+returns the original full payload. A candidate file is never an ACK: complete
+model input is cross-checked on each reuse. A complete projection read through
+`context-read` can establish the baseline body; `1` and `1.0` are both JSON
+numbers, while booleans remain distinct. Missing/mismatched baseline, source
+permission and freshness rules are unchanged.
+
+Native exec/quota and app-server/Turn tests now execute this production CLI and
+hook rather than a test lifecycle controller. They cover complete cold read,
+warm delta, automatic post-publication compaction, primary-handler write failure,
+same-capture complete recovery and zero extra guard/debit. The deterministic
+loopback provider still does not prove an autonomous model follows recovery or
+achieves lower total cost. Mid-session wholly unexecuted/killed hooks, code-mode,
+installed adoption, trace/all-read overhead and real solver outcomes need
+independent qualification. Ordinary app-server `exec_command` evidence must not
+be transferred to Codex App code-mode. No runtime/owner question is added, and
+phase one remains open.
 
 Capture regression qualification also distinguishes settlement binding from
 closeout: an upgraded receipt with an outstanding semantic replan still permits

@@ -483,7 +483,7 @@ def _emit_quota_result(
         )
         print_payload(failure, args.format, _quota_renderer(args))
         return 1
-    if delivery_request is not None:
+    if delivery_request is not None or getattr(args, "codex_context_dir", None):
         agent = payload.get("agent_identity")
         decision_identity = (str(payload.get("goal_id") or ""),
             str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
@@ -507,6 +507,18 @@ def _emit_quota_result(
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
+    if args.format == "json" and succeeded and getattr(args, "codex_context_dir", None) and capture_directory:
+        import hashlib
+        from ..control_plane.turn_driver.codex_context import project_codex_context
+
+        try:
+            capture_id = hashlib.sha256((capture_directory / "decision.json").read_bytes()).hexdigest()
+            payload = project_codex_context(payload, directory=args.codex_context_dir,
+                capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
+                surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+                capture_id=capture_id)
+        except OSError:
+            pass  # Lost optional capture: keep the admitted full payload, never rerun its guard.
     print_payload(payload, args.format, _quota_renderer(args))
     return 0 if succeeded else 1
 
@@ -520,6 +532,21 @@ def handle_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
 ) -> int:
+    if args.quota_command == "context-hook":
+        import json
+        import sys
+        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+        from ..control_plane.turn_driver.codex_context import codex_context_hook
+
+        # Native transport only: no registry discovery, guard or quota effects.
+        try:
+            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+            event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
+            payload = codex_context_hook(args.codex_context_dir, event) if isinstance(event, dict) else {}
+        except (OSError, ValueError, TypeError, RecursionError):
+            payload = {}
+        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        return 0
     if args.quota_command == "context-read":
         # Presentation recovery reads the original capture, never current Goal
         # state. In particular it must not evaluate a guard or append a receipt.
@@ -544,6 +571,7 @@ def handle_quota_command(
             getattr(args, "decision_output_dir", None) is not None
             or getattr(args, "decision_output_root", None) is not None
             or getattr(args, "decision_handoff_socket", None) is not None
+            or getattr(args, "codex_context_dir", None) is not None
         ):
             validate_quota_command_context_request(args)
             capture_directory = prepare_decision_capture(args)

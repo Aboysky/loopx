@@ -208,3 +208,32 @@ def test_optional_capture_projection_failure_falls_back_without_hiding_source(tm
         "goal_id": "fixture", "agent_id": "agent", "session_id": "session", "context_epoch": "epoch"}},
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="fixture-capture") is payload
     assert json.loads((tmp_path / "projection.json").read_bytes()) == payload
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+    from test_quota_settlement_cli import _heartbeat_receipt_count
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODEX_THREAD_ID", "native-session")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
+        state_path=state, provider=provider)
+    original = state.read_bytes()
+    root, captures = tmp_path / "context", tmp_path / "captures"
+    root.mkdir(mode=0o700)
+    captures.mkdir()
+    event = dict(session_id="native-session", cwd=str(project), hook_event_name="SessionStart", source="startup")
+    codex_context_hook(str(root), event)
+    for _ in range(2):
+        rc, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-full",
+            "--decision-output-root", str(captures), "--codex-context-dir", str(root), cwd=project)
+        assert rc == 0 and wire["mode"] == "full", wire
+        assert json.loads(Path(wire["recovery"]["path"]).read_text()) == wire["context"]
+    assert _heartbeat_receipt_count(runtime, "native-full") == 1
+    assert _spend_run_count(runtime) == 0 and state.read_bytes() == original

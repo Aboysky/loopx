@@ -75,6 +75,21 @@ def test_long_trace_uses_current_window_and_never_old_delivery(tmp_path):
     assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
 
 
+def test_full_projection_read_is_retention_evidence_with_json_number_semantics(tmp_path):
+    observation, baseline, _, _ = fixture(tmp_path)
+    baseline["context"]["compute"] = 1
+    context = {**baseline["context"], "compute": 1.0}
+    raw = json.dumps(context).encode()
+    Path(observation["capture_file"]).write_bytes(raw)
+    observation["capture_sha256"] = hashlib.sha256(raw).hexdigest()
+    path = tmp_path / "trace/payloads/input.json"
+    path.write_text(json.dumps({"input": [{"type": "function_call_output", "output": raw.decode()}]}))
+    assert codex_context_in_active_input(observation, baseline=baseline, session_id="session")
+    context["compute"] = True
+    path.write_text(json.dumps({"input": [{"type": "function_call_output", "output": json.dumps(context)}]}))
+    assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
+
+
 @pytest.mark.parametrize("failure", ["middle_missing", "pruned", "preview", "quoted", "wrong_role", "server_history",
     "bad_page", "overlap", "capture_changed", "other_session", "other_tool", "ended", "new_inference", "compacted",
     "child", "code_mode", "wrong_response", "partial_trace", "reordered_trace", "missing_trace", "outside_payload", "symlink", "boolean_type"])

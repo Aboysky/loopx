@@ -713,10 +713,34 @@ Python 持有 provider 特有的 IO；基线身份、新鲜度和精确重建仍
 
 该检查只能收窄调用方的保留声明，不能自行生成声明或证明未来 dispatch 的顺序。
 只有每个原始字节仍可观察时，才可复用全量基线；reader 不从已存文件推断 patch 链。
-原生 CLI/SQLite 组合现使用该 reader 选择温态交付，loopback provider 保留为独立
-oracle。恢复 hook 和 rendezvous controller 仍是 fixture：生产生命周期安装、发布
-后的压缩恢复、trace 开销及自主成果尚未取得资格。不新增 runtime 或 owner 问询门，
-一期仍保持开放。
+原生 CLI/SQLite 组合使用该 reader 选择温态交付，loopback provider 保留为独立
+oracle。当前生产接入新增 `quota context-hook --codex-context-dir <private-session-dir>`，
+从 stdin 读取原生事件；普通 `quota should-run` 在既有 capture destination 上携带同一
+`--codex-context-dir`，直接调用共享 projector，无需测试侧 rendezvous controller。
+该 Python 模块只负责 Codex 特有的事件和私有文件 IO，不新增 capability、runner、
+Goal 状态或决策 owner；TS 继续持有差分、绑定和回退语义。
+
+调用方为每个原生 session/workspace 准备独立的私有目录，并通过原生配置与信任流程
+把上述 hook 命令接到 `SessionStart`、`PreToolUse`、`PreCompact`。CLI 不安装 hook、
+修改信任或启用 tracing。它核对当前 `CODEX_THREAD_ID`、工作目录和 active call，并
+要求已经启用的 trace 提供完整输入；缺失、不可兼容或无法确认时自动全量。移除 opt-in
+参数即可恢复原路径；普通参数和旧 rendezvous 行为保持不变。selection 命令继续携带
+同一 transport 参数，不增加人工步骤。
+
+启动、resume、fork、压缩事件使 epoch 失效；同一 session 的恢复提示只带最新不可变
+capture 的完整读取命令，跨 session 不借用旧引用。生成候选和保存最新恢复引用使用同一
+私有锁；发布之后的压缩也能恢复同 capture。主 journal 写入失败时，handler 仍返回已知
+恢复引用；生产发布无法记录引用时返回原全量。候选文件从不等于 ACK，完整模型输入需在
+每次复用时重新核对。`context-read` 读回的完整投影可以提供基线正文证据；`1` 与 `1.0`
+均属 JSON number，布尔值仍须不同。基线缺失或错配、来源权限与新鲜度规则不变。
+
+原生 exec/quota 与 app-server/Turn 测试现执行上述生产 CLI 和 hook，而非测试侧
+生命周期 controller；覆盖完整初读、温态差分、发布后自动压缩、主 handler 写入失败、
+同 capture 完整补读和零额外 guard/扣额。它们仍使用确定性 loopback provider，不证明
+真实模型自主遵循恢复提示或总成本收益。中途整个 hook 未执行/被杀、code-mode、安装
+采用、trace 与全部补读开销以及真实 solver 成果仍须独立验证；不得将普通 app-server
+`exec_command` 资格套用于 Codex App 的 code-mode。不开新 runtime/owner 问询门，
+一期保持开放。
 
 Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
 重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout

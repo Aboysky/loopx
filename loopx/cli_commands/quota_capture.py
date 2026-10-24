@@ -78,6 +78,10 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     requested = getattr(args, "decision_output_dir", None)
     root = getattr(args, "decision_output_root", None)
     handoff = getattr(args, "decision_handoff_socket", None)
+    if getattr(args, "codex_context_dir", None) is not None and (
+            args.format != "json" or handoff is not None or (requested is None and root is None)):
+        raise QuotaCommandValidationError(
+            "native Codex context delivery needs JSON and a capture destination, without a second handoff socket")
     if handoff is not None:
         validate_handoff_socket(handoff)
         if requested is None and root is None:
@@ -149,6 +153,8 @@ def bind_capture_selection_transport(payload: dict, args: argparse.Namespace) ->
         suffix += " --decision-handoff-socket " + shlex.quote(args.decision_handoff_socket)
     if getattr(args, "turn_envelope", False):
         suffix += " --turn-envelope"
+    if getattr(args, "codex_context_dir", None):
+        suffix += " --codex-context-dir " + shlex.quote(args.codex_context_dir)
     selection["command_args_template"] = template + suffix
 
 

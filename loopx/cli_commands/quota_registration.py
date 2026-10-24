@@ -28,6 +28,7 @@ def register_quota_command(
             "plan",
             "should-run",
             "context-read",
+            "context-hook",
             "monitor-poll",
             "scheduler-ack",
             "scheduler-ack-current",
@@ -36,7 +37,7 @@ def register_quota_command(
             "void-slot",
         ],
         default="status",
-        help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
+        help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-hook for opt-in native Codex lifecycle IO, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument(
         "--goal-id",
@@ -198,6 +199,10 @@ def register_quota_command(
               "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
     )
     quota_parser.add_argument("--capture-file", help="For context-read: original captured JSON file; no guard is evaluated.")
+    quota_parser.add_argument("--codex-context-dir",
+        help="Opt-in private native Codex lifecycle directory. For context-hook, consume one native hook event on stdin. "
+             "For should-run, requires JSON and a decision capture destination; unknown retention stays full. "
+             "Does not install hooks, enable tracing, or change native trust.")
     quota_parser.add_argument("--capture-sha256", help="For context-read: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int, default=4096,

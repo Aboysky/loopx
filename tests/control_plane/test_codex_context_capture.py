@@ -1,7 +1,7 @@
 """Native tools execute the actual quota CLI and recover its original capture.
 
 The loopback provider is a deterministic input-boundary observer. This qualifies
-the transport composition, not a shipped continuity observer or solver benefit.
+the opt-in production lifecycle/CLI composition, not installed adoption or solver benefit.
 """
 from __future__ import annotations
 
@@ -10,11 +10,8 @@ import json
 import os
 from pathlib import Path
 import shlex
-import socket
 import subprocess
 import sys
-import tempfile
-import threading
 
 import pytest
 
@@ -71,199 +68,146 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     root = workspace / "captures"
     root.mkdir()
     wire_paths = {name: workspace / f"{name}.json" for name in ("cold", "warm")}
-    reference = home / "current-reference.json"
-    identity = home / "session.json"
-    hook = home / "hook.py"
-    hook.write_text(
-        "import json,pathlib,sys\nevent=json.load(sys.stdin)\n"
-        f"root=pathlib.Path({str(home)!r})\n"
-        "if event['hook_event_name']=='SessionStart':\n"
-        "    (root/'session.json').write_text(json.dumps({'session_id':event['session_id']}))\n"
-        "    if event.get('source')=='compact':\n"
-        "        (root/'epoch-invalidated').write_text('compact')\n"
-        "        try:\n"
-        + ("            raise RuntimeError('primary handler failure')\n" if failed_primary else "            pass\n")
-        + "        except RuntimeError:\n            pass\n"
-        "        ref=json.loads((root/'current-reference.json').read_text())\n"
-        "        print(json.dumps({'hookSpecificOutput':{'hookEventName':'SessionStart',"
-        "'additionalContext':'Baseline invalidated. Read the complete original capture before dependent work; '"
-        "'do not rerun admission or ask the owner. '+json.dumps(ref)}}))\n"
-    )
-    handler = {"type": "command", "command": shlex.join([sys.executable, str(hook)]), "timeout": 10}
+    lifecycle = workspace / "context"
+    lifecycle.mkdir(mode=0o700)
+    cli = ["env", f"PYTHONPATH={Path(__file__).resolve().parents[2]}", sys.executable,
+        "-m", "loopx.entrypoint"]
+    hook_command = shlex.join(cli + ["quota", "context-hook", "--codex-context-dir", str(lifecycle)])
+    if failed_primary:
+        # Fault only the primary journal update. Production code must still
+        # return the original full-read reference; no test recovery handler.
+        hook = home / "hook.py"
+        hook.write_text(
+            "import json,sys\nfrom unittest.mock import patch\n"
+            "from loopx.control_plane.turn_driver.codex_context import codex_context_hook\n"
+            "event=json.load(sys.stdin)\n"
+            "if event.get('source')=='compact':\n"
+            "    with patch('loopx.control_plane.turn_driver.codex_context._save', side_effect=OSError('synthetic failure')):\n"
+            f"        result=codex_context_hook({str(lifecycle)!r},event)\n"
+            "else:\n"
+            f"    result=codex_context_hook({str(lifecycle)!r},event)\n"
+            "print(json.dumps(result))\n")
+        hook_command = shlex.join(cli[:3] + [str(hook)])
+    handler = {"type": "command", "command": hook_command, "timeout": 10}
     (home / "hooks.json").write_text(json.dumps({"hooks": {
-        event: [{"hooks": [handler]}] for event in ("SessionStart", "PostToolUse")}}))
-    snapshots, requests_to_host, errors = [], [], []
-    stopped = threading.Event()
+        event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")}}))
+    errors, snapshots = [], []
     stages = {"phase": "start", "pages": [], "baseline_confirmed": False, "compact_response": None}
-    wires, page_digests = {}, {}
+    wires, page_digests, read_paths = {}, {}, {}
+    command = ["env", f"PYTHONPATH={Path(__file__).resolve().parents[2]}", sys.executable,
+        "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", "native-capture-turn", "--codex-app",
+        "--decision-output-root", str(root), "--codex-context-dir", str(lifecycle)]
+    if surface == "turn_envelope":
+        command.append("--turn-envelope")
 
-    with tempfile.TemporaryDirectory(prefix="context-native-", dir="/tmp") as short:
-        endpoint = Path(short).resolve() / "host.sock"
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-            listener.bind(str(endpoint))
-            listener.listen(2)
-            listener.settimeout(0.2)
+    def invoke(name):
+        return shlex.join(command) + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
 
-            def release():
-                try:
-                    while len(snapshots) < 2 and not stopped.is_set():
-                        try:
-                            channel, _ = listener.accept()
-                        except TimeoutError:
-                            continue
-                        index = len(snapshots)
-                        with channel:
-                            channel.settimeout(30)
-                            message = json.loads(channel.makefile("rb").readline(4096))
-                            path = Path(message["path"])
-                            raw = path.read_bytes()
-                            assert hashlib.sha256(raw).hexdigest() == message["sha256"]
-                            scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID,
-                                session_id=json.loads(identity.read_text())["session_id"], context_epoch="initial")
-                            request = {"scope": scope}
-                            if index:
-                                # Production CLI checks the native trace for the
-                                # active guard's model input. The loopback provider
-                                # remains an independent oracle, not its ACK source.
-                                bundle, = (workspace / "traces").glob("trace-*")
-                                request.update(baseline=wires["cold"],
-                                    retained={"complete": True, "target": wires["cold"]["target"]},
-                                    native_input={"trace_bundle": str(bundle),
-                                        "tool_call_id": stages["guard_call"],
-                                        "capture_file": str(wire_paths["cold"]),
-                                        "capture_sha256": page_digests["cold"]})
-                            request_path = path.parent / "delivery-request.json"
-                            request_path.write_text(json.dumps(request))
-                            request_path.chmod(0o600)
-                            requests_to_host.append(request)
-                            snapshots.append((path, raw))
-                            channel.sendall(json.dumps({"released": True, "sha256": message["sha256"],
-                                "context_delivery": True}).encode() + b"\n")
-                except BaseException as error:
-                    errors.append(error)
+    def pages(name, path):
+        raw = path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        page_digests[name] = digest
+        # Plan only read offsets. Every actual model-facing page must
+        # come from the public CLI, including digest verification.
+        offsets, start, count = [0], 0, 0
+        for character in raw.decode():
+            size = len(character.encode())
+            if count + size > 5000:
+                start += count
+                offsets.append(start)
+                count = 0
+            count += size
+        return [shlex.join(command[:5] + ["--format", "json", "quota", "context-read",
+            "--capture-file", str(path), "--capture-sha256", digest,
+            "--offset", str(offset), "--page-bytes", "5000"]) for offset in offsets]
 
-            worker = threading.Thread(target=release, daemon=True)
-            worker.start()
-            command = ["env", f"PYTHONPATH={Path(__file__).resolve().parents[2]}", sys.executable,
-                "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(runtime),
-                "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-                "--todo-id", TODO_ID, "--turn-instance-id", "native-capture-turn", "--codex-app",
-                "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint)]
-            if surface == "turn_envelope":
-                command.append("--turn-envelope")
+    def delivered(request, name):
+        return _delivered(request, page_digests[name])
 
-            def invoke(name):
-                return shlex.join(command) + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
+    def response(request, number, message):
+        phase = stages["phase"]
+        if stages["pages"]:
+            cmd = stages["pages"].pop(0)
+        elif phase == "start":
+            stages["phase"] = "cold_ready"
+            cmd = invoke("cold")
+        elif phase in {"cold_ready", "warm_ready"}:
+            name = phase.split("_")[0]
+            wires[name] = json.loads(wire_paths[name].read_text())
+            assert wires[name]["mode"] == ("full" if name == "cold" else "delta")
+            capture = Path(wires[name]["recovery"]["path"]).parent / "decision.json"
+            snapshots.append((capture, capture.read_bytes()))
+            read_paths[name] = Path(wires[name]["recovery"]["path"]) if name == "cold" else wire_paths[name]
+            stages["pages"] = pages(name, read_paths[name])
+            stages["phase"] = name + "_read"
+            cmd = stages["pages"].pop(0)
+        elif phase == "cold_read":
+            assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
+            stages.update(baseline_confirmed=True, phase="warm_ready")
+            cmd = invoke("warm")
+        elif phase == "warm_read":
+            assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
+            assert delivered(request, "warm") == wire_paths["warm"].read_text().rstrip("\n")
+            stages.update(phase="compact", compact_response=number)
+            cmd = "printf synthetic-work"
+        elif phase == "compact":
+            stages["phase"] = "recovery_ready"
+            message["content"][0]["text"] = "Summary deliberately omitting all packet source bodies."
+            return message
+        elif phase == "recovery_ready":
+            assert "LoopX context baseline invalidated." in _input_text(request)
+            assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
+            stages["phase"] = "recovered"
+            stages["pages"] = pages("recovery", Path(wires["warm"]["recovery"]["path"]))
+            cmd = stages["pages"].pop(0)
+        else:
+            assert phase == "recovered"
+            recovered = delivered(request, "recovery")
+            assert recovered == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
+            stages["phase"] = "done"
+            return message
+        return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
+            "name": "exec_command", "arguments": json.dumps({"cmd": cmd, "max_output_tokens": 2000})}
 
-            def pages(name, path):
-                raw = path.read_bytes()
-                digest = hashlib.sha256(raw).hexdigest()
-                page_digests[name] = digest
-                # Plan only read offsets. Every actual model-facing page must
-                # come from the public CLI, including digest verification.
-                offsets, start, count = [0], 0, 0
-                for character in raw.decode():
-                    size = len(character.encode())
-                    if count + size > 5000:
-                        start += count
-                        offsets.append(start)
-                        count = 0
-                    count += size
-                return [shlex.join(command[:5] + ["--format", "json", "quota", "context-read",
-                    "--capture-file", str(path), "--capture-sha256", digest,
-                    "--offset", str(offset), "--page-bytes", "5000"]) for offset in offsets]
+    def usage(request, number):
+        count = 30000 if number == stages["compact_response"] else 1
+        return {"input_tokens": count, "output_tokens": 1, "total_tokens": count + 1}
 
-            def delivered(request, name):
-                return _delivered(request, page_digests[name])
+    def observed_response(request, number, message):
+        try:
+            return response(request, number, message)
+        except Exception as error:
+            # End the native fixture and report the original assertion,
+            # rather than making Codex retry a broken HTTP connection.
+            errors.append(error)
+            return message
 
-            def response(request, number, message):
-                phase = stages["phase"]
-                if stages["pages"]:
-                    cmd = stages["pages"].pop(0)
-                elif phase == "start":
-                    stages["phase"] = "cold_ready"
-                    cmd = invoke("cold")
-                elif phase in {"cold_ready", "warm_ready"}:
-                    name = phase.split("_")[0]
-                    wires[name] = json.loads(wire_paths[name].read_text())
-                    assert wires[name]["mode"] == ("full" if name == "cold" else "delta")
-                    stages["pages"] = pages(name, wire_paths[name])
-                    stages["phase"] = name + "_read"
-                    cmd = stages["pages"].pop(0)
-                elif phase == "cold_read":
-                    assert delivered(request, "cold") == wire_paths["cold"].read_text().rstrip("\n")
-                    stages.update(baseline_confirmed=True, phase="warm_ready")
-                    cmd = invoke("warm")
-                elif phase == "warm_read":
-                    assert delivered(request, "cold") == wire_paths["cold"].read_text().rstrip("\n")
-                    assert delivered(request, "warm") == wire_paths["warm"].read_text().rstrip("\n")
-                    reference.write_text(json.dumps(wires["warm"]["recovery"]))
-                    stages.update(phase="compact", compact_response=number)
-                    cmd = "printf synthetic-work"
-                elif phase == "compact":
-                    stages["phase"] = "recovery_ready"
-                    message["content"][0]["text"] = "Summary deliberately omitting all packet source bodies."
-                    return message
-                elif phase == "recovery_ready":
-                    assert (home / "epoch-invalidated").read_text() == "compact"
-                    assert "Baseline invalidated." in _input_text(request)
-                    assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
-                    stages["phase"] = "recovered"
-                    stages["pages"] = pages("recovery", Path(wires["warm"]["recovery"]["path"]))
-                    cmd = stages["pages"].pop(0)
-                else:
-                    assert phase == "recovered"
-                    recovered = delivered(request, "recovery")
-                    assert recovered == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
-                    stages["phase"] = "done"
-                    return message
-                if cmd.startswith(shlex.join(command)):
-                    stages["guard_call"] = f"call_{number}"
-                return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
-                    "name": "exec_command", "arguments": json.dumps({"cmd": cmd, "max_output_tokens": 2000})}
-
-            def usage(request, number):
-                count = 30000 if number == stages["compact_response"] else 1
-                return {"input_tokens": count, "output_tokens": 1, "total_tokens": count + 1}
-
-            def observed_response(request, number, message):
-                try:
-                    return response(request, number, message)
-                except Exception as error:
-                    # End the native fixture and report the original assertion,
-                    # rather than making Codex retry a broken HTTP connection.
-                    errors.append(error)
-                    stopped.set()
-                    return message
-
-            try:
-                with local_inference_provider(observed_response, usage) as (url, calls, observed):
-                    _configure_provider(home, url)
-                    # The real CLI talks to its isolated local TS Effect process.
-                    # Native sandbox networking is disabled by default; allow this
-                    # synthetic workspace's loopback transport explicitly.
-                    with (home / "config.toml").open("a") as config:
-                        config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
-                    if host == "exec":
-                        result = subprocess.run([binary, "exec", "--dangerously-bypass-hook-trust",
-                            "--skip-git-repo-check", "--json", "-s", "workspace-write", "-C", str(workspace),
-                            "Synthetic CLI context-delivery fixture."], env=env, capture_output=True, text=True, timeout=90)
-                        assert result.returncode == 0, result.stderr
-                    else:
-                        _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
-            finally:
-                stopped.set()
-                worker.join(2)
-            assert not errors, errors
-            assert not worker.is_alive()
+    with local_inference_provider(observed_response, usage) as (url, calls, observed):
+        _configure_provider(home, url)
+        # The real CLI talks to its isolated local TS Effect process.
+        # Native sandbox networking is disabled by default; allow this
+        # synthetic workspace's loopback transport explicitly.
+        with (home / "config.toml").open("a") as config:
+            config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
+        if host == "exec":
+            result = subprocess.run([binary, "exec", "--dangerously-bypass-hook-trust",
+                "--skip-git-repo-check", "--json", "-s", "workspace-write", "-C", str(workspace),
+                "Synthetic CLI context-delivery fixture."], env=env, capture_output=True, text=True, timeout=90)
+            assert result.returncode == 0, result.stderr
+        else:
+            _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
+    assert not errors, errors
 
     assert stages["phase"] == "done"
     assert len(snapshots) == 2  # compaction/readback never invokes a third guard
+    assert len(list(root.glob("*/decision.json"))) == 2
     assert wire_paths["warm"].stat().st_size < wire_paths["cold"].stat().st_size
     assert len(calls) == len(observed) and stages["baseline_confirmed"]
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
-    current = prepare_context_delivery(json.loads(projection.read_bytes()), scope=requests_to_host[-1]["scope"],
+    current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
         capture_id=wires["warm"]["target"]["capture_id"], surface=surface)
     assert restore_context_delivery(wires["warm"], baseline=wires["cold"], current=current)["context"] == current["context"]
     for document in (wires["cold"]["context"], current["context"]):

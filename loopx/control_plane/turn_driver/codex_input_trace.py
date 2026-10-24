@@ -24,6 +24,20 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
     """
     from ..effect_runtime import MAX_REQUEST_BYTES
 
+    def canonical(value):
+        # JSON has one number type; native Python projection may spell 1.0
+        # where the TS codec spells 1. Preserve booleans and numeric values.
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, list):
+            return [canonical(item) for item in value]
+        if isinstance(value, dict):
+            return {key: canonical(item) for key, item in value.items()}
+        return value
+
+    def encoded(value):
+        return json.dumps(canonical(value), sort_keys=True, ensure_ascii=False, allow_nan=False)
+
     def read(path: Path, *, tail: bool = False) -> bytes:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(descriptor, "rb") as stream:
@@ -44,7 +58,8 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
             return False
         # Python equality conflates booleans and numbers; source observation
         # must retain their JSON types, as the shared projection owner does.
-        expected = json.dumps(baseline, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        expected = encoded(baseline)
+        context = encoded(baseline.get("context"))
         bundle = Path(observation["trace_bundle"]).resolve(strict=True)
         manifest = json.loads(read(bundle / "manifest.json"))
         if (manifest.get("schema_version") != 1 or manifest.get("root_thread_id") != session_id
@@ -100,8 +115,8 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
             return False  # implicit server-side history is outside this observer
         raw = read(Path(observation["capture_file"]))
         digest = hashlib.sha256(raw).hexdigest()
-        if digest != observation["capture_sha256"] or json.dumps(json.loads(raw), sort_keys=True,
-                ensure_ascii=False, allow_nan=False) != expected:
+        captured = encoded(json.loads(raw))
+        if digest != observation["capture_sha256"] or captured not in (expected, context):
             return False
         pages: dict[int, bytes] = {}
         for item in request["input"]:
@@ -114,7 +129,8 @@ def codex_context_in_active_input(observation: dict, *, baseline: dict, session_
                 page = json.loads(text)
             except ValueError:
                 continue
-            if json.dumps(page, sort_keys=True, ensure_ascii=False, allow_nan=False) == expected:
+            document = encoded(page)
+            if document == expected or (captured == context and document == context):
                 return True
             if not isinstance(page, dict) or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
                 continue
