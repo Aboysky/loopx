@@ -49,6 +49,14 @@ def read_context_capture(args: argparse.Namespace) -> dict:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
         offset, size = args.offset, args.page_bytes
+        context_dir = getattr(args, "codex_context_dir", None)
+        if context_dir:
+            if value or digest or offset != 0:
+                raise ValueError("session lookup starts at offset zero without capture-file or capture-sha256; follow next_command afterwards")
+            from ..control_plane.turn_driver.codex_context import read_codex_context_reference
+
+            value, digest = read_codex_context_reference(context_dir,
+                goal_id=getattr(args, "goal_id", None), agent_id=getattr(args, "agent_id", None))
         if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None or not value:
             raise ValueError("context-read requires the original capture file and its exact SHA-256")
         if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= 8192:
@@ -77,6 +85,8 @@ def read_context_capture(args: argparse.Namespace) -> dict:
         result = {"ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
             "offset": offset, "next_offset": end if end < len(raw) else None,
             "total_bytes": len(raw), "eof": end == len(raw), "content": raw[offset:end].decode("utf-8")}
+        if context_dir:
+            result["read_instruction"] = CONTEXT_CAPTURE_READ_GUIDANCE
         if end < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=end, page_bytes=size)
         return result

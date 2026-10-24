@@ -34,17 +34,22 @@ def _read(path: Path, *, private: bool = True) -> dict:
     return result
 
 
+def _private_root(directory: str) -> Path:
+    root = Path(directory).expanduser().absolute()
+    root = root.parent.resolve(strict=True) / root.name
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("context directory must already exist, be private and belong to this user")
+    return root
+
+
 @contextmanager
 def _locked(directory: str):
     if os.name != "posix":
         raise ValueError("native context continuity is unavailable on this platform")
     import fcntl
 
-    root = Path(directory).expanduser().absolute()
-    root = root.parent.resolve(strict=True) / root.name
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("context directory must already exist, be private and belong to this user")
+    root = _private_root(directory)
     fd = os.open(root / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     with os.fdopen(fd, "r+") as lock:
         if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
@@ -65,6 +70,44 @@ def _state(root: Path) -> dict:
 
 def _save(root: Path, state: dict) -> None:
     write_decision_capture(root / "session.json", state, publish=os.replace)
+
+
+def read_codex_context_reference(directory: str, *, goal_id: str, agent_id: str) -> tuple[str, str]:
+    """Select an original capture after a lost hook; never assert retention.
+
+    The journal is atomically replaced, so this read needs no lock or write.
+    Later pages use the returned explicit path/digest, not a moving selector.
+    """
+    state = _state(_private_root(directory))
+    session = os.environ.get("CODEX_THREAD_ID")
+    if (not session or state.get("session_id") != session
+            or not isinstance(state.get("cwd"), str)
+            or Path(state["cwd"]).resolve() != Path.cwd().resolve()):
+        raise ValueError("original capture lookup requires the same native session and workspace")
+    recovery = state.get("recovery")
+    if (not goal_id or not agent_id or not isinstance(recovery, dict)
+            or recovery.get("goal_id") != goal_id or recovery.get("agent_id") != agent_id):
+        raise ValueError("no original capture for this Goal/Agent; use its explicit capture reference")
+    path, digest = recovery.get("path"), recovery.get("sha256")
+    if not isinstance(path, str) or not isinstance(digest, str):
+        raise ValueError("original capture reference is incomplete")
+    return path, digest
+
+
+def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_id: str,
+                                         cli_argv: list[str]) -> str:
+    """Host-owned persistent instructions, independent of event-hook delivery."""
+    import shlex
+
+    command = shlex.join([*cli_argv, "--format", "json", "quota", "context-read",
+        "--codex-context-dir", directory, "--goal-id", goal_id, "--agent-id", agent_id])
+    return (
+        "If continuing a captured LoopX decision and its complete context or recovery reference was lost "
+        "(including compaction or a failed hook), recover before dependent work with: " + command + ". "
+        "Follow the returned next_command through eof; verify complete bytes and digest. "
+        "If lookup fails, restore the original capture/reference; do not guess, readmit or ask the owner. "
+        "Recovery never renews authority/freshness or proves retention. Independent authorized work can continue."
+    )
 
 
 def codex_context_hook(directory: str, event: dict) -> dict:
@@ -195,7 +238,8 @@ def project_codex_context(payload: dict, *, directory: str, capture_directory: P
             if result.get("schema_version") != "context_delivery_v1":
                 return result
             recovery = result["recovery"]
-            state["recovery"] = {key: recovery[key] for key in ("path", "sha256", "command")}
+            state["recovery"] = {**{key: recovery[key] for key in ("path", "sha256", "command")},
+                                 "goal_id": goal_id, "agent_id": agent_id}
             if result["mode"] == "full":
                 path = capture_directory / "presentation.json"
                 write_decision_capture(path, result)

@@ -64,4 +64,11 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
         entries.append(f"{json.dumps(key)} = {{ trusted_hash = {json.dumps(digest)} }}")
     # CLI override keys are dot-separated; native keys contain paths/dots.
     # Carry the entire table as TOML so native keys remain literal strings.
-    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(["-c", "hooks.state={" + ",".join(entries) + "}"])
+    from loopx.control_plane.turn_driver.codex_context import codex_context_recovery_instructions
+
+    instructions = codex_context_recovery_instructions(str(root), goal_id=env["LOOPX_GOAL_ID"],
+        agent_id=env["LOOPX_AGENT_ID"], cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
+    # This isolated trial's native developer instructions survive compaction;
+    # a failed SessionStart handler cannot erase the read-only recovery route.
+    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(["-c", "hooks.state={" + ",".join(entries) + "}",
+        "-c", "developer_instructions=" + json.dumps(instructions)])

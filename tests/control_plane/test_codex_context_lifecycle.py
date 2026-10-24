@@ -164,3 +164,58 @@ def test_real_hook_cli_is_transport_only_without_registry_or_installation(tmp_pa
     assert result.returncode == 0 and json.loads(result.stdout) == {}, result.stderr
     assert context._state(directory)["session_id"] == "session"
     assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("damage", [None, "session", "workspace", "goal", "agent", "missing_scope", "missing", "corrupt", "public", "symlink"])
+def test_lost_hook_reference_is_scoped_read_only_and_pins_later_pages(tmp_path, monkeypatch, damage):
+    import argparse
+    from loopx.cli_commands.quota_capture import read_context_capture
+
+    setup(tmp_path, monkeypatch)
+    _, first = project(tmp_path, payload={"goal_id": "fixture", "requirements": "保留🙂" * 400})
+    journal = tmp_path / "session.json"
+    args = argparse.Namespace(codex_context_dir=str(tmp_path), goal_id="fixture", agent_id="agent",
+                              offset=0, page_bytes=256)
+    if damage == "session":
+        monkeypatch.setenv("CODEX_THREAD_ID", "other")
+    elif damage == "workspace":
+        monkeypatch.chdir(tmp_path.parent)
+    elif damage in {"goal", "agent"}:
+        setattr(args, damage + "_id", "other")
+    elif damage == "missing_scope":
+        state = context._state(tmp_path)
+        state["recovery"].pop("goal_id")
+        context._save(tmp_path, state)
+    elif damage == "missing":
+        journal.unlink()
+    elif damage == "corrupt":
+        journal.write_text("{broken")
+    elif damage == "public":
+        journal.chmod(0o644)
+    elif damage == "symlink":
+        original = tmp_path / "original.json"
+        journal.rename(original)
+        journal.symlink_to(original)
+    before = journal.read_bytes() if journal.exists() else None
+    page = read_context_capture(args)
+    assert (journal.read_bytes() if journal.exists() else None) == before
+    assert page["ok"] is (damage is None)
+    if damage:
+        assert "content" not in page
+        return
+    assert page["sha256"] == first["recovery"]["sha256"] and page["offset"] == 0
+    assert "--codex-context-dir" not in page["next_command"]
+    assert first["recovery"]["sha256"] in page["next_command"]
+    # Publication can move the selector; the first page's explicit next command
+    # must continue the original capture, never silently switch to the new one.
+    _, second = project(tmp_path, "two", payload={"goal_id": "fixture", "requirements": "changed " * 400})
+    assert second["recovery"]["sha256"] != page["sha256"]
+    args.capture_file = first["recovery"]["path"]
+    args.capture_sha256 = first["recovery"]["sha256"]
+    args.codex_context_dir = None
+    args.offset = page["next_offset"]
+    rest = read_context_capture(args)
+    assert rest["ok"] and rest["sha256"] == page["sha256"]
+    assert rest["content"] == Path(args.capture_file).read_bytes()[args.offset:args.offset + len(rest["content"].encode())].decode()
+    args.codex_context_dir = str(tmp_path)
+    assert not read_context_capture(args)["ok"]  # no mixed moving and pinned selectors

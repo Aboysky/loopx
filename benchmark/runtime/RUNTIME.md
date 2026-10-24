@@ -67,9 +67,17 @@ call's complete actual input, never a saved session or file. Each worker wake
 uses a separate private trace directory, avoiding repeated scans of old wakes.
 The small recovery hook reads the original full capture after compaction, with
 no replacement admission or debit. Native worker and app-server code-mode tests
-cover resumed warm reuse for both packet views. Wholly missing/killed hooks and
-installed App adoption remain unqualified; deterministic native transport tests are not autonomous
-solver outcomes. Count complete input, recovery reads, native discovery and trace
+cover resumed warm reuse for both packet views. The opted-in worker also carries
+a compact native developer instruction that survives compaction independently
+of hook output. If context was lost while continuing a captured decision,
+`quota context-read --codex-context-dir DIR --goal-id GOAL --agent-id AGENT`
+checks the current native session/workspace and selects the original capture.
+Follow its digest-pinned next commands; this read never reruns admission or
+spends quota. Missing/foreign references refuse lookup. Native tests omit or
+kill all subsequent hooks and still recover every byte through this route.
+Installed App adoption remains separate; deterministic transport tests are not autonomous
+solver outcomes. Include this persistent instruction in subsequent cost comparisons;
+earlier input replays did not include it. Count complete input, recovery reads, native discovery and trace
 IO in treatment cost, not just the delta bytes.
 
 A simultaneous `fresh_replan` checkpoint listener retains its existing capture

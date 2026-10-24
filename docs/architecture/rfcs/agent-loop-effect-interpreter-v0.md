@@ -1085,8 +1085,8 @@ native app-server code-mode for both quota and Turn views, including the parent
 cell/child binding, forwarded output, compaction and primary-write failure.
 Missing, mismatched or ended cells and incomplete custom-tool output remain full.
 This qualifies the native code-mode transport, not installed desktop adoption.
-Mid-session wholly unexecuted/killed hooks, installed adoption, trace/all-read
-overhead and real solver outcomes still need qualification. No runtime/owner
+The following persistent recovery route qualifies wholly unexecuted/killed hooks;
+installed adoption, trace/all-read overhead and real solver outcomes remain separate. No runtime/owner
 question is added, and phase one remains open.
 
 The existing benchmark worker now consumes this production path through an
@@ -1108,8 +1108,8 @@ warm delta without another cold read, for both quota and Turn views. A subsequen
 native compaction still recovers the original full capture. Each benchmark wake
 uses a private trace subdirectory so earlier wakes do not enter its hot-path
 diagnostic scan. These deterministic checks qualify cross-wake transport,
-not net solver savings. Harbor/container and Codex App installation,
-wholly lost hooks and complete solver/cost qualification remain open.
+not net solver savings. Harbor/container and Codex App installation and complete solver/cost
+qualification remain open; lost-hook recovery is qualified below.
 Native discovery, trace IO and all recovery reads belong in that cost comparison.
 
 Matched native input replay now separates the subtree codec from the read policy:
@@ -1144,6 +1144,36 @@ Gaps, previews alone and a different capture remain insufficient; no history
 clearing, new acknowledgement or admission is needed. Composed code-mode tests
 exercise batched stdout, overlapping read boundaries, cross-process resume,
 warm delta and native compaction recovery for both quota and Turn views.
+
+A lost event handler now has a separate **read-only recovery entry**, not a
+second execution/admission path. `quota context-read --codex-context-dir DIR
+--goal-id GOAL --agent-id AGENT` selects the latest original capture only when
+the private journal matches the ambient native session, current workspace and
+requested Goal/Agent. It reads no current Goal, evaluates no guard, spends no
+quota and does not change the journal. A missing/foreign/older unscoped journal
+refuses lookup; an existing explicit digest-bound reference remains usable.
+Lookup starts at offset zero. Every following `next_command` pins the original
+path and hash, so a concurrent newer publication cannot mix captures. Missing,
+changed or symlinked files retain the ordinary reader's refusal behavior.
+
+The opt-in benchmark worker carries a compact recovery instruction in native
+`developer_instructions`, independently of SessionStart/PreToolUse delivery.
+Native code-mode consumers can carry the same product-owned instruction in
+their isolated native configuration; append it to existing host instructions
+rather than replacing unrelated policy. Its conditional trigger is continuing
+a captured decision after context loss, not starting an ordinary new turn.
+It directs same-capture reading before dependent work without a user question;
+independent authorized work remains possible and recovery renews neither authority
+nor freshness. The first lookup page supplies the existing bounded-read guidance.
+Default-off workers add no persistent instruction. Deterministic native tests
+remove the complete source during real compaction and then omit or kill every
+subsequent hook process. The actual worker and code-mode host recover all bytes
+through the persistent public CLI route without another guard or debit. Private
+files/session identity still establish no retention claim; actual current input
+remains the independent reuse criterion. Include the persistent instruction and
+all recovery reads in future cost comparisons; prior measurements exclude this
+new instruction. This does not claim live desktop installation or autonomous
+solver effectiveness.
 
 Capture regression qualification also distinguishes settlement binding from
 closeout: an upgraded receipt with an outstanding semantic replan still permits

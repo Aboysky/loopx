@@ -68,7 +68,7 @@ def _delivered(request, digest):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -89,7 +89,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     lifecycle = workspace / "context"
     lifecycle.mkdir(mode=0o700)
     cli = ["env", f"PYTHONPATH={Path(__file__).resolve().parents[2]}", sys.executable,
-        "-m", "loopx.entrypoint"]
+        "-m", "loopx.entrypoint", "--cli-bin", str(Path(sys.executable).with_name("loopx"))]
+    installed_cli = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI")
+    if installed_cli:
+        cli = [installed_cli, "--cli-bin", installed_cli]
     hook_command = shlex.join(cli + ["quota", "context-hook", "--codex-context-dir", str(lifecycle)])
     if failed_primary:
         # Fault only the primary journal update. Production code must still
@@ -105,7 +108,20 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             "else:\n"
             f"    result=codex_context_hook({str(lifecycle)!r},event)\n"
             "print(json.dumps(result))\n")
-        hook_command = shlex.join(cli[:3] + [str(hook)])
+        hook_command = shlex.join(["env", f"PYTHONPATH={Path(__file__).resolve().parents[2]}", sys.executable, str(hook)])
+    loss_marker = home / "lose-context-hook"
+    if hook_loss:
+        # Stop the whole hook process before product code runs. All later
+        # events fail too: recovery must not depend on a second working hook.
+        wrapper = home / "loopx-fixture"
+        wrapper.write_text("#!" + sys.executable + "\nimport os,signal,sys\n"
+            + f"if 'context-hook' in sys.argv and os.path.exists({str(loss_marker)!r}):\n"
+            + ("    os.kill(os.getpid(), signal.SIGKILL)\n" if hook_loss == "killed" else "    sys.exit(0)\n")
+            + (f"os.execv({installed_cli!r}, [{installed_cli!r}, *sys.argv[1:]])\n" if installed_cli else
+               f"os.environ['PYTHONPATH']={str(Path(__file__).resolve().parents[2])!r}\n"
+               + f"os.execv({sys.executable!r}, [{sys.executable!r}, '-m', 'loopx.entrypoint', *sys.argv[1:]])\n"))
+        wrapper.chmod(0o700)
+        hook_command = shlex.join([str(wrapper), "quota", "context-hook", "--codex-context-dir", str(lifecycle)])
     handler = {"type": "command", "command": hook_command, "timeout": 10}
     if host != "benchmark":
         (home / "hooks.json").write_text(json.dumps({"hooks": {
@@ -113,8 +129,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     errors, snapshots = [], []
     stages = {"phase": "start", "pages": [], "baseline_confirmed": False, "compact_response": None}
     wires, page_digests, read_paths = {}, {}, {}
-    command = ["env", f"PYTHONPATH={Path(__file__).resolve().parents[2]}", sys.executable,
-        "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(runtime),
+    command = [*cli, "--registry", str(registry), "--runtime-root", str(runtime),
         "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--turn-instance-id", "native-capture-turn", "--codex-app",
         "--decision-output-root", str(root), "--codex-context-dir", str(lifecycle)]
@@ -212,24 +227,68 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
             assert delivered(request, "warm") == wire_paths["warm"].read_text().rstrip("\n")
             stages.update(phase="compact", compact_response=number)
+            if hook_loss:
+                loss_marker.touch()
             cmd = "printf synthetic-work"
         elif phase == "compact":
             stages["phase"] = "recovery_ready"
             message["content"][0]["text"] = "Summary deliberately omitting all packet source bodies."
             return message
         elif phase == "recovery_ready":
+            if hook_loss:
+                text = _input_text(request)
+                assert "LoopX context baseline invalidated." not in text
+                # The recovery entry must really be present after compaction;
+                # the fixture may not supply a hidden saved capture path.
+                prefix = "If continuing a captured LoopX decision"
+                permanent = text[text.index(prefix):]
+                cmd = permanent.split("with: ", 1)[1].split(". Follow ", 1)[0]
+                stages["phase"] = "lookup_read"
+                assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
+                return tool(cmd, number)
             assert "LoopX context baseline invalidated." in _input_text(request)
             assert wires["warm"]["recovery"]["command"] in _input_text(request)
             assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
             stages["phase"] = "recovered"
             stages["pages"] = pages("recovery", Path(wires["warm"]["recovery"]["path"]))
             cmd = stages["pages"].pop(0)
+        elif phase == "lookup_read":
+            # Product lookup delivered the first page; use only its public
+            # digest-pinned next command, not the private session journal.
+            page = None
+            for item in reversed(request["input"]):
+                output = item.get("output")
+                parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
+                for part in parts:
+                    if not isinstance(part, str):
+                        continue
+                    try:
+                        value = json.loads(part.split("\nOutput:\n", 1)[-1])
+                        if isinstance(value, dict) and value.get("exit_code") == 0:
+                            value = json.loads(value["output"])
+                        if isinstance(value, dict) and value.get("schema_version") == "context_capture_page_v1":
+                            page = value
+                            break
+                    except (ValueError, KeyError):
+                        continue
+                if page:
+                    break
+            assert page and page["ok"], page
+            assert page["sha256"] == wires["warm"]["recovery"]["sha256"]
+            page_digests["recovery"] = page["sha256"]
+            if not page["eof"]:
+                return tool(page["next_command"], number)
+            stages["phase"] = "recovered"
+            return response(request, number, message)
         else:
             assert phase == "recovered"
             recovered = delivered(request, "recovery")
             assert recovered == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
             stages["phase"] = "done"
             return message
+        return tool(cmd, number)
+
+    def tool(cmd, number):
         if host == "code_mode":
             if adaptive:
                 commands = [cmd]
@@ -265,6 +324,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             if host == "code_mode":
                 config = home / "config.toml"
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
+            if hook_loss:
+                from loopx.control_plane.turn_driver.codex_context import codex_context_recovery_instructions
+                config = home / "config.toml"
+                instructions = codex_context_recovery_instructions(str(lifecycle), goal_id=GOAL_ID,
+                    agent_id=AGENT_ID, cli_argv=cli)
+                config.write_text("developer_instructions=" + json.dumps(instructions) + "\n" + config.read_text())
         # The real CLI talks to its isolated local TS Effect process.
         # Native sandbox networking is disabled by default; allow this
         # synthetic workspace's loopback transport explicitly.
@@ -290,7 +355,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project), LOOPX_SHARED_SKILLS=str(skills),
                 LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                 LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID, LOOPX_WAKE_LOG_DIR=str(workspace / "wakes"),
-                LOOPX_CLI=str(Path(sys.executable).with_name("loopx")), CODEX_BIN=binary,
+                LOOPX_CLI=str(wrapper if hook_loss else Path(sys.executable).with_name("loopx")), CODEX_BIN=binary,
                 MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=url,
                 OPENAI_API_KEY="synthetic-loopback-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="90")
             result = run_once(env)
@@ -335,3 +400,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert selected["todo_id"] == TODO_ID and selected["text"] == body
     assert all(path.read_bytes() == raw for path, raw in snapshots)
     assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("host,surface,hook_loss", [
+    (host, surface, loss) for host in ("code_mode", "benchmark")
+    for surface, loss in (("quota_packet", "missing"), ("turn_envelope", "killed"))
+])
+def test_native_missing_hook_recovers_from_persistent_cli_route(tmp_path, monkeypatch, host, surface, hook_loss):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        host, surface, False, True, True, hook_loss)

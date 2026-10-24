@@ -747,8 +747,8 @@ capture 的完整读取命令，跨 session 不借用旧引用。生成候选和
 真实模型自主遵循恢复提示或总成本收益。同一生产路径也通过原生 app-server 的
 code-mode 验证 quota 与 Turn 两种视图，覆盖父 cell/子调用绑定、输出转发、压缩和
 主 journal 写入失败。cell 缺失、错配或结束以及输出不完整时仍全量。这验证原生
-code-mode transport，不等于已安装桌面产品采用。中途整个 hook 未执行/被杀、安装
-采用、trace 与全部补读开销及真实 solver 成果仍须独立验证；不开新 runtime/owner
+code-mode transport，不等于已安装桌面产品采用。下述常驻恢复入口验证整个 hook 未执行/
+被杀；安装采用、trace 与全部补读开销及真实 solver 成果仍须独立验证；不开新 runtime/owner
 问询门，一期保持开放。
 
 既有 benchmark worker 现通过显式 `context_delivery` heartbeat 选项消费上述生产
@@ -764,7 +764,7 @@ treatment 须另起 trial。产品 renderer 与恢复分页保留原 Turn、capt
 选择温态差分而不再初读；quota 与 Turn 两种视图均覆盖。之后的原生压缩仍恢复原始
 全量 capture。benchmark 每次 wake 使用独立私有 trace 子目录，旧 wake 不进入热路径
 诊断扫描。这些确定性检查验证跨唤醒传递，不证明 solver 净收益。Harbor/container 与 Codex App
-安装、hook 完全丢失和完整 solver/成本资格仍开放；成本比较须计入原生发现、
+安装与完整 solver/成本资格仍开放；hook 丢失恢复在下文验证。成本比较须计入原生发现、
 trace IO 和所有补读。
 
 同负载原生输入重放现将子树 codec 与读取策略分开：先在相同分页大小、转发与批量
@@ -788,6 +788,26 @@ code-mode 调用方可以直接转发成功的 CLI stdout，避免再次序列�
 缺口、只有预览或不同 capture 仍不足以证明保留；无需清空历史、新增 ACK 或重新准入。
 组合 code-mode 测试覆盖批量 stdout、重叠分页边界、跨进程续跑、温态差分及原生压缩
 恢复，包含 quota 和 Turn 两种视图。
+
+事件 handler 完全丢失时，现有独立的**只读恢复入口**，不新增执行或准入路径。
+`quota context-read --codex-context-dir DIR --goal-id GOAL --agent-id AGENT`
+仅在私有 journal 匹配环境中的原生 session、当前工作目录和所请求 Goal/Agent 时，
+选取最新的原 capture。它不读取当前 Goal、不执行 guard、不扣额，也不修改 journal。
+缺失、跨身份或旧版未标注范围的 journal 拒绝隐式查找；已有显式摘要绑定引用仍可使用。
+查找从 offset 零开始，后续每个 `next_command` 固定到原路径和 hash，避免并发发布
+更新 capture 时混读。文件缺失、内容变化或符号链接继续沿既有 reader 拒绝。
+
+显式启用的 benchmark worker 将简短恢复指令放入原生 `developer_instructions`，
+独立于 SessionStart/PreToolUse 的交付。原生 code-mode 消费者也可在隔离配置中携带
+同一产品 owner 生成的指令；应追加到既有宿主指令，不替换无关规则。触发条件是
+上下文丢失后继续一个已捕获的决策，不是每个普通新 turn 的前置检查。指令要求依赖
+该上下文的工作先读回同 capture，不增加用户问询；独立授权工作仍可继续，恢复不刷新
+权限或新鲜度。首个查找页提供既有的有界读取指导。关闭功能的 worker 不增加常驻
+指令。确定性原生测试在真实压缩中删除完整来源，随后跳过或杀死所有后续 hook 进程，
+由真实 worker 与 code-mode 宿主通过常驻公开 CLI 入口读回全部字节，零额外 guard/扣额。
+私有文件与 session 身份仍不构成保留声明；是否可复用仍独立核验实际当前输入。
+后续成本比较须计入常驻指令与全部恢复读取，先前测量不包含这条新指令。此处不宣称
+真实桌面安装采用或自主 solver 效果。
 
 Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
 重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout

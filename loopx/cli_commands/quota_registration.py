@@ -202,7 +202,8 @@ def register_quota_command(
     quota_parser.add_argument("--codex-context-dir",
         help="Opt-in private native Codex lifecycle directory. For context-hook, consume one native hook event on stdin. "
              "For should-run, requires JSON and a decision capture destination; unknown retention stays full. "
-             "Does not install hooks, enable tracing, or change native trust.")
+             "For context-read without a file/hash, select the current native session/workspace capture for --goal-id/--agent-id; "
+             "start at offset zero, then follow digest-pinned next_command. Does not install hooks, enable tracing, or change native trust.")
     quota_parser.add_argument("--capture-sha256", help="For context-read: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int, default=4096,
