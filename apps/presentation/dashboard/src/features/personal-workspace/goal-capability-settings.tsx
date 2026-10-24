@@ -1,5 +1,6 @@
+import {ContextHelp} from "./context-help";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Code2, LoaderCircle, RefreshCw } from "lucide-react";
+import { AlertTriangle, CircleHelp, Code2, LoaderCircle, RefreshCw } from "lucide-react";
 
 import {
   applyGoalConfiguration,
@@ -292,7 +293,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
   const memorySelected = selected ? isMemoryCapability(selected.capability_id) : false;
 
   if (!selected || !localizedSelected) {
-    return <p className="personal-capability-empty">{t("capabilities.empty")}</p>;
+    return <ContextHelp label={locale === "zh-CN" ? "暂无已注册能力" : "No registered capabilities"} icon={CircleHelp}><p className="personal-capability-empty">{t("capabilities.empty")}</p></ContextHelp>;
   }
 
   const supportsGoal = localizedSelected.available_scopes.includes("goal");
@@ -356,15 +357,15 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
                 ? (locale === "zh-CN" ? "绑定任务的规范验收条款" : "Bound to canonical task acceptance criteria")
                 : (locale === "zh-CN" ? "依据操作者研究条款；不证明规范验收关联" : "Operator study basis; canonical acceptance binding is unverified")}</p>
               {selected.observation.latest.criterion_current === false ? <p role="alert">{locale === "zh-CN" ? "条款或任务关联已变化，旧判断不可作为当前依据。" : "Criteria or task binding changed; the old judgment is unavailable for current use."}</p> : null}
-              <p>{locale === "zh-CN" ? "仅观察声明文件在两个检查点之间的净变化" : "Observed only the net change of declared files between two checkpoints"}</p>
+              <ContextHelp label={locale === "zh-CN" ? "文件观察口径" : "File observation basis"}><p>{locale === "zh-CN" ? "仅观察声明文件在两个检查点之间的净变化" : "Observed only the net change of declared files between two checkpoints"}</p></ContextHelp>
               <details><summary>{locale === "zh-CN" ? "观察范围与条款版本" : "Observed scope and criterion version"}</summary>
                 <code>{selected.observation.latest.evidence_scope.criterion_binding.criteria_sha256}</code>
                 <p>{selected.observation.latest.evidence_scope.criterion_binding.criterion_ids?.join(", ")}</p>
                 <p>{selected.observation.latest.evidence_scope.files.join(", ")}</p>
               </details>
-            </> : <p>{locale === "zh-CN" ? "旧回执未记录所选条款及文件覆盖范围。" : "Legacy receipt did not record selected criteria or file coverage."}</p>}
+            </> : <ContextHelp label={locale === "zh-CN" ? "历史检查覆盖" : "Historical check coverage"} icon={CircleHelp}><p>{locale === "zh-CN" ? "旧回执未记录所选条款及文件覆盖范围。" : "Legacy receipt did not record selected criteria or file coverage."}</p></ContextHelp>}
           </> : null}
-          <p>{locale === "zh-CN" ? "此观察不证明任务完成；未命中漂移条件也不等于工作符合目标。" : "This observation does not prove completion; a drift condition not met does not establish on-goal work."}</p>
+          <ContextHelp label={locale === "zh-CN" ? "观察与验收" : "Observation and acceptance"}><p>{locale === "zh-CN" ? "此观察不证明任务完成；未命中漂移条件也不等于工作符合目标。" : "This observation does not prove completion; a drift condition not met does not establish on-goal work."}</p></ContextHelp>
         </section> : null}
 
         {localizedSelected.capability_id === "lark_event_inbox" ? (

@@ -146,7 +146,7 @@ export const researchHistoryScenario = {
       assert.doesNotMatch(await native.locator('.research-native-scope').innerText(), /T00:00:00Z/);
       assert.equal(await native.locator('.research-native-basis').evaluate(e => e.open), false);
       assert.equal(await nativePage.locator('.research-progress-basis').evaluate(e => e.open), false);
-      assert.equal(await nativePage.locator('.research-effect-empty').isVisible(), true, 'Measured progress remains readable before model analysis');
+      assert.equal(await nativePage.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(), true, 'Measured progress remains readable before model analysis; the unknown analysis is contextual help');
       await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-desktop.png'), animations: 'disabled'});
       await native.getByRole('button', {name: /首次提交.*查看原始证据/}).click();
       const original = nativePage.getByRole('region', {name: '引用原文', exact: true});
@@ -1037,7 +1037,11 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /历史捕获|historical/i);
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '0', 'A rejected candidate does not create realized gain');
       await basis.locator(':scope > summary').click();
-      assert.match(await nativeResults.innerText(), /历史原生测量.*当前结果未核验/s, 'Stale measurements never appear current');
+      assert.match(await nativeResults.innerText(), /历史原生测量/, 'Stale measurements retain their historical identity');
+      const currentSource = nativeResults.getByRole('button',{name:'当前来源未核验',exact:true});
+      await currentSource.focus();
+      await page.getByRole('tooltip').getByText(/当前结果未核验/).waitFor();
+      await page.keyboard.press('Escape');
       assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3');
       assert.equal(await nativeResults.locator('[data-native-point="final_valid"] strong').textContent(), '5', 'The last submission is not silently presented as retained or best');
       await page.reload({waitUntil: "networkidle"});
@@ -1080,7 +1084,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.getByRole("combobox").focus();
       await progress.getByRole("combobox").selectOption("c".repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
-      assert.match(await progress.locator('.research-progress-basis > summary').innerText(), /完整成本未知/);
+      assert.equal(await progress.locator('.research-progress-basis > summary').getByRole('button',{name:/完整成本未知/}).isVisible(),true,'The cost boundary remains discoverable with the details closed');
       await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /尚无用量捕获|No usage capture/);
       await progress.getByRole('button', {name: '用量范围与成本', exact: true}).focus();
@@ -1096,7 +1100,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.doesNotMatch(await progress.innerText(), /0%/);
       assert.equal(await nativeResults.count(), 0, 'A missing native capture cannot borrow the previous scope');
       assert.equal(await improvement.count(), 0, 'An absent comparison preserves the prior process-only surface');
-      assert.match(await progress.innerText(), /原生测量.*未采集/);
+      assert.equal(await progress.getByRole('button',{name:/原生测量未采集.*完整成本未知/}).isVisible(),true);
       await history.getByRole("button", {name: "查看分析", exact: true}).click();
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis C$/}).waitFor();
       await analysis.getByRole('button', {name: '关闭分析', exact: true}).click();
@@ -1107,7 +1111,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /末轮未完成|final Turn incomplete/);
       assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
       await progress.locator('.research-progress-basis > summary').click();
-      assert.match(await progress.innerText(), /所选范围尚未分析/);
+      assert.equal(await progress.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(),true);
       assert.equal(await nativeResults.isVisible(), true, 'An unanalysed pack still exposes its recorded outcomes with cost details closed');
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');

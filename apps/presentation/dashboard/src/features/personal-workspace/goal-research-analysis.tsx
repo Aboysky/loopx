@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
-import {ArrowUpRight, ChevronDown, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
+import {ArrowUpRight, ChevronDown, CircleHelp, LoaderCircle, RefreshCw, Sparkles, TriangleAlert, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryAssessment, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, episodeQuestionGroups, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
 import {requestJson} from "../../data/chat";
@@ -268,7 +268,7 @@ function AnalysisReadState({analysis: a}: {analysis: Controller}) {
     {Array.from({length: 6}, (_, i) => <span key={i} aria-hidden/>)}</div>;
   if (!a.pack) return <div className="analysis-read-empty"><span>{reasonCopy(a.snapshot?.catalog.reason_code, a.zh)}</span>
     <button type="button" disabled={a.loading} aria-label={a.zh ? "刷新分析来源" : "Refresh analysis sources"} onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/></button></div>;
-  return !a.pack.result && a.pack.availability !== "available" ? <p className="research-history-note">{reasonCopy(a.pack.reason_code, a.zh)}</p> : null;
+  return !a.pack.result && a.pack.availability !== "available" ? <ContextHelp label={a.zh ? "分析来源未就绪" : "Analysis source unavailable"} icon={CircleHelp}><p className="research-history-note">{reasonCopy(a.pack.reason_code, a.zh)}</p></ContextHelp> : null;
 }
 
 export function ResearchAnalysisStatus({analysis: a}: {analysis: Controller}) {
@@ -416,7 +416,7 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
       </ContextHelp></div>
       <AnalysisContinuation pack={p} analysis={a}/>
       {p.result && !available ? <p className="analysis-warning">{reasonCopy(p.reason_code, zh)}</p> : null}
-      {p.result_attempt && p.result_attempt !== p.job?.attempt ? <p className="analysis-warning" role="status">{zh ? "当前重试尚未完成，显示上次已保存分析。" : "The current retry is incomplete; showing the previously saved analysis."}</p> : null}
+      {p.result_attempt && p.result_attempt !== p.job?.attempt ? <ContextHelp label={zh ? "本次分析未完成" : "Current analysis incomplete"} icon={TriangleAlert}><p className="analysis-warning" role="status">{zh ? "当前重试尚未完成，显示上次已保存分析。" : "The current retry is incomplete; showing the previously saved analysis."}</p></ContextHelp> : null}
       {result?.display?.coverage.missing && !a.pending && !a.recordedRunning ? <div className="analysis-actions">
         <button type="button" disabled={!available} onClick={() => void a.execute(true)}>{zh ? "重新分析并补全译文" : "Reanalyze to complete translation"}</button>
         <small>{zh ? "重新分析完整固定范围，产生新的分析用量；保留上一轮结果。" : "Reanalyzes the full fixed scope with new analysis usage; the previous result is preserved."}</small>

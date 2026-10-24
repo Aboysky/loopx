@@ -235,11 +235,13 @@ async function verifyRemoteSelection(browser, url) {
     const {page} = session;
     await page.getByRole("region",{name:"当前工作",exact:true}).waitFor();
     assert.equal(await page.locator(".personal-context-drawer").count(),0,"An unknown remote Todo must not acquire a local request reader");
-    await page.getByRole("status").filter({hasText:"链接中的任务未出现在此来源的当前快照中"}).waitFor();
+    await page.getByRole("button",{name:"链接任务未读到",exact:true}).focus();
+    await page.getByRole("tooltip").getByText(/链接中的任务未出现在此来源的当前快照中/).waitFor();
+    await page.keyboard.press("Escape");
     assert.equal(await page.getByRole("button",{name:"添加任务",exact:true}).count(),0);
     assert.equal(await page.locator('.goal-owner-conversation').count(),0,"A remote snapshot cannot open a local Agent conversation");
     const observation = page.locator('.goal-observation-details');
-    await observation.locator(':scope > summary').getByText('1 项缺口 · 1 项限制 · 仅部分观测',{exact:true}).waitFor();
+    await observation.locator(':scope > summary').getByText('1 项缺口 · 1 项限制',{exact:true}).waitFor();
     assert.equal(await observation.evaluate(node=>node.open),false);
     await page.screenshot({path:resolve(outputDir,'overview-readonly-desktop.png'),animations:'disabled'});
     await observation.locator(':scope > summary').focus();await page.keyboard.press('Enter');
@@ -249,11 +251,15 @@ async function verifyRemoteSelection(browser, url) {
     await verifyGoalDetails(page, snapshot);
     snapshot.run_history.goals[0].acceptance_observation.goal_id = 'another-goal';
     await page.getByRole('button',{name:'刷新状态',exact:true}).click();
-    await observation.locator(':scope > summary').getByText('验收观测不可用，Goal 是否达成仍未知。',{exact:true}).waitFor();
+    await observation.getByRole('button',{name:'验收观察未获取',exact:true}).focus();
+    await page.getByRole('tooltip').getByText('验收观测不可用，Goal 是否达成仍未知。',{exact:true}).waitFor();
+    await page.keyboard.press('Escape');
     assert.equal(await observation.getByText('Archived totals have not been independently reconciled.',{exact:true}).count(),0,"Wrong-Goal observations never survive a refresh");
     await page.getByRole('button',{name:'Goal 信息',exact:true}).click();
     const unavailableDrawer = page.locator('.personal-context-drawer');
-    await unavailableDrawer.getByText('验收观测不可用，Goal 是否达成仍未知。',{exact:true}).waitFor();
+    await unavailableDrawer.getByRole('button',{name:'验收观察未获取',exact:true}).focus();
+    await page.getByRole('tooltip').getByText('验收观测不可用，Goal 是否达成仍未知。',{exact:true}).waitFor();
+    await page.keyboard.press('Escape');
     assert.equal(await unavailableDrawer.getByText('Archived totals have not been independently reconciled.',{exact:true}).count(),0);
     await page.keyboard.press('Escape');
     await page.getByRole("region",{name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
@@ -261,7 +267,9 @@ async function verifyRemoteSelection(browser, url) {
     target.searchParams.set("view", "conversation");
     target.searchParams.set("workAgent", "worker");
     await page.goto(target.href);
-    await page.getByRole("status").filter({hasText:"此来源仅提供状态快照，无法在这里读取或回复原会话。"}).waitFor();
+    await page.getByRole("button",{name:"来源仅有状态快照",exact:true}).focus();
+    await page.getByRole("tooltip").getByText("此来源仅提供状态快照，无法在这里读取或回复原会话。",{exact:true}).waitFor();
+    await page.keyboard.press("Escape");
     assert.equal(await page.getByRole("region", {name:"Agent 工作会话",exact:true}).getByRole("textbox").count(),0);
     assert.deepEqual(localOwnerReads,[],"Remote deep link caused local owner reads");
   } finally {await session.close();}
@@ -292,7 +300,7 @@ async function verifyGoalDetails(page, snapshot) {
   const acceptance = drawer.locator('.personal-goal-acceptance');
   const usage = drawer.locator('.personal-goal-detail-usage');
   await acceptance.getByText(reason,{exact:true}).waitFor();
-  await acceptance.getByRole('status').getByText('待核验 · 来源不全',{exact:true}).waitFor();
+  await acceptance.getByRole('button',{name:'验收观察 · 来源不全',exact:true}).waitFor();
   assert.equal(await acceptance.getByText('仅展示前 12 条观测。',{exact:true}).isVisible(),false,'Display-limit explanation is optional help, not a second status paragraph');
   assert.equal(await drawer.getByText(title,{exact:true}).count(),1,'The Goal title is not repeated in its header and body');
   assert.equal(await usage.getByText('未采集',{exact:true}).count(),1,'An entirely unknown usage section has one status, not six identical missing values');
@@ -308,7 +316,7 @@ async function verifyGoalDetails(page, snapshot) {
   });
   let reading = await readCheck();
   assert.ok(reading.font >= 16 && reading.line >= 24,`Evidence is reading text, not caption metadata: ${JSON.stringify(reading)}`);
-  const help = acceptance.locator('.personal-acceptance-coverage .context-help-trigger');
+  const help = acceptance.getByRole('button',{name:'验收观察 · 来源不全',exact:true});
   await help.focus();
   await page.getByRole('tooltip').getByText('当前仅有部分观测。任务完成或缺口列表为空，都不能证明 Goal 已通过验收。',{exact:true}).waitFor();
   await page.getByRole('tooltip').getByText('仅展示前 12 条观测。',{exact:true}).waitFor();
@@ -326,6 +334,8 @@ async function verifyGoalDetails(page, snapshot) {
   await page.screenshot({path:resolve(outputDir,'goal-detail-expanded-desktop.png'),animations:'disabled'});
   await page.keyboard.press('Escape');
   await drawer.waitFor({state:'detached'});
+  // The reader owner restores focus in its scheduled animation frame.
+  await page.waitForFunction(() => document.activeElement?.matches('button') && document.activeElement.textContent.includes('Goal 信息'));
   assert.ok(await info.evaluate(node=>node===document.activeElement),'Closing the Goal reader returns to its exact trigger');
 
   snapshot.usage_summary.goals = [{goal_id:source.id,cost_usd_24h:0,duration_ms_7d:7_200_000,input_tokens_7d:12500}];
@@ -363,13 +373,13 @@ async function verifyGoalDetails(page, snapshot) {
   source.acceptance_observation.missing_sources = [];
   await page.reload({waitUntil:'networkidle'});
   await page.getByRole('button',{name:'Goal 信息',exact:true}).click();
-  await acceptance.getByRole('status').getByText('待核验 · 部分记录',{exact:true}).waitFor();
+  await acceptance.getByRole('button',{name:'验收观察 · 部分记录',exact:true}).waitFor();
   assert.equal(await acceptance.getByText('来源不全',{exact:true}).count(),0,'A display limit does not imply an unavailable source');
   await page.keyboard.press('Escape');
   source.acceptance_observation.truncated = false;
   await page.reload({waitUntil:'networkidle'});
   await page.getByRole('button',{name:'Goal 信息',exact:true}).click();
-  await acceptance.getByRole('status').getByText('待核验',{exact:true}).waitFor();
+  await acceptance.getByRole('button',{name:'验收观察 · 待核验',exact:true}).waitFor();
   await page.keyboard.press('Escape');
   source.acceptance_observation = original;
   await page.setViewportSize({width:1512,height:982});
