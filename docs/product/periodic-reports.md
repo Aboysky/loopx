@@ -434,41 +434,39 @@ not production-message or real-phone proof.
 
 ## Acceptance boundaries
 
-### Ordinary managed Goal conversations
+### Managed Agent execution boundary
 
-In a local Goal's Codex conversation, **Advance LoopX tasks → Advance once**
-can submit one bounded native Turn for an explicitly selected registered
-Agent. It keeps the same Core Session, upstream thread, model settings and
-sandbox. Ordinary Goal Chat is currently read-only: this path qualifies source
-inspection and validation tasks, **not writable execution or a permission
-upgrade**. For example, a finite task may close only when its independently
-declared readiness check passes against the original source.
+A managed conversation must belong to the selected registered **Agent**, with
+its own original Session, execution state and return path. In the Goal's Agent
+view, managed and attached conversations are parallel sources; a Goal-wide
+Codex chat with an extra Agent selector does not establish that binding.
+The experimental **Advance LoopX tasks** control has therefore been withdrawn
+from ordinary Goal Chat. The existing general conversation, native Goal mode
+and original attached conversation entry retain their current owners.
 
-The native Turn still selects the task and owns admission, writeback and quota.
-The host resolves the selected task's existing immutable argv validation
-declaration before model execution, retains its canonical digest/revision, and
-rechecks that source and the execution lease before accepting completion.
-The normal Todo completion owner runs its declared check as well. Missing
-validation waits without starting a model; a failed check cannot complete the
-task or spend a delivery slot. Model-reported progress alone is insufficient.
-The API accepts only the registered Agent, operation identity and optional
-existing Todo reference; it accepts no validation command or runtime profile.
+The native host groundwork remains separately qualified: an explicitly invoked
+local managed request can use the original Core worker and native Task/Turn
+owners for a finite source-validation task. It retains the same thread and
+sandbox, resolves the selected Task's immutable argv validation declaration
+before model execution, and checks its canonical digest/revision and lease
+before accepting completion. Missing validation starts no model; a failed
+postcondition cannot complete the Task or spend a delivery slot. The low-level
+request accepts no runtime profile or caller validation command. Stable Core
+operation identity retains failed or unknown requests without replay.
 
-The control reads back the original Core Turn. Reload, an unknown POST response
-and retry retain one operation identity; a failed or unknown execution is never
-replayed. Busy/queued user work wins admission. Attached, external and private
-steward conversations retain their own admission paths; stopped/replaced Goals,
-changed validation and late results fail closed. Existing continuous Goal mode
-is a separate path and is not converted by this action.
+This groundwork does **not** create an Agent-owned managed conversation or a
+finished user entry. The logical registered Agent must be bound to its actual
+managed Session independently of the executor endpoint before exposing that
+entry alongside attached sources. Reuse existing Session, native Turn,
+monitor/calendar and periodic-report owners; do not add a second scheduler,
+task store or model worker. General writable execution, natural-language
+configuration and recurring task composition remain unfinished.
 
-This is a staged execution prerequisite. General writable managed execution,
-natural-language task configuration and arbitrary calendar/monitor/report
-composition remain unfinished. This control enables no recurring work and
-does not change the original steward's subscription or publication route.
-Packaged browser evidence uses a disposable real Core/File backend with a
-synthetic model/provider; it does not certify real-model or natural-deadline
-acceptance. See the [baseline](../assets/personal-workspace/steward-reports/managed-session-before.png)
-and [validated readback](../assets/personal-workspace/steward-reports/managed-session-after.png).
+Earlier packaged browser evidence demonstrated only the finite host/API path
+with disposable real Core/File data and a synthetic model/provider. It did not
+establish the correct Agent hierarchy, real-model adoption or natural-deadline
+acceptance. The UI withdrawal does not alter the original private steward's
+subscription, published reports, pending requests or publication route.
 
 ### Original private steward
 
