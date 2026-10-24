@@ -105,6 +105,10 @@ try {
         await page.keyboard.press('Tab');
         assert.equal(await dialogFor(page).evaluate(element => element.contains(document.activeElement)), true);
       }
+      if (await page.locator('.context-help-popover:popover-open').count()) {
+        await page.keyboard.press('Escape');
+        assert.equal(await dialogFor(page).isVisible(), true, 'Tab-focused help closes before the palette');
+      }
       await page.keyboard.press('Escape');
       await page.locator('.personal-mobile-menu').click();
       await launcher.click();
@@ -147,8 +151,13 @@ try {
   }});
   try {
     await remote.page.locator('.personal-goal-row').first().locator('.personal-goal-link').click();
+    assert.equal(await remote.page.getByRole('button', {name:/^(Settings|设置)$/}).count(), 0, 'a read-only host does not expose local management');
     await openPalette(remote.page);
-    assert.match(await dialogFor(remote.page).innerText(), /Read-only source|只读来源/);
+    const remoteHelp = dialogFor(remote.page).getByRole('button', {name:/Navigation help|导航说明/});
+    await remoteHelp.focus();
+    assert.match(await remote.page.locator('.context-help-popover:popover-open').innerText(), /Read-only source|只读来源/);
+    await remote.page.keyboard.press('Escape');
+    assert.equal(await dialogFor(remote.page).isVisible(), true, 'Help closes before the surrounding palette');
     assert.equal(await dialogFor(remote.page).getByRole('option', {name: /Review preview|查看预览/}).count(), 0);
   } finally {await remote.close();}
 

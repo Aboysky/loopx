@@ -1,8 +1,9 @@
+import {ArrowRight, ChevronDown, CircleHelp, Hand, Info} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import {useEffect, useState, type ReactNode} from "react";
 import {deliveryReviewWarning, reviewCoverageIncomplete} from "../../data/delivery-review";
 import {type DeliveryReviewRead} from "./delivery-review-state";
 import {goalWorkClassLabel, GoalWorkspaceWork} from "./goal-workspace-work";
-import { ArrowRight, ChevronDown, Hand, Info } from "lucide-react";
 import { DeliveryReviewContent, DeliveryWorkMap } from "./delivery-review";
 import { relativeTime } from "./goal-activity-view";
 import { goalAcceptanceContractCopy } from "./delivery-review-copy";
@@ -80,7 +81,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
     ) : null}
     <div className={`goal-overview-summary${showAttention ? " has-attention" : ""}`}>
       <section className="goal-overview-direction" aria-label={copy.direction}>
-        <p className={`goal-overview-objective${digest.objective ? "" : " is-unavailable"}`} data-testid="goal-declared-objective">{digest.objective ?? copy.objectiveUnavailable}</p>
+        {digest.objective ? <p className="goal-overview-objective" data-testid="goal-declared-objective">{digest.objective}</p> : <ContextHelp icon={CircleHelp} label={locale === "zh-CN" ? "目标声明未读到" : "Declared objective unavailable"}><p>{copy.objectiveUnavailable}</p></ContextHelp>}
         {currentWork && currentRow ? <details className="goal-overview-current">
           <summary><small>{copy.current} · {goalWorkClassLabel(currentRow.displayClass, locale === "zh-CN")}</small><span>{currentWork.text}</span><ChevronDown aria-hidden size={15}/></summary>
           {progressNote ? <div className="goal-overview-agent-note"><h3>{copy.agentSummary}</h3><p className="goal-overview-note">{progressNote}</p></div> : null}
@@ -104,13 +105,12 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
             {item.updatedAt ? <time dateTime={item.updatedAt}>{relativeTime(item.updatedAt, locale)}</time> : null}</span>
           <ArrowRight aria-hidden size={14} />
         </button></li>)}</ul>
-        {needs.availability === "ok" && needs.coverage !== "complete" ? <small>{t("vitals.needsYouPartial", { count: needs.listed })}</small> : null}
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
     <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
       readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board}
-      map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
+      map={readOnly ? <ContextHelp label={locale === "zh-CN" ? "来源读取范围" : "Source reading scope"} icon={CircleHelp}><p className="goal-work-scope">{copy.remote}</p></ContextHelp> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
     {readOnly ? <GoalAcceptanceObservationCard goal={goal} overview />
       : <OverviewDeliveryEvidence key={`delivery:${goal.goalId}`} review={review} zh={locale === "zh-CN"}>
         <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />
@@ -142,9 +142,9 @@ function WorkerReadback({goal, zh, onViewTasks}: {goal: WorkspaceGoal; zh: boole
   if (!source) return null;
   return <section className="goal-overview-worker-state" aria-label={zh ? "外部执行器状态" : "External worker status"}>
     <h3>{zh ? "执行器最近的观察" : "Last worker observation"}</h3>
-    {source.read_status !== "read" ? <p role="status">{zh
+    {source.read_status !== "read" ? <ContextHelp label={zh ? "执行结果未知" : "Execution outcome unknown"} icon={CircleHelp}><p role="status">{zh
       ? "执行器记录缺失有效来源或与当前目标配置不一致。当前执行结果未知。"
-      : "The worker record is unreadable or does not match the current Goal configuration. Its current outcome is unknown."}</p> : null}
+      : "The worker record is unreadable or does not match the current Goal configuration. Its current outcome is unknown."}</p></ContextHelp> : null}
     {source.rows.map(row => <div key={row.agent_id}>
       <p><strong>{row.status === "replan_paused" ? (zh ? "需要方向，已暂停复核" : "Direction needed; review paused")
         : (zh ? "原请求结果未知，已暂停新派发" : "Original outcome unknown; new dispatch paused")}</strong></p>
@@ -153,7 +153,7 @@ function WorkerReadback({goal, zh, onViewTasks}: {goal: WorkspaceGoal; zh: boole
         : "The review did not resolve its original obligation. Add concrete work or relevant results, then restart the worker to check current admission.") : (zh
         ? "先核实原操作及其结算。已发送请求仍可能产生费用；新事件或重启不能证明原请求未执行。"
         : "Check the original operation and its settlement first. An issued request may still incur costs; a new event or restart cannot prove it did not run.")}</p>
-      <p className="goal-overview-note">{zh ? "此记录不证明 Goal 达成；完整费用未知。" : "This record does not establish Goal completion. Complete costs are unknown."}</p>
+      <ContextHelp label={zh ? "执行记录范围" : "Execution record scope"}><p className="goal-overview-note">{zh ? "此记录不证明 Goal 达成；完整费用未知。" : "This record does not establish Goal completion. Complete costs are unknown."}</p></ContextHelp>
       <details><summary>{zh ? "原工作与观察时间" : "Original work and observation time"}</summary>
         <dl><div><dt>Agent</dt><dd>{row.agent_id}</dd></div>
           <div><dt>{zh ? "义务" : "Obligation"}</dt><dd>{row.obligation_id}</dd></div>
