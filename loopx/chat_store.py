@@ -1006,7 +1006,7 @@ class ChatSessionStore(ChatIngressStore):
         candidate_message_id = uuid.uuid4().hex
         accepted_at = utc_now()
         session_path = self._session_path(session_token)
-        with self._session_lock(session_token):
+        with self.runtime_activation_lock(), self._session_lock(session_token):
             with exclusive_file_lock(
                 session_path,
                 agent_id="loopx-chat",
