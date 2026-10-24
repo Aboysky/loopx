@@ -16,6 +16,9 @@ export interface TrajectoryInput {
   objective: string;
   selection: {rule: string; population_episodes: number | null; exhaustive: boolean};
   sources: TrajectorySource[]; episodes: TrajectoryEpisode[];
+  /** Explicit curator binding to a complete source-bound native capture.
+   * Context constrains interpretation without widening episode evidence. */
+  native_outcomes_source_id?: string;
   /** Trusted curator's complete Explore history capture, already in sources.
    * Omission keeps the existing assessment contract and identity unchanged. */
   display_snapshot?: {schema_version: 'research_display_snapshot_v1'; source_id: string; source_namespace: string;

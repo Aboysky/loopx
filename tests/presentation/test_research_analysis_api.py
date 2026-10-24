@@ -346,6 +346,64 @@ def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(wor
         w["request"](goal="other-owner", pack_id=registered["pack_id"])
 
 
+def test_explicit_native_context_reaches_process_and_changed_source_blocks_reuse(workspace):
+    w, read = workspace, workspace["request"]
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    native = {"schema_version": "trajectory_native_outcomes_v1", "scope": data["scope"],
+        "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:04:00Z", "complete": True,
+        "metric": {"name": "error", "unit": "points", "higher_is_better": False},
+        "retained_result_id": None,
+        "comparison": {"baseline_result_id": "result-1", "retention_citation": None},
+        "samples": [{"submission_index": i, "result_id": f"result-{i}", "candidate_ref": f"candidate-{i}",
+            "valid": True, "value": value, "submitted_at": f"2026-01-01T00:0{i}:00Z",
+            "observed_at": f"2026-01-01T00:0{i}:30Z",
+            "citation": {"source_id": "facts", "first_line": 2, "last_line": 2}}
+            for i, value in enumerate((10, 9), 1)]}
+    capture = json.dumps(native)
+    native_path = w["sources"] / "native.json"
+    native_path.write_text(capture)
+    scope = dict(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+        input_path=path, source_root=w["sources"], native_outcomes_json="native.json")
+    # Display-only registration keeps the existing analysis identity.
+    legacy = register_pack(**scope, title="Display-only native outcomes")
+    assert legacy["analysis_key"] == w["operation"]["analysis_key"]
+    data["sources"].append(dict(id="capture", artifact="native.json",
+        artifact_sha256=hashlib.sha256(capture.encode()).hexdigest(), first_line=1, text=capture))
+    data["native_outcomes_source_id"] = "capture"
+    path.write_text(json.dumps(data))
+    registered = register_pack(**scope, title="Explicit native context", base_pack_id=legacy["pack_id"])
+    assert registered["analysis_key"] != legacy["analysis_key"]
+    before = read(pack_id=registered["pack_id"])["pack"]
+    assert before["native_outcomes"]["projection"]["retained"] is None
+    assert before["job"] is None and not w["count"].exists()
+    provider = w["tmp_path"] / "bin" / "codex"
+    prompt_path = w["tmp_path"] / "received-prompt.txt"
+    provider.write_text(provider.read_text().replace("prompt=sys.stdin.read()",
+        f"prompt=sys.stdin.read()\nPath({str(prompt_path)!r}).write_text(prompt)"))
+    operation = {**w["operation"], "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    w["mode"].write_text("ok")
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    context = json.loads(prompt_path.read_text().split("\n\nNative outcome context:\n")[1])
+    assert context["metric"]["higher_is_better"] is False
+    assert context["best_valid"]["value"] == context["final_valid"]["value"] == 9
+    assert context["retained"] is None
+    assert context["retained_improvement"]["value"] is None
+    assert context["retained_improvement"]["final_candidate_delta"] == 1
+    assert capture not in prompt_path.read_text()
+    assert read(body=operation)["job"]["reused"]
+    read(pack_id=registered["pack_id"], output_language="en")
+    assert w["count"].read_text().splitlines() == ["started"]
+    native_path.write_text(capture + "\n")
+    historical = read(pack_id=registered["pack_id"])["pack"]
+    assert historical["result"] is not None
+    assert historical["native_outcomes"]["applicability"] == "historical"
+    with pytest.raises(HTTPError) as changed:
+        read(body=operation)
+    assert changed.value.code == 409
+    assert w["count"].read_text().splitlines() == ["started"]
+
+
 @contextmanager
 def source_analysis_workspace(w, name, *, enabled=True):
     """Synthetic source transport; actual local store, HTTP and provider process."""
