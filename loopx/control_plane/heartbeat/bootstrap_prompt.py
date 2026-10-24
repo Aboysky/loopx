@@ -66,6 +66,8 @@ def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
         ("runtime_profile", "--runtime-profile"), ("visible_goal_host", "--visible-goal-host"),
         ("host_surface", "--host-surface"), ("scheduler_owner", "--scheduler-owner"),
         ("execution_mode", "--execution-mode"),
+        ("decision_output_root", "--decision-output-root"),
+        ("codex_context_root", "--codex-context-root"),
     ):
         value = getattr(args, field, None)
         if value is not None:
@@ -78,6 +80,8 @@ def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
             command += [flag, value]
     if args.cli_bin != "loopx":
         command += ["--cli-bin", args.cli_bin]
+    if getattr(args, "turn_envelope", False):
+        command.append("--turn-envelope")
     if legacy:
         if args.codex_app:
             command.append("--codex-app")

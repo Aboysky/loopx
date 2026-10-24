@@ -177,6 +177,7 @@ def _heartbeat_prompt_commands(
     decision_output_root: Path | None,
     decision_handoff_socket: str | None,
     codex_context_dir: str | None,
+    codex_context_root: str | None,
     turn_envelope: bool,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
@@ -283,6 +284,8 @@ def _heartbeat_prompt_commands(
             capture_arg += " --decision-handoff-socket " + shlex.quote(decision_handoff_socket)
         if codex_context_dir is not None:
             capture_arg += " --codex-context-dir " + shlex.quote(codex_context_dir)
+        if codex_context_root is not None:
+            capture_arg += " --codex-context-root " + shlex.quote(codex_context_root)
         display_arg = " --turn-envelope" if turn_envelope else ""
         for key in ("quota_guard_command", "task_body_quota_guard_command"):
             commands[key] = str(commands[key]) + display_arg + capture_arg
@@ -319,6 +322,7 @@ def build_heartbeat_prompt(
     decision_output_root: str | Path | None = None,
     decision_handoff_socket: str | None = None,
     codex_context_dir: str | None = None,
+    codex_context_root: str | None = None,
     turn_envelope: bool = False,
 ) -> dict[str, Any]:
     if not (full or compact or brief or thin):
@@ -384,6 +388,7 @@ def build_heartbeat_prompt(
         turn_instance_id=normalized_turn_instance_id,
         decision_handoff_socket=decision_handoff_socket,
         codex_context_dir=codex_context_dir,
+        codex_context_root=codex_context_root,
         turn_envelope=turn_envelope,
     )
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
@@ -474,6 +479,7 @@ def build_heartbeat_prompt(
         decision_output_root=decision_output_root,
         decision_handoff_socket=decision_handoff_socket,
         codex_context_dir=codex_context_dir,
+        codex_context_root=codex_context_root,
         turn_envelope=turn_envelope,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)

@@ -421,6 +421,52 @@ loopx-canary heartbeat-prompt \
   --goal-id <GOAL_ID>
 ```
 
+### Opt-in native context delivery
+
+For a trusted Codex host, create private context/capture directories and render
+the native setup through the installed CLI:
+
+```sh
+loopx --format json quota context-config \
+  --codex-context-root <private-context-root> --goal-id <goal> --agent-id <agent>
+```
+
+The read-only result contains `native_config.hooks` and
+`native_config.developer_instructions`. Merge the hooks into the host's existing
+`hooks.json` or inline hook configuration, and append the recovery instruction to
+its existing developer instructions. Preserve other configuration. Review and
+trust only these exact hooks through Codex's native hook trust surface; the CLI
+does not install files, approve hashes, enable diagnostics or run a guard.
+Use one configuration for the declared Goal/Agent. A shared private root keeps
+different native sessions in separate journals, including interleaved sessions.
+
+Generate the normal bootstrap with `heartbeat-prompt --thin --codex-app
+--bootstrap`, its existing Goal/Agent/registry arguments, and
+`--decision-output-root <private-capture-root> --codex-context-root
+<private-context-root>`; optionally add `--turn-envelope`. The loader preserves
+these options without freezing a Turn ID. Each wake loads current instructions
+and binds the existing `LOOPX_TURN` before its generated guard. Selection keeps
+the same transport. An unset wake identity fails in the shell before admission.
+
+Warm delta additionally needs the native host process to have
+`CODEX_ROLLOUT_TRACE_ROOT` set to private native trace-v1 diagnostics before it
+starts. A hook cannot set its parent process environment. If that host cannot
+provide the required actual-input observation, ordinary full delivery continues;
+do not use a file, session ID or successful setup as a retention acknowledgement.
+Scope diagnostics to the authorized host and include their IO/retention cost.
+
+Read back native hook discovery/trust and the generated guard options, then
+verify cold full, warm delta only after complete current-input evidence,
+resume and compaction recovery on the actual host. The persistent instruction
+names `quota context-read --codex-context-root ...` when an entire hook is lost;
+lookup is read-only and subsequent pages pin the original file/hash. It never
+readmits or spends. Normal native trust/settings UI remains the activation and
+error surface; unsupported diagnostics keep the same full path.
+To roll back, remove the context/capture options from this bootstrap and remove
+only the generated hooks/recovery instruction from the native configuration.
+Existing captures remain private recovery evidence. This opt-in does not grant
+execution authority or prove installed App adoption or net token savings.
+
 ## Template
 
 Generate the persistent prompt from the installed runtime:

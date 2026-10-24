@@ -68,7 +68,7 @@ def _delivered(request, digest):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -93,7 +93,16 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     installed_cli = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI")
     if installed_cli:
         cli = [installed_cli, "--cli-bin", installed_cli]
-    hook_command = shlex.join(cli + ["quota", "context-hook", "--codex-context-dir", str(lifecycle)])
+    context_option = "--codex-context-root" if shared_root else "--codex-context-dir"
+    native_configuration = None
+    if shared_root:
+        prepared = subprocess.run(cli + ["--format", "json", "quota", "context-config",
+            context_option, str(lifecycle), "--goal-id", GOAL_ID, "--agent-id", AGENT_ID],
+            capture_output=True, text=True, timeout=15)
+        assert prepared.returncode == 0, prepared.stderr
+        native_configuration = json.loads(prepared.stdout)["native_config"]
+    hook_command = (native_configuration["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        if native_configuration else shlex.join(cli + ["quota", "context-hook", context_option, str(lifecycle)]))
     if failed_primary:
         # Fault only the primary journal update. Production code must still
         # return the original full-read reference; no test recovery handler.
@@ -121,7 +130,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                f"os.environ['PYTHONPATH']={str(Path(__file__).resolve().parents[2])!r}\n"
                + f"os.execv({sys.executable!r}, [{sys.executable!r}, '-m', 'loopx.entrypoint', *sys.argv[1:]])\n"))
         wrapper.chmod(0o700)
-        hook_command = shlex.join([str(wrapper), "quota", "context-hook", "--codex-context-dir", str(lifecycle)])
+        hook_command = shlex.join([str(wrapper), "quota", "context-hook", context_option, str(lifecycle)])
     handler = {"type": "command", "command": hook_command, "timeout": 10}
     if host != "benchmark":
         (home / "hooks.json").write_text(json.dumps({"hooks": {
@@ -132,12 +141,26 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     command = [*cli, "--registry", str(registry), "--runtime-root", str(runtime),
         "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--turn-instance-id", "native-capture-turn", "--codex-app",
-        "--decision-output-root", str(root), "--codex-context-dir", str(lifecycle)]
+        "--decision-output-root", str(root), context_option, str(lifecycle)]
     if surface == "turn_envelope":
         command.append("--turn-envelope")
+    generated_guard = None
+    if shared_root:
+        generated = subprocess.run([*cli, "--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", "heartbeat-prompt", "--thin", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--decision-output-root", str(root),
+            context_option, str(lifecycle), *(["--turn-envelope"] if surface == "turn_envelope" else [])],
+            capture_output=True, text=True, timeout=15)
+        assert generated.returncode == 0, generated.stderr
+        prompt = json.loads(generated.stdout)
+        assert prompt["ok"], prompt
+        generated_guard = next(line for line in prompt["task_body"].splitlines() if "quota should-run" in line)
+        assert '${LOOPX_TURN:?}' in generated_guard and context_option in generated_guard
+        generated_guard += " --todo-id " + shlex.quote(TODO_ID)
+        env["LOOPX_TURN"] = "native-capture-turn"
 
     def invoke(name):
-        return shlex.join(command) + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
+        return (generated_guard or shlex.join(command)) + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
 
     def pages(name, path):
         raw = path.read_bytes()
@@ -145,7 +168,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         page_digests[name] = digest
         # Plan only read offsets. Every actual model-facing page must
         # come from the public CLI, including digest verification.
-        page_size = 4096 if adaptive else 5000
+        page_size = 4096 if adaptive or host == "code_mode" else 5000
         offsets, start, count = [0], 0, 0
         for character in raw.decode():
             size = len(character.encode())
@@ -290,18 +313,21 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
 
     def tool(cmd, number):
         if host == "code_mode":
+            # Exercise the shipped default page size and bounded batching for
+            # both output forms. One model round per page can exhaust the
+            # unchanged native turn deadline before same-capture recovery ends.
+            commands = [cmd]
+            if stages["pages"]:
+                commands.append(stages["pages"].pop(0))
             if adaptive:
-                commands = [cmd]
-                if stages["pages"]:
-                    commands.append(stages["pages"].pop(0))
                 code = "".join("{const r=await tools.exec_command(" + json.dumps({
                     "cmd": command, "max_output_tokens": 2400})
                     + ");text(r.exit_code === 0 ? r.output : r);}" for command in commands)
                 return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
                     "name": "exec", "input": code}
             return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
-                "name": "exec", "input": "text(await tools.exec_command(" + json.dumps({
-                    "cmd": cmd, "max_output_tokens": 2000}) + "));"}
+                "name": "exec", "input": "".join("text(await tools.exec_command(" + json.dumps({
+                    "cmd": command, "max_output_tokens": 2000}) + "));" for command in commands)}
         return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
             "name": "exec_command", "arguments": json.dumps({"cmd": cmd, "max_output_tokens": 2000})}
 
@@ -324,7 +350,11 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             if host == "code_mode":
                 config = home / "config.toml"
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
-            if hook_loss:
+            if native_configuration:
+                config = home / "config.toml"
+                config.write_text("developer_instructions=" + json.dumps(native_configuration["developer_instructions"])
+                    + "\n" + config.read_text())
+            elif hook_loss:
                 from loopx.control_plane.turn_driver.codex_context import codex_context_recovery_instructions
                 config = home / "config.toml"
                 instructions = codex_context_recovery_instructions(str(lifecycle), goal_id=GOAL_ID,
@@ -409,3 +439,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
 def test_native_missing_hook_recovers_from_persistent_cli_route(tmp_path, monkeypatch, host, surface, hook_loss):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         host, surface, False, True, True, hook_loss)
+
+
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_shared_configuration_resume_and_lost_hook(tmp_path, monkeypatch, surface):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, "missing", shared_root=True)

@@ -1156,6 +1156,19 @@ Lookup starts at offset zero. Every following `next_command` pins the original
 path and hash, so a concurrent newer publication cannot mix captures. Missing,
 changed or symlinked files retain the ordinary reader's refusal behavior.
 
+`quota context-config` renders the native hook/recovery configuration through
+the CLI; the benchmark worker reuses that same provider helper. Shared Codex App
+configuration uses `--codex-context-root` to isolate journals by native session,
+while dedicated trial homes retain `--codex-context-dir`. Read-only lookup never
+creates an unknown session directory. The heartbeat bootstrap preserves the
+root/capture options and uses the existing per-wake `LOOPX_TURN` binding instead
+of persisting a Turn ID. Native hook trust and private actual-input diagnostics
+remain host-owned; missing diagnostics select full. Generated configuration
+installs nothing, changes no trust and grants no execution authority. See
+[activation/readback/rollback](../../heartbeat-automation-prompt.md#opt-in-native-context-delivery).
+This qualifies generated configuration plus native consumption, not installed
+desktop adoption or a new cost measurement.
+
 The opt-in benchmark worker carries a compact recovery instruction in native
 `developer_instructions`, independently of SessionStart/PreToolUse delivery.
 Native code-mode consumers can carry the same product-owned instruction in

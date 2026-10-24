@@ -1146,7 +1146,7 @@ def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
     from benchmark.runtime.context_delivery import prepare_context_delivery
     home = tmp_path / "home"
     home.mkdir()
-    env = {"LOOPX_CLI": "loopx"}
+    env = {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "agent"}
     if kind == "existing_hooks":
         protected = home / "hooks.json"
         protected.write_text('{"operator": "unchanged"}')

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -9,6 +10,67 @@ import sys
 import pytest
 
 from loopx.control_plane.turn_driver import codex_context as context
+
+
+def test_shared_root_keeps_interleaved_native_sessions_independent(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    monkeypatch.chdir(tmp_path)
+    original = {}
+    for session in ("one", "../../two"):
+        directory = Path(context.codex_context_directory(root=str(tmp_path), session=session, create=True))
+        assert directory.parent == tmp_path and directory.stat().st_mode & 0o077 == 0
+        monkeypatch.setenv("CODEX_THREAD_ID", session)
+        event = dict(session_id=session, cwd=str(tmp_path), hook_event_name="SessionStart", source="startup")
+        context.codex_context_hook(str(directory), event)
+        _, wire = project(directory)
+        original[session] = (directory, wire["recovery"], (directory / "session.json").read_bytes())
+    assert original["one"][0] != original["../../two"][0]
+    for session, (directory, recovery, raw) in original.items():
+        monkeypatch.setenv("CODEX_THREAD_ID", session)
+        selected = context.codex_context_directory(root=str(tmp_path))
+        assert selected == str(directory)
+        assert context.read_codex_context_reference(selected, goal_id="fixture", agent_id="agent") == (
+            recovery["path"], recovery["sha256"])
+        assert (directory / "session.json").read_bytes() == raw
+
+
+def test_shared_root_read_does_not_create_unknown_session_or_follow_alias(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "unknown")
+    with pytest.raises(FileNotFoundError):
+        context.codex_context_directory(root=str(tmp_path))
+    assert list(tmp_path.iterdir()) == []
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    with pytest.raises(ValueError, match="native session"):
+        context.codex_context_directory(root=str(tmp_path), create=True)
+    import hashlib
+
+    alias = tmp_path / hashlib.sha256(b"session").hexdigest()
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    alias.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match="private"):
+        context.codex_context_directory(root=str(tmp_path), session="session", create=True)
+    assert not (target / "session.json").exists()
+
+
+def test_native_configuration_cli_is_read_only_and_usable_without_registry(tmp_path):
+    tmp_path.chmod(0o700)
+    repo = Path(__file__).resolve().parents[2]
+    command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "context-config",
+        "--codex-context-root", str(tmp_path), "--goal-id", "fixture", "--agent-id", "agent"]
+    result = subprocess.run(command, cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(repo)},
+        capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    native = payload["native_config"]
+    assert set(native["hooks"]) == {"SessionStart", "PreToolUse"}
+    assert "--codex-context-root" in native["developer_instructions"]
+    assert "context-read" in native["developer_instructions"]
+    assert "hooks.state" not in native and list(tmp_path.iterdir()) == []
+    missing_identity = subprocess.run(command[:-2], cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(repo)}, capture_output=True, text=True, timeout=15)
+    assert missing_identity.returncode == 1 and not json.loads(missing_identity.stdout)["ok"]
 
 
 def setup(root, monkeypatch):

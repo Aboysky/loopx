@@ -43,6 +43,29 @@ def _private_root(directory: str) -> Path:
     return root
 
 
+def codex_context_directory(*, directory: str | None = None, root: str | None = None,
+                            session: str | None = None, create: bool = False) -> str | None:
+    """Namespace shared host configuration without sharing session journals.
+
+    A native session id selects a directory, never supplies a filesystem path
+    or proves retained context. Read-only recovery must not create directories.
+    """
+    if directory is not None and root is not None:
+        raise ValueError("choose codex-context-dir or codex-context-root")
+    if root is None:
+        return directory
+    import hashlib
+
+    parent = _private_root(root)
+    session = session if session is not None else os.environ.get("CODEX_THREAD_ID")
+    if not isinstance(session, str) or not session:
+        raise ValueError("native session context requires CODEX_THREAD_ID or a native hook session")
+    child = parent / hashlib.sha256(session.encode()).hexdigest()
+    if create:
+        child.mkdir(mode=0o700, exist_ok=True)
+    return str(_private_root(str(child)))
+
+
 @contextmanager
 def _locked(directory: str):
     if os.name != "posix":
@@ -95,12 +118,13 @@ def read_codex_context_reference(directory: str, *, goal_id: str, agent_id: str)
 
 
 def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_id: str,
-                                         cli_argv: list[str]) -> str:
+                                         cli_argv: list[str], session_root: bool = False) -> str:
     """Host-owned persistent instructions, independent of event-hook delivery."""
     import shlex
 
     command = shlex.join([*cli_argv, "--format", "json", "quota", "context-read",
-        "--codex-context-dir", directory, "--goal-id", goal_id, "--agent-id", agent_id])
+        "--codex-context-root" if session_root else "--codex-context-dir", directory,
+        "--goal-id", goal_id, "--agent-id", agent_id])
     return (
         "If continuing a captured LoopX decision and its complete context or recovery reference was lost "
         "(including compaction or a failed hook), recover before dependent work with: " + command + ". "
@@ -108,6 +132,26 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         "If lookup fails, restore the original capture/reference; do not guess, readmit or ask the owner. "
         "Recovery never renews authority/freshness or proves retention. Independent authorized work can continue."
     )
+
+
+def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
+                                 cli_argv: list[str], session_root: bool = False) -> dict:
+    """Native configuration data shared by the worker and CLI setup journey.
+
+    This renders no trust hashes and writes no host configuration. The native
+    host remains responsible for reviewing/trusting the exact discovered hook.
+    """
+    import shlex
+
+    if not goal_id or not agent_id:
+        raise ValueError("context configuration requires exact goal-id and agent-id")
+    directory = str(_private_root(directory))
+    option = "--codex-context-root" if session_root else "--codex-context-dir"
+    handler = {"type": "command", "command": shlex.join([
+        *cli_argv, "--format", "json", "quota", "context-hook", option, directory]), "timeout": 10}
+    return {"hooks": {event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")},
+        "developer_instructions": codex_context_recovery_instructions(directory, goal_id=goal_id,
+            agent_id=agent_id, cli_argv=cli_argv, session_root=session_root)}
 
 
 def codex_context_hook(directory: str, event: dict) -> dict:

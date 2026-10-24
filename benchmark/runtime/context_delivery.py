@@ -9,11 +9,11 @@ import json
 import os
 import stat
 from pathlib import Path
-import shlex
 import tempfile
 
 
 def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
+    from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
 
     root = home / "loopx-context"
@@ -30,11 +30,9 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     # hot-path scan or a reason to distrust intact current model input.
     env["CODEX_ROLLOUT_TRACE_ROOT"] = tempfile.mkdtemp(prefix="wake-", dir=traces)
     env["LOOPX_CODEX_CONTEXT_DIR"] = str(root)
-    command = shlex.join([env["LOOPX_CLI"], "--format", "json", "quota", "context-hook",
-                          "--codex-context-dir", str(root)])
-    handler = {"type": "command", "command": command, "timeout": 10}
-    content = json.dumps({"hooks": {event: [{"hooks": [handler]}]
-                                  for event in ("SessionStart", "PreToolUse")}})
+    configuration = codex_context_configuration(str(root), goal_id=env["LOOPX_GOAL_ID"],
+        agent_id=env["LOOPX_AGENT_ID"], cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
+    content = json.dumps({"hooks": configuration["hooks"]})
     path = home / "hooks.json"
     if path.is_symlink() or (path.exists() and path.read_text() != content):
         raise ValueError("native context hooks changed within a trial; use a new trial")
@@ -64,11 +62,7 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
         entries.append(f"{json.dumps(key)} = {{ trusted_hash = {json.dumps(digest)} }}")
     # CLI override keys are dot-separated; native keys contain paths/dots.
     # Carry the entire table as TOML so native keys remain literal strings.
-    from loopx.control_plane.turn_driver.codex_context import codex_context_recovery_instructions
-
-    instructions = codex_context_recovery_instructions(str(root), goal_id=env["LOOPX_GOAL_ID"],
-        agent_id=env["LOOPX_AGENT_ID"], cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
     # This isolated trial's native developer instructions survive compaction;
     # a failed SessionStart handler cannot erase the read-only recovery route.
     env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(["-c", "hooks.state={" + ",".join(entries) + "}",
-        "-c", "developer_instructions=" + json.dumps(instructions)])
+        "-c", "developer_instructions=" + json.dumps(configuration["developer_instructions"])])

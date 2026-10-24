@@ -483,7 +483,8 @@ def _emit_quota_result(
         )
         print_payload(failure, args.format, _quota_renderer(args))
         return 1
-    if delivery_request is not None or getattr(args, "codex_context_dir", None):
+    if (delivery_request is not None or getattr(args, "codex_context_dir", None)
+            or getattr(args, "codex_context_root", None)):
         agent = payload.get("agent_identity")
         decision_identity = (str(payload.get("goal_id") or ""),
             str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
@@ -507,17 +508,20 @@ def _emit_quota_result(
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
-    if args.format == "json" and succeeded and getattr(args, "codex_context_dir", None) and capture_directory:
+    if (args.format == "json" and succeeded and capture_directory
+            and (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))):
         import hashlib
-        from ..control_plane.turn_driver.codex_context import project_codex_context
+        from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
 
         try:
             capture_id = hashlib.sha256((capture_directory / "decision.json").read_bytes()).hexdigest()
-            payload = project_codex_context(payload, directory=args.codex_context_dir,
+            directory = codex_context_directory(directory=args.codex_context_dir,
+                root=getattr(args, "codex_context_root", None), create=True)
+            payload = project_codex_context(payload, directory=directory,
                 capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
                 surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
                 capture_id=capture_id)
-        except OSError:
+        except (OSError, ValueError):
             pass  # Lost optional capture: keep the admitted full payload, never rerun its guard.
     print_payload(payload, args.format, _quota_renderer(args))
     return 0 if succeeded else 1
@@ -532,17 +536,45 @@ def handle_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
 ) -> int:
+    if args.quota_command == "context-config":
+        import json
+        from ..command_invocation import loopx_cli_argv
+        from ..control_plane.turn_driver.codex_context import codex_context_configuration
+
+        try:
+            directory = getattr(args, "codex_context_root", None) or args.codex_context_dir
+            if not directory:
+                raise ValueError("context-config requires codex-context-root or codex-context-dir")
+            config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
+                cli_argv=loopx_cli_argv(), session_root=bool(getattr(args, "codex_context_root", None)))
+            payload = {"ok": True, "native_config": config,
+                "activation": "Merge hooks and append developer_instructions to the existing native configuration; "
+                    "review and trust only these exact hooks in Codex. Restart/resume with the resulting configuration. "
+                    "Pass this same context location and a decision-output-root to heartbeat-prompt/should-run. "
+                    "For delta, the native process must already have CODEX_ROLLOUT_TRACE_ROOT pointing to private diagnostics; "
+                    "unavailable diagnostics preserve full delivery. Disabling the context options restores ordinary output. "
+                    "This command installs nothing and grants no execution authority."}
+        except (OSError, ValueError, TypeError) as exc:
+            payload = {"ok": False, "reason": str(exc)}
+        print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+        return 0 if payload["ok"] else 1
     if args.quota_command == "context-hook":
         import json
         import sys
         from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-        from ..control_plane.turn_driver.codex_context import codex_context_hook
+        from ..control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
 
         # Native transport only: no registry discovery, guard or quota effects.
         try:
             raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
             event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
-            payload = codex_context_hook(args.codex_context_dir, event) if isinstance(event, dict) else {}
+            if (isinstance(event, dict) and isinstance(event.get("session_id"), str) and event["session_id"]
+                    and event.get("hook_event_name") in ("SessionStart", "PreCompact", "PreToolUse")):
+                directory = codex_context_directory(directory=args.codex_context_dir,
+                    root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
+                payload = codex_context_hook(directory, event)
+            else:
+                payload = {}
         except (OSError, ValueError, TypeError, RecursionError):
             payload = {}
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
@@ -572,6 +604,7 @@ def handle_quota_command(
             or getattr(args, "decision_output_root", None) is not None
             or getattr(args, "decision_handoff_socket", None) is not None
             or getattr(args, "codex_context_dir", None) is not None
+            or getattr(args, "codex_context_root", None) is not None
         ):
             validate_quota_command_context_request(args)
             capture_directory = prepare_decision_capture(args)

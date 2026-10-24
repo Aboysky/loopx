@@ -31,10 +31,14 @@ def resolve_heartbeat_capture_root(
     turn_instance_id: str | None,
     decision_handoff_socket: str | None = None,
     codex_context_dir: str | None = None,
+    codex_context_root: str | None = None,
     turn_envelope: bool = False,
 ) -> Path | None:
     """Validate capture transport for an already resolved host-owned Turn."""
-    if codex_context_dir is not None and (root is None or decision_handoff_socket is not None):
+    if codex_context_dir is not None and codex_context_root is not None:
+        raise ValueError("choose codex-context-dir or codex-context-root")
+    if (codex_context_dir is not None or codex_context_root is not None) and (
+            root is None or decision_handoff_socket is not None):
         raise ValueError("native context delivery requires a capture root without a second handoff socket")
     if root is None:
         if decision_handoff_socket is not None:
@@ -42,7 +46,8 @@ def resolve_heartbeat_capture_root(
         if turn_envelope:
             raise ValueError("TurnEnvelope requires an explicit decision capture root")
         return None
-    if not thin or full or compact or brief or native_goal_host or not turn_instance_id:
+    if (not thin or full or compact or brief or native_goal_host
+            or (not turn_instance_id and codex_context_root is None)):
         raise ValueError("--decision-output-root requires thin mode and an explicit host-owned Turn ID")
     directory = Path(root).expanduser().absolute()
     if directory.is_symlink() or not directory.is_dir():

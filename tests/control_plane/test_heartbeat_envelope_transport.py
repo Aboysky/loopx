@@ -23,6 +23,34 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
+def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp_path):
+    from loopx.cli import build_parser
+    from loopx.control_plane.heartbeat.bootstrap_prompt import goal_bootstrap
+
+    args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_heartbeat",
+        thin=True, decision_output_root=tmp_path, codex_context_root=str(tmp_path), turn_envelope=True)
+    prompt = build_heartbeat_prompt(**args)
+    guard = prompt["quota_guard_command"]
+    assert '--turn-instance-id "${LOOPX_TURN:?}"' in guard
+    assert "--begin-turn" not in guard
+    assert "--codex-context-root" in guard and "--turn-envelope" in guard
+    assert "LOOPX_TURN=<current_time_iso>" in prompt["task_body"]
+    # The shell refuses an unbound wake before the CLI can create a receipt.
+    result = subprocess.run(guard, shell=True, env={"PATH": os.environ["PATH"]},
+        capture_output=True, text=True)
+    assert result.returncode != 0 and "LOOPX_TURN" in result.stderr
+    assert list(tmp_path.iterdir()) == []
+    parser = build_parser()
+    cli = ["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--decision-output-root", str(tmp_path), "--codex-context-root", str(tmp_path), "--turn-envelope", "--bootstrap"]
+    parsed = parser.parse_args(cli)
+    bootstrap = goal_bootstrap(parsed, registry=tmp_path / "registry.json")
+    command = shlex.split(bootstrap.split("```sh\n")[1].split("\n```")[0])
+    assert "--bootstrap" not in command and "--turn-instance-id" not in command
+    assert command[command.index("--codex-context-root") + 1] == str(tmp_path)
+    assert "--turn-envelope" in command
+
+
 def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tmp_path):
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli",
                 turn_instance_id=TURN_ID, thin=True)

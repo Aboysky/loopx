@@ -797,6 +797,15 @@ code-mode 调用方可以直接转发成功的 CLI stdout，避免再次序列�
 查找从 offset 零开始，后续每个 `next_command` 固定到原路径和 hash，避免并发发布
 更新 capture 时混读。文件缺失、内容变化或符号链接继续沿既有 reader 拒绝。
 
+`quota context-config` 通过 CLI 生成原生 hook/恢复配置，benchmark worker 复用同一
+provider helper。Codex App 共享配置使用 `--codex-context-root` 按原生 session 隔离
+journal，独立 trial home 保留 `--codex-context-dir`。只读查找不创建未知 session
+目录。心跳 bootstrap 保留 root/capture 参数，使用既有每次唤醒的 `LOOPX_TURN`
+绑定，不持久化固定 Turn ID。原生 hook 信任和私有实际输入诊断仍由宿主管理；缺少
+诊断时使用全量。生成配置不安装文件、不改变信任、不授予执行权限。参见
+[启用/读回/回滚](../../heartbeat-automation-prompt.md#opt-in-native-context-delivery)。
+本段验证生成配置及原生消费，不等于真实桌面安装采用或新的成本测量。
+
 显式启用的 benchmark worker 将简短恢复指令放入原生 `developer_instructions`，
 独立于 SessionStart/PreToolUse 的交付。原生 code-mode 消费者也可在隔离配置中携带
 同一产品 owner 生成的指令；应追加到既有宿主指令，不替换无关规则。触发条件是

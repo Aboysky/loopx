@@ -49,7 +49,10 @@ def read_context_capture(args: argparse.Namespace) -> dict:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
         offset, size = args.offset, args.page_bytes
-        context_dir = getattr(args, "codex_context_dir", None)
+        from ..control_plane.turn_driver.codex_context import codex_context_directory
+
+        context_dir = codex_context_directory(directory=getattr(args, "codex_context_dir", None),
+            root=getattr(args, "codex_context_root", None))
         if context_dir:
             if value or digest or offset != 0:
                 raise ValueError("session lookup starts at offset zero without capture-file or capture-sha256; follow next_command afterwards")
@@ -102,7 +105,8 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     requested = getattr(args, "decision_output_dir", None)
     root = getattr(args, "decision_output_root", None)
     handoff = getattr(args, "decision_handoff_socket", None)
-    if getattr(args, "codex_context_dir", None) is not None and (
+    if (getattr(args, "codex_context_dir", None) is not None
+            or getattr(args, "codex_context_root", None) is not None) and (
             args.format != "json" or handoff is not None or (requested is None and root is None)):
         raise QuotaCommandValidationError(
             "native Codex context delivery needs JSON and a capture destination, without a second handoff socket")
@@ -179,6 +183,8 @@ def bind_capture_selection_transport(payload: dict, args: argparse.Namespace) ->
         suffix += " --turn-envelope"
     if getattr(args, "codex_context_dir", None):
         suffix += " --codex-context-dir " + shlex.quote(args.codex_context_dir)
+    if getattr(args, "codex_context_root", None):
+        suffix += " --codex-context-root " + shlex.quote(args.codex_context_root)
     selection["command_args_template"] = template + suffix
 
 

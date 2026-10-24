@@ -80,6 +80,15 @@ solver outcomes. Include this persistent instruction in subsequent cost comparis
 earlier input replays did not include it. Count complete input, recovery reads, native discovery and trace
 IO in treatment cost, not just the delta bytes.
 
+Codex App setup uses the same product configuration renderer as the worker:
+`loopx --format json quota context-config --codex-context-root DIR --goal-id GOAL --agent-id AGENT`.
+It returns native hooks and persistent recovery instructions, without installing
+files or changing trust. A shared root isolates journals by native session;
+the trial-local single-session `--codex-context-dir` remains supported.
+See [heartbeat setup](../../docs/heartbeat-automation-prompt.md#opt-in-native-context-delivery)
+for activation, diagnostics, readback and rollback. Generated setup and a native
+app-server test do not by themselves prove installed desktop adoption.
+
 A simultaneous `fresh_replan` checkpoint listener retains its existing capture
 ownership and reports this context treatment unavailable; it continues the
 original checkpoint path. Choose separate newly pinned trials to compare the

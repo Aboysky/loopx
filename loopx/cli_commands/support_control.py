@@ -408,6 +408,7 @@ def handle_support_control_command(
                 decision_output_root=args.decision_output_root,
                 decision_handoff_socket=args.decision_handoff_socket,
                 codex_context_dir=args.codex_context_dir,
+                codex_context_root=args.codex_context_root,
                 turn_envelope=args.turn_envelope,
                 reward_memory_enabled=reward_memory_enabled,
             )
