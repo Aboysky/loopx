@@ -267,6 +267,15 @@ README 的产品配图与证据图应默认展示，并保留简短图注和必�
 Repeated items must not default to a stack of full documents. For example, a
 supporting-outcome list must not render every requirement, Agent review and
 independent-check explanation before the reader reaches the next main region.
+When consecutive analysis questions differ only by their exact declared episode
+identity, a substantial repeated question can appear once with a labelled slot
+and compact episode/verdict rows. Preserve order, accessible full questions and
+the complete selected question, rationale and evidence on expansion. Do not
+guess a common question from similar wording, remove negation or comparisons,
+or invent short titles; different or small questions retain their full wording.
+连续分析问题只有已声明片段身份不同且文字大量重复时，共同问题展示一次，各行保留片段
+与判读；展开恢复完整问题、理由和证据，顺序与无障碍名称不变。不按相似意思合并问题，
+不删否定或比较条件，不编造短标题；不同或简短问题保持完整。
 Keep the summary's actual verification state visible; open the chosen item in
 place, with its complete content and original evidence reachable. A disclosure
 must not duplicate the same content above and below its trigger.

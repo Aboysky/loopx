@@ -31,6 +31,11 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
   const capture = JSON.parse(await readFile(path, "utf8"));
   const history = JSON.stringify({ok: true, goal_id: capture.goal_id, items: capture.events, total: capture.events.length, next_cursor: null});
   const evidence = "No native improvement was observed.\n";
+  const names = ["variant-alpha", "variant-beta", "variant-gamma", "variant-delta", "variant-epsilon", "independent-control"];
+  const question = (id, language) => id === "independent-control"
+    ? (language === "zh" ? "独立对照是否支持 V18 的收益？尚无依据。" : "Does the independent control support a benefit for V18? It is not established.")
+    : (language === "zh" ? `${id} 的实验证据是否检验原始目标，并被后续选择实际采用？保留负面结果、控制差异与未知。`
+      : `Does ${id} test the original objective and inform the subsequent selection? Preserve negative results, control differences and unknowns.`);
   const source = (id, artifact, text) => ({id, artifact, first_line: 1, text, artifact_sha256: createHash("sha256").update(text).digest("hex")});
   const translate = row => row.text.replaceAll("Does ", "").replaceAll(" improve native utility under the fixed budget?", " 是否在固定预算内改善原生收益？")
     .replaceAll("Not established; no native validation yet.", "尚未确定；尚无原生验证。")
@@ -43,18 +48,21 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
     .replaceAll("Keep ", "保留 ").replaceAll("Check the original evidence", "核对原始证据").replaceAll("Never claim native success", "不得宣称原生成功");
   capture.analyses = ["partial", "other-source", "complete"].map(variant => {
     const input = {schema_version: "trajectory_assessment_input_v1", scope: {goal_id: capture.goal_id, case_id: "synthetic-case", run_id: "synthetic-run", revision: variant, window: "fixed twenty-hour record window"},
-      objective: "Improve native utility", selection: {rule: "Synthetic episode, not a whole-run rate", population_episodes: 1, exhaustive: true},
+      objective: "Improve native utility", selection: {rule: "Synthetic episodes, not a whole-run rate", population_episodes: names.length, exhaustive: true},
       sources: [source("evidence", "evidence.txt", evidence), source("history", "history.json", history)],
-      episodes: [{id: "episode", question: "Does V18 help?", source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]}],
+      episodes: names.map(id => ({id, question: question(id, "en"), source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]})),
       display_snapshot: {schema_version: "research_display_snapshot_v1", source_id: "history", source_namespace: variant === "other-source" ? "other-source" : "local",
         ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literal_values_v1"} : {})}};
     const outputs = Object.fromEntries(["zh", "en"].map(language => {
       const p = prepareTrajectoryAssessment({input, config: {model: "gpt-6.1-sol", effort: "max", service_tier: "fast", output_language: language}});
       let rows = JSON.parse(p.prompt.split("\n\ndisplay_fields:\n")[1]).map(row => ({field_id: row.field_id, text: language === "zh" ? translate(row) : row.text}));
       if (variant === "partial") rows = [{...rows[0], text: "999"}, ...rows.slice(2)];
-      return [language, {assessments: TRAJECTORY_METRICS.map(metric => ({episode_id: "episode", metric, verdict: "unknown", reason: language === "zh" ? "合成证据，实际收益未核验。" : "Synthetic evidence; native benefit is unverified.", citations: []})),
+      return [language, {assessments: TRAJECTORY_METRICS.flatMap(metric => names.map((episode_id, index) => ({episode_id, metric,
+        verdict: index < 3 ? "unknown" : index === 3 ? "no" : "yes",
+        reason: language === "zh" ? "合成证据；负面结果并未证明因果收益，原生效果仍未核验。" : "Synthetic evidence; a negative result does not establish causal benefit. Native effectiveness remains unverified.",
+        citations: index < 3 ? [] : [{source_id: "evidence", first_line: 1, last_line: 1}]}))),
         limitations: [language === "zh" ? "合成翻译仅用于交互验证。" : "Synthetic translation for interaction validation only."],
-        episode_questions: [{episode_id: "episode", question: language === "zh" ? "V18 是否有帮助？" : "Does V18 help?"}], display_translations: rows}];
+        episode_questions: names.map(episode_id => ({episode_id, question: question(episode_id, language)})), display_translations: rows}];
     }));
     return {title: {partial: "部分译文", "other-source": "其他来源", complete: "完整固定快照"}[variant], input, artifacts: {"evidence.txt": evidence, "history.json": history}, outputs};
   });
@@ -83,6 +91,22 @@ export const researchDisplayLanguageScenario = {
         assert.match(await history.locator(".research-route-caption").first().innerText(), /是否在固定预算/);
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
         await page.screenshot({path: resolve(outputDir, `research-display-language-first-${width}.png`), animations: "disabled"});
+        const metric = history.locator('[data-metric="goal_alignment"]');
+        await metric.click();
+        const judgments = history.locator('.research-effect-evidence');
+        assert.equal(await judgments.locator('.research-assessment-shared-question').count(), 1);
+        assert.deepEqual(await judgments.locator('.research-assessment-name').allTextContents(),
+          [...capture.analyses.at(-1).input.episodes.slice(0, 5).map(episode => episode.id), '独立对照是否支持 V18 的收益？尚无依据。']);
+        assert.deepEqual(await judgments.locator('.research-assessment-verdict').allTextContents(),
+          ['证据不足', '证据不足', '证据不足', '未建立', '有依据', '有依据']);
+        const firstJudgment = judgments.locator('.research-assessment').first();
+        await firstJudgment.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
+        assert.match(await firstJudgment.locator('.research-assessment-question').innerText(), /保留负面结果、控制差异与未知/);
+        assert(await firstJudgment.locator('.research-assessment-body p').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
+        await firstJudgment.locator('.research-assessment-body details > summary').click();
+        assert.match(await firstJudgment.innerText(), /Does variant-alpha test the original objective/);
+        await judgments.press('Escape');
+        assert.equal(await metric.evaluate(element => element === document.activeElement), true);
         await original.click();
         await page.screenshot({path: resolve(outputDir, `research-display-language-original-${width}.png`), animations: "disabled"});
         await history.getByRole("button", {name: "查看译文", exact: true}).click();
