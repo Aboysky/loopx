@@ -43,6 +43,8 @@ def workspace(tmp_path, monkeypatch):
     mode, count = tmp_path / "mode", tmp_path / "process-count"
     mode.write_text("wait")
     output = {"assessments": [dict(episode_id="episode", metric="benefit_test", verdict="no", reason="Diagnostic measurements do not establish a native utility test.", citations=[dict(source_id="facts", first_line=2, last_line=2)])], "limitations": ["Synthetic process output, not a calibrated model assessment."]}
+    output["synthesis"] = {"summary": {"text": "A diagnostic improvement leaves native utility unresolved.", "episode_ids": ["episode"],
+                                      "citations": [dict(source_id="facts", first_line=2, last_line=2)]}, "findings": [], "next_experiments": []}
     binary = tmp_path / "bin"
     binary.mkdir()
     provider = binary / "codex"
@@ -523,3 +525,32 @@ def test_source_analysis_default_off_and_non_analysis_writes_stay_disabled(works
             with pytest.raises(HTTPError):
                 s["request"](body=body)
         assert not w["count"].exists()
+
+
+def test_synthesis_only_citation_uses_existing_reader_and_does_not_execute(workspace):
+    w, read = workspace, workspace["request"]
+    # The exact two-line synthesis citation is distinct from the metric's
+    # single-line citation. Arbitrary ranges remain unauthorized.
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    data["sources"][0].update(first_line=1, text=(w["sources"] / "facts.txt").read_text().rstrip("\n"))
+    path.write_text(json.dumps(data))
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner", input_path=path,
+                               source_root=w["sources"], title="Synthetic grounded synthesis")
+    provider = w["tmp_path"] / "bin" / "codex"
+    script = provider.read_text().replace("Path(sys.argv[sys.argv.index('-o')+1]).write_text", "output['synthesis']['summary']['citations'][0]['first_line']=1\nPath(sys.argv[sys.argv.index('-o')+1]).write_text")
+    provider.write_text(script)
+    before = read(pack_id=registered["pack_id"])["pack"]
+    assert before["job"] is None and not w["count"].exists()
+    operation = {**w["operation"], "pack_id":registered["pack_id"], "analysis_key":before["analysis_key"]}
+    w["mode"].write_text("ok")
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    result = read(pack_id=registered["pack_id"])["pack"]["result"]
+    citation = result["synthesis"]["summary"]["citations"][0]
+    assert citation == dict(source_id="facts", first_line=1, last_line=2)
+    query = {key:value for key,value in operation.items() if key != "goal_id"}
+    assert read(suffix="/citation", **query, **citation)["text"] == data["sources"][0]["text"]
+    with pytest.raises(HTTPError):
+        read(suffix="/citation", **query, **{**citation,"last_line":3})
+    assert w["count"].read_text().splitlines() == ["started"]
+    assert json.loads(path.read_text()) == data

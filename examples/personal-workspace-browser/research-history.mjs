@@ -159,6 +159,82 @@ export const researchHistoryScenario = {
       await nativePage.close();
       await nativeOwner.close();
     }
+    // Saved synthesis crosses the actual qualification/process/HTTP boundary.
+    // Its fixture is synthetic: these checks qualify reading and provenance,
+    // not the scientific usefulness of a real model's interpretation.
+    const synthesisOwner = await startHistoryOwner(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/research-synthesis-readback.json"));
+    const synthesisPage = await browser.newPage({viewport: {width: 1280, height: 900}});
+    try {
+      await synthesisPage.addInitScript(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
+      const query = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research', statusUrl: '/status.json?goal_id=synthetic-research-readback'});
+      await synthesisPage.goto(`${synthesisOwner.base}/chat/?${query}`, {waitUntil: 'domcontentloaded'});
+      const synthesis = synthesisPage.getByRole('region', {name: '研究汇报', exact: true});
+      await synthesis.waitFor();
+      assert.match(await synthesis.innerText(), /积极信号.*最终保留.*仍未知/s);
+      assert.equal(await synthesis.locator('.research-synthesis-finding').count(), 2);
+      assert(await synthesis.locator('.research-synthesis-summary').evaluate(e => parseFloat(getComputedStyle(e).fontSize) >= 16), 'Main research account must be readable body text');
+      assert.equal(await synthesis.locator('details[open]').count(), 0, 'Ordinary reading starts with observations; reasoning is optional detail');
+      assert.equal(await synthesisPage.locator('.research-effect-metrics:visible').count(), 0, 'Metric counts do not replace the research account');
+      await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-ordinary-desktop.png'), animations: 'disabled'});
+      assert(await synthesisPage.evaluate(() => {
+        const results = document.querySelector('.research-progress');
+        const report = document.querySelector('.research-synthesis');
+        const history = document.querySelector('.research-history-heading');
+        return Boolean(results && report && history
+          && (results.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING)
+          && (report.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING));
+      }), 'The complete overview reads results, report, then research history');
+      const reading = synthesisPage.getByRole('navigation', {name: '研究阅读', exact: true});
+      await reading.getByRole('button', {name: '汇报', exact: true}).click();
+      assert(await synthesisPage.evaluate(() => document.activeElement?.contains(document.querySelector('.research-synthesis'))));
+      await reading.getByRole('button', {name: '指标', exact: true}).click();
+      assert(await synthesisPage.evaluate(() => document.activeElement?.contains(document.querySelector('.research-progress'))));
+      await synthesis.locator('.research-synthesis-finding > summary').first().click();
+      await synthesis.getByRole('button', {name: /^证据 1: facts/}).first().click();
+      const source = synthesisPage.getByRole('region', {name: '引用原文', exact: true});
+      await source.waitFor();
+      await source.getByText(/Synthetic baseline: candidate-one/).waitFor();
+      assert.match(await source.innerText(), /Synthetic baseline.*Synthetic later result/s);
+      await source.press('Escape');
+      assert.equal(await synthesisPage.getByRole('region', {name: '轨迹深度分析', exact: true}).count(), 0);
+      await synthesisPage.setViewportSize({width: 390, height: 844});
+      await synthesis.locator('.research-synthesis-finding > summary').first().click();
+      await synthesisPage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
+      assert(await synthesisPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-ordinary-mobile.png'), animations: 'disabled'});
+      await synthesisPage.getByRole('button', {name: '深入解读', exact: true}).click();
+      const analysis = synthesisPage.getByRole('region', {name: '轨迹深度分析', exact: true});
+      await analysis.waitFor();
+      assert.equal(await synthesisPage.getByRole('region', {name: '研究汇报', exact: true}).count(), 1, 'One reading focus when expanded');
+      assert.match(await analysis.innerText(), /竞争解释.*随机波动/s);
+      await analysis.getByRole('tab', {name: /结论与解释/}).focus();
+      await synthesisPage.keyboard.press('ArrowRight');
+      assert.equal(await analysis.getByRole('tab', {name: /下一步实验/}).getAttribute('aria-selected'), 'true');
+      assert.match(await analysis.innerText(), /固定条件.*随机序列.*推翻解释的结果/s);
+      assert.equal(await analysis.locator('.analysis-method').first().evaluate(e => e.open), false, 'Episode judgments remain available as secondary verification');
+      await synthesisPage.mouse.move(1, 1);
+      if (await synthesisPage.locator('.context-help-popover:popover-open').count()) await synthesisPage.keyboard.press('Escape');
+      await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-deep-mobile.png'), animations: 'disabled'});
+      await synthesisPage.setViewportSize({width: 1280, height: 900});
+      await analysis.getByRole('tab', {name: /结论与解释/}).click();
+      await analysis.evaluate(e => e.scrollIntoView({block: 'start'}));
+      await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-deep-desktop.png'), animations: 'disabled'});
+      const packBeforeHistory = new URL(synthesisPage.url()).searchParams.get('research_pack');
+      await analysis.getByRole('button', {name: '查看研究历程', exact: true}).click();
+      assert.equal(await analysis.count(), 0);
+      assert.equal(new URL(synthesisPage.url()).searchParams.get('research_pack'), packBeforeHistory);
+      await synthesisPage.waitForFunction(() => document.activeElement?.classList.contains('research-history-heading'));
+      await reading.getByRole('button', {name: '汇报', exact: true}).click();
+      await synthesisPage.getByRole('button', {name: '深入解读', exact: true}).click();
+      await analysis.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await synthesisPage.waitForFunction(() => document.activeElement?.textContent?.includes('深入解读'));
+      const readback = await (await synthesisPage.request.get(`${synthesisOwner.base}/fixture/readback`)).json();
+      assert.equal(readback.source_unchanged, true);
+      assert.equal(readback.mutation_attempts, 0, 'Reading either layer and citations starts no model or state write');
+    } finally {
+      await synthesisPage.close();
+      await synthesisOwner.close();
+    }
     const capture = JSON.parse(await readFile(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/edgebench-research-history.json")));
     let owner = await startHistoryOwner();
     let collisionOwner, emptyOwner, temporary;

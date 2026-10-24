@@ -2,7 +2,7 @@ import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} 
 import {defaultParseSearch} from "@tanstack/react-router";
 import {ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {ResearchRecordSearch} from "./research-record-browser";
-import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
+import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
@@ -292,6 +292,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     if (parent) opener.current = parent.opener;
     select(parent?.selection ?? {nodes: [], day: null}, false);
   };
+  const resultsAnchor = useRef<HTMLDivElement>(null), reportAnchor = useRef<HTMLDivElement>(null), historyAnchor = useRef<HTMLElement>(null);
   const readingSelection = Boolean(selected || selectedMembers?.length);
   const selectedFinding = selected?.findings.find(finding => finding.result_id === selection.finding)
     ?? (!selection.finding ? selected?.findings.at(-1) : undefined);
@@ -363,8 +364,23 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           </button>)}
         </div>
       </div>;
+  const progressive = Boolean(analysis.pack?.result?.synthesis);
+  const progressiveOverview = progressive && !readingSelection;
+  const jump = (target: HTMLElement | null) => {target?.focus({preventScroll: true}); target?.scrollIntoView({block: "start"});};
+  const showHistory = () => {analysis.close(); requestAnimationFrame(() => jump(detail.current ?? historyAnchor.current));};
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
-    <header className="research-history-heading"><div><div className="research-history-title"><h2>{copy.title}</h2><ContextHelp label={zh ? "历史范围与读图说明" : "History scope and reading guide"}>
+    {progressiveOverview ? <>
+      <nav className="research-reading-order" aria-label={zh ? "研究阅读" : "Research reading"}>
+        <button type="button" onClick={() => jump(resultsAnchor.current)}>{zh ? "指标" : "Results"}</button><span aria-hidden>→</span>
+        <button type="button" onClick={() => jump(reportAnchor.current)}>{zh ? "汇报" : "Report"}</button><span aria-hidden>→</span>
+        <button type="button" onClick={showHistory}>{zh ? "研究历程" : "Research history"}</button>
+      </nav>
+      <ResearchAnalysisStatus analysis={analysis}/>
+      <div ref={resultsAnchor} tabIndex={-1} className="research-reading-layer"><ResearchProgressSummary analysis={analysis} includeReport={false}/></div>
+      <div ref={reportAnchor} tabIndex={-1} className="research-reading-layer"><ResearchReportSummary analysis={analysis}/><ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/></div>
+      <ResearchCitationPanel analysis={analysis}/>
+    </> : null}
+    <header className="research-history-heading" ref={historyAnchor} tabIndex={-1}><div><div className="research-history-title"><h2>{copy.title}</h2><ContextHelp label={zh ? "历史范围与读图说明" : "History scope and reading guide"}>
       <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>
       {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
       <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
@@ -379,7 +395,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           });
         }}><Search size={15} aria-hidden/></button>
         {!readingSelection ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
-        <div className="research-analysis-scoped-action"><ResearchAnalysisButton analysis={analysis}/>
+        <div className="research-analysis-scoped-action">{!progressiveOverview ? <ResearchAnalysisButton analysis={analysis}/> : null}
           {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
         </div>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => {
@@ -395,10 +411,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     </div>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
     {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
-    <ResearchAnalysisStatus analysis={analysis}/>
-    {!readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}
-    <ResearchAnalysisPanel analysis={analysis}/>
-    <ResearchCitationPanel analysis={analysis}/>
+    {!progressiveOverview ? <><ResearchAnalysisStatus analysis={analysis}/>
+      {!readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}
+      <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/></> : null}
     {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
     {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
 

@@ -4,6 +4,7 @@ import {TRAJECTORY_METRICS} from "../../../../../../loopx/control_plane/capabili
 import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, TrajectoryEpisode, TrajectoryInput, TrajectoryMetric, TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
 import {ContextHelp} from "./context-help";
+import {ResearchSynthesis} from "./goal-research-synthesis";
 import "./goal-research-progress.css";
 
 // Read models from benchmark-toolkit. This view formats existing counts and
@@ -107,7 +108,7 @@ function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<Rese
     {native.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获 · 当前结果未核验" : "Historical capture · current result unverified"}</p> : null}
     <details><summary aria-label={`${label}: ${improvement.value === null ? (zh ? "未知" : "Unknown") : `${format(improvement.value)} ${outcomes.metric.unit}`}`}>
       <strong data-retained-improvement>{improvement.value === null ? "—" : format(improvement.value)}</strong>
-      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit} · {outcomes.metric.name}</span><ChevronDown size={14} aria-hidden/>
+      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit} · {outcomes.metric.name}{improvement.baseline ? ` · ${zh ? "基线" : "baseline"} ${improvement.baseline.value}` : ""}</span><ChevronDown size={14} aria-hidden/>
     </summary><dl>
       {([[improvement.baseline, zh ? "比较基线" : "Comparison baseline"], [outcomes.retained, zh ? "实际保留" : "Actually retained"]] as const).map(([point, title]) => <div key={title}><dt>{title}</dt><dd>{point ? <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{String(point.value)} · {point.candidate_ref}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未知" : "Unknown")}</dd></div>)}
       <div><dt>{zh ? "保留依据" : "Retention evidence"}</dt><dd>{improvement.retention_citation ? <button type="button" onClick={event => onCitation(improvement.retention_citation!, event.currentTarget)}>{zh ? "查看原文" : "Read original evidence"}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未采集" : "Uncaptured")}</dd></div>
@@ -218,7 +219,7 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
   </div>;
 }
 
-export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; zh: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation, analysisOpen = false, includeReport = true}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; zh: boolean; analysisOpen?: boolean; includeReport?: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
   const incomplete = usage?.incomplete_turn;
   const coverage = usage?.request_coverage;
@@ -238,7 +239,9 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
       {p.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史分析：来源或方法已变化，不能当作当前判断。" : "Historical analysis: the source or method changed; these are not current judgments."}</p> : null}
       {p.native_outcomes ? <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
       {p.native_outcomes ? <RetainedImprovement native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
-      {result ? <ResearchMetrics key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={{...p, result}} zh={zh} onCitation={onCitation}/>
+      {result?.synthesis ? includeReport && !analysisOpen && <><ResearchSynthesis synthesis={result.synthesis} zh={zh} onCitation={onCitation}/>
+        <details><summary>{zh ? "六项过程判读" : "Six process judgments"}</summary><ResearchMetrics key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={{...p, result}} zh={zh} onCitation={onCitation}/></details></>
+        : result ? <ResearchMetrics key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={{...p, result}} zh={zh} onCitation={onCitation}/>
         : <p className="research-effect-empty" role="status">{zh ? "所选范围尚未分析" : "No analysis for the selected scope"}</p>}
       <details className="research-progress-basis"><summary>{zh ? "来源与用量" : "Sources and usage"}<span>{p.native_outcomes ? "" : (zh ? " · 原生测量未采集" : " · Native measurements uncaptured")}{zh ? " · 完整成本未知" : " · Total cost unknown"}</span></summary>
         <section className="research-usage" aria-label={zh ? "求解用量" : "Solver usage"}>
