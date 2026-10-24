@@ -13,7 +13,7 @@ A local-first control plane and research workbench for agents and teams.<br>
 
 [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[Get started](#quick-start) · [Why LoopX](#why-loopx) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
+[Get started](#quick-start) · [News](#news) · [Why LoopX](#why-loopx) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
 </div>
 
@@ -36,6 +36,16 @@ $loopx speed up this project's slowest workflow; compare approaches and verify t
 ```
 
 Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgrades ↓](#try-loopx)
+
+## News
+
+<!-- Keep 2–3 reader-facing milestones, newest first, in both READMEs. Use published
+     dates (UTC) and primary sources; the full change history belongs in Releases. -->
+
+- **2026-10-23 · [v2.1.1](https://github.com/loopx-project/loopx/releases/tag/v2.1.1)** — Task and original-conversation recovery, quick navigation, and optional content workflows. [Upgrade guide](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md).
+- **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript control plane and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
+
+[All releases](https://github.com/loopx-project/loopx/releases)
 
 <a id="how-it-works"></a>
 
@@ -612,8 +622,10 @@ long-running agent ecosystem. Our confirmed partners include:
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
 
 <a id="loopx-20-1"></a>
+<a id="whats-new-in-20"></a>
 
-## What's New in 2.0
+<details>
+<summary>2.0 background and migration</summary>
 
 | A shared control plane | A long-horizon research workbench |
 | --- | --- |
@@ -623,6 +635,8 @@ long-running agent ecosystem. Our confirmed partners include:
 **Upgrading from 1.x?** 2.0 retires ordinary writes to unpromoted Markdown Goals.
 Review the [migration and recovery guide](docs/product/releases/v2.0.0.md) before
 continuing those Goals. Installation does not silently convert existing state.
+
+</details>
 
 ## Advanced Paths
 

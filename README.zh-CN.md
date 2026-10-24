@@ -13,7 +13,7 @@
 
 [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[快速上手](#快速开始) · [为什么需要 LoopX](#为什么需要-loopx) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
+[快速上手](#快速开始) · [最新动态](#最新动态) · [为什么需要 LoopX](#为什么需要-loopx) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
 </div>
 
@@ -36,6 +36,16 @@ $loopx 优化这个项目最慢的流程，对比方案并验证性能提升
 ```
 
 Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升级说明 ↓](#试用-loopx)
+
+## 最新动态
+
+<!-- Keep 2–3 reader-facing milestones, newest first, in both READMEs. Use published
+     dates (UTC) and primary sources; the full change history belongs in Releases. -->
+
+- **2026-10-23 · [v2.1.1](https://github.com/loopx-project/loopx/releases/tag/v2.1.1)** — 改进任务与原对话恢复、快速导航，以及可选内容工作流。[升级指南](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md#中文指南)。
+- **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共享 TypeScript 控制面与长程研究工作台。[迁移指南](docs/product/releases/v2.0.0.md#中文指南) · [重构历程](https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/)。
+
+[全部发布记录](https://github.com/loopx-project/loopx/releases)
 
 ## 为什么需要 LoopX
 
@@ -546,8 +556,10 @@ LoopX 欢迎与其他开源项目协作，共建长程 Agent 生态。已确认�
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI 原生分布式文件系统
 
 <a id="loopx-20-1"></a>
+<a id="20-新变化"></a>
 
-## 2.0 新变化
+<details>
+<summary>2.0 背景与迁移</summary>
 
 | 共享控制面 | 长程研究工作台 |
 | --- | --- |
@@ -557,6 +569,8 @@ LoopX 欢迎与其他开源项目协作，共建长程 Agent 生态。已确认�
 **从 1.x 升级？** 2.0 停止对未迁移 Markdown Goal 的普通写入。
 继续这些 Goal 前先看[迁移与恢复指南](docs/product/releases/v2.0.0.md#中文指南)；
 安装新版不会静默转换既有状态。
+
+</details>
 
 ## 进阶路径
 
