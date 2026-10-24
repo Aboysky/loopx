@@ -754,7 +754,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         assert(await detail.getByText('0.2 / 30', {exact:true}).isVisible());
         await page.screenshot({path:resolve(outputDir, `research-execution-${viewport.width}.png`), animations:'disabled'});
         assert.deepEqual(selectedNodes(),['hit-6']);
-        await detail.getByRole('heading',{name:'Synthetic hit target 6',exact:true}).waitFor();
+        await detail.getByText('Synthetic hit target 6',{exact:true}).waitFor();
         await detail.press('Escape');
         assert.deepEqual(selectedNodes(),ids,'Escape returns to the original group');
         assert(await detail.locator('[data-research-node="hit-6"] button').evaluate(e=>e===document.activeElement));
