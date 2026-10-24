@@ -1,5 +1,5 @@
 import {useId, useState, type ReactNode} from "react";
-import {ArrowUpRight} from "lucide-react";
+import {ArrowDownRight, ArrowUpRight} from "lucide-react";
 import type {AssessmentCitation, TrajectoryResearchSynthesis} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import "./goal-research-synthesis.css";
 
@@ -18,7 +18,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
       onClick={event => onCitation(c, event.currentTarget)}>[{i + 1}]<ArrowUpRight size={12} aria-hidden/></button>)}</div>;
   const alternatives = (items: string[]) => items.length ? <><h6>{zh ? "竞争解释" : "Competing explanations"}</h6><ul>{items.map((text, n) => <li key={n}>{text}</li>)}</ul></> : null;
   const episodeLink = (ids: string[]) => onReviewEpisodes && ids.length ? <button type="button" className="research-review-episodes"
-    onClick={event => onReviewEpisodes(ids, event.currentTarget)}>{zh ? "复核相关片段" : "Review related episodes"} · {ids.length}<ArrowUpRight size={14} aria-hidden/></button> : null;
+    onClick={event => onReviewEpisodes(ids, event.currentTarget)}>{zh ? "查看片段" : "View episodes"} · {ids.length}<ArrowDownRight size={14} aria-hidden/></button> : null;
   const controls = (experiment: TrajectoryResearchSynthesis["next_experiments"][number]) => <dl>
     <dt>{zh ? "最小干预" : "Smallest intervention"}</dt><dd>{experiment.intervention}</dd>
     <dt>{zh ? "固定条件" : "Controls"}</dt><dd>{experiment.controls}</dd>
@@ -70,7 +70,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
     </>;
   }
   return <section className={`research-synthesis${detail ? " research-synthesis-detail" : ""}`} aria-label={zh ? "研究汇报" : "Research report"}>
-    <header>{!detail ? <h3>{zh ? "研究汇报" : "Research report"}</h3> : null}<span>{zh ? "Agent 分析 · 所选片段" : "Agent analysis · selected episodes"}</span>
+    <header>{!detail ? <h3>{zh ? "研究汇报" : "Research report"}</h3> : null}<span>{zh ? "Agent 分析" : "Agent analysis"}</span>
       {!detail && onExpand ? <button type="button" className="research-report-expand" onClick={event => onExpand(event.currentTarget)}>{zh ? "深入解读" : "Read deeper"}<ArrowUpRight size={14} aria-hidden/></button> : null}
     </header>
     <p className="research-synthesis-summary">{s.summary.text}</p>

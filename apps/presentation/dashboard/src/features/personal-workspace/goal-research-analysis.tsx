@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
-import {ArrowUpRight, ChevronDown, CircleHelp, LoaderCircle, RefreshCw, Sparkles, TriangleAlert, X} from "lucide-react";
+import {ArrowLeft, ArrowUpRight, ChevronDown, CircleHelp, LoaderCircle, RefreshCw, Sparkles, TriangleAlert, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryAssessment, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, episodeQuestionGroups, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
 import {requestJson} from "../../data/chat";
@@ -366,6 +366,7 @@ function AnalysisReport({pack, result, zh, onCitation}: {pack: Pack; result: Tra
   const origin = useRef<HTMLButtonElement | null>(null);
   const [review, setReview] = useState<{ids: string[]; sequence: number} | null>(null);
   const [all, setAll] = useState(false);
+  const shownCount = (pack.episodes ?? []).filter(episode => all || !review || review.ids.includes(episode.id)).length;
   useLayoutEffect(() => {
     if (!review || !reader.current) return;
     reader.current.open = true;
@@ -380,11 +381,18 @@ function AnalysisReport({pack, result, zh, onCitation}: {pack: Pack; result: Tra
         setAll(false);
         setReview(previous => ({ids, sequence: (previous?.sequence ?? 0) + 1}));
       } : undefined}/>
-    <details className="analysis-method" ref={reader}><summary>{zh ? "逐片段复核" : "Review individual episodes"}</summary>
+    <details className="analysis-method" ref={reader}><summary>{zh ? "研究片段" : "Research episodes"}</summary>
       {review ? <div className="analysis-episode-reading">
-        <button type="button" onClick={() => {reader.current!.open = false; origin.current?.focus();}}>{zh ? "返回汇报" : "Back to report"}</button>
-        <span>{zh ? "相关片段" : "Related episodes"} · {review.ids.length} / {pack.episode_count}</span>
-        {!all ? <button type="button" onClick={() => {setAll(true); requestAnimationFrame(() => reader.current?.querySelector("summary")?.focus());}}>{zh ? "显示全部片段" : "Show all episodes"}</button> : null}
+        <button type="button" onClick={() => {
+          if (!reader.current) return;
+          reader.current.open = false;
+          const target = origin.current?.isConnected ? origin.current
+            : reader.current.previousElementSibling?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+          target?.focus({preventScroll: true});
+          target?.scrollIntoView({block: "center"});
+        }}><ArrowLeft size={14} aria-hidden/>{zh ? "返回汇报" : "Back to report"}</button>
+        <span role="status" aria-label={all ? (zh ? "全部片段" : "All episodes") : (zh ? "相关片段" : "Related episodes")}>{shownCount} / {pack.episode_count}</span>
+        <button type="button" aria-pressed={all} onClick={() => setAll(value => !value)}>{all ? (zh ? "只看相关片段" : "Related episodes only") : (zh ? "显示全部片段" : "Show all episodes")}</button>
       </div> : null}
       <AnalysisEpisodes key={`${review?.sequence ?? 0}:${all}`} pack={pack} result={result} zh={zh} onCitation={onCitation} selectedIds={review && !all ? review.ids : undefined}/>
     </details>
