@@ -10,6 +10,9 @@ import pytest
 
 from loopx.cli_commands.quota_capture import capture_decision, prepare_decision_capture
 from loopx.control_plane.quota.error_codes import QuotaCommandValidationError
+from tests.control_plane.canonical_authority_fixture import (
+    initialize_canonical_source_fixture, read_fixture_todos,
+)
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _write_fixture,
     _configure_read_only_todo, _run_cli, _heartbeat_receipt_count,
@@ -84,10 +87,8 @@ def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, mo
                      f'  <!-- loopx:todo todo_id=todo_fixture_blocked status=blocked '
                      f'claimed_by={AGENT_ID} task_class=advancement_task '
                      'action_kind=validate reason=fixture_dependency -->\n')
-    code, listed = _run_cli(registry, runtime, 'todo', 'list', '--goal-id', GOAL_ID)
-    assert code == 0, listed
     projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=listed['todos'],
+        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=read_fixture_todos(state),
     )
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
@@ -140,10 +141,8 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
     goal['coordination'].update(write_scope=scopes, requires_parent_approval=['publish', 'production-action'])
     goal['guards'] = guards
     registry.write_text(json.dumps(configured))
-    code, listed = _run_cli(registry, runtime, 'todo', 'list', '--goal-id', GOAL_ID)
-    assert code == 0, listed
     projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=listed['todos'],
+        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=read_fixture_todos(state),
     )
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
@@ -199,10 +198,8 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     registry.write_text(json.dumps(configured))
     _configure_read_only_todo(project)
     state = project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md'
-    code, listed = _run_cli(registry, runtime, 'todo', 'list', '--goal-id', GOAL_ID)
-    assert code == 0, listed
     projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=listed['todos'],
+        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=read_fixture_todos(state),
     )
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     capture = tmp_path / "guard ' $(touch INJECTED) `touch INJECTED`"
@@ -314,7 +311,8 @@ def test_capture_root_allocates_private_distinct_children(tmp_path):
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
 @pytest.mark.parametrize('release', ['exact', 'wrong_digest', 'disconnect', 'changed_capture'])
-def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
+@pytest.mark.parametrize('native_context', [False, True])
+def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_context):
     import hashlib
     import socket
     import sys
@@ -322,8 +320,12 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
     from pathlib import Path
 
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_read_only_todo(project)
+    state = _configure_read_only_todo(project)
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state)
     capture = tmp_path / 'handoff-capture'
+    context = tmp_path / 'native-context'
+    if native_context:
+        context.mkdir(mode=0o700)
     with tempfile.TemporaryDirectory(prefix='quota-host-', dir='/tmp') as short:
         endpoint = Path(short).resolve() / 'host.sock'
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
@@ -337,8 +339,10 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
                        '--runtime-profile', 'generic_cli', '--available-capability', 'shell',
                        '--available-capability', 'filesystem_read',
                        '--decision-output-dir', str(capture), '--decision-handoff-socket', str(endpoint)]
+            if native_context:
+                command += ['--context-delivery', 'on', '--codex-context-dir', str(context)]
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}) as process:
+                                  text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2]), **({'LOOPX_CONTEXT_DELIVERY': 'on', 'LOOPX_EXECUTION_MODE': 'heartbeat'} if native_context else {})}) as process:
                 try:
                     channel, _ = listener.accept()
                     with channel:
@@ -354,6 +358,8 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
                         # successful output while the Host is taking its snapshot.
                         import select
                         assert not select.select([process.stdout], [], [], 0)[0]
+                        if native_context:
+                            assert list(context.iterdir()) == []  # no projection before release
                         if release == 'changed_capture':
                             (capture / 'decision.json').write_bytes(original + b'\n')
                         if release != 'disconnect':
@@ -366,6 +372,8 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release):
                     else:
                         assert process.returncode != 0
                         assert 'Do not blindly rerun' in stderr + stdout
+                        if native_context:
+                            assert list(context.iterdir()) == []
                     assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
                     assert json.loads(original)['heartbeat_receipt']['turn_instance_id'] == TURN_ID
                 finally:
@@ -428,6 +436,8 @@ def test_capture_root_accepts_guided_turn_before_identity_is_minted(tmp_path):
 
 def test_guided_turn_captures_the_minted_identity(tmp_path):
     project, runtime, registry = _write_fixture(tmp_path)
+    initialize_canonical_source_fixture(runtime, GOAL_ID,
+        state_path=project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md')
     capture_root = tmp_path / "captures"
     capture_root.mkdir()
 
@@ -473,6 +483,8 @@ def _replan_selection_hop(tmp_path, host):
 
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
+    initialize_canonical_source_fixture(runtime, GOAL_ID,
+        state_path=project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md')
     common = ('--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--runtime-profile', 'generic_cli',
               '--turn-instance-id', TURN_ID, '--available-capability', 'shell',
               '--available-capability', 'filesystem_write')
@@ -524,9 +536,21 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
     code, selected, observed, saved, _ = _replan_selection_hop(tmp_path, typed_host)
     assert observed['decision']['ok'] is True
     assert observed['decision']['heartbeat_receipt']['status'] == 'upgraded'
-    # The binding hop is the same Turn's pending closeout, not a new point.
-    assert observed['intent'] == {'capture': False, 'reason': 'turn_closeout_pending',
-                                  'execution_authority_granted': False}
+    # Binding a Todo does not discharge the original semantic replan. This
+    # fixture has not admitted delivery or produced work/closeout evidence.
+    # Preserve that boundary instead of inferring closeout from "upgraded".
+    decision = observed['decision']
+    receipt = decision['heartbeat_receipt']
+    assert receipt.get('closeout_required') is not True
+    assert decision['interaction_contract']['agent_channel']['delivery_allowed'] is False
+    assert decision['replan_action_packet']['decision'] == 'replan_required'
+    assert decision['replan_action_packet'].get('settlement_only') is not True
+    assert observed['intent'] == {
+        'capture': True,
+        'obligation_id': receipt['semantic_replan_obligation_id'],
+        'settlement_effect_id': receipt['settlement_identity']['effect_id'],
+        'execution_authority_granted': False,
+    }
     assert code == 0 and selected['ok'] is True, selected
     assert selected['schema_version'] == 'loopx_turn_envelope_v0'
     assert len(saved) == 1 and json.loads(saved[0].read_text()) == observed['decision']

@@ -495,3 +495,52 @@ test('artifact digests retain bare lowercase syntax, original bytes and error se
     assert.throws(()=>prepareTrajectoryAssessment({input:x,config}), error => error instanceof Error && error.message === message);
   }
 });
+
+test('research synthesis is grounded across named episodes without widening metric evidence', () => {
+  const x = input();
+  x.sources.push({id: 'other', artifact: 'other.txt', artifact_sha256: 'b'.repeat(64), first_line: 4, text: 'A competing explanation remains open'});
+  x.episodes[1]!.source_ids = ['other'];
+  const p = prepareTrajectoryAssessment({input: x, config: {...config, research_synthesis: true, output_language: 'zh'}});
+  const citation = {source_id: 's', first_line: 10, last_line: 10};
+  const synthesis = {
+    summary: {text: 'Negative evidence narrowed the question; the mechanism remains unresolved.', episode_ids: ['e1'], citations: [citation]},
+    findings: [{title: 'The negative result is informative', observation: 'A did not improve the measurement.',
+      interpretation: 'The route may not address the bottleneck.', alternative_explanations: ['Noise may hide a smaller gain.'],
+      episode_ids: ['e1', 'e2'], citations: [citation, {source_id: 'other', first_line: 4, last_line: 4}]}],
+    next_experiments: [{question: 'Does A change the bottleneck under matched conditions?', why_priority: 'It separates the remaining explanations.',
+      intervention: 'Change only A.', controls: 'Same checkpoint, inputs, random sequence and total budget.',
+      prediction: 'A repeatable gain with the bottleneck change supports the interpretation.',
+      disconfirming_result: 'No bottleneck change despite matched repeated gains refutes it.', episode_ids: ['e1'], citations: [citation]}],
+  };
+  const raw = {...output(), episode_questions: x.episodes.map(e => ({episode_id: e.id, question: e.question})), synthesis};
+  const result = qualifyTrajectoryAssessment({...p, output: raw});
+  assert.deepEqual(result.synthesis, synthesis);
+  assert.equal(result.calibration, 'uncalibrated_model');
+  assert.notEqual(p.analysis_key, prepareTrajectoryAssessment({input: x, config: {...config, output_language: 'zh'}}).analysis_key);
+  const previous = {...prepared(), output: output()};
+  assert.equal(compareTrajectoryAssessments({...p, previous}).can_reuse, false);
+  for (const mutate of [
+    (s: typeof synthesis) => {s.summary.citations = [];},
+    (s: typeof synthesis) => {s.summary.episode_ids = ['missing'];},
+    (s: typeof synthesis) => {s.summary.episode_ids = ['e1', 'e1'];},
+    (s: typeof synthesis) => {s.summary.citations[0]!.first_line = 9;},
+    (s: typeof synthesis) => {s.findings[0]!.episode_ids = ['e1'];},
+    (s: typeof synthesis) => {s.next_experiments[0]!.disconfirming_result = '';},
+    (s: typeof synthesis) => {s.findings.push(...s.findings, ...s.findings, ...s.findings);},
+  ]) {
+    const invalid = structuredClone(raw); mutate(invalid.synthesis);
+    assert.throws(() => qualifyTrajectoryAssessment({...p, output: invalid}));
+  }
+  const invalidMetric = structuredClone(raw);
+  invalidMetric.assessments[0]!.citations = [{source_id: 'other', first_line: 4, last_line: 4}];
+  assert.throws(() => qualifyTrajectoryAssessment({...p, output: invalidMetric}), /outside episode evidence/);
+  assert.throws(() => qualifyTrajectoryAssessment({...p, output: {...raw, synthesis: undefined}}), /synthesis/);
+});
+
+test('synthesis off preserves legacy prompt, schema, key and qualified output', () => {
+  const original = prepared(), off = prepareTrajectoryAssessment({input: input(), config: {...config, research_synthesis: false}});
+  assert.deepEqual(off, original);
+  assert.deepEqual(qualifyTrajectoryAssessment({...off, output: output()}), qualifyTrajectoryAssessment({...original, output: output()}));
+  assert.equal(qualifyTrajectoryAssessment({...original, output: output()}).synthesis, undefined);
+  assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config, research_synthesis: 'yes'}}), /must be boolean/);
+});
