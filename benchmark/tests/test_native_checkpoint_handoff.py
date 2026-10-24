@@ -593,7 +593,8 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN") or os.name != "posix",
                    reason="Requires the real native CLI and private Unix transport")
 @pytest.mark.parametrize("capture", ["files", "native", "full", "off", "controller"])
-def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(tmp_path, capture):
+@pytest.mark.parametrize("context_delivery", [False, True])
+def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay(tmp_path, capture, context_delivery):
     """Use run_once, its renderer/listener/session owner and the actual quota CLI."""
     import sys
     import tomllib
@@ -601,12 +602,13 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
     from benchmark.runtime.worker import run_once
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TURN_ID, _write_fixture, _configure_autonomous_replan_fixture,
-        _heartbeat_receipt_count, _run_cli,
+        _heartbeat_receipt_count, _run_cli, _initialize_fixture_authority,
     )
 
     if capture == "controller" and os.environ.get("LOOPX_CHECKPOINT_EXTERNAL_CONTROLLER") != "1":
         pytest.skip("Requires an explicitly attached host checkpoint supervisor")
     project, runtime, registry = _write_fixture(tmp_path / "authority")
+    _initialize_fixture_authority(project, runtime)
     logs = Path("/logs/agent/wakes") if capture == "controller" else tmp_path / "trial" / "wakes"
     candidate = project / "candidate.txt"
     candidate.write_text("original candidate")
@@ -702,10 +704,15 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                    OPENAI_API_KEY="synthetic-local-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60")
         deadline = str(time.time() + 600)
         env["LOOPX_PHASE_DEADLINE_EPOCH"] = deadline
+        if context_delivery:
+            env["LOOPX_CONTEXT_DELIVERY"] = "1"
         if capture != "off":
             env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
         result = run_once(env)
         assert result["ok"] and not result["timed_out"], result
+        if context_delivery:
+            assert result["context_transport"] == {"available": True}
+            assert "--codex-context-dir" in guards[0]
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
         # Checkpoint preloading keeps the existing heartbeat contract without
         # injecting a Host countdown or runtime guidance.
@@ -717,7 +724,7 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
         if capture == "off":
             assert "checkpoint_handoffs" not in result
             assert "--decision-handoff-socket" not in guards[0]
-            assert not list(logs.glob("*/decisions"))
+            assert bool(list(logs.glob("*/decisions"))) is context_delivery
             return
         assert len(result["checkpoint_handoffs"]) == 1
         assert '--turn-envelope' not in shlex.split(guards[0])

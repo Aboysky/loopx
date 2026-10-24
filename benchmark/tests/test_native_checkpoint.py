@@ -876,7 +876,8 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
 
 
 @pytest.mark.parametrize("turn_envelope", [None, False, True], ids=["legacy", "ordinary", "envelope"])
-def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch, turn_envelope):
+@pytest.mark.parametrize("context_option", [None, "codex_context_dir", "codex_context_root"])
+def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch, turn_envelope, context_option):
     """A stopped command is eligible only at the declared pre-output boundary."""
     import copy
     import shlex
@@ -894,6 +895,9 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
         guard["turn_envelope"] = turn_envelope
     if turn_envelope is False:
         argv.remove("--turn-envelope")
+    if context_option:
+        guard[context_option] = "/fixture/context"
+        argv += ["--" + context_option.replace("_", "-"), guard[context_option]]
     command = shlex.join(["/bin/bash", "-lc", shlex.join(argv)])
     item = {"type": "commandExecution", "id": "guard-call", "command": command, "cwd": str(tmp_path),
             "status": "failed", "exitCode": 137, "aggregatedOutput": None}
@@ -925,6 +929,15 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
         with pytest.raises(ValueError, match="must be boolean"):
             _verify_interrupted_guard(turns, {**guard, "turn_envelope": invalid})
     variants = []
+    for option in ("--codex-context-dir", "--codex-context-root"):
+        altered = list(argv)
+        if option in altered:
+            altered[altered.index(option) + 1] = "/foreign/context"
+        else:
+            altered += [option, "/foreign/context"]
+        changed = copy.deepcopy(turns)
+        changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(altered)])
+        variants.append(changed)
     for field, value in [("aggregatedOutput", "score already exposed"), ("cwd", "/elsewhere"),
                          ("status", "completed"), ("command", shlex.join(["/bin/bash", "-lc", shlex.join(argv) + "; touch later"]))]:
         changed = copy.deepcopy(turns)

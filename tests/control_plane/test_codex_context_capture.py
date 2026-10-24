@@ -21,6 +21,7 @@ from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, re
 from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
+from test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- real release barrier fixture
 
 pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
     reason="Explicit native Codex binary required; inference uses loopback only")
@@ -68,7 +69,7 @@ def _delivered(request, digest):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, handoff_socket=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
@@ -144,6 +145,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         "--decision-output-root", str(root), context_option, str(lifecycle)]
     if surface == "turn_envelope":
         command.append("--turn-envelope")
+    if handoff_socket:
+        command += ["--decision-handoff-socket", handoff_socket]
     generated_guard = None
     if shared_root:
         generated = subprocess.run([*cli, "--registry", str(registry), "--runtime-root", str(runtime),
@@ -430,6 +433,13 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert selected["todo_id"] == TODO_ID and selected["text"] == body
     assert all(path.read_bytes() == raw for path, raw in snapshots)
     assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("private_handoff", [True], indirect=True)
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_capture_release_preserves_delta_and_recovery(tmp_path, monkeypatch, private_handoff, surface):  # noqa: F811 -- pytest fixture injection
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, handoff_socket=private_handoff)
 
 
 @pytest.mark.parametrize("host,surface,hook_loss", [

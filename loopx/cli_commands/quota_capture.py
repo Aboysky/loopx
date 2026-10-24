@@ -107,9 +107,9 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     handoff = getattr(args, "decision_handoff_socket", None)
     if (getattr(args, "codex_context_dir", None) is not None
             or getattr(args, "codex_context_root", None) is not None) and (
-            args.format != "json" or handoff is not None or (requested is None and root is None)):
+            args.format != "json" or (requested is None and root is None)):
         raise QuotaCommandValidationError(
-            "native Codex context delivery needs JSON and a capture destination, without a second handoff socket")
+            "native Codex context delivery needs JSON and a capture destination")
     if handoff is not None:
         validate_handoff_socket(handoff)
         if requested is None and root is None:

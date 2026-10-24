@@ -116,7 +116,9 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
                 "goal_id": guard["goal_id"], "agent_id": guard["agent_id"],
                 "turn_instance_id": guard["turn_instance_id"], "turn_envelope": turn_envelope,
                 "decision_output_root": guard["capture_root"],
-                "decision_output_dir": None, "decision_handoff_socket": guard["socket_path"]}
+                "decision_output_dir": None, "decision_handoff_socket": guard["socket_path"],
+                "codex_context_dir": guard.get("codex_context_dir"),
+                "codex_context_root": guard.get("codex_context_root")}
     if any(args.get(key) != value for key, value in expected.items()):
         raise ValueError("native pending guard differs from the held packet routes or identity")
     # A second matching guard after a tool yield cannot stand in for the first

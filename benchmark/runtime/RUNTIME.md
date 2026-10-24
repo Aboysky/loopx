@@ -89,12 +89,17 @@ See [heartbeat setup](../../docs/heartbeat-automation-prompt.md#opt-in-native-co
 for activation, diagnostics, readback and rollback. Generated setup and a native
 app-server test do not by themselves prove installed desktop adoption.
 
-A simultaneous `fresh_replan` checkpoint listener retains its existing capture
-ownership and reports this context treatment unavailable; it continues the
-original checkpoint path. Choose separate newly pinned trials to compare the
-features. Do not modify an active/frozen trial. Disable `context_delivery` for a
-new trial to roll back; default runs install no hooks, trust or trace settings.
-No scorer, budget, task semantics or launch authority changes with this option.
+A simultaneous `fresh_replan` checkpoint listener retains the pre-output barrier:
+the original full decision is saved and released before native presentation.
+The interrupted native cursor also binds the context path. Native projection
+uses its own retention proof; a socket consumer's presentation request cannot
+wrap that projection or supply its proof. Missing native proof keeps full output,
+without guard replay or another debit. Checkpoint capture remains independent of
+TurnEnvelope. Qualify the selected native host version before attributing warm
+transport to a trial; setup availability alone is insufficient.
+Do not modify an active/frozen trial. Disable `context_delivery` for a new trial
+to roll back; default runs install no hooks, trust or trace settings. No scorer,
+budget, task semantics or launch authority changes with this option.
 
 Checkpoint capture is independent of this display experiment. A `fresh_replan`
 declaration may establish a private capture/handoff socket while
