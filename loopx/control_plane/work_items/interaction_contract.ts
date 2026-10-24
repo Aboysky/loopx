@@ -678,7 +678,9 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   const settlementOnly = requireBoolean(request.settlement_only, "settlement_only");
   const checksPresent = requireBoolean(request.goal_acceptance_checks_present, "goal_acceptance_checks_present");
   const goalId = readArgument(request.goal_id, "goal_id");
-  if (!shouldRun || !deliveryAllowed || selectionRequired || settlementOnly || !goalId
+  // Semantic replan is an admitted planning attempt, even when ordinary work
+  // delivery is forbidden. It still needs the original Goal and acceptance.
+  if (!shouldRun || (!deliveryAllowed && !hasReplan) || selectionRequired || settlementOnly || !goalId
       || request.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT) {
     return {required_reads: reads};
   }

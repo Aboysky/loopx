@@ -306,6 +306,19 @@ test("shared requirement reads use final admission and add no work on non-delive
     ["existing", "goal_state", "goal_acceptance"]);
 });
 
+test("semantic replan retains Goal reads while ordinary delivery is forbidden", () => {
+  const facts: JsonObject = {...readFacts(), has_replan: true, delivery_allowed: false};
+  const projected = projectInteractionRequiredReads(facts);
+  const reads = projected.required_reads as JsonObject[];
+  assert.deepEqual(reads.map(read => read.source), ["existing", "goal_state", "goal_acceptance"]);
+  assert.match(String(reads[1]!.reason), /complete Goal intent, acceptance and stops/);
+  assert.equal(projected.delivery_allowed, undefined, "context cannot grant work authority");
+  for (const patch of [{should_run: false}, {selection_required: true}, {settlement_only: true}]) {
+    assert.deepEqual(projectInteractionRequiredReads({...facts, ...patch}).required_reads,
+      facts.required_reads, JSON.stringify(patch));
+  }
+});
+
 test("shared reads follow adaptive primary and never fabricate a missing Goal source", () => {
   const facts: JsonObject = {...readFacts(), goal_state_file: null, goal_acceptance_checks_present: false,
     task_orchestration_contract: {schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: "todo_primary"}};
