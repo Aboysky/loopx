@@ -177,6 +177,49 @@ class ManagedTaskValidationUnavailable(ValueError):
     """A native selection has no usable caller-declared independent validator."""
 
 
+def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path) -> dict[str, Any]:
+    """Observe existing registration; the typed owner admits the exact binding."""
+    from .conversation_bindings import ChatConversationBindings
+    native_goal = load_goal_from_registry(controller.registry_path, goal_id)
+    return ChatConversationBindings._core("collaboration.session.managed_identity", {
+        "goal": StewardManagedMode(controller, None)._goal(goal_id),
+        "goal_active": bool(native_goal and native_goal.get("status") == "active" and not goal_is_stopped(native_goal)),
+        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve())})
+
+
+def prepare_managed_session_route(controller: Any, *, goal_id: str | None, executor: str, workspace: Path,
+        channel_id: str, goal_instance_id: str | None, managed_agent_id: str | None,
+        project_context: Any, steward_context: Any) -> dict[str, Any]:
+    """Compose the existing Core route; unbound channels retain their old path."""
+    from ...chat_manager import is_manager_channel
+    route = {"goal_id": goal_id, "goal_instance_id": goal_instance_id, "channel_id": channel_id}
+    if managed_agent_id is None:
+        return route
+    if (controller.closed.is_set() or project_context is not None or steward_context is not None
+            or is_manager_channel(channel_id) or executor != "codex" or goal_id is None):
+        raise ValueError("registered managed Agents require the local Goal's managed Codex host")
+    identity = managed_session_identity(controller, goal_id=goal_id, agent_id=managed_agent_id, workspace=workspace)
+    if channel_id not in (f"goal.{goal_id}", identity["channel_id"]):
+        raise ValueError("the managed Agent channel cannot be substituted")
+    if goal_instance_id is not None and goal_instance_id != identity["goal_instance_id"]:
+        raise ValueError("the original managed Agent Goal lifetime changed")
+    return {**route, **identity, "session_mode": "managed_runtime", "managed_workspace_path": str(workspace.resolve())}
+
+
+def require_managed_agent_session(controller: Any, session: dict[str, Any], workspace: Path) -> None:
+    """Reobserve registration before Core admission, resume or host recovery."""
+    if session.get("managed_agent_id") is None:
+        return
+    from ...control_plane.collaboration import conversation_scope
+    if session.get("managed_workspace_path") != str(workspace.resolve()):
+        raise ValueError("the original managed Agent workspace changed")
+    identity = managed_session_identity(controller, goal_id=session["goal_id"], agent_id=session["managed_agent_id"], workspace=workspace)
+    if (identity["goal_instance_id"] != session.get("goal_instance_id")
+            or identity["channel_id"] != session.get("channel_id")
+            or conversation_scope(session)["kind"] != "owner_goal"):
+        raise ValueError("the original registered Agent Session identity changed")
+
+
 class ManagedSessionTurn:
     """Thin local-owner entry to the existing Turn worker and task validator.
 
@@ -227,14 +270,14 @@ class ManagedSessionTurn:
         goal = StewardManagedMode(self.controller, None)._goal(session.get("goal_id"))
         agents = goal["registered_agents"] if goal else []
         result: dict[str, Any] = {"ok": True, "session_id": session_id, "registered_agents": agents,
-            "available": False, "turn": None}
+            "managed_agent_id": session.get("managed_agent_id"), "available": False, "turn": None}
         if operation_id is not None:
             if not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", operation_id):
                 raise ValueError("invalid operation identity")
             # Readback of an accepted/unknown request is not another execution.
             result["turn"] = self.store.turn_for_client(session_id, "managed." + operation_id)
         try:
-            self.admit(self._request(session_id, agent_id or next(iter(agents), ""), "preview"))
+            self.admit(self._request(session_id, agent_id or session.get("managed_agent_id") or "", "preview"))
             result["available"] = True
         except ValueError as exc:
             result["reason"] = str(exc)
