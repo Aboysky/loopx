@@ -28,6 +28,19 @@ from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import DEF
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "control_plane"))
 from canonical_authority_fixture import initialize_canonical_authority
+from host_process_fixture import write_python_host_fixture
+
+
+def materialize_analysis(source_root: Path, analysis: dict) -> Path:
+    """Preserve the captured UTF-8 artifact bytes that its digests describe."""
+    source_root.mkdir()
+    for name, text in analysis["artifacts"].items():
+        path = source_root / name
+        assert path.parent == source_root, "Fixture artifacts must be flat"
+        path.write_bytes(text.encode("utf-8"))
+    input_path = source_root / "input.json"
+    input_path.write_bytes(json.dumps(analysis["input"], ensure_ascii=False).encode("utf-8"))
+    return input_path
 
 
 def main():
@@ -70,7 +83,7 @@ def main():
                 "adapter": {"kind": "read_only_project_map_v0", "status": "connected-read-only"}})
             log = runtime / "goals" / captured_goal / "explore-result-log.jsonl"
             log.parent.mkdir(parents=True)
-            log.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]))
+            log.write_bytes("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]).encode("utf-8"))
             initialize_canonical_authority(runtime, captured_goal, build_todo_runtime_shadow_projection(
                 goal_id=captured_goal, todos=capture.get("todos", []), handoff_mode="soft_claim"), state_path=state, provider="sqlite")
             original.update({path: path.read_bytes() for path in (state, log)})
@@ -84,23 +97,17 @@ def main():
         for capture in captures:
             for index, analysis in enumerate(capture.get("analyses", [])):
                 source_root = root / f"analysis-{capture['goal_id']}-{index}"
-                source_root.mkdir()
-                for name, text in analysis["artifacts"].items():
-                    path = source_root / name
-                    assert path.parent == source_root, "Fixture artifacts must be flat"
-                    path.write_text(text, encoding="utf-8")
-                input_path = source_root / "input.json"
-                input_path.write_text(json.dumps(analysis["input"], ensure_ascii=False))
+                input_path = materialize_analysis(source_root, analysis)
                 scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
                 registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
                                            config=analysis.get("config", fixture_config),
                                            native_outcomes_json=analysis.get("native_outcomes_json"))
                 for language, output in analysis["outputs"].items():
-                    provider = root / f"analysis-provider-{index}-{language}"
-                    provider.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+                    provider = write_python_host_fixture(root / f"analysis-provider-{index}-{language}",
+                        ("#!python\n" if sys.platform == "win32" else f"#!{sys.executable}\n")
+                        + "import sys\nfrom pathlib import Path\n"
                         f"sys.stdin.read()\nPath(sys.argv[sys.argv.index('-o')+1]).write_bytes({json.dumps(output, ensure_ascii=False).encode()!r})\n"
                         "print('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}')\n")
-                    provider.chmod(0o700)
                     selected = inspect_pack(**scope, pack_id=registered["pack_id"], output_language=language)
                     execute_pack(**scope, pack_id=registered["pack_id"], analysis_key=selected["analysis_key"], output_language=language, codex=str(provider))
         metrics = {"history_reads": 0, "mutation_attempts": 0}
