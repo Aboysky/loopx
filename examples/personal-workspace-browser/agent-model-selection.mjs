@@ -87,6 +87,21 @@ export const agentModelSelectionScenario = {
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const menu = page.locator(".personal-chat-model-menu");
+      assert.equal(await page.locator(".personal-channel-header .personal-chat-model-menu").count(), 0,
+        "Sending choices leave the reading header");
+      assert.equal(await page.locator(".personal-channel-composer .personal-chat-model-menu").count(), 1,
+        "The one composer owns the existing model control");
+      const draft = page.getByLabel("向 LoopX 发送消息");
+      await draft.fill("这段草稿要保留。中文 / English draft.");
+      const actionTrigger = page.getByLabel("添加附件与快捷操作", {exact: true});
+      const sendsBeforeMenu = api.turnRequests.length;
+      await actionTrigger.click();
+      await page.getByRole("button", {name: "添加图片", exact: true}).waitFor();
+      await page.keyboard.press("Escape");
+      assert.equal(await draft.inputValue(), "这段草稿要保留。中文 / English draft.");
+      assert.equal(await actionTrigger.evaluate(node => node === document.activeElement), true);
+      assert.equal(api.turnRequests.length, sendsBeforeMenu, "Opening and closing actions never submits the draft");
+      await draft.fill("");
       const modelControl = page.getByRole("combobox", {name: "选择模型"});
       const openSettings = async () => {
         if (!(await menu.evaluate(node => node.open))) {
@@ -150,6 +165,10 @@ export const agentModelSelectionScenario = {
       assert.equal(requests.at(-1).agent_model_id, "vendor/model  fast", "an explicit choice uses the exact model identifier");
       await page.setViewportSize({width: 390, height: 844});
       await openSettings();
+      const inputBounds = await page.locator(".personal-channel-composer").boundingBox();
+      const sendBounds = await page.getByRole("button", {name: "发送", exact: true}).boundingBox();
+      assert.ok(inputBounds && sendBounds && sendBounds.x >= inputBounds.x && sendBounds.x + sendBounds.width <= inputBounds.x + inputBounds.width,
+        "The send action stays in the input frame on a phone");
       const panel = await page.locator(".personal-chat-model-panel").boundingBox();
       assert.ok(panel.x >= 0 && panel.x + panel.width <= 390, "The whole model menu stays inside the phone viewport, including its labels and controls");
       const width = await modelControl.locator(".personal-select-value").evaluate(node => node.clientWidth);
