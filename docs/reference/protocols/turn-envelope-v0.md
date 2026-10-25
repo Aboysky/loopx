@@ -122,6 +122,22 @@ reader; a missing source is never replaced by a fresh guard. The existing generi
 followthrough is now available with stride off; its result-class counts and
 observations remain evidence, not successful-work or goal-gain verdicts.
 
+Captured replans also reference Explore attachment syntax already present in the
+same captured writer instead of repeating it in the entry work context. This
+applies to default CLI/full recovery as well as optional delta delivery. Evidence,
+pagination, before-work feedback comparison, measurement provenance, optionality,
+privacy and lease-lifetime rules remain in the entry. Full authoring guidance and
+templates remain byte-for-byte in the writer. Only exact recognized guidance and
+matching fields with one captured Explore attachment qualify; unknown/custom
+text, differing templates, missing writers and uncaptured/non-replan calls stay
+inline. No new reader round trip or automatic evidence attachment is introduced.
+
+捕获的重规划入口复用同一写回阶段已有的 Explore 附件说明，默认 CLI、完整恢复和可选
+差分传输均适用。证据、分页、执行前反馈比较、测量来源、可选性、隐私与租约期限规则
+仍在入口；完整写回说明及模板逐字保留。仅对已识别且完全一致、具有唯一捕获写回附件
+的字段引用；未知或自定义说明、不同模板、缺少写回及未捕获或非重规划情形保持内联。
+不增加读取往返，也不自动附加研究结论。
+
 Live decisions replace the previous method checklist and duplicate stride
 planning advice with compact goal, evidence and authority boundaries. Review
 delivers those boundaries once, with the facts; writeback delivers the existing

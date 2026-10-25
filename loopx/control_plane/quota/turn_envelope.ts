@@ -1,6 +1,7 @@
 import { EffectiveAction } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import {referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 
 import {
@@ -385,10 +386,18 @@ function replanWorkContext(payload: JsonObject, context: JsonObject): JsonObject
   const reads = replanReadCommands(payload);
   const core = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
   const acceptance = object(core.acceptance_contract);
-  if (!reads || !Object.keys(acceptance).length || !Array.isArray(context.sources)) return context;
+  if (!reads || !Array.isArray(context.sources)) return context;
+  const plan = object(object(object(payload.interaction_contract).cli_channel).settlement_plan);
+  const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
+  const attachments = object(steps.find(step => step.kind === "durable_writeback")).optional_attachments;
+  const explore = Array.isArray(attachments) ? attachments.map(object).filter(row => row.capability_id === "explore") : [];
   return {...context, sources: context.sources.map(value => {
     const source = object(value), content = object(source.content);
-    if (source.source !== "goal_acceptance" || content.status != null && content.status !== "loaded" ||
+    if (source.source === "turn_start_capability_hook" && source.hook_id === "explore.turn_context" &&
+        source.capability_id === "explore" && explore.length === 1 && typeof reads.writeback === "string") {
+      return {...source, content: referenceExploreResultWriteback(content, explore[0], reads.writeback)};
+    }
+    if (!Object.keys(acceptance).length || source.source !== "goal_acceptance" || content.status != null && content.status !== "loaded" ||
         canonicalHash(content.goal_acceptance_contract) !== canonicalHash(acceptance)) return value;
     const {goal_acceptance_contract: _contract, ...metadata} = content;
     return {...source, content: {...metadata, context_read: reads.review}};

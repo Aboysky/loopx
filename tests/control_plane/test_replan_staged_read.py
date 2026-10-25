@@ -84,6 +84,41 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     assert source == original
 
 
+def enable_explore(fixture):
+    registry = json.loads(fixture["registry"].read_bytes())
+    registry["goals"][0]["explore_graph"] = {"enabled": True}
+    fixture["registry"].write_text(json.dumps(registry))
+
+
+def explore_source(packet):
+    sources = packet["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    return next(row for row in sources if row.get("hook_id") == "explore.turn_context")
+
+
+def assert_explore_entry_and_writer(source, entry, writer):
+    original = explore_source(source)["content"]["graph"]
+    graph = explore_source(entry)["content"]["graph"]
+    if "settlement_plan" not in writer["writeback"]:
+        assert graph == original  # Selection has not yet bound a captured writer.
+        return
+    assert graph["result_writeback_read"] == entry["replan_action_packet"]["writeback"]
+    assert "result_attachment_template" not in graph
+    # These obligations apply BEFORE choosing or executing work, not at closeout.
+    assert "Read measurement_feedback before repeating a measured route" in graph["result_writeback_guidance"]
+    assert "keep the active task lease through refresh-state" in graph["result_writeback_guidance"]
+    assert "Keep raw logs local." in graph["result_writeback_guidance"]
+    assert "Capture is optional, not a settlement obligation." in graph["result_writeback_guidance"]
+    assert "never invent a shared version" in graph["result_writeback_guidance"]
+    assert "Result evidence must name the candidate it actually evaluated" in graph["result_writeback_guidance"]
+    for key in ("writeback_results", "measurement_feedback", "recent_findings", "result_page", "guidance"):
+        assert graph.get(key) == original.get(key)
+    step = next(row for row in writer["writeback"]["settlement_plan"]["ordered_steps"] if row["kind"] == "durable_writeback")
+    attachment = next(row for row in step["optional_attachments"] if row["capability_id"] == "explore")
+    assert attachment["guidance"] == original["result_writeback_guidance"]
+    assert attachment["attachment_template"] == original["result_attachment_template"]
+    assert json_bytes(original) - json_bytes(graph) > 2000
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("replan", [True, False])
 @pytest.mark.parametrize("context_delivery", [False, True])
@@ -97,6 +132,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    enable_explore(fixture)
     if not replan:
         fixture["index"].write_text("")
     wake = tmp_path / "wakes" / TURN
@@ -155,6 +191,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             "turn_instance_id": TURN}, large_local_snapshot=True)
         assert selector["capture"] is replan
         if not replan:
+            assert "result_writeback_read" not in explore_source(view)["content"]["graph"]
             assert "replan_action_packet" not in view
             return
         assert source["autonomous_replan_obligation"]["replan_context"]["context_id"]
@@ -170,6 +207,8 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             read = json.loads(result.stdout)
             assert read["obligation_id"] == selector["obligation_id"]
             assert read["stage"] == stage
+            if stage == "writeback":
+                assert_explore_entry_and_writer(source, view, read)
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
@@ -205,6 +244,7 @@ def test_review_retains_scoped_dependencies_and_unknown_outcomes():
 def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider, envelope):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    enable_explore(fixture)
     capture = tmp_path / "capture"
     try:
         initial = call_progress_cli(fixture, "quota", "should-run", "--codex-app",
@@ -223,6 +263,27 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
         saved = (capture / "decision.json").read_bytes()
         source = json.loads(saved)
+        # Unknown old/custom prose, different templates, ambiguous/missing
+        # writers and missing capture must remain fully inline.
+        for mutation in ("custom", "template", "duplicate", "missing", "capture"):
+            changed = copy.deepcopy(source)
+            graph = explore_source(changed)["content"]["graph"]
+            step = next(row for row in changed["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+                if row["kind"] == "durable_writeback")
+            attachment = next(row for row in step["optional_attachments"] if row["capability_id"] == "explore")
+            if mutation == "custom":
+                graph["result_writeback_guidance"] += " Stop before a new operation."
+                attachment["guidance"] = graph["result_writeback_guidance"]
+            elif mutation == "template":
+                graph["result_attachment_template"]["input_revision"] = "different-revision"
+            elif mutation == "duplicate":
+                step["optional_attachments"].append(copy.deepcopy(attachment))
+            elif mutation == "missing":
+                step.pop("optional_attachments")
+            else:
+                changed.pop("replan_read_path")
+            projected = _turn_envelope_result("replan_cli_view", payload=changed)
+            assert explore_source(projected)["content"]["graph"] == graph
         entry_writeback = guard["writeback"] if envelope else guard["interaction_contract"]["cli_channel"]
         assert "settlement_plan" not in entry_writeback and "next_cli_actions" not in entry_writeback
         assert entry_writeback["settlement_identity"] == source["heartbeat_receipt"]["settlement_identity"]
@@ -243,6 +304,12 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             assert result.returncode == expected_code, (result.stdout, result.stderr)
             return json.loads(result.stdout)
         review, writer = read("review"), read("writeback")
+        if not envelope:
+            assert_explore_entry_and_writer(source, guard, writer)
+        else:
+            assert_explore_entry_and_writer(source, {
+                "interaction_contract": {"agent_channel": {"work_context": guard["work_context"]}},
+                "replan_action_packet": packet}, writer)
         assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert writer["settlement_command"].endswith(" --settle-turn")
         assert review["context_id"] == writer["context_id"]
