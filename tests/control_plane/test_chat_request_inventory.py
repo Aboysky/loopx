@@ -15,6 +15,28 @@ def _inventory(api, session_id, **query):
     return call(path="/api/chat/request-inventory?" + urlencode({"session_id": session_id, **query}))
 
 
+def test_inventory_pins_code_revision_but_rereads_original_source(api, monkeypatch):
+    from loopx.control_plane import effect_runtime
+
+    _, _, route = _source(api)
+    _, fixture, _ = api
+    original = effect_runtime._runtime_fingerprint
+    scans = []
+    def fingerprint():
+        scans.append(True)
+        return original()
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", fingerprint)
+    first = _inventory(api, route["session_id"])
+    assert first[0] == 200 and first[1]["pending_count"] == 1
+    assert len(scans) == 1
+    source = _root(fixture["runtime"]) / "roundtrips" / (route["request_id"] + ".json")
+    source.write_text("{damaged")
+    second = _inventory(api, route["session_id"])
+    assert second[0] == 200 and second[1]["coverage"]["unreadable"] == 1
+    assert second[1]["pending_count"] == 0
+    assert len(scans) == 2, "Each HTTP read must qualify its own runtime revision"
+
+
 def test_read_and_adoption_still_owe_conclusion_and_queued_return_stays_visible(api):
     _, _, route = _source(api)
     _, f, server = api

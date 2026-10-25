@@ -176,6 +176,15 @@ discarding it. Developer isolation remains explicit. Browser acceptance against
 one Bot service does not qualify the native App's actual service route. This
 checkpoint remains open until that native path is implemented and read back.
 
+Chat storage overrides do not select another registered-work authority. The
+workspace Status and delivery task map read the coordinator's existing registered
+runtime root, while private Chat history and its settings keep their own store.
+The original-conversation request inventory pins one qualified code revision per
+HTTP read through the existing Effect request scope. This does not cache source
+authorization or receipt decisions: each source and the final caller scope are
+still rechecked, and the next read qualifies its own revision. Unreadable sources
+remain incomplete coverage rather than an empty successful inventory.
+
 Cold Goal links wait for the current status directory before invalidating a
 missing selection; the bundled placeholder is not proof that a valid Goal was
 removed. This keeps an initial Goal route out of default-steward discovery.
