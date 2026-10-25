@@ -184,8 +184,10 @@ Sibling settings and Goal records are preserved.
 An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
 machine default, with off when absent. The existing worker environment's explicit
 `LOOPX_CONTEXT_DELIVERY=off` also overrides inheritance; environment on alone does
-not enable delivery. On accepts only the two existing declared
-scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
+not enable delivery. Benchmark trials keep their existing `context_delivery=on`
+opt-in. Workers propagate the resolved trial choice, including default off, to
+both preflight and solver subprocesses without changing the caller's settings.
+On accepts only the two existing declared scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
 declaration), and the existing Codex benchmark heartbeat worker (`generic_cli`
 plus its explicit heartbeat worker environment). Missing, contradictory or
 unsupported declarations return an error before admission. Declarations select
@@ -293,6 +295,8 @@ TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizo
 
 显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，未配置则关闭。
 已有 worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承；环境 on 本身不启用投递。
+benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本次运行已解析的选择
+（含默认关闭）传给预检和 solver 子进程，不改写调用方原设置。
 开启仅接受已有两类声明：Codex App 心跳（`--codex-app` 或等价完整调度声明），以及
 现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
 不支持的声明在准入前报错；声明只选择 adapter，不证明宿主身份或上下文保留。

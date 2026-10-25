@@ -202,3 +202,70 @@ def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_
         "--goal-id", "fixture", "--agent-id", "worker")
     assert code != 0 and not result["ok"]
     assert not (runtime / "context-delivery").exists() and not registry.exists()
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
+@pytest.mark.skipif(os.name != "posix", reason="Native benchmark worker qualification uses POSIX isolation")
+@pytest.mark.parametrize("provider,worker_mode,machine_on", [
+    ("file", None, False), ("file", None, True),
+    ("sqlite", None, False), ("sqlite", None, True), ("sqlite", "off", True),
+])
+def test_native_worker_default_off_isolates_machine_on(tmp_path, monkeypatch, provider, worker_mode, machine_on):
+    from benchmark.runtime.worker import run_once
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+    from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
+    import sys
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(workspace)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    if machine_on:
+        assert configure(registry, runtime, workspace, "on")[0] == 0
+    skills = workspace / "skills"
+    skills.mkdir()
+    program = str(Path(sys.executable).with_name("loopx"))
+    env.update(LOOPX_EXECUTION_MODE="heartbeat", LOOPX_TASK_ENTRY="seeded-todo",
+        LOOPX_TASK_STAGE="execute", LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project),
+        LOOPX_SHARED_SKILLS=str(skills), LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
+        LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID, LOOPX_WAKE_LOG_DIR=str(workspace / "wakes"),
+        LOOPX_CLI=program, CODEX_BIN=binary, MODEL_NAME="fixture", REASONING_EFFORT="high",
+        OPENAI_API_KEY="synthetic-loopback-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60", LOOPX_USAGE_PING="0")
+    if worker_mode is not None:
+        env["LOOPX_CONTEXT_DELIVERY"] = worker_mode
+    observed, errors = [], []
+    saved = workspace / "original-guard.json"
+
+    def response(request, number, message):
+        try:
+            if number == 1:
+                body = _input_text(request)
+                assert "context-project" not in body
+                command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
+                turn_assignment = next(line.strip() for line in body.splitlines() if line.startswith("LOOPX_TURN="))
+                observed.append(shlex.split(turn_assignment)[0].split("=", 1)[1])
+                return {"type": "function_call", "id": "guard-call", "call_id": "guard-call",
+                    "name": "exec_command", "arguments": json.dumps({
+                        "cmd": turn_assignment + "\n" + command + " > " + shlex.quote(str(saved)),
+                        "max_output_tokens": 1000})}
+            decision = json.loads(saved.read_text())
+            assert decision["ok"] and decision["should_run"], decision
+            assert decision["goal_id"] == GOAL_ID
+            assert decision["heartbeat_receipt"]["turn_instance_id"] == observed[0]
+            return message
+        except Exception as error:
+            errors.append(error)
+            return message
+
+    original = dict(env)
+    with local_inference_provider(response) as (url, _, requests):
+        env["OPENAI_BASE_URL"] = url
+        original["OPENAI_BASE_URL"] = url
+        result = run_once(env)
+    assert result["ok"], result
+    assert not errors and len(requests) == 2, errors
+    assert env == original, "Resolved worker defaults must not mutate caller/frozen input"
+    assert _heartbeat_receipt_count(runtime, observed[0]) == 1 and _spend_run_count(runtime) == 0
+    assert "context_transport" not in result
+    assert not (runtime / "context-delivery").exists() and not (home / "loopx-context").exists()
+    assert not (home / "hooks.json").exists()
