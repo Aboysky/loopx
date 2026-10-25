@@ -325,8 +325,8 @@ function deferredReplanWriteback(writeback: JsonObject): JsonObject {
     ...(Object.keys(identity).length ? {settlement_identity: identity} : {})};
 }
 
-/** Keep the current Goal and work horizon in every entry, indexing only
- * cumulative outcome details behind the same immutable acceptance reader.
+/** Preserve the captured Goal and work horizon for review and the signed
+ * executor envelope, indexing cumulative outcome details by exact content.
  */
 function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRef = "$.core_goal") {
   const context = object(object(payload.autonomous_replan_obligation).replan_context);

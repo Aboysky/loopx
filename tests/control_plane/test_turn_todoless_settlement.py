@@ -148,13 +148,14 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
     packet = authority["replan_action_packet"]
     assert "read autonomous_replan_obligation.replan_context" not in prompt
     assert "Read replan_action_packet.review" in prompt
-    assert authority["core_goal"]["objective"] == guard["autonomous_replan_obligation"]["replan_context"]["core_goal"]["objective"]
+    assert "core_goal" not in authority  # The mandatory review owns its only model copy.
     stages = {}
     for stage in ("review", "writeback"):
         command = shlex.split(packet[stage])
         read = subprocess.run(command, capture_output=True, text=True, check=True)
         stages[stage] = json.loads(read.stdout)
         assert stages[stage]["obligation_id"] == identity["replan_obligation_id"]
+    assert stages["review"]["core_goal"]["objective"] == guard["autonomous_replan_obligation"]["replan_context"]["core_goal"]["objective"]
     assert stages["review"]["context_id"] == stages["writeback"]["context_id"]
     assert stages["writeback"]["writeback"]["settlement_plan"]["identity"] == identity
     assert _classification_count(runtime, "quota_slot_spent") == 1
