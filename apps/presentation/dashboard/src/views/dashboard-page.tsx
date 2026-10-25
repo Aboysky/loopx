@@ -6,7 +6,7 @@ import { readConversationReturns, readTaskSessions } from "../data/conversation-
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
 import { useBoundConversation } from "../data/use-bound-conversation";
-import {AppStewardEntry} from "../features/personal-workspace/app-steward-entry";
+import {AppStewardEntry, useAppStewardTarget} from "../features/personal-workspace/app-steward-entry";
 import { goalSubtree } from "../features/personal-workspace/goal-hierarchy";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
@@ -1252,7 +1252,7 @@ function PersonalGoalHome({
   rows,
   selectedGoalId: requestedGoalId,
   selectedWorkspaceRef: requestedWorkspaceRef,
-  boundConversation,
+  boundConversation: requestedBoundConversation,
   rootGoalId,
   onChangeGoalRoot,
   statusSourceControl,
@@ -1378,6 +1378,12 @@ function PersonalGoalHome({
       },
     };
   }, [sourceError, scopedModel, t]);
+  const appEntryEnabled = !readOnly && statusSourceControl.activeSource.kind === "local"
+    && !requestedGoalId && !rootGoalId && !requestedWorkspaceRef && !requestedBoundConversation
+    && selectedWorkAgentId == null && !selectedWorkSessionId && selectedView !== "chat";
+  const appEntry = useAppStewardTarget(appEntryEnabled);
+  const appEntryBlocked = appEntry.loading || appEntry.unavailable;
+  const boundConversation = requestedBoundConversation ?? appEntry.target;
   const selectedGoalId = rootGoalId && !model.goals.some(goal => goal.goalId === requestedGoalId)
     ? rootGoalId : requestedGoalId;
   const selectedWorkspaceRef = rootGoalId || boundConversation ? null : requestedWorkspaceRef;
@@ -1521,7 +1527,7 @@ function PersonalGoalHome({
     goalId: selectedGoal?.goalId,
     bound: boundConversation ?? undefined,
     managed: managedTarget ?? undefined,
-    enabled: !readOnly && (selectedWorkAgentId == null || managedTarget !== null) && (managedTarget ? Boolean(managedConversation.session) : boundConversation ? Boolean(originalConversation.session) : selectedAgent.available),
+    enabled: !readOnly && !appEntryBlocked && (selectedWorkAgentId == null || managedTarget !== null) && (managedTarget ? Boolean(managedConversation.session) : boundConversation ? Boolean(originalConversation.session) : selectedAgent.available),
   });
 
   // Who is speaking in the transcript. The manager channel answers as the LoopX
@@ -1741,7 +1747,7 @@ function PersonalGoalHome({
   }, [conversationHistory.history, contextId, selectedAgent.label]);
 
   useEffect(() => {
-    if (readOnly) return;
+    if (readOnly || appEntryBlocked) return;
     if (!selectedAgent.available) return;
     if (!conversationHistory.connectionKey || !conversationHistory.history) return;
     // Browsing a Goal (including palette navigation) must not create/resume
@@ -1999,7 +2005,7 @@ function PersonalGoalHome({
       retireRecoveryObservation?.();
       window.clearTimeout(handoffRetryTimer);
     };
-  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, selectedView, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
+  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, appEntryBlocked, selectedView, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
   // The projection deliberately outlives the mounted view. Its caller may be
   // running for a Goal the owner has already left, and the recovery stream's
@@ -2260,6 +2266,7 @@ function PersonalGoalHome({
       return;
     }
     const targetContextId = route?.contextId ?? contextId;
+    if (appEntryBlocked && targetContextId === contextId) throw new Error("The App steward entry is unavailable; retry its source lookup.");
     if (route?.queue && runtimeBindings[targetContextId]?.sessionId !== route.queue.sessionId) {
       throw new ChatApiError("The original Session changed; the message was not queued.", { delivery_state: "not_delivered" });
     }
@@ -2937,7 +2944,8 @@ function PersonalGoalHome({
       <PersonalWorkspacePage
         typedActionsRevision={typedActionsRevision}
         workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace,
-          onOpenOriginal: onOpenOriginalConversation, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
+          onOpenOriginal: onOpenOriginalConversation,
+          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
         agents={(fixedSession ? [selectedAgent] : agentOptions).map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,

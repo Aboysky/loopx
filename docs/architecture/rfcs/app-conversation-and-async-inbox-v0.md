@@ -140,7 +140,7 @@ remain unavailable. There is no fallback to ordinary steward/project history,
 Session creation, executor change or model reconfiguration on this entry.
 Group audiences retain their existing boundary.
 
-An owner-private steward connection also offers **Use for App Conversation**. Core
+An owner-private steward connection also offers **Use for App steward**. Core
 stores this explicit entry preference alongside the binding set, without
 changing any audience, managed identity or execution grant. Multiple stewards
 never compete by list order or recent activity. The local App steward Chat
@@ -153,9 +153,28 @@ it cannot silently fall back to a peer or ordinary conversation. Goal-scoped,
 project, explicit original, managed-Agent and remote/read-only views retain their
 own navigation. A newly selected preference does not retarget an already frozen
 original conversation.
+Overview quick prompts and its composer use the same explicit choice and the
+existing exact Session send, active-Turn queue, stream recovery and readback.
+Resolving the entry does not open Chat or block Goal navigation. Sending stays
+disabled during discovery; failure offers retry and conversation settings beside
+the composer instead of switching to the ordinary manager. Unselected entries
+retain ordinary overview behavior. Quick prompts stay discoverable after source
+selection; opening the full conversation freezes its verified binding and Session
+in the URL. This journey adds no queue or message consumer.
 Settings retain an explicit clear action even after the selected binding is
 removed or its workspace becomes unavailable; clearing changes only the entry
 preference and retains all conversation history and execution grants.
+
+**Open desktop delivery checkpoint.** The normal App, browser and external
+messaging entries must share one machine service owner and its original Chat
+store, Session identities and delegation audience. A window must not silently
+start another service/runtime with a different history. App close/reopen and
+upgrade must preserve the original consumer and its running work; a missing or
+unqualified service must show recovery rather than switch stores. Retain any
+previous independent App history for explicit recovery instead of merging or
+discarding it. Developer isolation remains explicit. Browser acceptance against
+one Bot service does not qualify the native App's actual service route. This
+checkpoint remains open until that native path is implemented and read back.
 
 Cold Goal links wait for the current status directory before invalidating a
 missing selection; the bundled placeholder is not proof that a valid Goal was

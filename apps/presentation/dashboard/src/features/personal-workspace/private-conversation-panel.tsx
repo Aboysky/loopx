@@ -143,7 +143,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       {row.context_kind === "steward" && row.audience === "owner" ? <button type="button" disabled={busy || (!row.context_available && appStewardBindingId !== row.binding_id)}
         aria-pressed={appStewardBindingId === row.binding_id}
         onClick={() => void act(() => selectAppSteward(appStewardBindingId === row.binding_id ? null : row.binding_id, revision))}>
-        {appStewardBindingId === row.binding_id ? (zh ? "App「对话」· 取消选择" : "App Conversation · Clear selection") : (zh ? "用于 App「对话」" : "Use for App Conversation")}</button> : null}
+        {appStewardBindingId === row.binding_id ? (zh ? "App 管家 · 取消选择" : "App steward · Clear selection") : (zh ? "用于 App 管家" : "Use for App steward")}</button> : null}
       </header>
       <p>{row.context_kind === "steward" ? (row.goal_scope === "all_registered"
         ? (zh ? `LoopX 管家 · 全部已注册工作 · ${row.goal_count} 个 Goal` : `LoopX steward · All registered work · ${row.goal_count} Goals`)

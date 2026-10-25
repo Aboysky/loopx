@@ -419,6 +419,9 @@ function ManagerConversationTray({
   const latestUserIndex = messages.reduce((latest, message, index) => message.role === "user" ? index : latest, 0);
   const latestExchange = messages.slice(Math.max(0, latestUserIndex));
   const visibleMessages = latestExchange.slice(-3);
+  const activeIndex = messages.reduce((latest, message, index) => message.role === "assistant" && message.pending ? index : latest, -1);
+  // A queued follow-up must not hide the current Turn's activity and controls.
+  if (activeIndex >= 0 && activeIndex < latestUserIndex) visibleMessages.unshift(messages[activeIndex]);
   const latestAssistantMessage = visibleMessages.filter((item) => item.role === "assistant" && !item.pending).at(-1);
 
   useEffect(() => {
@@ -436,7 +439,7 @@ function ManagerConversationTray({
         <span>
           <Bot size={16} />
           <strong>{title ?? t("conversation.title")}</strong>
-          <small>{messages.at(-1)?.pending ? t("conversation.replying") : t("common.recently")}</small>
+          <small>{visibleMessages.some(message => message.pending) ? t("conversation.replying") : t("common.recently")}</small>
         </span>
         <div className="personal-manager-conversation-actions">
           {onDraftTask && latestAssistantMessage ? (
@@ -1031,10 +1034,14 @@ export function PersonalWorkspacePage({
     ?? (locale === "zh-CN" ? "原会话" : "Original conversation");
   const selectedWorkspaceProject = workspaceConversations?.projects?.find((project) => project.project_ref === selectedWorkspaceRef) ?? null;
   // A workspace scope exists only inside the steward conversation tab.
-  const managerChatOpen = originalConversation !== undefined || selectedWorkspaceRef !== null || selectedGoalTab === "chat";
+  const managerChatOpen = selectedWorkspaceRef !== null || selectedGoalTab === "chat";
   const workspaceUnavailable = selectedWorkspaceRef !== null && workspaceConversations?.projects != null && !selectedWorkspaceProject;
   const workspaceTitle = selectedWorkspaceRef ? selectedWorkspaceProject?.title ?? t("workspace.unknownTitle") : null;
   function setSelectedGoalTab(view: WorkspaceGoalTab) {
+    if (view === "chat" && originalConversation && workspaceConversations?.onOpenOriginal) {
+      workspaceConversations.onOpenOriginal(originalConversation.target);
+      return;
+    }
     setLocalView(view);
     callbacks.onSelectView?.(view);
   }
@@ -1346,8 +1353,8 @@ export function PersonalWorkspacePage({
   const retainedSteering = readSteeringRequest(composerDraftKey);
   const retryingSteering = retainedSteering && retainedSteering.sessionId === conversationSessionId
     && retainedSteering.text.trim() === composer.trim() ? retainedSteering : undefined;
-  const composerBlocked = steering || (!(retryingSteering || queueTurnId) && (sending || conversationTurnRunning));
-  const quickPromptBlocked = steering || sending || conversationTurnRunning;
+  const composerBlocked = Boolean(workspaceConversations?.entryGate) || steering || (!(retryingSteering || queueTurnId) && (sending || conversationTurnRunning));
+  const quickPromptBlocked = Boolean(workspaceConversations?.entryGate) || Boolean(originalConversation && !originalConversation.session?.resumable) || steering || sending || conversationTurnRunning;
   // The Goal overview is for reading; its composer folds to one line until asked for.
   const [overviewComposerOpen, setOverviewComposerOpen] = useState(false);
   useEffect(() => setOverviewComposerOpen(false), [selectedGoalId, selectedGoalTab]);
@@ -2626,7 +2633,7 @@ export function PersonalWorkspacePage({
     }
   }, [attentionKeySignature, attentionNotificationsActive, attentionNotificationSupportState, t]);
 
-  const composerSuggestions = !originalConversation && !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey} onKeyDown={(event) => {
+  const composerSuggestions = (!originalConversation || !managerChatOpen) && !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey} onKeyDown={(event) => {
     if (event.key !== "Escape") return;
     event.currentTarget.open = false;
     event.currentTarget.querySelector("summary")?.focus();
@@ -2737,15 +2744,15 @@ export function PersonalWorkspacePage({
         <div className="personal-channel">
           <div>
           <ChannelHeader
-            requestInventory={!readOnly && !rootUnavailable && !runtimeSourceUnavailable && !selectedGoalId && !selectedWorkspaceRef
+            requestInventory={!workspaceConversations?.entryGate && !readOnly && !rootUnavailable && !runtimeSourceUnavailable && !selectedGoalId && !selectedWorkspaceRef
               && (!originalConversation || originalConversation.source?.context_kind === "steward") ? <ConversationRequests
                 key={originalConversation?.session?.session_id ?? "owner"} sessionId={conversationSessionId} ownerFallback={!originalConversation}
                 refreshKey={`${managerMessages.length}:${managerMessages.at(-1)?.id ?? ""}:${Boolean(managerMessages.at(-1)?.pending)}`}/> : undefined}
-            originalConversationTitle={originalConversation ? `${originalConversation.source?.app_ref ?? "Lark"} · ${originalTitle}` : undefined}
+            originalConversationTitle={workspaceConversations?.entryGate ? (locale === "zh-CN" ? "管家来源未核验" : "Steward source unverified") : originalConversation ? `${originalConversation.source?.app_ref ?? "Lark"} · ${originalTitle}` : undefined}
             agents={agents}
             scopeUnavailable={rootUnavailable}
             agentWorkActive={agentWorkActive}
-            conversationScope={!originalConversation && workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
+            conversationScope={!workspaceConversations?.entryGate && !originalConversation && workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
               onChange: (value) => {
                 setActiveSessionRun(null);
                 workspaceConversations.onSelect(value === stewardScopeValue ? null : value);
@@ -2920,6 +2927,15 @@ export function PersonalWorkspacePage({
             </> : null}
           </div>
           {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive && !managedWorkActive}>
+            {workspaceConversations?.entryGate ? <div className="personal-history-notice" role={workspaceConversations.entryGate.unavailable ? "alert" : "status"}>
+              <span>{workspaceConversations.entryGate.unavailable
+                ? (locale === "zh-CN" ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry.")
+                : (locale === "zh-CN" ? "正在核验管家会话…" : "Verifying the steward conversation…")}</span>
+              {workspaceConversations.entryGate.unavailable ? <>
+                <button type="button" onClick={workspaceConversations.entryGate.retry}>{t("history.retry")}</button>
+                <button type="button" onClick={() => openSettings({kind: "settings", tab: "lark"}, true)}>{locale === "zh-CN" ? "会话设置" : "Conversation settings"}</button>
+              </> : null}
+            </div> : null}
             {originalConversation && !originalConversation.session?.resumable ? <div className="personal-history-notice" role={originalConversation.error ? "alert" : "status"}>
               <span>{originalConversation.session
                 ? (locale === "zh-CN" ? "可以回看原记录；此执行器暂不支持继续原会话。" : "Original history is available; this executor cannot continue its Session.")
@@ -2952,8 +2968,8 @@ export function PersonalWorkspacePage({
             ) : <>
             {!selectedGoal && !managerChatOpen && managerConversationReceiptVisible && managerMessages.length ? (
               <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
-                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
-                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId) : undefined}
+                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
+                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!(conversationKey, turnId) : undefined}
                 onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                 messages={managerMessages}
                 onClose={() => setManagerConversationReceiptVisible(false)}
@@ -3055,15 +3071,16 @@ export function PersonalWorkspacePage({
               <button
                 aria-label={t("composer.addImage")}
                 className="personal-composer-attach"
-                disabled={steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount}
+                disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount}
                 onClick={() => imageInputRef.current?.click()}
                 title={t("composer.attachImageHint")}
                 type="button"
               >
                 <Paperclip size={17} />
               </button>
-              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
+              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
               <textarea
+                disabled={Boolean(workspaceConversations?.entryGate)}
                 id="personal-conversation-composer"
                 aria-label={t("composer.sendMessage")}
                 onChange={(event) => setComposer(event.target.value)}
