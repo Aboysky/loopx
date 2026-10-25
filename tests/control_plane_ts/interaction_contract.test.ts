@@ -311,7 +311,7 @@ test("semantic replan retains Goal reads while ordinary delivery is forbidden", 
   const projected = projectInteractionRequiredReads(facts);
   const reads = projected.required_reads as JsonObject[];
   assert.deepEqual(reads.map(read => read.source), ["existing", "goal_state", "goal_acceptance"]);
-  assert.match(String(reads[1]!.reason), /complete Goal intent, acceptance and stops/);
+  assert.match(String(reads[1]!.reason), /(?:full|complete) Goal intent, acceptance(?: and|,) stops/);
   assert.equal(projected.delivery_allowed, undefined, "context cannot grant work authority");
   for (const patch of [{should_run: false}, {selection_required: true}, {settlement_only: true}]) {
     assert.deepEqual(projectInteractionRequiredReads({...facts, ...patch}).required_reads,

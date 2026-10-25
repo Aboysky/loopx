@@ -700,7 +700,7 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   };
   const stateFile = readArgument(request.goal_state_file, "goal_state_file");
   if (stateFile) add(`cat -- ${shellQuote(stateFile)}`, "goal_state",
-    "Read complete Goal intent, acceptance and stops. No summaries; failed/changed sources need a fresh guard.");
+    "Read full Goal intent, acceptance, stops. No summaries; failed/changed sources need a fresh guard.");
   if (request.goal_objective_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
     "goal_acceptance", "Use the canonical goal_objective before the older source text. Only if your adoption is missing/stale, review your own work, reconcile Todo/Vision changes, then use adopt-objective with your Agent id, exact revision/digest, own objective_work_digest and review_summary. New execution is held until your adoption. Other peers adopt independently; existing Turn settlement/release remains available. Preserve root acceptance, permissions and stops. Adopt once per objective revision, never per Turn or work/peer update. Reuse complete inline context without extra reads/writes.");
   if (checksPresent || request.goal_outcomes_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
