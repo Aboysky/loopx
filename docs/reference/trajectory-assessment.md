@@ -397,6 +397,14 @@ versions remain accessible through the same reader and browser history.
 Reading, registering or refreshing a successor never starts analysis. A failed,
 cancelled or concurrently running successor does not replace a valid base result.
 
+`compared_pair_count` is the number of shared episode/metric pairs in two
+qualified outputs. It is `null` when either output is unavailable; zero means
+there are no shared judgments, not that conclusions stayed unchanged. Changed
+judgments are shown with this denominator, separately from added/removed eligible
+pairs. Older projections without the count remain unknown in the reader.
+These are structural version facts, not matched scientific comparisons or
+evidence of analysis quality.
+
 The typed comparison reuses a qualified output only when literal excerpts,
 source identities/paths/line positions, episode questions, eligibility,
 objective, selection/window and analyst configuration are equivalent. Capture

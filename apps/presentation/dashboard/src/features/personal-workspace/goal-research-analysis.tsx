@@ -229,6 +229,7 @@ const analysisActionLabel = (p: Pack | null, zh: boolean) => p?.continuation?.ca
 function AnalysisContinuation({pack: p, analysis: a}: {pack: Pack; analysis: Controller}) {
   const c = p.continuation, zh = a.zh;
   if (!c) return p.continuation_unavailable ? <p className="analysis-warning">{zh ? "基础分析暂不可读；本版仍可独立分析完整范围。" : "The base analysis cannot be read; this version can still assess its complete scope independently."} <button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "重试读取" : "Retry reading"}</button></p> : null;
+  const compared = p.result && c.base_available ? c.compared_pair_count : null;
   const reassessment = c.can_reuse ? (zh ? "复用原判读" : "Reuse judgments")
     : `${zh ? (p.result ? "已复核全部" : "完整复核") : "Reassess all"} ${p.episode_count} ${zh ? "片段" : "episodes"}`;
   return <section className="analysis-continuation" aria-label={zh ? "分析版本变化" : "Analysis version changes"}>
@@ -236,7 +237,10 @@ function AnalysisContinuation({pack: p, analysis: a}: {pack: Pack; analysis: Con
       <button type="button" onClick={() => {a.select(c.base_pack_id); requestAnimationFrame(() => a.panel.current?.focus({preventScroll: true}));}}>{zh ? "查看上一版" : "Previous version"}</button>
       <details className="analysis-method"><summary>{zh ? "版本与变化" : "Version and changes"}</summary>
       <div className="analysis-continuation-summary"><strong>{c.can_reuse ? (zh ? "证据内容未变" : "Evidence content unchanged") : (zh ? "接续上一版" : "Continue from previous version")}</strong><span>{reassessment}</span></div>
-      <p>{p.result && c.base_available ? `${c.verdict_changes.length} ${zh ? "项判断变化" : "changed judgments"}` : (zh ? "查看变化" : "Inspect changes")}</p>
+      <p>{compared == null ? (zh ? "共同判断项数量未知。" : "The shared judgment count is unknown.")
+        : compared === 0 ? (zh ? "无共同判断项" : "No shared judgments")
+          : zh ? `共同判断 ${compared} 项 · 变化 ${c.verdict_changes.length} 项` : `${compared} shared judgments · ${c.verdict_changes.length} changed`}</p>
+      {compared != null ? <p>{zh ? "共同判断项按相同片段和指标计数；数量或标签变化不证明分析质量变化。" : "Shared judgments use the same episode and metric. Counts and label changes do not establish changes in analysis quality."}</p> : null}
       <dl><dt>{zh ? "上一版" : "Previous"}</dt><dd>{c.base_title} · {c.base_scope.revision}<br/>{c.base_episode_count} · {c.base_scope.window}</dd>
         <dt>{zh ? "本版" : "Current"}</dt><dd>{c.current_scope.revision}<br/>{p.episode_count} · {c.current_scope.window}</dd>
         <dt>{zh ? "来源变动" : "Source changes"}</dt><dd>{zh ? "新增 / 更正 / 删除" : "Added / revised / removed"}: {c.sources.added.length} / {c.sources.revised.length} / {c.sources.removed.length}</dd>

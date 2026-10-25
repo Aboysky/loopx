@@ -335,6 +335,7 @@ export const researchHistoryScenario = {
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
     let unavailableAnalysis = false, failedAnalysisPack = "a", episodeMetadataLimit = null, comparisonFixture = false;
     let analysisWrites = 0, analysisReads = 0, localizedFixture = false, continuationFixture = false, equivalentContinuation = false;
+    let versionComparison = "shared";
     let unavailableTask = false;
     const taskReads = [];
     try {
@@ -371,8 +372,11 @@ export const researchHistoryScenario = {
               sources: {added: ['follow-up'], revised: [], removed: []}, episodes: {added: [], revised: ['variant-alpha'], removed: []},
               can_reuse: false, configuration_changed: false, objective_changed: false, base_available: true, base_episode_count: 4,
               reassessed_episode_ids: p.episodes.map(e => e.id), new_pair_count: 0, removed_pair_count: 0,
+              compared_pair_count: versionComparison === "disjoint" ? 0 : p.result.assessments.length,
               verdict_changes: [{episode_id: 'variant-alpha', metric: 'benefit_test', before: 'yes', after: 'unknown'}],
             };
+            if (!base && ["disjoint", "unchanged"].includes(versionComparison)) p.continuation.verdict_changes = [];
+            if (!base && versionComparison === "legacy") delete p.continuation.compared_pair_count;
           }
           for (const pack of [...readback.catalog.packs, readback.pack]) pack.config = {...pack.config, output_language: language};
           if (readback.pack.result) {
@@ -1386,6 +1390,7 @@ print(json.dumps([
       await version.locator('summary').focus();
       await page.keyboard.press('Enter');
       await version.getByText(/已复核全部 4 片段/).waitFor();
+      await version.getByText(/共同判断 \d+ 项 · 变化 1 项/).waitFor();
       assert.match(await version.innerText(), /original-capture.*later-evidence/s);
       assert.match(await version.innerText(), /variant-alpha.*已做收益检验.*证据不足/);
       await version.locator('summary').click();
@@ -1400,6 +1405,15 @@ print(json.dumps([
       await version.getByText('版本与变化', {exact: true}).waitFor();
       await page.reload({waitUntil: 'networkidle'});
       await version.getByText('版本与变化', {exact: true}).waitFor();
+      for (const [mode, label] of [["unchanged", /共同判断 \d+ 项 · 变化 0 项/], ["disjoint", "无共同判断项"], ["legacy", "共同判断项数量未知。"]]) {
+        versionComparison = mode;
+        await page.reload({waitUntil: 'networkidle'});
+        await version.getByText('版本与变化', {exact: true}).click();
+        await version.getByText(label, {exact: true}).waitFor();
+        if (mode !== "unchanged") assert.doesNotMatch(await version.innerText(), /共同判断 \d+ 项 · 变化 0 项|0 项判断变化/);
+      }
+      versionComparison = "shared";
+      await page.reload({waitUntil: 'networkidle'});
       await page.setViewportSize({width: 390, height: 844});
       await chineseAnalysis.evaluate(element => element.scrollIntoView({block: 'start'}));
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
@@ -1407,6 +1421,11 @@ print(json.dumps([
       await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
       await page.getByRole('button', {name: 'Previous version', exact: true}).waitFor();
+      versionComparison = "disjoint";
+      await page.reload({waitUntil: 'networkidle'});
+      await page.getByText('Version and changes', {exact: true}).click();
+      await page.getByText('No shared judgments', {exact: true}).waitFor();
+      versionComparison = "shared";
       equivalentContinuation = true;
       await page.reload({waitUntil: 'networkidle'});
       await page.getByRole('button', {name: 'Reuse analysis', exact: true}).first().waitFor();
