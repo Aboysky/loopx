@@ -130,8 +130,12 @@ only when the current contract permits final scope closeout. Ordinary completion
 retains `active_goal` continuation without creating
 an artificial successor. Its command has the condition
 `todo_deliverable_complete`; required validation is never conditional or waived.
-Qualified `in_flight_continuation` leaves unfinished work open and omits ordinary
-completion rather than pretending the deliverable passed.
+Qualified `in_flight_continuation` leaves unfinished work open with its original
+declaration. Its plan retains the conditional completion command: execute it only
+when the original deliverable independently passes acceptance. Completed work or
+a changed route uses `semantic_closeout` with an evidence-linked vision decision
+on the same Turn; no fresh guard or binding is needed. Projecting a command does
+not execute it or establish acceptance.
 
 The shared Todo summary keeps missing-successor diagnostics and counts, but its
 warning is review guidance, not an obligation to create a successor or terminate
