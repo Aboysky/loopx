@@ -229,32 +229,28 @@ const analysisActionLabel = (p: Pack | null, zh: boolean) => p?.continuation?.ca
 function AnalysisContinuation({pack: p, analysis: a}: {pack: Pack; analysis: Controller}) {
   const c = p.continuation, zh = a.zh;
   if (!c) return p.continuation_unavailable ? <p className="analysis-warning">{zh ? "基础分析暂不可读；本版仍可独立分析完整范围。" : "The base analysis cannot be read; this version can still assess its complete scope independently."} <button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "重试读取" : "Retry reading"}</button></p> : null;
-  const changes = [
-    c.sources.added.length ? `${zh ? "新增来源" : "New sources"} ${c.sources.added.length}` : "",
-    c.sources.revised.length ? `${zh ? "更新来源" : "Updated sources"} ${c.sources.revised.length}` : "",
-    c.sources.removed.length ? `${zh ? "移除来源" : "Removed sources"} ${c.sources.removed.length}` : "",
-    c.episodes.added.length ? `${zh ? "新增片段" : "New episodes"} ${c.episodes.added.length}` : "",
-    c.episodes.revised.length ? `${zh ? "更新片段" : "Updated episodes"} ${c.episodes.revised.length}` : "",
-    c.episodes.removed.length ? `${zh ? "移除片段" : "Removed episodes"} ${c.episodes.removed.length}` : "",
-    c.can_reuse ? (zh ? "复用原判读" : "Reuse judgments") : `${zh ? (p.result ? "已复核全部" : "完整复核") : "Reassess all"} ${p.episode_count} ${zh ? "片段" : "episodes"}`,
-  ].filter(Boolean).join(" · ");
+  const reassessment = c.can_reuse ? (zh ? "复用原判读" : "Reuse judgments")
+    : `${zh ? (p.result ? "已复核全部" : "完整复核") : "Reassess all"} ${p.episode_count} ${zh ? "片段" : "episodes"}`;
   return <section className="analysis-continuation" aria-label={zh ? "分析版本变化" : "Analysis version changes"}>
-    <div className="analysis-continuation-summary"><strong>{c.can_reuse ? (zh ? "证据内容未变" : "Evidence content unchanged") : (zh ? "接续上一版" : "Continue from previous version")}</strong>
-      <span>{changes}</span>
+    <div className="analysis-continuation-controls">
       <button type="button" onClick={() => {a.select(c.base_pack_id); requestAnimationFrame(() => a.panel.current?.focus({preventScroll: true}));}}>{zh ? "查看上一版" : "Previous version"}</button>
-    </div>
-    {!c.base_available ? <p className="analysis-warning">{zh ? "上一版尚无适用分析，本次将独立分析完整范围。" : "No applicable previous analysis is available. This version will assess the full scope independently."}</p> : null}
-    {c.configuration_changed || c.objective_changed ? <p className="analysis-warning">{zh ? "分析设置或目标已变更，两版判断不作为同条件比较。" : "The analysis configuration or objective changed. Judgments are not a matched comparison."}</p> : null}
-    <details className="analysis-method"><summary>{p.result && c.base_available ? `${c.verdict_changes.length} ${zh ? "项判断变化" : "changed judgments"}` : (zh ? "查看变化" : "Inspect changes")}</summary>
-      <p>{c.base_title} · {c.base_scope.revision} → {c.current_scope.revision}</p>
-      <p>{zh ? "上次覆盖" : "Previous coverage"}: {c.base_episode_count} · {c.base_scope.window}<br/>{zh ? "本次覆盖" : "Current coverage"}: {p.episode_count} · {c.current_scope.window}</p>
-      <p>{zh ? "来源（新增 / 更正 / 删除）" : "Sources (added / revised / removed)"}: {c.sources.added.length} / {c.sources.revised.length} / {c.sources.removed.length}<br/>{zh ? "片段（新增 / 更正 / 删除）" : "Episodes (added / revised / removed)"}: {c.episodes.added.length} / {c.episodes.revised.length} / {c.episodes.removed.length}<br/>{zh ? "适用判断项（新增 / 移除）" : "Eligible judgments (added / removed)"}: {c.new_pair_count} / {c.removed_pair_count}</p>
+      <details className="analysis-method"><summary>{zh ? "版本与变化" : "Version and changes"}</summary>
+      <div className="analysis-continuation-summary"><strong>{c.can_reuse ? (zh ? "证据内容未变" : "Evidence content unchanged") : (zh ? "接续上一版" : "Continue from previous version")}</strong><span>{reassessment}</span></div>
+      <p>{p.result && c.base_available ? `${c.verdict_changes.length} ${zh ? "项判断变化" : "changed judgments"}` : (zh ? "查看变化" : "Inspect changes")}</p>
+      <dl><dt>{zh ? "上一版" : "Previous"}</dt><dd>{c.base_title} · {c.base_scope.revision}<br/>{c.base_episode_count} · {c.base_scope.window}</dd>
+        <dt>{zh ? "本版" : "Current"}</dt><dd>{c.current_scope.revision}<br/>{p.episode_count} · {c.current_scope.window}</dd>
+        <dt>{zh ? "来源变动" : "Source changes"}</dt><dd>{zh ? "新增 / 更正 / 删除" : "Added / revised / removed"}: {c.sources.added.length} / {c.sources.revised.length} / {c.sources.removed.length}</dd>
+        <dt>{zh ? "片段变动" : "Episode changes"}</dt><dd>{zh ? "新增 / 更正 / 删除" : "Added / revised / removed"}: {c.episodes.added.length} / {c.episodes.revised.length} / {c.episodes.removed.length}</dd>
+        <dt>{zh ? "适用判断项" : "Eligible judgments"}</dt><dd>{zh ? "新增 / 移除" : "Added / removed"}: {c.new_pair_count} / {c.removed_pair_count}</dd></dl>
       {c.episodes.added.length ? <p>{zh ? "新增片段" : "New episodes"}: {c.episodes.added.join(" · ")}</p> : null}
       {c.episodes.revised.length ? <p>{zh ? "更正片段" : "Revised episodes"}: {c.episodes.revised.join(" · ")}</p> : null}
       {c.episodes.removed.length ? <p>{zh ? "移除片段" : "Removed episodes"}: {c.episodes.removed.join(" · ")}</p> : null}
       <p>{zh ? "无法仅凭局部变化证明旧结论不受影响，因此实质变化均复核完整新版证据；指标按本版适用项重新计算，旧版不覆盖、不相加。" : "Local changes cannot prove earlier conclusions unaffected. Substantive changes therefore reassess the complete new evidence. Metrics are recalculated from this version’s eligible items; previous results are neither overwritten nor added."}</p>
       {c.verdict_changes.length ? <ul>{c.verdict_changes.map(row => <li key={`${row.episode_id}:${row.metric}`}>{row.episode_id} · {metricCopy[row.metric][zh ? 0 : 1]}: {verdictLabel(row.metric, row.before, zh)} → {verdictLabel(row.metric, row.after, zh)}</li>)}</ul> : null}
-    </details>
+      </details>
+    </div>
+    {!c.base_available ? <p className="analysis-warning">{zh ? "上一版尚无适用分析，本次将独立分析完整范围。" : "No applicable previous analysis is available. This version will assess the full scope independently."}</p> : null}
+    {c.configuration_changed || c.objective_changed ? <p className="analysis-warning">{zh ? "分析设置或目标已变更，两版判断不作为同条件比较。" : "The analysis configuration or objective changed. Judgments are not a matched comparison."}</p> : null}
   </section>;
 }
 
