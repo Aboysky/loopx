@@ -578,8 +578,9 @@ export async function inspectGoalAcceptance(
   const state = authority.kind === "legacy" ? authority.state
     : authority.owner_matches && authority.lifecycle.state === "active" ? authority.state : null;
   const tasks = [...todos.entries()].filter(([key]) => todoId === undefined || key === todoId).map(([key, todo]) => ({
-    todo_id: key, todo_semantic_digest: goalAcceptanceTodoDigest(todo),
-    ...(state ? acceptanceTask(key, todo, state) : {state: "unbound", criterion_ids: [], applicable: false}),
+    todo_semantic_digest: goalAcceptanceTodoDigest(todo),
+    ...(state ? acceptanceTask(key, todo, state)
+      : {todo_id: key, state: "unbound", criterion_ids: [], applicable: false}),
   }));
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
