@@ -58,16 +58,35 @@ function resultWritebackFields(writeback: JsonObject): JsonObject {
  * settlement plan. Unknown/custom guidance stays inline: no prose classification
  * or migration of old obligations to a later phase. Evidence and paging stay put.
  */
-export function referenceExploreResultWriteback(content: JsonObject, attachment: JsonObject, read: string): JsonObject {
+function withoutCurrentResultWriteback(content: JsonObject, attachment: JsonObject): JsonObject | null {
   const rawGraph = content.graph;
   if (content.ok !== true || content.graph_enabled !== true || !rawGraph || typeof rawGraph !== "object" || Array.isArray(rawGraph) ||
-      attachment.capability_id !== "explore" || attachment.guidance !== exploreResultWritebackAffordance().guidance) return content;
+      attachment.capability_id !== "explore" || attachment.guidance !== exploreResultWritebackAffordance().guidance) return null;
   const graph = requireJsonObject(rawGraph, "Explore graph");
   const fields = resultWritebackFields(attachment);
-  if (Object.entries(fields).some(([key, value]) => value === undefined || !isDeepStrictEqual(graph[key], value))) return content;
+  if (Object.entries(fields).some(([key, value]) => value === undefined || !isDeepStrictEqual(graph[key], value))) return null;
   const retained = {...graph};
   for (const key of Object.keys(fields)) delete retained[key];
-  return {...content, graph: {...retained, result_writeback_guidance: exploreBeforeWorkGuidance(), result_writeback_read: read}};
+  return retained;
+}
+
+export function referenceExploreResultWriteback(content: JsonObject, attachment: JsonObject, read: string): JsonObject {
+  const retained = withoutCurrentResultWriteback(content, attachment);
+  return retained === null ? content : {...content, graph: {...retained,
+    result_writeback_guidance: exploreBeforeWorkGuidance(), result_writeback_read: read}};
+}
+
+/** A pure replan has no admitted Todo for refresh-state's result attachment.
+ * Preserve evidence collection obligations and the independent graph commands;
+ * do not advertise unusable authoring or invent a later attachment authority.
+ * The caller must establish the autonomous settlement binding first.
+ */
+export function omitUnboundExploreResultWriteback(content: JsonObject): JsonObject {
+  const retained = withoutCurrentResultWriteback(content, exploreResultWritebackAffordance());
+  return retained === null ? content : {...content, graph: {...retained,
+    result_writeback_guidance: exploreBeforeWorkGuidance() +
+      " The refresh-state Explore attachment requires an admitted Todo and is unavailable for this pure replan. " +
+      "The independent graph record commands remain available for reusable evidence."}};
 }
 
 function rows(value: unknown): JsonObject[] {

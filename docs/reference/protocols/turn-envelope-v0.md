@@ -189,6 +189,18 @@ attempt、用户或 Stop 限制。旧 journal 与没有安全读取路由的调�
 Selection, current admission and stop facts stay inline. Optional native
 full/delta presentation and full recovery carry this same CLI view; the original
 source remains unchanged for checkpoint qualification and authority inspection.
+For a captured autonomous replan with no admitted Todo and no Explore attachment
+in its settlement plan, the entry omits the current owner's unusable attachment
+syntax. It retains evidence, feedback, before-work obligations and independent
+graph commands, and explains that Todo-bound attachment is unavailable. Unknown
+guidance, missing binding proof and uncaptured reads remain unchanged. This
+neither grants attachment authority nor defers another required read.
+
+中文：已捕获的纯自主 replan 没有准入 Todo、结算计划也没有 Explore 附件时，入口
+不再投递当前不可用的附件格式。事实、反馈、工作前义务及独立图谱记录入口完整保留，
+并说明附件需要 Todo 身份。未知指令、缺少绑定证明或未捕获的读取保持原样；这不增加
+附件权限，也不增加必须执行的后续读取。
+
 Writeback also offers `refresh-state --settle-turn`: after successful writeback
 and delivery postconditions it follows the canonical owed quota command for the
 same Goal, Agent, Todo/obligation and Turn, then verifies receipts. It collects no

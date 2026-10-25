@@ -95,6 +95,66 @@ def explore_source(packet):
     return next(row for row in sources if row.get("hook_id") == "explore.turn_context")
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path, monkeypatch, provider):
+    from test_replan_successor_guard_reentry import _fixture, GOAL as goal, AGENT as agent, TURN as turn
+    from loopx.capabilities.explore.result_writeback import prepare_result_attachment
+
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider)
+    enable_explore({"registry": tmp_path / "registry.json"})
+    capture = tmp_path / "capture"
+    try:
+        entry = call("quota", "should-run", "--codex-app", "--goal-id", goal,
+            "--agent-id", agent, "--turn-instance-id", turn, "--decision-output-dir", str(capture))
+        source = json.loads((capture / "decision.json").read_bytes())
+        original = explore_source(source)["content"]["graph"]
+        graph = explore_source(entry)["content"]["graph"]
+        assert entry["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == "autonomous_replan"
+        assert not entry.get("selected_todo")
+        assert "result_attachment_template" not in graph and "result_writeback_read" not in graph
+        assert "unavailable for this pure replan" in graph["result_writeback_guidance"]
+        assert "Read measurement_feedback before repeating a measured route" in graph["result_writeback_guidance"]
+        assert "never invent a shared version" in graph["result_writeback_guidance"]
+        assert "Capture is optional, not a settlement obligation." in graph["result_writeback_guidance"]
+        for key in ("writeback_results", "measurement_feedback", "result_page", "recent_findings",
+                    "record_node_template", "record_finding_template", "guidance"):
+            assert graph.get(key) == original.get(key)
+        assert json_bytes(original) - json_bytes(graph) > 2000
+        writer_run = subprocess.run(shlex.split(entry["replan_action_packet"]["writeback"]),
+            capture_output=True, text=True, check=True)
+        writer = json.loads(writer_run.stdout)
+        assert all(not row.get("optional_attachments")
+            for row in writer["writeback"]["settlement_plan"]["ordered_steps"])
+        # Prove the real attachment owner rejects this binding; projection must
+        # not suggest a new way around it or change its primary commit behavior.
+        attachment = {**original["result_attachment_template"], "question": "Is the source valid?",
+            "applicability": "Synthetic source", "input_revision": "source-v1", "observation": "Reviewed",
+            "interpretation": "Unresolved", "evidence_refs": ["evidence:source-review"]}
+        with pytest.raises(ValueError, match="requires agent, Todo and Turn identity"):
+            prepare_result_attachment(attachment, registry_path=tmp_path / "registry.json",
+                runtime_root=runtime, goal_id=goal, agent_id=agent, todo_id=None, turn_instance_id=turn)
+        # No capture, unknown instructions, ambiguous authoring and unproven
+        # identity keep the old payload rather than guessing applicability.
+        for mutation in ("capture", "custom", "identity", "attachment"):
+            changed = copy.deepcopy(source)
+            expected = explore_source(changed)["content"]
+            if mutation == "capture":
+                changed.pop("replan_read_path")
+            elif mutation == "custom":
+                expected["graph"]["result_writeback_guidance"] += " Preserve a custom obligation."
+            elif mutation == "identity":
+                changed["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"].pop("binding_kind")
+            else:
+                step = next(row for row in changed["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+                    if row["kind"] == "durable_writeback")
+                step["optional_attachments"] = [{"capability_id": "explore", "guidance": "Custom authoring"}]
+            projected = _turn_envelope_result("replan_cli_view", payload=changed)
+            assert explore_source(projected)["content"] == expected
+        assert json.loads((capture / "decision.json").read_bytes()) == source
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
 def assert_explore_entry_and_writer(source, entry, writer):
     original = explore_source(source)["content"]["graph"]
     graph = explore_source(entry)["content"]["graph"]
