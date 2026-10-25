@@ -464,7 +464,7 @@ def install_model(steward, tmp_path, sid, *, result_kind="validated_completion")
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("local_session", [False, True])
-@pytest.mark.parametrize("replan_outcome", ["settled", "wait", "invalid_semantic"])
+@pytest.mark.parametrize("replan_outcome", ["settled", "wait", "invalid_semantic", "already_admitted", "retained_probe"])
 def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(steward, tmp_path, monkeypatch, provider, local_session, replan_outcome):
     from datetime import timezone
     from loopx.capabilities.periodic_report import cadence_runtime
@@ -507,6 +507,11 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
     original_bytes = store._turn_path(sid, rejected["turn_id"]).read_bytes()
     _, second_window = reports.current_window(owner)
     assert second_window["window_id"] != first_window["window_id"]
+    if replan_outcome in {"already_admitted", "retained_probe"}:
+        # A past refusal is evidence, not current authority. The native owner
+        # can now admit this exact report without a semantic replan.
+        assert configure_goal(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+            execution_replan_after_turns=6, execute=True)["ok"]
     # The model is a transport oracle only. Native admission, the persisted
     # missing-baseline trigger, semantic validation and settlement stay real.
     vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
@@ -543,11 +548,32 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
     runtime._steward_monitor_next_check.clear()
     resumed = pump_steward_monitors(runtime)
     assert len(resumed) == 1, "The original idle producer must recover its proven pre-execution refusal"
-    done = finish(runtime, resumed[0])
+    if replan_outcome == "retained_probe":
+        from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+        selection = StewardTurnHost.report_selection_recovery
+
+        def legacy_selection(host, original, **kwargs):
+            # Exercise the real old host-only wait journal, not a fabricated
+            # success or an unknown failed model Turn.
+            return None if kwargs.get("probe_turn") is not None else selection(host, original)
+
+        with monkeypatch.context() as legacy:
+            legacy.setattr(StewardTurnHost, "report_selection_recovery", legacy_selection)
+            stopped = finish(runtime, resumed[0])
+        assert stopped["delta_count"] == 0 and stopped["upstream_turn_id"] is None
+        stopped_bytes = store._turn_path(sid, stopped["turn_id"]).read_bytes()
+        assert capture.read_bytes() == calls
+        runtime._steward_monitor_next_check.clear()
+        continued = pump_steward_monitors(runtime)
+        assert len(continued) == 1, "Only the canonical no-model admission probe may continue once"
+        done = finish(runtime, continued[0])
+        assert store._turn_path(sid, stopped["turn_id"]).read_bytes() == stopped_bytes
+    else:
+        done = finish(runtime, resumed[0])
     replans = [row["payload"] for row in store.events_after(sid, done["turn_id"], None)
         if row["kind"] == "native_loopx.replan_result"]
-    assert len(replans) == 1
-    if replan_outcome != "settled":
+    assert len(replans) == (0 if replan_outcome == "retained_probe" else 1)
+    if replan_outcome not in {"settled", "already_admitted", "retained_probe"}:
         assert replans[0].get("status") != "committed"
         assert replans[0]["effects"]["state_written"] is False and replans[0]["effects"]["quota_spent"] is False
         assert not (attempt_directory(reports.root, second_window) / "private-generation.json").exists()
@@ -570,10 +596,13 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
     assert done["turn_id"] != rejected["turn_id"]
     assert store._turn_path(sid, rejected["turn_id"]).read_bytes() == original_bytes
     assert reports.current_window(owner)[1] == second_window
-    assert replans[0]["result_kind"] == "replan_required" and replans[0]["status"] == "committed"
-    assert replans[0]["validation"]["summary"] == "independent native semantic replan preview passed"
-    assert replans[0]["receipt"]["lineage"]["todo_id"] == ""
-    assert replans[0]["receipt"]["lineage"]["replan_obligation_id"]
+    if replan_outcome == "settled":
+        assert replans[0]["result_kind"] == "replan_required" and replans[0]["status"] == "committed"
+        assert replans[0]["validation"]["summary"] == "independent native semantic replan preview passed"
+        assert replans[0]["receipt"]["lineage"]["todo_id"] == ""
+        assert replans[0]["receipt"]["lineage"]["replan_obligation_id"]
+    elif replan_outcome == "already_admitted":
+        assert replans[0]["status"] == "stopped" and replans[0]["effects"]["quota_spent"] is False
     task = next(row for row in StewardMonitor(runtime).todos(actor)
         if row["todo_id"] == done["loopx_request"]["todo_id"])
     assert task["status"] == "done"
@@ -594,7 +623,7 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
         assert proof["verified"] and proof["text"] == body.strip()
         assert len(bot.writes) > len(writes)  # The original sender may split a full report.
     tail = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
-    assert sum(row.get("method") == "turn/start" for row in tail) == 2
+    assert sum(row.get("method") == "turn/start" for row in tail) == (2 if replan_outcome == "settled" else 1)
     assert not any(row.get("method") == "thread/start" for row in tail)
     after = capture.read_bytes(), list(bot.writes)
     runtime._steward_monitor_next_check.clear()

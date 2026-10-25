@@ -357,7 +357,13 @@ class ManagedSessionTurn:
                 client_id += ".admission-retry"
                 retry = self.store.turn_for_client(session_id, client_id)
                 if retry is not None:
-                    return retry, False
+                    selection_recovery = StewardTurnHost(controller).report_selection_recovery(existing, probe_turn=retry)
+                    if selection_recovery is None or "probe" not in selection_recovery:
+                        return retry, False
+                    client_id = "managed." + operation_id + ".admission-resume"
+                    resumed = self.store.turn_for_client(session_id, client_id)
+                    if resumed is not None:
+                        return resumed, False
             commit = managed_session_goal_commit(store=self.store,
                 registry_path=controller.registry_path, session_id=session_id)
             with commit():
