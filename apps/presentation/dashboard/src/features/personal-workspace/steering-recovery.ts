@@ -87,20 +87,23 @@ export function retireSteeringRequest(key: string, id: string) {
   persistRequests();
 }
 
-// Upgrade recovery only. No new inline drafts are created by the current UI.
-export function legacySteeringRequests(sessionId: string): Array<[string, SteeringRequest]> {
+// Upgrade recovery only: old inline and executor-keyed original-conversation
+// requests. Current input never creates either legacy location.
+export function legacySteeringRequests(sessionId: string, currentKey?: string): Array<[string, SteeringRequest]> {
   return [...requestCache()].filter(([key, request]) => request.sessionId === sessionId
-    && key === JSON.stringify(["inline", sessionId, request.turnId]));
+    && (key === JSON.stringify(["inline", sessionId, request.turnId])
+      || Boolean(currentKey?.startsWith("bound/") && key.startsWith(`${currentKey}:`))));
 }
 
 export function restoreLegacySteeringRequest(key: string, legacyKey: string, sessionId: string): SteeringRequest | undefined {
-  const request = legacySteeringRequests(sessionId).find(([candidate]) => candidate === legacyKey)?.[1];
+  const request = legacySteeringRequests(sessionId, key).find(([candidate]) => candidate === legacyKey)?.[1];
   if (!request) return undefined;
   const current = readSteeringRequest(key);
   if (current && (current.id !== request.id || current.sessionId !== request.sessionId
     || current.turnId !== request.turnId || current.text !== request.text)) return undefined;
   // Copy durably before retiring the old location. A failed copy preserves both
   // page recovery and the old durable entry; dispatch still requires readback.
-  if (retainSteeringRequest(key, request)) retireSteeringRequest(legacyKey, request.id);
+  if (!retainSteeringRequest(key, request)) return undefined;
+  retireSteeringRequest(legacyKey, request.id);
   return request;
 }
