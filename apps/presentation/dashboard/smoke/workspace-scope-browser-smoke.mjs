@@ -250,7 +250,11 @@ try {
   await composer.fill("配置被拒绝时保留这条消息。");
   const rejection = page.waitForResponse(response => response.url().endsWith(`/sessions/${sessionId}/turns`) && response.status() === 424);
   await composer.press("Enter");
-  assert.equal((await rejection).status(), 424);
+  const rejectedResponse = await rejection;
+  assert.equal(rejectedResponse.status(), 424);
+  const rejectedBody = await rejectedResponse.json();
+  assert.equal(rejectedBody.error_code, "unsupported_configuration");
+  assert.equal(rejectedBody.delivery_state, "not_delivered");
   await page.waitForFunction(() => document.querySelector("textarea")?.value === "配置被拒绝时保留这条消息。");
   assert.equal(await composer.inputValue(), "配置被拒绝时保留这条消息。");
   const refusedSession = (await (await page.request.get(`${url}../api/chat/sessions`)).json()).sessions.find(row => row.session_id === sessionId);
