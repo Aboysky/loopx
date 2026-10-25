@@ -218,9 +218,15 @@ export const researchHistoryScenario = {
       await analysis.waitFor();
       assert.equal(await synthesisPage.getByRole('region', {name: '研究汇报', exact: true}).count(), 1, 'One reading focus when expanded');
       assert.match(await analysis.innerText(), /竞争解释.*随机波动/s);
+      const savedOverview = await analysis.locator('.research-synthesis-summary').innerText();
+      assert(await analysis.locator('.research-report-tabs').evaluate(tabs => {
+        const overview = tabs.parentElement.querySelector('.research-synthesis-summary');
+        return Boolean(overview && (tabs.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING));
+      }), 'Choose findings or experiments before reading a potentially long overview');
       await analysis.getByRole('tab', {name: /结论与解释/}).focus();
       await synthesisPage.keyboard.press('ArrowRight');
       assert.equal(await analysis.getByRole('tab', {name: /下一步实验/}).getAttribute('aria-selected'), 'true');
+      assert.equal(await analysis.locator('.research-synthesis-summary').count(), 0, 'Experiment reading starts with the experiment instead of repeating the report overview');
       assert.match(await analysis.innerText(), /固定条件.*随机序列.*推翻解释的结果/s);
       assert.equal(await analysis.locator('.analysis-method').first().evaluate(e => e.open), false, 'Episode judgments remain available as secondary verification');
       await synthesisPage.mouse.move(1, 1);
@@ -228,6 +234,7 @@ export const researchHistoryScenario = {
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-deep-mobile.png'), animations: 'disabled'});
       await synthesisPage.setViewportSize({width: 1280, height: 900});
       await analysis.getByRole('tab', {name: /结论与解释/}).click();
+      assert.equal(await analysis.locator('.research-synthesis-summary').innerText(), savedOverview, 'Returning to findings restores the complete saved overview');
       await analysis.evaluate(e => e.scrollIntoView({block: 'start'}));
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-deep-desktop.png'), animations: 'disabled'});
       // The report already declares its episode lineage. Follow those exact
@@ -1371,13 +1378,15 @@ print(json.dumps([
       assert.equal(await chineseAnalysis.locator('.analysis-episode[open]').count(), 0);
       continuationFixture = true;
       await page.reload({waitUntil: 'networkidle'});
-      // The inline version summary is a semantic section, not another page.
+      // Version bookkeeping is optional detail; the saved analysis leads.
       const version = chineseAnalysis.locator('.analysis-continuation');
-      await version.getByText('接续上一版', {exact: true}).waitFor();
-      await version.getByText(/已复核全部 4 片段/).waitFor();
+      await version.getByText('版本与变化', {exact: true}).waitFor();
       assert.equal(await version.locator('details').getAttribute('open'), null);
-      await version.locator('summary').click();
-      assert.match(await version.innerText(), /original-capture → later-evidence/);
+      assert.doesNotMatch(await version.innerText(), /新增来源|已复核全部|original-capture/);
+      await version.locator('summary').focus();
+      await page.keyboard.press('Enter');
+      await version.getByText(/已复核全部 4 片段/).waitFor();
+      assert.match(await version.innerText(), /original-capture.*later-evidence/s);
       assert.match(await version.innerText(), /variant-alpha.*已做收益检验.*证据不足/);
       await version.locator('summary').click();
       await page.setViewportSize({width: 1440, height: 1000});
@@ -1388,9 +1397,9 @@ print(json.dumps([
       await chineseAnalysis.getByText('Synthetic original analysis', {exact: true}).waitFor();
       assert.equal(await chineseAnalysis.locator('.analysis-continuation').count(), 0);
       await page.goBack({waitUntil: 'networkidle'});
-      await version.getByText('接续上一版', {exact: true}).waitFor();
+      await version.getByText('版本与变化', {exact: true}).waitFor();
       await page.reload({waitUntil: 'networkidle'});
-      await version.getByText('接续上一版', {exact: true}).waitFor();
+      await version.getByText('版本与变化', {exact: true}).waitFor();
       await page.setViewportSize({width: 390, height: 844});
       await chineseAnalysis.evaluate(element => element.scrollIntoView({block: 'start'}));
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

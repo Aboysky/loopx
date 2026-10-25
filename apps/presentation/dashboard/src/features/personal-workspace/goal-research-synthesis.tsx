@@ -27,6 +27,10 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
     <dt>{zh ? "预期区分" : "Distinguishing prediction"}</dt><dd>{experiment.prediction}</dd>
     <dt>{zh ? "推翻解释的结果" : "Disconfirming result"}</dt><dd>{experiment.disconfirming_result}</dd>
   </dl>;
+  const overview = <>
+    <p className="research-synthesis-summary">{s.summary.text}</p>
+    <details className="research-report-summary-sources"><summary>{zh ? "概览来源" : "Summary sources"} · {s.summary.citations.length}</summary>{citations(s.summary.citations)}</details>
+  </>;
   let body: ReactNode;
   if (!detail) {
     body = <>
@@ -48,6 +52,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
           }}>{next ? (zh ? "下一步实验" : "Next experiments") : (zh ? "结论与解释" : "Findings and explanations")} <span>{next ? s.next_experiments.length : s.findings.length}</span></button>)}
       </div>
       <div id={`${id}-body`} role="tabpanel" aria-labelledby={`${id}-${experiments}-tab`}>
+        {!experiments ? overview : null}
         {experiments ? <div className="research-report-experiments">
           {!s.next_experiments.length ? <p>{zh ? "现有证据不足以提出有区分力的下一步实验。" : "The evidence does not justify a discriminating next experiment."}</p> : null}
           {s.next_experiments.map((experiment, i) => <article key={i} className="research-report-experiment">
@@ -73,8 +78,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
     <header>{!detail ? <h3>{zh ? "研究汇报" : "Research report"}</h3> : null}<span>{zh ? "Agent 分析" : "Agent analysis"}</span>
       {!detail && onExpand ? <button type="button" className="research-report-expand" onClick={event => onExpand(event.currentTarget)}>{zh ? "深入解读" : "Read deeper"}<ArrowUpRight size={14} aria-hidden/></button> : null}
     </header>
-    <p className="research-synthesis-summary">{s.summary.text}</p>
-    <details className="research-report-summary-sources"><summary>{zh ? "概览来源" : "Summary sources"} · {s.summary.citations.length}</summary>{citations(s.summary.citations)}</details>
+    {!detail ? overview : null}
     {body}
   </section>;
 }
