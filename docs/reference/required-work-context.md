@@ -168,6 +168,52 @@ patch or an incompatible reader automatically recovers the same original full
 capture. Recovery never reruns the guard, asks the owner, spends quota or grants
 execution. Wire reduction alone does not establish actual model costs or outcomes.
 
+### Machine default
+
+**Settings → This machine → Capabilities → Codex heartbeat context** uses the
+existing revision-locked preview, apply, readback and rollback operations. Its
+`context_delivery` machine namespace accepts
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}` or
+the same object with `"mode":"on"`. The CLI exposes that same owner through
+`machine-config preview/apply --namespace context_delivery --config-json FILE`;
+apply requires the exact preview revision. Removing the namespace restores off.
+Sibling settings and Goal records are preserved.
+
+An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
+machine default, with off when absent. The existing worker environment's explicit
+`LOOPX_CONTEXT_DELIVERY=off` also overrides inheritance; environment on alone does
+not enable delivery. On accepts only the two existing declared
+scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
+declaration), and the existing Codex benchmark heartbeat worker (`generic_cli`
+plus its explicit heartbeat worker environment). Missing, contradictory or
+unsupported declarations return an error before admission. Declarations select
+an adapter; they do not authenticate a host or prove retained input.
+Native continuity currently requires POSIX; other platforms reject on explicitly.
+
+Machine-inherited `heartbeat-prompt`, `quota should-run` and native context
+commands share a private `context-delivery` directory beneath the resolved
+machine runtime, with independent journals per native session. A missing leaf is
+created with `0700`; unsafe existing leaves are rejected without chmod or
+symlink traversal. Explicit on keeps the existing explicit-location contract.
+Unrelated quota commands and digest-bound recovery pages do not activate this
+setting. Ordinary machine validation still applies to business operations.
+
+For native setup, `quota context-config --codex-app --goal-id GOAL --agent-id AGENT`
+under machine on prepares only that private transport leaf and renders the
+existing hooks and recovery instructions. It does not install or trust hooks,
+change host configuration or enable diagnostics in a running parent. The native
+process still needs its exact reviewed hooks and `CODEX_ROLLOUT_TRACE_ROOT`
+configured before startup. Without current-input retention proof, delivery stays
+full. Generated machine-inherited hooks reload the same machine runtime, so off
+or removal stops their journal writes. Explicit manual on options remain explicit.
+
+Generate a persistent entrypoint with `heartbeat-prompt --bootstrap`. It retains
+caller-supplied options, including an explicit off, but never freezes resolved
+machine defaults or generated private paths. Existing v2 loaders reload the
+setting on each wake; old expanded prompts need regeneration. This setting does
+not restart stopped Goals, alter quota/leases or qualify installed Desktop,
+all-Goal adoption, actual solver costs or outcome benefit.
+
 ## 中文
 
 普通 Heartbeat/quota 默认在 `agent_channel.work_context` 返回完整选定 Todo、
@@ -230,6 +276,38 @@ TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizo
 这些只改变既有选项内的展示，不新增配置或准入。保留不明、epoch 改变、patch 损坏
 或读者不兼容时，自动恢复同一原始 full capture，不重跑 guard、不问询、不扣额，
 也不授予执行权限。传输减少本身不证明实际模型费用或结果改善。
+
+### 机器级默认
+
+在**设置 → 本机设置 → 能力中心 → Codex 心跳上下文**选择关闭或开启，沿用现有
+精确修订预览、应用、读回和回滚。机器 namespace 为 `context_delivery`，配置为
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}`；开启时
+把 `mode` 改为 `on`。CLI 的 `machine-config preview/apply --namespace context_delivery
+--config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复关闭，
+不改写其他配置和 Goal 记录。
+
+显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，未配置则关闭。
+已有 worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承；环境 on 本身不启用投递。
+开启仅接受已有两类声明：Codex App 心跳（`--codex-app` 或等价完整调度声明），以及
+现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
+不支持的声明在准入前报错；声明只选择 adapter，不证明宿主身份或上下文保留。
+当前原生连续性依赖 POSIX；其他平台显式拒绝开启。
+
+机器继承入口共用已解析 machine runtime 下的私有 `context-delivery` 目录，并按原生
+会话隔离 journal。缺失末级目录以 `0700` 创建；不跟随末级符号链接、不修改不安全目录
+权限。显式 on 保留原有显式路径要求。无关 quota 命令和带原始摘要的恢复分页不激活此
+设置；业务操作仍须通过原有设备配置校验。
+
+机器开启后，`quota context-config --codex-app --goal-id GOAL --agent-id AGENT` 只准备
+私有传输末级目录并生成已有 hook 和恢复指令，不安装或信任 hook，也不更改宿主配置。
+原生进程启动前仍须配置已审阅的精确 hook 与 `CODEX_ROLLOUT_TRACE_ROOT`；无法证明当前
+输入保留时返回完整捕获。由机器继承生成的 hook 每次重读同一个 runtime，关闭或移除
+配置后停止 journal 写入；手工显式 on 保留其显式优先级。
+
+通过 `heartbeat-prompt --bootstrap` 生成持久入口，仅保留调用者显式参数（包括 off），
+不固化当前机器默认值或自动生成路径。已有 v2 loader 每次唤醒重读设置；旧展开式提示须
+重新生成。此开关不重启停用 Goal、不改变额度或 lease；正常 Desktop、全部 Goal 的实际
+采用和真实 solver 完整成本及效果仍须分别验收。
 
 ### Saved context cache / 已保存上下文缓存
 
