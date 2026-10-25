@@ -53,6 +53,10 @@ inapplicable explanation. Todo-bound semantic replanning also uses the same
 autonomous Vision authoring contract in its action and settlement projections,
 so exact in-response references retain complete replacement and replan rules.
 Ordinary settlement and all execution/receipt checks keep their existing rules.
+An existing receipt-bound Todo retains its original Task identity during a
+semantic replan. Only an unbound fallback yields to the original Todo-less
+planning obligation; that obligation must match its signed Goal, Agent and
+Turn. Neither route admits ordinary work while delivery remains withheld.
 
 Preferences remain conditional on scoped records. The existing preference and
 Explore hooks return their actual read context through registered adapters;
@@ -185,6 +189,9 @@ Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修�
 偏好只在对应作用域有记录时出现；Explore 和偏好沿用各自 hook 的真实 adapter，
 读取范围由 capability owner 决定。来源失败保留未完成必读项并阻止依赖交付，恢复后
 重新准入；User gate 仍生效。大小告警不截断验收或移除剩余必读项。
+已有 receipt 绑定的 Todo 在语义重规划中保留原 Task 身份；只有未绑定的备选任务才让位于
+原无 Todo 规划义务，该义务必须与签名中的 Goal、Agent 和 Turn 一致。两条路径都不会
+在普通交付被禁止时授权执行业务工作。
 
 已选定工作时，验收 adapter 复用 canonical owner 的精确 Todo 读取，顶层 `tasks`
 只携带该工作的关联观察；完整 Goal 合同、已配置 scope、检查、受阻工作和累计 outcome

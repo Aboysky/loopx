@@ -166,6 +166,13 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
         # to produce its bound planning outcome. Keep that route distinct from
         # admission to execute the selected work.
         if effective_action in REPLAN_ACTIONS:
+            try:
+                # Preserve the typed owner's signed Todo-less binding check.
+                # The plan's lineage gate still holds unbound replans; selected
+                # Todo replans retain their existing Task settlement identity.
+                turn_envelope_replan_settlement_identity(envelope, turn_instance_id=None)
+            except (ValueError, RuntimeError):
+                return LoopXTurnRoute.CONTRACT_ERROR
             return LoopXTurnRoute.REPLAN_REQUIRED
         if not delivery_allowed:
             return LoopXTurnRoute.BLOCKED
@@ -478,7 +485,7 @@ def build_loopx_turn_plan(
     turn_instance_id: str | None = None,
     iteration_context_policy: str = "resume",
     session_scope: str | None = None,
-    goal_ref: Mapping[str, str] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Project a TurnEnvelope into a typed, side-effect-free host decision."""
 

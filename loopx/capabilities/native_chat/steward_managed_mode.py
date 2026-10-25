@@ -252,7 +252,8 @@ class ManagedSessionTurn:
             "work_kind": "native_turn", "validation_command": None}
 
     def admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
-              settlement_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
+              settlement_recovery: dict[str, Any] | None = None,
+              selection_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         from .conversation_bindings import ChatConversationBindings
         if self.controller.closed.is_set():
             raise ValueError("the original Chat host is stopped")
@@ -273,12 +274,16 @@ class ManagedSessionTurn:
             report = {"report_subscription": subscription, "report_window": window,
                 "report_todo": next((row for row in StewardMonitor(self.controller).todos(actor)
                     if row["todo_id"] == request.get("todo_id")), None)}
+        if request.get("work_kind") == "scheduled_task":
+            from .session_calendar_tasks import SessionCalendarTasks
+            report["scheduled_task"] = SessionCalendarTasks(self.controller).admission(request)
         return ChatConversationBindings._core("collaboration.session.managed_turn.admit", {
             "session": session, "request": request, "turn": turn,
             "goal": StewardManagedMode(self.controller, None)._goal(actor["goal_id"]),
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "monitor_todo": monitor, **report,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
+            **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
@@ -302,16 +307,26 @@ class ManagedSessionTurn:
             result["reason"] = str(exc)
         if session.get("managed_agent_id"):
             from .steward_reports import ManagedSessionReports
+            from .session_calendar_tasks import SessionCalendarTasks
             result["report"] = ManagedSessionReports(self.controller).health(session_id)
+            task = SessionCalendarTasks(self.controller).health(session_id)
+            if task.get("configured"):
+                result["scheduled_task"] = task
         return result
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
                todo_id: str | None = None, monitor_deadline: str | None = None,
-               report_window: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+               report_window: dict[str, Any] | None = None,
+               scheduled_window: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
         from ...attached_session import managed_session_goal_commit
         controller = self.controller
         with controller._session_adapter_lock(session_id):
             request = self._request(session_id, agent_id, operation_id, todo_id)
+            if scheduled_window is not None:
+                if report_window is not None or monitor_deadline is not None or not todo_id:
+                    raise ValueError("a calendar task requires its original finite Todo")
+                request.update(work_kind="scheduled_task", schedule_window_id=scheduled_window["window_id"],
+                    schedule_subscription_revision=scheduled_window["subscription_revision"])
             if report_window is not None:
                 if monitor_deadline is not None or not todo_id:
                     raise ValueError("a report requires its original finite generation Todo")
@@ -326,6 +341,8 @@ class ManagedSessionTurn:
                 request.update(work_kind="monitor", monitor_deadline=monitor_deadline,
                     monitor_lease_version=retained["version"] if retained else 0)
             existing = self.store.turn_for_client(session_id, "managed." + operation_id)
+            selection_recovery = None
+            client_id = "managed." + operation_id
             if existing is not None:
                 frozen = dict(existing.get("loopx_request") or {})
                 if monitor_deadline is not None:
@@ -333,14 +350,22 @@ class ManagedSessionTurn:
                     request["monitor_lease_version"] = frozen.get("monitor_lease_version")
                 if frozen != request:
                     raise ValueError("managed Turn request identity conflict; inspect the original operation")
-                return existing, False  # Failed/unknown work is never replayed.
+                from .steward_turn import StewardTurnHost
+                selection_recovery = StewardTurnHost(controller).report_selection_recovery(existing) if report_window is not None else None
+                if selection_recovery is None:
+                    return existing, False  # Failed/unknown work is never replayed.
+                client_id += ".admission-retry"
+                retry = self.store.turn_for_client(session_id, client_id)
+                if retry is not None:
+                    return retry, False
             commit = managed_session_goal_commit(store=self.store,
                 registry_path=controller.registry_path, session_id=session_id)
             with commit():
-                admitted = self.admit(request)
-                accepted = self.store.accept_managed_turn(session_id, client_turn_id="managed." + operation_id,
+                admitted = self.admit(request, selection_recovery=selection_recovery)
+                accepted = self.store.accept_managed_turn(session_id, client_turn_id=client_id,
                     message="Advance the currently admitted native LoopX work.",
                     display_message="生成本期定时报告。" if report_window is not None else
+                        "执行本期定时任务。" if scheduled_window is not None else
                         "检查当前 Goal 原生任务状态。" if monitor_deadline is not None else "推进一次 LoopX 任务。",
                     origin="native_loopx", loopx_execution=True, loopx_request=request)
             try:
@@ -377,6 +402,8 @@ class ManagedSessionTurn:
         if not selected.get("todo_id"):
             raise ManagedTaskValidationUnavailable("select an existing native task with independent validation")
         self.validation_basis = self._validation_source(request, selected["todo_id"])
+        if re.fullmatch(r"cadence_[a-f0-9]{64}", self.validation_basis.get("target_key") or "") and request.get("work_kind") != "scheduled_task":
+            raise ValueError("the original calendar Task must execute through its scheduled Session admission")
         declaration = read_completion_validation_declaration(runtime_root=self.controller.coordination_runtime_root,
             goal_id=request["actor"]["goal_id"], todo_id=selected["todo_id"],
             expected_digest=self.validation_basis["completion_validation_sha256"])

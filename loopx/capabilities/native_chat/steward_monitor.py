@@ -349,6 +349,16 @@ def pump_managed_session_monitors(controller: Any, *, cancelled=lambda: False) -
             service.admit(request)
             goal = load_goal_from_registry(controller.registry_path, session["goal_id"])
             report_config = (goal or {}).get("control_plane", {}).get("periodic_report", {})
+            if (report_config.get("enabled") is True and report_config.get("profile_preset") == "session-task"
+                    and report_config.get("route_ref") == "managed-session:" + session["session_id"]):
+                from .session_calendar_tasks import SessionCalendarTasks
+                try:
+                    accepted, created = SessionCalendarTasks(controller).frontier(session["session_id"])
+                    if created:
+                        changed.append(accepted)
+                        continue
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                    _LOG.warning("A managed calendar task is unavailable; its original window and work are retained")
             if (report_config.get("enabled") is True and report_config.get("profile_preset") == "weekly-progress"
                     and report_config.get("route_ref") == "managed-session:" + session["session_id"]):
                 from .steward_reports import ManagedSessionReports

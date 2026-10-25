@@ -496,11 +496,12 @@ test('artifact digests retain bare lowercase syntax, original bytes and error se
   }
 });
 
-test('research synthesis is grounded across named episodes without widening metric evidence', () => {
+for (const revision of [undefined, 2]) test(`research synthesis revision ${revision ?? 1} preserves episode citation boundaries`, () => {
   const x = input();
   x.sources.push({id: 'other', artifact: 'other.txt', artifact_sha256: 'b'.repeat(64), first_line: 4, text: 'A competing explanation remains open'});
   x.episodes[1]!.source_ids = ['other'];
-  const p = prepareTrajectoryAssessment({input: x, config: {...config, research_synthesis: true, output_language: 'zh'}});
+  const p = prepareTrajectoryAssessment({input: x, config: {...config, research_synthesis: true, output_language: 'zh',
+    ...(revision === 2 ? {research_synthesis_revision: revision} : {})}});
   const citation = {source_id: 's', first_line: 10, last_line: 10};
   const synthesis = {
     summary: {text: 'Negative evidence narrowed the question; the mechanism remains unresolved.', episode_ids: ['e1'], citations: [citation]},
@@ -543,4 +544,31 @@ test('synthesis off preserves legacy prompt, schema, key and qualified output', 
   assert.deepEqual(qualifyTrajectoryAssessment({...off, output: output()}), qualifyTrajectoryAssessment({...original, output: output()}));
   assert.equal(qualifyTrajectoryAssessment({...original, output: output()}).synthesis, undefined);
   assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config, research_synthesis: 'yes'}}), /must be boolean/);
+});
+
+test('synthesis revision separates new guidance while frozen and disabled requests keep their identities', () => {
+  const legacy = prepareTrajectoryAssessment({input: input(), config: {...config, research_synthesis: true}});
+  // Frozen public fixture identities from before the revision: upgrading the
+  // producer must not strand saved jobs, including language-specific requests.
+  assert.equal(prepared().analysis_key, 'bafc1cd4c93f25a274a6f6789eda79f3a1f9e197ff21a651bfd7f677f36cb607');
+  assert.equal(legacy.analysis_key, '96c07478771c8bdb4db5e79999a31a25f8acc86cbc182bc8cb09ad52ac8a7a91');
+  const next = prepareTrajectoryAssessment({input: input(), config: {...legacy.config, research_synthesis_revision: 2}});
+  assert.equal(next.method_version, 'research-episodes-synthesis-v2');
+  assert.notEqual(next.analysis_key, legacy.analysis_key);
+  assert.deepEqual(next.input, legacy.input);
+  assert.deepEqual(next.output_schema, legacy.output_schema, 'No new result fields or scientific qualification gate');
+  assert.equal(next.prompt.split('\n\nEvidence pack:\n')[1], legacy.prompt.split('\n\nEvidence pack:\n')[1]);
+  const raw = {...output(), synthesis: {summary: {text: 'The mechanism is unresolved.', episode_ids: ['e1'],
+    citations: [{source_id: 's', first_line: 10, last_line: 10}]}, findings: [], next_experiments: []}};
+  assert.deepEqual(qualifyTrajectoryAssessment({...next, output: raw}).metrics,
+    qualifyTrajectoryAssessment({...legacy, output: raw}).metrics);
+  assert.equal(compareTrajectoryAssessments({...next, previous: {...legacy, output: raw}}).can_reuse, false,
+    'A guidance revision needs an explicit new analysis; do not relabel a saved judgment');
+  assert.deepEqual(prepareTrajectoryAssessment({input: input(), config: legacy.config}), legacy);
+  for (const revision of [null, true, '2', 0, 1, 3]) {
+    assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config,
+      research_synthesis: true, research_synthesis_revision: revision}}), /supported revision/);
+  }
+  assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config,
+    research_synthesis: false, research_synthesis_revision: 2}}), /enabled synthesis/);
 });

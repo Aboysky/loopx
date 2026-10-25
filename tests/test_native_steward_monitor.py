@@ -121,11 +121,7 @@ def test_local_managed_watch_uses_existing_idle_worker_without_private_binding(s
         # time. Advance to the next real scheduler tick before authoring this
         # synthetic second window; do not retry a rejected/unknown operation.
         from loopx.control_plane.runtime.time import now_utc
-        checked = datetime.fromisoformat(after["last_checked_at"].replace("Z", "+00:00"))
-        limit = time.monotonic() + 2
-        while now_utc() <= checked:
-            assert time.monotonic() < limit
-            time.sleep(.02)
+        wait_for_next_observation_tick(after)
         edit_local_watch(restarted, actor, todo_id, "--next-due-at",
             now_utc().isoformat())
         second = pump_steward_monitors(restarted)
@@ -401,6 +397,18 @@ def test_unreadable_conversation_does_not_starve_another_native_monitor(steward,
     assert capture.read_bytes() == calls
 
 
+def wait_for_next_observation_tick(todo):
+    """A new keyed effect needs a newer observation, not only another due ID."""
+    from loopx.control_plane.runtime.time import now_utc
+    if not todo.get("last_checked_at"):
+        return
+    checked = datetime.fromisoformat(todo["last_checked_at"].replace("Z", "+00:00"))
+    limit = time.monotonic() + 2
+    while now_utc() <= checked:
+        assert time.monotonic() < limit, "the native observation clock did not advance"
+        time.sleep(.02)
+
+
 def due_window(monitor, actor, deadline="2001-01-01T00:00:00Z"):
     """Advance a synthetic window through the real native Todo/lease owners.
 
@@ -409,6 +417,7 @@ def due_window(monitor, actor, deadline="2001-01-01T00:00:00Z"):
     from uuid import uuid4
     from loopx.capabilities.native_chat.steward_commands import native_command
     todo = monitor.current(actor)
+    wait_for_next_observation_tick(todo)
     key = "test-window." + uuid4().hex
     lease = monitor._acquire(actor, todo, key)["lease"]
     try:

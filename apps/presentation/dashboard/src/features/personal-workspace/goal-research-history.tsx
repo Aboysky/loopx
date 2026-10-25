@@ -74,6 +74,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const [loaded, setLoaded] = useState(0);
   const [revision, setRevision] = useState(0);
   const [selection, setSelection] = useState(() => selectedFromUrl(goalId));
+  // Pinning the displayed finding must not collapse a newly opened question.
+  const [questionExpanded, setQuestionExpanded] = useState(() => !selectedFromUrl(goalId).finding);
   const [recordsOpen, setRecordsOpen] = useState(false);
   const records = useRef<HTMLDetailsElement>(null);
   const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
@@ -139,14 +141,14 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     </details> : null}</>;
   };
   const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
-  const findingElement = (finding: ExploreHistoryEvent, title: string) => {
+  const findingElement = (finding: ExploreHistoryEvent) => {
     const sections = findingSections(finding);
     const content = <>{findingBody(finding)}{sections || finding.evidence_refs.length ? <details className="research-finding-sources"><summary>{zh ? "来源与适用范围" : "Sources and applicability"}{finding.evidence_refs.length ? ` · ${finding.evidence_refs.length}` : ""}</summary>
       {sections ? <dl className="research-finding-sections"><dt>{sectionCopy.applicability}</dt><dd>{sections.applicability}</dd><dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd></dl> : null}
       {finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
       <details><summary>{zh ? "完整原文" : "Full original text"}</summary><h4>{originals.get(finding.event_id)?.title ?? finding.title}</h4><p>{originals.get(finding.event_id)?.summary ?? finding.summary}</p></details></details> : null}</>;
     return <article className="research-recorded-finding" key={finding.event_id}>
-      {finding.title !== title ? <h4>{finding.title}</h4> : null}{findingMeta(finding)}{content}
+      <h3>{finding.title}</h3>{findingMeta(finding)}{content}
     </article>;
   };
   const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><div><p>{stateLabel(event.status)} · {event.title}</p>{event.summary ? findingBody(event) : null}</div>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
@@ -156,7 +158,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       readerParent.current = null;
       focusReturn.current = null;
       focusPending.current = true;
-      setSelection(selectedFromUrl(goalId));
+      const next = selectedFromUrl(goalId);
+      setSelection(next);
+      setQuestionExpanded(!next.finding);
       const view = viewFromUrl(goalId); setLens(view.lens); setPhase(view.phase);
     };
     window.addEventListener("popstate", pop);
@@ -272,6 +276,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       focusPending.current = true;
     }
     setSelection(next);
+    setQuestionExpanded(!next.finding);
     const url = new URL(window.location.href);
     url.searchParams.delete("research_node"); url.searchParams.delete("research_group"); url.searchParams.delete("research_finding");
     if (next.nodes.length || next.day !== null) {
@@ -440,8 +445,14 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       {selected ? <div className="research-history-detail" ref={detail} role="region" aria-label={selected.latest.title} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
         <div className="research-reader-content">
         <div className="research-reader-location"><button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{readerParent.current ? (zh ? "返回问题列表" : "Back to questions") : copy.all}</button>
-        <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p></div>
-        <h3>{selected.latest.title}</h3>{displayControl}
+        <div className="research-reader-states">
+          <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p>
+          {selected.findings.length > 1 && findingExceptions ? <p className="research-finding-exceptions">{findingExceptions}</p> : null}
+        </div></div>
+        {selected.findings.length ? selectedFinding?.title !== selected.latest.title ? <details className="research-reader-question" key={selected.id} open={questionExpanded} onToggle={event => setQuestionExpanded(event.currentTarget.open)}>
+          <summary><span>{selected.latest.title}</span></summary>
+          {selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
+        </details> : null : <h3>{selected.latest.title}</h3>}{displayControl}
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
         {selected.findings.length ? <>
           {selected.findings.length > 1 ? <nav className="research-finding-navigation" aria-label={zh ? "问题结论" : "Question findings"}>
@@ -464,8 +475,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
               })}
             </div>
           </nav> : null}
-          {selected.findings.length > 1 && findingExceptions ? <p className="research-finding-exceptions">{findingExceptions}</p> : null}
-          {selectedFinding ? findingElement(selectedFinding, selected.latest.title) : <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p>}
+          {selectedFinding ? findingElement(selectedFinding) : <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p>}
         </> : <>{selected.latest.summary ? <p>{selected.latest.summary}</p> : null}<ContextHelp label={zh ? "暂无附属结论" : "No attached findings"} icon={CircleHelp}><p className="research-history-note">{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p></ContextHelp></>}
         <details className="research-node-provenance" key={selected.id}><summary>{zh ? "来源与历史" : "Sources and history"}</summary>
         {selectedContextCitations.length ? <><h4>{zh ? "译文依据" : "Translation context"}</h4>
@@ -473,7 +483,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
             onClick={event => {void analysis.readCitation(citation, event.currentTarget);}}>
             {citation.source_id} · {zh ? "行" : "lines"} {citation.first_line}–{citation.last_line}
           </button>)}</div></> : null}
-        {selected.findings.length && selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
+        {selected.findings.length && selectedFinding?.title === selected.latest.title && selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
         {measurementSummary(selected.id)}
         <h4>{copy.versions}</h4>{selected.latest.evidence_refs.length ? selected.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : <p>{zh ? "产物版本与来源引用未记录。" : "Artifact version and source references were not recorded."}</p>}
         {selectedEdges.length ? <><h4>{copy.links}</h4><ul>{selectedEdges.map(edge => <li key={edge.event_id}>{positions.get(edge.from_node)?.node.latest.title ?? (zh ? "来源节点未记录" : "Source node not recorded")} → {relationLabel(edge.edge_type)} → {positions.get(edge.to_node)?.node.latest.title ?? (zh ? "目标节点未记录" : "Target node not recorded")}{edge.summary ? ` — ${edge.summary}` : ""}</li>)}</ul></> : null}

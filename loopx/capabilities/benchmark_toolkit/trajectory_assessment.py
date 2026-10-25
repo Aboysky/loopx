@@ -49,7 +49,7 @@ def prepare(
         {
             "input": json.loads(input_path.read_text(encoding="utf-8")),
             "config": {"model": model, "effort": effort, "service_tier": service_tier,
-                       **({"research_synthesis": True} if research_synthesis else {})},
+                       **({"research_synthesis": True, "research_synthesis_revision": 2} if research_synthesis else {})},
         },
     )
 
