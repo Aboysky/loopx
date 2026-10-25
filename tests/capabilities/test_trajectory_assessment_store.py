@@ -686,6 +686,35 @@ def test_method_upgrade_reads_verified_old_result_without_rejudging(pack, monkey
         inspect_pack(**scope)
 
 
+def test_revised_producer_preserves_frozen_legacy_job_and_requires_new_execution(pack):
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment import prepare
+
+    scope, operation, current, input_path, sources, provider = pack
+    assert current["config"]["research_synthesis_revision"] == 2
+    prepared = prepare(input_path, model="gpt-6.1-sol", effort="max", service_tier="fast")
+    assert prepared["analysis_key"] == current["analysis_key"]
+    legacy = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Frozen legacy analysis", config={key: value for key, value in current["config"].items()
+                                              if key != "research_synthesis_revision"})
+    legacy_operation = {**scope, "pack_id": legacy["pack_id"], "analysis_key": legacy["analysis_key"]}
+    execute_pack(**legacy_operation, codex=provider)
+    old = inspect_pack(**scope, pack_id=legacy["pack_id"])
+    before = {path: path.read_bytes() for path in scope["runtime_root"].glob("**/jobs/*/*") if path.is_file()}
+    assert current["analysis_key"] != legacy["analysis_key"]
+    pending = inspect_pack(**scope, pack_id=current["pack_id"])
+    assert pending["job"] is None and pending["result"] is None
+    execute_pack(**operation, codex=provider)
+    new = inspect_pack(**scope, pack_id=current["pack_id"])
+    assert new["result"]["method_version"] == "research-episodes-synthesis-v2"
+    assert new["result"]["metrics"] == old["result"]["metrics"]
+    assert inspect_pack(**scope, pack_id=legacy["pack_id"]) == old
+    assert all(path.read_bytes() == content for path, content in before.items())
+    # Both frozen versions still use the same literal, source-qualified reader.
+    for op in [legacy_operation, operation]:
+        assert read_citation(**op, source_id="source", first_line=2, last_line=2)["text"] == (
+            "The native measurement did not improve utility · 原始测量。")
+
+
 def _usage_fixture():
     def counts(i, c, o):
         return dict(input_tokens=i, cached_input_tokens=c, output_tokens=o)
