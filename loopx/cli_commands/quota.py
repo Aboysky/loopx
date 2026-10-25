@@ -626,7 +626,8 @@ def handle_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
 ) -> int:
-    native_result = handle_native_context_command(args, print_payload=print_payload)
+    native_result = handle_native_context_command(args, print_payload=print_payload,
+        registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     if native_result is not None:
         return native_result
     if args.quota_command == "replan-view":
