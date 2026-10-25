@@ -68,7 +68,7 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     assert review["coverage_count"] == context["coverage_count"]
     assert review["coverage_truncated"] == context["coverage_truncated"]
     assert [row["evidence_ref"] for row in review["evidence"]] == [row["evidence_ref"] for row in context["evidence"]]
-    assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])
+    assert {k: v for k, v in writer["writeback_contract"].items() if k not in {"successor_binding_args", "successor_settlement"}} == without_example(source["replan_action_packet"]["writeback_contract"])
     assert writer["allowed_terminal"] == source["replan_action_packet"]["allowed_terminal"]
     assert review["context_id"] == writer["context_id"] == context["context_id"]
     assert json_bytes(review) <= 16384
@@ -314,7 +314,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         assert writer["settlement_command"].endswith(" --settle-turn")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
-        assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])
+        assert {k: v for k, v in writer["writeback_contract"].items() if k not in {"successor_binding_args", "successor_settlement"}} == without_example(source["replan_action_packet"]["writeback_contract"])
         assert (capture / "decision.json").read_bytes() == saved
         assert {key: fixture[key].read_bytes() for key in original_files} == original_files
         assert not reader_fixture["registry"].exists()

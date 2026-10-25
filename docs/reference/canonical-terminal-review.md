@@ -145,6 +145,16 @@ alone does not certify final scope closeout. Graph validation, empty-frontier
 replan and terminal proof remain governed by their existing typed rules. This
 guidance change is shared by CLI, status and quota readback.
 
+When a captured replan creates a successor, use the writeback reader's
+`successor_binding_args` on `todo add --replan-obligation-id ...`. The original
+Turn and Goal incarnation are checked before creation. The creation receipt
+returns that Turn's settlement plan instead of an immediate stop action; finish
+its validation/writeback/accounting before ending. The successor remains open
+and needs a later admission for execution. No guard reentry is required.
+An unbound legacy add retains its existing end-of-heartbeat receipt; it does not
+invent an original Turn. This binding is an authoring affordance, not a new
+requirement to create successor work.
+
 If final closeout is attempted before writeback/accounting, CLI JSON and Markdown
 return that same recovery plan. Supplied registry/runtime, project/state routes
 and original lease proof are retained where the corresponding command accepts

@@ -443,6 +443,20 @@ function replanView(request: JsonObject): JsonObject {
     }
     const writeback = actionProjection(payload, false).writeback;
     const plan = object(object(writeback).settlement_plan);
+    const identity = object(plan.identity);
+    if (typeof identity.turn_instance_id === "string") {
+      const goalRef = object(plan.goal_ref);
+      contract.successor_binding_args = `--turn-instance-id ${shellQuote(identity.turn_instance_id)}` +
+        (typeof goalRef.goal_instance_id === "string" ? ` --goal-instance-id ${shellQuote(goalRef.goal_instance_id)}` : "");
+      contract.successor_settlement = "If creating a replan successor, include successor_binding_args with its obligation id, then follow the creation receipt's original Turn settlement plan before ending; do not run the successor.";
+      delete contract.successor_host_action;
+      if (typeof contract.successor_command === "string") {
+        contract.successor_command = `${contract.successor_command} ${contract.successor_binding_args}`;
+        // Creation returns the original settlement plan directly. A guard
+        // reentry here would repeat admission/context and can select new work.
+        object(writeback).next_cli_actions = [contract.successor_command];
+      }
+    }
     const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
     const refresh = steps.find(step => step.kind === "durable_writeback");
     return {...common, ...sourceRead, writeback_contract: contract,

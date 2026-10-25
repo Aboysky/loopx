@@ -309,15 +309,8 @@ export function projectInteractionExecution(value: unknown): InteractionExecutio
     rawDelivery = rawAttempt;
     deliverySource = "canonical_attempt";
   }
-  // Normal delivery is deliberately closed during autonomous replanning.
-  // Its canonical attempt still permits that semantic slice. An explicit
-  // delivery denial (including null) remains a denial; user/Stop gates below
-  // still apply. Do not infer permission from a stale replan packet alone.
-  if (action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED && replanRequired
-      && !canonicalDelivery.present) {
-    rawDelivery = rawAttempt;
-    deliverySource = "canonical_attempt";
-  }
+  // Replanning has its own Host route. Attempting that route never grants
+  // ordinary delivery authority, even when the canonical delivery fact is absent.
 
   const fixedBeforeUserGate = ([
     EffectiveAction.HEARTBEAT_SETTLED_SKIP,
