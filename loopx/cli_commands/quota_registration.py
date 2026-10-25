@@ -31,6 +31,7 @@ def register_quota_command(
             "context-project",
             "context-hook",
             "context-config",
+            "replan-view",
             "monitor-poll",
             "scheduler-ack",
             "scheduler-ack-current",
@@ -41,6 +42,11 @@ def register_quota_command(
         default="status",
         help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
+    quota_parser.add_argument("--decision-file", help="Original captured decision for read-only replan-view.")
+    quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view.")
+    quota_parser.add_argument("--source-hash", help="Original source_decision_hash for replan-view.")
+    quota_parser.add_argument("--replan-stage", choices=["review", "writeback", "acceptance", "explore"], default="review",
+                              help="Read decision context before opening its writeback format.")
     quota_parser.add_argument(
         "--goal-id",
         help="Goal id to check. Optional for status/plan (omit for all goals); required for should-run, scheduler ACK/failure, spend, and void. A scoped status/plan ranks only the selected goal, not the global next turn.",
