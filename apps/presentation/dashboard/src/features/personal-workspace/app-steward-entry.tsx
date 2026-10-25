@@ -37,7 +37,7 @@ export function AppStewardEntry({children, onOpen}: {children: ReactNode; onOpen
   settings.searchParams.set("settings_tab", "lark");
   return <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-5 p-6 text-slate-900 dark:text-zinc-100">
     <h1 className="text-xl font-semibold">{zh ? "LoopX 管家" : "LoopX steward"}</h1>
-    {state === "loading" ? <p role="status">{zh ? "正在打开原管家会话…" : "Opening the original steward conversation…"}</p> : <>
+    {state === "loading" ? <p role="status">{zh ? "正在打开管家对话…" : "Opening the steward conversation…"}</p> : <>
       <p role="alert">{zh ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry."}</p>
       <div className="flex flex-wrap gap-3">
         <Button onClick={() => {setState("loading"); setRevision(value => value + 1);}}>{zh ? "重试" : "Retry"}</Button>

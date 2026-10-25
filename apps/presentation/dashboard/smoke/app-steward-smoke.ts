@@ -34,7 +34,7 @@ try {
   const before = await inspect();
   assert.equal(before.sessions, 3);
   assert.equal(await fetchAppStewardTarget(), null, "No implicit selection between two original stewards");
-  const peer = connections.connections.find(row => row.app_ref === "synthetic-peer")!;
+  let peer = connections.connections.find(row => row.app_ref === "synthetic-peer")!;
   assert.ok(peer && peer.binding_id !== bindingId);
   connections = await selectAppSteward(bindingId, connections.revision);
   const target = {bindingId, sessionId};
@@ -59,6 +59,16 @@ try {
   assert.equal(after.sessions, before.sessions);
   assert.deepEqual(after.messages, before.messages);
   assert.equal(after.native_requests, before.native_requests, "Entry lookup and preference never invoke a model or replay a Turn");
+  child.stdin.write("replace-peer\n");
+  const replaced = await next();
+  connections = await fetchPrivateConversations();
+  const futurePeer = connections.connections.find(row => row.app_ref === "synthetic-peer")!;
+  assert.notEqual(futurePeer.binding_id, peer.binding_id);
+  assert.equal(futurePeer.binding_id, replaced.new_peer_binding_id);
+  assert.deepEqual(await fetchAppStewardTarget(), target, "A newly connected steward cannot capture the selected entry");
+  peer = futurePeer;
+  child.stdin.write("close\n"); await next();
+  await assert.rejects(() => fetchAppStewardTarget(), /selected original steward is unavailable/);
   child.stdin.write("revoke\n"); await next();
   connections = await fetchPrivateConversations();
   assert.equal(connections.app_steward_binding_id, bindingId);

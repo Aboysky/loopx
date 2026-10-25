@@ -140,7 +140,7 @@ remain unavailable. There is no fallback to ordinary steward/project history,
 Session creation, executor change or model reconfiguration on this entry.
 Group audiences retain their existing boundary.
 
-An owner-private steward connection also offers **Use as App steward**. Core
+An owner-private steward connection also offers **Use for App Conversation**. Core
 stores this explicit entry preference alongside the binding set, without
 changing any audience, managed identity or execution grant. Multiple stewards
 never compete by list order or recent activity. The local App steward Chat

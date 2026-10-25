@@ -6,6 +6,7 @@ credentials or model account is read or contacted. Stdin controls source events.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import runpy
 import socket
@@ -16,7 +17,8 @@ import threading
 import pytest
 
 REPO = Path(__file__).resolve().parents[4]
-sys.path[:0] = [str(REPO), str(REPO / "tests/control_plane")]
+BACKEND = Path(os.environ.get("LOOPX_CHAT_FIXTURE_BACKEND_ROOT", REPO)).resolve()
+sys.path[:0] = [str(BACKEND), str(REPO), str(REPO / "tests/control_plane")]
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.chat_server import serve_chat
 
@@ -28,6 +30,7 @@ class SyntheticPrivateSource:
     def __init__(self, root, *, steward=False, peer=False):
         self.root, self.verified = root, True
         self.steward, self.peer = steward, peer
+        self.peer_provider = None
         if peer:
             self.transport_ref = "synthetic-peer"
 
@@ -80,6 +83,12 @@ class SyntheticPrivateSource:
                 elif command == "close":
                     server.chat_store.update_session(sid, status="closed")
                     result = {"closed": True}
+                elif command == "replace-peer" and self.peer_provider is not None:
+                    old = next(row for row in bindings.read()["bindings"] if row["transport_ref"] == self.peer_provider.transport_ref)
+                    bindings.disconnect(old["binding_id"], expected_revision=bindings.read()["revision"])
+                    self.peer_provider.start(server)
+                    fresh = next(row for row in bindings.read()["bindings"] if row["transport_ref"] == self.peer_provider.transport_ref)
+                    result = {"old_peer_binding_id": old["binding_id"], "new_peer_binding_id": fresh["binding_id"]}
                 elif command == "revoke":
                     bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
                     result = {"revoked": binding["binding_id"]}
@@ -121,6 +130,7 @@ def main():
         steward = "--steward" in sys.argv
         source = SyntheticPrivateSource(root, steward=steward)
         peer = SyntheticPrivateSource(root, steward=True, peer=True) if steward else None
+        source.peer_provider = peer
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]

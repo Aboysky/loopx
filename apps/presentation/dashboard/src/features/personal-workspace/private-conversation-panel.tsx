@@ -130,9 +130,9 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       <button className="personal-private-refresh" disabled={busy} aria-label={zh ? "刷新状态" : "Refresh status"} onClick={() => void act(refresh)} type="button"><RefreshCw size={16} aria-hidden="true"/></button>
     </header>
     {appStewardBindingId !== null && !rows.some(row => row.binding_id === appStewardBindingId) ? <div className="personal-detail-actions">
-      <p role="alert">{zh ? "已选 App 管家的连接已失效。" : "The selected App steward connection is unavailable."}</p>
+      <p role="alert">{zh ? "已选的 App 对话来源已失效。" : "The selected App Conversation source is unavailable."}</p>
       <button type="button" disabled={busy} onClick={() => void act(() => selectAppSteward(null, revision))}>
-        {zh ? "取消 App 管家选择" : "Clear App steward selection"}</button>
+        {zh ? "取消 App 对话来源" : "Clear App Conversation source"}</button>
     </div> : null}
     {rows.map(row => <article className="personal-private-connection" key={row.binding_id}>
       <header className="personal-private-heading">
@@ -143,7 +143,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       {row.context_kind === "steward" && row.audience === "owner" ? <button type="button" disabled={busy || (!row.context_available && appStewardBindingId !== row.binding_id)}
         aria-pressed={appStewardBindingId === row.binding_id}
         onClick={() => void act(() => selectAppSteward(appStewardBindingId === row.binding_id ? null : row.binding_id, revision))}>
-        {appStewardBindingId === row.binding_id ? (zh ? "App 管家 · 取消选择" : "App steward · Clear selection") : (zh ? "用作 App 管家" : "Use as App steward")}</button> : null}
+        {appStewardBindingId === row.binding_id ? (zh ? "App「对话」· 取消选择" : "App Conversation · Clear selection") : (zh ? "用于 App「对话」" : "Use for App Conversation")}</button> : null}
       </header>
       <p>{row.context_kind === "steward" ? (row.goal_scope === "all_registered"
         ? (zh ? `LoopX 管家 · 全部已注册工作 · ${row.goal_count} 个 Goal` : `LoopX steward · All registered work · ${row.goal_count} Goals`)
