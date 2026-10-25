@@ -152,14 +152,20 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
-        root = Path(args.decision_output_root).expanduser().absolute()
-        metadata = root.lstat()
-        if root.resolve(strict=True) != root or not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
-            raise ValueError("saved projection needs an existing private physical capture root")
         directory = codex_context_directory(directory=args.codex_context_dir,
             root=args.codex_context_root, create=True)
         if not directory:
             raise ValueError("native context is unavailable")
+        # The session already owns a private recovery location. Callers need
+        # only supply a separate cache root when they want another location.
+        # Create a missing leaf privately; never chmod or follow an existing
+        # leaf. Normal platform parent aliases (such as /tmp) remain usable.
+        root = Path(args.decision_output_root or directory).expanduser().absolute()
+        root = root.parent.resolve(strict=True) / root.name
+        root.mkdir(mode=0o700, exist_ok=True)
+        metadata = root.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            raise ValueError("saved projection needs a private physical capture root owned by this user")
         cache = Path(tempfile.mkdtemp(prefix="context-", dir=root))
         projected = project_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",

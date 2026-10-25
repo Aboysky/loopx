@@ -230,3 +230,23 @@ TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizo
 这些只改变既有选项内的展示，不新增配置或准入。保留不明、epoch 改变、patch 损坏
 或读者不兼容时，自动恢复同一原始 full capture，不重跑 guard、不问询、不扣额，
 也不授予执行权限。传输减少本身不证明实际模型费用或结果改善。
+
+### Saved context cache / 已保存上下文缓存
+
+For `quota context-project`, enabling context delivery no longer requires a
+second cache-directory setup step. Omitting `--decision-output-root` reuses the
+native session's private context directory. An explicit missing leaf is created
+with mode `0700` under an existing parent; existing directories must remain
+private, physically addressed and owned by the current user. Existing symlinks,
+non-directories and unsafe permissions are rejected without changing them.
+Normal platform parent aliases are resolved before validating the leaf.
+Read-only recovery never creates a cache. With context delivery off, projection
+remains inert and reads the original capture. Failures retain that capture's
+exact digest and Turn receipt; they never rerun admission or spend quota.
+
+`quota context-project` 开启上下文投递后，不再要求另外手工准备缓存目录。
+省略 `--decision-output-root` 时复用原生会话的私有上下文目录；显式指定的新目录
+在已存在的父目录下以 `0700` 创建。已有目录仍须属于当前用户、权限私有且不是
+符号链接；不修改不安全目录的权限。平台正常的父路径别名先解析再检查末级目录。
+只读恢复不创建缓存；关闭上下文投递时保持无副作用，读取原始 capture。失败仍保留
+原始摘要和 Turn 回执，不重新准入或扣减额度。
