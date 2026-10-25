@@ -466,6 +466,42 @@ def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_p
         _turn_envelope_result("replan_view", **params, stage="acceptance", outcome_ref="missing")
 
 
+def test_summary_acceptance_uses_lossless_captured_index_after_cli_compaction(tmp_path):
+    from replan_packet_fixture import populated_replan_source
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+
+    source = populated_replan_source(tmp_path, acceptance=True)
+    contract = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"]
+    summary = {"goal_acceptance_contract": copy.deepcopy(contract), "total": 7,
+               "completed": 2, "selected_todo_id": "todo_independent"}
+    source["agent_todo_summary"] = summary
+    original = copy.deepcopy(source)
+    projected = _turn_envelope_result("replan_cli_view", payload=source)
+    cli = compact_quota_should_run_cli_payload(projected)
+    delivered = cli["agent_todo_summary"]
+    assert {key: delivered[key] for key in ("total", "completed", "selected_todo_id")} == {
+        key: summary[key] for key in ("total", "completed", "selected_todo_id")}
+    assert delivered["goal_acceptance_contract"] == {}
+    index = delivered["outcome_requirements_index"]
+    assert {key: value for key, value in index.items() if key != "outcome_refs"} == {
+        key: value for key, value in contract["outcome_requirements"].items() if key != "outcomes"}
+    _, review, params = _views(source)
+    assert index["outcome_refs"] == [row["outcome_ref"] for row in review["acceptance_index"]["outcomes"]]
+    for ref, outcome in zip(index["outcome_refs"], contract["outcome_requirements"]["outcomes"], strict=True):
+        assert _turn_envelope_result("replan_view", **params, stage="acceptance", outcome_ref=ref)["outcome"] == outcome
+    assert json_bytes(summary) - json_bytes(delivered) > 200 * 1024
+    assert source == original
+    # Same IDs are insufficient: changed facts and existing indices stay inline.
+    changed = copy.deepcopy(source)
+    changed["agent_todo_summary"]["goal_acceptance_contract"]["outcome_requirements"]["revision"] += 1
+    assert _turn_envelope_result("replan_cli_view", payload=changed)["agent_todo_summary"] == changed["agent_todo_summary"]
+    changed = copy.deepcopy(source)
+    changed["agent_todo_summary"]["outcome_requirements_index"] = {"revision": "other"}
+    assert _turn_envelope_result("replan_cli_view", payload=changed)["agent_todo_summary"] == changed["agent_todo_summary"]
+    source.pop("replan_read_path")
+    assert _turn_envelope_result("replan_cli_view", payload=source) == source
+
+
 def test_large_acceptance_is_not_repeated_in_cli_or_envelope_work_context(tmp_path):
     from replan_packet_fixture import populated_replan_source
 

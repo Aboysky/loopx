@@ -1253,8 +1253,19 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     // Defer only authoring/settlement format, not admission or stop facts.
     // This default captured path needs no optional native delta transport.
     const goal = replanGoalContext(payload, reads);
+    const summary = object(payload.agent_todo_summary);
+    const originalCore = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
+    // Reuse the same captured acceptance index for an exact summary copy.
+    // Otherwise this legacy carrier silently restores the full deferred detail.
+    // A different revision or an existing summary index remains untouched.
+    const indexedSummary = goal.core.outcome_requirements_index &&
+      !Object.hasOwn(summary, "outcome_requirements_index") &&
+      canonicalHash(summary.goal_acceptance_contract ?? null) === canonicalHash(originalCore.acceptance_contract ?? null)
+      ? {...summary, goal_acceptance_contract: goal.core.acceptance_contract,
+        outcome_requirements_index: goal.core.outcome_requirements_index} : summary;
     return {...payload,
       core_goal: goal.core,
+      ...(indexedSummary !== summary ? {agent_todo_summary: indexedSummary} : {}),
       ...(payload.planning_horizon ? {planning_horizon: goal.horizon} : {}),
       interaction_contract: {...interaction, cli_channel: deferredReplanWriteback(cli), agent_channel: {...agent,
         work_context: replanWorkContext(payload, object(agent.work_context))}},

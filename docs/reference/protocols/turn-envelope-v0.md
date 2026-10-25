@@ -111,6 +111,15 @@ original guidance and authoring examples. Explore has an optional, separately
 readable basis; unavailable evidence remains unavailable. These views do not
 assess acceptance, infer execution from counts or make a dependency global.
 
+The captured CLI Todo summary also reuses this outcome index when its complete
+acceptance contract exactly matches the reviewed Goal contract. Summary counts
+and selection facts remain intact; differing contracts or an existing summary
+index stay unchanged. This needs no extra read or native delta transport.
+
+中文：捕获后的 CLI Todo 摘要若携带与复盘 Goal 完全相同的验收契约，也复用
+同一验收索引，避免把已分段的细则重新整段交付。计数和任务选择事实保留；
+不同版本或已有摘要索引不变。无需新增读取或开启原生差分传输。
+
 `quota replan-view --decision-file <file> --source-hash <hash>` defaults to
 `--replan-stage review`; `writeback`, `acceptance --outcome-ref <ref>` and
 `explore` read the corresponding original-source detail. Missing/mutated sources
