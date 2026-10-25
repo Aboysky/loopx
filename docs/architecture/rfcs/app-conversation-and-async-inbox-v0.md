@@ -262,12 +262,20 @@ connection to revoke it; rollback must preserve its private delivery journals.
 
 Use **Continue original conversation** or the explicitly selected App steward
 entry above to reach this path. Old ordinary history is retained separately.
-This checkpoint covers text projection, not reply/thread relation mirroring,
-attachment transfer, retroactive insertion into Lark chronology or all-channel
-broadcast. An App attachment produces an explicit unsynchronized notice and a
-partial outbox, never a full-delivery claim. Synthetic real-HTTP/Core journeys
-cover repeated inputs, long text, restart, missing/unknown receipts, revocation
-and provider replacement. Installed provider readback remains a separate gate.
+This checkpoint covers text and bounded App image projection, not reply/thread
+relation mirroring, retroactive insertion into Lark chronology or all-channel
+broadcast. Canonical App images reuse the existing resource uploader and post
+sender, retaining caption and ordered inline images in the original private
+chat. Long captions keep images on the final concrete post only. Every upload
+and send rechecks the original source and current Core message/grant; completion
+also requires independent image-byte readback. Failed verification recovers the
+same message receipt without another upload or send. An upload whose provider
+acknowledgement is unknown, or a started send without a message locator, stays
+unconfirmed after restart. Earlier delivered attachment placeholders retain
+their frozen receipts and partial status; upgrades do not silently replay them.
+Synthetic real-HTTP/Core journeys cover repeated inputs, complete images and
+long captions, restart, missing/unknown receipts, byte mismatch, revocation and
+provider replacement. Installed provider readback remains a separate gate.
 
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
