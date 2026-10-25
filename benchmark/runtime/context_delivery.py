@@ -25,8 +25,7 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
     source = ["--capture-file", str(path), "--capture-sha256", digest]
     project = [*prefix, "context-project", *source,
         "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
-        "--turn-instance-id", turn_id, "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
-        "--decision-output-root", str(path.parent / "decisions")]
+        "--turn-instance-id", turn_id, "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"]]
     full = [*prefix, "context-read", *source]
     return ("Present that same immutable packet with:\n```sh\n" + shlex.join(project)
         + "\n```\nFollow the returned command and all next_command pages; reconstruct any delta against "

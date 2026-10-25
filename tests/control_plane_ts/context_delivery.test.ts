@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {compactSelectedTodoSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
+import {compactTodoContextSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
 
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
 
@@ -63,6 +63,11 @@ function inline(delivery: JsonObject, path: (string | number)[]): unknown {
       return value;
     }
     if (i === path.length) return undefined;
+    if (Object.hasOwn((node.values ?? {}) as JsonObject, path[i])) {
+      let value = (node.values as Record<string | number, unknown>)[path[i]];
+      for (const key of path.slice(i + 1)) value = (value as JsonObject)?.[key];
+      return value;
+    }
     node = ((node.changed ?? node.items) as Record<string | number, JsonObject>)?.[path[i]];
   }
 }
@@ -185,11 +190,11 @@ test("final assembly race, truncated or out-of-order delta uses same-capture ful
 
 test("cold-source title deduplication retains full body, distinct title and original capture", () => {
   const original = {todo: {text: long, title: long, note: "Keep this note", status: "open"}};
-  const result = compactSelectedTodoSource(original);
+  const result = compactTodoContextSource(original);
   assert.deepEqual(result, {todo: {text: long, note: "Keep this note", status: "open"}});
   assert.equal(original.todo.title, long);
   const distinct = {todo: {...original.todo, title: "A meaningful short title"}};
-  assert.strictEqual(compactSelectedTodoSource(distinct), distinct);
+  assert.strictEqual(compactTodoContextSource(distinct), distinct);
 });
 
 function evidenceContext(): JsonObject {
@@ -258,7 +263,7 @@ function packet(): JsonObject {
   return {goal_id: "goal", agent_id: "agent", should_run: true, selected_todo: {todo_id: "todo_work", claimed_by: "agent"},
     goal_boundary: {write_scope: ["src/**"], approval: "pending", stop: "publication"},
     unknown_future_control: {allowed: false}, handoff_readiness: {ready: false},
-    automation_liveness: {pause_allowed: false}, autonomous_replan_scope: {owner_agent_ids: ["agent"]}, planning_horizon: {items: [{id: "one", body: long}, {id: "two", body: long}]},
+    automation_liveness: {pause_allowed: false}, autonomous_replan_scope: {owner_agent_ids: ["agent"]}, planning_horizon: {work_items: [{id: "one", body: long}, {id: "two", body: long}]},
     interaction_contract: {mode: "bounded_delivery", user_channel: {notify: "quiet"},
       agent_channel: {delivery_allowed: true, must_attempt: true, work_context: context()},
       cli_channel: {spend_policy: "after_validation", settlement_plan: {identity: {turn: "turn-a"}, ordered_steps: [
@@ -272,6 +277,111 @@ function packetWarm(value: JsonObject, baseline: JsonObject, surface = "quota_pa
   return prepareContextDelivery({context: value, scope, capture_id: "capture-b", surface, baseline,
     retained: {complete: true, target: baseline.target}});
 }
+
+test("grouped literals carry current controls without interpreting object data as patch operations", () => {
+  const value = {registry: {body: long}, first: null, second: {value: 1, changed: {stop: true}},
+    values: {items: [false, 0, ""], removed: ["literal-data"]}, last: "current"};
+  const baseline = packetFull(value), delta = packetWarm(value, baseline);
+  assert.equal(delta.mode, "delta");
+  const literals = (delta.changes as JsonObject).values as JsonObject;
+  assert.ok(Object.hasOwn(literals, "first"));
+  assert.deepEqual(literals.values, value.values);
+  assert.deepEqual(inline(delta, ["second"]), value.second);
+  const capture = packetFull(value, "capture-b");
+  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: capture}).context, value);
+  const forged = structuredClone(delta);
+  delete ((forged.changes as JsonObject).values as JsonObject).first;
+  assert.equal(restoreContextDelivery({delivery: forged, baseline, current: capture}).mode, "full");
+  literals.second = {value: "wire-only"};
+  assert.deepEqual(value.second, {value: 1, changed: {stop: true}});
+  assert.deepEqual((baseline.context as typeof value).second, value.second);
+});
+
+test("quota and Turn replay original Goal intent without replaying the complete acceptance tree", () => {
+  for (const surface of ["quota_packet", "turn_envelope"]) {
+    const horizon = {schema_version: "quota_planning_horizon_v0", goal_id: "goal", agent_id: "agent",
+      core_goal: {objective: "Deliver the original Goal; stop before publication.", objective_source: "active_state",
+        objective_missing: false, read_action: "read-current-goal", acceptance_contract: {requirements: [long]}},
+      work_items: [{todo_id: "a", text: long}, {todo_id: "b", text: long}], relations: [],
+      unknown_future_constraint: {stop: true}};
+    const before: JsonObject = surface === "quota_packet" ? {planning_horizon: horizon}
+      : {action: {delivery_allowed: true, planning_horizon: horizon}};
+    const path = surface === "quota_packet" ? ["planning_horizon"] : ["action", "planning_horizon"];
+    const baseline = packetFull(before, "capture-a", surface);
+    const delta = packetWarm(before, baseline, surface);
+    assert.equal(delta.mode, "delta");
+    for (const [key, value] of Object.entries(horizon.core_goal)) if (key !== "acceptance_contract")
+      assert.deepEqual(inline(delta, [...path, "core_goal", key]), value);
+    assert.equal(inline(delta, [...path, "core_goal", "acceptance_contract"]), undefined);
+    assert.equal(inline(delta, [...path, "work_items"]), undefined);
+    assert.deepEqual(inline(delta, [...path, "unknown_future_constraint"]), {stop: true});
+    const current = structuredClone(before);
+    const next = (surface === "quota_packet" ? current.planning_horizon
+      : (current.action as JsonObject).planning_horizon) as typeof horizon;
+    next.core_goal.objective = "Keep the corrected original Goal and its new stop.";
+    next.core_goal.acceptance_contract.requirements.push("A late cumulative requirement.");
+    next.work_items.reverse();
+    const changed = packetWarm(current, baseline, surface), capture = packetFull(current, "capture-b", surface);
+    assert.deepEqual(inline(changed, [...path, "core_goal", "objective"]), next.core_goal.objective);
+    assert.deepEqual(restoreContextDelivery({delivery: changed, baseline, current: capture}).context, current);
+    assert.deepEqual(restoreContextDelivery({delivery: changed, current: capture}).context, current);
+  }
+});
+
+test("Turn capsule reuses complete guidance but repeats current closure and unknown controls", () => {
+  const value = {action: {delivery_allowed: true}, contract_capsule: {vision_continuation_audit: {
+    required: true, required_before_closeout: [long], authoritative_evidence_kinds: ["source"],
+    not_satisfied_by: ["a receipt"], unknown_future_gate: {allowed: false},
+    vision_gap_judge: {done: false, decision: "continue", external_research_instruction: long,
+      research_writeback_required_when_used: ["source", "finding"]}}}};
+  const baseline = packetFull(value, "capture-a", "turn_envelope");
+  const delta = packetWarm(value, baseline, "turn_envelope");
+  assert.equal(delta.mode, "delta");
+  const prefix = ["contract_capsule", "vision_continuation_audit"];
+  assert.equal(inline(delta, [...prefix, "required"]), true);
+  assert.equal(inline(delta, [...prefix, "vision_gap_judge", "done"]), false);
+  assert.deepEqual(inline(delta, [...prefix, "unknown_future_gate"]), {allowed: false});
+  assert.equal(inline(delta, [...prefix, "vision_gap_judge", "external_research_instruction"]), undefined);
+  const current = structuredClone(value);
+  current.contract_capsule.vision_continuation_audit.vision_gap_judge.decision = "stop";
+  const changed = packetWarm(current, baseline, "turn_envelope");
+  assert.equal(inline(changed, [...prefix, "vision_gap_judge", "decision"]), "stop");
+  assert.deepEqual(restoreContextDelivery({delivery: changed, baseline,
+    current: packetFull(current, "capture-b", "turn_envelope")}).context, current);
+});
+
+test("registered branch evidence can be reused without retaining selection or resume authority", () => {
+  for (const surface of ["work_context", "quota_packet", "turn_envelope"]) {
+    const work = evidenceContext(), harness = source(work, 0).harness as JsonObject;
+    harness.selected_branches = [{todo_id: "a", selection_status: "selected", status: "open", resume_ready: true,
+      typed_evidence_audit: {nodes: [{node_id: "node-a", title: long}], findings: [{status: "confirmed", finding: long}]}}];
+    harness.link_evidence_template = ["loopx", "todo", "update", "--todo-id", "<todo-id>", "--evidence", long];
+    const before: JsonObject = surface === "work_context" ? work
+      : surface === "quota_packet" ? {interaction_contract: {agent_channel: {work_context: work}}} : {work_context: work};
+    const root = surface === "work_context" ? [] : surface === "quota_packet"
+      ? ["interaction_contract", "agent_channel", "work_context"] : ["work_context"];
+    const path = [...root, "sources", 0, "content", "harness"];
+    const baseline = packetFull(before, "capture-a", surface), delta = packetWarm(before, baseline, surface);
+    assert.equal(delta.mode, "delta");
+    assert.equal(inline(delta, [...path, "selected_branches", 0, "todo_id"]), "a");
+    assert.equal(inline(delta, [...path, "selected_branches", 0, "resume_ready"]), true);
+    assert.equal(inline(delta, [...path, "selected_branches", 0, "typed_evidence_audit"]), undefined);
+    const current = structuredClone(before);
+    let next: unknown = current;
+    for (const key of [...path, "selected_branches", 0]) next = (next as Record<string | number, unknown>)[key];
+    const branch = next as JsonObject;
+    branch.selection_status = "rejected"; branch.resume_ready = false;
+    branch.typed_evidence_audit = {findings: [{status: "refuted", finding: "New counterexample."}]};
+    const changed = packetWarm(current, baseline, surface), capture = packetFull(current, "capture-b", surface);
+    assert.equal(inline(changed, [...path, "selected_branches", 0, "resume_ready"]), false);
+    assert.deepEqual(restoreContextDelivery({delivery: changed, baseline, current: capture}).context, current);
+    const unchangedCapture = packetFull(before, "capture-b", surface);
+    // Reconstructing the same data is insufficient if unchanged live controls
+    // were omitted from this input rather than supplied in the current frame.
+    assert.equal(restoreContextDelivery({delivery: {...delta, changes: null}, baseline,
+      current: unchangedCapture}).mode, "full");
+  }
+});
 
 test("whole packet reuses complete projections; live controls and unknown fields remain inline", () => {
   const before = packet(), baseline = packetFull(before), current = structuredClone(before);
@@ -297,18 +407,20 @@ test("whole packet reuses complete projections; live controls and unknown fields
   assert.equal(inline(delta, ["planning_horizon"]), undefined);
   // A forged wire can reconstruct correctly yet omit an unchanged live gate.
   const broken = structuredClone(delta);
-  delete ((broken.changes as JsonObject).changed as JsonObject).should_run;
+  const changes = broken.changes as JsonObject;
+  delete ((changes.values as JsonObject)?.should_run !== undefined
+    ? changes.values as JsonObject : changes.changed as JsonObject).should_run;
   assert.equal(restoreContextDelivery({delivery: broken, baseline, current: packetFull(current, "capture-b")}).mode, "full");
 });
 
 test("array edits preserve append, removal, reorder, duplicate entries and exact scalar types", () => {
   const before = packet(), baseline = packetFull(before);
-  const old = (before.planning_horizon as JsonObject).items as JsonObject[];
+  const old = (before.planning_horizon as JsonObject).work_items as JsonObject[];
   const cases: unknown[] = [[], [old[1]], [...old, {id: "three", body: long}], [old[1], old[0]],
     [old[0], old[0]], [null, "", false, 0], null, "", {items: old},
     [{...old[0], late_constraint: "STOP now", revision: "r2"}, old[1]]];
   for (const items of cases) {
-    const current = {...before, planning_horizon: {items}};
+    const current = {...before, planning_horizon: {work_items: items}};
     const delta = packetWarm(current, baseline);
     const capture = packetFull(current, "capture-b");
     const restored = delta.mode === "full" ? delta : restoreContextDelivery({delivery: delta, baseline, current: capture});

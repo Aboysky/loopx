@@ -10,6 +10,87 @@ import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
+import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
+import {EffectiveAction} from "../quota/effective_action.generated.ts";
+
+/** A native refusal before execution can owe governance, never a business replay. */
+function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, sessionId: unknown): void {
+  if (params.report_selection_recovery == null) return;
+  if (request.work_kind !== "report")
+    throw new EffectRuntimeRequestError("selection recovery belongs only to its original report");
+  const proof = requireJsonObject(params.report_selection_recovery, "original selection refusal");
+  const original = requireJsonObject(proof.original, "original refused Chat Turn");
+  const prior = requireJsonObject(original.loopx_request, "original refused request");
+  const result = requireJsonObject(requireJsonObject(original.response, "original response").native_loopx, "native refusal");
+  const refusal = readTurnSelectionRejection(result.selection_rejection, request.todo_id);
+  const effects = requireJsonObject(result.effects, "original invocation effects");
+  if (original.session_id !== sessionId || original.origin !== "native_loopx"
+      || original.loopx_execution !== true || original.status !== "completed"
+      || original.delta_count !== 0 || original.upstream_turn_id !== null
+      || Object.keys(prior).length !== Object.keys(request).length
+      || Object.keys(request).some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+      || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
+      || result.mode !== "run_once" || result.effects_scope !== "current_invocation"
+      || result.error_code !== "turn_todo_selection_deferred" || result.resume_turn_key != null
+      || refusal.state !== "deferred" || refusal.reason_code !== "autonomous_replan"
+      || refusal.recovery_action !== "reenter_guard_without_selection"
+      || refusal.status_health_ok !== true || refusal.contract_error_count !== 0
+      || !(refusal.delivery_preemptions as unknown[]).includes("autonomous_replan")
+      || Object.keys(effects).length !== 4
+      || ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"].some(key => effects[key] !== false)
+      || proof.generation_present !== false) {
+    throw new EffectRuntimeRequestError("report selection recovery requires the original proven pre-execution replan refusal");
+  }
+  if (proof.probe == null) return;
+  // The original host returned before calling its model when a fresh guard
+  // no longer owed governance. Absence of output alone cannot prove that.
+  const probe = requireJsonObject(proof.probe, "original host admission probe");
+  const observed = requireJsonObject(probe.turn, "original probe Chat Turn");
+  const journal = requireJsonObject(probe.journal, "canonical probe journal");
+  const inspection = requireJsonObject(probe.inspection, "canonical probe inspection");
+  const recovery = requireJsonObject(inspection.recovery_decision, "probe recovery decision");
+  const recorded = requireJsonObject(inspection.recorded_effects, "probe effects");
+  const plan = requireJsonObject(journal.plan, "probe plan");
+  const route = requireJsonObject(plan.route, "probe route");
+  const envelope = requireJsonObject(plan.turn_envelope, "probe envelope");
+  const action = requireJsonObject(envelope.action, "probe action");
+  const selected = requireJsonObject(action.selected_todo, "probe selected task");
+  const identity = requireJsonObject(requireJsonObject(requireJsonObject(plan.transaction, "probe transaction")
+    .settlement_plan, "probe settlement").identity, "probe identity");
+  const host = requireJsonObject(journal.host, "probe host");
+  const stopped = requireJsonObject(journal.host_result, "probe host result");
+  const runningHere = params.turn != null && requireJsonObject(params.turn, "current Chat Turn").turn_id === observed.turn_id
+    && ["starting", "running"].includes(String(observed.status));
+  if (observed.session_id !== sessionId || typeof observed.turn_id !== "string" || !/^[a-f0-9]{32}$/.test(observed.turn_id)
+      || observed.turn_id === original.turn_id
+      || observed.origin !== "native_loopx" || observed.loopx_execution !== true
+      || observed.delta_count !== 0 || observed.upstream_turn_id !== null || observed.error_code != null || observed.error != null
+      || JSON.stringify(observed.loopx_request) !== JSON.stringify(request)
+      || !(runningHere || observed.status === "completed"
+        && JSON.stringify(requireJsonObject(observed.response, "probe response").native_loopx) === JSON.stringify(result))
+      || journal.schema_version !== "loopx_turn_journal_v0" || !ENVELOPED_SHA256_PATTERN.test(String(journal.turn_key))
+      || journal.status !== "stopped" || journal.goal_id !== envelope.goal_id
+      || journal.host_attempt_count !== 1 || journal.result_kind !== "wait"
+      || JSON.stringify(journal.completed_phases) !== JSON.stringify(["host_execute", "typed_result", "validation"])
+      || host.kind !== "codex-app-server" || host.executable !== "built-in"
+      || stopped.schema_version !== "loopx_turn_result_v0" || stopped.turn_key !== journal.turn_key
+      || stopped.result_kind !== "wait" || stopped.classification !== "report_replan_not_admitted"
+      || inspection.schema_version !== "loopx_turn_journal_inspection_v1" || inspection.ok !== true
+      || inspection.goal_matches !== true || inspection.owner_matches !== true || inspection.turn_key_matches !== true
+      || inspection.journal_consistent !== true || inspection.journal_status !== "stopped"
+      || recovery.action !== "return_existing" || recovery.reinvoke_host !== false
+      || recorded.host_invoked !== true || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => recorded[key] !== false)
+      || route.kind !== "ready_for_host" || route.effective_action !== EffectiveAction.NORMAL_RUN
+      || envelope.effective_action !== EffectiveAction.NORMAL_RUN || envelope.replan_action_packet != null
+      || action.must_attempt !== true || action.delivery_allowed !== true || selected.todo_id !== identity.todo_id
+      || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
+      || identity.goal_id !== requireJsonObject(request.actor, "report actor").goal_id
+      || identity.agent_id !== requireJsonObject(request.actor, "report actor").agent_id
+      || typeof identity.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(identity.todo_id)
+      || identity.turn_instance_id !== request.turn_instance_id + ".replan") {
+    throw new EffectRuntimeRequestError("report continuation requires its canonical host-only admission stop; retain all model or unknown work");
+  }
+}
 
 /** Registration and current Goal lifetime are observed by the host, never by
  * a message or the selected executor/model. This creates no scheduling grant. */
@@ -152,6 +233,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
     : session.active_turn_id || params.queued_turn_count !== 0) {
     throw new EffectRuntimeRequestError("the original conversation is busy or no longer owns this Turn; retain its current work");
   }
+  admitReportSelectionRecovery(params, request, session.session_id);
   return {actor, workspace_path: goal.workspace_path, host: "codex-app-server", observation_only: observationOnly};
 }
 
@@ -269,6 +351,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       || request.validation_command.some(value => typeof value !== "string" || !value || value.includes("\0") || value.length > 10000))) {
     throw new EffectRuntimeRequestError("the host's native validator must be a bounded argv");
   }
+  admitReportSelectionRecovery(params, request, current.sessionId);
   if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
       || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
       || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request))) {

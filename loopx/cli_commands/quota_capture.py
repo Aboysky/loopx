@@ -117,8 +117,9 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
     Publication is delayed until this native tool runs, so the same actual-input
-    observer can qualify a resumed baseline. Any optional transport failure
-    returns the original full read reference, never a replacement guard.
+    observer can qualify a resumed baseline. Optional codec failure returns the
+    original full read reference. An unsafe recovery selector fails explicitly
+    with that same reference, never a replacement guard.
     Invalid run-mode opt-ins fail before that optional transport path.
     """
     try:
@@ -144,24 +145,32 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     full_reference = dict(reference)
     mode = "full"
     target = None
+    native_prepared = False
     try:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
         from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
-        root = Path(args.decision_output_root).expanduser().absolute()
-        metadata = root.lstat()
-        if root.resolve(strict=True) != root or not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
-            raise ValueError("saved projection needs an existing private physical capture root")
         directory = codex_context_directory(directory=args.codex_context_dir,
             root=args.codex_context_root, create=True)
         if not directory:
             raise ValueError("native context is unavailable")
+        # The session already owns a private recovery location. Callers need
+        # only supply a separate cache root when they want another location.
+        # Create a missing leaf privately; never chmod or follow an existing
+        # leaf. Normal platform parent aliases (such as /tmp) remain usable.
+        root = Path(args.decision_output_root or directory).expanduser().absolute()
+        root = root.parent.resolve(strict=True) / root.name
+        root.mkdir(mode=0o700, exist_ok=True)
+        metadata = root.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            raise ValueError("saved projection needs a private physical capture root owned by this user")
         cache = Path(tempfile.mkdtemp(prefix="context-", dir=root))
         projected = project_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest())
+        native_prepared = True
         wire = cache / "delivery.json"
         write_decision_capture(wire, projected)
         digest = hashlib.sha256(wire.read_bytes()).hexdigest()
@@ -174,8 +183,22 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
                 # Deliver that exact full body plus its target in this small
                 # descriptor, rather than paging another wrapper around it.
                 reference = {key: projected["recovery"][key] for key in ("path", "sha256", "command")}
-    except (OSError, ValueError, TypeError, RecursionError):
-        pass  # Optional presentation unavailable: the original full reference is already verified.
+    except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError) as exc:
+        if isinstance(exc, QuotaDecisionTransportError) or (activation["enabled"] and not native_prepared):
+            if not isinstance(exc, QuotaDecisionTransportError):
+                exc = QuotaDecisionTransportError(
+                    "Current context recovery could not be prepared. Read the saved "
+                    "original decision and receipt; do not rerun admission."
+                )
+            return {"ok": False, "error_code": exc.error_code,
+                "reason": " ".join(str(exc).split())[:500],
+                "heartbeat_receipt": receipt, "capture_sha256": args.capture_sha256,
+                "recovery": full_reference,
+                "instruction": "Context presentation was not published. Read recovery.command for the "
+                    "original captured decision and preserve its Turn receipt; do not rerun admission. "
+                    "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_READ_GUIDANCE}
+        # Off is inert; after native preparation an optional wire write can fall
+        # back to the original reference without leaving an older selector live.
     return {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
         "recovery": full_reference,
         "capture_sha256": args.capture_sha256,
