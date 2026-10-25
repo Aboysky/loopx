@@ -5,6 +5,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {reusableTurnContextPaths} from "../capability_hooks.ts";
+import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
 
 const VERSION = "context_delivery_v1";
 const MAX_ANCESTRY = 32;
@@ -21,14 +22,26 @@ const equal = (a: unknown, b: unknown): boolean => {
 const digest = (value: unknown): string => `sha256:${canonicalAuthoritySha256(value)}`;
 const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
 
-/** A title equal to the complete body carries no second instruction. Never use
- * the bounded hot title/text as the source, and retain a genuinely distinct title. */
-export function compactSelectedTodoSource(content: JsonObject): JsonObject {
+/** Context keeps complete records and provenance, rather than repeating the
+ * canonical reader's field dictionary. Unknown read schemas remain verbatim.
+ * A title equal to the complete body carries no second instruction. */
+export function compactTodoContextSource(content: JsonObject): JsonObject {
+  let result = content;
   const todo = jsonObject(content.todo);
-  if (!todo || typeof todo.text !== "string" || todo.title !== todo.text) return content;
-  const copy = {...todo};
-  delete copy.title;
-  return {...content, todo: copy};
+  if (todo && typeof todo.text === "string" && todo.title === todo.text) {
+    const copy = {...todo};
+    delete copy.title;
+    result = {...result, todo: copy};
+  }
+  const authority = jsonObject(content.authority_read);
+  const model = jsonObject(authority?.todo_read_model);
+  if (model?.schema_version === COORDINATION_STATE_CONTRACT.todo_read_record.schema_version
+      && Array.isArray(model.contract_fields)
+      && model.contract_fields.every(field => typeof field === "string")) {
+    const {contract_fields: _dictionary, ...metadata} = model;
+    result = {...result, authority_read: {...authority, todo_read_model: metadata}};
+  }
+  return result;
 }
 
 function parentAt(root: JsonObject, path: Path): Record<string | number, unknown> {
@@ -121,8 +134,10 @@ function splitContext(context: JsonObject): Split {
       sourceIds.add(id);
       for (const path of paths) {
         let value: unknown = content;
-        for (const key of path.slice(0, -1)) value = jsonObject(value)?.[key];
-        if (jsonObject(value)) add(JSON.stringify([...identity, ...path]), [...prefix, ...path], true);
+        for (const key of path.slice(0, -1)) value = Array.isArray(value)
+          ? value[Number(key)] : jsonObject(value)?.[key];
+        if (jsonObject(value) || Array.isArray(value))
+          add(JSON.stringify([...identity, ...path]), [...prefix, ...path], true);
       }
     }
   }
@@ -133,8 +148,8 @@ function splitContext(context: JsonObject): Split {
  * Keep one exact codec for quota and Turn; source-only callers use the same codec. */
 const SURFACES = ["work_context", "quota_packet", "turn_envelope"] as const;
 type Surface = typeof SURFACES[number];
-type Delta = {value: unknown} | {changed: Record<string, Delta>; removed?: string[]}
-  | {items: Record<string, Delta>; length?: number};
+type Delta = {value: unknown} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
+  | {items: Record<string, Delta>; values?: Record<string, unknown>; length?: number};
 const pathKey = (path: Path): string => JSON.stringify(path);
 
 // These are existing quota projections. Unknown root fields stay fresh. Within
@@ -175,10 +190,11 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
     const audit = jsonObject(value);
     if (!audit) { paths.push(path); return; }
     for (const [key, item] of Object.entries(audit)) {
-      if (key === "required_before_closeout") continue; // complete binding instructions in the exact patch
+      if (["required_before_closeout", "authoritative_evidence_kinds", "not_satisfied_by"].includes(key)) continue;
       if (key !== "vision_gap_judge" || !jsonObject(item)) { paths.push([...path, key]); continue; }
       for (const field of Object.keys(item as JsonObject))
-        if (!["agent_judge_instruction", "evidence_read_instruction", "registry_read_instruction", "done_only_when", "continue_when"].includes(field))
+        if (!["agent_judge_instruction", "evidence_read_instruction", "registry_read_instruction",
+          "external_research_instruction", "research_writeback_required_when_used", "done_only_when", "continue_when"].includes(field))
           paths.push([...path, key, field]);
     }
   };
@@ -202,10 +218,30 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
       });
     }
   };
+  const horizon = (value: unknown, path: Path) => {
+    const object = jsonObject(value);
+    if (!object) { paths.push(path); return; }
+    for (const [field, item] of Object.entries(object)) {
+      if (field === "core_goal" && jsonObject(item)) {
+        // Repeat the original intent, provenance and availability. The complete
+        // cumulative acceptance tree may be large; it is not the Goal sentence.
+        for (const key of Object.keys(item as JsonObject))
+          if (key !== "acceptance_contract") paths.push([...path, field, key]);
+      } else if (!["work_items", "relations", "acceptance_gaps", "attention_todo_ids",
+        "completeness", "detail_refs", "detail_refs_ref", "selection_contract"].includes(field)) paths.push([...path, field]);
+    }
+  };
   if (surface === "work_context") work(context, []);
   else if (surface === "turn_envelope") {
     for (const [key, value] of Object.entries(context)) {
       if (key === "work_context") work(value, [key]);
+      else if ((key === "action" || key === "contract_capsule") && jsonObject(value)) {
+        for (const [field, item] of Object.entries(value as JsonObject)) {
+          if (key === "action" && field === "planning_horizon") horizon(item, [key, field]);
+          else if (key === "contract_capsule" && field === "vision_continuation_audit") vision(item, [key, field]);
+          else paths.push([key, field]);
+        }
+      }
       else if (key === "writeback") {
         const writeback = jsonObject(value);
         if (!writeback) { paths.push([key]); continue; }
@@ -217,6 +253,7 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
     }
   } else {
     for (const [key, value] of Object.entries(context)) {
+      if (key === "planning_horizon") { horizon(value, [key]); continue; }
       if (key !== "interaction_contract") {
         if (!REUSABLE_PACKET_FIELDS.has(key) && !legacyQuotaFields.includes(key)) paths.push([key]);
         continue;
@@ -240,6 +277,21 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
   return {paths, valid};
 }
 
+/** Group complete CURRENT literals, not baseline references. Keep the cheaper
+ * ordinary edit when grouping would grow metadata; both containers share this rule. */
+function groupCurrentValues(delta: Exclude<Delta, {value: unknown}>): Delta {
+  const children = Object.entries("items" in delta ? delta.items : delta.changed ?? {});
+  const values = children.filter(([, child]) => "value" in child);
+  if (values.length < 2) return delta;
+  const nested = Object.fromEntries(children.filter(([, child]) => !("value" in child)));
+  const grouped: Exclude<Delta, {value: unknown}> = { ...delta,
+    ...("items" in delta ? {items: nested} : {changed: nested}),
+    values: Object.fromEntries(values.map(([key, child]) => [key, (child as {value: unknown}).value])),
+  };
+  if (!("items" in grouped) && !Object.keys(nested).length) delete grouped.changed;
+  return bytes(grouped) < bytes(delta) ? grouped : delta;
+}
+
 function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | null {
   const exact = new Set(forced.map(pathKey)), ancestors = new Set<string>();
   for (const path of forced) for (let i = 0; i < path.length; i++) ancestors.add(pathKey(path.slice(0, i)));
@@ -256,14 +308,14 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         if (child) changed.push([field, child]);
       }
       const removed = Object.keys(old).filter(field => !Object.hasOwn(next, field));
-      delta = {changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})};
+      delta = groupCurrentValues({changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})});
     } else if (Array.isArray(a) && Array.isArray(b)) {
       const items: [string, Delta][] = [];
       b.forEach((value, i) => {
         const child = i < a.length ? visit(a[i], value, [...path, i]) : {value: clone(value)};
         if (child) items.push([String(i), child]);
       });
-      delta = {items: Object.fromEntries(items), ...(a.length !== b.length ? {length: b.length} : {})};
+      delta = groupCurrentValues({items: Object.fromEntries(items), ...(a.length !== b.length ? {length: b.length} : {})});
     } else return {value: clone(b)};
     // Sizing does not publish a value. Copy only a replacement that is chosen,
     // rather than every unchanged subtree and every discarded ancestor value.
@@ -282,12 +334,15 @@ function applyTree(before: unknown, delta: Delta | null): unknown {
     if (!Array.isArray(before)) throw new Error("array baseline missing");
     const result = clone(before);
     if (delta.length !== undefined) result.length = delta.length;
+    for (const [key, value] of Object.entries(delta.values ?? {})) result[Number(key)] = clone(value);
     for (const [key, item] of Object.entries(delta.items)) result[Number(key)] = applyTree(before[Number(key)], item);
     return result;
   }
   const source = requireJsonObject(before, "object baseline"), result = clone(source);
   for (const key of delta.removed ?? []) delete result[key];
-  for (const [key, item] of Object.entries(delta.changed)) {
+  for (const [key, value] of Object.entries(delta.values ?? {}))
+    Object.defineProperty(result, key, {value: clone(value), enumerable: true, writable: true, configurable: true});
+  for (const [key, item] of Object.entries(delta.changed ?? {})) {
     // Avoid prototype setters for JSON property names such as __proto__.
     Object.defineProperty(result, key, {value: applyTree(Object.hasOwn(source, key) ? source[key] : undefined, item),
       enumerable: true, writable: true, configurable: true});
@@ -334,7 +389,7 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   const changes = changeTree(prior, context, after.paths);
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
     ancestry: Number(depth) + 1, changes,
-    instruction: "Current controls are inline even when unchanged. Other fields inherit the confirmed baseline; all requirements remain binding. Changes contain complete values, object changes/removals or exact array-index edits. Lost context triggers automatic full recovery from this capture, never an owner question."};
+    instruction: "Current controls are inline even when unchanged. Other fields inherit the confirmed baseline; all requirements remain binding. A value replaces its subtree; values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
   return delta;

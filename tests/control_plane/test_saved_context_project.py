@@ -44,7 +44,7 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
         assert code == 0 and page["content"].encode() == path.read_bytes()[:page["next_offset"]]
 
 
-@pytest.mark.parametrize("root_kind", ["unsafe", "symlink", "missing"])
+@pytest.mark.parametrize("root_kind", ["unsafe", "symlink", "missing_parent"])
 def test_enabled_cache_preparation_failure_returns_error_with_original_reference(tmp_path, monkeypatch, root_kind):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import project_saved_context_capture
@@ -66,6 +66,8 @@ def test_enabled_cache_preparation_failure_returns_error_with_original_reference
         root.chmod(0o755)
     elif root_kind == "symlink":
         root.symlink_to(context, target_is_directory=True)
+    if root_kind == "missing_parent":
+        root = root / "uncreated-parent" / "cache"
     digest = hashlib.sha256(raw).hexdigest()
     args = build_parser().parse_args(["--format", "json", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
@@ -76,6 +78,55 @@ def test_enabled_cache_preparation_failure_returns_error_with_original_reference
     assert result["recovery"]["path"] == str(path) and result["recovery"]["sha256"] == digest
     assert "prior.json" not in json.dumps(result)
     assert path.read_bytes() == raw and stale.read_bytes() == stale_bytes
+
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("cache_location", ["default", "new", "existing"])
+def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, monkeypatch, enabled, cache_location):
+    from loopx.control_plane.turn_driver.codex_context import read_codex_context_reference
+
+    context, root = tmp_path / "native", tmp_path / "cache"
+    context.mkdir(mode=0o700)
+    if cache_location == "existing":
+        root.mkdir(mode=0o700)
+    path = tmp_path / "original.json"
+    original = {"ok": True, "goal_id": "saved-goal", "agent_identity": {"agent_id": "saved-agent"},
+        "heartbeat_receipt": {"turn_instance_id": "saved-turn"},
+        "requirement": "Retain every requirement and the original decision identity."}
+    raw = json.dumps(original).encode()
+    path.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    monkeypatch.setenv("CODEX_THREAD_ID", "native-session")
+    monkeypatch.chdir(tmp_path)
+    if enabled:
+        from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+        codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
+            "session_id": "native-session", "cwd": str(tmp_path)})
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
+        "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
+        "--codex-app", "--context-delivery", "on" if enabled else "off", "--codex-context-dir", str(context)]
+    if cache_location != "default":
+        args += ["--decision-output-root", str(root)]
+    code, result = _run_cli(registry, runtime, *args, cwd=tmp_path)
+    assert code == 0 and result["ok"] and result["mode"] == "full", result
+    assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+    if enabled:
+        actual_root = context if cache_location == "default" else root
+        assert actual_root.stat().st_mode & 0o077 == 0
+        assert list(actual_root.glob("context-*"))
+        recovered_path, recovered_digest = read_codex_context_reference(str(context),
+            goal_id="saved-goal", agent_id="saved-agent")
+        recovered = Path(recovered_path).read_bytes()
+        assert hashlib.sha256(recovered).hexdigest() == recovered_digest
+        assert json.loads(recovered) == original
+    else:
+        assert not list(context.iterdir())
+        assert root.exists() == (cache_location == "existing")
+    command = shlex.split(result["command"])
+    code, page = _run_cli(registry, runtime, *command[3:], cwd=tmp_path)
+    assert code == 0 and json.loads(page["content"]) == original
 
 
 def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path, monkeypatch):
@@ -183,6 +234,7 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
         assert argv[argv.index("--capture-sha256") + 1] == "a" * 64
         assert "should-run" not in argv and "spend-slot" not in argv
     assert commands[0][commands[0].index("--turn-instance-id") + 1] == "original-turn"
+    assert "--decision-output-root" not in commands[0]
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
