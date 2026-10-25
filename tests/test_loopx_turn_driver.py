@@ -1292,7 +1292,8 @@ def test_turn_plan_keeps_todoless_replan_for_controller(effective_action: str) -
     assert payload["turn_envelope"] == envelope
 
 
-@pytest.mark.parametrize("hold", [None, "should_run", "must_attempt", "signature", "obligation", "business"])
+@pytest.mark.parametrize("hold", [None, "should_run", "must_attempt", "signature", "obligation", "business",
+                                  "missing_binding", "identity", "turn"])
 def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
     from loopx.control_plane.quota.settlement import build_turn_scoped_cli_settlement_plan
     obligation = "replan-" + "a" * 16
@@ -1306,13 +1307,17 @@ def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
             "user_channel": {"action_required": False, "notify": "DONT_NOTIFY"},
             "agent_channel": {"must_attempt": hold != "must_attempt", "delivery_allowed": False, "quiet_noop_allowed": False},
             "cli_channel": {"spend_after_validation": True, "settlement_plan": settlement}}}
+    if hold == "missing_binding":
+        del decision["interaction_contract"]["cli_channel"]["settlement_plan"]
+    if hold == "identity":
+        settlement["identity"]["agent_id"] = "different-agent"
     envelope = build_turn_envelope(decision)
     if hold == "signature":
         envelope["action_signature"]["matches"] = False
     if hold == "obligation":
         envelope["replan_action_packet"]["obligation_id"] = "replan-" + "b" * 16
     plan = build_loopx_turn_plan(envelope, host="codex-app-server", execution_mode="isolated-headless",
-        session_scope="agent", turn_instance_id="fixture.replan")
+        session_scope="agent", turn_instance_id="different-turn" if hold == "turn" else "fixture.replan")
     assert plan["route"]["would_invoke_host"] is (hold is None)
     assert plan["route"]["selected_todo"] is None
     assert not any(plan["effects"].values())
