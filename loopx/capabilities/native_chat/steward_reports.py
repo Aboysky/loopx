@@ -374,12 +374,18 @@ def session_report_configuration_guard(controller: Any, goal_id: str, proposed: 
             actor = ManagedSessionReports(controller).selected(destination)["actor"]
             if actor["goal_id"] != goal_id:
                 raise ValueError("select the original managed Agent Session in this Goal")
+            if proposed.get("profile_preset") == "session-task":
+                from .session_calendar_tasks import SessionCalendarTasks
+                SessionCalendarTasks(controller).source_task(actor, proposed.get("task") or {})
         journal = read_cadence_journal(runtime_root=controller.coordination_runtime_root, goal_id=goal_id)
         cancellation = None
         if journal and journal["publication"] is None and not journal.get("retirement"):
             window = journal["window"]
             reports = ManagedSessionReports(controller)
             folder = attempt_directory(controller.coordination_runtime_root, window)
+            if window["profile_ref"]["profile_id"] == "session_task":
+                from .session_calendar_tasks import SessionCalendarTasks
+                reports = SessionCalendarTasks(controller)
             if folder.exists() and not reports._published_window(window):
                 before = {k: v for k, v in current.items() if k != "enabled"}
                 after = {k: v for k, v in (proposed or {}).items() if k != "enabled"}
@@ -387,6 +393,8 @@ def session_report_configuration_guard(controller: Any, goal_id: str, proposed: 
                     actor = reports._frozen_actor(window)
                     failure = reports._known_generation_failure(actor, window) if actor else None
                     if (proposed is not None or not failure) and (current or proposed is not None):
+                        if window["profile_ref"]["profile_id"] == "session_task":
+                            raise PendingStewardReportError("This calendar task is unfinished or its result is unconfirmed. Pause or restore its original plan; only a known failed independent validation can be cleared.")
                         raise PendingStewardReportError("The original frozen report still requires verified delivery. Pause or restore the same plan; clear a known failed generation before changing its schedule or conversation.")
                     if failure:
                         cancellation = actor, window, failure

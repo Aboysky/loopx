@@ -413,6 +413,17 @@ class StewardTurnHost:
             prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn)) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
             if request.get("work_kind") == "report":
                 prompt += report_context
+            if request.get("work_kind") == "scheduled_task":
+                from .session_calendar_tasks import SessionCalendarTasks
+                basis = SessionCalendarTasks(self.controller).admission(request)
+                # Read the completed source Task's criteria and referenced permitted
+                # artifacts. Calendar configuration cannot install host argv
+                # or enlarge the original Task's execution scope.
+                prompt += "\nOriginal native calendar task criteria; existing Goal/Task authority and stop conditions still apply:\n" + json.dumps({
+                    "task": basis["definition"]["source_task"]["text"],
+                    "source_todo_id": basis["definition"]["source_task"]["todo_id"],
+                    "window_start": basis["window"]["start_at"], "window_end": basis["window"]["due_at"],
+                }, ensure_ascii=False)
             previous_guard = adapter.session._launch_guard
 
             @contextmanager

@@ -6,6 +6,11 @@ Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
+The same local calendar can explicitly repeat an already completed native Task
+in its original managed Session. This backend/configuration slice is described
+below; arbitrary new tasks from natural language and the unified Agent UI
+remain separate, unfinished acceptance.
+
 The steward becomes a persistent LoopX-managed Agent. Its original private
 conversation remains the user's entry point. Native monitor Todos, Turn
 admission, scheduling and periodic-report publication own recurring work.
@@ -732,3 +737,102 @@ alone does not activate a subscription or deliver a report. The opt-in original
 steward report path binds it to the admitted calendar window, native generation
 and private full-body delivery; installed adoption, current configuration and
 the original production route still need independent verification.
+
+
+## Repeat an existing native Task in a managed Session
+
+Use this optional mode for “repeat this completed task on a calendar.” It uses
+an existing Goal, registered Agent and exact local managed Session. It creates
+no Goal, executor, recurring cron or separate task database. The source Task
+must already be completed, belong to that Agent and retain an independent argv
+validation declaration. Open, deferred, blocked, foreign and unvalidated tasks
+are rejected; configuring a calendar does not resume them or install commands.
+Report-generation and calendar-generated Tasks are already window-bound and
+cannot be sources themselves. Use the existing report calendar for reports.
+This uses the Goal's existing single calendar subscription. Selecting this
+mode replaces that Goal's previous subscription after the pending-window
+guard; it does not add another schedule beside an enabled report calendar.
+The original validator must check the repeated task's current expected
+outcome; a check pinned to an old output does not establish fresh business
+work. Scheduling preserves that declaration rather than improving its proof.
+
+The existing Goal capability configuration transaction accepts:
+
+```json
+{
+  "goal_id": "example-project",
+  "capability_id": "periodic_report",
+  "configuration": {
+    "enabled": true,
+    "profile_preset": "session-task",
+    "route_ref": "managed-session:11111111111111111111111111111111",
+    "timezone": "UTC",
+    "schedule": {
+      "schema_version": "periodic_report_schedule_v0",
+      "schedule_id": "repeat-completed-task",
+      "timezone": "UTC",
+      "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+      "start_date": "2030-01-01"
+    },
+    "task": {"source_todo_id": "todo_completed_example"}
+  }
+}
+```
+
+Replace the example with the actual existing identities and requested time.
+Prepare through `/api/chat/goal-configuration/preview`, then apply the same
+body and its `expected_plan_revision` through
+`/api/chat/goal-configuration/apply`. The existing Goal settings JSON editor
+uses this transaction; read back the saved configuration and the managed
+Session's `scheduled_task` inspection. A stale preview or changed identity is
+rejected. This is an explicit Goal override: a machine default cannot enroll
+another conversation. `session-task` is a calendar execution mode, not a report
+renderer preset; it does not invoke the progress-report source or editorial
+format. Task descriptions, scripts and validation argv cannot be supplied in
+this configuration.
+
+At the first due boundary, the original idle Chat pump freezes the source
+Task's declaration into the existing cadence attempt. It creates one finite
+native Task for that window, inheriting the source Task's scope, repository,
+capability requirements, decision requirements and independent validation.
+TypeScript admission rechecks those declarations, the exact Session, Goal
+lifetime and current configuration. The same native Turn worker executes and
+settles it. Successful Task validation, native commit and the complete original
+Core answer must all read back before that period is acknowledged. This Task
+completion receipt is distinct from report/provider publication; it never
+claims an external message was sent. Source and previous-period Tasks may be
+read from canonical completed history after archival.
+
+Before the first deadline, while the Session has accepted user work, or while
+the schedule is disabled, this path starts no task model. Ordinary calendar
+and source reads still have local IO costs. Each actual execution uses native
+admission, a Task lease, independent validation and quota settlement. Token
+usage and fees depend on the configured host; the calendar makes no savings
+claim. Duplicate observations and a lost completion acknowledgement reconcile
+the existing Task and Core message without another model execution or answer.
+
+Set `enabled=false` to pause new work and delivery; retain the rest of the
+configuration to resume that plan. Clearing the override after a known failed
+independent task-postcondition validation retains that Task and retires only
+that window, after verified
+configuration apply. Re-enabling cannot replay the failed period; the next
+independent due boundary can execute. Unknown, partial or interrupted work is
+retained for the existing native recovery owner; there is no automatic model
+replay. A template/source change during an unfinished period cannot silently
+replace the frozen task. Clearing or disabling this mode preserves ordinary
+Chat, attached Sessions, existing reports and their histories.
+
+This slice does not interpret conversation text as a subscription, configure
+an arbitrary future task that has no completed native source, send to an
+external destination, or finish the unified managed/attached Agent journey.
+Those remain part of the existing recurring-task work. Tests use real HTTP,
+File/SQLite, native Tasks/Turns and an independently checked synthetic model
+artifact; they do not establish live-model comprehension, installed adoption,
+a natural production deadline or a full frontend acceptance.
+
+For rollback, pause or cancel through a runtime that understands this mode.
+Older runtimes do not understand its Task completion receipt; downgrading that
+Goal's calendar owner with retained Task windows is unqualified. Keep the
+compatible reader and original evidence, rather than deleting the journal to
+make an older reader accept it. Ordinary feature-off Goals create no new
+calendar Task or Task receipt and retain their existing rollback path.

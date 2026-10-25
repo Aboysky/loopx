@@ -67,11 +67,13 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   }
   const observationOnly = request.work_kind === "monitor";
   const reportWork = request.work_kind === "report";
+  const scheduledWork = request.work_kind === "scheduled_task";
   const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
     ...(observationOnly ? ["monitor_deadline", "monitor_lease_version"] : []),
-    ...(reportWork ? ["report_window_id", "report_subscription_revision"] : [])];
+    ...(reportWork ? ["report_window_id", "report_subscription_revision"] : []),
+    ...(scheduledWork ? ["schedule_window_id", "schedule_subscription_revision"] : [])];
   if (Object.keys(request).some(key => !requestFields.includes(key))
-      || request.operation !== "native_turn" || request.host !== "codex-app-server" || !["native_turn", "monitor", "report"].includes(String(request.work_kind))
+      || request.operation !== "native_turn" || request.host !== "codex-app-server" || !["native_turn", "monitor", "report", "scheduled_task"].includes(String(request.work_kind))
       || request.validation_command !== null
       || typeof request.turn_instance_id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(request.turn_instance_id)
       || request.todo_id !== null && (typeof request.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(request.todo_id))) {
@@ -107,6 +109,42 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
     }
   } else if (params.report_settlement_recovery != null) {
     throw new EffectRuntimeRequestError("report recovery belongs only to its original calendar report");
+  }
+  if (scheduledWork) {
+    const basis = requireJsonObject(params.scheduled_task, "original scheduled task");
+    const subscription = requireJsonObject(basis.subscription, "current task subscription");
+    const window = requireJsonObject(basis.window, "original calendar window");
+    const todo = requireJsonObject(basis.todo, "original finite task");
+    const frozen = requireJsonObject(basis.definition, "original task definition");
+    const originalActor = requireJsonObject(frozen.actor, "original task actor");
+    const task = requireJsonObject(subscription.task, "configured task");
+    const frozenTask = requireJsonObject(frozen.task, "frozen task");
+    const sourceTask = requireJsonObject(basis.source_task, "current completed source Task");
+    const originalSource = requireJsonObject(frozen.source_task, "original source Task");
+    const inherited = ["action_kind", "task_domain", "task_repository", "capability_binding_ref", "priority",
+      "required_write_scopes", "required_capabilities", "target_capabilities", "required_decision_scopes", "excluded_agents"];
+    const originalFields = [...inherited, "todo_id", "text", "claimed_by", "status", "task_class",
+      "completion_validation_sha256", "completion_validation_revision", "completion_turn_key"];
+    if (subscription.enabled !== true || subscription.source !== "goal_override"
+        || subscription.profile_preset !== "session-task" || subscription.route_ref !== `managed-session:${session.session_id}`
+        || subscription.effective_revision !== request.schedule_subscription_revision
+        || window.subscription_revision !== request.schedule_subscription_revision
+        || window.window_id !== request.schedule_window_id || window.goal_id !== actor.goal_id || window.agent_id !== actor.agent_id
+        || fields.some(key => originalActor[key] !== actor[key])
+        || frozenTask.source_todo_id !== task.source_todo_id || task.source_todo_id !== sourceTask.todo_id
+        || originalFields.some(key => JSON.stringify(sourceTask[key] ?? null) !== JSON.stringify(originalSource[key] ?? null))
+        || sourceTask.claimed_by !== actor.agent_id || sourceTask.status !== "done"
+        || sourceTask.task_class !== "advancement_task" || sourceTask.completion_validation_required !== true
+        || sourceTask.action_kind === "generate_periodic_report" || /^cadence_[a-f0-9]{64}$/.test(String(sourceTask.target_key ?? ""))
+        || todo.todo_id !== request.todo_id || todo.target_key !== window.window_id
+        || todo.claimed_by !== actor.agent_id || todo.task_class !== "advancement_task"
+        || todo.status !== "open" || todo.text !== frozen.todo_text
+        || ["action_kind", "task_domain", "task_repository", "capability_binding_ref", "priority"].some(key => todo[key] !== sourceTask[key])
+        || ["required_write_scopes", "required_capabilities", "target_capabilities", "required_decision_scopes", "excluded_agents"]
+          .some(key => JSON.stringify(todo[key] ?? []) !== JSON.stringify(sourceTask[key] ?? []))
+        || todo.completion_validation_required !== true) {
+      throw new EffectRuntimeRequestError("scheduled work requires its original explicit task, validation, Session and calendar window");
+    }
   }
   if (turn ? turn.session_id !== session.session_id || turn.turn_id !== session.active_turn_id
       || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
