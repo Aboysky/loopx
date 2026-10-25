@@ -65,8 +65,11 @@ from .chat_store import (
     normalize_agent_model_id,
     utc_now,
 )
-from .chat_providers import ClaudeCodeAdapter, codex_model_options, direct_model_from_environment
-from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, session_model_settings_supported
+from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .capabilities.native_chat.model_settings import (
+    normalize_agent_reasoning_effort, configure_session_model, inspect_agent_model_options,
+    observed_model_settings, session_model_settings_pending,
+)
 from .attached_session import (
     ManagedSessionGoalCommit,
     enqueue_attached_agent_turn,
@@ -114,11 +117,6 @@ class ChatSessionConfigurationRejectedError(CodexChatAgentError):
     """Configuration preparation failed before this request's Turn admission."""
 
 
-def _pending_session_model_settings(session: dict[str, Any]) -> bool:
-    return bool(session_model_settings_supported(session) and any(
-        session.get(requested) is not None and session[requested] != session.get(observed)
-        for requested, observed in (("requested_agent_model_id", "agent_model_id"),
-                                    ("requested_agent_reasoning_effort", "agent_reasoning_effort"))))
 
 
 class ChatRuntimeAdapter(Protocol):
@@ -314,101 +312,12 @@ class ChatRuntimeController:
 
     def inspect_agent_model_options(self, agent_id: str, *, work_dir: Path, goal_id: str | None = None,
                                     agent_model_id: str | None = None) -> dict[str, Any]:
-        """Read model choices from one selected, available ACP endpoint.
+        return inspect_agent_model_options(self, agent_id, work_dir=work_dir, goal_id=goal_id, agent_model_id=agent_model_id)
 
-        This is intentionally not a PATH scan: the controller launches only an
-        endpoint already present in the built-in catalog or owner-local registry.
-        The temporary upstream session is closed before returning.
-        """
-        capability = next((row for row in self.capabilities() if row["agent_id"] == agent_id), None)
-        if capability is None or not capability.get("available"):
-            raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
-        if agent_id == "codex":
-            defaults = load_codex_chat_defaults(self.coordination_runtime_root) if goal_id else {}
-            home = codex_profile_home(self.codex_home, defaults)
-            models = codex_model_options(self.codex_bin, codex_home=home)
-            if models is None:
-                raise CodexChatAgentError("The selected Codex account did not return model choices. Check Chat account settings, then retry; existing conversations are unchanged.",
-                                          error_code="provider_unavailable", gate=None)
-            return {"agent_id": agent_id, "model": models, "supported": True}
-        if agent_id == "claude-code":
-            return {
-                "agent_id": agent_id,
-                "supported": True,
-                "model": {
-                    "id": "model", "label": "Model", "selected": "sonnet",
-                    "options": [
-                        {"value": "sonnet", "label": "Sonnet"},
-                        {"value": "opus", "label": "Opus"},
-                        {"value": "fable", "label": "Fable"},
-                    ],
-                },
-            }
-        if str(capability.get("adapter_kind")) != "acp":
-            return {"agent_id": agent_id, "model": None, "supported": False}
-        adapter = self._start_adapter(
-            agent_id=agent_id,
-            work_dir=work_dir,
-            goal_id=None,
-            objective="",
-            agent_config={"model": agent_model_id} if agent_model_id else None,
-        )
-        try:
-            return {"agent_id": agent_id, "model": adapter.model_options(),
-                    "reasoning_effort": adapter.reasoning_options(), "supported": True}
-        finally:
-            adapter.close_session()
+    def configure_session_model(self, session_id: str, *, model: str, effort: str | None = None) -> dict[str, Any]:
+        return configure_session_model(self, session_id, model=model, effort=effort)
 
-    def configure_session_model(self, session_id: str, *, model: str,
-                                effort: str | None = None) -> dict[str, Any]:
-        """Save choices for this ordinary Session's next Turn, never replace it.
-
-        The active Turn keeps its adapter. Between Turns the existing resume
-        owner confirms the requested settings on the same upstream thread.
-        """
-        model = normalize_agent_model_id(model)
-        if effort is not None:
-            effort = normalize_agent_reasoning_effort(effort)
-        with self._session_adapter_lock(session_id):
-            session = self.store.load_session(session_id)
-            if session is None or session.get("status") == "closed":
-                raise KeyError("chat session was not found")
-            if not session_model_settings_supported(session):
-                raise CodexChatAgentError("Change this conversation's configuration in its owning host or settings.",
-                                          error_code="unsupported_configuration", gate=None)
-            if session.get("project_context") is not None:
-                self.project_contexts.session_context(session)
-            home = codex_context.checked_session_home(self.codex_home, session)
-            catalog = codex_model_options(self.codex_bin, codex_home=home)
-            if catalog is None:
-                raise CodexChatAgentError("The selected Codex account did not return model choices; retry before changing settings.",
-                                          error_code="provider_unavailable", gate=None)
-            option = next((row for row in (catalog or {}).get("options", []) if row["value"] == model), None)
-            if option is None:
-                raise CodexChatAgentError("The selected account did not offer this model; the saved configuration is unchanged.",
-                                          error_code="unsupported_configuration", gate=None)
-            selected_effort = effort or session.get("requested_agent_reasoning_effort") or session.get("agent_reasoning_effort")
-            if selected_effort and selected_effort not in option.get("reasoning_efforts", []):
-                raise CodexChatAgentError("Choose a supported reasoning effort for this model; the saved configuration is unchanged.",
-                                          error_code="unsupported_configuration", gate=None)
-            if session.get("project_context") is not None:
-                self.project_contexts.session_context(session)
-            return self.store.update_session(session_id, expected_statuses={"ready", "busy", "resuming", "resume_failed"}, requested_agent_model_id=model,
-                                             requested_agent_reasoning_effort=selected_effort)
-
-    @staticmethod
-    def _observed_model_settings(adapter: ChatRuntimeAdapter, requested_effort: str | None = None,
-                                 requested_model: str | None = None) -> dict[str, Any]:
-        settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else {}
-        if requested_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) and adapter.current_model_id != requested_model:
-            raise CodexChatAgentError("The Agent did not confirm the requested model; no message was sent.",
-                                      error_code="unsupported_configuration", gate=None)
-        if requested_effort and settings.get("agent_reasoning_effort") != requested_effort:
-            raise CodexChatAgentError(
-                "The Agent did not confirm the requested reasoning effort; no message was sent.",
-                error_code="unsupported_configuration", gate=None,
-            )
-        return settings
+    _observed_model_settings = staticmethod(observed_model_settings)
 
     @staticmethod
     def _session_objective(
@@ -878,7 +787,7 @@ class ChatRuntimeController:
         if accepted_turn_id is None and active is not None and active.get("status") == "queued":
             accepted_turn_id = str(active["turn_id"])
         settings_changed = bool(
-            _pending_session_model_settings(session)
+            session_model_settings_pending(session)
             and (not active or active.get("status") in TERMINAL_TURN_STATES
                  or active.get("status") == "queued" and active_id == accepted_turn_id)
         )
@@ -1170,7 +1079,7 @@ class ChatRuntimeController:
             require_managed_agent_session(self, session, work_dir)
             codex_context.checked_session_home(self.codex_home, session)
             active = self.store.load_turn(session_id, str(session["active_turn_id"])) if session.get("active_turn_id") else None
-            if _pending_session_model_settings(session) and (active is None or active.get("status") in TERMINAL_TURN_STATES):
+            if session_model_settings_pending(session) and (active is None or active.get("status") in TERMINAL_TURN_STATES):
                 try:
                     self._ensure_adapter_locked(session, work_dir=work_dir, objective=objective, goal_commit=commit)
                 except CodexChatAgentError as exc:
