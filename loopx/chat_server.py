@@ -1008,7 +1008,7 @@ class ChatRequestHandler(
             try:
                 if bindings is None:
                     raise ValueError("conversation bindings unavailable")
-                sessions = bindings.local_sessions(query["conversation_binding_id"][0])
+                snapshot = bindings.local_session_snapshot(query["conversation_binding_id"][0])
             except (ValueError, OSError, KeyError):
                 # A failed provider/store read may contain private diagnostics.
                 # Refuse this selector; never fall back to an unfiltered list.
@@ -1016,7 +1016,7 @@ class ChatRequestHandler(
             # Older services ignore this new query. A matching selector in the
             # response lets callers reject their ordinary, unfiltered result.
             return self._send_json({"ok": True, "schema_version": "loopx_chat_session_list_v1",
-                                    "conversation_binding_id": query["conversation_binding_id"][0], "sessions": sessions})
+                                    "conversation_binding_id": query["conversation_binding_id"][0], **snapshot})
         goal_id = _compact_text((query.get("goal_id") or [""])[0], limit=160) or None
         agent_id = _compact_text((query.get("agent_id") or [""])[0], limit=80) or None
         channel_id = _compact_text((query.get("channel_id") or [""])[0], limit=160) or None
