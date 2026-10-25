@@ -11,6 +11,31 @@ _AGENT_MODEL_ID_MAX_LENGTH = 160
 MODEL_SELECTION_UNSET = object()
 
 
+def session_model_settings_supported(session: dict[str, Any]) -> bool:
+    """Project the same current-Session boundary used by the save operation.
+
+    Host-owned, native Goal and legacy migration Sessions keep their existing
+    configuration owner. A model choice must never trigger their thread replay.
+    Imports are local because the Session store also uses these normalizers.
+    """
+    from ...chat_coordination import PROJECT_CONTEXT_VERSION
+    from ...chat_manager import is_manager_channel
+    from ...chat_store import CHAT_SESSION_MODE_MANAGED
+
+    return bool(
+        session.get("agent_id") == "codex"
+        and session.get("session_mode") == CHAT_SESSION_MODE_MANAGED
+        and session.get("upstream_mode") == "chat"
+        and session.get("status") in {"ready", "busy", "resuming", "resume_failed"}
+        and session.get("managed_agent_id") is None
+        and not is_manager_channel(session.get("channel_id"))
+        and session.get("steward_context") is None
+        and (session.get("project_context") or {}).get("audience") not in {"bound_owner", "bound_group"}
+        and (session.get("goal_id") is None
+             or session.get("coordination_context_version") == PROJECT_CONTEXT_VERSION)
+    )
+
+
 def normalize_agent_model_id(value: Any) -> str:
     """Keep a provider model value without applying file-name rules.
 

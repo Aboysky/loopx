@@ -46,6 +46,7 @@ from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
     ChatRuntimeController,
     ChatTurnAcceptanceUnavailableError,
+    ChatSessionConfigurationRejectedError,
 )
 from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE, is_manager_channel,
@@ -889,6 +890,11 @@ class ChatRequestHandler(
                 )
                 return
             response = completed.get("response")
+        except ChatSessionConfigurationRejectedError as exc:
+            self._send_error(str(exc), status=424,
+                             error_code="runtime_error" if exc.error_code == "resume_failed" else exc.error_code,
+                             delivery_state="not_delivered", turn_replay_safe=True)
+            return
         except ChatTurnAcceptanceUnavailableError:
             self._send_error(
                 "Chat turn acceptance is temporarily unavailable.",
@@ -1142,6 +1148,31 @@ class ChatRequestHandler(
                 "status": turn["status"],
             }
         )
+
+    def _configure_session_model(self, session_id: str) -> None:
+        try:
+            body = self._read_json()
+            if "agent_model_id" not in body or set(body) - {"agent_model_id", "agent_reasoning_effort"}:
+                raise ValueError("model settings require agent_model_id and optional agent_reasoning_effort")
+            session = self.server.chat_store.load_session(session_id)
+            if session is None:
+                raise KeyError("chat session was not found")
+            self._session_context(session)
+            updated = self.server.runtime_controller.configure_session_model(session_id,
+                model=body["agent_model_id"], effort=body.get("agent_reasoning_effort"))
+        except KeyError:
+            self._send_error("chat session was not found", status=404)
+            return
+        except CodexChatAgentError as exc:
+            self._send_error(str(exc), status=424, error_code=exc.error_code, gate=exc.gate)
+            return
+        except (ValueError, TypeError) as exc:
+            self._send_error(str(exc))
+            return
+        except OSError:
+            self._send_error("Conversation settings could not be saved; read the current settings and retry.", status=503)
+            return
+        self._send_json({"ok": True, "session": self.server.chat_store.public_session(updated)})
 
     def _resume_session(self, session_id: str) -> None:
         try:
@@ -1747,6 +1778,8 @@ class ChatRequestHandler(
             return handle_loopx_request(self, session_action_parts[3], apply=True)
         if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "resume":
             return self._resume_session(session_action_parts[3])
+        if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "model-settings":
+            return self._configure_session_model(session_action_parts[3])
         action_parts = path.strip("/").split("/")
         if len(action_parts) == 4 and action_parts[:2] == ["api", "actions"] and action_parts[3] in {"apply", "cancel", "regenerate", "reject", "defer"}:
             if action_parts[3] == "apply":

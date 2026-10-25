@@ -130,6 +130,25 @@ messages are excluded. Listening is neither a delivery receipt nor task
 acceptance. Native binding/composition/HTTP regressions qualify the source read
 model, while each provider's installed liveness and result return remain separate.
 
+### Model choices in the current ordinary conversation
+
+The ordinary Codex composer saves an offered model and supported reasoning effort
+on its exact existing Session. Choosing performs no Turn, thread creation, history
+replay or interruption. The active Turn retains its actual configuration; the
+saved subsequent choice and native runtime readback stay distinct in the menu.
+Between Turns, the existing resume owner must confirm that choice on the same
+native thread before dispatch. Rejection before a new message's admission keeps
+its draft; a queued request keeps the existing queue's failure/recovery owner.
+Reloading retains the Session and its saved choice; other Sessions and machine
+defaults are unaffected. Save failure offers retry without claiming success.
+
+Host-owned, steward, registered-Agent, bound-audience, native Goal and legacy
+migration Sessions retain their existing settings owner. Unsupported providers
+cannot silently start a replacement conversation. Availability and admission use
+one shared read model. Production HTTP/store and synthetic native-protocol tests
+qualify settings, history, busy/queued adoption and refusal. They do not certify
+live model quality, installed native input or cross-channel synchronization.
+
 ### Continue an original private conversation on the local App
 
 Settings → Lark offers **Continue original conversation** on an existing
