@@ -69,13 +69,16 @@
 .analysis-method > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--pw-text); }
 .analysis-method dl { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px 16px; }
 .analysis-method dd { margin: 0; color: var(--pw-text); }
-.analysis-continuation { margin-block: 16px; border-block: 1px solid var(--pw-line); padding-block: 12px; }
+.analysis-continuation { margin-block: 8px; }
+.analysis-continuation-controls { display: flow-root; }
+.analysis-continuation-controls > details { min-width: 0; }
+.analysis-continuation-controls > button { float: inline-end; margin-inline-start: 16px; }
+.analysis-continuation-controls > details[open] { padding-block-end: 12px; }
 .analysis-continuation-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
 .analysis-continuation-summary strong { font-weight: 500; }
 .analysis-continuation-summary > span { color: var(--pw-muted); }
-.analysis-continuation-summary button { margin-inline-start: auto; }
 .analysis-continuation .analysis-method { border: 0; margin: 0; padding: 0; }
-.analysis-continuation .analysis-method > summary { display: list-item; list-style-position: inside; min-height: 36px; }
+.analysis-continuation .analysis-method > summary { display: list-item; list-style-position: inside; min-height: 44px; }
 .analysis-spin { animation: analysis-request-spin 1s linear infinite; }
 @keyframes analysis-request-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .analysis-spin { animation: none; } }

@@ -101,7 +101,8 @@ class StewardTurnHost:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
         return {**admitted, "observed_scope_id": scope["current"] if scope else None}
 
-    def report_selection_recovery(self, original: dict[str, Any]) -> dict[str, Any] | None:
+    def report_selection_recovery(self, original: dict[str, Any], *,
+                                  probe_turn: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """The typed owner qualifies this observation before any new worker."""
         result = (original.get("response") or {}).get("native_loopx") or {}
         refusal = result.get("selection_rejection")
@@ -114,9 +115,28 @@ class StewardTurnHost:
         request = original["loopx_request"]
         reports, owner = report_service(self.controller, request["actor"])
         _, window = reports.current_window(owner)
-        return {"original": original, "generation_present": window is None
+        proof = {"original": original, "generation_present": window is None
             or window["window_id"] != request["report_window_id"]
             or (attempt_directory(reports.root, window) / "private-generation.json").exists()}
+        if probe_turn is not None:
+            from ...control_plane.turn_driver.executor import inspect_loopx_turn_journal
+            from ...control_plane.turn_driver.journal_store import (
+                load_turn_journal, turn_journal_path,
+            )
+            actor = request["actor"]
+            keys = {row["payload"].get("resume_turn_key")
+                for row in self.store.events_after(actor["session_id"], probe_turn["turn_id"], None)
+                if row.get("kind") == "native_loopx.replan_result"}
+            if len(keys) != 1 or not isinstance(next(iter(keys)), str):
+                return None
+            key = keys.pop()
+            # Transport canonical observations to the shared typed admission
+            # owner. Neither a missing model event nor Python prose decides.
+            proof["probe"] = {"turn": probe_turn,
+                "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
+                    agent_id=actor["agent_id"], turn_key=key),
+                "journal": load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))}
+        return proof
 
     def _report_launch_recovery(self, original: dict[str, Any]) -> dict[str, Any] | None:
         """Read the original typed launch refusal and its canonical transaction.
@@ -202,7 +222,9 @@ class StewardTurnHost:
         retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
             "--todo-id", request["todo_id"]]).get("lease")
         version = retained["version"] if retained else 0
-        suffix = ".validation-recovery." + str(version) if recovery else ".admission-retry" if request.get("resume_turn_key") or admission_retry else ""
+        suffix = (".validation-recovery." + str(version) if recovery else
+            ".admission-retry." + turn_id if admission_retry else
+            ".admission-retry" if request.get("resume_turn_key") else "")
         lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
             "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
             "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
@@ -327,8 +349,16 @@ class StewardTurnHost:
                 client_id = native_steward_client_id(actor, turn_instance_id + ".admission-retry")
                 retry = self.store.turn_for_client(actor["session_id"], client_id)
                 if retry is not None:
-                    return retry, False
-                if work_kind == "report":
+                    if work_kind != "report":
+                        return retry, False
+                    selection_recovery = self.report_selection_recovery(existing, probe_turn=retry)
+                    if selection_recovery is None or "probe" not in selection_recovery:
+                        return retry, False
+                    client_id = native_steward_client_id(actor, turn_instance_id + ".admission-resume")
+                    resumed = self.store.turn_for_client(actor["session_id"], client_id)
+                    if resumed is not None:
+                        return resumed, False
+                if work_kind == "report" and selection_recovery is None:
                     selection_recovery = self.report_selection_recovery(existing)
                     if selection_recovery is None:
                         launch_recovery = self._report_launch_recovery(existing)
@@ -383,6 +413,19 @@ class StewardTurnHost:
         original = self.store.turn_for_client(session_id, original_client) if request.get("work_kind") == "report" else None
         selection_recovery = (self.report_selection_recovery(original)
             if original and original["turn_id"] != turn_id else None)
+        resumed_client = (original_client + ".admission-resume"
+            if request["actor"].get("schema_version") == "loopx_managed_session_actor_v0"
+            else native_steward_client_id(request["actor"], request["turn_instance_id"] + ".admission-resume"))
+        if selection_recovery and turn["client_turn_id"] == resumed_client:
+            retry_client = (original_client + ".admission-retry"
+                if request["actor"].get("schema_version") == "loopx_managed_session_actor_v0"
+                else native_steward_client_id(request["actor"], request["turn_instance_id"] + ".admission-retry"))
+            retry = self.store.turn_for_client(session_id, retry_client)
+            if retry is None:
+                raise ValueError("the original admission probe is unavailable")
+            selection_recovery = self.report_selection_recovery(original, probe_turn=retry)
+            if selection_recovery is None:
+                raise ValueError("the original admission probe has no canonical journal")
         admitted = self._admit(request, turn=turn, selection_recovery=selection_recovery)
         actor = admitted["actor"]
         local_session = actor.get("schema_version") == "loopx_managed_session_actor_v0"
@@ -516,7 +559,7 @@ class StewardTurnHost:
         result: dict[str, Any] = {}
         with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
                 admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
-            if selection_recovery:
+            if selection_recovery and "probe" not in selection_recovery:
                 # Re-enter the native guard without selecting another business
                 # Todo. Only its signed replan packet may invoke the original
                 # Agent. The native executor owns semantic validation/settlement.
@@ -531,10 +574,17 @@ class StewardTurnHost:
                     native_host_runner=run, native_session_binding_resolver=session_binding)
                 self.store.append_event(session_id, turn_id, kind="native_loopx.replan_result", payload=governance)
                 if governance.get("status") != "committed" or governance.get("result_kind") != "replan_required":
-                    retained = selection_recovery["original"]["response"]["native_loopx"]
-                    self.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=retained)
-                    return {"schema_version": "loopx_chat_agent_response_v0", "message": "原生重规划尚未完成；保留原报告及执行证据。",
-                        "proposals": [], "gate": None, "native_loopx": retained}
+                    probe = self.report_selection_recovery(original, probe_turn=self.store.load_turn(session_id, turn_id))
+                    try:
+                        if probe is None or "probe" not in probe:
+                            raise ValueError("no canonical admission probe")
+                        self._admit(request, turn=self.store.load_turn(session_id, turn_id), selection_recovery=probe)
+                    except (OSError, ValueError, RuntimeError):
+                        retained = selection_recovery["original"]["response"]["native_loopx"]
+                        self.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=retained)
+                        return {"schema_version": "loopx_chat_agent_response_v0", "message": "原生重规划尚未完成；保留原报告及执行证据。",
+                            "proposals": [], "gate": None, "native_loopx": retained}
+                    selection_recovery = probe
                 governance_work = False
             if report_work:
                 # Portfolio collection can take minutes and legitimately see
