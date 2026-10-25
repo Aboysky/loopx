@@ -533,7 +533,7 @@ test('artifact digests retain bare lowercase syntax, original bytes and error se
   }
 });
 
-for (const revision of [undefined, 2, 3]) test(`research synthesis revision ${revision ?? 1} preserves episode citation boundaries`, () => {
+for (const revision of [undefined, 2, 3, 4]) test(`research synthesis revision ${revision ?? 1} preserves episode citation boundaries`, () => {
   const x = input();
   x.sources.push({id: 'other', artifact: 'other.txt', artifact_sha256: 'b'.repeat(64), first_line: 4, text: 'A competing explanation remains open'});
   x.episodes[1]!.source_ids = ['other'];
@@ -605,6 +605,7 @@ test('synthesis revision separates new guidance while frozen and disabled reques
   assert.deepEqual(prepareTrajectoryAssessment({input: input(), config: legacy.config}), legacy);
   const selection = prepareTrajectoryAssessment({input: input(), config: {...next.config, research_synthesis_revision: 3}});
   assert.equal(selection.method_version, 'research-episodes-synthesis-v3');
+  assert.equal(selection.analysis_key, 'e348081086ca231be5aa9f22e3d695e66306410053afaaff3e9d2a5719cef033');
   assert.notEqual(selection.analysis_key, next.analysis_key);
   assert.deepEqual(selection.input, next.input);
   assert.deepEqual(selection.output_schema, next.output_schema, 'Selection guidance reuses the report fields and evidence gates');
@@ -614,7 +615,18 @@ test('synthesis revision separates new guidance while frozen and disabled reques
   assert.equal(compareTrajectoryAssessments({...selection, previous: {...next, output: raw}}).can_reuse, false);
   assert.deepEqual(prepareTrajectoryAssessment({input: input(), config: next.config}), next,
     'Explicit case-selection guidance must not upgrade a frozen revision 2 request');
-  for (const revision of [null, true, '2', 0, 1, 4]) {
+  const decision = prepareTrajectoryAssessment({input: input(), config: {...next.config, research_synthesis_revision: 4}});
+  assert.equal(decision.method_version, 'research-episodes-synthesis-v4');
+  assert.notEqual(decision.analysis_key, selection.analysis_key);
+  assert.deepEqual(decision.input, selection.input);
+  assert.deepEqual(decision.output_schema, selection.output_schema, 'Decision guidance adds no fields or scientific gate');
+  assert.equal(decision.prompt.split('\n\nEvidence pack:\n')[1], selection.prompt.split('\n\nEvidence pack:\n')[1]);
+  assert.deepEqual(qualifyTrajectoryAssessment({...decision, output: raw}).metrics,
+    qualifyTrajectoryAssessment({...selection, output: raw}).metrics);
+  assert.equal(compareTrajectoryAssessments({...decision, previous: {...selection, output: raw}}).can_reuse, false);
+  assert.deepEqual(prepareTrajectoryAssessment({input: input(), config: selection.config}), selection,
+    'A saved revision 3 report remains bound to its original instructions and job');
+  for (const revision of [null, true, '2', 0, 1, 5]) {
     assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config,
       research_synthesis: true, research_synthesis_revision: revision}}), /supported revision/);
   }
@@ -622,4 +634,6 @@ test('synthesis revision separates new guidance while frozen and disabled reques
     research_synthesis: false, research_synthesis_revision: 2}}), /enabled synthesis/);
   assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config,
     research_synthesis: false, research_synthesis_revision: 3}}), /enabled synthesis/);
+  assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config,
+    research_synthesis: false, research_synthesis_revision: 4}}), /enabled synthesis/);
 });

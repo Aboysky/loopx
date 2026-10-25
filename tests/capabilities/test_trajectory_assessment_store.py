@@ -750,8 +750,22 @@ def test_revised_producer_preserves_frozen_legacy_job_and_requires_new_execution
     assert selected["result"]["metrics"] == new["result"]["metrics"]
     assert inspect_pack(**scope, pack_id=current["pack_id"]) == new
     assert all(path.read_bytes() == content for path, content in retained.items())
+    retained = {path: path.read_bytes() for path in scope["runtime_root"].glob("**/jobs/*/*") if path.is_file()}
+    decision = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Decision-scoped analysis", config={**current["config"], "research_synthesis_revision": 4},
+        base_pack_id=selection["pack_id"])
+    decision_operation = {**scope, "pack_id": decision["pack_id"], "analysis_key": decision["analysis_key"]}
+    assert decision["analysis_key"] != selection["analysis_key"]
+    pending = inspect_pack(**scope, pack_id=decision["pack_id"])
+    assert pending["job"] is None and pending["result"] is None
+    execute_pack(**decision_operation, codex=provider)
+    decided = inspect_pack(**scope, pack_id=decision["pack_id"])
+    assert decided["result"]["method_version"] == "research-episodes-synthesis-v4"
+    assert decided["result"]["metrics"] == selected["result"]["metrics"]
+    assert inspect_pack(**scope, pack_id=selection["pack_id"]) == selected
+    assert all(path.read_bytes() == content for path, content in retained.items())
     # Every version uses the same literal, source-qualified reader.
-    for op in [legacy_operation, operation, selection_operation]:
+    for op in [legacy_operation, operation, selection_operation, decision_operation]:
         assert read_citation(**op, source_id="source", first_line=2, last_line=2)["text"] == (
             "The native measurement did not improve utility · 原始测量。")
 

@@ -206,6 +206,10 @@ Equal seeds or wall-clock limits alone do not establish matched random draws, pr
 Keep findings and proposals concise and specific to the cited evidence. These are reasoning instructions, not extra measurements, automatic scientific qualification or permission to execute a test.`;
 const SYNTHESIS_CASE_SELECTION_INSTRUCTION = `${SYNTHESIS_DECISION_INSTRUCTION}
 When proposing concrete cases or subsets, use why_priority and controls to explain their selection from the supplied observations and which competing explanation they can distinguish. Separate observed case differences from future predictions; check whether an apparent gain instead reflects a changed baseline. Where relevant, consider supporting, unchanged and contrary cases, or state which evidence is missing. Distinguish exploratory selection after seeing results from a predeclared sample. A purposive diagnostic pilot can be useful without testing every case, but does not establish prevalence, generalization or a fair ranking. Do not invent representative cases, exhaustive coverage or independence from matching labels.`;
+const SYNTHESIS_DECISION_SCOPE_INSTRUCTION = `${SYNTHESIS_CASE_SELECTION_INSTRUCTION}
+Choose the next decision before its experimental design. Distinguish choosing between candidates from attributing a combined result to components or interactions; a comparison can answer one without answering the others. Explain which decision the proposal can change and what remains outside its scope. Do not expand a candidate comparison into a factorial merely because multiple components changed; justify broader attribution when it is needed for the decision.
+Reuse applicable completed controls and useful negative results before adding work. Prefer a staged comparison that resolves the immediate uncertainty, with an explicit observation that would justify extending it; a larger design or replication remains appropriate when a narrower one cannot distinguish the relevant explanations. If reviewing existing evidence is sufficient for the next decision, say so and do not invent a new experiment.
+In why_priority and intervention, weigh the information needed for that decision against the proposed work. When supported, account for cases, arms, repetitions and per-run limits, plus preparation, validation and analysis; keep configured execution allowance separate from actual elapsed cost and mark missing costs unknown. Do not claim a design is cheapest or optimal without a supported comparison. An informative tie or negative result can settle the immediate decision without assigning the earlier combined gain to individual components.`;
 const groundedSchema = {
   episode_ids: {type: 'array', minItems: 1, items: {type: 'string'}},
   citations: {type: 'array', minItems: 1, items: citationSchema},
@@ -232,13 +236,14 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   }
   const synthesis = config.research_synthesis === true;
   const synthesisRevision = config.research_synthesis_revision;
-  if (synthesisRevision !== undefined && ((synthesisRevision !== 2 && synthesisRevision !== 3) || !synthesis)) {
-    throw new EffectRuntimeRequestError('research_synthesis_revision requires enabled synthesis and supported revision 2 or 3');
+  if (synthesisRevision !== undefined && ((synthesisRevision !== 2 && synthesisRevision !== 3 && synthesisRevision !== 4) || !synthesis)) {
+    throw new EffectRuntimeRequestError('research_synthesis_revision requires enabled synthesis and supported revision 2, 3 or 4');
   }
-  const synthesisInstruction = synthesisRevision === 3 ? SYNTHESIS_CASE_SELECTION_INSTRUCTION
+  const synthesisInstruction = synthesisRevision === 4 ? SYNTHESIS_DECISION_SCOPE_INSTRUCTION
+    : synthesisRevision === 3 ? SYNTHESIS_CASE_SELECTION_INSTRUCTION
     : synthesisRevision === 2 ? SYNTHESIS_DECISION_INSTRUCTION : SYNTHESIS_INSTRUCTION;
-  const method = synthesis ? synthesisRevision === 3 ? 'research-episodes-synthesis-v3'
-    : synthesisRevision === 2 ? 'research-episodes-synthesis-v2' : SYNTHESIS_METHOD : TRAJECTORY_METHOD;
+  const method = synthesis ? synthesisRevision === undefined ? SYNTHESIS_METHOD
+    : `research-episodes-synthesis-v${synthesisRevision}` : TRAJECTORY_METHOD;
   if (config.output_language !== undefined && config.output_language !== 'zh' && config.output_language !== 'en') {
     throw new EffectRuntimeRequestError('output_language must be zh or en');
   }
