@@ -48,6 +48,28 @@ def test_machine_on_preserves_existing_worker_environment_off(tmp_path, monkeypa
     assert not (runtime / "context-delivery").exists() and not registry.exists()
 
 
+@pytest.mark.parametrize("host", [
+    ["--runtime-profile", profile] for profile in
+    ("trae_app", "claude_code", "kunluncode", "kiro_cli", "ark_managed_agent_goal")
+] + [["--host-surface", "claude_code", "--scheduler-owner", "agent_cli_loop",
+      "--execution-mode", "interactive"]])
+def test_codex_machine_preference_preserves_other_declared_hosts(tmp_path, monkeypatch, host):
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    args = ["quota", "context-config", *host, "--goal-id", "fixture", "--agent-id", "worker"]
+    code, original = _run_cli(registry, runtime, *args)
+    assert code == 0 and original["context_delivery"]["enabled"] is False, original
+    assert configure(registry, runtime, tmp_path, "on")[0] == 0
+    code, inherited = _run_cli(registry, runtime, *args)
+    assert code == 0 and inherited == original, inherited
+    # Explicit opt-in still rejects unsupported hosts rather than ignoring it.
+    code, explicit = _run_cli(registry, runtime, *args, "--context-delivery", "on")
+    assert code != 0 and not explicit["ok"], explicit
+    assert not registry.exists() and not (runtime / "context-delivery").exists()
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("host", [[], ["--runtime-profile", "codex_cli"],
     ["--codex-app", "--runtime-profile", "codex_app_heartbeat"],
     ["--host-surface", "codex_app"], ["--runtime-profile", "generic_cli"]])

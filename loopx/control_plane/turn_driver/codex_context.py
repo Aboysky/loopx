@@ -25,7 +25,7 @@ CONTEXT_DELIVERY_SETTINGS = ("off", "on")
 CONTEXT_DELIVERY_SCENARIOS = ("codex_benchmark_heartbeat", "codex_app_heartbeat")
 
 
-def context_delivery_for_arguments(args: Any) -> dict[str, Any]:
+def context_delivery_for_arguments(args: Any, *, codex_machine_preference: bool = False) -> dict[str, Any]:
     """One declaration adapter for explicit CLI and inherited machine opt-ins."""
     fields = {key: getattr(args, key, None) for key in ("host_surface", "scheduler_owner", "execution_mode")}
     profiles = [value for value in (getattr(args, "runtime_profile", None),
@@ -38,12 +38,14 @@ def context_delivery_for_arguments(args: Any) -> dict[str, Any]:
     return context_delivery_activation(setting, runtime_profile=profiles[0] if profiles else None,
         scheduler_execution_context=fields if any(fields.values()) else None,
         benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
-            if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None)
+            if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None,
+        codex_machine_preference=codex_machine_preference)
 
 
 def context_delivery_activation(setting: str, *, runtime_profile: str | None = None,
                                 scheduler_execution_context: dict[str, Any] | None = None,
-                                benchmark_mode: str | None = None) -> dict[str, Any]:
+                                benchmark_mode: str | None = None,
+                                codex_machine_preference: bool = False) -> dict[str, Any]:
     from ..scheduler.execution_context import (
         ExecutionMode, HostSurface, SchedulerOwner, resolve_scheduler_execution_context,
         scheduler_execution_context_for_runtime_profile,
@@ -63,6 +65,15 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
             resolution = resolve_scheduler_execution_context(scheduler_execution_context)
         context = resolution.context if resolution.ok else None
         if context is not None:
+            # The machine's application row selects Codex. Other explicitly
+            # resolved hosts keep full delivery; an explicit CLI on still
+            # rejects them. Unknown/conflicting declarations never bypass this
+            # adapter, and generic_cli still needs the benchmark declaration.
+            if codex_machine_preference and context.host_surface in {
+                HostSurface.ARK_MANAGED_AGENT, HostSurface.TRAE_APP, HostSurface.CLAUDE_CODE,
+                HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI, HostSurface.LOCAL_SCHEDULER,
+            }:
+                return context_delivery_activation("off")
             if (context.host_surface is HostSurface.CODEX_APP
                     and context.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
                     and context.execution_mode is ExecutionMode.HOSTED_AUTOMATION):

@@ -26,11 +26,11 @@ def context_delivery_machine_configuration_namespace() -> MachineConfigurationNa
         normalize=normalize_context_delivery_machine_defaults,
         project_public=lambda value: dict(value),
         apply_public_update=lambda _current, update: dict(update),
-        title="Codex heartbeat context",
+        title="Differential context",
         description=(
-            "Off by default. On supports declared Codex App and benchmark heartbeats only; "
-            "unknown or unsupported modes fail before admission. Native hooks and input "
-            "diagnostics still need host setup; unproven retention uses the full capture."
+            "Reuse unchanged context for Codex App and benchmark heartbeats. Off by default; "
+            "unsupported declarations fail and unproven continuity keeps full context. "
+            "A saved preference does not establish host readiness or actual delta use."
         ),
         documentation={"path": "docs/reference/required-work-context.md#machine-default"},
         default_configuration={"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "off"},

@@ -67,13 +67,16 @@ def apply_context_machine_options(
         value = (configuration or {}).get("namespaces", {}).get("context_delivery")
         if value is None or value["mode"] == "off":
             return
-        args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
     # Recovery does not activate a run mode or create a missing session.
     if command != "context-read":
         args.context_delivery = "on"
-        context_delivery_for_arguments(args)
+        if not context_delivery_for_arguments(args, codex_machine_preference=explicit is None)["enabled"]:
+            args.context_delivery = "off"
+            return
         if command == "should-run" and args.format != "json":
             raise ValueError("native Codex context delivery needs JSON and a capture destination")
+    if explicit is None:
+        args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
     location_missing = not (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
         or getattr(args, "decision_handoff_socket", None))
     capture_missing = (heartbeat or command == "should-run") and not (

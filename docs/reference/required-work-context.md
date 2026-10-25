@@ -170,7 +170,7 @@ execution. Wire reduction alone does not establish actual model costs or outcome
 
 ### Machine default
 
-**Settings → This machine → Capabilities → Codex heartbeat context** uses the
+**Settings → This machine → Capabilities → Differential context → Codex** uses the
 existing revision-locked preview, apply and readback operations in one switch action.
 Switching off uses the same transaction. A saved preference does not certify native
 host setup or actual delta use; the settings view states this explicitly. Its
@@ -179,7 +179,10 @@ host setup or actual delta use; the settings view states this explicitly. Its
 the same object with `"mode":"on"`. The CLI exposes that same owner through
 `machine-config preview/apply --namespace context_delivery --config-json FILE`;
 apply requires the exact preview revision. Removing the namespace restores off.
-Sibling settings and Goal records are preserved.
+Sibling settings and Goal records are preserved. The application row selects Codex
+within this capability; the existing `mode` remains that Codex preference, with no
+additional global switch or host configuration authority. Read-only editors cannot
+save it. The UI does not alter other hosts or initialize the current native session.
 
 An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
 machine default, with off when absent. The existing worker environment's explicit
@@ -190,7 +193,9 @@ both preflight and solver subprocesses without changing the caller's settings.
 On accepts only the two existing declared scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
 declaration), and the existing Codex benchmark heartbeat worker (`generic_cli`
 plus its explicit heartbeat worker environment). Missing, contradictory or
-unsupported declarations return an error before admission. Declarations select
+unsupported Codex declarations return an error before admission. This machine
+preference is scoped to Codex: other explicitly resolved hosts keep full delivery.
+An explicit `--context-delivery on` on those hosts still errors. Declarations select
 an adapter; they do not authenticate a host or prove retained input.
 Native continuity currently requires POSIX; other platforms reject on explicitly.
 
@@ -285,13 +290,15 @@ TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizo
 
 ### 机器级默认
 
-在**设置 → 本机设置 → 能力中心 → Codex 心跳上下文**选择关闭或开启，沿用现有
+在**设置 → 本机设置 → 能力中心 → 差分上下文 → Codex**选择关闭或开启，沿用现有
 精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
 设置页明确区分已保存偏好与尚未验证的原生初始化、实际差分使用。机器 namespace 为 `context_delivery`，配置为
 `{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}`；开启时
 把 `mode` 改为 `on`。CLI 的 `machine-config preview/apply --namespace context_delivery
 --config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复关闭，
-不改写其他配置和 Goal 记录。
+不改写其他配置和 Goal 记录。应用行选择的是此能力下的 Codex；既有 `mode` 仍表示
+该 Codex 偏好，不新增总开关或宿主配置 authority。只读编辑器不能保存；界面不会
+改变其他应用或初始化当前原生会话。
 
 显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，未配置则关闭。
 已有 worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承；环境 on 本身不启用投递。
@@ -299,7 +306,9 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 （含默认关闭）传给预检和 solver 子进程，不改写调用方原设置。
 开启仅接受已有两类声明：Codex App 心跳（`--codex-app` 或等价完整调度声明），以及
 现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
-不支持的声明在准入前报错；声明只选择 adapter，不证明宿主身份或上下文保留。
+不支持的 Codex 声明在准入前报错。机器偏好仅作用于 Codex；其他已明确解析的宿主
+继续完整投递，对这些宿主显式指定 `--context-delivery on` 仍报错。声明只选择 adapter，
+不证明宿主身份或上下文保留。
 当前原生连续性依赖 POSIX；其他平台显式拒绝开启。
 
 机器继承与显式开启的入口共用已解析 machine runtime 下的私有 `context-delivery` 目录，并按原生

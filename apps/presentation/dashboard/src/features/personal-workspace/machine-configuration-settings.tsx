@@ -249,7 +249,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
   }
 
   async function setContextDelivery(mode: "off" | "on") {
-    if (busy || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
+    if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
     const namespace = selected.machine_namespace;
     const configuration = {...selected.default, mode};
     setBusy("apply"); setError(null); setNotice(null);
@@ -261,7 +261,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       if (next.machine_configuration?.namespaces[namespace]?.mode !== mode) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
-      setNotice(locale === "zh-CN" ? "设置已保存，下一次支持的心跳采用。" : "Saved for the next supported heartbeat.");
+      setNotice(locale === "zh-CN" ? "Codex 偏好已保存。" : "Codex preference saved.");
       onChanged?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("machine.applyError"));
@@ -458,17 +458,19 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             </section>
           ) : null}
 
-          {selected.capability_id === "context_delivery" ? <section className="personal-capability-field-summary">
+          {selected.capability_id === "context_delivery" ? <section aria-label={locale === "zh-CN" ? "使用差分上下文的应用" : "Applications using differential context"} className="personal-capability-field-summary">
             <div className="personal-capability-fields"><label className="is-boolean">
-              <span>{locale === "zh-CN" ? "上下文差分" : "Context delta delivery"}</span>
-              <input type="checkbox" role="switch" checked={selectedCurrent?.mode === "on"} disabled={Boolean(busy)}
+              <span>Codex</span>
+              <input aria-label={locale === "zh-CN" ? "在 Codex 中使用差分上下文" : "Use differential context in Codex"}
+                type="checkbox" role="switch" checked={selectedCurrent?.mode === "on"} disabled={Boolean(busy) || !editorAvailable}
                 onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off")} />
             </label></div>
-            <p>{locale === "zh-CN" ? "自动管理私有缓存和会话隔离。显式关闭的实验保持关闭。" : "Private storage and session isolation are automatic. Explicitly disabled runs stay disabled."}</p>
-            {selectedCurrent?.mode === "on" ? <p role="status">{locale === "zh-CN" ? "已保存偏好；原生宿主初始化与实际差分使用尚未验证。" : "Preference saved; native host setup and actual delta use are not verified."}</p> : null}
-            <ContextHelp label={locale === "zh-CN" ? "生效条件" : "Activation requirements"}><p>{locale === "zh-CN"
-              ? "开关保存的是使用偏好，不代表当前宿主已经差分传输。Codex 原生钩子与输入诊断均可用且旧上下文完整时才使用差分；否则保留完整上下文。每轮回执显示实际传输方式。"
-              : "This saves a preference, not proof of active delta delivery. Delta requires native hooks, input diagnostics and a complete retained baseline; otherwise full context is preserved. Each delivery reports its actual mode."}</p></ContextHelp>
+            <p role="status">{selectedCurrent?.mode === "on"
+              ? locale === "zh-CN" ? "已为 Codex 保存开启偏好；宿主就绪与实际使用尚未验证。" : "Codex preference is on; host readiness and actual use are not verified."
+              : locale === "zh-CN" ? "Codex 未开启。" : "Off for Codex."}</p>
+            <ContextHelp label={locale === "zh-CN" ? "Codex 支持范围与生效条件" : "Codex support and activation requirements"}><p>{locale === "zh-CN"
+              ? "目前仅支持 Codex App 心跳和 benchmark 心跳，无法确认或不支持的跑法报错。保存偏好不代表当前会话已采用差分，也不会改变其他应用或显式关闭的实验。宿主准备就绪且旧上下文完整时才使用差分，否则保留完整上下文。私有存储与会话隔离自动管理；每轮回执显示实际传输方式。"
+              : "Currently supports only Codex App and benchmark heartbeats; unknown or unsupported declarations return an error. Saving a preference does not establish use in the current session or change other applications or explicitly disabled runs. Delta requires a ready host and complete retained context; otherwise full context is preserved. Private storage and session isolation are automatic; each delivery reports its actual mode."}</p></ContextHelp>
           </section> : null}
           {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
             <button onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
