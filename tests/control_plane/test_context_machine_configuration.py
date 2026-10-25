@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
+from contextlib import redirect_stdout
 
 import pytest
 
@@ -68,6 +70,60 @@ def test_codex_machine_preference_preserves_other_declared_hosts(tmp_path, monke
     assert code != 0 and not explicit["ok"], explicit
     assert not registry.exists() and not (runtime / "context-delivery").exists()
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("selected_mode,default_mode", [("on", None), ("off", "on")])
+def test_native_options_share_registry_runtime_without_explicit_root(
+    tmp_path, monkeypatch, relative, selected_mode, default_mode,
+):
+    import loopx.paths as paths
+    from loopx.cli import main
+
+    selected, default = tmp_path / "declared", tmp_path / "default"
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", default)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", tmp_path / "legacy")
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": "0.1", "goals": [],
+        "common_runtime_root": "declared" if relative else str(selected)}))
+
+    def cli(*args):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = main(["--registry", str(registry), "--format", "json", *args])
+        return code, json.loads(output.getvalue())
+
+    setting = tmp_path / "setting.json"
+    setting.write_text(json.dumps({"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": selected_mode}))
+    options = ["--namespace", "context_delivery", "--config-json", str(setting)]
+    code, plan = cli("machine-config", "preview", *options)
+    assert code == 0, plan
+    code, saved = cli("machine-config", "apply", *options,
+        "--expected-plan-revision", plan["plan_revision"], "--execute")
+    assert code == 0 and saved["readback_verified"], saved
+    if default_mode:
+        assert configure(registry, default, tmp_path, default_mode)[0] == 0
+    selected_bytes = (selected / "machine/configuration.json").read_bytes()
+    code, setup = cli("quota", "context-config", "--codex-app", "--goal-id", "fixture", "--agent-id", "worker")
+    assert code == 0 and setup["context_delivery"]["enabled"] is (selected_mode == "on"), setup
+    assert not (default / "context-delivery").exists()
+    if selected_mode == "on":
+        command = shlex.split(setup["native_config"]["hooks"]["SessionStart"][0]["hooks"][0]["command"])
+        assert command[command.index("--runtime-root") + 1] == str(selected)
+        assert (selected / "context-delivery").is_dir()
+    else:
+        assert not (selected / "context-delivery").exists()
+    assert (selected / "machine/configuration.json").read_bytes() == selected_bytes
+    # Original digest-bound pages remain independent of a now-unreadable registry.
+    capture = tmp_path / "capture.json"
+    raw = b'{"original":"capture"}'
+    capture.write_bytes(raw)
+    registry.write_text("{broken")
+    code, page = cli("quota", "context-read", "--capture-file", str(capture),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest())
+    assert code == 0 and page["content"].encode() == raw, page
 
 
 @pytest.mark.parametrize("host", [[], ["--runtime-profile", "codex_cli"],

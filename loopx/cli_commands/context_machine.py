@@ -33,9 +33,9 @@ def apply_context_machine_options(
 ) -> None:
     """Resolve each invocation afresh; explicit options skip this default lookup.
 
-    Saved capture pages stay registry/configuration independent. Native-only
-    commands use the explicit machine runtime or normal machine route without
-    loading a Goal registry. No hook, trust, tracing or automation is installed.
+    Saved capture pages stay registry/configuration independent. Other native
+    commands share the machine-configuration owner's registry runtime route.
+    No hook, trust, tracing or automation is installed.
     """
     explicit = getattr(args, "context_delivery", None)
     if explicit == "off":
@@ -53,12 +53,8 @@ def apply_context_machine_options(
         "capture_file", "capture_sha256", "codex_context_dir", "codex_context_root"
     )):
         return
-    from ..paths import effective_runtime_root, resolve_runtime_root
-    runtime_root = (
-        effective_runtime_root(registry_path, runtime_root_arg)
-        if heartbeat or command == "should-run"
-        else resolve_runtime_root({}, runtime_root_arg)
-    )
+    from ..paths import effective_runtime_root
+    runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if explicit is None:
         from ..capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
         from ..capabilities.machine_configuration.store import read_machine_configuration
