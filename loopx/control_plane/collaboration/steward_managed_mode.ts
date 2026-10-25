@@ -11,6 +11,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
 import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
+import {EffectiveAction} from "../quota/effective_action.generated.ts";
 
 /** A native refusal before execution can owe governance, never a business replay. */
 function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, sessionId: unknown): void {
@@ -79,8 +80,8 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
       || inspection.journal_consistent !== true || inspection.journal_status !== "stopped"
       || recovery.action !== "return_existing" || recovery.reinvoke_host !== false
       || recorded.host_invoked !== true || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => recorded[key] !== false)
-      || route.kind !== "ready_for_host" || route.effective_action !== "normal_run"
-      || envelope.effective_action !== "normal_run" || envelope.replan_action_packet != null
+      || route.kind !== "ready_for_host" || route.effective_action !== EffectiveAction.NORMAL_RUN
+      || envelope.effective_action !== EffectiveAction.NORMAL_RUN || envelope.replan_action_packet != null
       || action.must_attempt !== true || action.delivery_allowed !== true || selected.todo_id !== identity.todo_id
       || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
       || identity.goal_id !== requireJsonObject(request.actor, "report actor").goal_id
