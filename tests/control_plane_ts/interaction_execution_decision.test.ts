@@ -126,13 +126,14 @@ test("canonical null and false stop compatibility fallback", () => {
   }
 });
 
-test("the canonical replan attempt permits only its current semantic lane", () => {
+test("the canonical replan attempt leaves ordinary delivery closed", () => {
   const current = executionFacts({effective_action: "autonomous_replan_required",
     replan_required: true, canonical_execution: {must_attempt_work: true}});
   const admitted = projectInteractionExecution(current);
   assert.equal(admitted.mode, "autonomous_replan");
-  assert.equal(admitted.delivery_allowed, true);
-  assert.equal(admitted.delivery_basis, "canonical_attempt");
+  assert.equal(admitted.must_attempt, true);
+  assert.equal(admitted.delivery_allowed, false);
+  assert.equal(admitted.delivery_basis, "none");
   for (const denial of [false, null]) {
     const refused = projectInteractionExecution({...current,
       canonical_execution: {must_attempt_work: true, delivery_allowed: denial}});
