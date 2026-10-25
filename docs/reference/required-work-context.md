@@ -171,7 +171,9 @@ execution. Wire reduction alone does not establish actual model costs or outcome
 ### Machine default
 
 **Settings → This machine → Capabilities → Codex heartbeat context** uses the
-existing revision-locked preview, apply, readback and rollback operations. Its
+existing revision-locked preview, apply and readback operations in one switch action.
+Switching off uses the same transaction. A saved preference does not certify native
+host setup or actual delta use; the settings view states this explicitly. Its
 `context_delivery` machine namespace accepts
 `{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}` or
 the same object with `"mode":"on"`. The CLI exposes that same owner through
@@ -190,11 +192,13 @@ unsupported declarations return an error before admission. Declarations select
 an adapter; they do not authenticate a host or prove retained input.
 Native continuity currently requires POSIX; other platforms reject on explicitly.
 
-Machine-inherited `heartbeat-prompt`, `quota should-run` and native context
+Both machine-inherited and explicitly enabled `heartbeat-prompt`, `quota should-run` and native context
 commands share a private `context-delivery` directory beneath the resolved
 machine runtime, with independent journals per native session. A missing leaf is
 created with `0700`; unsafe existing leaves are rejected without chmod or
-symlink traversal. Explicit on keeps the existing explicit-location contract.
+symlink traversal. Explicit on uses the same automatic location when none is supplied;
+caller-supplied locations remain supported. A handoff socket keeps its Host-owned
+projection path and does not acquire a second native journal.
 Unrelated quota commands and digest-bound recovery pages do not activate this
 setting. Ordinary machine validation still applies to business operations.
 
@@ -280,7 +284,8 @@ TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizo
 ### 机器级默认
 
 在**设置 → 本机设置 → 能力中心 → Codex 心跳上下文**选择关闭或开启，沿用现有
-精确修订预览、应用、读回和回滚。机器 namespace 为 `context_delivery`，配置为
+精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
+设置页明确区分已保存偏好与尚未验证的原生初始化、实际差分使用。机器 namespace 为 `context_delivery`，配置为
 `{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}`；开启时
 把 `mode` 改为 `on`。CLI 的 `machine-config preview/apply --namespace context_delivery
 --config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复关闭，
@@ -293,9 +298,10 @@ TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizo
 不支持的声明在准入前报错；声明只选择 adapter，不证明宿主身份或上下文保留。
 当前原生连续性依赖 POSIX；其他平台显式拒绝开启。
 
-机器继承入口共用已解析 machine runtime 下的私有 `context-delivery` 目录，并按原生
+机器继承与显式开启的入口共用已解析 machine runtime 下的私有 `context-delivery` 目录，并按原生
 会话隔离 journal。缺失末级目录以 `0700` 创建；不跟随末级符号链接、不修改不安全目录
-权限。显式 on 保留原有显式路径要求。无关 quota 命令和带原始摘要的恢复分页不激活此
+权限。显式 on 未指定路径时也自动选择目录，仍支持手工覆盖；handoff socket 保留
+原有 Host 投影路径，不另设原生 journal。无关 quota 命令和带原始摘要的恢复分页不激活此
 设置；业务操作仍须通过原有设备配置校验。
 
 机器开启后，`quota context-config --codex-app --goal-id GOAL --agent-id AGENT` 只准备

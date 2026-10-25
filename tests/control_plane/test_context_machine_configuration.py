@@ -178,3 +178,27 @@ def test_machine_default_never_follows_or_chmods_an_unsafe_transport_root(tmp_pa
     assert code != 0 and not result["ok"], result
     assert (target if kind == "symlink" else root).stat().st_mode == before
     assert not list(target.iterdir()) and not registry.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native continuity uses POSIX private directories and locks")
+def test_explicit_on_first_use_uses_same_private_default_without_machine_setting(tmp_path):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    code, result = _run_cli(registry, runtime, "quota", "context-config", "--context-delivery", "on",
+        "--codex-app", "--goal-id", "fixture", "--agent-id", "worker")
+    assert code == 0 and result["context_delivery"]["enabled"], result
+    root = runtime / "context-delivery"
+    assert root.stat().st_mode & 0o077 == 0
+    hook = result["native_config"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    argv = shlex.split(hook)
+    assert argv[argv.index("--codex-context-root") + 1] == str(root)
+    assert argv[argv.index("--context-delivery") + 1] == "on"
+    assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
+    assert not list(root.iterdir()), "setup does not manufacture retained-input evidence"
+
+
+def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_path):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    code, result = _run_cli(registry, runtime, "quota", "context-config", "--context-delivery", "on",
+        "--goal-id", "fixture", "--agent-id", "worker")
+    assert code != 0 and not result["ok"]
+    assert not (runtime / "context-delivery").exists() and not registry.exists()

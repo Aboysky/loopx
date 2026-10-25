@@ -17,7 +17,9 @@ def _private_transport_root(runtime_root: Path) -> str:
     """Create only our leaf; never repair permissions or follow a replaced leaf."""
     if os.name != "posix":
         raise ValueError("native context continuity is unavailable on this platform")
-    root = runtime_root.expanduser().resolve() / "context-delivery"
+    runtime_root = runtime_root.expanduser().resolve()
+    runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root = runtime_root / "context-delivery"
     root.mkdir(mode=0o700, exist_ok=True)
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -35,13 +37,14 @@ def apply_context_machine_options(
     commands use the explicit machine runtime or normal machine route without
     loading a Goal registry. No hook, trust, tracing or automation is installed.
     """
-    if getattr(args, "context_delivery", None) is not None:
+    explicit = getattr(args, "context_delivery", None)
+    if explicit == "off":
         return
-    args.context_delivery = "off"
+    args.context_delivery = explicit or "off"
     # Existing benchmark workers retain their explicit opt-out. A machine
     # default must not silently change a frozen worker's disabled transport.
     # An environment on alone still supplies no activation or host proof.
-    if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "off":
+    if explicit is None and os.environ.get("LOOPX_CONTEXT_DELIVERY") == "off":
         return
     command = getattr(args, "quota_command", None)
     if not heartbeat and command not in {"should-run", "context-config", "context-project", "context-hook", "context-read"}:
@@ -51,26 +54,28 @@ def apply_context_machine_options(
     )):
         return
     from ..paths import effective_runtime_root, resolve_runtime_root
-    from ..capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
-    from ..capabilities.machine_configuration.store import read_machine_configuration
-
     runtime_root = (
         effective_runtime_root(registry_path, runtime_root_arg)
         if heartbeat or command == "should-run"
         else resolve_runtime_root({}, runtime_root_arg)
     )
-    configuration = read_machine_configuration(runtime_root, registry=build_builtin_machine_configuration_registry())
-    value = (configuration or {}).get("namespaces", {}).get("context_delivery")
-    if value is None or value["mode"] == "off":
-        return
-    args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
+    if explicit is None:
+        from ..capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+        from ..capabilities.machine_configuration.store import read_machine_configuration
+
+        configuration = read_machine_configuration(runtime_root, registry=build_builtin_machine_configuration_registry())
+        value = (configuration or {}).get("namespaces", {}).get("context_delivery")
+        if value is None or value["mode"] == "off":
+            return
+        args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
     # Recovery does not activate a run mode or create a missing session.
     if command != "context-read":
         args.context_delivery = "on"
         context_delivery_for_arguments(args)
         if command == "should-run" and args.format != "json":
             raise ValueError("native Codex context delivery needs JSON and a capture destination")
-    location_missing = not (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+    location_missing = not (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
+        or getattr(args, "decision_handoff_socket", None))
     capture_missing = (heartbeat or command == "should-run") and not (
         getattr(args, "decision_output_dir", None) or getattr(args, "decision_output_root", None)
     )

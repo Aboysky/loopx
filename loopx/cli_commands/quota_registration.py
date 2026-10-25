@@ -207,7 +207,7 @@ def register_quota_command(
         help="Experimental native packet reuse; inherits the machine setting, otherwise off. Explicit off bypasses machine defaults. On uses existing host declarations: "
              "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
              "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
-             "A directory alone never enables it; declarations are not retention proof.")
+             "Enabled supported calls choose private context/capture paths automatically unless overridden. A directory alone never enables it; declarations are not retention proof.")
     context_location = quota_parser.add_mutually_exclusive_group()
     context_location.add_argument("--codex-context-dir",
         help="Opt-in private native Codex lifecycle directory. For context-hook, consume one native hook event on stdin. "

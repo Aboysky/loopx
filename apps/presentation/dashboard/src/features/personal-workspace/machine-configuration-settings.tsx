@@ -248,6 +248,26 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     setError(null);
   }
 
+  async function setContextDelivery(mode: "off" | "on") {
+    if (busy || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
+    const namespace = selected.machine_namespace;
+    const configuration = {...selected.default, mode};
+    setBusy("apply"); setError(null); setNotice(null);
+    try {
+      const plan = await previewMachineConfiguration(namespace, configuration);
+      await applyMachineConfiguration(namespace, configuration, plan.plan_revision);
+      const next = await fetchMachineConfiguration();
+      setInspection(next);
+      if (next.machine_configuration?.namespaces[namespace]?.mode !== mode) {
+        throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
+      }
+      setNotice(locale === "zh-CN" ? "设置已保存，下一次支持的心跳采用。" : "Saved for the next supported heartbeat.");
+      onChanged?.();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("machine.applyError"));
+    } finally { setBusy(null); }
+  }
+
   async function createPreview() {
     if (!editorAvailable || !selected?.machine_namespace || !desiredConfiguration || !editorValid || busy) return;
     setBusy("preview");
@@ -438,7 +458,19 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             </section>
           ) : null}
 
-          {editorAvailable ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
+          {selected.capability_id === "context_delivery" ? <section className="personal-capability-field-summary">
+            <div className="personal-capability-fields"><label className="is-boolean">
+              <span>{locale === "zh-CN" ? "上下文差分" : "Context delta delivery"}</span>
+              <input type="checkbox" role="switch" checked={selectedCurrent?.mode === "on"} disabled={Boolean(busy)}
+                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off")} />
+            </label></div>
+            <p>{locale === "zh-CN" ? "自动管理私有缓存和会话隔离。显式关闭的实验保持关闭。" : "Private storage and session isolation are automatic. Explicitly disabled runs stay disabled."}</p>
+            {selectedCurrent?.mode === "on" ? <p role="status">{locale === "zh-CN" ? "已保存偏好；原生宿主初始化与实际差分使用尚未验证。" : "Preference saved; native host setup and actual delta use are not verified."}</p> : null}
+            <ContextHelp label={locale === "zh-CN" ? "生效条件" : "Activation requirements"}><p>{locale === "zh-CN"
+              ? "开关保存的是使用偏好，不代表当前宿主已经差分传输。Codex 原生钩子与输入诊断均可用且旧上下文完整时才使用差分；否则保留完整上下文。每轮回执显示实际传输方式。"
+              : "This saves a preference, not proof of active delta delivery. Delta requires native hooks, input diagnostics and a complete retained baseline; otherwise full context is preserved. Each delivery reports its actual mode."}</p></ContextHelp>
+          </section> : null}
+          {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
             <button onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
               <Code2 aria-hidden size={14} />{t(editorMode === "guided" ? "machine.editJson" : "machine.backToForm")}
             </button>
@@ -487,7 +519,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             </section>
           ) : null}
 
-          {editorAvailable ? <footer className="personal-capability-actions">
+          {editorAvailable && selected.capability_id !== "context_delivery" ? <footer className="personal-capability-actions">
             {configured ? <button className="is-danger" disabled={Boolean(busy)} onClick={() => void createRemovalPreview()} type="button"><Trash2 aria-hidden size={15} />{t("machine.previewRemoval")}</button> : null}
             <button disabled={Boolean(busy) || !editorValid} onClick={() => void createPreview()} type="button">{busy === "preview" ? t("common.loading") : t("machine.previewChanges")}</button>
             <button className="is-primary" disabled={Boolean(busy) || !preview} onClick={() => void applyPreview()} type="button">{busy === "apply" ? t("common.loading") : t("machine.applyPreview")}</button>
