@@ -125,6 +125,10 @@ def test_successor_review_needs_checkpoint_linked_settlement(tmp_path, monkeypat
     # Follow only the returned receipt; no fresh guard or successor admission.
     steps = successor["settlement_plan"]["ordered_steps"]
     actions = [step["command_template"] for step in steps if step["kind"] in {"durable_writeback", "quota_spend"}]
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    rendered = render_todo_markdown(successor)
+    assert successor["instruction"] in rendered
+    assert all(command in rendered for command in actions)
     actions[0] = actions[0].replace("<validated_progress>", "source_review").replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
     sha = "a" * 64
 
