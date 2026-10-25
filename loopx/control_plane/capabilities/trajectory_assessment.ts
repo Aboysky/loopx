@@ -204,6 +204,8 @@ For a resource-limit explanation, distinguish a configured ceiling from attempte
 Use the existing controls, prediction and disconfirming_result fields to make the proposed test interpretable. Name only the operational checks needed to tell whether its intervention engaged and its comparison held, such as phase entry, actual exit reason and completed/effective work. Make predictions conditional on those checks; a failed manipulation is not a refutation of the mechanism.
 Equal seeds or wall-clock limits alone do not establish matched random draws, proposal coverage or completed work. Where relevant, distinguish a fixed-work comparison from an end-to-end wall-clock comparison, and say how actual coupling will be checked. Identify intended post-intervention state/path divergence separately from a confound; do not demand identical later trajectories when changing those trajectories is the mechanism. Sampled proposals, accepted intermediate moves and direct final improvements are different observations; no direct update does not exclude an indirect path effect.
 Keep findings and proposals concise and specific to the cited evidence. These are reasoning instructions, not extra measurements, automatic scientific qualification or permission to execute a test.`;
+const SYNTHESIS_CASE_SELECTION_INSTRUCTION = `${SYNTHESIS_DECISION_INSTRUCTION}
+When proposing concrete cases or subsets, use why_priority and controls to explain their selection from the supplied observations and which competing explanation they can distinguish. Separate observed case differences from future predictions; check whether an apparent gain instead reflects a changed baseline. Where relevant, consider supporting, unchanged and contrary cases, or state which evidence is missing. Distinguish exploratory selection after seeing results from a predeclared sample. A purposive diagnostic pilot can be useful without testing every case, but does not establish prevalence, generalization or a fair ranking. Do not invent representative cases, exhaustive coverage or independence from matching labels.`;
 const groundedSchema = {
   episode_ids: {type: 'array', minItems: 1, items: {type: 'string'}},
   citations: {type: 'array', minItems: 1, items: citationSchema},
@@ -230,11 +232,13 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   }
   const synthesis = config.research_synthesis === true;
   const synthesisRevision = config.research_synthesis_revision;
-  if (synthesisRevision !== undefined && (synthesisRevision !== 2 || !synthesis)) {
-    throw new EffectRuntimeRequestError('research_synthesis_revision requires enabled synthesis and supported revision 2');
+  if (synthesisRevision !== undefined && ((synthesisRevision !== 2 && synthesisRevision !== 3) || !synthesis)) {
+    throw new EffectRuntimeRequestError('research_synthesis_revision requires enabled synthesis and supported revision 2 or 3');
   }
-  const synthesisInstruction = synthesisRevision === 2 ? SYNTHESIS_DECISION_INSTRUCTION : SYNTHESIS_INSTRUCTION;
-  const method = synthesis ? synthesisRevision === 2 ? 'research-episodes-synthesis-v2' : SYNTHESIS_METHOD : TRAJECTORY_METHOD;
+  const synthesisInstruction = synthesisRevision === 3 ? SYNTHESIS_CASE_SELECTION_INSTRUCTION
+    : synthesisRevision === 2 ? SYNTHESIS_DECISION_INSTRUCTION : SYNTHESIS_INSTRUCTION;
+  const method = synthesis ? synthesisRevision === 3 ? 'research-episodes-synthesis-v3'
+    : synthesisRevision === 2 ? 'research-episodes-synthesis-v2' : SYNTHESIS_METHOD : TRAJECTORY_METHOD;
   if (config.output_language !== undefined && config.output_language !== 'zh' && config.output_language !== 'en') {
     throw new EffectRuntimeRequestError('output_language must be zh or en');
   }
@@ -247,7 +251,7 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   // Omission preserves the identity of already registered, language-unspecified artifacts.
   const configIdentity = {model: str(config.model, 'model'), effort: str(config.effort, 'effort'), service_tier: str(config.service_tier, 'service_tier'),
     ...(language ? {output_language: language} : {}), ...(synthesis ? {research_synthesis: true} : {}),
-    ...(synthesisRevision === 2 ? {research_synthesis_revision: synthesisRevision} : {})};
+    ...(synthesisRevision !== undefined ? {research_synthesis_revision: synthesisRevision} : {})};
   const numberedSources = input.sources.map(s => ({...s, text: s.text.split('\n').map((line, n) => `${s.first_line+n}: ${line}`).join('\n')}));
   const languageInstruction = language ? `\n\nOutput language: ${language === 'zh' ? 'Simplified Chinese (简体中文)' : 'English'}. Write every reason, limitation and episode question in this language, regardless of the evidence language.
 Return episode_questions exactly once per supplied episode: episode_id unchanged and question as a concise faithful rendering of its research question. Preserve uncertainty, negation, comparisons, numbers and units. Do not add conclusions to questions. These are analytical renderings, not replacements for original records.

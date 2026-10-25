@@ -76,6 +76,25 @@ divergence. A justified repeat with contemporary controls can still be useful.
 These are model reasoning instructions; the validator does not certify that the
 answer followed them or that a proposed experiment is scientifically sufficient.
 
+Optional revision 3 (`config.research_synthesis_revision: 3`, with synthesis
+enabled) adds case-selection reasoning in the existing `why_priority` and
+`controls` fields. When proposing concrete cases, explain their observed
+selection basis, changed baselines, useful supporting or contrary cases, and
+missing evidence. Separate a retrospective diagnostic pilot from a predeclared
+sample and its broader generalization. A pilot need not test every case, and
+matching labels do not establish independent or comparable observations.
+Register a successor pack and explicitly generate its report through the same
+workbench; browsing does not invoke a model. Disable this guidance by choosing
+a revision 2 or legacy pack. Default producer requests remain revision 2, and
+frozen v1/v2 prompts, keys, results, failures and usage are unchanged. Revision 3
+adds no result fields, new model call per finding, solver behavior or scientific
+qualification gate. Its case-selection rationale remains uncalibrated advice.
+
+可选第3版沿既有优先级理由／控制条件说明案例选择依据、基线变化、反例和缺失证据，
+区分事后诊断试点与预先定义样本，不把少量试点外推为普遍收益。接续pack需显式生成，
+浏览不调用模型；选择第2版或旧pack即可停用。默认仍为第2版，旧报告、失败和用量不改；
+新增指引不等于模型已遵从或科学有效性获得认证。
+
 New default producer requests persist revision 2. Previously stored synthesis
 configurations that omit the revision retain the exact v1 prompt, key and
 language caches; reading or retrying them does not upgrade the method. Explicit
