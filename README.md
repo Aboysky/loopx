@@ -37,22 +37,21 @@ $loopx speed up this project's slowest workflow; compare approaches and verify t
 
 Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgrades ↓](#try-loopx)
 
-## News
+## 📰 News
 
 <!-- Curate major product/architecture releases, research findings, consequential
      engineering lessons and substantive community milestones. Each needs a public
      source and a distinct reader takeaway; version bumps or PR merges alone are
-     not news. Keep both languages
-     aligned, newest first, using verified publication dates (UTC). -->
+     not news. Keep both languages aligned, newest first, using verified publication
+     dates (UTC). -->
 
-- **2026-10-20 · [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript control plane and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
-- **2026-10-14 · [Agentic software & upstream delivery](https://loopx-project.github.io/loopx/blog/semantic-software-development/)** — Connecting goals, evidence and human feedback to engineering delivery, including an independent user’s [merged vLLM optimization](https://github.com/vllm-project/vllm/pull/54951) and its measurement limits.
-- **2026-10-05 · [Evidence-driven research on EdgeBench](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)** — Studies of feedback, continuation, replanning and context cost, separating observed system progress from still-unproven mechanism gains.
-- **2026-10-02 · [Long-horizon bootstrapping & RSI](https://loopx-project.github.io/loopx/blog/long-horizon-rsi/)** — Four months of developing LoopX with LoopX: public project history and a design perspective on system-level self-improvement.
-- **2026-09-26 · [Five freshness incidents](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)** — A postmortem of stale and incomplete evidence behind green health checks, with lessons for source freshness, coverage and recovery.
-- **2026-09-18 · [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/)** — A 46-task long-horizon agent study comparing Plain Codex, native Goal and LoopX Heartbeat, with task-level results, methodology and comparison limits.
-- **2026-09-06 · [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — A Personal Agent Workspace to follow agent work, act on decisions, and inspect delivered results across sessions. [Workspace guide](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md).
-- **2026-08-02 · [200+ hour trajectories shared on X](https://x.com/huangruiteng/status/2083904257494024425)** — Early owner-run examples spanning 200+ elapsed hours drew broad attention on X, showing work across execution, waits, human decisions and recovery. [Trajectories and limits](#open-source-issue-fix).
+- **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript control plane and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
+- **2026-10-14 · 🤖 [Agentic software](https://loopx-project.github.io/loopx/blog/semantic-software-development/)** — Connecting goals, evidence and human feedback to engineering delivery.
+- **2026-10-05 · 📊 [Evidence-driven research on EdgeBench](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)** — Studies of feedback, continuation, replanning and context cost, separating observed system progress from still-unproven mechanism gains.
+- **2026-10-02 · 🧠 [Long-horizon bootstrapping & RSI](https://loopx-project.github.io/loopx/blog/long-horizon-rsi/)** — Four months of developing LoopX with LoopX: public project history and a design perspective on system-level self-improvement.
+- **2026-09-18 · 🧪 [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/)** — A 46-task long-horizon agent study comparing Plain Codex, native Goal and LoopX Heartbeat, with task-level results, methodology and comparison limits.
+- **2026-09-06 · 🎉 [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — A Personal Agent Workspace to follow agent work, act on decisions, and inspect delivered results across sessions. [Workspace guide](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md).
+- **2026-08-02 · ⏱️ [200+ hour trajectories shared on X](https://x.com/huangruiteng/status/2083904257494024425)** — Early owner-run examples spanning 200+ elapsed hours drew broad attention on X, showing work across execution, waits, human decisions and recovery. [Trajectories and limits](#open-source-issue-fix).
 
 [All releases](https://github.com/loopx-project/loopx/releases)
 
