@@ -140,6 +140,37 @@ remain unavailable. There is no fallback to ordinary steward/project history,
 Session creation, executor change or model reconfiguration on this entry.
 Group audiences retain their existing boundary.
 
+An owner-private steward connection also offers **Use as App steward**. Core
+stores this explicit entry preference alongside the binding set, without
+changing any audience, managed identity or execution grant. Multiple stewards
+never compete by list order or recent activity. The local App steward Chat
+entry resolves only that source's existing current Session, then freezes its
+exact binding and Session in the URL. Discovery blocks the ordinary composer
+until it completes and performs no model work or Session creation. Existing
+unselected installations retain their ordinary entry. Once selected, a missing,
+revoked or replaced source stays unavailable until recovery or explicit clear;
+it cannot silently fall back to a peer or ordinary conversation. Goal-scoped,
+project, explicit original, managed-Agent and remote/read-only views retain their
+own navigation. A newly selected preference does not retarget an already frozen
+original conversation.
+Settings retain an explicit clear action even after the selected binding is
+removed or its workspace becomes unavailable; clearing changes only the entry
+preference and retains all conversation history and execution grants.
+
+Cold Goal links wait for the current status directory before invalidating a
+missing selection; the bundled placeholder is not proof that a valid Goal was
+removed. This keeps an initial Goal route out of default-steward discovery.
+
+![Choose an existing synthetic source](../../assets/personal-workspace/app-steward-entry/choose-source.png)
+![Continue its original conversation](../../assets/personal-workspace/app-steward-entry/original-conversation.png)
+
+Public-safe packaged evidence also includes the
+[narrow selection](../../assets/personal-workspace/app-steward-entry/selected-source-narrow.png),
+[unavailable entry](../../assets/personal-workspace/app-steward-entry/unavailable-narrow.png),
+and [complete narrow report](../../assets/personal-workspace/app-steward-entry/full-report-narrow.png).
+These use disposable Core/HTTP state and synthetic provider/model data; they do
+not certify installed external delivery or the complete synchronization goal.
+
 The App reuses its conversation history, single composer, stream recovery and
 queued-input owners. Quiet source refresh reads the verified compact index;
 only changed snapshots are read. Messages arriving from the original source
@@ -169,8 +200,8 @@ a started write without a provider locator stays unconfirmed after restart.
 Revocation or changed identity prevents further delivery. Disable the existing
 connection to revoke it; rollback must preserve its private delivery journals.
 
-Use **Continue original conversation** above to reach this path. Ordinary App
-steward history is still a separate entry; it is not silently merged or retargeted.
+Use **Continue original conversation** or the explicitly selected App steward
+entry above to reach this path. Old ordinary history is retained separately.
 This checkpoint covers text projection, not reply/thread relation mirroring,
 attachment transfer, retroactive insertion into Lark chronology or all-channel
 broadcast. An App attachment produces an explicit unsynchronized notice and a

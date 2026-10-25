@@ -99,6 +99,30 @@ Lark listener 观测。该本地 hook 只读取缓存，不发起网络请求。
 不回退到普通管家/项目历史，不新建替代 Session，也不在这里切换执行器或模型。
 群受众保留原有边界。
 
+已有本人私聊管家连接还提供 **用作 App 管家**。Core 在原 binding 集合中保存
+明确的入口选择，不改变受众、受管身份或执行授权。多个管家不按列表顺序或最近
+活跃时间竞争。点击本机 App 管家聊天时，仅在所选来源中发现当前已有 Session，
+随后将确切 binding 与 Session 固定在 URL。发现完成前阻止普通输入框出现；
+发现不调用模型、不创建会话。未选择的旧安装保留普通入口。选定来源缺失、撤权
+或被替换时保持不可用，等待恢复或明确取消选择，不悄悄回退到另一管家或普通会话。
+Goal 范围、项目、明确原会话、受管 Agent 以及远端/只读视图保留各自导航。
+后来修改默认选择，不挪走已固定的原会话。
+所选 binding 已移除或工作区不可用时，设置仍保留明确取消选择的入口；取消只改变
+默认入口，保留全部会话历史与执行授权。
+
+冷启动 Goal 深链接时，先等待当前状态目录，再判断所选 Goal 是否已失效；内置
+占位数据不能证明有效 Goal 已被删除，初始 Goal 路由因此不会误入默认管家发现。
+
+![选择已有合成来源](../../assets/personal-workspace/app-steward-entry/choose-source.png)
+![继续其原会话](../../assets/personal-workspace/app-steward-entry/original-conversation.png)
+
+公开安全的打包证据另含
+[窄屏选择](../../assets/personal-workspace/app-steward-entry/selected-source-narrow.png)、
+[入口不可用](../../assets/personal-workspace/app-steward-entry/unavailable-narrow.png)和
+[窄屏完整报告](../../assets/personal-workspace/app-steward-entry/full-report-narrow.png)。
+以上使用临时 Core/HTTP 状态及合成 provider/模型数据，不代替安装态外部送达或
+完整同步目标的验收。
+
 App 复用原对话历史、单输入框、流恢复和排队输入 owner。安静刷新读取经核验的
 紧凑索引，仅在变化时读取快照；原来源新增消息无需导航即可显示，Web 输入保留
 Web 来源，通过已有 Core 队列及新鲜来源准入。连接列表独立于 App/凭证目录加载，
@@ -119,8 +143,8 @@ Core 重查 Session、当前绑定与受众，provider 核验原来源。消息�
 没有 provider locator 的写入，重启后仍保留未确认。撤权或身份变化阻止后续投递。
 关闭既有连接即可撤销授权；回滚须保留私有投递 journal。
 
-通过上述 **继续原会话** 使用该路径。普通 App 管家历史仍是独立入口，不会被静默
-合并或重定向。本检查点覆盖文本投影，不覆盖回复/话题关系镜像、附件传输、向 Lark
+通过上述 **继续原会话** 或明确选定的 App 管家入口使用该路径；旧普通历史继续
+独立保留。本检查点覆盖文本投影，不覆盖回复/话题关系镜像、附件传输、向 Lark
 历史回插旧时间或全渠道广播。App 附件会产生明确的未同步提示，并保留 partial
 outbox，不声明完整送达。真实 HTTP/Core 配合合成 provider 的旅程覆盖重复输入、
 长正文、重启、回执缺失/未知、撤权及 App 身份替换；安装态 provider 读回另行验收。

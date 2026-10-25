@@ -6,6 +6,7 @@ import { readConversationReturns, readTaskSessions } from "../data/conversation-
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
 import { useBoundConversation } from "../data/use-bound-conversation";
+import {AppStewardEntry} from "../features/personal-workspace/app-steward-entry";
 import { goalSubtree } from "../features/personal-workspace/goal-hierarchy";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
@@ -3681,7 +3682,7 @@ export function DashboardPage() {
   useEffect(() => {
     // A source transition can still expose the previous source's Goal rows.
     // Reconcile only its committed URL, including during browser Back/Forward.
-    if (isLoading || (source.kind === "url" && search.statusUrl && search.statusUrl !== source.label)) return;
+    if (statusRequestActive || isLoading || (source.kind === "url" && search.statusUrl && search.statusUrl !== source.label)) return;
     if (search.statusUrl && source.kind === "example") {
       return;
     }
@@ -3708,7 +3709,7 @@ export function DashboardPage() {
         }),
       });
     }
-  }, [goalArchiveLoadState.phase, goalRows, isLoading, navigate, search.goalId, search.rootGoalId, search.statusUrl, source.kind, source.label]);
+  }, [goalArchiveLoadState.phase, goalRows, isLoading, navigate, search.goalId, search.rootGoalId, search.statusUrl, source.kind, source.label, statusRequestActive]);
 
   useEffect(() => {
     if (!progress || isLoading || !search.goalId || source.kind !== "url") return;
@@ -3751,7 +3752,7 @@ export function DashboardPage() {
     );
   }
 
-  return (
+  const home = (
     <PersonalGoalHome
       boundConversation={search.conversationBinding !== undefined || search.conversationSession !== undefined
         ? { bindingId: search.conversationBinding ?? "", sessionId: search.conversationSession ?? "" } : null}
@@ -3823,4 +3824,15 @@ export function DashboardPage() {
       theme={theme}
     />
   );
+  const defaultStewardEntry = search.view === "conversation" && !search.goalId && !search.rootGoalId
+    && search.workspace === undefined && search.workAgent === undefined && search.workSession === undefined
+    && search.conversationBinding === undefined && search.conversationSession === undefined
+    && activeStatusSource.kind === "local" && !activeStatusSource.readOnly;
+  return defaultStewardEntry ? <AppStewardEntry onOpen={target => void navigate({replace: true,
+    search: current => "goalId" in current && current.statusUrl === search.statusUrl && current.view === "conversation"
+      && !current.goalId && !current.rootGoalId && current.workspace === undefined && current.workAgent === undefined
+      && current.workSession === undefined && current.conversationBinding === undefined && current.conversationSession === undefined
+      ? {...current, conversationBinding: target.bindingId, conversationSession: target.sessionId} : current})}>
+    {home}
+  </AppStewardEntry> : home;
 }
