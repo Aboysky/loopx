@@ -298,6 +298,24 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     select(parent?.selection ?? {nodes: [], day: null}, false);
   };
   const resultsAnchor = useRef<HTMLDivElement>(null), reportAnchor = useRef<HTMLDivElement>(null), historyAnchor = useRef<HTMLElement>(null);
+  const reportEntries = useRef(new Set<string>());
+  const reportScope = JSON.stringify([goalId, readSourceUrl ?? "", analysis.pack?.pack_id ?? analysis.location.packId]);
+  useLayoutEffect(() => {
+    if (!active || !analysis.location.open || reportEntries.current.has(reportScope)) return;
+    // A record/finding link owns its focus, even while history is still loading.
+    if (selection.nodes.length || selection.day !== null) {reportEntries.current.add(reportScope); return;}
+    if (analysis.loading && !analysis.pack && !analysis.readError) return;
+    const target = analysis.panel.current;
+    if (!target) return;
+    // Resolve a saved report link once per reading context. Explicit reopening
+    // keeps its existing action focus; reads and tab restoration must not rearm it.
+    reportEntries.current.add(reportScope);
+    // A user may have selected a source while this report was loading.
+    // URL restoration must not take focus from that active control.
+    if (document.activeElement && document.activeElement !== document.body && document.activeElement !== target) return;
+    target.focus({preventScroll: true});
+    target.scrollIntoView({block: "start"});
+  }, [active, reportScope, analysis.location.open, analysis.loading, analysis.pack, analysis.readError, analysis.panel, selection.nodes.length, selection.day]);
   const readingSelection = Boolean(selected || selectedMembers?.length);
   const selectedFinding = selected?.findings.find(finding => finding.result_id === selection.finding)
     ?? (!selection.finding ? selected?.findings.at(-1) : undefined);

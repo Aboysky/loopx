@@ -245,6 +245,37 @@ export const researchHistoryScenario = {
       assert.equal(await synthesisPage.getByRole('region', {name: '研究汇报', exact: true}).count(), 1, 'One reading focus when expanded');
       assert.match(await analysis.innerText(), /竞争解释.*随机波动/s);
       const savedOverview = await analysis.locator('.research-synthesis-summary').innerText();
+      // A saved-report URL is a reading destination, including after reload.
+      // Source hydration must not leave its actual account below the metrics.
+      for (const viewport of [{width: 390, height: 844}, {width: 1280, height: 900}]) {
+        await synthesisPage.setViewportSize(viewport);
+        await synthesisPage.reload({waitUntil: 'domcontentloaded'});
+        await analysis.locator('.research-synthesis-summary').waitFor();
+        await synthesisPage.screenshot({path: resolve(outputDir, `research-deep-link-${viewport.width}.png`), animations: 'disabled'});
+        assert(await analysis.locator('.research-synthesis-summary').evaluate(e => {
+          const box = e.getBoundingClientRect();
+          return box.top >= 0 && box.bottom <= innerHeight - 48;
+        }), 'A saved deep-report link reveals the actual account in the first viewport');
+      }
+      // First-visit scroll restoration already fails on the unchanged base.
+      // Qualify the report-entry effect against subsequent view restoration;
+      // keep that independent workspace initialization gap in delivery evidence.
+      await synthesisPage.getByRole('button', {name: '任务', exact: true}).click();
+      await synthesisPage.getByRole('button', {name: '研究', exact: true}).click();
+      await analysis.locator('.research-synthesis-summary').waitFor();
+      const laterFinding = analysis.locator('.research-report-finding').last();
+      const readingTop = await laterFinding.evaluate(async e => {
+        e.scrollIntoView({block: 'center'});
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return e.getBoundingClientRect().top;
+      });
+      await synthesisPage.getByRole('button', {name: '任务', exact: true}).click();
+      await synthesisPage.getByRole('button', {name: '研究', exact: true}).click();
+      await synthesisPage.waitForFunction(top => {
+        const finding = document.querySelector('.personal-goal-view-panel:not([hidden]) .research-report-finding:last-child');
+        return finding && Math.abs(finding.getBoundingClientRect().top - top) < 3;
+      }, readingTop);
+      await synthesisPage.setViewportSize({width: 390, height: 844});
       assert(await analysis.locator('.research-report-tabs').evaluate(tabs => {
         const overview = tabs.parentElement.querySelector('.research-synthesis-summary');
         return Boolean(overview && (tabs.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING));
