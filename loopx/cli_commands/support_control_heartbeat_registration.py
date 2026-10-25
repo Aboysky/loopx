@@ -176,8 +176,8 @@ def register_heartbeat_control_commands(
 
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
 
-    heartbeat_prompt_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS, default="off",
-        help="Experimental native packet reuse; off by default. On uses existing host declarations: "
+    heartbeat_prompt_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
+        help="Experimental native packet reuse; inherits the machine setting, otherwise off. Explicit off bypasses machine defaults. On uses existing host declarations: "
              "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
              "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
              "A directory alone never enables it; declarations are not retention proof.")

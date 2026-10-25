@@ -238,7 +238,7 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "app_machine"])
 def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -259,7 +259,7 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider="sqlite")
     sources = []
-    for name in (("cold", "warm") if host == "app_server" else ()):
+    for name in (("cold", "warm") if host != "benchmark" else ()):
         code, decision = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "saved-native-turn", "--codex-app", cwd=project)
         assert code == 0, decision
@@ -274,7 +274,15 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
     cli = [program, "--cli-bin", program]
     from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
     configuration = codex_context_configuration(str(context), goal_id=GOAL_ID, agent_id=AGENT_ID, cli_argv=cli, scenario="codex_app_heartbeat")
-    if host == "app_server":
+    if host == "app_machine":
+        from tests.control_plane.test_context_machine_configuration import configure
+        assert configure(registry, runtime, workspace, "on")[0] == 0
+        code, setup = _run_cli(registry, runtime, "quota", "context-config", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project)
+        assert code == 0, setup
+        configuration = setup["native_config"]
+        cli += ["--runtime-root", str(runtime)]
+    if host != "benchmark":
         (home / "hooks.json").write_text(json.dumps({"hooks": configuration["hooks"]}))
     phase, queue, observed, errors = "cold", [], {}, []
     actual_turn = None
@@ -298,7 +306,8 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
                     command = shlex.join([*cli, "--format", "json", "quota", "context-project",
                         "--capture-file", str(source), "--capture-sha256", hashlib.sha256(raw).hexdigest(),
                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "saved-native-turn",
-                        "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(cache)])
+                        "--codex-app", *([] if host == "app_machine" else [
+                            "--context-delivery", "on", "--codex-context-dir", str(context), "--decision-output-root", str(cache)])])
                 phase += "_ready"
             elif phase.endswith("_ready"):
                 name = phase.split("_")[0]

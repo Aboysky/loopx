@@ -203,8 +203,8 @@ def register_quota_command(
     quota_parser.add_argument("--capture-file", help="For context-read/context-project: original captured JSON file; no guard is evaluated.")
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
 
-    quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS, default="off",
-        help="Experimental native packet reuse; off by default. On uses existing host declarations: "
+    quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
+        help="Experimental native packet reuse; inherits the machine setting, otherwise off. Explicit off bypasses machine defaults. On uses existing host declarations: "
              "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
              "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
              "A directory alone never enables it; declarations are not retention proof.")
@@ -217,7 +217,7 @@ def register_quota_command(
     context_location.add_argument("--codex-context-root",
         help="Existing private native context root, with independent journals per native session. "
              "Use for shared Codex App hook configuration; cannot combine with --codex-context-dir. "
-             "context-config renders native configuration for the exact Goal/Agent; no files, trust, guard or spend are changed.")
+             "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int, default=4096,
