@@ -103,7 +103,6 @@ export function restoreLegacySteeringRequest(key: string, legacyKey: string, ses
     || current.turnId !== request.turnId || current.text !== request.text)) return undefined;
   // Copy durably before retiring the old location. A failed copy preserves both
   // page recovery and the old durable entry; dispatch still requires readback.
-  if (!retainSteeringRequest(key, request)) return undefined;
-  retireSteeringRequest(legacyKey, request.id);
+  if (retainSteeringRequest(key, request)) retireSteeringRequest(legacyKey, request.id);
   return request;
 }

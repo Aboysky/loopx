@@ -2350,9 +2350,12 @@ export function PersonalWorkspacePage({
     // dispatch. Restoring its text alone cannot turn it into a fresh send.
     if (conversationSessionId && !readSteeringRequest(composerDraftKey)) {
       const legacy = legacySteeringRequests(conversationSessionId, composerDraftKey)[0];
-      if (legacy && !restoreLegacySteeringRequest(composerDraftKey, legacy[0], conversationSessionId)) {
-        setActionFeedback(t("feedback.steeringStorageUnavailable"));
-        return;
+      if (legacy) {
+        restoreLegacySteeringRequest(composerDraftKey, legacy[0], conversationSessionId);
+        if (!readSteeringRequest(composerDraftKey)) {
+          setActionFeedback(t("feedback.steeringStorageUnavailable"));
+          return;
+        }
       }
     }
     const previousSteering = readSteeringRequest(composerDraftKey);
