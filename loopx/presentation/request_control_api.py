@@ -12,7 +12,7 @@ from ..control_plane.collaboration.goal_instance_scope import collaboration_goal
 from ..control_plane.collaboration.inbox import _entry, _read, _root
 from ..control_plane.collaboration.request_amendment import control_request
 from ..control_plane.collaboration.source_chat_observation import is_source_chat_host
-from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_request_scope
 from ..control_plane.goals.goal_ref_validation import exact_goal_ref
 from ..control_plane.projects.registry_codec import load_project_registry
 from ..capabilities.manager_context import target_authority
@@ -75,6 +75,7 @@ class RequestControlMixin:
                 registry_path=self.server.registry_path) or []
         return session, goals, core
 
+    @effect_runtime_request_scope()
     def _request_inventory_read(self) -> None:
         from ..control_plane.collaboration.conversation_inventory import read_conversation_requests
 
