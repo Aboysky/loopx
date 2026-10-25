@@ -4,7 +4,7 @@ import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {createInterface} from "node:readline";
-import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {resolveTestPython, testPythonCommand} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 
@@ -96,7 +96,12 @@ function comparisonReadback() {
 
 export async function startHistoryOwner(fixture) {
   const fixtures = Array.isArray(fixture) ? fixture : fixture ? [fixture] : [];
-  const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path])],
+  const backendCommand = testPythonCommand(`
+import runpy
+sys.argv = ${JSON.stringify(["examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path])])}
+runpy.run_path(sys.argv[0], run_name="__main__")
+`);
+  const child = spawn(backendCommand.command, backendCommand.args,
     {cwd: repoRoot, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["ignore", "pipe", "pipe"]});
   let diagnostic = "";
   child.stderr.on("data", chunk => {diagnostic = (diagnostic + chunk).slice(-4000);});
