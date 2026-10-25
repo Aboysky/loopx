@@ -30,7 +30,7 @@ def build_builtin_machine_configuration_registry() -> MachineConfigurationRegist
 
     from .goal_storage import goal_storage_machine_configuration_namespace
     from ..native_chat.machine_defaults import codex_chat_machine_configuration_namespace
-    from ...control_plane.turn_driver.context_machine import context_delivery_machine_configuration_namespace
+    from .context_delivery import context_delivery_machine_configuration_namespace
 
     return (
         MachineConfigurationRegistry()

@@ -1,48 +1,16 @@
-"""Machine defaults for the existing opt-in Codex transport, not Goal authority.
+"""Compose machine defaults into omitted native CLI options, without Goal authority.
 
-The machine-configuration transaction owns persistence. This native IO adapter
-only supplies omitted CLI options; packet semantics remain in context_delivery.ts.
+The machine-configuration transaction owns persistence; packet semantics stay
+with the existing TypeScript transport. This layer performs native path IO.
 """
 from __future__ import annotations
 
 import argparse
 import os
-from collections.abc import Mapping
 from pathlib import Path
 import stat
-from typing import Any
 
-from ...capabilities.machine_configuration.contract import MachineConfigurationNamespace
-from .codex_context import CONTEXT_DELIVERY_SETTINGS, context_delivery_for_arguments
-
-
-CONTEXT_DELIVERY_MACHINE_SCHEMA = "context_delivery_machine_defaults_v0"
-
-
-def normalize_context_delivery_machine_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
-    if set(raw) != {"schema_version", "mode"} or raw.get("schema_version") != CONTEXT_DELIVERY_MACHINE_SCHEMA:
-        raise ValueError("context_delivery requires its schema_version and mode")
-    if raw["mode"] not in CONTEXT_DELIVERY_SETTINGS:
-        raise ValueError("context_delivery mode must be off or on")
-    return {"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": raw["mode"]}
-
-
-def context_delivery_machine_configuration_namespace() -> MachineConfigurationNamespace:
-    return MachineConfigurationNamespace(
-        namespace="context_delivery",
-        schema_versions=frozenset({CONTEXT_DELIVERY_MACHINE_SCHEMA}),
-        normalize=normalize_context_delivery_machine_defaults,
-        project_public=lambda value: dict(value),
-        apply_public_update=lambda _current, update: dict(update),
-        title="Codex heartbeat context",
-        description=(
-            "Off by default. On supports declared Codex App and benchmark heartbeats only; "
-            "unknown or unsupported modes fail before admission. Native hooks and input "
-            "diagnostics still need host setup; unproven retention uses the full capture."
-        ),
-        documentation={"path": "docs/reference/required-work-context.md#machine-default"},
-        default_configuration={"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "off"},
-    )
+from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 
 
 def _private_transport_root(runtime_root: Path) -> str:
@@ -82,9 +50,9 @@ def apply_context_machine_options(
         "capture_file", "capture_sha256", "codex_context_dir", "codex_context_root"
     )):
         return
-    from ...paths import effective_runtime_root, resolve_runtime_root
-    from ...capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
-    from ...capabilities.machine_configuration.store import read_machine_configuration
+    from ..paths import effective_runtime_root, resolve_runtime_root
+    from ..capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from ..capabilities.machine_configuration.store import read_machine_configuration
 
     runtime_root = (
         effective_runtime_root(registry_path, runtime_root_arg)

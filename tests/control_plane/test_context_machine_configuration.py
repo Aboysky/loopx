@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from loopx.control_plane.turn_driver.context_machine import CONTEXT_DELIVERY_MACHINE_SCHEMA
+from loopx.capabilities.machine_configuration.context_delivery import CONTEXT_DELIVERY_MACHINE_SCHEMA
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,

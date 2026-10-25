@@ -352,7 +352,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
     if registry_path is not None:
-        from ..control_plane.turn_driver.context_machine import apply_context_machine_options
+        from .context_machine import apply_context_machine_options
 
         try:
             apply_context_machine_options(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)

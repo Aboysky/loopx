@@ -374,7 +374,7 @@ def handle_support_control_command(
                 )
             runtime_profile = requested_runtime_profile
             from copy import copy
-            from ..control_plane.turn_driver.context_machine import apply_context_machine_options
+            from .context_machine import apply_context_machine_options
 
             # Persist caller choices only. Machine defaults and private paths
             # must resolve again on the next wake, including after rollback.
