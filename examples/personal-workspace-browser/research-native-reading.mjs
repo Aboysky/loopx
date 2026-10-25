@@ -25,7 +25,8 @@ export const researchNativeReadingScenario = {
         expected: [0.0000001234567890123456, 0.0000001234567890123456, 0.0000001123456789012345, 0.0000001123456789012345], display: ["1.235E-7", "1.235E-7", "1.123E-7", "1.123E-7"], gain: "-1.111E-8"},
       {id: "large", values: [123456789.12345679], higher: true, retained: 0,
         expected: [123456789.12345679, 123456789.12345679, 123456789.12345679, 123456789.12345679], display: ["1.235E8", "1.235E8", "1.235E8", "1.235E8"], gain: "0"},
-      ...["command", "mixed", "damaged", "empty-output", "unsafe-exit"].map(source => ({id: `${source}-source`, source,
+      ...["command", "mixed", "damaged", "empty-output", "unsafe-exit", "tool-text", "tool-shell", "tool-pending",
+        "tool-function", "tool-mixed", "tool-damaged", "tool-unsafe-exit", "tool-empty"].map(source => ({id: `${source}-source`, source,
         values: [2, 1], higher: false, retained: 0, expected: [1, 2, 1, 2]})),
     ];
     const root = await mkdtemp(resolve(tmpdir(), "loopx-native-reading-"));
@@ -37,6 +38,9 @@ export const researchNativeReadingScenario = {
       fixture.analyses = cases.map(c => {
         const a = structuredClone(original), native = JSON.parse(a.artifacts["native.json"]);
         a.title = c.id;
+        // These supplied outputs use the legacy assessment format, independent
+        // of the current registration default for newly generated reports.
+        a.config = {model: "fixture", effort: "max", service_tier: "fast", research_synthesis: false};
         a.input.scope.run_id = c.id;
         native.scope = {...a.input.scope};
         native.complete = !c.partial;
@@ -62,6 +66,20 @@ export const researchNativeReadingScenario = {
             ? JSON.stringify({type: "unknown_event", text: "Unrecognized source MUST_REMAIN_LITERAL"})
             : c.source === "damaged" ? "{malformed MUST_REMAIN_LITERAL"
             : command(c.source === "empty-output" ? "" : longFailure, c.source === "unsafe-exit" ? Number.MAX_SAFE_INTEGER + 1 : 17)].join("\n");
+          if (c.source.startsWith("tool-")) {
+            const shell = (text, exit_code) => JSON.stringify({chunk_id: "synthetic", wall_time_seconds: 0.25, exit_code, output: text});
+            const tool = output => JSON.stringify({type: "response_item", payload: {
+              type: c.source === "tool-function" ? "function_call_output" : "custom_tool_call_output", output}});
+            const part = text => ({type: "input_text", text});
+            const first = ["tool-text", "tool-function"].includes(c.source) ? output : c.source === "tool-empty" ? ""
+              : [part("Recorded tool response\n"), part(c.source === "tool-unsafe-exit"
+                ? '{"chunk_id":"synthetic","wall_time_seconds":0.25,"exit_code":9007199254740993,"output":"MUST_REMAIN_LITERAL"}'
+                : shell(output, c.source === "tool-pending" ? null : 0))];
+            const second = c.source === "tool-mixed" ? [part(longFailure), {type: "input_image", image_url: "synthetic"}]
+              : c.source === "tool-damaged" ? [part(longFailure), {type: "input_text", text: 12}]
+              : c.source === "tool-empty" ? "" : [part(shell(longFailure, 17))];
+            text = [tool(first), tool(second)].join("\n");
+          }
           native.samples[0].citation.last_line = 2;
         }
         a.artifacts["facts.txt"] = text;
@@ -73,7 +91,7 @@ export const researchNativeReadingScenario = {
       await writeFile(path, JSON.stringify(fixture));
       // Same public synthetic data for reproducible before/after inspection.
       await writeFile(resolve(outputDir, "research-citation-reader-fixture.json"), JSON.stringify({...fixture,
-        analyses: fixture.analyses.filter(a => a.title === "command-source")}));
+        analyses: fixture.analyses.filter(a => ["command-source", "tool-shell-source"].includes(a.title))}));
       owner = await startHistoryOwner(path);
       page = await browser.newPage({viewport: {width: 1280, height: 900}, hasTouch: true});
       const errors = [];
@@ -103,6 +121,13 @@ export const researchNativeReadingScenario = {
         assert.match(await native.locator(".research-native-best .research-native-unit").textContent(), new RegExp(c.unit ?? "points"), "The raw unit remains visible even when no valid measurement exists");
         assert.match(await native.locator(".research-native-scope").innerText(), new RegExp(`${c.values.filter(v => v !== null).length} / ${c.values.length}.*有效结果`));
         if (c.partial) assert.match(await native.innerText(), /部分窗口 · 起点未知/);
+        if (c.id === "invalid-first") {
+          const best = await native.locator('[data-native-point="best_valid"]').boundingBox();
+          const retained = await native.locator('[data-native-point="retained"]').boundingBox();
+          assert(best.width > retained.width + 8, "An unknown retained result must not reserve an equal primary column beside the best valid measurement");
+          await native.evaluate(e => e.scrollIntoView({block: "start"}));
+          await page.screenshot({path: resolve(outputDir, "research-native-unknown-desktop.png"), animations: "disabled"});
+        }
         await page.setViewportSize({width: 390, height: 844});
         const details = native.locator(".research-native-basis");
         if (await details.evaluate(e => e.open)) await details.locator(":scope > summary").click();
@@ -122,6 +147,7 @@ export const researchNativeReadingScenario = {
           await page.screenshot({path: resolve(outputDir, "research-native-source-tail-phone.png"), animations: "disabled"});
         }
         await details.locator(":scope > summary").tap();
+        if (c.id === "invalid-first") await page.screenshot({path: resolve(outputDir, "research-native-unknown-phone.png"), animations: "disabled"});
         if (c.id === "lower-negative") {
           const retained = native.getByRole("button", {name: /原生保留结果.*查看原始证据/});
           await retained.focus(); await retained.press("Enter");
@@ -139,7 +165,7 @@ export const researchNativeReadingScenario = {
           const citation = page.getByRole("region", {name: "引用原文", exact: true});
           await citation.waitFor();
           const literal = fixture.analyses.find(a => a.title === c.id).artifacts["facts.txt"];
-          if (["mixed", "damaged", "unsafe-exit"].includes(c.source)) {
+          if (["mixed", "damaged", "unsafe-exit", "tool-mixed", "tool-damaged"].includes(c.source)) {
             await citation.locator("pre").waitFor();
             assert.equal(await citation.locator("pre").textContent(), literal, "Never discard unsupported or malformed neighboring evidence");
             assert.equal(await citation.locator("details").count(), 0);
@@ -147,17 +173,28 @@ export const researchNativeReadingScenario = {
             await citation.locator(".analysis-source-content").waitFor();
             assert.equal(await citation.locator(".analysis-source-command").count(), 2);
             await citation.getByText("行 2", {exact: true}).waitFor();
-            await citation.getByText("退出码 17", {exact: true}).waitFor();
+            if (c.source !== "tool-empty") await citation.getByText("退出码 17", {exact: true}).waitFor();
+            if (c.source === "tool-pending") await citation.getByText("尚无退出码", {exact: true}).waitFor();
             const raw = citation.locator(".analysis-source-raw");
             assert.equal(await raw.getAttribute("open"), null);
             await raw.locator("summary").tap();
             assert.equal(await raw.locator("pre").textContent(), literal, "Raw evidence remains byte-for-byte available");
             await raw.locator("summary").tap();
-            if (c.source === "empty-output") assert.equal(await citation.getByText("输出为空", {exact: true}).count(), 2);
+            if (["empty-output", "tool-empty"].includes(c.source)) assert.equal(await citation.getByText("输出为空", {exact: true}).count(), 2);
             else {
-              const records = literal.split("\n").map(line => JSON.parse(line).payload.item);
-              for (const [i, record] of records.entries()) {
-                assert.equal(await citation.locator(".analysis-source-output").nth(i).textContent(), record.aggregated_output);
+              const records = literal.split("\n").map(line => JSON.parse(line).payload);
+              const outputs = await citation.locator(".analysis-source-output").allTextContents();
+              if (c.source.startsWith("tool-")) {
+                const main = JSON.stringify({cases: 8, improved: 3, regressed: 2, unchanged: 3, complete_cost: null}, null, 2);
+                assert(outputs.includes(c.source === "tool-unsafe-exit" ? records[0].output[1].text : main));
+                if (c.source === "tool-unsafe-exit") {
+                  assert.equal(await citation.getByText("退出码 9007199254740992", {exact: true}).count(), 0, "Unsafe numeric metadata must not be rounded into a display fact");
+                  assert(outputs.some(text => text.includes("9007199254740993")));
+                }
+                if (["tool-shell", "tool-pending", "tool-unsafe-exit"].includes(c.source)) assert.equal(outputs[0], "Recorded tool response\n", "Preserve text blocks and order, including surrounding caveats");
+                assert.equal(outputs.at(-1), JSON.parse(records[1].output[0].text).output);
+              } else {
+                for (const [i, record] of records.entries()) assert.equal(outputs[i], record.item.aggregated_output);
               }
               assert.equal(await citation.locator("script").count(), 0);
               assert.equal(await page.evaluate(() => window.sourceExecuted), undefined);
@@ -191,12 +228,13 @@ export const researchNativeReadingScenario = {
       await page.getByRole("button", {name: "About native measurements", exact: true}).focus();
       await page.getByRole("tooltip").waitFor({state: "visible"});
       await page.keyboard.press("Escape");
-      await selector.selectOption({label: "command-source"});
+      await selector.selectOption({label: "tool-pending-source"});
       const selected = await selector.inputValue();
       await page.locator(`.research-progress-scope[data-pack-id="${selected}"]`).waitFor();
       await page.getByRole("region", {name: "Native measurements", exact: true}).getByRole("button", {name: /Native retained result.*Read original evidence/}).click();
       const originalPanel = page.getByRole("region", {name: "Cited original", exact: true});
       await originalPanel.getByText("Exit code 17", {exact: true}).waitFor();
+      await originalPanel.getByText("No exit code yet", {exact: true}).waitFor();
       await originalPanel.getByText("Complete raw record", {exact: true}).waitFor();
       await originalPanel.press("Escape");
       const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();

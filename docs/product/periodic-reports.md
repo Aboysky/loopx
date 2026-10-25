@@ -280,6 +280,25 @@ priority, replan, budget, stop and settlement policies remain effective. Pausing
 the steward prevents new scheduled model Turns without discarding accepted work
 or historical results.
 
+If the native guard refuses the exact report Task before execution because a
+semantic replan is due, the original idle worker can admit one correlated
+continuation of that window. It rechecks native admission without choosing
+another business Task. When governance is still due, the canonical writeback
+preview must independently accept the original Agent's semantic delta before
+writeback and quota settlement. When the fresh guard no longer owes governance,
+the host-only admission stop can request a new exact admission of the original
+report Task without a governance model call. A different advisory Task in that
+probe is never executed and grants no authority over the report. A retained stop
+from the earlier host can receive one separately correlated continuation only
+when its canonical journal proves that exact host-only path and no model work;
+missing output alone is insufficient. Both paths retain the original native
+report identity, task validator, report window and publication owner.
+Ordinary delivery remains withheld during governance. The original return
+reader then verifies the full report through its existing publication owner.
+The refused Chat request remains in history. Unknown execution, partial effects,
+a frozen generation, changed authorization or an unsuccessful continuation do
+not authorize another model replay, window or message consumer.
+
 A native status watch calls the existing monitor-poll owner under its original
 Chat Turn and task lease. It does not select a continuous monitor as a heartbeat
 advancement task, so open executable work does not prevent a due observation.

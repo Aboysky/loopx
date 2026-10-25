@@ -230,36 +230,31 @@ function AnalysisContinuation({pack: p, analysis: a}: {pack: Pack; analysis: Con
   const c = p.continuation, zh = a.zh;
   if (!c) return p.continuation_unavailable ? <p className="analysis-warning">{zh ? "基础分析暂不可读；本版仍可独立分析完整范围。" : "The base analysis cannot be read; this version can still assess its complete scope independently."} <button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "重试读取" : "Retry reading"}</button></p> : null;
   const compared = p.result && c.base_available ? c.compared_pair_count : null;
-  const changes = [
-    c.sources.added.length ? `${zh ? "新增来源" : "New sources"} ${c.sources.added.length}` : "",
-    c.sources.revised.length ? `${zh ? "更新来源" : "Updated sources"} ${c.sources.revised.length}` : "",
-    c.sources.removed.length ? `${zh ? "移除来源" : "Removed sources"} ${c.sources.removed.length}` : "",
-    c.episodes.added.length ? `${zh ? "新增片段" : "New episodes"} ${c.episodes.added.length}` : "",
-    c.episodes.revised.length ? `${zh ? "更新片段" : "Updated episodes"} ${c.episodes.revised.length}` : "",
-    c.episodes.removed.length ? `${zh ? "移除片段" : "Removed episodes"} ${c.episodes.removed.length}` : "",
-    c.can_reuse ? (zh ? "复用原判读" : "Reuse judgments") : `${zh ? (p.result ? "已复核全部" : "完整复核") : "Reassess all"} ${p.episode_count} ${zh ? "片段" : "episodes"}`,
-  ].filter(Boolean).join(" · ");
+  const reassessment = c.can_reuse ? (zh ? "复用原判读" : "Reuse judgments")
+    : `${zh ? (p.result ? "已复核全部" : "完整复核") : "Reassess all"} ${p.episode_count} ${zh ? "片段" : "episodes"}`;
   return <section className="analysis-continuation" aria-label={zh ? "分析版本变化" : "Analysis version changes"}>
-    <div className="analysis-continuation-summary"><strong>{c.can_reuse ? (zh ? "证据内容未变" : "Evidence content unchanged") : (zh ? "接续上一版" : "Continue from previous version")}</strong>
-      <span>{changes}</span>
+    <div className="analysis-continuation-controls">
       <button type="button" onClick={() => {a.select(c.base_pack_id); requestAnimationFrame(() => a.panel.current?.focus({preventScroll: true}));}}>{zh ? "查看上一版" : "Previous version"}</button>
-    </div>
-    {!c.base_available ? <p className="analysis-warning">{zh ? "上一版尚无适用分析，本次将独立分析完整范围。" : "No applicable previous analysis is available. This version will assess the full scope independently."}</p> : null}
-    {c.configuration_changed || c.objective_changed ? <p className="analysis-warning">{zh ? "分析设置或目标已变更，两版判断不作为同条件比较。" : "The analysis configuration or objective changed. Judgments are not a matched comparison."}</p> : null}
-    <details className="analysis-method"><summary>{compared == null ? (zh ? "查看变化" : "Inspect changes")
-      : compared === 0 ? (zh ? "无共同判断项" : "No shared judgments")
-        : zh ? `共同判断 ${compared} 项 · 变化 ${c.verdict_changes.length} 项` : `${compared} shared judgments · ${c.verdict_changes.length} changed`}</summary>
+      <details className="analysis-method"><summary>{zh ? "版本与变化" : "Version and changes"}</summary>
+      <div className="analysis-continuation-summary"><strong>{c.can_reuse ? (zh ? "证据内容未变" : "Evidence content unchanged") : (zh ? "接续上一版" : "Continue from previous version")}</strong><span>{reassessment}</span></div>
       <p>{compared == null ? (zh ? "共同判断项数量未知。" : "The shared judgment count is unknown.")
-        : (zh ? "共同判断项按相同片段和指标计数；数量或标签变化不证明分析质量变化。" : "Shared judgments use the same episode and metric. Counts and label changes do not establish changes in analysis quality.")}</p>
-      <p>{c.base_title} · {c.base_scope.revision} → {c.current_scope.revision}</p>
-      <p>{zh ? "上次覆盖" : "Previous coverage"}: {c.base_episode_count} · {c.base_scope.window}<br/>{zh ? "本次覆盖" : "Current coverage"}: {p.episode_count} · {c.current_scope.window}</p>
-      <p>{zh ? "来源（新增 / 更正 / 删除）" : "Sources (added / revised / removed)"}: {c.sources.added.length} / {c.sources.revised.length} / {c.sources.removed.length}<br/>{zh ? "片段（新增 / 更正 / 删除）" : "Episodes (added / revised / removed)"}: {c.episodes.added.length} / {c.episodes.revised.length} / {c.episodes.removed.length}<br/>{zh ? "适用判断项（新增 / 移除）" : "Eligible judgments (added / removed)"}: {c.new_pair_count} / {c.removed_pair_count}</p>
+        : compared === 0 ? (zh ? "无共同判断项" : "No shared judgments")
+          : zh ? `共同判断 ${compared} 项 · 变化 ${c.verdict_changes.length} 项` : `${compared} shared judgments · ${c.verdict_changes.length} changed`}</p>
+      {compared != null ? <p>{zh ? "共同判断项按相同片段和指标计数；数量或标签变化不证明分析质量变化。" : "Shared judgments use the same episode and metric. Counts and label changes do not establish changes in analysis quality."}</p> : null}
+      <dl><dt>{zh ? "上一版" : "Previous"}</dt><dd>{c.base_title} · {c.base_scope.revision}<br/>{c.base_episode_count} · {c.base_scope.window}</dd>
+        <dt>{zh ? "本版" : "Current"}</dt><dd>{c.current_scope.revision}<br/>{p.episode_count} · {c.current_scope.window}</dd>
+        <dt>{zh ? "来源变动" : "Source changes"}</dt><dd>{zh ? "新增 / 更正 / 删除" : "Added / revised / removed"}: {c.sources.added.length} / {c.sources.revised.length} / {c.sources.removed.length}</dd>
+        <dt>{zh ? "片段变动" : "Episode changes"}</dt><dd>{zh ? "新增 / 更正 / 删除" : "Added / revised / removed"}: {c.episodes.added.length} / {c.episodes.revised.length} / {c.episodes.removed.length}</dd>
+        <dt>{zh ? "适用判断项" : "Eligible judgments"}</dt><dd>{zh ? "新增 / 移除" : "Added / removed"}: {c.new_pair_count} / {c.removed_pair_count}</dd></dl>
       {c.episodes.added.length ? <p>{zh ? "新增片段" : "New episodes"}: {c.episodes.added.join(" · ")}</p> : null}
       {c.episodes.revised.length ? <p>{zh ? "更正片段" : "Revised episodes"}: {c.episodes.revised.join(" · ")}</p> : null}
       {c.episodes.removed.length ? <p>{zh ? "移除片段" : "Removed episodes"}: {c.episodes.removed.join(" · ")}</p> : null}
       <p>{zh ? "无法仅凭局部变化证明旧结论不受影响，因此实质变化均复核完整新版证据；指标按本版适用项重新计算，旧版不覆盖、不相加。" : "Local changes cannot prove earlier conclusions unaffected. Substantive changes therefore reassess the complete new evidence. Metrics are recalculated from this version’s eligible items; previous results are neither overwritten nor added."}</p>
       {c.verdict_changes.length ? <ul>{c.verdict_changes.map(row => <li key={`${row.episode_id}:${row.metric}`}>{row.episode_id} · {metricCopy[row.metric][zh ? 0 : 1]}: {verdictLabel(row.metric, row.before, zh)} → {verdictLabel(row.metric, row.after, zh)}</li>)}</ul> : null}
-    </details>
+      </details>
+    </div>
+    {!c.base_available ? <p className="analysis-warning">{zh ? "上一版尚无适用分析，本次将独立分析完整范围。" : "No applicable previous analysis is available. This version will assess the full scope independently."}</p> : null}
+    {c.configuration_changed || c.objective_changed ? <p className="analysis-warning">{zh ? "分析设置或目标已变更，两版判断不作为同条件比较。" : "The analysis configuration or objective changed. Judgments are not a matched comparison."}</p> : null}
   </section>;
 }
 
@@ -294,34 +289,75 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
 }
 
+function CitedToolText({text, zh}: {text: string; zh: boolean}) {
+  // Decode only the saved direct shell-result envelope, never recursively
+  // reinterpret arbitrary JSON or infer successful work from its text.
+  try {
+    const value: unknown = JSON.parse(text);
+    if (value && typeof value === "object" && !Array.isArray(value)
+      && "chunk_id" in value && typeof value.chunk_id === "string"
+      && "wall_time_seconds" in value && typeof value.wall_time_seconds === "number"
+      && Number.isFinite(value.wall_time_seconds) && value.wall_time_seconds >= 0
+      && "exit_code" in value && (value.exit_code === null || (typeof value.exit_code === "number" && Number.isSafeInteger(value.exit_code)))
+      && "output" in value && typeof value.output === "string") {
+      return <div className="analysis-source-tool-text">
+        <div className="analysis-source-command-meta">
+          <span>{value.exit_code === null ? (zh ? "尚无退出码" : "No exit code yet") : `${zh ? "退出码" : "Exit code"} ${value.exit_code}`}</span>
+          <span>{value.wall_time_seconds} s</span>
+        </div>
+        <CitedOutput text={value.output} zh={zh}/>
+      </div>;
+    }
+  } catch { /* Plain text and unknown envelopes stay literal. */ }
+  return <CitedOutput text={text} zh={zh}/>;
+}
+
+function CitedOutput({text, zh}: {text: string; zh: boolean}) {
+  return text ? <pre className="analysis-source-output">{text}</pre>
+    : <p className="analysis-source-empty">{zh ? "输出为空" : "Empty output"}</p>;
+}
+
 function CitationContent({citation, zh}: {citation: Citation; zh: boolean}) {
-  // A reading projection of the native completed-command envelope, not a
-  // source verifier. Unknown or mixed formats retain the complete literal.
-  const commands: {output: string; argv: string[]; exitCode: number; status: string}[] = [];
+  // Display projections of explicitly typed records only. Unknown, mixed or
+  // malformed records retain the complete citation, including neighboring lines.
+  const records: ({output: string; argv: string[]; exitCode: number; status: string} | {texts: string[]})[] = [];
   try {
     for (const line of citation.text.split("\n")) {
-      const event: {type?: unknown; payload?: {type?: unknown; item?: Record<string, unknown>}} | null = JSON.parse(line);
+      const event: {type?: unknown; payload?: {type?: unknown; output?: unknown; item?: Record<string, unknown>}} | null = JSON.parse(line);
       const item = event?.payload?.item;
-      if (event?.type !== "event_msg" || event.payload?.type !== "item_completed"
-        || item?.type !== "CommandExecution" || typeof item.aggregated_output !== "string"
-        || !Array.isArray(item.command) || !item.command.every((arg: unknown) => typeof arg === "string")
-        || typeof item.exit_code !== "number" || !Number.isSafeInteger(item.exit_code) || typeof item.status !== "string") {
+      if (event?.type === "event_msg" && event.payload?.type === "item_completed"
+        && item?.type === "CommandExecution" && typeof item.aggregated_output === "string"
+        && Array.isArray(item.command) && item.command.every((arg: unknown) => typeof arg === "string")
+        && typeof item.exit_code === "number" && Number.isSafeInteger(item.exit_code) && typeof item.status === "string") {
+        records.push({output: item.aggregated_output, argv: item.command, exitCode: item.exit_code, status: item.status});
+      } else if (event?.type === "response_item"
+        && (event.payload?.type === "custom_tool_call_output" || event.payload?.type === "function_call_output")) {
+        const output = event.payload.output;
+        if (typeof output === "string") records.push({texts: [output]});
+        else if (Array.isArray(output) && output.length > 0 && output.every(part => part && typeof part === "object"
+          && !Array.isArray(part) && part.type === "input_text" && typeof part.text === "string")) {
+          records.push({texts: output.map(part => part.text as string)});
+        } else return <pre>{citation.text}</pre>;
+      } else {
         return <pre>{citation.text}</pre>;
       }
-      commands.push({output: item.aggregated_output, argv: item.command, exitCode: item.exit_code, status: item.status});
     }
   } catch {
     return <pre>{citation.text}</pre>;
   }
   return <div className="analysis-source-content">
-    {commands.map((command, index) => <div className="analysis-source-command" key={index}>
-      <div className="analysis-source-command-meta">
-        {commands.length > 1 ? <span>{zh ? "行" : "Line"} {citation.first_line + index}</span> : null}
-        <span>{zh ? "退出码" : "Exit code"} {command.exitCode}</span><span>{command.status}</span>
-      </div>
-      {command.output ? <pre className="analysis-source-output">{command.output}</pre>
-        : <p className="analysis-source-empty">{zh ? "输出为空" : "Empty output"}</p>}
-      <details><summary>{zh ? "命令参数" : "Command arguments"}</summary><pre>{JSON.stringify(command.argv, null, 2)}</pre></details>
+    {records.map((record, index) => <div className="analysis-source-command" key={index}>
+      {"texts" in record ? <>
+        {records.length > 1 ? <div className="analysis-source-command-meta">{zh ? "行" : "Line"} {citation.first_line + index}</div> : null}
+        {record.texts.map((text, part) => <CitedToolText key={part} text={text} zh={zh}/>)}
+      </> : <>
+        <div className="analysis-source-command-meta">
+          {records.length > 1 ? <span>{zh ? "行" : "Line"} {citation.first_line + index}</span> : null}
+          <span>{zh ? "退出码" : "Exit code"} {record.exitCode}</span><span>{record.status}</span>
+        </div>
+        <CitedOutput text={record.output} zh={zh}/>
+        <details><summary>{zh ? "命令参数" : "Command arguments"}</summary><pre>{JSON.stringify(record.argv, null, 2)}</pre></details>
+      </>}
     </div>)}
     <details className="analysis-source-raw"><summary>{zh ? "完整原始记录" : "Complete raw record"}</summary><pre>{citation.text}</pre></details>
   </div>;
