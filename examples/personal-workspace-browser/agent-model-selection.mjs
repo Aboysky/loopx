@@ -97,6 +97,10 @@ export const agentModelSelectionScenario = {
       const sendsBeforeMenu = api.turnRequests.length;
       await actionTrigger.click();
       await page.getByRole("button", {name: "添加图片", exact: true}).waitFor();
+      const actionPanel = await page.locator(".personal-composer-actions-panel").boundingBox();
+      const inputFrame = await page.locator(".personal-channel-composer").boundingBox();
+      assert.ok(actionPanel && inputFrame && actionPanel.y + actionPanel.height <= inputFrame.y + 1,
+        "Optional actions leave the whole draft and Send visible");
       await page.keyboard.press("Escape");
       assert.equal(await draft.inputValue(), "这段草稿要保留。中文 / English draft.");
       assert.equal(await actionTrigger.evaluate(node => node === document.activeElement), true);
@@ -116,6 +120,10 @@ export const agentModelSelectionScenario = {
           await catalog.finished();
         }
         await modelControl.waitFor();
+        const frame = await page.locator(".personal-channel-composer").boundingBox();
+        const panel = await page.locator(".personal-chat-model-panel").boundingBox();
+        assert.ok(frame && panel && panel.y + panel.height <= frame.y + 1,
+          "The model menu opens above the complete input, retaining the editable draft and Send");
       };
       await menu.locator(".personal-model-current").filter({hasText: "runtime-default"}).waitFor();
       assert.equal(discoveryCount, 0, "Opening an ordinary conversation does not start optional native catalog discovery");

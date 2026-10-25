@@ -2205,7 +2205,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-runtime .personal-select-value { min-width: 0; }
 .personal-composer-runtime .personal-select-value > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-composer-runtime .personal-select-listbox { top: auto; bottom: calc(100% + 8px); }
-.personal-composer-runtime .personal-chat-model-menu { flex: 0 1 auto; max-width: 260px; }
+.personal-composer-runtime .personal-chat-model-menu { position: static; flex: 0 1 auto; max-width: 260px; }
 .personal-composer-runtime .personal-chat-model-menu > summary { min-height: 36px; padding: 4px 6px; border-color: transparent; background: transparent; }
 .personal-composer-runtime .personal-chat-model-menu > summary > span { display: flex; align-items: baseline; gap: 6px; }
 .personal-composer-runtime .personal-chat-model-menu > summary small { flex: none; }
@@ -2213,6 +2213,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-runtime .personal-chat-model-panel { top: auto; bottom: calc(100% + 12px); }
 .personal-composer-runtime .personal-chat-model-panel .personal-select-listbox { bottom: auto; }
 .personal-composer-actions { position: relative; flex: none; margin: 0; }
+.personal-channel-composer .personal-composer-actions { position: static; }
 .personal-composer-actions > summary { display: grid; place-items: center; width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 6px; color: var(--pw-muted); cursor: pointer; list-style: none; }
 .personal-composer-actions > summary::-webkit-details-marker { display: none; }
 .personal-composer-actions > summary:hover, .personal-composer-runtime .personal-select-trigger:hover, .personal-composer-runtime .personal-chat-model-menu > summary:hover { background: var(--pw-line); color: var(--pw-text); }
