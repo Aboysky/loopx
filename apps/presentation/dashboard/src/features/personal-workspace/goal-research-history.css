@@ -231,12 +231,20 @@
 .research-finding-steps { display: flex; flex-shrink: 0; align-items: center; gap: 8px; font-size: var(--text-body); }
 .research-history .research-finding-steps button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); cursor: pointer; }
 .research-finding-steps button:disabled { color: var(--pw-muted); cursor: not-allowed; }
-.research-history-detail .research-finding-exceptions { font-size: var(--text-body); color: var(--pw-muted); margin: 8px 0 16px; }
-.research-recorded-finding > h4 { font-size: var(--text-lead); line-height: var(--leading-prose); margin: 8px 0; }
+.research-history-detail .research-finding-exceptions { font-size: var(--text-body); color: var(--pw-muted); margin: 0; }
+.research-recorded-finding > h3 { max-width: none; font-size: var(--text-heading); line-height: var(--leading-heading); margin: 8px 0; }
+.research-reader-states { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.research-reader-question { margin-block: 4px 12px; font-size: var(--text-body); }
+.research-reader-question > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; color: var(--pw-muted); }
+.research-reader-question > summary::before { content: "▸"; flex-shrink: 0; }
+.research-reader-question[open] > summary::before { content: "▾"; }
+.research-reader-question > summary::-webkit-details-marker { display: none; }
+.research-reader-question:not([open]) > summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.research-reader-question[open] > summary { color: var(--pw-text); font-size: var(--text-heading); line-height: var(--leading-heading); font-weight: 600; }
+.research-reader-question > p { font-size: var(--text-lead); line-height: var(--leading-prose); }
 @media (max-width: 640px) {
-  .research-history .research-finding-navigation { flex-wrap: wrap; gap: 8px; }
-  .research-finding-navigation label { flex-basis: 100%; }
-  .research-finding-steps { margin-left: auto; }
+  .research-history .research-finding-navigation { gap: 8px; }
+  .research-finding-steps { gap: 4px; }
   .research-history-context > summary { padding-inline: 16px; }
 }
 .research-analysis-scope { font-size: var(--text-body); line-height: var(--leading-body); color: var(--pw-muted); overflow-wrap: anywhere; }
