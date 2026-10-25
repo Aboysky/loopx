@@ -189,12 +189,29 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
                     "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_READ_GUIDANCE}
         # Off is inert; after native preparation an optional wire write can fall
         # back to the original reference without leaving an older selector live.
-    return {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
+    result: dict[str, Any] = {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
         "recovery": full_reference,
         "capture_sha256": args.capture_sha256,
         **({"context_delivery": activation} if activation["enabled"] else {}),
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + CONTEXT_CAPTURE_READ_GUIDANCE}
+    if activation["enabled"] and native_prepared:
+        # Reuse the public page protocol and its physical-file/digest/UTF-8
+        # checks. Older callers can still restart with command; current callers
+        # consume this page and avoid a descriptor-only model round trip.
+        # Reserve room for the descriptor in the same tool response; subsequent
+        # reads retain the ordinary page size and exact UTF-8 cursor.
+        page = read_context_capture(argparse.Namespace(capture_file=reference["path"],
+            capture_sha256=reference["sha256"], offset=0, page_bytes=3072))
+        if page["ok"]:
+            if not page["eof"]:
+                page["next_command"] = context_capture_read_command(Path(reference["path"]),
+                    reference["sha256"], offset=page["next_offset"])
+            result.update(page)
+            result["instruction"] = ("This result includes page zero. Consume its content, then follow "
+                "next_command through eof. command restarts at zero if the inline page is incomplete "
+                "or unsupported. " + result["instruction"])
+    return result
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:

@@ -332,9 +332,26 @@ Read-only recovery never creates a cache. With context delivery off, projection
 remains inert and reads the original capture. Failures retain that capture's
 exact digest and Turn receipt; they never rerun admission or spend quota.
 
+With delivery on, a successful saved projection also returns page zero using
+the existing `context_capture_page_v1` fields. Its content is bounded to 3 KiB
+to leave room for projection metadata; subsequent pages retain the normal 4 KiB
+size. Consume `content`, then follow
+`next_command` through `eof`; verify full byte coverage and the digest. The
+existing `command` still restarts at zero for older readers or incomplete inline
+output. If the optional first-page read fails, that same command remains usable.
+Off responses do not add a page. No new flag, admission or retention receipt is
+introduced; an inline page alone cannot prove complete input retention.
+
 `quota context-project` 开启上下文投递后，不再要求另外手工准备缓存目录。
 省略 `--decision-output-root` 时复用原生会话的私有上下文目录；显式指定的新目录
 在已存在的父目录下以 `0700` 创建。已有目录仍须属于当前用户、权限私有且不是
 符号链接；不修改不安全目录的权限。平台正常的父路径别名先解析再检查末级目录。
 只读恢复不创建缓存；关闭上下文投递时保持无副作用，读取原始 capture。失败仍保留
 原始摘要和 Turn 回执，不重新准入或扣减额度。
+
+开启时，成功的已保存投影同时用现有 `context_capture_page_v1` 字段返回第一页。
+该页内容最多 3 KiB，为投影元数据留出输出空间；后续仍按正常 4 KiB 读取。
+先读取 `content`，再沿 `next_command` 读至 `eof`，核验完整字节覆盖与摘要。
+原有 `command` 仍从零开始，供旧读取方或内联输出不完整时重读；可选的首屏读取
+失败时也保留该命令。关闭态不增加分页数据，不新增开关、准入或保留回执；
+单页内联内容不证明完整输入仍被保留。
