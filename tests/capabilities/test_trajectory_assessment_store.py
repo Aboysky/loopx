@@ -247,6 +247,7 @@ def test_new_evidence_reassesses_old_judgments_and_complete_denominator(pack, tm
     assert before["continuation"]["can_reuse"] is False
     assert before["continuation"]["reassessed_episode_ids"] == ["episode", "follow-up"]
     assert before["continuation"]["new_pair_count"] == 1
+    assert before["continuation"]["compared_pair_count"] is None
     revised = {"assessments": [dict(episode_id=e, metric="benefit_test", verdict=v, reason="Later evidence corrects the earlier interpretation", citations=[dict(source_id="later", first_line=1, last_line=1)] if v != "unknown" else []) for e, v in [("episode", "no"), ("follow-up", "unknown")]], "limitations": ["Synthetic counterevidence"]}
     revised["synthesis"] = {"summary": {"text": "The earlier interpretation was refuted by later evidence.", "episode_ids": ["episode"],
                                       "citations": [dict(source_id="later", first_line=1, last_line=1)]}, "findings": [], "next_experiments": []}
@@ -259,7 +260,33 @@ def test_new_evidence_reassesses_old_judgments_and_complete_denominator(pack, tm
     benefit = next(row for row in view["result"]["metrics"] if row["metric"] == "benefit_test")
     assert (benefit["yes"], benefit["no"], benefit["unknown"], benefit["eligible"]) == (0, 1, 1, 2)
     assert view["continuation"]["verdict_changes"] == [dict(episode_id="episode", metric="benefit_test", before="yes", after="no")]
+    assert view["continuation"]["compared_pair_count"] == 1
     assert inspect_pack(**scope, pack_id=registered["pack_id"])["result"] == previous
+
+
+def test_disjoint_research_units_have_zero_comparisons_without_overwriting_prior_result(pack, tmp_path):
+    scope, operation, registered, path, sources, provider = pack
+    execute_pack(**operation, codex=provider)
+    previous = inspect_pack(**scope)["result"]
+    old_files = {p: p.read_bytes() for p in scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*/*") if p.is_file()}
+    raw = json.loads(next(p for p in old_files if p.name == "model-output.json").read_text())
+    data = json.loads(path.read_text())
+    data["scope"]["revision"] = "different-research-unit"
+    data["episodes"][0]["id"] = "new-question"
+    raw["assessments"][0]["episode_id"] = "new-question"
+    raw["synthesis"]["summary"]["episode_ids"] = ["new-question"]
+    path.write_text(json.dumps(data))
+    successor = register_pack(**scope, input_path=path, source_root=sources, title="Different research unit", base_pack_id=registered["pack_id"])
+    assert inspect_pack(**scope)["continuation"]["compared_pair_count"] is None
+    executable = tmp_path / "disjoint-output-fixture"
+    executable.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\nsys.stdin.read()\nPath(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(raw)!r})\n")
+    executable.chmod(0o700)
+    execute_pack(**scope, pack_id=successor["pack_id"], analysis_key=successor["analysis_key"], codex=str(executable))
+    delta = inspect_pack(**scope)["continuation"]
+    assert (delta["compared_pair_count"], delta["new_pair_count"], delta["removed_pair_count"]) == (0, 1, 1)
+    assert delta["verdict_changes"] == []
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["result"] == previous
+    assert all(p.read_bytes() == content for p, content in old_files.items())
 
 
 def test_continuation_does_not_cross_owner_run_or_revoked_source(pack, tmp_path):
@@ -282,6 +309,7 @@ def test_continuation_does_not_cross_owner_run_or_revoked_source(pack, tmp_path)
     view = inspect_pack(**scope)
     assert view["availability"] == "available"
     assert not view["continuation"]["base_available"] and not view["continuation"]["can_reuse"]
+    assert view["continuation"]["compared_pair_count"] is None
     assert view["continuation"]["reassessed_episode_ids"] == ["episode"]
     result = execute_pack(**scope, pack_id=successor["pack_id"], analysis_key=successor["analysis_key"], codex=provider)
     assert result["status"] == "succeeded" and not result["reused"]

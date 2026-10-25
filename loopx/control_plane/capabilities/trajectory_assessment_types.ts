@@ -76,6 +76,8 @@ export interface TrajectoryContinuation {
   episodes: {added: string[]; revised: string[]; removed: string[]};
   can_reuse: boolean; configuration_changed: boolean; objective_changed: boolean;
   reassessed_episode_ids: string[]; new_pair_count: number; removed_pair_count: number;
+  /** Shared episode/metric rows in two qualified outputs; null if either is unavailable. */
+  compared_pair_count: number | null;
   verdict_changes: Array<{episode_id: string; metric: TrajectoryMetric; before: AssessmentVerdict; after: AssessmentVerdict}>;
 }
 

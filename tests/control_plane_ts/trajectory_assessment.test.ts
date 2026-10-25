@@ -368,6 +368,43 @@ test('later evidence can overturn an earlier judgment; full new denominators are
   assert.throws(() => compareTrajectoryAssessments({...current, output: output(), previous: {...original, output: output()}}), /missing eligible/);
 });
 
+test('comparison denominator distinguishes unchanged judgments, disjoint units and unavailable results', () => {
+  const current = prepared(), previous = {...prepared(), output: output()};
+  const unchanged = compareTrajectoryAssessments({...current, previous, output: output()});
+  assert.equal(unchanged.compared_pair_count, 3);
+  assert.deepEqual(unchanged.verdict_changes, []);
+  for (const args of [
+    {...current, previous},
+    {...current, previous: prepared(), output: output()},
+    {...current, previous: prepared()},
+  ]) assert.equal(compareTrajectoryAssessments(args).compared_pair_count, null, 'Missing qualified output is unknown, not zero comparisons');
+
+  const next = input(), renamed = output();
+  next.scope.revision = 'different-research-units';
+  for (const episode of next.episodes) episode.id = `new-${episode.id}`;
+  for (const assessment of renamed.assessments) assessment.episode_id = `new-${assessment.episode_id}`;
+  const disjoint = compareTrajectoryAssessments({input: next, config, previous, output: renamed});
+  assert.equal(disjoint.compared_pair_count, 0);
+  assert.equal(disjoint.new_pair_count, 3);
+  assert.equal(disjoint.removed_pair_count, 3);
+  assert.deepEqual(disjoint.verdict_changes, [], 'No shared rows is not evidence of unchanged conclusions');
+});
+
+test('comparison denominator counts shared episode and metric pairs, not total new judgments', () => {
+  const next = input(), revised = output();
+  next.episodes[0]!.eligible_metrics = ['information_gain'];
+  next.episodes.push({id: 'e3', question: 'Does the new intervention help?', source_ids: ['s'], eligible_metrics: ['information_gain']});
+  next.selection.population_episodes = 3;
+  revised.assessments.splice(1, 1);
+  revised.assessments[0]!.verdict = 'no';
+  revised.assessments.push({episode_id: 'e3', metric: 'information_gain', verdict: 'yes', reason: 'New evidence', citations: [{source_id: 's', first_line: 10, last_line: 10}]});
+  const delta = compareTrajectoryAssessments({input: next, config, previous: {...prepared(), output: output()}, output: revised});
+  assert.equal(delta.compared_pair_count, 2);
+  assert.equal(delta.new_pair_count, 1);
+  assert.equal(delta.removed_pair_count, 1);
+  assert.deepEqual(delta.verdict_changes, [{episode_id: 'e1', metric: 'information_gain', before: 'yes', after: 'no'}]);
+});
+
 test('corrections, removals, scope and model changes require full reassessment and identity cannot cross runs', () => {
   const previous = {...prepared(), output: output()};
   for (const edit of [(x: TrajectoryInput) => {x.sources[0]!.text = 'corrected negative evidence';},
