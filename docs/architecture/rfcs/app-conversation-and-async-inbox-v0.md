@@ -180,9 +180,15 @@ Chat storage overrides do not select another registered-work authority. The
 workspace Status and delivery task map read the coordinator's existing registered
 runtime root, while private Chat history and its settings keep their own store.
 The original-conversation request inventory pins one qualified code revision per
-HTTP read through the existing Effect request scope. This does not cache source
-authorization or receipt decisions: each source and the final caller scope are
-still rechecked, and the next read qualifies its own revision. Unreadable sources
+HTTP read through the existing Effect request scope. Within that read, provider
+scope is verified once per distinct original Session, including older Sessions
+behind a reopened conversation, then every observed source is freshly verified
+again before any content is returned. Each row still checks its current source
+basis, host, Turn, target grant, Goal lifetime and receipt state. A revoked binding
+or provider identity at the closing check refuses the whole response. No proof
+survives the HTTP read; the next page independently qualifies source scope and
+code revision. This bounds provider IO by sources instead of historical rows,
+without caching receipt decisions or reducing scan coverage. Unreadable sources
 remain incomplete coverage rather than an empty successful inventory.
 
 Cold Goal links wait for the current status directory before invalidating a
