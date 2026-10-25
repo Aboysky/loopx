@@ -1263,10 +1263,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       canonicalHash(summary.goal_acceptance_contract ?? null) === canonicalHash(originalCore.acceptance_contract ?? null)
       ? {...summary, goal_acceptance_contract: goal.core.acceptance_contract,
         outcome_requirements_index: goal.core.outcome_requirements_index} : summary;
-    return {...payload,
-      core_goal: goal.core,
+    // Review owns the captured planning facts. The entry retains admission,
+    // current selection and stops; the mandatory reader supplies the complete
+    // Goal and horizon before the Agent chooses its next work.
+    const {core_goal: _core, planning_horizon: _horizon, ...entry} = payload;
+    return {...entry,
       ...(indexedSummary !== summary ? {agent_todo_summary: indexedSummary} : {}),
-      ...(payload.planning_horizon ? {planning_horizon: goal.horizon} : {}),
       interaction_contract: {...interaction, cli_channel: deferredReplanWriteback(cli), agent_channel: {...agent,
         work_context: replanWorkContext(payload, object(agent.work_context))}},
       autonomous_replan_obligation: {...obligation, context_read: reads.review},

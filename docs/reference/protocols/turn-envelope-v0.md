@@ -88,6 +88,23 @@ second supplies the existing authoring shape and settlement commands. No read
 runs another guard, writes a receipt or authorizes work. There is no additional
 read acknowledgement, mandatory model call or prescribed route change.
 
+The required review is the delivery owner for the captured Goal and planning
+horizon. The CLI entry and staged Host presentation do not repeat those bodies.
+They retain admission, selected work, required reads, authority and stop rules;
+the CLI also retains its current action portfolio for explicit selection. The
+signed executor envelope and complete capture remain unchanged. Each Turn must
+read its own review before deciding: a changed dependency or priority changes
+the source-bound reader even when native context delta transport is disabled.
+Uncaptured consumers keep the inline path. This changes presentation timing,
+not the Goal requirements or which work is authorized.
+
+中文：必读 review 统一交付本次捕获的 Goal 与规划范围，CLI 入口和分段 Host
+呈现不再重复这两份正文。入口保留准入、已选工作、必读项、权限与停止规则，
+CLI 也保留供显式选项使用的当前 action portfolio。执行器签名包和完整 capture
+不变；每个 Turn 决策前须读取自己的 review。依赖或优先级变化会改变绑定源摘要的
+读取命令，关闭原生差分时也生效。未捕获的调用保留原内联路径。这调整交付时序，
+不改变目标要求或授权工作范围。
+
 Captured reads retain the caller's explicit `--cli-bin` route, including later
 acceptance and Explore reads; an ambient executable cannot silently replace it.
 Without an explicit route, new captured readers use the current installed Python
@@ -168,9 +185,10 @@ With native context delivery off, captured CLI and TurnEnvelope entries share
 one projection that defers the settlement plan/command list to the writeback
 read instead of printing both. The signed settlement identity stays inline for
 the outer Turn executor; the reader returns the complete canonical plan.
-Every entry retains the current Core Goal and planning horizon. Only cumulative
-acceptance detail is indexed; dependency, priority, blocker and plan changes
-remain visible. This uses the existing optional full/delta owner, not a new
+The required review retains the current Core Goal and planning horizon; these
+bodies are not repeated in the model entry. Only cumulative acceptance detail
+is indexed; dependency, priority, blocker and plan changes remain visible in
+that Turn's review. This uses the existing optional full/delta owner, not a new
 cache or acknowledgement. Its default-off path needs no retained baseline.
 
 New native Turn journals bind the same readers to their original observation
@@ -186,8 +204,9 @@ must include entry, detail reads and recovery; indexing alone does not establish
 lower total cost or better decisions.
 
 中文：关闭差分时，CLI 与短包入口也共享延后结算格式的投影，完整计划只在写回
-读取时交付；外层仍拿到签名结算身份。每轮显式保留当前 Core Goal 和规划窗口，
-累计验收明细才索引读取，依赖、优先级、阻塞与计划变化不可省略。新原生 journal
+读取时交付；外层仍拿到签名结算身份。每轮必读 review 保留当前 Core Goal 和
+规划窗口，模型入口不再重复这两份正文；累计验收明细才索引读取，依赖、优先级、
+阻塞与计划变化不可省略。新原生 journal
 绑定同源读取，模型使用事实审视后再读格式，执行器保留完整签名包并独占状态、
 额度与调度结算。规范 replan attempt 只允许该语义切片，不绕过显式拒绝、缺失
 attempt、用户或 Stop 限制。旧 journal 与没有安全读取路由的调用继续读原包；

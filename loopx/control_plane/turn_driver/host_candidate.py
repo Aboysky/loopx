@@ -140,9 +140,10 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     replan = _mapping(envelope.get("replan_action_packet"))
     if replan:
         authority["replan_action_packet"] = _mapping(detail.get("replan_action_packet")) or replan
-    # Transport the current typed Goal/horizon, including changed dependencies
-    # and priorities. Capability hooks are not a substitute for this owner.
-    for field in ("core_goal", "planning_horizon", "acceptance_index"):
+    # Captured review owns these facts, including changed dependencies and
+    # priorities. Keep the signed envelope intact for the executor; do not send
+    # a second copy ahead of the mandatory immutable review read.
+    for field in (() if staged else ("core_goal", "planning_horizon", "acceptance_index")):
         value = detail.get(field, action.get(field))
         if value is not None:
             authority[field] = value

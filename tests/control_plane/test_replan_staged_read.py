@@ -372,6 +372,14 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
                 "replan_action_packet": packet}, writer)
         assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert writer["settlement_command"].endswith(" --settle-turn")
+        # Real CLI/default-off and native readers both deliver the original
+        # planning facts after admission, without a second body in the entry.
+        expected_goal = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+        assert review["core_goal"] == expected_goal
+        assert review["action_portfolio"] == source.get("action_portfolio")
+        if not envelope:
+            assert "core_goal" not in guard and "planning_horizon" not in guard
+            assert guard.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
         assert {k: v for k, v in writer["writeback_contract"].items() if k not in {"successor_binding_args", "successor_settlement"}} == without_example(source["replan_action_packet"]["writeback_contract"])
@@ -441,8 +449,9 @@ def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_p
     assert large_envelope["action"]["planning_horizon"]["core_goal_ref"] == "$.action.core_goal"
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
     authority = extract_turn_authority({"turn_envelope": large_envelope})
-    assert authority["planning_horizon"]["core_goal_ref"] == "$.core_goal"
-    assert authority["core_goal"] == large_envelope["action"]["core_goal"]
+    assert not {"core_goal", "planning_horizon", "acceptance_index"} & authority.keys()
+    assert authority["replan_action_packet"]["review"]
+    assert expanded["core_goal"] == large_envelope["action"]["core_goal"]
     assert large_envelope["action"]["planning_horizon"]["core_goal_ref"] == "$.action.core_goal"
     original = large["autonomous_replan_obligation"]["replan_context"]["core_goal"]
     assert json_bytes(original) > 200 * 1024
@@ -544,6 +553,7 @@ def test_staged_entry_replays_goal_and_changed_horizon_with_existing_delta_owner
 
     source = populated_replan_source(tmp_path, acceptance=True)
     entry = _turn_envelope_result("replan_cli_view", payload=source)
+    assert entry["action_portfolio"] == source["action_portfolio"]
     scope = {"goal_id": source["goal_id"], "agent_id": source["agent_identity"]["agent_id"],
         "session_id": "synthetic-session", "context_epoch": "one"}
     full = prepare_context_delivery(entry, scope=scope, capture_id="entry-a", surface="quota_packet")
@@ -554,9 +564,15 @@ def test_staged_entry_replays_goal_and_changed_horizon_with_existing_delta_owner
         value = _turn_envelope_result("replan_cli_view", payload=current)
         candidate = prepare_context_delivery(value, scope=scope, capture_id="entry-b", surface="quota_packet",
             baseline=full, retained={"complete": True, "target": full["target"]})
-        assert entry["core_goal"]["objective"] in json.dumps(candidate, ensure_ascii=False)
+        # Even without native delta, the entry has one immutable reader rather
+        # than a second planning body. A changed dependency changes that reader's
+        # source hash, so retention cannot silently reuse the preceding facts.
+        assert "core_goal" not in value and "planning_horizon" not in value
+        _, review, _ = _views(current)
+        assert review["core_goal"]["objective"] == current["autonomous_replan_obligation"]["replan_context"]["core_goal"]["objective"]
         if changed:
-            assert "todo-new-dependency" in json.dumps(candidate)
+            assert value["replan_action_packet"]["review"] != entry["replan_action_packet"]["review"]
+            assert review["planning_horizon"]["work_items"][0]["successor_todo_ids"] == ["todo-new-dependency"]
         recovery = prepare_context_delivery(value, scope=scope, capture_id="entry-b", surface="quota_packet")
         assert restore_context_delivery(candidate, baseline=full, current=recovery)["context"] == value
         assert restore_context_delivery(candidate, baseline=None, current=recovery)["context"] == value
