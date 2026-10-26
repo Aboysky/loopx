@@ -5,6 +5,16 @@ computed `quota should-run` decision. It gives an agent the next action and its
 safety contract without replaying every diagnostic lane in the full quota
 payload.
 
+This page describes the current versioned representation. The
+[unified-contract RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+proposes replacing the live quota/envelope format choice with one complete
+contract, including differential delivery. Historical captures retain their
+original schema and signature; the proposal does not introduce a new CLI switch.
+
+中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
+历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
+
 Preview it explicitly:
 
 ```bash

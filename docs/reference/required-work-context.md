@@ -1,5 +1,12 @@
 # Required work context
 
+This page specifies current delivery behavior. The
+[unified-contract RFC](../architecture/rfcs/controller-executor-unified-contract-v0.md)
+proposes one full/delta/detail/recovery pipeline across entrypoints. Its
+controller-authored brief must retain complete original requirements and
+reachable evidence; experimental model-token targets never permit truncation
+or replace source-consumption obligations.
+
 Ordinary Heartbeat/quota delivers the full effective selected Todo, enabled
 canonical acceptance and Agent-scoped User obligations at
 `interaction_contract.agent_channel.work_context`. These are current work
@@ -332,6 +339,10 @@ not restart stopped Goals, alter quota/leases or qualify installed Desktop,
 all-Goal adoption, actual solver costs or outcome benefit.
 
 ## 中文
+
+本页规定当前交付行为。[统一契约提案](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+拟让所有入口复用 full/delta/detail/recovery 流程。controller 编写的工作说明必须
+保留完整原始要求与可访问证据；实验性模型 token 目标不允许截断，也不替代来源读取义务。
 
 普通 Heartbeat/quota 默认在 `agent_channel.work_context` 返回完整选定 Todo、
 启用的验收与当前 Agent 相关的 User Todo，附带来源和修订，不需要开启 TurnEnvelope。
