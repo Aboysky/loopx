@@ -184,6 +184,17 @@ const LOCALIZED_OUTPUT_SCHEMA = {...TRAJECTORY_OUTPUT_SCHEMA,
     type: 'object', additionalProperties: false, required: ['episode_id', 'question'],
     properties: {episode_id: {type: 'string'}, question: {type: 'string'}}}}}};
 
+function episodeAssessmentSchema(input: TrajectoryInput) {
+  const row = TRAJECTORY_OUTPUT_SCHEMA.properties.assessments.items;
+  return {type: 'array', items: {anyOf: input.episodes.filter(episode => episode.eligible_metrics.length).map(episode => ({
+    ...row, properties: {...row.properties,
+      episode_id: {type: 'string', enum: [episode.id]},
+      metric: {type: 'string', enum: episode.eligible_metrics},
+      citations: {type: 'array', items: {...citationSchema, properties: {...citationSchema.properties,
+        source_id: {type: 'string', enum: episode.source_ids}}}}},
+  }))}};
+}
+
 // Opt-in on the frozen analysis configuration. Old packs keep their exact
 // prompt, key, schema and judgments; reading never upgrades or invokes a model.
 const SYNTHESIS_METHOD = 'research-episodes-synthesis-v1';
@@ -248,6 +259,10 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
     throw new EffectRuntimeRequestError('output_language must be zh or en');
   }
   const language = config.output_language as TrajectoryOutputLanguage | undefined;
+  const schemaRevision = config.output_schema_revision;
+  if (schemaRevision !== undefined && schemaRevision !== 2) {
+    throw new EffectRuntimeRequestError('output_schema_revision must be 2 when supplied');
+  }
   const display = language && input.display_snapshot ? prepareDisplay(input) : undefined;
   const native = input.native_outcomes_source_id ? nativeContext(input) : undefined;
   const measured = params.native_outcomes === undefined ? undefined : projectTrajectoryNativeOutcomes(params.native_outcomes, input);
@@ -255,6 +270,7 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   // Only analysis identity; provider configuration/execution is owned by its adapter.
   // Omission preserves the identity of already registered, language-unspecified artifacts.
   const configIdentity = {model: str(config.model, 'model'), effort: str(config.effort, 'effort'), service_tier: str(config.service_tier, 'service_tier'),
+    ...(schemaRevision === 2 ? {output_schema_revision: 2} : {}),
     ...(language ? {output_language: language} : {}), ...(synthesis ? {research_synthesis: true} : {}),
     ...(synthesisRevision !== undefined ? {research_synthesis_revision: synthesisRevision} : {})};
   const numberedSources = input.sources.map(s => ({...s, text: s.text.split('\n').map((line, n) => `${s.first_line+n}: ${line}`).join('\n')}));
@@ -273,8 +289,10 @@ Do not translate source identities, references, timestamps, statuses, measuremen
     required: [...LOCALIZED_OUTPUT_SCHEMA.required, 'display_translations'], properties: {...LOCALIZED_OUTPUT_SCHEMA.properties,
       display_translations: {type: 'array', items: {type: 'object', additionalProperties: false, required: ['field_id', 'text'],
         properties: {field_id: {type: 'string'}, text: {type: 'string'}}}}}} : language ? LOCALIZED_OUTPUT_SCHEMA : TRAJECTORY_OUTPUT_SCHEMA;
-  const output_schema = synthesis ? {...assessmentSchema,
+  const baseSchema = synthesis ? {...assessmentSchema,
     required: [...assessmentSchema.required, 'synthesis'], properties: {...assessmentSchema.properties, synthesis: synthesisSchema}} : assessmentSchema;
+  const output_schema = schemaRevision === 2 ? {...baseSchema,
+    properties: {...baseSchema.properties, assessments: episodeAssessmentSchema(input)}} : baseSchema;
   const analysis_key = createHash('sha256').update(JSON.stringify({method, rubric: RUBRIC, input, config: configIdentity,
     ...(synthesis ? {synthesis_instruction: synthesisInstruction} : {}),
     ...(native ? {native_context_instruction: NATIVE_CONTEXT_INSTRUCTION} : {}),

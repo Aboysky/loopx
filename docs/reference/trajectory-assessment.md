@@ -515,6 +515,20 @@ ignores user configuration/rules, disables shell tools and web search, and passe
 only the evidence pack in its prompt. It is not a security sandbox for hostile
 executables or an authorization to read arbitrary machine files.
 
+New CLI preparations and default pack registrations use
+`config.output_schema_revision: 2`. Their generation schema binds each metric
+row to a declared episode, its eligible metrics and its own source IDs. Display
+context remains separate evidence and cannot widen a metric's citation scope.
+Post-generation validation still checks ranges, completeness and claim evidence;
+schema acceptance does not prove a citation supports a judgment. Explicit frozen
+configurations without this revision retain their original schema, key and saved
+results. Selecting revision 2 creates a new analysis identity and needs explicit
+execution; reading never upgrades a job or reuses a failed artifact as success.
+
+新准备的 CLI 分析及默认登记采用输出格式版本 2，在生成时绑定片段、适用指标与该片段
+的来源范围。原有引用行范围和结果校验保留；格式通过不代表论据成立。旧配置、结果和
+失败记录保持原样，新版本须明确执行，普通读取不升级或启动分析。
+
 The command runs synchronously, with a default 900-second analysis timeout. A host
 may supervise it asynchronously and read its immediate receipt:
 

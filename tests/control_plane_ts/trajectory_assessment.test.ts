@@ -425,6 +425,19 @@ test('corrections, removals, scope and model changes require full reassessment a
   assert.deepEqual(delta.episodes.removed, ['e2']); assert.equal(delta.removed_pair_count, 1);
 });
 
+test('scoped output schema is explicit, versioned and leaves frozen configurations unchanged', () => {
+  const legacy = prepared(), scoped = prepareTrajectoryAssessment({input: input(), config: {...config, output_schema_revision: 2}});
+  assert.notEqual(scoped.analysis_key, legacy.analysis_key);
+  assert.equal(scoped.prompt, legacy.prompt);
+  assert.deepEqual(scoped.input, legacy.input);
+  assert.deepEqual(prepared(), legacy);
+  assert.deepEqual(qualifyTrajectoryAssessment({...scoped, output: output()}).metrics,
+    qualifyTrajectoryAssessment({...legacy, output: output()}).metrics);
+  for (const revision of [null, 1, 3, true, '2']) {
+    assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config, output_schema_revision: revision}}), /output_schema_revision/);
+  }
+});
+
 test('output language binds identity, prompt and complete analytical questions without changing evidence', () => {
   const original = input(), legacy = prepared();
   const zh = prepareTrajectoryAssessment({input: original, config: {...config, output_language: 'zh'}});
