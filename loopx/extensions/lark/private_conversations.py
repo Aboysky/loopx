@@ -881,20 +881,29 @@ class LarkPrivateConversations:
             return False
         if edit and reply_placement is not None:
             raise ValueError("a new private message cannot replace an existing source reply")
-        if edit:
-            def before_edit(_intent: str) -> dict[str, bool]:
-                phase_state.update(text=text, started=True)
-                record["deliveries"][phase] = phase_state
-                _atomic_write_json(path, record)
-                return {"continue_delivery": True}
 
+        def before_send(_intent: str) -> dict[str, bool]:
+            # Provider preview is external IO. Recheck the original source and
+            # current Core grant afterwards, including every resumed rich part.
+            if authorization_check is not None and not authorization_check():
+                return {"continue_delivery": False}
+            name, verified = self._source_authority(record, record["profile"],
+                record["event"]["chat_id"], record["event"]["message_id"])
+            if not name or not verified or (authorization_check is not None and not authorization_check()):
+                return {"continue_delivery": False}
+            phase_state.update(text=text, started=True)
+            record["deliveries"][phase] = phase_state
+            _atomic_write_json(path, record)
+            return {"continue_delivery": True}
+
+        if edit:
             def edit_attempt(value: Any) -> None:
                 phase_state["attempt"] = dict(value)
                 record["deliveries"][phase] = phase_state
                 _atomic_write_json(path, record)
 
             result = update_lark_inbox_reply(**kwargs, previous_text=edit["text"], attempt=edit["attempt"],
-                before_send=before_edit, delivery_attempt_recorder=edit_attempt,
+                before_send=before_send, delivery_attempt_recorder=edit_attempt,
                 require_previous_text_match=edit_only)
             if not edit_only and result.get("blocker") == "provider_update_edit_limit":
                 # A confirmed edit rejection plus fresh non-matching readback
@@ -920,18 +929,13 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, record)
                 return self._deliver(path, record, phase, text, inbox=inbox)
         elif phase_state.get("attempt"):
-            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"], resume_parts=True)
+            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"], resume_parts=True,
+                                            before_send=before_send)
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
             # the original source recoverable; never resend blindly.
             return False
         else:
-            def before_send(_intent: str) -> dict[str, bool]:
-                phase_state.update(text=text, started=True)
-                record["deliveries"][phase] = phase_state
-                _atomic_write_json(path, record)
-                return {"continue_delivery": True}
-
             def attempt(value: Any) -> None:
                 phase_state["attempt"] = dict(value)
                 _atomic_write_json(path, record)

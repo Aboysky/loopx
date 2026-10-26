@@ -267,7 +267,9 @@ relation mirroring, retroactive insertion into Lark chronology or all-channel
 broadcast. Canonical App images reuse the existing resource uploader and post
 sender, retaining caption and ordered inline images in the original private
 chat. Long captions keep images on the final concrete post only. Every upload
-and send rechecks the original source and current Core message/grant; completion
+and send rechecks the original source and current Core message/grant. Sends and
+edits check again after provider preview, before recording the write intent;
+each continued or resumed rich part uses that same boundary. Completion
 also requires independent image-byte readback. Failed verification recovers the
 same message receipt without another upload or send. An upload whose provider
 acknowledgement is unknown, or a started send without a message locator, stays

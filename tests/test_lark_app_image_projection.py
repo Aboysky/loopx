@@ -19,6 +19,7 @@ class ImageIO:
         self.corrupt_download = False
         self.unknown_upload = False
         self.after_upload = None
+        self.after_send_preview = None
 
     def __call__(self, args, cwd=None, timeout=None):
         if "images" in args and "create" in args:
@@ -45,7 +46,10 @@ class ImageIO:
             (Path(cwd) / args[args.index("--output") + 1]).write_bytes(raw)
             self.downloads += 1
             return {"returncode": 0, "stdout": '{"ok":true}'}
-        return self.provider(args, cwd, timeout)
+        result = self.provider(args, cwd, timeout)
+        if "+messages-send" in args and "--dry-run" in args and self.after_send_preview:
+            self.after_send_preview()
+        return result
 
 
 def _journey(fixture, *, caption="Inspect this diagram", count=1):
@@ -157,6 +161,42 @@ def test_revoked_image_source_after_upload_cannot_send_or_continue(ordinary):  #
         runtime.close()
 
 
+@pytest.mark.parametrize("long_caption,preview_number,allowed_prefix", [
+    (False, 1, 0), (True, 1, 0), (True, 2, 0), (True, 3, 1),
+])
+def test_disconnect_during_send_preview_stops_every_remaining_part(
+        ordinary, long_caption, preview_number, allowed_prefix):  # noqa: F811
+    caption = "Caption and evidence.\n" * 2100 if long_caption else "Inspect this diagram"
+    _, runtime, provider, transport, io, _, before = _journey(ordinary, caption=caption)
+    binding = transport._binding("notes-app")
+    previews = 0
+
+    def revoke():
+        nonlocal previews
+        previews += 1
+        if previews == preview_number:
+            transport.bindings.disconnect(binding["binding_id"],
+                expected_revision=transport.bindings.read()["revision"])
+
+    io.after_send_preview = revoke
+    try:
+        transport.reconcile()
+        assert previews >= preview_number
+        assert io.uploads == 1
+        assert len(provider.writes) == before + allowed_prefix
+        assert not any('"tag":"img"' in m.get("body", {}).get("content", "")
+                       for m in provider.messages.values())
+        row = _projection(transport)
+        assert row["status"] != "delivered"
+        # No provider write was attempted at the revoked boundary. Earlier
+        # confirmed parts stay frozen; restart cannot upload or send the rest.
+        attempts = list(provider.writes)
+        _restart(runtime, transport, io).reconcile()
+        assert provider.writes == attempts and io.uploads == 1
+    finally:
+        runtime.close()
+
+
 def test_long_app_caption_puts_images_only_in_last_concrete_post(ordinary):  # noqa: F811
     caption = "Full caption and evidence.\n" * 2100 + "IMAGE CAPTION END"
     _, runtime, provider, transport, io, _, before = _journey(ordinary, caption=caption)
@@ -171,6 +211,37 @@ def test_long_app_caption_puts_images_only_in_last_concrete_post(ordinary):  # n
         sent = list(provider.writes)
         _restart(runtime, transport, io).reconcile()
         assert provider.writes == sent and ordinary[4].read_text() == requests
+    finally:
+        runtime.close()
+
+
+def test_resumed_parts_recheck_disconnect_after_preview_without_replaying_prefix(ordinary):  # noqa: F811
+    _, runtime, provider, transport, io, _, before = _journey(
+        ordinary, caption="Caption and evidence.\n" * 2100)
+    binding = transport._binding("notes-app")
+    provider.verify_replies = False
+    try:
+        transport.reconcile()
+        assert len(provider.writes) == before + 1 and io.uploads == 1
+        assert _projection(transport)["status"] == "pending"
+        provider.verify_replies = True
+        previews = 0
+
+        def revoke():
+            nonlocal previews
+            previews += 1
+            transport.bindings.disconnect(binding["binding_id"],
+                expected_revision=transport.bindings.read()["revision"])
+
+        io.after_send_preview = revoke
+        sent = list(provider.writes)
+        restarted = _restart(runtime, transport, io)
+        restarted.reconcile()
+        assert previews == 1
+        assert provider.writes == sent and io.uploads == 1
+        assert _projection(restarted)["status"] != "delivered"
+        restarted.reconcile()
+        assert provider.writes == sent and io.uploads == 1
     finally:
         runtime.close()
 
