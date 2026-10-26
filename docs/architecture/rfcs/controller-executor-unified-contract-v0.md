@@ -201,6 +201,27 @@ and recovery derive from the saved instance without another guard. A legitimate
 new selection or authority check may produce a new capture; it must not rewrite
 an earlier observation or silently rebind an outstanding result.
 
+### Review freshness and recovery
+
+A complete capture proves what was observed; it does not freeze write-time
+validity. Keep semantic content identity, review relevance and settlement
+identity distinct. A supporting outcome owned by another agent may still
+constrain the shared Goal: owner labels alone cannot remove its acceptance or
+requirement-status changes from the review basis. Narrow invalidation requires
+an explicit dependency-scoping rule and tests for shared constraints, not a
+role-name filter or an allowlist inferred from prose.
+
+When the same admitted obligation rejects a stale review, its current typed
+owner should return the complete current review basis and applicable control
+instructions. The consumer reads and reassesses that basis, then retries the
+original writeback with its original identities. Do not send it an unbound
+write command or require another guard merely to retrieve facts already used
+by the writer. A changed basis still rejects; returning context does not accept
+a decision or authorize spending. This recovery belongs to the existing
+composition/writeback boundary and must survive the C1 writer transition.
+It is not a claim that cross-agent invalidation has been narrowed or that the
+complete unified contract is delivered.
+
 ### Executor input and output
 
 Choose **natural-language work exchange with runtime-owned metadata**, rather
