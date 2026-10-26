@@ -730,6 +730,61 @@ def test_real_hook_cli_is_transport_only_without_registry_or_installation(tmp_pa
     assert not registry.exists() and not runtime.exists()
 
 
+def test_real_hook_cli_handles_standalone_and_late_postcompact(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep every accepted requirement. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, first))
+    journal = tmp_path / "session.json"
+    before = json.loads(journal.read_bytes())
+    assert "candidate" in before
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    installed_cli = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI")
+    cli = [installed_cli] if installed_cli else [sys.executable, "-m", "loopx.entrypoint"]
+
+    def hook(name, *, enabled=True, **fields):
+        result = subprocess.run([*cli, "--registry", str(registry), "--runtime-root", str(runtime),
+            "quota", "context-hook", "--context-delivery", "on" if enabled else "off", "--codex-app",
+            "--codex-context-dir", str(tmp_path)], input=json.dumps({**event, "hook_event_name": name, **fields}),
+            capture_output=True, text=True, timeout=20, cwd=Path(__file__).resolve().parents[2])
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    original = journal.read_bytes()
+    for name, fields in [("PostCompact", {"session_id": "foreign"}),
+                         ("PostCompact", {"cwd": str(tmp_path.parent)}),
+                         ("PostToolUse", {"tool_response": "ordinary tool output"}), ("Stop", {})]:
+        assert hook(name, **fields) == {}
+        assert journal.read_bytes() == original
+    assert hook("PostCompact", enabled=False) == {}
+    assert journal.read_bytes() == original
+
+    # PostCompact must invalidate on its own, without an earlier PreCompact or
+    # SessionStart hiding an ignored public event. Reordered duplicates converge.
+    reset_epoch = None
+    for name in ("PostCompact", "PreCompact", "SessionStart", "PostCompact"):
+        hook(name, source="compact")
+        after = json.loads(journal.read_bytes())
+        assert "candidate" not in after and "pending" not in after
+        assert after["recovery"] == before["recovery"]
+        assert after["context_epoch"] != before["context_epoch"]
+        reset_epoch = reset_epoch or after["context_epoch"]
+        assert after["context_epoch"] == reset_epoch
+
+    _, current = project(tmp_path, "after-compact", payload=payload)
+    assert current["mode"] == "full"
+    deliver(tmp_path, event, read_pages(tmp_path, current))
+    before_late = json.loads(journal.read_bytes())
+    assert "candidate" in before_late
+    assert hook("PostCompact") == {}
+    after_late = json.loads(journal.read_bytes())
+    assert "candidate" not in after_late and after_late["context_epoch"] != before_late["context_epoch"]
+    assert after_late["recovery"] == before_late["recovery"]
+    assert json.loads(Path(current["recovery"]["path"]).read_bytes()) == payload
+    # These public transport commands must not perform guard/admission/spend.
+    assert not registry.exists() and not runtime.exists()
+
+
 def test_real_hook_cli_retires_unreadable_journal_before_io_recovers(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
