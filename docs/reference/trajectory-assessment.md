@@ -790,6 +790,10 @@ It grants no source-Goal lifecycle, conversation, scoring or solver writes.
 Stop and restart the reader without the option to disable local execution;
 historical packs remain on disk. Cancel running analysis through its existing
 action before stopping the server.
+Cancellation uses the prepared source namespace, original Goal and existing
+local pack/job identity, so it remains available when the original source is
+offline. Starting or retrying analysis still requires a fresh source read and
+current registered membership.
 
 The trusted curator registers authorized inputs through the existing
 `trajectory-pack-register` command. For each source, use runtime root
