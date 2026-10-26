@@ -404,9 +404,20 @@ from the recorded settlement identity; an observed semantic replan obligation
 cannot replace an existing Todo binding. Source-quota and health refusals still
 prevent host launch. Release fixture setup now imports its final source once;
 these executable checks do not qualify a real model or installed host.
-Cache-suite consistency, staged replan instruction parity across all consumers,
-structured/external consumers and packaged host continuity remain unfinished. Its default writer change remains unshipped; the PR is Draft for
-unfinished author work, not merely pending review. No model or cost benefit is
+The structured-host renderer now shares complete-input transport with Codex,
+including original hash-bound material readers. Actual isolated File/SQLite
+Turn-to-DSH runner paths receive that same captured source; historical request
+prompts retain their exact content. Structured DSH still has Todo-scoped
+sessions: an obligation-only replan is rejected before dispatch, rather than
+inventing a Todo binding. Full-source input deliberately retains inactive
+capability configuration and diagnostics; those facts do not activate recall
+instructions or reflection result fields. This is a disclosed presentation
+change, with activation and historical parity checked separately.
+Cache-suite consistency, old reader expectations, staged instruction parity and
+actual optional/external consumers, version admission and packaged host
+continuity remain unfinished. Operation-SDK checks without an explicit native
+runtime are untested, not qualified. The default writer change remains
+unshipped; the PR is Draft for unfinished author work, not merely pending review. No model or cost benefit is
 established. Historical effect decoding is temporary; it must not become a
 second permanent executable view.
 

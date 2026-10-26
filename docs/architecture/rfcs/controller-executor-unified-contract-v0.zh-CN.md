@@ -315,8 +315,15 @@ hash 绑定的 review/writeback reader。合成 File/SQLite 执行验证了新 o
 和原 Todo 绑定 replan 的材料读取。原生启动现只从已记录的结算身份取得唯一因果
 绑定，观察到的语义 replan obligation 不得替换原 Todo 绑定。源 quota 与健康拒绝
 仍阻止宿主启动。Release fixture 现只导入一次最终来源；这些可执行检查不代表真实
-模型或已安装宿主验收。Cache 整套测试一致性、所有消费者的分阶段 replan 指令等价、
-structured/external 消费者以及打包宿主连续性仍未完成。其默认 writer 变更尚未交付；PR 因作者实现未完而保持
+模型或已安装宿主验收。结构化宿主 renderer 现与 Codex 共享完整输入传输及原 hash
+绑定的材料读取器。实际隔离 File/SQLite Turn→DSH runner 接收同一捕获来源；历史
+请求 prompt 正文保持精确一致。结构化 DSH 仍使用 Todo 范围的 session：只有
+obligation 的 replan 在派发前被拒绝，不伪造 Todo 绑定。完整来源有意保留未激活能力的
+配置和诊断事实；这些事实不会激活 recall 指令或 reflection 结果字段。这是已披露的
+展示变化，激活边界与历史等价分开验证。
+Cache 整套测试一致性、旧 reader 断言、分阶段指令等价和实际 optional/external
+消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
+检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
 Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effect 解码只是临时迁移，
 不得成为第二份永久可执行视图。
 
