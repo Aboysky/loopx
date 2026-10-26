@@ -398,11 +398,14 @@ failed-attempt recovery and once-only settlement. This advances the two-writer
 and final-input replacement; it does not qualify C1 cutover. The candidate
 now routes capability reentry through the canonical CLI channel and preserves
 original hash-bound review/writeback readers in complete-contract Codex input.
-Synthetic File/SQLite execution qualifies those readers for a fresh replan;
-it does not qualify prior Todo-bound replan launch, whose identity preflight
-still rejects the tested recovery. Cache-suite consistency, staged replan
-instruction parity across all consumers, structured/external consumers and
-packaged host continuity remain unfinished. Its default writer change remains unshipped; the PR is Draft for
+Synthetic File/SQLite execution qualifies those readers for fresh obligation-bound
+and prior Todo-bound replans. Native launch now derives its one causal binding
+from the recorded settlement identity; an observed semantic replan obligation
+cannot replace an existing Todo binding. Source-quota and health refusals still
+prevent host launch. Release fixture setup now imports its final source once;
+these executable checks do not qualify a real model or installed host.
+Cache-suite consistency, staged replan instruction parity across all consumers,
+structured/external consumers and packaged host continuity remain unfinished. Its default writer change remains unshipped; the PR is Draft for
 unfinished author work, not merely pending review. No model or cost benefit is
 established. Historical effect decoding is temporary; it must not become a
 second permanent executable view.

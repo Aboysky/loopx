@@ -311,10 +311,12 @@ TypeScript owner 中、quota 与原生 Turn 捕获之前组合完整来源，并
 stdin。隔离 File/SQLite 的真实 CLI 加合成可执行程序覆盖来源完整性、失败 attempt
 恢复与一次结算。这推进了两个 writer 和最终输入替换，尚未取得 C1 切换资格。
 候选现已通过规范 CLI channel 路由能力重入，并在完整契约的 Codex 输入中保留原始
-hash 绑定的 review/writeback reader。合成 File/SQLite 执行验证了新 replan 的材料
-读取；尚未验证此前 Todo 绑定的 replan 启动，其身份预检仍拒绝本次恢复案例。
-Cache 整套测试一致性、所有消费者的分阶段 replan 指令等价、structured/external
-消费者以及打包宿主连续性仍未完成。其默认 writer 变更尚未交付；PR 因作者实现未完而保持
+hash 绑定的 review/writeback reader。合成 File/SQLite 执行验证了新 obligation 绑定
+和原 Todo 绑定 replan 的材料读取。原生启动现只从已记录的结算身份取得唯一因果
+绑定，观察到的语义 replan obligation 不得替换原 Todo 绑定。源 quota 与健康拒绝
+仍阻止宿主启动。Release fixture 现只导入一次最终来源；这些可执行检查不代表真实
+模型或已安装宿主验收。Cache 整套测试一致性、所有消费者的分阶段 replan 指令等价、
+structured/external 消费者以及打包宿主连续性仍未完成。其默认 writer 变更尚未交付；PR 因作者实现未完而保持
 Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effect 解码只是临时迁移，
 不得成为第二份永久可执行视图。
 
