@@ -427,11 +427,21 @@ reader writes. This qualifies transport to the checkpoint's model-input file,
 not native session capture or a benchmark/model outcome. A matching outer
 source hash alone previously admitted an unsupported version or invalid inner
 binding through `replan-view`; the reader now uses the existing complete-contract
-validator, while unversioned historical reads retain their decoder. Discovering
-staged commands in the complete quota input and reconciling the staged writer's
-additional successor instructions remain open; these tests obtain the legacy
-reader from the adapter and do not claim that gap is solved. Do not restore a
-second compact executable fact view merely to satisfy historical assertions.
+validator, while unversioned historical reads retain their decoder.
+Successor authoring is now bound to the already-decided Turn before complete
+capture, using the same formatting owner as historical staged reads. The complete
+contract includes original Turn/Goal binding and the obligation to finish the
+creation receipt's original settlement before ending, without executing the
+successor. A later modern material read does not append another binding. Actual
+File/SQLite App-heartbeat and generic-CLI tests create the successor from this
+inline contract, reject premature spend, settle the original identity once and
+leave the successor open, without another guard or a staged reader dependency.
+This changes complete-input successor guidance; historical unversioned reads
+retain their old behavior. Settlement-only, capability-intent, unbound and
+mismatched-context inputs retain their authoring unchanged. The checkpoint's
+legacy-reader tests alone do not establish this lifecycle result. Remaining
+material-reader retirement and other C1 consumers must not restore a second
+compact executable fact view merely to satisfy historical assertions.
 Cache-suite consistency, old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native

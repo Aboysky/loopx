@@ -331,9 +331,16 @@ context delivery 开关组合下的完整来源相等；可选 full recovery 保
 准入只有一次，reader 不写状态。这只证明契约传到 checkpoint 的模型输入文件，
 不代表原生 session 捕获或 benchmark/模型成果。此前只要外层 source hash 相符，
 `replan-view` 就会接受不支持的版本或无效的内部绑定；现在复用既有完整契约 validator，
-未版本化的历史读取保留原解码器。完整 quota 输入如何发现 staged 命令，以及 staged
-writer 额外 successor 指令如何归并仍未解决；这些测试从适配器取得旧 reader，
-不能据此声称缺口已闭合。不能为了满足历史断言而恢复第二份精简可执行事实视图。
+未版本化的历史读取保留原解码器。
+successor 写入指引现已在完整 capture 前绑定到已决定的 Turn，复用历史 staged
+读取的同一格式化 owner。完整契约包含原 Turn/Goal 绑定，以及结束前完成创建回执
+所返原结算、不得执行 successor 的义务；后续现代材料读取不再追加第二次绑定。
+真实 File/SQLite 的 App heartbeat 和 generic CLI 测试从该内联契约创建 successor，
+拒绝过早 spend，原身份只结算一次并保持 successor open，不依赖再次 guard 或
+staged reader。这改变了完整输入的 successor 指引；未版本化历史读取保持原行为。
+仅结算、capability intent、未绑定和 context 不匹配的输入保留原写入指引。
+checkpoint 的旧 reader 测试本身不能证明这条生命周期。剩余材料 reader 退役及
+其他 C1 消费者不能为满足历史断言而恢复第二份精简可执行事实视图。
 Cache 整套测试一致性、旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
