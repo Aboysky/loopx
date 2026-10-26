@@ -1134,6 +1134,24 @@ def test_context_transport_off_never_installs_or_trusts_ambient_args(tmp_path, m
     assert not (Path(env["LOOPX_CODEX_HOME"]) / "hooks.json").exists()
 
 
+@pytest.mark.parametrize("setting,mode", [("off", 0o664), ("on", 0o600)])
+@pytest.mark.skipif(os.name != "posix", reason="Native POSIX file creation permissions")
+def test_context_native_writer_is_private_without_changing_off_umask(tmp_path, setting, mode):
+    from benchmark.runtime import worker
+
+    original = os.umask(0o002)
+    try:
+        command = [sys.executable, "-c", "from pathlib import Path; Path('native-history').write_bytes(b'fixture')"]
+        with worker.child_process(command, env={**os.environ, "LOOPX_PROJECT": str(tmp_path),
+                "LOOPX_CONTEXT_DELIVERY": setting}, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            child.communicate(timeout=10)
+            assert child.returncode == 0
+        assert (tmp_path / "native-history").stat().st_mode & 0o777 == mode
+        assert os.umask(0o002) == 0o002
+    finally:
+        os.umask(original)
+
+
 def test_context_selection_is_fixed_by_trial_home(tmp_path):
     args = settings(tmp_path, execution=Execution(mode="heartbeat", context_delivery="on"))
     prepare_codex_home(**args)
@@ -1151,7 +1169,7 @@ def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
         protected = home / "hooks.json"
         protected.write_text('{"operator": "unchanged"}')
     else:
-        protected = home / "context-traces"
+        protected = home / "loopx-context"
         if kind == "public_directory":
             protected.mkdir(mode=0o755)
             protected.chmod(0o755)
@@ -1166,7 +1184,8 @@ def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
     assert "LOOPX_CODEX_CONTEXT_TRUST_ARGS" not in env
 
 
-def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["openai", "operator-provider"])
+def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_path, monkeypatch, provider):
     from contextlib import contextmanager
     from benchmark.runtime.context_delivery import prepare_context_delivery
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
@@ -1174,7 +1193,8 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     home = tmp_path / "home"
     home.mkdir()
     config = home / "config.toml"
-    original_config = b"[features]\nplugins=true\nremote_plugin=true\nplugin_sharing=true\n"
+    original_config = (f'model_provider={json.dumps(provider)}\n'
+        + '[features]\nplugins=true\nremote_plugin=true\nplugin_sharing=true\n').encode()
     config.write_bytes(original_config)
     methods, commands = [], []
 
@@ -1187,7 +1207,7 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
                 return {}
             assert method == "hooks/list", "discovery must not start model work"
             own = [{"sourcePath": str((home / "hooks.json").resolve()),
-                    "key": f"own-{i}", "currentHash": f"native-hash-{i}"} for i in range(2)]
+                    "key": f"own-{i}", "currentHash": f"native-hash-{i}"} for i in range(5)]
             return {"data": [{"hooks": [*own, {"sourcePath": str(tmp_path / "other-hooks.json"),
                 "key": "unrelated", "currentHash": "never-trust-this"}]}]}
         yield SimpleNamespace(request=request, notify=lambda *args: None)
@@ -1205,6 +1225,11 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     assert all("features.plugins" not in value and "features.remote_plugin" not in value
                and "features.plugin_sharing" not in value for value in trusted)
     assert config.read_bytes() == original_config
+    overrides = {trusted[i + 1].split("=", 1)[0]: trusted[i + 1].split("=", 1)[1]
+                 for i, value in enumerate(trusted) if value == "-c"}
+    assert not any(key.startswith("model_provider") for key in overrides)
+    assert "CODEX_ROLLOUT_TRACE_ROOT" not in env
+    assert not (home / "context-traces").exists()
 
 
 @pytest.mark.parametrize("value", [True, False, "1", "codex_benchmark_heartbeat", "codex_app_heartbeat", "all"])
