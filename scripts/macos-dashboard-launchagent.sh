@@ -331,7 +331,9 @@ PY
 }
 
 resolve_chat_options() {
-  "$1" - "$chat_plist" <<'PY'
+  (
+  cd /
+  "$1" - "$chat_plist" "$registry" <<'PY'
 import json
 import math
 import os
@@ -369,8 +371,17 @@ for variable, flag in (
                 if not value:
                     raise SystemExit(f"{variable} has an empty installed argument")
     if value is None or value == "":
-        options[variable] = ""
-        continue  # Retain the CLI's existing default, without pinning a new root.
+        if flag != "--runtime-root":
+            options[variable] = ""
+            continue
+        # Pin the same route Chat would select at installation. The updater
+        # can then fence that exact store without reinterpreting a later
+        # registry edit or inheriting the upgrader's default runtime.
+        from loopx.control_plane.projects.registry_codec import load_project_registry
+        from loopx.paths import resolve_runtime_root
+        registry_path = Path(sys.argv[2])
+        configured = load_project_registry(registry_path) if registry_path.exists() else {}
+        value = str(resolve_runtime_root(configured, registry_path=registry_path))
     if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 for c in value):
         raise SystemExit(f"{variable} must be a bounded string without control characters")
     if flag == "--runtime-root":
@@ -394,6 +405,7 @@ if not isinstance(value, str) or len(value) > 256 or any(ord(c) < 32 for c in va
 options[variable] = value.strip()
 print(json.dumps(options))
 PY
+  )
 }
 
 write_plists() {

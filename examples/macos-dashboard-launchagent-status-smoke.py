@@ -454,7 +454,9 @@ def main() -> int:
         assert "--port 8767" in default_chat_plist, default_chat_plist
         assert "--replace-existing-loopx-chat" in default_chat_plist, default_chat_plist
         assert "--no-open" in default_chat_plist, default_chat_plist
-        assert "--runtime-root" not in shlex.split(plistlib.loads(chat_plist.read_bytes())["ProgramArguments"][2])
+        from loopx.runtime_activation import _chat_runtime_root
+        pinned_runtime = _chat_runtime_root(chat_plist)
+        assert pinned_runtime == Path(plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_RUNTIME_ROOT"])
         assert f"export CODEX_HOME={(home / '.codex').resolve()};" in default_chat_plist, default_chat_plist
         assert "export LOOPX_PYTHON=" in default_plist, default_plist
         assert "export LOOPX_PYTHON=" in default_chat_plist, default_chat_plist
@@ -476,6 +478,7 @@ def main() -> int:
         run_script(fake_bin, home, ["restart"], schema_version=2,
                    extra_env={"LOOPX_REPO_ROOT": str(successor)})
         assert json.loads(plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_SCAN_PATHS_JSON"]) == pinned
+        assert _chat_runtime_root(chat_plist) == pinned_runtime
 
         # KeepAlive restarts never re-enter this installer, so each agent
         # carries its own retention step for both of its streams.
