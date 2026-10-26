@@ -131,8 +131,10 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         value = _mapping(capsule.get(field))
         if value:
             authority[field] = value
+    # Ordinary execution needs the same work/continuation obligations as replan.
+    # Keep their signed source data; this adapter must not classify or execute it.
     remaining_capsule = {key: value for key, value in capsule.items() if key not in authority}
-    if staged and remaining_capsule:
+    if remaining_capsule:
         authority["contract_capsule"] = remaining_capsule
     context = _mapping(envelope.get("agent_context"))
     if context:

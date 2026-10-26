@@ -617,13 +617,40 @@ capsule witnesses. Packet-free v0 envelopes remain supported. The envelope keeps
 - validation/writeback and quota-spend policy;
 - the current scheduler action and cadence acknowledgement command.
 
-The envelope also carries a bounded `contract_capsule` for interaction mode,
+The envelope also carries a `contract_capsule` for interaction mode,
 work-lane and execution obligations, successor/replan duties, automation
 liveness, vision/handoff state, and actionable warning references. A canonical
 `action_signature` is independently built from the full decision and from the
 envelope; matching hashes prove the covered action dimensions agree for that
 projection. They do not prove that every possible quota state has test
 coverage.
+
+The five execution-contract objects `work_lane_contract`,
+`execution_obligation`, `autonomous_replan_scope`, `agent_scope_frontier`, and
+`automation_liveness` retain their complete source JSON, including nested data,
+ordered lists, empty values and unrecognized metadata. Their clauses are not
+subject to display truncation. Both quota-envelope emission and direct Turn
+composition use this shared producer. The shared structured Host prompt now
+forwards the remaining signed capsule for ordinary execution as well as staged
+replanning; previously the ordinary path omitted it. Retaining metadata does
+not interpret it as a new execution permission or support a new required
+semantic. Existing schema/signature coverage and historical captured envelopes
+remain readable without rewriting them. Re-projecting an older raw decision
+with the corrected producer can produce a different signature; validate an
+existing envelope against its saved content and digest. Raw quota output and admission,
+scheduler and settlement decisions are unchanged. Larger capsule bytes remain
+visible in the existing diagnostic budget warning; this correction does not
+claim lower token cost or complete controller-contract unification.
+
+中文：上述五份执行契约完整保留源 JSON，包括嵌套数据、有序列表、空值和未知
+元数据，不按展示预算截断条款。quota 短包与直接 Turn 共用该生产者；共享结构化
+Host 在普通执行和分阶段重规划中都传递剩余的已签名 capsule，修复普通执行
+原先遗漏的问题。保留元数据不表示解释新权限或支持新的必需语义。既有 schema、
+签名覆盖与历史捕获内容继续可读，不改写旧记录。用修正后的生产者重新投影旧
+原始决定可能得到不同签名；既有 envelope 应按保存内容与摘要校验。原始 quota
+输出、准入、调度和
+结算决定不变。增长的字节量仍通过既有预算诊断可见；这项修正不证明 token
+成本下降，也不表示 controller 契约已完全统一。
 
 Required reads use the authoritative `interaction_contract.agent_channel` list,
 including an explicit empty list. Historical interaction-root and payload lists

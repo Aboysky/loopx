@@ -86,6 +86,44 @@ function payload(): Record<string, unknown> {
   };
 }
 
+test("execution contracts retain complete clauses, nested data and empty values", () => {
+  const source = payload();
+  const clause = "Preserve original identity / 保留原身份. ".repeat(40) + "Stop on source mismatch.";
+  const contracts = {
+    work_lane_contract: {schema_version: "work_lane_contract_v1", action: clause,
+      outcome_followthrough: {required: true, spend_policy: clause,
+        accepted_resolution_kinds: Array.from({length: 12}, (_, i) => `resolution-${i}`),
+        evidence: {ordered: ["artifact", "validation"], missing: null}}},
+    execution_obligation: {must_attempt_work: true, reason: clause, notify_is_execution_gate: false},
+    automation_liveness: {keep_active: true, pause_allowed: false, pause_policy: clause,
+      spend_policy: "Only after validated writeback", reason: "", observation: null},
+    agent_scope_frontier: {recommended_action: clause, spend_policy: clause, blocks_delivery: false},
+    autonomous_replan_scope: {required: false, applies: false, owner_agent_ids: [], context: null},
+  };
+  Object.assign(source, structuredClone(contracts));
+  const envelope = buildTurnEnvelope({payload: source, scheduler_execution_args: ""});
+  const capsule = envelope.contract_capsule as JsonObject;
+  for (const [field, expected] of Object.entries(contracts)) {
+    assert.deepEqual(capsule[field], expected);
+    const changed = structuredClone(envelope);
+    delete (changed.contract_capsule as JsonObject)[field];
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed),
+      turnEnvelopeActionSignatureDocument(envelope));
+  }
+  // Retained future metadata is data, not a newly interpreted execution rule.
+  assert.equal(envelope.should_run, true);
+  assert.equal((envelope.compaction as JsonObject).within_budget, false);
+  // Existing historical envelopes are checked from their captured content;
+  // signature verification never rebuilds an old capsule through the producer.
+  const historical = structuredClone(envelope);
+  historical.contract_capsule = {schema_version: "loopx_contract_capsule_v0",
+    source: "full_quota_decision", work_lane_contract: {must_attempt_work: true}};
+  const signatureBefore = turnEnvelopeActionSignatureDocument(historical);
+  (source.work_lane_contract as JsonObject).action = "changed later";
+  assert.deepEqual(turnEnvelopeActionSignatureDocument(historical), signatureBefore);
+  assert.deepEqual(capsule.work_lane_contract, contracts.work_lane_contract);
+});
+
 test("a Todo-less planning identity must match the original signed quota binding", () => {
   const identity = {
     schema_version: "quota_settlement_identity_v1", goal_id: "goal-turn-envelope", agent_id: "agent-ts",

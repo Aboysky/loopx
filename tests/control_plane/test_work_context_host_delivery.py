@@ -58,6 +58,12 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert source_context['complete'] is True
     assert source_context['instruction']  # Non-vacuous instruction transport.
     authority = extract_turn_authority({'turn_envelope': envelope})
+    # These are execution obligations, not display summaries. The ordinary
+    # structured Host must receive the same contracts as the raw quota caller.
+    for field in ('work_lane_contract', 'execution_obligation', 'automation_liveness'):
+        assert full[field]
+        assert envelope['contract_capsule'][field] == full[field]
+        assert authority['contract_capsule'][field] == full[field]
     context = authority['work_context']
     assert context['instruction'] == source_context['instruction']
     assert authority['selected_todo']['text_source_verified'] is True
@@ -83,11 +89,14 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert transported['selected_todo'] == authority['selected_todo']
     assert transported['required_reads'] == authority['required_reads']
     assert transported['work_context'] == context
+    assert transported['contract_capsule'] == authority['contract_capsule']
     # A compromised carrier cannot silently remove either the instruction or a
     # separate obligation while retaining the signed action's original digest.
-    for changed_field in ('instruction', 'sources'):
+    for carrier, changed_field in (('work_context', 'instruction'),
+                                   ('work_context', 'sources'),
+                                   ('contract_capsule', 'execution_obligation')):
         altered = copy.deepcopy(envelope)
-        del altered['work_context'][changed_field]
+        del altered[carrier][changed_field]
         with pytest.raises(ValueError, match='action signature'):
             extract_turn_authority({'turn_envelope': altered})
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)

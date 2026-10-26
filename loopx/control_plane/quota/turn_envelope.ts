@@ -108,31 +108,9 @@ const ACTIONABLE_WARNING_FIELDS = [
 
 const CONTRACT_CAPSULE_FIELDS: Readonly<Record<string, readonly string[]>> = {
   interaction_contract: ["schema_version", "mode"],
-  work_lane_contract: [
-    "schema_version", "lane", "monitor_kind", "next_lane", "obligation",
-    "must_attempt_work", "reason_codes", "monitor_policy", "selected_todo_id",
-    "selected_next_due_at", "non_runnable_non_monitor_count",
-    "material_transition", "action",
-  ],
-  execution_obligation: [
-    "kind", "contract", "contract_obligation", "must_attempt_work",
-    "notify_is_execution_gate", "delivery_allowed", "reason",
-  ],
   goal_route_hint: [
     "schema_version", "kind", "route_decision", "preserves_goal_next_action",
     "goal_next_action_mutation",
-  ],
-  autonomous_replan_scope: [
-    "schema_version", "required", "applies", "scope", "owner_agent_ids",
-    "selected_peer_agent",
-  ],
-  agent_scope_frontier: [
-    "schema_version", "action", "effective_action", "blocks_delivery",
-    "quiet_noop_allowed", "requires_replan", "recommended_action", "spend_policy",
-  ],
-  automation_liveness: [
-    "schema_version", "keep_active", "pause_allowed", "pause_policy",
-    "automation_action",
   ],
   handoff_readiness: [
     "ready", "codex_ready", "handoff_status", "post_handoff_run_seen",
@@ -141,13 +119,6 @@ const CONTRACT_CAPSULE_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "schema_version", "capability_gate_action", "blocked_advancement_count",
     "blocked_due_monitor_count", "mode",
   ],
-};
-
-const CONTRACT_CAPSULE_TEXT_LIMITS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
-  work_lane_contract: { action: 300, material_transition: 240 },
-  execution_obligation: { reason: 240 },
-  agent_scope_frontier: { recommended_action: 320, spend_policy: 220 },
-  automation_liveness: { pause_policy: 260 },
 };
 
 function object(value: unknown): JsonObject {
@@ -750,9 +721,20 @@ function contractCapsule(payload: JsonObject): JsonObject {
   };
   for (const [sourceKey, fields] of Object.entries(CONTRACT_CAPSULE_FIELDS)) {
     const compact = compactFields(
-      payload[sourceKey], fields, CONTRACT_CAPSULE_TEXT_LIMITS[sourceKey] || {},
+      payload[sourceKey], fields, {},
     );
     if (Object.keys(compact).length > 0) capsule[sourceKey] = compact;
+  }
+  // These source owners provide execution contracts, not display summaries.
+  // Preserve clauses and nested/unknown data without interpreting new fields.
+  // The existing signature covers the complete retained JSON; budget overflow
+  // remains diagnostic rather than permission to truncate an obligation.
+  for (const field of [
+    "work_lane_contract", "execution_obligation", "autonomous_replan_scope",
+    "agent_scope_frontier", "automation_liveness",
+  ]) {
+    const contract = object(payload[field]);
+    if (Object.keys(contract).length > 0) capsule[field] = structuredClone(contract);
   }
   const unavailableContext = projectTurnStartUnavailableContext(payload.turn_start_capability_hook_dispatch);
   if (unavailableContext) capsule.unavailable_context = unavailableContext;
@@ -797,17 +779,6 @@ function contractCapsule(payload: JsonObject): JsonObject {
   }
   const taskScope = text(payload.task_scope, 80);
   if (taskScope) capsule.task_scope = taskScope;
-  const workLane = object(payload.work_lane_contract);
-  const outcome = object(workLane.outcome_followthrough);
-  if (Object.keys(outcome).length > 0) {
-    const compactLane = object(capsule.work_lane_contract);
-    compactLane.outcome_followthrough = compactFields(
-      outcome,
-      ["required", "obligation", "accepted_resolution_kinds", "spend_policy"],
-      { spend_policy: 220 },
-    );
-    capsule.work_lane_contract = compactLane;
-  }
   const warnings = ACTIONABLE_WARNING_FIELDS.filter((field) => Boolean(payload[field]));
   if (warnings.length > 0) capsule.actionable_warning_refs = warnings;
   return capsule;
