@@ -219,6 +219,16 @@ action consequences or relying on fixed alignment offsets.
 Reading a citation opens only the requested original, preserving the explicit
 open or closed state of the full analysis and returning to the exact citation.
 
+Search results use the same reading hierarchy: compact title, recorded time and
+status in the list; opening a row restores its complete title and body. Keep
+protocol identities and source references in one disclosure, with version
+comparison beside it. Counts stay compact; coverage and comparison-method
+explanations use contextual help. Reading failures retain a visible state and
+the existing recovery action. Do not clamp the opened document or its evidence.
+
+搜索列表以标题、时间和记录状态供浏览，展开后完整呈现正文。来源与标识合并按需查看，
+版本比较保留原位入口；范围、口径用共享帮助，真实读取失败和恢复动作仍可见。
+
 When an explicit analysis supplies a whole-history translation, use it throughout
 the matching research snapshot, including routes, decisions and expanded history.
 Offer one in-place original/translation switch; keep coverage and source/version
