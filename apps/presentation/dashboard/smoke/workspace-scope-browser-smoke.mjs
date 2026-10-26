@@ -258,6 +258,10 @@ try {
   assert.equal(replayBody.turn_id, originalTurn);
   assert.equal(replayBody.created, false, "A completed request keeps its receipt despite a later unsupported configuration");
   assert.equal(await readFile(packetLog, "utf8"), beforeReplayPackets, "Receipt recovery starts no native configuration or work");
+  const invalidIdentity = await page.request.post(new URL(`/api/chat/sessions/${sessionId}/turns`, url).href,
+    {data: {client_turn_id: "invalid/identity", message: "Reject the request before any native preparation."}});
+  assert.equal(invalidIdentity.status(), 400, await invalidIdentity.text());
+  assert.equal(await readFile(packetLog, "utf8"), beforeReplayPackets, "Malformed request identity cannot prepare native configuration");
   await composer.fill("配置被拒绝时保留这条消息。");
   const rejection = page.waitForResponse(response => response.url().endsWith(`/sessions/${sessionId}/turns`) && response.status() === 424);
   await composer.press("Enter");

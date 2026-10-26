@@ -138,6 +138,25 @@ def test_configuration_preparation_failure_is_known_non_delivery(current_session
     assert not list((store.sessions_root / session["session_id"] / "turns").iterdir())
 
 
+@pytest.mark.parametrize("client_id", ["invalid/id", "invalid id", "invalid:identity"])
+def test_invalid_turn_identity_is_rejected_before_pending_model_preparation(current_session_settings, monkeypatch, client_id):
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.chat_runtime import ChatRuntimeController
+    store, session, post = current_session_settings
+    assert post({"agent_model_id": "second", "agent_reasoning_effort": "high"})[0] == 200
+    before = store.load_session(session["session_id"])
+    preparations = []
+    def prepare(*_args, **_kwargs):
+        preparations.append(True)
+        raise CodexChatAgentError("Native configuration rejected", error_code="unsupported_configuration", gate=None)
+    monkeypatch.setattr(ChatRuntimeController, "_ensure_adapter_locked", prepare)
+    status, body = post({"client_turn_id": client_id, "message": "Invalid identity must start no native operation."}, "turns")
+    assert status == 400 and "compact opaque id" in body["error"]
+    assert not preparations
+    assert store.load_session(session["session_id"]) == before
+    assert not store.messages(session["session_id"])
+
+
 @pytest.mark.parametrize("body", [{"agent_model_id": "unknown"},
     {"agent_model_id": "second", "agent_reasoning_effort": "unsupported"},
     {"agent_model_id": "second", "origin": "lark"}, {"agent_reasoning_effort": "high"}])

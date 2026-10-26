@@ -62,6 +62,7 @@ from .chat_store import (
     CHAT_SESSION_MODE_MANAGED,
     TERMINAL_TURN_STATES,
     ChatSessionStore,
+    _opaque_id,
     normalize_agent_model_id,
     utc_now,
 )
@@ -1081,7 +1082,7 @@ class ChatRuntimeController:
             active = self.store.load_turn(session_id, str(session["active_turn_id"])) if session.get("active_turn_id") else None
             if (session_model_settings_pending(session)
                 and (active is None or active.get("status") in TERMINAL_TURN_STATES)
-                and self.store.turn_for_client(session_id, client_turn_id) is None):
+                and self.store.turn_for_client(session_id, _opaque_id(client_turn_id, field="client_turn_id")) is None):
                 # Existing ingress identity belongs to the acceptance/replay
                 # owner, even if later settings cannot start a new Turn.
                 try:
