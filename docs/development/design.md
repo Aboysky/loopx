@@ -193,6 +193,14 @@ keep all findings selectable and failed or tentative counts visible. Preserve
 the exact finding on reload and Back. Offer the whole recorded history in place
 and through the existing return action, without letting it bury the chosen text.
 
+Decision history groups records by their recorded question identity, with the
+question title once above its successive decisions. Matching titles alone do
+not establish shared identity or decision revision. Show recent records first,
+with their outcome, change and recorded status; retain stopped/retained evidence
+and expose earlier records in place. Counts and date spans describe the selected
+time range. Keep negative and tentative record counts visible when older rows
+are folded, and open each row's exact finding in the existing reader.
+
 Route captions distinguish start and end and wrap as readable entries. If a
 long title is clamped in that list, one activation opens its complete original
 in the existing reader; keyboard return restores the exact entry. Keep view,
