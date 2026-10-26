@@ -158,7 +158,11 @@ try {
   const afterSettings = (await readFile(packetLog, "utf8")).trim().split("\n").map(line => JSON.parse(line));
   assert.equal(afterSettings.length, packetsBefore.length, "Saving a choice starts no thread, resume or model work");
   await page.keyboard.press("Escape");
+  const configuredAdmission = page.waitForResponse(response => response.url().endsWith(`/sessions/${sessionId}/turns`) && response.status() === 202);
   await composer.press("Enter");
+  const configuredResponse = await configuredAdmission;
+  const originalSend = configuredResponse.request().postDataJSON();
+  const originalTurn = (await configuredResponse.json()).turn_id;
   await page.locator(".personal-message-pending").waitFor({state: "hidden"});
   await menu.locator(".personal-model-current").filter({hasText: "trial-native-model"}).waitFor();
   let completedPackets = (await readFile(packetLog, "utf8")).trim().split("\n").map(line => JSON.parse(line));
@@ -247,6 +251,13 @@ try {
   await page.getByRole("option", {name: "Rejected model", exact: true}).click();
   assert.equal((await rejectedChoiceSaved).status(), 200);
   await page.keyboard.press("Escape");
+  const beforeReplayPackets = await readFile(packetLog, "utf8");
+  const originalReceipt = await page.request.post(new URL(`/api/chat/sessions/${sessionId}/turns`, url).href, {data: originalSend});
+  assert.equal(originalReceipt.status(), 202, await originalReceipt.text());
+  const replayBody = await originalReceipt.json();
+  assert.equal(replayBody.turn_id, originalTurn);
+  assert.equal(replayBody.created, false, "A completed request keeps its receipt despite a later unsupported configuration");
+  assert.equal(await readFile(packetLog, "utf8"), beforeReplayPackets, "Receipt recovery starts no native configuration or work");
   await composer.fill("配置被拒绝时保留这条消息。");
   const rejection = page.waitForResponse(response => response.url().endsWith(`/sessions/${sessionId}/turns`) && response.status() === 424);
   await composer.press("Enter");

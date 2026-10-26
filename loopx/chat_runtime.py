@@ -1079,7 +1079,11 @@ class ChatRuntimeController:
             require_managed_agent_session(self, session, work_dir)
             codex_context.checked_session_home(self.codex_home, session)
             active = self.store.load_turn(session_id, str(session["active_turn_id"])) if session.get("active_turn_id") else None
-            if session_model_settings_pending(session) and (active is None or active.get("status") in TERMINAL_TURN_STATES):
+            if (session_model_settings_pending(session)
+                and (active is None or active.get("status") in TERMINAL_TURN_STATES)
+                and self.store.turn_for_client(session_id, client_turn_id) is None):
+                # Existing ingress identity belongs to the acceptance/replay
+                # owner, even if later settings cannot start a new Turn.
                 try:
                     self._ensure_adapter_locked(session, work_dir=work_dir, objective=objective, goal_commit=commit)
                 except CodexChatAgentError as exc:

@@ -106,6 +106,25 @@ def test_current_session_setting_changes_are_isolated(current_session_settings):
     assert store.load_session(other["session_id"]) == other
 
 
+@pytest.mark.parametrize("message,expected_status", [("Original message.", 202), ("Conflicting message.", 400)])
+def test_completed_request_retry_keeps_its_receipt_after_later_settings_change(current_session_settings, monkeypatch, message, expected_status):
+    from loopx.chat_runtime import ChatRuntimeController
+    store, session, post = current_session_settings
+    sid = session["session_id"]
+    accepted = store.accept_managed_turn(sid, client_turn_id="original-send", message="Original message.")
+    store.update_turn(sid, accepted.turn["turn_id"], status="completed", response={"message": "Original answer."})
+    store.update_session(sid, status="ready", active_turn_id=None)
+    assert post({"agent_model_id": "second", "agent_reasoning_effort": "high"})[0] == 200
+    before = store.load_session(sid)
+    monkeypatch.setattr(ChatRuntimeController, "_ensure_adapter_locked", lambda *_a, **_kw: pytest.fail(
+        "Recovering an existing receipt cannot prepare or dispatch a later configuration"))
+    status, body = post({"client_turn_id": "original-send", "message": message}, "turns")
+    assert status == expected_status
+    if status == 202:
+        assert body["created"] is False and body["turn_id"] == accepted.turn["turn_id"]
+    assert store.load_session(sid) == before
+
+
 @pytest.mark.parametrize("failure", [ValueError("grant revoked"), OSError("provider unavailable"), KeyError("closed")])
 def test_configuration_preparation_failure_is_known_non_delivery(current_session_settings, monkeypatch, failure):
     from loopx.chat_runtime import ChatRuntimeController
