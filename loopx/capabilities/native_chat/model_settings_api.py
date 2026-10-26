@@ -60,4 +60,3 @@ class ChatModelSettingsRequestMixin:
             self._send_error("Conversation settings could not be saved; read the current settings and retry.", status=503)
             return
         self._send_json({"ok": True, "session": self.server.chat_store.public_session(updated)})
-
