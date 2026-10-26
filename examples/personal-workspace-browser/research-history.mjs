@@ -264,6 +264,34 @@ export const researchHistoryScenario = {
       assert.match(await unretained.innerText(), /原始记录没有保留信息.*保留结果未知/s);
       assert.equal(await unretained.getByRole('heading', {name: '竞争解释', exact: true}).count(), 0, 'Missing alternatives are not filled with an invented explanation');
       const savedOverview = await analysis.locator('.research-synthesis-summary').innerText();
+      // Saved links and the first return from another view preserve reading.
+      // Exercise a fresh panel mount at each width, then repeat the round trip.
+      for (const viewport of [{width: 390, height: 844}, {width: 1280, height: 900}]) {
+        await synthesisPage.setViewportSize(viewport);
+        await synthesisPage.reload({waitUntil: 'domcontentloaded'});
+        await analysis.locator('.research-synthesis-summary').waitFor();
+        await synthesisPage.screenshot({path: resolve(outputDir, `research-deep-link-${viewport.width}.png`), animations: 'disabled'});
+        assert(await analysis.locator('.research-synthesis-summary').evaluate(e => {
+          const box = e.getBoundingClientRect();
+          return box.top >= 0 && box.bottom <= innerHeight - 48;
+        }), 'A saved deep-report link reveals the actual account in the first viewport');
+        const laterFinding = analysis.locator('.research-report-finding').last();
+        for (let visit = 0; visit < 2; visit++) {
+          const readingTop = await laterFinding.evaluate(async e => {
+            e.scrollIntoView({block: 'center'});
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            return e.getBoundingClientRect().top;
+          });
+          await synthesisPage.getByRole('button', {name: '任务', exact: true}).click();
+          await synthesisPage.getByRole('button', {name: '研究', exact: true}).click();
+          // The existing panel entrance animation must settle before measuring.
+          await synthesisPage.waitForFunction(top => {
+            const finding = document.querySelector('.personal-goal-view-panel:not([hidden]) .research-report-finding:last-child');
+            return finding && Math.abs(finding.getBoundingClientRect().top - top) < 3;
+          }, readingTop);
+        }
+      }
+      await synthesisPage.setViewportSize({width: 390, height: 844});
       assert(await analysis.locator('.research-report-tabs').evaluate(tabs => {
         const overview = tabs.parentElement.querySelector('.research-synthesis-summary');
         return Boolean(overview && (tabs.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING));
