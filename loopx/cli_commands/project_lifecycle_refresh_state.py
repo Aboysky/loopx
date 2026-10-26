@@ -640,9 +640,10 @@ def handle_refresh_state_command(
                 runtime_root=args.runtime_root,
             )
             payload["replan_transition"] = transition
-            payload["error"] += " Required transition: " + "; ".join(
-                transition["next_cli_actions"]
-            )
+            if transition["next_cli_actions"]:
+                payload["error"] += " Required transition: " + "; ".join(
+                    transition["next_cli_actions"]
+                )
     if outcome_update_result is not None:
         # This native effect precedes the ordinary writeback. Retain its receipt
         # even if later settlement fails; replay the identical operation once.
