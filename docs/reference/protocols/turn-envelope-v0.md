@@ -10,10 +10,15 @@ This page describes the current versioned representation. The
 proposes replacing the live quota/envelope format choice with one complete
 contract, including differential delivery. Historical captures retain their
 original schema and signature; the proposal does not introduce a new CLI switch.
+The proposed composition point precedes capture and encoding. Today's action
+signature compares its registered projection; equality alone does not establish
+complete source-clause preservation or qualify the unified contract.
 
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
 历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
+提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
+仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
 
 Preview it explicitly:
 

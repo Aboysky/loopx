@@ -6,7 +6,7 @@
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
 - **最近规范性修订：** 2026-10-27
-- **实现基线：** `08e290fb5ee44506e12fc62651e088d71bb93a45`
+- **实现基线：** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
 
@@ -82,6 +82,32 @@
 组织与评估组是独立维度；并非所有组合都受支持。Native/plain benchmark 对照可以有意
 不包含 LoopX Core，必须保留其独立性。
 
+### C1 源码核对：已有共享 owner 与剩余分叉
+
+源码实际共享的部分比输出名称体现的更多。`_emit_quota_result` 在
+`_project_quota_cli_payload` 选择普通 CLI 压缩或 `buildTurnEnvelope` **之前**，
+已经捕获完整决策。后者委托 TypeScript owner，Python 模块是传输 adapter。
+Quota capture 与 Turn journal capture 都调用
+[`decision_capture.py`](../../../loopx/control_plane/turn_driver/decision_capture.py)
+中的 `write_decision_capture`。原生上下文交付与显式宿主 handoff 也复用该模块和既有
+context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
+也不重写已经共享的差分与 native-resume 逻辑。
+
+| 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
+| --- | --- | --- |
+| `interaction_contract.agent_channel.work_context` 与未完成必读 | `work_context` 加 `required_reads`；相同内联材料可改用引用 | 一份完整要求/证据来源与可解析引用；保留未完成必读及其完成条件 |
+| 选定 Todo、recommended action、action portfolio 与 planning horizon | `action`；`turnActionProjection` 进行引用迁移与文本压缩 | 一份选定工作/动作身份；保留完整可执行条款，区分摘要与执行指令 |
+| `interaction_contract.cli_channel.settlement_plan` | 复制至 `writeback.settlement_plan`，包含原 effect 身份与条件步骤 | 原样复用 settlement owner；controller 对话和新 capture 都不另建扣款身份 |
+| User/agent interaction channel、execution policy 与 task orchestration | 分为 `user`、`execution_policy`、`boundary` 与 orchestration 分节 | 保留通知与执行义务的区别、权限和停止 gate；不从正文猜测 |
+| Replan packet、必读与分阶段写回 | 专门的 replan 投影与延后写回 | 保留事实/来源访问、policy 特定触发与有序变更；不统一打开 stride 行为 |
+| Scheduler context 与执行归属 | 携带调用方执行上下文的 scheduler 投影 | 保留真实宿主 owner 与 ACK 义务；统一 schema 不转移 scheduler 权限 |
+| 完整已保存决策、action signature 与 journal 绑定 | 来源 hash、投影动作 hash、captured-decision 引用分别存在 | 区分语义完整性、精确传输字节与回执身份，不互换 hash |
+
+这份表是 owner 与义务映射，**不是完整字段清单，也不是等价验证结果**。当前投影有文本
+预算、字段白名单和引用迁移；仅比较 action signature，不能证明完整来源条款与未知字段
+都被保留。C1 实现必须按确切 base/head 枚举字段和调用方；未分类项阻止切换，不能以
+假定的兼容视图为由悄悄丢弃。
+
 ## 5. 提议架构
 
 ### 归属与统一契约
@@ -118,6 +144,19 @@ CLI、heartbeat、managed Turn 与评估使用一个语义实例、一个 schema
 实例的编码选择，分页是传输限制，都不形成 quota schema 和 Turn schema。原生工具
 可以带 provider 必需的外层包装，但不能改名、遗漏或另行决定契约字段。人类 UI read
 model 继续作为展示 sink，不成为另一份可执行契约。
+
+组合边界位于**当前 domain 决策与宿主操作绑定之后、不可变 capture 与上下文编码之前**。
+所有活跃 writer 使用该边界，不能先把 quota packet 压成 envelope，再把结果改称完整
+统一契约。必需来源材料可以使用经授权的详情引用，但引用、revision 和必读义务必须完整，
+并能从同一次语义 capture 恢复。
+
+“一份 capture”指一次调用的一份不可变语义观察，不是所有用途只存一个文件。完整规范
+实例、编码后的 full/delta/page 产物和 Turn journal 的绑定应保持可区分。精确文件字节
+digest 保护传输，canonical hash 保护语义内容，既有 effect 身份保护只结算一次；三者
+不能互相替代，也不授予当前权限。恢复引用需要身份/位置时，在序列化前预留；不要要求
+文档包含自身最终字节的 digest。编码、分页、native resume 与恢复都从已保存实例派生，
+不再执行 guard。合法的新选择或权限复核可以产生新 capture，但不能改写旧观察，或把
+未结算结果悄悄绑定到新观察。
 
 ### Executor 输入与输出
 
@@ -287,6 +326,16 @@ C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约�
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余
 缺口、实际测试与回退。完整语言迁移或无关 manager 重写不是前置条件；新抽象能编译
 不能算任务完成。
+
+C1 首个实现片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
+从共享 quota emission 边界开始，同时追踪 attached heartbeat 交付与 Turn adapter，
+保留各自真实宿主归属。不能新增无人使用的第三个 serializer，而两个活跃 writer 继续
+各自拥有语义。既有 `test_quota_decision_capture.py` 与
+`test_turn_host_decision_capture.py` 提供可扩展的 capture/恢复覆盖，不证明新 schema。
+通过隔离 fixture 上的真实入口验收普通工作、选择、replan、等待、未结算 Turn 恢复、
+详情不可用与 capability-off 行为。每例除重建数据外，还须验证完整义务和原结算身份。
+Native-resume/context 工作保留原 owner；采用其已验收改动，只补新组合边界缺少的集成
+覆盖。替换真正可用且其余受支持 reader 有明确切换/退役条件之前，C1 保持未完成。
 
 ## 12. 待决事项
 

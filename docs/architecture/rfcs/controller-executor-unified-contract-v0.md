@@ -6,7 +6,7 @@
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
 - **Last normative revision:** 2026-10-27
-- **Implementation baseline:** `08e290fb5ee44506e12fc62651e088d71bb93a45`
+- **Implementation baseline:** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
 
@@ -101,6 +101,36 @@ source, single/two-session organization and evaluation arm are independent
 axes. Not every combination is supported. Native/plain benchmark controls may
 intentionally have no LoopX Core and must remain uncontaminated controls.
 
+### C1 source audit: shared owners and the remaining split
+
+The source already shares more than the output names suggest. `_emit_quota_result`
+captures the complete decision **before** `_project_quota_cli_payload` chooses
+ordinary CLI compaction or `buildTurnEnvelope`. The latter delegates to the
+TypeScript owner; its Python module is a transport adapter. Both quota capture
+and Turn journal capture call `write_decision_capture` in
+[`decision_capture.py`](../../../loopx/control_plane/turn_driver/decision_capture.py).
+Native context delivery and explicit host handoff also reuse that module and
+the existing context-delivery owner. C1 must converge the remaining composition
+and consumer assumptions, rather than introduce another capture service or
+rewrite already shared delta/native-resume logic.
+
+| Current source / obligation | Present envelope treatment | Required C1 disposition |
+| --- | --- | --- |
+| `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |
+| Selected Todo, recommended action, action portfolio and planning horizon | `action`; reference relocation and text compaction occur in `turnActionProjection` | One selected work/action identity; preserve complete actionable clauses and distinguish summaries from executable instructions |
+| `interaction_contract.cli_channel.settlement_plan` | Copied into `writeback.settlement_plan`, including original effect identity and conditional steps | Reuse the settlement owner unchanged; neither controller dialogue nor a new capture creates another debit identity |
+| User/agent interaction channels, execution policy and task orchestration | Separate `user`, `execution_policy`, `boundary` and orchestration sections | Preserve notification versus execution obligations, authority and stop gates; do not derive them from prose |
+| Replan packet, required reads and staged writeback | Dedicated replan projection and deferred writeback | Preserve fact/source access, policy-specific triggers and ordered mutations; no blanket activation of stride behavior |
+| Scheduler context and execution ownership | Scheduler projection with caller execution context | Carry the actual host owner and ACK obligations; a common schema does not transfer scheduler authority |
+| Complete saved decision, action signature and journal binding | Source hash, projected action hash and captured-decision reference are distinct | Preserve the distinction between semantic integrity, exact transport bytes and receipt identity; no hash substitution |
+
+This is an owner-and-obligation map, **not an exhaustive field inventory or a
+parity result**. Current projections have bounded text, allowlists and relocated
+references. Matching their action signatures alone cannot prove preservation of
+all source clauses or unknown fields. C1 implementation must enumerate those
+fields and callers against its exact base/head; anything unclassified holds
+cutover, rather than disappearing into an assumed compatibility view.
+
 ## 5. Proposed architecture
 
 ### Ownership and one contract
@@ -140,6 +170,25 @@ pagination is a transport limit. Neither creates a quota schema and a Turn
 schema. Native tool wrappers may carry provider-required envelopes without
 renaming, omitting or independently deciding contract fields. Human UI read
 models remain presentation sinks, not alternate executable contracts.
+
+The composition boundary is **after current domain decisions and host-operation
+binding, before immutable capture and context encoding**. All live writers use
+that boundary. They must not first compact a quota packet into an envelope and
+then label the result the complete unified contract. Required source material
+may use authorized detail references, but those references, revisions and read
+obligations must be complete and recoverable from that same semantic capture.
+
+“One capture” means one immutable semantic observation for an invocation, not
+one file for every purpose. Keep the complete canonical instance, encoded
+full/delta/page artifacts and the Turn journal's binding distinguishable. Exact
+file-byte digests protect transport; canonical hashes protect semantic content;
+the existing effect identity protects once-only settlement. None substitutes
+for another or grants current authority. Reserve an identity/location before
+serialization when recovery references need it; do not require a document to
+contain the digest of its own final bytes. Encoding, pagination, native resume
+and recovery derive from the saved instance without another guard. A legitimate
+new selection or authority check may produce a new capture; it must not rewrite
+an earlier observation or silently rebind an outstanding result.
 
 ### Executor input and output
 
@@ -358,6 +407,21 @@ C7 can prepare measurements before C6 but cannot claim two-session outcomes.
 Implementation PRs must name the replaced caller, remaining gap, actual tests
 and rollback. No full language migration or unrelated manager rewrite is a
 prerequisite. No task is complete merely because a new abstraction compiles.
+
+For C1, the first implementation slice pairs the complete field/clause migration
+with a real single-session producer and consumer replacement. Start at the
+shared quota emission boundary and trace both attached heartbeat delivery and
+the Turn adapter; retain their actual host ownership. Do not build an unused
+third serializer while both active writers keep their own semantics. Existing
+`test_quota_decision_capture.py` and `test_turn_host_decision_capture.py` provide
+capture/recovery coverage to extend, not proof of the proposed schema. Qualify
+normal work, selection, replan, wait, unsettled-Turn recovery, unavailable detail
+and capability-off behavior through the real entries on isolated fixtures.
+Each case must check complete obligations and original settlement identity as
+well as reconstructed data. Native-resume/context work remains with its existing
+owner; adopt its qualified changes and add only the integration coverage missing
+at the new composition boundary. Keep C1 open until the replacement works and
+the remaining supported readers have explicit cutover/retirement conditions.
 
 ## 12. Open decisions
 
