@@ -370,7 +370,13 @@ Unix rendezvous 检查此前只比较内容，允许 full 回退掩盖同一错�
 历史文件替换和未合格 replay profile。未调用付费模型或启动 benchmark 实验。
 当前完整 quota-settlement CLI 模块 158 项通过，包含历史 cache parity 用例；
 此前间歇性错配的原因尚未证明，不能改写为历史通过。
-剩余 cache 一致性调查、旧 reader 断言、分阶段指令等价和实际 optional/external
+File/SQLite context→DSH 子进程检查现使用完整 capture 和生产 request builder，
+不再把当前 CLI 响应当作旧 action projection。普通 capability 开/关输入保留全部
+来源事实；已绑定 replan 使用生产 capture binder，并执行实际交付的原证据 reader。
+来源事实、schema 版本或 replan 义务被修改时，在 runner 接缝前拒绝；显式历史引用
+reader 覆盖仍保留。八项聚焦用例通过，使用注入的记录 runner，未调用真实 DSH 模型；
+本次测试迁移没有修改 runtime 代码。
+剩余 cache 一致性调查、其他旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
 Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effect 解码只是临时迁移，

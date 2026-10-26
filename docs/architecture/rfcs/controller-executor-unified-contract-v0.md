@@ -483,7 +483,15 @@ process resume, replaced history and an unqualified replay profile. No paid
 model or benchmark experiment ran. The current full quota-settlement CLI module
 passes 158 checks, including the historical cache-parity case; the earlier
 intermittent mismatch is not causally explained or relabeled as a pass.
-Remaining cache consistency investigation, old reader expectations, staged instruction parity and
+The File/SQLite context-to-DSH subprocess checks now use the complete capture and
+production request builder instead of treating a current CLI response as a legacy
+action projection. Normal capability-on/off inputs retain every source fact;
+bound replan uses the production capture binder and executes the delivered
+original-evidence readers. Altered source facts, schema versions and replan
+obligations reject before the runner seam. The explicit historical reference
+reader remains covered. Eight focused cases pass with an injected recorder,
+not a live DSH model; runtime code is unchanged by this test migration.
+Remaining cache consistency investigation, other old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native
 runtime are untested, not qualified. The default writer change remains
