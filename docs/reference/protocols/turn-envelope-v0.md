@@ -652,6 +652,21 @@ Host 在普通执行和分阶段重规划中都传递剩余的已签名 capsule�
 结算决定不变。增长的字节量仍通过既有预算诊断可见；这项修正不证明 token
 成本下降，也不表示 controller 契约已完全统一。
 
+Ordinary structured Host prompts also retain the signed `user`,
+`execution_policy`, `scheduler`, `response_plan`, and
+`task_orchestration_contract` sections, plus the existing captured-decision
+reference when present. These sections are no longer conditional on a staged
+replan reader. Notification policy does not grant or cancel execution authority;
+carrying surrounding Turn plans does not delegate their effects. The prompt
+keeps state writeback, quota and scheduler operations with the outer Turn
+executor and asks the work segment to return its semantic result.
+
+中文：普通结构化 Host 还保留已签名的用户通知、执行策略、调度、响应计划、
+任务编排五个区段，以及已有的捕获决定引用，不再以分阶段 replan reader
+是否存在为条件。通知策略不授予或取消执行权限；传递外围 Turn 计划不等于
+委派其副作用。提示明确由外围 Turn executor 负责状态写回、quota 和调度操作，
+工作段返回语义结果。
+
 Required reads use the authoritative `interaction_contract.agent_channel` list,
 including an explicit empty list. Historical interaction-root and payload lists
 remain fallbacks when that carrier is absent. Commands retain their exact bytes;
