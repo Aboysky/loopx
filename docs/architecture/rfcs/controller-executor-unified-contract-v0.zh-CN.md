@@ -1,0 +1,301 @@
+# RFC：Controller / Executor 会话与统一受治理工作契约（v0）
+
+- **RFC 状态：** Accepted（设计接受在合并后生效）
+- **替代 / 关闭：** 无
+- **交付成熟度：** Proposal；本文不交付新运行时、schema 或默认行为。
+- **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
+- **创建日期：** 2026-10-27
+- **最近规范性修订：** 2026-10-27
+- **实现基线：** `08e290fb5ee44506e12fc62651e088d71bb93a45`
+- **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
+- **语言镜像：** [English](controller-executor-unified-contract-v0.md)
+
+## 文档地图与维护契约
+
+英文与中文文档互为语义镜像；两者出现差异即为缺陷。
+
+第 4 节记录指定基线的源码事实；第 1–3、5–11 节定义提议的决策与验收；第 12 节记录
+待决事项。合并前本文是待评审提案。合并接受设计，不证明实现、安装、实验或默认提升。
+首次实现产出证据后，历史记录进入独立的日期 ledger。
+
+## 1. 决策摘要
+
+1. 将 quota 执行 packet 与 TurnEnvelope 融合成**一份版本化的受治理工作契约**：
+   同一 schema、语义生产入口、capture、交付/恢复机制和结算身份。不同宿主携带同一契约，
+   长期保留 quota/Turn 兼容视图不是目标。各 domain owner 仍决定自己拥有的事实。
+2. 在可选的双会话 profile 中，**controller 模型会话是唯一面向 Core 的模型客户端**。
+   它读契约、判断工作、与 executor 沟通并提交显式 typed Core 操作。Core 拥有合法迁移与
+   回执；controller 不是第二个权威。
+3. Executor 接收自然语言任务对话、原始材料和普通宿主工具，返回发现、产物、证据与问题。
+   它不消费第二份 Core packet 视图，不编写 quota、Vision、lease 或 settlement 字段。
+   任务正文之外的小型机器载体负责记录路由与因果关系。
+4. 完整首包、精确差分上下文与自动全量恢复属于统一契约的能力。Controller 与 executor
+   分别证明各自上下文连续性，不能借用对方的基线。
+5. 先在现有单会话路径验收契约统一；双会话保持 opt-in，直至可比成果与完整成本证据支持
+   采用。本文不启动 benchmark 或特权操作。
+
+## 2. 问题与动机
+
+同一任务可从 App heartbeat、external worker 或 `loopx turn` 进入，但上下文和结果
+义务的呈现不同。共享决策事实已经存在，调用方仍分别选择 packet 格式、组织提示，并适配
+模型编写的记账信息。再增加一份 controller 专用 packet 会继续增加分支。
+
+例如，修复导出失败的 executor 需要原始要求、失败事实、允许使用的工作区和独立验收，
+不需要学习如何编码 Vision delta 或扣除 LoopX Turn。分离这些工作可能减少干扰与重复
+协议输入，但额外 controller 也可能丢约束、增加延迟或过度指挥。这些是待验证假设，
+不能从会话拆分直接推出收益。
+
+### 不变量
+
+- 保留完整已接受要求、revision、权限、未完成必读和证据来源；短提示不能成为遗漏理由。
+- 选定工作只有一个当前控制 owner 和一个已准入 executor attempt。对话、路由 ACK 和
+  模型宣告完成都不是回执。
+- 通知不决定执行。安静通知不能取消已准入工作；消息不能覆盖真实停止或预算 gate。
+- 受治理 Turn 是有界工作/结算单位，不是 wake、模型回复或 controller/executor 往返。
+  不能按每条消息另扣 Turn。
+- 重试、来源修正与收尾保留原身份；不能把旧结果结算到新选中的 Todo。
+
+## 3. 范围与非目标
+
+范围包括：契约融合、上下文交付、按角色绑定会话、controller/executor 沟通、共享生命周期
+复用、宿主 adapter、benchmark 采用、旧路径退役与可观察的产品验收。
+
+非目标：新 Goal store、workflow DSL、通用 effect executor、权限引擎、scheduler、
+强制双 Agent 团队、自动切换宿主或修改 benchmark 评分。Peer 团队沿用现有委派/验收
+契约，不把业务判断移入确定性的 Core 规则。
+
+## 4. 当前系统契约
+
+| 现有概念 | 实际职责 / 源码 | 对目标设计的含义 |
+| --- | --- | --- |
+| Quota packet / TurnEnvelope | [`quota.py`](../../../loopx/cli_commands/quota.py) 对已决 payload 分普通/envelope 分支投影；[`turn_envelope.ts`](../../../loopx/control_plane/quota/turn_envelope.ts) 提供有界分节与动作绑定 | 将两者义务迁入同一 schema，再退役两条旧输出路径 |
+| Work context | [`interaction_contract.ts`](../../../loopx/control_plane/work_items/interaction_contract.ts) 承载 typed 执行/上下文要求 | 扩展现有 owner，不新建 controller 决策引擎 |
+| Thin heartbeat | [`task_body.py`](../../../loopx/control_plane/heartbeat/task_body.py) 按格式分支渲染产品入口指令 | 保留 bootstrap/宿主入口，统一其消费的契约 |
+| `loopx turn` | [`turn.py`](../../../loopx/cli_commands/turn.py)、[`executor.py`](../../../loopx/control_plane/turn_driver/executor.py)、[`settlement.py`](../../../loopx/control_plane/turn_driver/settlement.py) 实现受治理调用与回执绑定收尾 | 复用生命周期；CLI 入口不是另一套产品 runtime |
+| Managed Codex | [`codex_agent_session.py`](../../../loopx/control_plane/turn_driver/codex_agent_session.py) 与 [`codex_sessions.py`](../../../loopx/control_plane/turn_driver/codex_sessions.py) 实现原生会话执行/续接 | 属于 runtime adapter，不是竞争控制面；当前 Agent 级存储还没有提议中的角色区分 |
+| Executor result | [`codex_cli.py`](../../../loopx/control_plane/turn_driver/codex_cli.py) 要求 schema 约束结果，包括 delivery、Vision/progress 字段 | 双会话 profile 把 Core 编写责任交给 controller，保留验证 |
+| External worker | [`external_scheduler_worker.py`](../../../scripts/external_scheduler_worker.py) 拥有外层唤醒/命令传输 | 保留该归属；对已经证实重复的语义编排进行合并 |
+| Benchmark runner | [`worker.py`](../../../benchmark/runtime/worker.py) 的 heartbeat 使用产品 thin body，Turn mode 使用公开 Turn CLI；[`sessions.py`](../../../benchmark/runtime/sessions.py) 复用原生会话 adapter | 它是产品 profile 外的评估 harness，不是独立实现目标 |
+| Turn Loop Controller | [稳定协议](../../reference/protocols/turn-loop-controller-v0.md) 定义纯 disposition 函数 | 保持确定性；它不是本提案的 controller 模型会话 |
+
+执行模式（`managed_runtime` / `attached_host`）、runtime provider、唤醒来源、单/双会话
+组织与评估组是独立维度；并非所有组合都受支持。Native/plain benchmark 对照可以有意
+不包含 LoopX Core，必须保留其独立性。
+
+## 5. 提议架构
+
+### 归属与统一契约
+
+```text
+Core owners <-> unified governed work contract <-> controller session
+                                                       |
+                                      task / findings / artifacts
+                                                       |
+                                                 executor session
+                                                       |
+                                              scoped host tools
+
+Host adapter 执行 dispatch、session fence、中断与传输。
+Core owner 校验操作，提交既有 effect/settlement 回执。
+```
+
+复用 TypeScript interaction/work-context 与 effect owner。组合 owner 一次捕获它们的
+当前事实，不重写 quota、replan、Todo 或 lease 决策。Python 可以收集来源、适配原生
+传输。宿主特定执行归属在同一契约中显式表达，包括委托给宿主的 scheduler effect 和
+相应 ACK 义务。
+
+Schema 名称与逐字段迁移需完成下文 C1 盘点。以下是必须覆盖的语义组，**不是再加几层
+嵌套协议**：
+
+| 语义组 | 保留能力 |
+| --- | --- |
+| 身份与当前决策 | 契约版本、capture/revision、Goal/Agent/work/Turn 绑定、选定动作、准入、claim/lease、范围、批准、取消与停止条件 |
+| 完整工作上下文 | 原始意图与要求、未满足义务、已接受证据、当前来源/revision、必读完成状态与授权详情访问 |
+| 上下文交付 | Full/delta 编码、精确 base/target digest、消费 session/role/epoch 与不可变 capture 恢复 |
+| 操作与收尾 | 可用 typed 操作、动作绑定/完整性、条件顺序、验证及 writeback/debit 身份、scheduler 与通知归属 |
+
+CLI、heartbeat、managed Turn 与评估使用一个语义实例、一个 schema。Full/delta 是该
+实例的编码选择，分页是传输限制，都不形成 quota schema 和 Turn schema。原生工具
+可以带 provider 必需的外层包装，但不能改名、遗漏或另行决定契约字段。人类 UI read
+model 继续作为展示 sink，不成为另一份可执行契约。
+
+### Executor 输入与输出
+
+采用**自然语言工作交流，加运行时持有的元数据**，不提供 executor 专用 Core 视图，也
+不退化为无记录聊天。Controller 用适合任务的正文说明目标、相关事实、边界和验收，可
+steer、回答问题或修订请求。Host 通过既有 request/dispatch 记录携带 opaque request/
+revision、attempt、session/generation、因果序列与产物引用；模型不必在正文复述这些
+标识。不增加独立消息账本。
+
+原始要求和授权证据以附件或宿主材料 reader 提供。Core capture 与访问校验由 controller/
+runtime 完成，executor 不通过调用 Core 取材料。必读要求由实际材料交付/读取机制保留，
+controller 转述或路由 ACK 不能替代。必需材料不能交付时，阻止依赖它的工作；独立工作
+可以继续。不可信来源正文不能获得指令或工具权限。
+
+Executor 在委派范围内自主选择工具和步骤，不必每次调用工具都询问 controller。工具
+权限由宿主/provider 强制，包括文件与进程访问范围；仅从提示中移除 Core 工具名不构成
+隔离。能访问 Core 凭据的无限制 shell 会违反这个 profile。不支持所需隔离的宿主应明确
+显示不支持，不能静默声称双会话已经合格。
+
+输出保留用户要求的交付物、产物引用、实测验证、失败与不确定性。Controller 理解结果、
+执行或请求独立验证，再提交显式 typed Core 命令。Core 不从 executor 散文中的子串推断
+完成、权限或 replan。宿主进程退出不等于业务完成。验证失败可在同一已准入范围内反馈
+并继续工作；实质性的范围/revision 变化需要重新核验 dispatch。
+
+**长度要求与语言无关，并随任务变化。** 先保留可独立执行的完整含义，再优化大小。实验
+起点可采用：普通任务正文 200–800 model tokens，复杂交接 800–2000，结果摘要
+150–600。这些是未经验证的起点，不是 schema 上限、默认值、通过条件或截断规则。
+使用实际模型 tokenizer 计量，并记录语言/内容构成。代码、数学、表格、来源材料和完整
+交付物保留自然格式；摘要、附件、补读和所有往返合计成本，引用不会消除材料成本。
+同会话的小修正在连续性有据可查时只传变化，没有最低长度要求。
+
+例如，controller 可以说：“修复附件复现中的导出失败；保留原始排序要求，在分配的
+工作区操作。验证回归，说明剩余缺口。”结果可以解释修改并引用 patch 与独立测试。
+这两段自然语言均不替代原始要求、权限授予或 canonical 完成回执。
+
+### 会话、生命周期与恢复
+
+首版使用一个逻辑工作 Agent 和两个显式绑定的原生 session role。不能只为认知分工再建
+一个 Goal/Todo/quota 身份。扩展既有 session binding owner，加入 role/generation、
+独立有序队列及上下文基线；不能把两个 native ID 写进当前单一 Agent 级槽位。
+一个 controller 拥有控制对话，选定工作最多由一个 executor attempt 执行。Controller
+role 不是第二个并发业务 executor。Peer 或并行执行仍需既有独立 claim/lease/handoff
+契约。
+
+1. 既有入口取得新鲜准入或恢复应结回执，把捕获的统一契约交给 controller。
+2. Controller 围绕 Goal、未满足要求、已有结果和可行工作判断，Core 验证其选定操作。
+   Replan policy 继续决定何时必须 review；先看事实不意味着把 stride 独有触发条件变成
+   默认 policy，也不强迫无意义换路。
+3. Dispatch 前，host 绑定 work/request revision、attempt、session role、generation、
+   范围与预算；调用 executor 前记录 intent。
+4. Executor 工作并返回观察/产物。Readback 区分投递、执行、结果可用、独立验证与已接受
+   写回。多次交流不产生多次 quota 扣除。
+5. Controller 提议接受或修改；既有 effect owner 校验并对原 Turn 结算一次。后续新鲜
+   决策继续可执行工作、按记录的事件/时间等待或停止。
+
+| 故障 | 必需处理 |
+| --- | --- |
+| Controller 在 dispatch 后崩溃 | 先恢复已持久化 attempt 与 executor 状态/结果，再决定是否重发；不能启动重复 executor |
+| 结果/结算响应丢失 | 以原幂等身份读既有回执，仅重试未解决的 effect |
+| Executor 重启或上下文被压缩 | 围栏旧 generation，重新核验连续性；未知时完整交付当前材料 |
+| 取消、需求变化、lease 到期或结果迟到 | 每次拥有的 dispatch/write 前重验当前权限/revision；保留证据，拒绝过时接受并核对已准入 effect |
+| 工具执行中 Stop | Host 在受支持范围内中断；分别报告 ACK 与真实退出。保留未知/执行中 effect；停止回执不能证明物理回滚 |
+| Controller 不可用 | 既有 host/Core 停止与预算机制仍有效；暂停依赖工作并恢复，不能让 executor 临时成为 Core owner |
+
+### 差分上下文
+
+复用现有 context-delivery owner 与不可变 capture 机制。先完整交付，只有在精确消费
+session、role、epoch、schema、source capture 下证明已完整送达并保留上下文，才能
+发送注册子树的精确 delta。保留删除、数组顺序、null、空值和完整字符串。未知字段在
+注册复用语义前每次完整发送；delta 加元数据更大时发送 full。
+
+当前权限、准入、取消、未完成必读、结算与 scheduler 事实即使未变也新鲜内联交付，温态
+传输不能减弱正文义务。缺失/乱序 delta、截断、压缩、损坏或未知基线自动从同次 capture
+全量恢复，不重新准入/扣额。执行仍检查来源有效性与当前权限；恢复旧 capture 不能复活
+已取消工作。Executor 任务对话独立消费语义材料，不是 controller Core packet 换名后的
+delta。
+
+## 6. 备选方案与取舍
+
+| 备选方案 | 结论 |
+| --- | --- |
+| Quota 与 TurnEnvelope 长期保留兼容视图 | 拒绝作为终态：仍有重复选择/渲染与字段漂移；仅保留有界迁移 decoder |
+| 给 executor 一份紧凑 Core packet 视图 | 不作为双会话默认设计：仍有协议编写负担和两个面向 Core 的模型客户端 |
+| 没有运行时绑定的纯自然语言聊天 | 拒绝：无法可靠核对过时/重复结果、取消与重启 |
+| 始终使用双会话 | 拒绝：controller 成本、延迟和交接损失可能超过收益；保留合格单会话 profile |
+| 一个万能 runtime/effect executor | 拒绝：host、scheduler、事务与 provider 权限不同；共享语义与回执，不共享执行所有权 |
+
+## 7. 安全、隐私与兼容性
+
+Controller 判断不授予额外权限。运行时凭据与 Core 写能力对 executor 不可访问；按
+当前访问规则交付范围内工作材料。撤权和取消在模型记忆之外强制执行。敏感材料保留原有
+受众、保留期限及模型 provider 选择边界。
+
+现有单会话与可选能力关闭路径需要行为等价。不支持的 profile 显式失败。旧持久化
+capture/回执保留原版本/签名与 replay 身份，不能改写成新 schema。混合版本 live writer
+通过围栏处理，不靠尽力而为的散文转换合并。Schema 删除须满足 RFC 索引规定的逐字段
+盘点、无损映射和显式维护者批准。
+
+## 8. 迁移与回退
+
+1. 盘点实际 producer、reader、writer、已保存 prompt、capture 和外部集成。把每个旧
+   字段与正文义务映射到保留的 owner/字段、权威派生或明确批准的删除。“事实相同”的
+   总括声明不够；保留原失败 fixture。
+2. 通过真实 quota、thin-heartbeat、Turn 入口验收统一契约的单会话执行。每个 binding
+   只切一个 writer；旧 reader 是绑定版本的显式迁移 adapter，列出真实调用方与删除
+   条件，不能成为长期产品视图。
+3. 加入按角色区分的 session、共享生命周期复用及 opt-in 双会话 profile，复用既有
+   same-session/native-resume 和 effect recovery 代码。
+4. Benchmark worker 与打包 App heartbeat 采用同一产品 profile。各 host 分别证明
+   观察、停止和恢复；CLI 测试或模型模拟不能证明已安装 App 合格。
+5. 最后一个受支持活跃 reader 迁移后，删除旧 producer、格式选择开关、重复 renderer
+   与双格式测试。只为受支持历史回执 replay 保留版本 decoder。终态验收要求只发出一份
+   契约，不再选择 quota 或 Turn packet 格式。
+
+回退先关闭受影响 profile 的新准入，drain/中断 attempt，核对回执，再在下次准入工作
+恢复先前合格 profile。不能静默替换 native session 或重解释 pending 回执。删除字段/
+decoder 前证明 export、旧版本 readback 与降级行为；满足受支持保留/升级边界前保留旧
+reader。本文不单独授权破坏性迁移。
+
+## 9. 验证与验收
+
+| 主张 | 证据与必需结果 | 边界 |
+| --- | --- | --- |
+| 一份完整契约 | 字段/条款盘点；同次捕获的正常、replan、wait、recovery、能力关闭负载经过全部活跃入口；重建语义实例相同 | 单 serializer 单测不足；畸形/不支持版本显式失败 |
+| 无损上下文交付 | Full/delta/recovery 等价；缺页、迟到、截断、role/session 不符与真实原生压缩/续接 | 合计所有读取/恢复成本，不重新准入/扣额 |
+| 角色隔离与恢复 | 实际 host tools 下的 controller/executor 崩溃窗口、重复 dispatch、迟到结果、revision 变化、lease 到期、Stop | Executor 不能访问 Core，不能采用过时结果或隐藏第二个业务 executor |
+| 语义采用 | 原始要求 → controller 判断 → executor 实际工作 → 独立验证 → 接受结果并回原受众 | 读回执、合法 JSON 或 replan 成功不能单独通过 |
+| 共享生产路径 | 真实 CLI 与受支持 File/SQLite；涉及 authority 持久化变更时跑真实隔离 PostgreSQL；打包 App heartbeat 与 benchmark worker 复用 | 不破坏 live Goal；未支持/未运行 host 仍未合格 |
+| 成果与成本收益 | 当前单会话、统一契约单会话、统一契约双会话三组，固定 task/model/policy/budget/evaluator | 报告不确定性、失败与反例，不从 prompt bytes 单独宣称收益 |
+
+使用[既有测量模型](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model)。
+计入两个会话的输入/输出/cached tokens、工具及材料读取、planning/replan/recovery、
+墙钟时间、验证、人工注意力和 provider 成本；未知用量不是零。持久化因果归因，转发
+产物时不重复计算成本。比较可比预算下的已接受成果，不能只看 replan 次数或 executor
+速度。另行授权实验前冻结标准，本文不预设胜出方案。
+
+## 10. 运行契约
+
+既有 Goal Chat、settings 与工作 readback 应呈现选定 profile、controller/executor
+真实可用性、当前工作、有意义进展、不可用/错误、Stop 范围及返回产物。不要把内部 packet
+选择变成用户任务。复用共享 typed 投影与配置优先级，不建独立 controller console 或
+重复 provider/model 设置。
+
+既有诊断记录 capture、request/attempt/role/generation、当前 revision、effect 回执
+和成本覆盖；提供可操作恢复，不暴露私有原始对话。通知与工作延续分离；事件/时间等待及
+backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新的 recurring automation。
+
+## 11. 规范性交付计划与重构任务
+
+这些任务扩展整体路线图 S2/S4/S6/S7/S11 和 effect interpreter 既有融合工作，不另立
+路线图。认领前对齐相关活跃任务/PR，复用已合格修复，不重复实现。下列 task ID 是稳定
+设计引用，不代表 canonical Todo 已完成。
+
+| 任务 / 依赖 | Owner 与实际替换内容 | 决定性退出 / 回退 |
+| --- | --- | --- |
+| **C1 — 统一契约；首先** | Interaction/work-context + quota/Turn owner：盘点字段与指令条款，捕获同一 schema，迁移真实普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留完整要求、动作绑定和一次结算；cutover 合格前保留绑定版本的 reader |
+| **C2 — 一个上下文交付管线；C1** | Context owner + host observer：将 full/delta/detail/recovery 纳入 canonical 契约，删除 packet 格式分支和重复上下文副本 | 正常/replan/resume 中同 capture 恢复及精确 role/session 连续性；full 回退不重新准入；编码可回退 full |
+| **C3 — 会话绑定与原生生命周期；C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
+| **C4 — 共享受治理生命周期；C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
+| **C5 — Replan 与结果编写边界；C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |
+| **C6 — Controller/executor 交流；C2–C5** | Manager/request + host owner：复用版本化语义请求与结果返回，用自然语言工作/材料交流替换 executor 的 schema 约束任务 | 完整来源交付、executor 局部自主、强制 Core 隔离、纠偏往返与独立验收结果；回退后新工作使用合格单会话 profile |
+| **C7 — Benchmark 复用与完整成本归因；C4/C6** | Benchmark toolkit/execution owner：薄 adapter 选择相同产品 profile；合并重复 launch/session 配置，跟踪两个会话，不改冻结 trial | Native/plain 对照不变，可比组配置/replay 与完整成本覆盖；合并 helper 不启动 job |
+| **C8 — 产品配置与运行 readback；C3/C6** | 既有 App/settings/Chat 投影：同一 effective configuration owner，按角色展示 activity、失败/恢复、Stop 和产物返回 | 打包 managed 及受支持 attached heartbeat 流程，包括 host 不可用和结果迟到；安装资格另验；不新增 packet 格式开关 |
+| **C9 — 旧路径退役与采用资格；C1–C8** | Contract/runtime 维护者：删除被替代 producer、格式开关、重复提示/测试，更新 protocol、guide 和 RFC 交付事实 | 调用方/字段/decoder 退役清单、历史 replay 与回退证据；App + benchmark 验收及可比收益成立后再决定默认提升 |
+
+C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
+推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余
+缺口、实际测试与回退。完整语言迁移或无关 manager 重写不是前置条件；新抽象能编译
+不能算任务完成。
+
+## 12. 待决事项
+
+1. **精确 wire 名称与字段映射——contract owner，在 C1 cutover 前。** 优先演进一个
+   现有注册 vocabulary/version，不另起协议族。完成 producer/reader/字段盘点后决定；
+   字段删除需要维护者批准，保留原含义不因此新增批准要求。
+2. **首个合格双会话 host——runtime owner，在 C6 dispatch 前。** 根据实际会话控制与
+   隔离能力选择。Managed Codex 可以是实现载体，App heartbeat 是必要产品验收；两者
+   不能互相替代，也不能据此证明 benchmark 使用。
+3. **资源分配与默认——product/evaluation owner，在 C7–C8 后。** 先用相同模型的
+   controller/executor 隔离架构影响；更便宜的 controller 模型与不同预算另行实验。
+   完整成果/成本证据支持决定前，profile 保持 opt-in。
