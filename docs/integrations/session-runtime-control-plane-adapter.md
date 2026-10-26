@@ -83,6 +83,19 @@ does not overwrite it. A home-mismatch gate requires restoring the original
 native profile and thread, or resolving an explicit profile conflict; changing
 this variable is not a session-migration command.
 
+Chat workspaces are also preserved through `LOOPX_CHAT_SCAN_PATHS_JSON` (a JSON
+array of existing absolute directories). Reinstall recovers explicit
+`--scan-path` / `--scan-root` selections from older plists. An unconfigured
+managed installation now pins its bounded package workspace once instead of
+silently following each new release directory. Set this variable explicitly
+when selecting a durable project workspace; a missing original directory still
+requires recovery and does not authorize a replacement workspace.
+
+中文：`LOOPX_CHAT_SCAN_PATHS_JSON` 保存聊天工作区，值为现有绝对目录的 JSON 数组。
+重装会保留旧 plist 中的 `--scan-path` / `--scan-root`；未配置的托管安装现在会固定
+首次选定的包目录，不再随升级后的安装目录改变会话身份。选择长期项目时显式设置
+该变量。原目录缺失仍需恢复，不自动改绑另一个目录。
+
 The LaunchAgent keeps service execution `CODEX_HOME` separate from
 `LOOPX_CHAT_CODEX_HOME`. Set both when a coordinator's workers resume in a
 different existing home from its Chat app-server. Install/restart preserves the
