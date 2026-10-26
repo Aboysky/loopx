@@ -306,6 +306,15 @@ epoch 变化均要求 full。Retention 为合成声明；这衡量 codec 行为�
 session/epoch 变化和同 capture 恢复。这里消除了具体布局风险；下一步仍是共享 writer
 与最终消费者替换，不能再建设一个布局框架，也不能据此宣布 C1 交付。
 
+尚未完成的实现候选 [#7430](https://github.com/loopx-project/loopx/pull/7430) 已在既有
+TypeScript owner 中、quota 与原生 Turn 捕获之前组合完整来源，并传入实际 Codex
+stdin。隔离 File/SQLite 的真实 CLI 加合成可执行程序覆盖来源完整性、失败 attempt
+恢复与一次结算。这推进了两个 writer 和最终输入替换，尚未取得 C1 切换资格。
+候选仍需完成能力重入/cache 展示迁移、分阶段 replan 指令等价、structured/external
+消费者以及打包宿主连续性。其默认 writer 变更尚未交付；PR 因作者实现未完而保持
+Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effect 解码只是临时迁移，
+不得成为第二份永久可执行视图。
+
 ### C1 消费链替换与切换单元
 
 切换单元是一个受支持入口**及其下游消费者**，不是一个输出开关。对

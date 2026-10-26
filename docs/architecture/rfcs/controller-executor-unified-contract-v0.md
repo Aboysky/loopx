@@ -390,6 +390,19 @@ same-capture recovery. This resolves a concrete layout risk; shared writer and
 final-consumer replacement remain the next implementation, not another layout
 framework or a declaration that C1 is delivered.
 
+The unfinished implementation candidate [#7430](https://github.com/loopx-project/loopx/pull/7430)
+now composes a complete source in the existing TypeScript owner before both
+quota and native Turn capture, and passes it to actual Codex stdin. Isolated
+File/SQLite CLI tests with a synthetic executable cover source integrity,
+failed-attempt recovery and once-only settlement. This advances the two-writer
+and final-input replacement; it does not qualify C1 cutover. The candidate
+still has capability-reentry/cache presentation migrations, staged replan
+instruction parity, structured/external consumers and packaged host continuity
+to finish. Its default writer change remains unshipped; the PR is Draft for
+unfinished author work, not merely pending review. No model or cost benefit is
+established. Historical effect decoding is temporary; it must not become a
+second permanent executable view.
+
 ### C1 caller replacement and cutover unit
 
 The cutover unit is a supported entrypoint **and its downstream consumers**,
