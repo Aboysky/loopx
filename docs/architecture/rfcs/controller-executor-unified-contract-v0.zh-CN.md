@@ -362,7 +362,15 @@ codec，覆盖恶意 PATH、不可用 registry、身份/验收篡改及实际 wr
 合法、显式的 finding status，确保实际到达缺少 Todo 的身份门。23 项 staged
 检查与四项原生宿主用例通过；这些相互重叠的范围不能证明全部消费者退役或打包
 宿主资格。
-Cache 整套测试一致性、旧 reader 断言、分阶段指令等价和实际 optional/external
+原生 context fixture 现将两种 CLI 写法都绑定到 `complete_turn`，并将重建后的
+全部事实与原始 capture 比较。首次四项失败源于恢复 oracle 仍使用旧 surface；
+Unix rendezvous 检查此前只比较内容，允许 full 回退掩盖同一错配。修正后要求
+原 target 和实际 delta 模式。十项用例通过真实 Codex exec/app-server/code-mode
+及 worker resume，使用隔离 SQLite 与确定性本地回环响应，覆盖压缩、进程恢复、
+历史文件替换和未合格 replay profile。未调用付费模型或启动 benchmark 实验。
+当前完整 quota-settlement CLI 模块 158 项通过，包含历史 cache parity 用例；
+此前间歇性错配的原因尚未证明，不能改写为历史通过。
+剩余 cache 一致性调查、旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
 Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effect 解码只是临时迁移，

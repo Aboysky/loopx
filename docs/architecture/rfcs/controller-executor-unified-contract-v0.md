@@ -472,7 +472,18 @@ that the complete input now owns. The attachment refusal fixture supplies a
 valid explicit finding status so it reaches the real missing-Todo identity gate.
 All 23 staged checks and four native host cases passed; these overlapping scopes
 do not establish full consumer retirement or packaged-host qualification.
-Cache-suite consistency, old reader expectations, staged instruction parity and
+The native context fixture now binds both CLI spellings to `complete_turn` and
+compares reconstructed facts with the original captures. Its four initial
+failures came from constructing the restoration oracle with retired surfaces;
+a Unix rendezvous check had masked the same mismatch by accepting full fallback.
+The corrected checks require the original target and actual delta mode. Ten
+cases pass through real Codex exec/app-server/code-mode and worker resume with
+isolated SQLite and deterministic loopback inference, including compaction,
+process resume, replaced history and an unqualified replay profile. No paid
+model or benchmark experiment ran. The current full quota-settlement CLI module
+passes 158 checks, including the historical cache-parity case; the earlier
+intermittent mismatch is not causally explained or relabeled as a pass.
+Remaining cache consistency investigation, old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native
 runtime are untested, not qualified. The default writer change remains
