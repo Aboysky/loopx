@@ -351,9 +351,17 @@ checkpoint 的旧 reader 测试本身不能证明这条生命周期。剩余材�
 File/SQLite 检查保留完整任务正文、规范 note、作用域 gate、需求新鲜读取及来源丢失
 恢复，不把 App capture 换绑到原生宿主。此前六项旧根布局断言失败仍作为历史失败
 保留；它们后续的语义检查现在已实际执行。
-另有六项 staged-reader 检查在前一候选和本次修改中均失败：四项期待已移除的精简
-writeback 布局，两项要求隐藏 pure-replan 不可用的 Explore 写入指引。后续验收仍
-开放；仅保留完整来源不能结清该能力指引问题。
+此前六项 staged-reader 失败作为历史证据保留。完整 composer 现于 capture 前
+复用 Explore 既有可用性修正：已证明没有 Todo 的 pure replan 不再展示必须绑定
+Todo 的结果附件写法。证据、独立图命令与全部工作前义务保留；陌生/自定义指令及
+歧义绑定保持原文。有 Todo 的可用附件写法仍完整内联。这是可用性修正，不改变
+权限，也不新增精简事实视图。真实 File/SQLite 原生宿主输入覆盖两种绑定。
+Staged 测试现消费完整 CLI 输入，并对同一不可变 capture 运行历史材料 reader
+codec，覆盖恶意 PATH、不可用 registry、身份/验收篡改及实际 writer。测试比较
+全部 successor 绑定指令，不再排除完整输入已拥有的字段。附件拒绝 fixture 提供
+合法、显式的 finding status，确保实际到达缺少 Todo 的身份门。23 项 staged
+检查与四项原生宿主用例通过；这些相互重叠的范围不能证明全部消费者退役或打包
+宿主资格。
 Cache 整套测试一致性、旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持

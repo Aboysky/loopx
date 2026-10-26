@@ -456,11 +456,22 @@ checks retain full task text, canonical notes, scoped gates, fresh requirement
 reads and source-loss recovery without rebinding an App capture to a native
 host. The six earlier failures at obsolete root-layout assertions remain
 historical failures; their downstream semantic checks now execute.
-Six staged-reader checks still fail on both the preceding candidate and this
-change: four expect the removed compact writeback layout, and two require
-unavailable pure-replan Explore authoring to be suppressed. Their downstream
-acceptance remains open; complete source preservation alone does not settle
-that capability-guidance question.
+The six earlier staged-reader failures are retained as historical evidence.
+The complete composer now reuses Explore's existing applicability correction
+before capture: a proven pure replan without a Todo does not advertise the
+Todo-bound result attachment. Evidence, independent graph commands and all
+before-work obligations remain; unfamiliar/custom instructions and ambiguous
+bindings stay intact. Supported Todo-bound attachment authoring remains fully
+inline. This is an applicability correction, not an authority change or a new
+compact fact view. Real File/SQLite native host inputs qualify both bindings.
+The staged tests now consume the complete CLI input and exercise the historical
+material-reader codec against that same immutable capture, including a hostile
+PATH, unavailable registry, tampered identity/acceptance and the actual writer.
+They compare all successor-binding instructions rather than excluding fields
+that the complete input now owns. The attachment refusal fixture supplies a
+valid explicit finding status so it reaches the real missing-Todo identity gate.
+All 23 staged checks and four native host cases passed; these overlapping scopes
+do not establish full consumer retirement or packaged-host qualification.
 Cache-suite consistency, old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native
