@@ -17,7 +17,7 @@ from loopx.extensions.lark.conversation_identity import identity_ref
 from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
 
-def test_app_id_selector_discovers_private_route_on_shared_group_listener(ordinary):
+def test_app_id_selector_discovers_private_route_on_shared_group_listener(ordinary):  # noqa: F811
     from test_lark_private_conversations import connect
     from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
