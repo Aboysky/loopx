@@ -933,6 +933,11 @@ def test_ordinary_host_preserves_signed_surrounding_turn_policies() -> None:
     prompt = render_prompt(authority)
     delivered, _ = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\n', 1)[1])
     assert delivered['user']['notify'] == 'NOTIFY'
+    assert delivered['action']['must_attempt'] is False
+    assert delivered['action']['delivery_allowed'] is False
+    assert delivered['action']['quiet_noop_allowed'] is False
+    assert delivered['should_run'] is False
+    assert delivered['effective_action'] == 'quota_skip'
     assert delivered['execution_policy']['normal_delivery_allowed'] is False
     assert delivered['execution_policy']['safe_bypass_allowed'] is False
     assert delivered['task_orchestration_contract']['activation_allowed'] is False

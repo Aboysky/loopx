@@ -62,6 +62,11 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     # but ordinary execution must not lose notification, bypass or scheduler
     # restrictions just because no staged replan reader is present.
     assert 'replan_action_packet' not in authority
+    assert authority['agent_id'] == AGENT_ID
+    for field in ('must_attempt', 'delivery_allowed', 'quiet_noop_allowed'):
+        assert authority['action'][field] == full['interaction_contract']['agent_channel'][field]
+    assert authority['should_run'] == full['should_run']
+    assert authority['effective_action'] == full['effective_action']
     assert full['safe_bypass_allowed'] is False
     assert authority['execution_policy']['safe_bypass_allowed'] is False
     assert authority['user']['notify'] == full['interaction_contract']['user_channel']['notify']
@@ -99,6 +104,7 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert transported['required_reads'] == authority['required_reads']
     assert transported['work_context'] == context
     assert transported['contract_capsule'] == authority['contract_capsule']
+    assert transported['action'] == authority['action']
     for field in ('user', 'execution_policy', 'scheduler'):
         assert transported[field] == envelope[field]
     assert 'the outer Turn executor owns those effects' in prompt

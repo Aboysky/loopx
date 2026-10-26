@@ -667,6 +667,22 @@ executor and asks the work segment to return its semantic result.
 委派其副作用。提示明确由外围 Turn executor 负责状态写回、quota 和调度操作，
 工作段返回语义结果。
 
+The structured Host also receives signed `agent_id`, `decision`, `should_run`,
+`effective_action` and `state`. Its `action` object retains execution flags,
+action choices and capability intent while the existing task/planning carriers
+keep their established locations. `recommended_action` remains a display
+fallback, omitted from this Host projection because it can retain an older
+recommendation than the authoritative `primary_action`. Neither a suggested
+alternative nor a transported intent overrides admission, scope or effect
+ownership. This is input preservation, not a new admission decision or the
+unified-contract writer transition.
+
+中文：结构化 Host 同时收到已签名的 Agent 身份、决定、是否运行、有效行动和
+状态；`action` 保留执行标记、行动选项及能力意图，任务和规划字段沿用已有位置。
+`recommended_action` 是可能落后于权威 `primary_action` 的展示回退，仍不放入
+此 Host 投影。建议选项和传递的意图不覆盖准入、作用域或副作用归属。这是输入
+保真修复，不增加准入决策，也不表示统一契约 writer 已切换。
+
 Required reads use the authoritative `interaction_contract.agent_channel` list,
 including an explicit empty list. Historical interaction-root and payload lists
 remain fallbacks when that carrier is absent. Commands retain their exact bytes;

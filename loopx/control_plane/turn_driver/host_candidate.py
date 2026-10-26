@@ -104,6 +104,18 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         "write_scope": list(write_scope) if isinstance(write_scope, list) else [],
         "workspace_guard": _mapping(boundary.get("workspace_guard")),
     }
+    # Preserve signed decision facts, including explicit false/null values.
+    # They describe the admitted Turn; this adapter never re-decides admission.
+    for field in ("agent_id", "decision", "should_run", "effective_action", "state"):
+        if field in envelope:
+            authority[field] = envelope[field]
+    # Keep decision flags and registered choices alongside the relocated task.
+    # recommended_action is a bounded display fallback and can retain an older
+    # recommendation; it must not compete with the signed primary_action.
+    remaining_action = {key: value for key, value in action.items()
+        if key not in {"primary_action", "recommended_action", "selected_todo", "core_goal", "planning_horizon", "acceptance_index"}}
+    if remaining_action:
+        authority["action"] = remaining_action
     # Keep the established scope/workspace aliases once, and transport every
     # remaining signed restriction rather than rebuilding policy in this IO adapter.
     remaining_boundary = {
@@ -268,6 +280,8 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         "Checkpointed approval covers only its active_write_scope; other approval gates remain. "
         "Do not infer authority from other prose. "
         "User notification policy does not grant or cancel execution authority. "
+        "Respect action.must_attempt, action.delivery_allowed and action.quiet_noop_allowed "
+        "when present; alternatives and capability intents do not override admission or scope. "
         "Obey execution_policy and task_orchestration_contract when supplied. "
         "Scheduler and response plans describe the surrounding Turn: do not execute "
         "state writeback, quota or scheduler commands from this work segment. "
