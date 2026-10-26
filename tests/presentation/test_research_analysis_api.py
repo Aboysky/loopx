@@ -24,7 +24,7 @@ from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
 
 
 @pytest.fixture
-def workspace(tmp_path, monkeypatch):
+def workspace(tmp_path, monkeypatch, request):
     runtime, sources = tmp_path / "runtime", tmp_path / "sources"
     sources.mkdir()
     evidence = b"Prior question\nOnly the diagnostic was measured; native utility remains untested.\n"
@@ -75,7 +75,9 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_t
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{"id": goal, "repo": str(tmp_path), "state_file": "active.md"} for goal in ("research-owner", "other-owner")]}))
     before = {path: path.read_bytes() for path in (state, registry, input_path, sources / "facts.txt")}
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
-    server.registry_path, server.runtime_root_override, server.verbose = registry, None, False
+    server.registry_path, server.runtime_root_override, server.verbose = (
+        registry, str(tmp_path / "private-chat") if getattr(request, "param", False) else None, False
+    )
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     base = f"http://127.0.0.1:{server.server_port}/api/chat/research-analysis"
@@ -97,6 +99,7 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_t
         server.server_close()
 
 
+@pytest.mark.parametrize("workspace", [False, True], indirect=True)
 def test_shared_excerpts_reverify_through_http_without_dispatch(workspace, monkeypatch):
     w = workspace
     path = w["tmp_path"] / "input.json"
@@ -335,6 +338,7 @@ def test_registered_http_cancel_failure_retry_reuse_and_source_return(workspace)
     assert changed.value.code == 409
 
 
+@pytest.mark.parametrize("workspace", [False, True], indirect=True)
 def test_http_rejects_other_owner_paths_free_configuration_and_wrong_origin(workspace):
     w = workspace
     read, operation = w["request"], w["operation"]
@@ -354,6 +358,7 @@ def test_http_rejects_other_owner_paths_free_configuration_and_wrong_origin(work
     assert not w["count"].exists()
 
 
+@pytest.mark.parametrize("workspace", [False, True], indirect=True)
 def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(workspace):
     w = workspace
     data = json.loads((w["tmp_path"] / "input.json").read_text())
@@ -526,6 +531,79 @@ def test_source_goal_analysis_reads_cancel_retry_and_reuse_do_not_mutate_source(
         with pytest.raises(HTTPError) as changed:
             read(body=operation)
         assert changed.value.code == 409
+
+
+@pytest.mark.parametrize("registered,failed,code", [(True, True, 503), (False, False, 404)])
+def test_source_analysis_cancel_does_not_require_live_source(workspace, registered, failed, code):
+    w = workspace
+    with source_analysis_workspace(w, "offline-cancel") as s:
+        read, operation, source = s["request"], s["operation"], s["server"].source
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(read, body=operation)
+            until = time.monotonic() + 8
+            while not w["count"].exists() and time.monotonic() < until:
+                time.sleep(.05)
+            assert w["count"].exists(), "Local analysis process did not start"
+            reads = source.reads
+            source.registered, source.failed = registered, failed
+            try:
+                assert read(body=operation, suffix="/cancel")["job"]["cancel_requested"]
+                assert running.result(timeout=8)["job"]["status"] == "cancelled"
+                assert source.reads == reads, "Cancelling a local job must not read its original source"
+                for retry in (False, True):
+                    with pytest.raises(HTTPError) as denied:
+                        read(body={**operation, "retry": retry})
+                    assert denied.value.code == code
+                assert w["count"].read_text().splitlines() == ["started"]
+            finally:
+                # The same test must clean up its child when run against the
+                # defective baseline, where offline cancellation is rejected.
+                source.registered, source.failed = True, False
+                read(body=operation, suffix="/cancel")
+                running.result(timeout=8)
+        assert read()["pack"]["job"]["status"] == "cancelled"
+        for path, original in w["before"].items():
+            assert path.read_bytes() == original
+
+
+def test_source_analysis_offline_cancel_requires_pinned_job_identity(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "cancel-identity") as s:
+        read, operation, source = s["request"], s["operation"], s["server"].source
+        source.failed = True
+        with pytest.raises(HTTPError):
+            read(body=operation, suffix="/cancel")
+        assert not w["count"].exists(), "Cancellation cannot create a missing local job"
+        source.failed = False
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(read, body=operation)
+            until = time.monotonic() + 8
+            while not w["count"].exists() and time.monotonic() < until:
+                time.sleep(.05)
+            assert w["count"].exists(), "Local analysis process did not start"
+            source.failed = True
+            try:
+                for namespace in (None, "0" * 64):
+                    with pytest.raises(HTTPError) as denied:
+                        read(body=operation, suffix="/cancel", namespace=namespace)
+                    assert denied.value.code == 400
+                for field, value, code in (
+                    ("goal_id", "another-goal", 404),
+                    ("pack_id", "0" * 64, 409),
+                    ("analysis_key", "0" * 64, 409),
+                ):
+                    with pytest.raises(HTTPError) as denied:
+                        read(body={**operation, field: value}, suffix="/cancel")
+                    assert denied.value.code == code
+                assert not list(s["server"].analysis_runtime_root.rglob("cancel.request"))
+                assert not running.done(), "A mismatched selector must not cancel the running job"
+                assert read(body=operation, suffix="/cancel")["job"]["cancel_requested"]
+                assert running.result(timeout=8)["job"]["status"] == "cancelled"
+                assert w["count"].read_text().splitlines() == ["started"]
+            finally:
+                source.failed = False
+                read(body=operation, suffix="/cancel")
+                running.result(timeout=8)
 
 
 def test_source_analysis_requires_exact_namespace_goal_and_live_membership(workspace):

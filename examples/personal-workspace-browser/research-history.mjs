@@ -4,7 +4,7 @@ import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {createInterface} from "node:readline";
-import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {resolveTestPython, testPythonCommand} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 
@@ -96,7 +96,12 @@ function comparisonReadback() {
 
 export async function startHistoryOwner(fixture) {
   const fixtures = Array.isArray(fixture) ? fixture : fixture ? [fixture] : [];
-  const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path])],
+  const backendCommand = testPythonCommand(`
+import runpy
+sys.argv = ${JSON.stringify(["examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path])])}
+runpy.run_path(sys.argv[0], run_name="__main__")
+`);
+  const child = spawn(backendCommand.command, backendCommand.args,
     {cwd: repoRoot, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["ignore", "pipe", "pipe"]});
   let diagnostic = "";
   child.stderr.on("data", chunk => {diagnostic = (diagnostic + chunk).slice(-4000);});
@@ -131,11 +136,38 @@ export const researchHistoryScenario = {
     const nativeOwner = await startHistoryOwner(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/research-native-readback.json"));
     const nativePage = await browser.newPage({viewport: {width: 1280, height: 900}});
     try {
-      await nativePage.addInitScript(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
+      await nativePage.addInitScript(() => {
+        if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');
+      });
+      // A captured research reader has no execution services. Its home must
+      // identify the read-only source, rather than diagnose the owner's machine.
+      await nativePage.goto(`${nativeOwner.base}/chat/?view=overview&statusUrl=%2Fstatus.json`, {waitUntil: 'domcontentloaded'});
+      await nativePage.locator('.personal-home-goal-card').filter({hasText: 'Synthetic research'}).waitFor();
+      await nativePage.locator('.personal-status-source-meta .is-connected').waitFor();
+      assert.match(await nativePage.locator('.personal-status-source').innerText(), /Research preview/);
+      assert.equal(await nativePage.getByTestId('runtime-readiness').count(), 0, 'Reading captured research must not ask the owner to install an Agent runtime');
+      assert.equal(await nativePage.locator('.personal-channel-composer').count(), 0, 'The read-only source offers no execution composer');
+      await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-desktop.png'), animations: 'disabled'});
+      await nativePage.setViewportSize({width: 390, height: 844});
+      assert(await nativePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-mobile.png'), animations: 'disabled'});
+      await nativePage.setViewportSize({width: 1280, height: 900});
+      await nativePage.getByRole('button', {name: '对话', exact: true}).click();
+      const emptyConversation = nativePage.locator('.personal-timeline-empty');
+      await emptyConversation.waitFor();
+      assert.match(await emptyConversation.innerText(), /对话记录/);
+      assert.equal(await emptyConversation.locator('p, button, a').count(), 0, 'A read-only empty conversation must not invite an unavailable execution action');
+      assert.equal(await nativePage.locator('.personal-channel-composer').count(), 0);
+      await nativePage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'en'));
+      await nativePage.reload({waitUntil: 'domcontentloaded'});
+      await nativePage.getByText('No conversation records', {exact: true}).waitFor();
+      assert.equal(await emptyConversation.locator('p, button, a').count(), 0);
+      await nativePage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
       const query = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research', statusUrl: '/status.json?goal_id=synthetic-research-readback'});
       await nativePage.goto(`${nativeOwner.base}/chat/?${query}`, {waitUntil: 'domcontentloaded'});
       const native = nativePage.getByRole('region', {name: '原生测量', exact: true});
       await native.waitFor();
+      assert.match(await nativePage.locator('.personal-status-source').innerText(), /Research preview/, 'Goal-scoped reads preserve the read-only source');
       assert.match(await native.innerText(), /2 \/ 3.*项有效结果/s);
       assert.equal(await native.locator('[data-native-point="best_valid"] strong').textContent(), '3');
       assert.equal(await native.locator('[data-native-point="initial"] strong').textContent(), '7');
@@ -164,6 +196,13 @@ export const researchHistoryScenario = {
       const readback = await (await nativePage.request.get(`${nativeOwner.base}/fixture/readback`)).json();
       assert.equal(readback.source_unchanged, true);
       assert.equal(readback.mutation_attempts, 0);
+      for (const method of ['POST', 'PUT', 'DELETE']) {
+        const refused = await nativePage.request.fetch(`${nativeOwner.base}/api/chat/turns`, {method, data: {agent_id: 'codex', text: 'Synthetic request'}});
+        assert.equal(refused.status(), 405, 'Source presentation never grants execution writes');
+      }
+      const fenced = await (await nativePage.request.get(`${nativeOwner.base}/fixture/readback`)).json();
+      assert.equal(fenced.source_unchanged, true);
+      assert.equal(fenced.mutation_attempts, 3);
     } finally {
       await nativePage.close();
       await nativeOwner.close();
@@ -199,6 +238,20 @@ export const researchHistoryScenario = {
       await reading.getByRole('button', {name: '指标', exact: true}).click();
       assert(await synthesisPage.evaluate(() => document.activeElement?.contains(document.querySelector('.research-progress'))));
       await synthesis.locator('.research-synthesis-finding > summary').first().click();
+      // A reader must be able to separate the observed result from its
+      // interpretation in both reading modes, including stacked narrow views.
+      const assertFindingAccount = async reader => {
+        const account = reader.locator('.research-report-account').first();
+        const observed = account.locator(':scope > div').nth(0);
+        const interpreted = account.locator(':scope > div').nth(1);
+        assert(await observed.getByRole('heading', {name: '观察与依据', exact: true}).isVisible());
+        assert.match(await observed.innerText(), /第三次候选误差为 3.*第二次候选无效/s);
+        assert.equal(await observed.getByRole('button', {name: /^证据 1: facts/}).count(), 1);
+        assert(await interpreted.getByRole('heading', {name: '解释', exact: true}).isVisible());
+        assert.match(await interpreted.innerText(), /尚不能定位机制.*随机波动/s);
+        assert.equal(await interpreted.getByRole('button', {name: /^证据/}).count(), 0, 'An observation citation must not label the interpretation as proven');
+      };
+      await assertFindingAccount(synthesis);
       await synthesis.getByRole('button', {name: /^证据 1: facts/}).first().click();
       const source = synthesisPage.getByRole('region', {name: '引用原文', exact: true});
       await source.waitFor();
@@ -207,6 +260,7 @@ export const researchHistoryScenario = {
       await source.press('Escape');
       assert.equal(await synthesisPage.getByRole('region', {name: '轨迹深度分析', exact: true}).count(), 0);
       await synthesisPage.setViewportSize({width: 390, height: 844});
+      await assertFindingAccount(synthesis);
       await synthesis.locator('.research-synthesis-finding > summary').first().click();
       await synthesisPage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
       assert(await synthesisPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
@@ -218,7 +272,39 @@ export const researchHistoryScenario = {
       await analysis.waitFor();
       assert.equal(await synthesisPage.getByRole('region', {name: '研究汇报', exact: true}).count(), 1, 'One reading focus when expanded');
       assert.match(await analysis.innerText(), /竞争解释.*随机波动/s);
+      await assertFindingAccount(analysis);
+      const unretained = analysis.locator('.research-report-account').nth(1);
+      assert.match(await unretained.innerText(), /原始记录没有保留信息.*保留结果未知/s);
+      assert.equal(await unretained.getByRole('heading', {name: '竞争解释', exact: true}).count(), 0, 'Missing alternatives are not filled with an invented explanation');
       const savedOverview = await analysis.locator('.research-synthesis-summary').innerText();
+      // Saved links and the first return from another view preserve reading.
+      // Exercise a fresh panel mount at each width, then repeat the round trip.
+      for (const viewport of [{width: 390, height: 844}, {width: 1280, height: 900}]) {
+        await synthesisPage.setViewportSize(viewport);
+        await synthesisPage.reload({waitUntil: 'domcontentloaded'});
+        await analysis.locator('.research-synthesis-summary').waitFor();
+        await synthesisPage.screenshot({path: resolve(outputDir, `research-deep-link-${viewport.width}.png`), animations: 'disabled'});
+        assert(await analysis.locator('.research-synthesis-summary').evaluate(e => {
+          const box = e.getBoundingClientRect();
+          return box.top >= 0 && box.bottom <= innerHeight - 48;
+        }), 'A saved deep-report link reveals the actual account in the first viewport');
+        const laterFinding = analysis.locator('.research-report-finding').last();
+        for (let visit = 0; visit < 2; visit++) {
+          const readingTop = await laterFinding.evaluate(async e => {
+            e.scrollIntoView({block: 'center'});
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            return e.getBoundingClientRect().top;
+          });
+          await synthesisPage.getByRole('button', {name: '任务', exact: true}).click();
+          await synthesisPage.getByRole('button', {name: '研究', exact: true}).click();
+          // The existing panel entrance animation must settle before measuring.
+          await synthesisPage.waitForFunction(top => {
+            const finding = document.querySelector('.personal-goal-view-panel:not([hidden]) .research-report-finding:last-child');
+            return finding && Math.abs(finding.getBoundingClientRect().top - top) < 3;
+          }, readingTop);
+        }
+      }
+      await synthesisPage.setViewportSize({width: 390, height: 844});
       assert(await analysis.locator('.research-report-tabs').evaluate(tabs => {
         const overview = tabs.parentElement.querySelector('.research-synthesis-summary');
         return Boolean(overview && (tabs.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING));
@@ -235,6 +321,7 @@ export const researchHistoryScenario = {
       await synthesisPage.setViewportSize({width: 1280, height: 900});
       await analysis.getByRole('tab', {name: /结论与解释/}).click();
       assert.equal(await analysis.locator('.research-synthesis-summary').innerText(), savedOverview, 'Returning to findings restores the complete saved overview');
+      await assertFindingAccount(analysis);
       await analysis.evaluate(e => e.scrollIntoView({block: 'start'}));
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-deep-desktop.png'), animations: 'disabled'});
       // The report already declares its episode lineage. Follow those exact
@@ -305,6 +392,10 @@ export const researchHistoryScenario = {
       await synthesisPage.setViewportSize({width: 390, height: 844});
       await synthesisPage.getByRole('button', {name: 'Read deeper', exact: true}).click();
       const english = synthesisPage.locator('.research-analysis');
+      const englishAccount = english.locator('.research-report-account').first();
+      assert(await englishAccount.getByRole('heading', {name: 'Observation and evidence', exact: true}).isVisible());
+      assert(await englishAccount.getByRole('heading', {name: 'Interpretation', exact: true}).isVisible());
+      assert.match(await englishAccount.locator(':scope > div').nth(1).innerText(), /mechanism remains unresolved.*Random variation/s);
       const englishReview = english.locator('.analysis-method').first();
       const englishOrigin = english.locator('.research-report-finding .research-review-episodes').first();
       await englishOrigin.click();
@@ -317,6 +408,90 @@ export const researchHistoryScenario = {
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-related-episodes-mobile-en.png'), animations: 'disabled'});
       await englishReview.getByRole('button', {name: 'Back to report', exact: true}).click();
       assert(await englishOrigin.evaluate(e => e === document.activeElement));
+
+      // Reading a remote source and executing on it are separate facts. Keep
+      // the real saved HTTP/store result, changing only source identity and
+      // explicit transport observations for the negative/recovery cases.
+      const readonlyStatus = `${synthesisOwner.base}/status.json?goal_id=synthetic-research-readback`;
+      await synthesisPage.route(target => target.pathname === '/status.json', async route => {
+        if (new URL(route.request().url()).searchParams.get('view') === 'workspace-directory') {
+          return route.fulfill({status: 404, json: {error: 'Use the complete captured status source'}});
+        }
+        const response = await route.fetch(), value = await response.json();
+        value.local_dashboard_api = {...value.local_dashboard_api, read_only_sources: [
+          {id: 'research-readonly', label: 'Read-only research', status_url: readonlyStatus},
+        ]};
+        await route.fulfill({response, json: value});
+      });
+      let readonlyState = 'saved', readonlyWrites = 0;
+      await synthesisPage.route(target => target.pathname === '/api/chat/research-analysis', async route => {
+        if (route.request().method() !== 'GET') {
+          readonlyWrites++;
+          return route.fulfill({status: 405, json: {error: 'Read-only source'}});
+        }
+        if (readonlyState === 'read-error') return route.fulfill({status: 503, json: {error: 'Synthetic read failure'}});
+        const response = await route.fetch(), value = await response.json();
+        assert.notEqual(value.execution_enabled, true, 'The isolated owner does not enable model dispatch');
+        if (readonlyState === 'empty' || readonlyState === 'failed') value.pack.result = null;
+        if (readonlyState === 'empty') value.pack.job = null;
+        if (readonlyState === 'failed') value.pack.job = {status: 'failed', attempt: 2,
+          analysis_wall_seconds: 4, usage: {input_tokens: 10, output_tokens: 5}};
+        if (readonlyState === 'running') value.pack.job = {status: 'running', attempt: 2};
+        if (readonlyState === 'changed') Object.assign(value.pack, {availability: 'unavailable', reason_code: 'source_changed'});
+        await route.fulfill({response, json: value});
+      });
+      const readonlyQuery = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research',
+        research_analysis: 'synthetic-research-readback', statusUrl: readonlyStatus});
+      const readonlyPanel = synthesisPage.locator('.research-analysis');
+      for (const [locale, unavailableText, emptyText] of [
+        ['zh-CN', '分析暂不可用，请刷新重试。', '此来源尚无已保存的分析。'],
+        ['en', 'Analysis is unavailable; refresh to retry.', 'This source has no saved analysis yet.'],
+      ]) {
+        readonlyState = 'saved';
+        await synthesisPage.evaluate(locale => localStorage.setItem('loopx-pw-locale', locale), locale);
+        await synthesisPage.goto(`${synthesisOwner.base}/chat/?${readonlyQuery}`, {waitUntil: 'networkidle'});
+        await readonlyPanel.locator('.research-report-tabs').waitFor();
+        assert.equal(await readonlyPanel.getByText(unavailableText, {exact: true}).count(), 0,
+          'A readable saved report is not unavailable merely because this source cannot execute');
+        readonlyState = 'empty';
+        await synthesisPage.reload({waitUntil: 'networkidle'});
+        await readonlyPanel.getByText(emptyText, {exact: true}).waitFor();
+        assert.equal(await readonlyPanel.locator('.analysis-primary').count(), 0,
+          'A read-only empty source offers reading recovery instead of a generation action');
+        assert.equal(await readonlyPanel.getByText(unavailableText, {exact: true}).count(), 0);
+        if (locale === 'zh-CN') {
+          await readonlyPanel.evaluate(e => e.scrollIntoView({block: 'start', behavior: 'instant'}));
+          await synthesisPage.screenshot({path: resolve(outputDir, 'readonly-analysis-empty-phone.png'), animations: 'disabled'});
+        }
+      }
+      await synthesisPage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
+      readonlyState = 'running';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      assert(await readonlyPanel.getByRole('button', {name: '取消分析', exact: true}).isDisabled(),
+        'A stored running receipt cannot enable cancellation on a read-only source');
+      await readonlyPanel.evaluate(e => e.scrollIntoView({block: 'start', behavior: 'instant'}));
+      await synthesisPage.screenshot({path: resolve(outputDir, 'readonly-analysis-running-phone.png'), animations: 'disabled'});
+      readonlyState = 'failed';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      await readonlyPanel.getByText('上次分析未完成；失败记录已保留。', {exact: true}).waitFor();
+      assert.match(await readonlyPanel.getByLabel('本次分析用量').innerText(), /4\.0s.*10.*5/s);
+      assert.equal(await readonlyPanel.getByRole('button', {name: '重试分析', exact: true}).count(), 0);
+      await readonlyPanel.evaluate(e => e.scrollIntoView({block: 'start', behavior: 'instant'}));
+      await synthesisPage.screenshot({path: resolve(outputDir, 'readonly-analysis-failed-phone.png'), animations: 'disabled'});
+      readonlyState = 'changed';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      await readonlyPanel.getByText('原始来源已变化；保留历史分析，重新核对后才能再次分析。', {exact: true}).waitFor();
+      await readonlyPanel.locator('.research-report-tabs').waitFor();
+      readonlyState = 'saved';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      readonlyState = 'read-error';
+      await readonlyPanel.getByRole('button', {name: '刷新分析结果', exact: true}).click();
+      await readonlyPanel.getByRole('alert').filter({hasText: '刷新失败，保留上次结果。'}).waitFor();
+      await readonlyPanel.locator('.research-report-tabs').waitFor();
+      readonlyState = 'saved';
+      await readonlyPanel.getByRole('button', {name: '重试读取', exact: true}).click();
+      await readonlyPanel.getByRole('alert').waitFor({state: 'hidden'});
+      assert.equal(readonlyWrites, 0, 'Reading, failed reads and readonly job observations never request execution');
       const readback = await (await synthesisPage.request.get(`${synthesisOwner.base}/fixture/readback`)).json();
       assert.equal(readback.source_unchanged, true);
       assert.equal(readback.mutation_attempts, 0, 'Reading either layer and citations starts no model or state write');
@@ -409,6 +584,10 @@ export const researchHistoryScenario = {
         // the status endpoint; navigation must reach the frontend server.
         await page.route(url => url.pathname === "/status.json", async route => {
           const response = await fetchWorkspaceBackend(route, owner.base);
+          if (new URL(route.request().url()).searchParams.get('view') === 'workspace-directory') {
+            assert.equal(response.status(), 404, 'Captured readers use the full-status fallback with source identity');
+            return route.fulfill({response});
+          }
           assert.equal(response.status(), 200);
           await route.fulfill({response});
         });
@@ -1172,8 +1351,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
       assert.equal(await progress.locator('.research-progress-basis > summary').getByRole('button',{name:/完整成本未知/}).isVisible(),true,'The cost boundary remains discoverable with the details closed');
       await progress.locator('.research-progress-basis > summary').click();
-      assert.match(await progress.innerText(), /尚无用量捕获|No usage capture/);
-      await progress.getByRole('button', {name: '用量范围与成本', exact: true}).focus();
+      assert.match(await progress.locator('.research-usage-heading').first().innerText(), /未采集|Not captured/);
+      assert.doesNotMatch(await progress.innerText(), /未测，不记零|unmeasured, not zero/i, 'Missing counters remain a concise state, not a default explanation');
+      await progress.getByRole('button', {name: '求解用量未采集', exact: true}).focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /未测，不记零|unmeasured, not zero/i);
       assert.doesNotMatch(await progress.getByRole('tooltip').innerText(), /本次完整捕获|This complete capture/);
       await page.keyboard.press('Escape');
       await progress.locator('.research-progress-basis > summary').click();
@@ -1196,6 +1377,14 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /末轮未完成|final Turn incomplete/);
       assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
+      assert.match(await progress.locator('.research-analysis-cost').innerText(), /未采集|Not captured/);
+      assert.equal(await progress.locator('.research-analysis-values').count(), 0, 'An uncaptured analysis attempt does not add invented readings');
+      assert.doesNotMatch(await progress.innerText(), /仅含已持久化用量|Persisted usage only/, 'The same unfinished-state explanation does not compete with its counters');
+      const unfinishedHelp = progress.getByRole('button', {name: '末轮用量说明', exact: true});
+      await unfinishedHelp.focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /不能据此判定运行已结束/);
+      await page.keyboard.press('Escape');
+      assert(await unfinishedHelp.evaluate(element => element === document.activeElement));
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(),true);
       assert.equal(await nativeResults.isVisible(), true, 'An unanalysed pack still exposes its recorded outcomes with cost details closed');
