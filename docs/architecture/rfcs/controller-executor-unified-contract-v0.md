@@ -354,6 +354,42 @@ lossless mapping and explicit maintainer approval required by the RFC index.
 
 ## 8. Migration and rollback
 
+### C1 wire-layout recommendation
+
+The proposed starting layout evolves the existing Turn-envelope version into
+one complete contract, retaining complete decision fields at their current root
+paths. Add actual host-operation binding and integrity metadata through their
+existing owners; do not wrap a second complete `facts` document beside a compact
+`action` projection. This is a migration recommendation, not a registered wire
+version or a claim that today's quota payload is already the final protocol.
+
+| Source or concern | Candidate mapping and qualification |
+| --- | --- |
+| Complete current decision fields | Preserve path and value, including optional mode-specific fields; enumerate all modes before cutover. Do not copy only one observed packet's keys. |
+| Work context, required reads and settlement | Keep their existing `interaction_contract` paths and owners. Existing root-relative references retain their meaning; any intentional relocation requires explicit reference and reader migration. Never rewrite prose or command strings by pattern. |
+| Host-operation binding | Compose from the actual caller execution context. Validate consistency with source authority; reject conflicting bindings rather than choosing whichever representation is convenient. |
+| Content and transport integrity | Commit the entire semantic instance independently of the former compact action digest. Preserve exact capture-byte verification and original settlement identity as separate checks; changing a transport encoding does not create a new effect. |
+| Historical receipts and readers | Decode the recorded version for outstanding work. A temporary internal adapter may serve an existing effect interpreter, but must not become a second emitted contract or a compact replacement for the model's required input. |
+
+A synthetic layout probe used real isolated File/SQLite quota captures and the
+existing TypeScript context codec. Preserving source paths permitted warm delta
+encoding; moving all facts under a new `facts` key while retaining the old
+`quota_packet` surface fell back to full with `delta_not_smaller`. Both layouts
+reconstructed exactly, and an epoch change required full delivery. Retention was
+synthetically asserted; this measures codec behavior, not host observation,
+model comprehension or outcome/cost benefit. It rejects **unmapped root relocation
+under the existing surface**, not nesting in general. A redesigned nested layout
+remains possible if its mapping and consumers justify the migration cost.
+
+Therefore C1/C2 must explicitly version the context surface and its fresh/reuse
+paths with the wire transition. Do not relabel an old surface or inherit its
+baseline by Turn identity. The first delivery after transition is full; reuse
+requires a verified compatible retained baseline. Qualification includes fields
+outside the old action projection, missing baselines, session/epoch changes and
+same-capture recovery. This resolves a concrete layout risk; shared writer and
+final-consumer replacement remain the next implementation, not another layout
+framework or a declaration that C1 is delivered.
+
 ### C1 caller replacement and cutover unit
 
 The cutover unit is a supported entrypoint **and its downstream consumers**,
@@ -512,7 +548,8 @@ the remaining supported readers have explicit cutover/retirement conditions.
 
 1. **Exact wire name and field mapping — contract owner, before C1 cutover.**
    Prefer evolving one existing registered vocabulary/version over a parallel
-   protocol family. Decide after the complete producer/reader/field inventory;
+   protocol family. Section 8 recommends preserving source-root paths; finalize
+   the version and host-binding mapping after the complete producer/reader/field inventory;
    maintainer approval is required for removal, not for preserving old meaning.
 2. **First qualified two-session host — runtime owner, before C6 dispatch.**
    Choose from actual session control and isolation capabilities. Managed Codex

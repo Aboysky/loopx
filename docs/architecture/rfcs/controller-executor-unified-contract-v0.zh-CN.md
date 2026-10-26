@@ -278,6 +278,34 @@ capture/回执保留原版本/签名与 replay 身份，不能改写成新 schem
 
 ## 8. 迁移与回退
 
+### C1 wire 布局建议
+
+建议的起点是演进既有 Turn-envelope 版本为一份完整契约，完整 decision 字段保留在
+当前根路径。通过既有 owner 补充实际 host-operation binding 与完整性元数据；不要在
+紧凑 `action` 投影旁再包装一份完整 `facts` 文档。这是迁移建议，不是已注册 wire
+版本，也不表示当前 quota payload 已经是最终协议。
+
+| 来源或关注点 | 候选映射与资格要求 |
+| --- | --- |
+| 当前完整 decision 字段 | 保留路径和值，包括各模式的可选字段；切换前枚举全部模式，不能只复制某次观察到的 packet keys。 |
+| Work context、必读与结算 | 保留既有 `interaction_contract` 路径与 owner。现有根相对引用保持含义；有意搬迁须显式迁移引用与 reader，不能按模式改写正文或命令字符串。 |
+| Host-operation binding | 从真实调用方 execution context 组合，验证与源权限一致；binding 冲突时拒绝，不能选择方便的表示。 |
+| 内容与传输完整性 | 对整个语义实例作完整性承诺，独立于原紧凑 action digest。精确 capture 字节校验和原结算身份仍分别检查；更换传输编码不创建新 effect。 |
+| 历史回执与 reader | 未结工作按记录版本解码。临时内部 adapter 可以服务既有效果解释器，但不能成为第二份输出契约，也不能用紧凑副本替代模型必需输入。 |
+
+一个合成布局探针使用真实隔离 File/SQLite quota capture 和既有 TypeScript context
+codec。保留源路径时可使用 warm delta；将全部事实搬至新 `facts` key、同时沿用旧
+`quota_packet` surface 时，以 `delta_not_smaller` 回退 full。两种布局均精确重建，
+epoch 变化均要求 full。Retention 为合成声明；这衡量 codec 行为，不证明宿主观察、
+模型理解或成果/成本收益。它排除的是**沿用旧 surface 却未映射的根路径搬迁**，不是
+一般性的嵌套布局。若映射与消费者收益足以抵偿迁移成本，仍可设计嵌套布局。
+
+因此 C1/C2 须随 wire 迁移显式版本化 context surface 及其 fresh/reuse 路径，不能
+改名冒用旧 surface 或凭 Turn 身份继承基线。迁移后的首次交付使用 full；只有验证了
+兼容的 retained baseline 才可复用。资格覆盖旧 action 投影之外的字段、基线缺失、
+session/epoch 变化和同 capture 恢复。这里消除了具体布局风险；下一步仍是共享 writer
+与最终消费者替换，不能再建设一个布局框架，也不能据此宣布 C1 交付。
+
 ### C1 消费链替换与切换单元
 
 切换单元是一个受支持入口**及其下游消费者**，不是一个输出开关。对
@@ -399,7 +427,8 @@ Native-resume/context 工作保留原 owner；采用其已验收改动，只补�
 ## 12. 待决事项
 
 1. **精确 wire 名称与字段映射——contract owner，在 C1 cutover 前。** 优先演进一个
-   现有注册 vocabulary/version，不另起协议族。完成 producer/reader/字段盘点后决定；
+   现有注册 vocabulary/version，不另起协议族。第 8 节建议保留源根路径；完成
+   producer/reader/字段盘点后确定版本与 host-binding 映射；
    字段删除需要维护者批准，保留原含义不因此新增批准要求。
 2. **首个合格双会话 host——runtime owner，在 C6 dispatch 前。** 根据实际会话控制与
    隔离能力选择。Managed Codex 可以是实现载体，App heartbeat 是必要产品验收；两者
