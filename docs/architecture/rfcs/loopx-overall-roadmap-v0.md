@@ -190,6 +190,12 @@ recovery and settlement. Session roles, execution modes, wake sources and
 benchmark arms remain separate axes. This is design direction, not shipped
 behavior or evidence of lower cost.
 
+C1's [caller cutover map](controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
+includes quota emission, the direct Turn producer and the final native/structured
+host prompts. A common capture does not unify those consumers. Qualification
+checks source obligations through composition, reconstruction and actual final
+input; new-admission cutover stays separate from historical receipt replay.
+
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,
 replan/result authoring, executor exchange, benchmark reuse, packaged App

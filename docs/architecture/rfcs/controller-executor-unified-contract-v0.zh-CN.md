@@ -265,6 +265,43 @@ capture/回执保留原版本/签名与 replay 身份，不能改写成新 schem
 
 ## 8. 迁移与回退
 
+### C1 消费链替换与切换单元
+
+切换单元是一个受支持入口**及其下游消费者**，不是一个输出开关。对
+`99921829f2c5` 的源码核对确认以下活跃接缝。这补充前述基线审计；它是迁移设计，
+不表示这些路径已经改变。
+
+| 活跃接缝 | 具体替换与保留的 owner |
+| --- | --- |
+| `quota.py::_emit_quota_result` / `_project_quota_cli_payload` | 在 capture 前组合完整契约，替换 ordinary/envelope 执行格式分支。准入、capability hook、capture IO 与 host poll 回执保留原 owner。诊断 status 视图不是可执行契约。 |
+| `turn.py` 的 `build_fresh_turn_decision_owner().resolve()` 之后 | 携带实际 scheduler execution context 调用同一组合 owner。此入口直接调用 `build_turn_envelope`；仅修改 quota CLI emission 不会迁移 Turn。保留 Turn plan、journal 和回执执行器。 |
+| `heartbeat/task_body.py::render_thin_heartbeat_task_body` | 用统一契约读取指令替换 `captured_envelope` 指令分支，保留精确 selection/reentry transport、通知独立性、必读与原结算身份。保存的 bootstrap 仍在唤醒时解析当前指令。 |
+| `turn_driver/codex_cli.py::_prompt` 与 `host_candidate.py::extract_turn_authority` / `render_prompt` | 在实际 prompt 边界替换格式特定输入。当前普通 Codex 接收 envelope，分阶段 replan 使用提取的 authority，结构化 host 也使用提取的 authority。共享源字节或签名不能证明这些最终输入保留相同义务。保留 provider 结果编码与外层 effect 归属。 |
+| `turn_driver/decision_capture.py` 与 `cli_commands/quota_capture.py` | 复用不可变 capture、校验读取器和 full/delta 交付。首次交付和保存后恢复必须重建同一契约；不能仅因 Turn 身份相同，就把某投影的 continuity baseline 用于另一投影。 |
+| `benchmark/runtime/worker.py`、`benchmark/runtime/sessions.py` 与 `scripts/external_scheduler_worker.py` | 迁移它们实际调用的产品入口。保留评估配置与外层唤醒归属，不新增 benchmark 专用转换，也不把 managed-host 测试算作 attached-host 验收。 |
+
+替换任一接缝前，实现 PR 记录源路径、字段或指令条款、当前 reader、目标 owner、表示、
+恢复与退役条件。字段搬迁须包含引用解析；删除诊断须证明其中不含动作、权限、必读或
+验收义务。未知数据不得静默消失；未知的必需执行语义也不能靠转发 JSON 就变安全，
+相关操作须保持不可用，直到兼容消费者能够理解。不能用子串匹配分类义务。
+
+使用**一次明确的版本迁移**，不在每次唤醒自动协商格式。已迁移 binding 的新准入要求
+组合、交付和消费 reader 兼容。不支持的消费者在 dispatch 前收到可操作的不可用结果，
+不能因此创建第二个活跃 writer。已准入工作继续使用记录的版本和原回执；在这些工作及
+受支持恢复窗口核清前保留历史 decoder。回退同样区分未结工作与新准入。版本迁移不能
+把保存的 prompt、journal 或源 hash 改写成仿佛一直使用新契约。
+
+C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
+完整旅程，同时明确剩余 reader。这个有界切片通过资格，不代表可向未验收 host 开启
+新 writer，也不关闭 C1。最终切换须在全部受支持 reader 验收后删除活跃格式选择。
+临时 decoder 有具名 caller 与退出条件，不是面向用户的兼容视图。
+
+对 normal、selection、replan、wait、recovery 和 capability-off 的每个 fixture，
+在**三个边界**核对独立编写的义务：组合契约、重建交付、最终模型输入及必需材料读取。
+包含旧 action signature 未覆盖的源变化、必需来源缺失、不兼容消费者和结算响应丢失。
+仅重建相等会漏掉 prompt 层丢义务；仅 prompt 完整会漏掉过期权限或重复扣额。
+这些是集成要求，不授权运行模型或启动实验。
+
 1. 盘点实际 producer、reader、writer、已保存 prompt、capture 和外部集成。把每个旧
    字段与正文义务映射到保留的 owner/字段、权威派生或明确批准的删除。“事实相同”的
    总括声明不够；保留原失败 fixture。

@@ -145,6 +145,11 @@ S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格�
 和材料；身份、权限、恢复、结算仍归既有 host/Core owner。Session role、执行模式、
 唤醒来源和 benchmark 评估组保持正交。这是设计方向，不是已交付行为或成本收益证据。
 
+C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
+覆盖 quota emission、直接生产契约的 Turn 入口和最终 native/structured host prompt。
+共享 capture 不表示这些消费者已统一。资格检查须追踪来源义务经过组合、重建到实际
+最终输入；新准入切换与历史回执重放分别处理。
+
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
 与共享生命周期、replan/结果编写、executor 交流、benchmark 复用、打包 App readback
 及退役。App heartbeat 流程和实际 benchmark 消费者分别验收；managed Codex 可以作为

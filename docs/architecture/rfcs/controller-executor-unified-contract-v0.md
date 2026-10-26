@@ -333,6 +333,57 @@ lossless mapping and explicit maintainer approval required by the RFC index.
 
 ## 8. Migration and rollback
 
+### C1 caller replacement and cutover unit
+
+The cutover unit is a supported entrypoint **and its downstream consumers**,
+not an output flag. Source inspection at `99921829f2c5` identifies the following
+live seams. This supplements the earlier baseline audit; it is a migration
+design, not a claim that these paths have changed.
+
+| Live seam | Concrete replacement and retained owner |
+| --- | --- |
+| `quota.py::_emit_quota_result` / `_project_quota_cli_payload` | Compose the complete contract before capture; replace the ordinary/envelope execution-format branch. Retain admission, capability hooks, capture IO and host poll receipts with their current owners. A diagnostic status view is not an executable contract. |
+| `turn.py` after `build_fresh_turn_decision_owner().resolve()` | Call the same composition owner with the actual scheduler execution context. This entry calls `build_turn_envelope` directly; changing quota CLI emission alone does not migrate Turn. Retain the Turn plan, journal and receipt executor. |
+| `heartbeat/task_body.py::render_thin_heartbeat_task_body` | Replace the `captured_envelope` instruction split with one contract-reading instruction. Preserve exact selection/reentry transport, notification independence, required reads and original settlement. The saved bootstrap still resolves current instructions on wake. |
+| `turn_driver/codex_cli.py::_prompt` and `host_candidate.py::extract_turn_authority` / `render_prompt` | Replace format-specific model inputs at the actual prompt boundary. Today ordinary Codex receives the envelope, staged replan uses extracted authority, and structured hosts use extracted authority. Shared source bytes or signatures do not prove these final inputs preserve the same obligations. Keep provider result encoding and outer effect ownership. |
+| `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
+| `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
+
+Before replacing any seam, its implementation PR records source path, field or
+instruction clause, current readers, target owner, representation, recovery and
+retirement condition. Relocation must include reference resolution; an omitted
+diagnostic needs evidence that it carries no action, authority, required read or
+acceptance obligation. Unknown data cannot silently disappear. Unknown required
+execution semantics cannot be made safe merely by forwarding their JSON: the
+dependent operation stays unavailable until a compatible consumer understands
+them. Do not classify obligations by substring matching.
+
+Use **one explicit version transition**, not automatic format negotiation per
+wake. New admission for a migrated binding requires compatible composition,
+delivery and consuming readers. An unsupported consumer receives an actionable
+unavailable result before dispatch, without creating a second live writer.
+Already admitted work continues its recorded version and original receipts;
+retain its historical decoder until that work and the supported recovery window
+are reconciled. Rollback likewise separates outstanding work from new admission.
+A version transition does not rewrite saved prompts, journals or source hashes
+as if they had always used the new contract.
+
+The first C1 PR must include the two production composition callsites above and
+at least one complete producer-to-final-input journey, with an explicit list of
+remaining readers. Qualifying that bounded slice does not enable the new writer
+for an unqualified host or close C1. The final cutover removes active format
+choice only after all supported readers qualify. Temporary decoders have named
+callers and removal conditions; they are not user-facing compatibility views.
+
+For each normal, selection, replan, wait, recovery and capability-off fixture,
+check independently authored obligations at **three boundaries**: composed
+contract, reconstructed delivery, and final model input plus required material
+reads. Include a source change outside the old action signature, a missing
+required source, an incompatible consumer and a lost settlement response.
+Reconstruction equality alone misses prompt-layer omission; a complete prompt
+alone misses stale authority or a duplicate debit. These are integration
+requirements, not authorization to run a model or launch an experiment.
+
 1. Inventory actual producers, readers, writers, saved prompts, captures and
    external integrations. Map each old field and prose obligation to its retained
    owner/field, authoritative derivation or explicitly approved removal. No
