@@ -131,6 +131,17 @@ all source clauses or unknown fields. C1 implementation must enumerate those
 fields and callers against its exact base/head; anything unclassified holds
 cutover, rather than disappearing into an assumed compatibility view.
 
+A synthetic probe of the named baseline demonstrates the limit: two long
+`recommended_action` strings with identical prefixes but different tails produce
+the same action-signature document and both report `matches=true`, while their
+`source_decision_hash` values differ. An unregistered top-level source field has
+the same distinction. Conversely, a complete registered settlement plan survives
+projection, and changing its Turn identity changes the action signature. These
+observations reject promoting the existing bounded envelope unchanged into the
+complete contract. They do **not** establish a current authority-loss bug: the
+recommendation is diagnostic, the unknown field is synthetic, and the complete
+source commitment still distinguishes both inputs. No model benefit is measured.
+
 ## 5. Proposed architecture
 
 ### Ownership and one contract
@@ -418,7 +429,9 @@ capture/recovery coverage to extend, not proof of the proposed schema. Qualify
 normal work, selection, replan, wait, unsettled-Turn recovery, unavailable detail
 and capability-off behavior through the real entries on isolated fixtures.
 Each case must check complete obligations and original settlement identity as
-well as reconstructed data. Native-resume/context work remains with its existing
+well as reconstructed data. The oracle must include source-different but
+projection-equal cases; comparing two outputs of the same projection is circular
+evidence for completeness. Native-resume/context work remains with its existing
 owner; adopt its qualified changes and add only the integration coverage missing
 at the new composition boundary. Keep C1 open until the replacement works and
 the remaining supported readers have explicit cutover/retirement conditions.

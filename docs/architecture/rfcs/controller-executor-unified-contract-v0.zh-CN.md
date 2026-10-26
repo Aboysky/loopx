@@ -108,6 +108,14 @@ context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，�
 都被保留。C1 实现必须按确切 base/head 枚举字段和调用方；未分类项阻止切换，不能以
 假定的兼容视图为由悄悄丢弃。
 
+对上述基线的合成探针展示了这一限制：两段前缀相同、尾部不同的长 `recommended_action`
+产生相同的 action-signature document，且均返回 `matches=true`，但各自的
+`source_decision_hash` 不同。未注册的顶层来源字段也有相同区别。反之，完整的已注册
+settlement plan 在投影中保留，改变其 Turn 身份会改变 action signature。这些观察
+排除了直接把现有有界 envelope 原样提升成完整契约的路线，**不证明当前发生权限丢失**：
+recommendation 属于诊断，未知字段是合成输入，完整来源承诺仍能区分两份输入。
+没有测量模型收益。
+
 ## 5. 提议架构
 
 ### 归属与统一契约
@@ -334,6 +342,7 @@ C1 首个实现片必须把完整字段/条款迁移与真实单会话 producer�
 `test_turn_host_decision_capture.py` 提供可扩展的 capture/恢复覆盖，不证明新 schema。
 通过隔离 fixture 上的真实入口验收普通工作、选择、replan、等待、未结算 Turn 恢复、
 详情不可用与 capability-off 行为。每例除重建数据外，还须验证完整义务和原结算身份。
+独立 oracle 必须包含来源不同而投影相同的情况；比较同一投影的两份输出不能证明完整性。
 Native-resume/context 工作保留原 owner；采用其已验收改动，只补新组合边界缺少的集成
 覆盖。替换真正可用且其余受支持 reader 有明确切换/退役条件之前，C1 保持未完成。
 
