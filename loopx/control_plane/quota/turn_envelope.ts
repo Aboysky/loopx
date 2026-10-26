@@ -1042,6 +1042,28 @@ function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): st
   return ACTION_SIGNATURE_COVERAGE_V0;
 }
 
+/** Live consumers must understand the declared wire versions before dispatch.
+ * Historical v0 callers may omit signature metadata; digest verification stays
+ * with its existing owner. Explicit unknown/null declarations are never v0.
+ * This does not make the bounded envelope a complete future work contract.
+ */
+export function assertTurnEnvelopeConsumerVersion(envelope: JsonObject): void {
+  assertSupportedQuotaPacket(envelope);
+  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION) {
+    throw new EffectRuntimeRequestError("unsupported TurnEnvelope schema_version; use a compatible consumer");
+  }
+  const signature = object(envelope.action_signature);
+  if (Object.hasOwn(signature, "schema_version") && signature.schema_version !== ACTION_SIGNATURE_SCHEMA_VERSION) {
+    throw new EffectRuntimeRequestError("unsupported TurnEnvelope action signature schema_version; use a compatible consumer");
+  }
+  if (Object.hasOwn(signature, "coverage") && (typeof signature.coverage !== "string" || ![
+    ACTION_SIGNATURE_COVERAGE_V0, ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V2,
+    ACTION_SIGNATURE_COVERAGE_V3, ACTION_SIGNATURE_COVERAGE_V4, ACTION_SIGNATURE_COVERAGE_V5,
+  ].includes(signature.coverage))) {
+    throw new EffectRuntimeRequestError("unsupported TurnEnvelope action signature coverage; use a compatible consumer");
+  }
+}
+
 export function turnEnvelopeActionSignatureDocument(value: unknown): JsonObject {
   const envelope = requireJsonObject(value, "turn_envelope");
   assertSupportedQuotaPacket(envelope);
@@ -1245,6 +1267,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
         work_context: replanWorkContext(payload, object(agent.work_context))}},
       autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};
+  }
+  if (operation === "consumer_version") {
+    assertTurnEnvelopeConsumerVersion(requireJsonObject(request.envelope, "turn_envelope"));
+    return {ok: true};
   }
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

@@ -5,6 +5,7 @@ import {
   ACTION_SIGNATURE_COVERAGE_V0,
   ACTION_SIGNATURE_COVERAGE_V3,
   buildTurnEnvelope,
+  assertTurnEnvelopeConsumerVersion,
   evaluateTurnEnvelope,
   quotaActionSignatureDocument,
   turnEnvelopeActionSignatureDocument,
@@ -1201,4 +1202,26 @@ test("native Turn capture binds the original observation without inventing admis
     assert.throws(() => evaluateTurnEnvelope({...request, envelope: bound, ...change}),
       EffectRuntimeRequestError);
   }
+});
+
+
+test("consumer version gate rejects explicit future/null declarations without rewriting v0", () => {
+  const envelope = buildTurnEnvelope({payload: payload(), scheduler_execution_args: ""});
+  const before = structuredClone(envelope);
+  assertTurnEnvelopeConsumerVersion(envelope);
+  for (const field of ["envelope", "signature", "coverage"]) {
+    for (const unsupported of [null, "future-required-semantics", "", 1]) {
+      const changed = structuredClone(envelope);
+      const carrier = field === "envelope" ? changed : changed.action_signature as JsonObject;
+      carrier[field === "coverage" ? "coverage" : "schema_version"] = unsupported;
+      assert.throws(() => assertTurnEnvelopeConsumerVersion(changed), /unsupported TurnEnvelope/);
+    }
+  }
+  // Preserve the existing v0 planning transport; this gate neither upgrades
+  // historical objects nor substitutes for the caller's digest verification.
+  const legacy = structuredClone(envelope);
+  delete (legacy.action_signature as JsonObject).schema_version;
+  delete (legacy.action_signature as JsonObject).coverage;
+  assertTurnEnvelopeConsumerVersion(legacy);
+  assert.deepEqual(envelope, before);
 });

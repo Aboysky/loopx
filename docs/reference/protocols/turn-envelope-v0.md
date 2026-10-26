@@ -652,6 +652,26 @@ Host 在普通执行和分阶段重规划中都传递剩余的已签名 capsule�
 结算决定不变。增长的字节量仍通过既有预算诊断可见；这项修正不证明 token
 成本下降，也不表示 controller 契约已完全统一。
 
+Live Turn planning, native Codex prompt construction and structured Host
+consumption share the TypeScript owner's version gate. The current consumer
+accepts `loopx_turn_envelope_v0`, action-signature schema v0 and the registered
+v0–v5 coverage versions. An explicitly unknown or null version is rejected
+before Host launch, even when its unchanged action digest still matches. The
+historical digest document does not sign these version declarations, so digest
+equality alone cannot establish consumer compatibility. Existing v0 callers
+that omit signature-version metadata retain their prior behavior; digest,
+lineage, current authority and settlement checks remain separate. Saved capture
+bytes and old signature documents are not rewritten. This gate does not qualify
+a future unified schema or interpret unknown required nested semantics.
+
+中文：实时 Turn 规划、原生 Codex 提示构造和结构化 Host 消费共用 TypeScript
+owner 的版本门。当前 consumer 接受 envelope v0、action-signature schema v0
+及已注册的 v0–v5 coverage；显式未知或 null 版本即使仍携带匹配的旧行动摘要，
+也会在 Host 启动前拒绝。历史摘要文档不签署这些版本声明，摘要相等不能证明
+消费者兼容。省略签名版本元数据的既有 v0 调用方保持原行为；摘要、谱系、当前
+权限和结算校验仍各自负责。既有捕获字节和历史签名文档不改写。此门不表示未来
+统一 schema 已获得资格，也不负责解释未知的必需嵌套语义。
+
 Ordinary structured Host prompts also retain the signed `user`,
 `execution_policy`, `scheduler`, `response_plan`, and
 `task_orchestration_contract` sections, plus the existing captured-decision

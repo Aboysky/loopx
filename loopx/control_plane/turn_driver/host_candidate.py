@@ -11,7 +11,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from ..quota.turn_envelope import turn_envelope_action_signature_document
+from ..quota.turn_envelope import assert_turn_envelope_consumer_version, turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
@@ -74,6 +74,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     """Return the signed action and safety boundary exactly as projected."""
 
     envelope = _mapping(request.get("turn_envelope"))
+    assert_turn_envelope_consumer_version(envelope)
     signature = _mapping(envelope.get("action_signature"))
     source_hash = str(signature.get("source_hash") or "")
     envelope_hash = str(signature.get("envelope_hash") or "")

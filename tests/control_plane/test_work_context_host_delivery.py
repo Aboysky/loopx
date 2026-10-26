@@ -118,6 +118,23 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
         del altered[carrier][changed_field]
         with pytest.raises(ValueError, match='action signature'):
             extract_turn_authority({'turn_envelope': altered})
+    # A matching v0 digest does not authorize interpreting a future wire version.
+    # Version declarations are outside the historical action digest document.
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+    for path in (('schema_version',), ('action_signature', 'schema_version'),
+                 ('action_signature', 'coverage')):
+        for unsupported in ('future_required_semantics', None):
+            altered = copy.deepcopy(envelope)
+            carrier = altered if len(path) == 1 else altered[path[0]]
+            carrier[path[-1]] = unsupported
+            for consumer in (extract_turn_authority, _prompt):
+                with pytest.raises(EffectRuntimeRejected, match='unsupported TurnEnvelope'):
+                    consumer({'turn_envelope': altered})
+            plan = build_loopx_turn_plan(altered, host='generic-cli', execution_mode='isolated-headless')
+            assert plan['route']['kind'] == 'contract_error'
+            assert plan['route']['would_invoke_host'] is False
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)
     code, ordinary = _run_cli(registry, runtime, *args)
     assert code == 0, ordinary
@@ -132,3 +149,46 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
     assert _spend_run_count(runtime) == 0
     assert saved.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('declaration', ['envelope', 'signature', 'coverage'])
+def test_real_turn_refuses_unsupported_consumer_version_before_launch(tmp_path, monkeypatch, provider, declaration):
+    import contextlib
+    import io
+    import sys
+    from loopx.cli import main
+    from loopx.cli_commands import turn
+    from tests.test_loopx_turn_driver import _write_live_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    original_builder = turn.build_turn_envelope
+    observed = []
+
+    def incompatible_writer(*args, **kwargs):
+        packet = original_builder(*args, **kwargs)
+        if declaration == 'envelope':
+            packet['schema_version'] = 'unsupported_work_contract'
+        else:
+            packet['action_signature']['schema_version' if declaration == 'signature' else 'coverage'] = 'unsupported_required_semantics'
+        observed.append(copy.deepcopy(packet))
+        return packet
+
+    monkeypatch.setattr(turn, 'build_turn_envelope', incompatible_writer)
+    marker = project / 'host-started'
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = main(['--registry', str(registry), '--runtime-root', str(runtime), '--format', 'json',
+            'turn', 'run-once', '--host', 'generic-cli', '--goal-id', 'loopx-turn-fixture',
+            '--agent-id', 'codex-fixture', '--project', str(project), '--host-command-json',
+            json.dumps([sys.executable, '-c', f'from pathlib import Path; Path({str(marker)!r}).touch()']),
+            '--no-global-sync', '--execute'])
+    result = json.loads(output.getvalue())
+    assert observed and code != 0, result
+    assert not marker.exists()
+    assert 'unsupported TurnEnvelope' in result['error'], result
+    assert 'compatible consumer' in result['error'], result
+    # Generic CLI error effects are unknown; the marker and ledger independently
+    # prove this pre-dispatch refusal, without interpreting null as false.
+    assert _spend_run_count(runtime) == 0
