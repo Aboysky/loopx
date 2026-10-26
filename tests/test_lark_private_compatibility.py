@@ -17,6 +17,53 @@ from loopx.extensions.lark.conversation_identity import identity_ref
 from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
 
+def test_app_id_selector_discovers_private_route_on_shared_group_listener(ordinary):
+    from test_lark_private_conversations import connect
+    from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
+
+    _, runtime, provider, transport = connect(ordinary)
+    selector = "cli_notes_app"
+    binding = transport._binding("notes-app")
+    transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    # The CLI accepts the App ID, while its inventory reports the named profile.
+    provider.profile_apps[selector] = selector
+    def runner(args, cwd=None, timeout=None):
+        result = provider(args, cwd, timeout)
+        if args[1:] == ["profile", "list"]:
+            result["stdout"] = json.dumps([row for row in json.loads(result["stdout"])
+                                          if row["name"] != selector])
+        return result
+    transport.runner = runner
+    try:
+        transport.bindings.configure(transport_ref=selector,
+            project_ref=runtime.project_contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
+        legacy = {"target_payload": {"targets": {"group": {"enabled": True,
+            "channel": {"chat_id": "oc_community"}, "identity": {"sender_profile": selector,
+                "cli_bin": "lark-cli", "bot_app_id": selector}}}},
+            "binding_payloads": {"goal": {"bindings": {"goal": {"goal_id": "goal", "enabled": True,
+                "provider": "lark", "target_ref": "group", "topic": {"root_message_id": "om_root"}}}}}}
+        profiles = transport.profiles()
+        assert profiles[selector]["consumer_ref"] == hashlib.sha256(selector.encode()).hexdigest()[:32]
+        event = provider.event(selector, "private_status", "/status")
+        result = poll_lark_goal_topic_profile_once(profile=selector,
+            snapshot={**legacy, "private_profiles": profiles}, runtime_root=transport.runtime_root,
+            answer=lambda **_: pytest.fail("private input must not reach group execution"),
+            consume_runner=lambda _: {"returncode": 0, "stdout": json.dumps(event)},
+            private_admitter=transport.admit)
+        assert result["event_statuses"] == ["command_recorded"]
+        # A removed App must not remain discoverable through its ID selector.
+        provider.profile_apps.pop("notes-app")
+        assert selector not in transport.profiles()
+        # An explicit profile with the same spelling must not be redirected
+        # to a different App merely because that App exists elsewhere.
+        provider.profile_apps["notes-app"] = selector
+        provider.profile_apps[selector] = "cli_replacement"
+        transport.runner = provider
+        assert selector not in transport.profiles()
+    finally:
+        runtime.close()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX cross-process flock contract")
 @pytest.mark.parametrize("shared_private", [False, True])
 def test_legacy_consumer_stays_standby_until_original_profile_owner_exits(tmp_path, monkeypatch, shared_private):
