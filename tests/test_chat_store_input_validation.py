@@ -51,6 +51,33 @@ def _dedup_store(tmp_path: Path) -> tuple[ChatSessionStore, str]:
     return store, session_id
 
 
+def test_history_cursor_rejects_other_session_and_rewritten_prefix(tmp_path: Path) -> None:
+    store, sid = _dedup_store(tmp_path)
+    for i in range(5):
+        store.append_message(sid, role="user", text=f"row {i}")
+    page = store.session_snapshot(sid, message_limit=2)
+    cursor = page["message_page"]["next_cursor"]
+    other = store.create_session(goal_id="goal-one", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="other", upstream_mode="chat")["session_id"]
+    with pytest.raises(ValueError, match="cursor"):
+        store.session_snapshot(other, message_limit=2, message_cursor=cursor)
+    path = store._session_dir(sid) / "messages.jsonl"
+    original = path.read_bytes()
+    rows = store.messages(sid)
+    rows[0]["text"] = "Rewritten source"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(ValueError, match="cursor"):
+        store.session_snapshot(sid, message_limit=2, message_cursor=cursor)
+    path.write_bytes(original + b"{broken record}\n")
+    with pytest.raises(ValueError, match="journal record"):
+        store.session_snapshot(sid, message_limit=2)
+    path.write_bytes(original)
+    assert store.session_snapshot(sid, message_limit=2, message_cursor=cursor)["messages"] == store.messages(sid)[2:4]
+    path.write_text("\n".join(path.read_text().splitlines()[:3]) + "\n")
+    with pytest.raises(ValueError, match="cursor"):
+        store.session_snapshot(sid, message_limit=2, message_cursor=cursor)
+
+
 def test_same_message_id_same_payload_returns_existing_row(tmp_path: Path) -> None:
     store, session_id = _dedup_store(tmp_path)
     first = store.append_message(
