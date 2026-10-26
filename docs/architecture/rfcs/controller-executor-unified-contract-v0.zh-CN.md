@@ -341,6 +341,19 @@ staged reader。这改变了完整输入的 successor 指引；未版本化历�
 仅结算、capability intent、未绑定和 context 不匹配的输入保留原写入指引。
 checkpoint 的旧 reader 测试本身不能证明这条生命周期。剩余材料 reader 退役及
 其他 C1 消费者不能为满足历史断言而恢复第二份精简可执行事实视图。
+完整契约边界现复用既有 decision/frontier 词表，在 capture 前与后续读取时拒绝未知、
+空值或类型错误的根执行 action；hash 合法不能证明消费者理解未知执行语义。可选证据
+仍完整保留，包括陌生版本和形似 action 的字段名；未版本化历史 action 路由不变。
+这只验证根 action 边界，不代表所有必需语义字段均已验收。真实 File/SQLite 原生 CLI
+的 producer 故障在 capture、派发与 spend 前被拒绝；前一候选会到达更晚的启动拒绝，
+这些探针不证明此前存在无保护执行。Selected-work 测试现读取
+完整 interaction context，并通过真实原生 `turn plan` 入口验证宿主输入。真实
+File/SQLite 检查保留完整任务正文、规范 note、作用域 gate、需求新鲜读取及来源丢失
+恢复，不把 App capture 换绑到原生宿主。此前六项旧根布局断言失败仍作为历史失败
+保留；它们后续的语义检查现在已实际执行。
+另有六项 staged-reader 检查在前一候选和本次修改中均失败：四项期待已移除的精简
+writeback 布局，两项要求隐藏 pure-replan 不可用的 Explore 写入指引。后续验收仍
+开放；仅保留完整来源不能结清该能力指引问题。
 Cache 整套测试一致性、旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持

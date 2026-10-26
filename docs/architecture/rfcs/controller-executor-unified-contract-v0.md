@@ -442,6 +442,25 @@ mismatched-context inputs retain their authoring unchanged. The checkpoint's
 legacy-reader tests alone do not establish this lifecycle result. Remaining
 material-reader retirement and other C1 consumers must not restore a second
 compact executable fact view merely to satisfy historical assertions.
+The complete-contract boundary now rejects unknown, empty or mistyped root
+execution actions, using the existing decision/frontier vocabularies both
+before capture and on later reads. Valid hashes do not make unknown execution
+semantics supported. Optional evidence remains intact, including unfamiliar
+versions and action-like field names; historical unversioned action routing is
+unchanged. This qualifies the root action boundary, not every required semantic
+field. A real File/SQLite native-CLI producer fault is rejected before capture,
+dispatch or spend. The preceding candidate reached a later launch refusal;
+these probes do not show prior unguarded execution. Selected-work tests now consume the complete interaction context and
+use the actual native `turn plan` entrypoint for host input. Real File/SQLite
+checks retain full task text, canonical notes, scoped gates, fresh requirement
+reads and source-loss recovery without rebinding an App capture to a native
+host. The six earlier failures at obsolete root-layout assertions remain
+historical failures; their downstream semantic checks now execute.
+Six staged-reader checks still fail on both the preceding candidate and this
+change: four expect the removed compact writeback layout, and two require
+unavailable pure-replan Explore authoring to be suppressed. Their downstream
+acceptance remains open; complete source preservation alone does not settle
+that capability-guidance question.
 Cache-suite consistency, old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native
