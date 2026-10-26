@@ -578,67 +578,6 @@ separates shipped foundations from the next end-to-end acceptance milestones.
 
 </details>
 
-<a id="contributing"></a>
-<a id="community--feedback"></a>
-
-## Community & Contributing
-
-Help shape how long-horizon Agent teams work. Share a workflow, reproduce a
-bug, build an integration, or show what your Agents accomplished. Code,
-documentation, examples, reviews and carefully bounded evidence studies are
-all welcome.
-
-- **Learn:** [Documentation](https://loopx-project.github.io/loopx/docs/) ·
-  [Blog](https://loopx-project.github.io/loopx/blog/) ·
-  [Technical directions](docs/project/technical-directions.md).
-- **Discuss and share:** ask questions, compare workflows and share projects in
-  [GitHub Discussions](https://github.com/loopx-project/loopx/discussions).
-- **Report a bug or suggest a feature:** open a
-  [GitHub Issue](https://github.com/loopx-project/loopx/issues/new/choose) with
-  your version, host/runtime, expected behavior and a public-safe reproduction.
-- **Make your first contribution:** pick a public task from
-  [Contributor Tasks](docs/development/contributor-tasks.md), or bring a
-  self-contained fix. The [contribution guide](CONTRIBUTING.md) covers setup,
-  validation and the PR process; larger changes start with a discussion.
-- **Join the conversation:** [Discord](https://discord.gg/XmGgQyCFZd) ·
-  [Lark](docs/assets/loopx-lark-developer-group.png) ·
-  [WeChat](docs/assets/loopx-wechat-contact.png).
-
-See [Support](.github/SUPPORT.md) for channel routing and official sources, and
-our [Code of Conduct](CODE_OF_CONDUCT.md) for community participation.
-
-<details>
-<summary>Before sharing code, logs or examples</summary>
-
-Keep `.loopx/`, legacy `.codex/goals/`, live `ACTIVE_GOAL_STATE.md`, raw Agent
-sessions and benchmark traces, credentials, private logs, internal links,
-sensitive user/team data and operator artifacts out of public contributions.
-
-</details>
-
-### Contributors
-
-Thank you to everyone contributing code, documentation, bug reports, reviews
-and real-world feedback. You help make long-horizon Agent work easier to run,
-inspect and trust.
-
-[![LoopX GitHub contributors](https://contrib.rocks/image?repo=loopx-project/loopx&columns=12&max=120)](https://github.com/loopx-project/loopx/graphs/contributors)
-
-[All GitHub contributors](https://github.com/loopx-project/loopx/graphs/contributors) ·
-[Authors and contribution records](docs/project/authors.md) ·
-[Governance](.github/GOVERNANCE.md) · [Project history](docs/project/history.md) ·
-[Name and marks](docs/project/trademarks.md).
-
-### Community chats
-
-<p align="center">
-  <a href="docs/assets/loopx-lark-developer-group.png"><img src="docs/assets/loopx-lark-developer-group.png" alt="LoopX Lark developer group QR code" width="280"></a>
-  <a href="docs/assets/loopx-wechat-contact.png"><img src="docs/assets/loopx-wechat-contact.png" alt="LoopX WeChat contact QR code" width="220"></a>
-</p>
-<p align="center">
-  <sub><strong>Lark:</strong> scan to join directly<br><strong>WeChat: <code>huangrt00</code></strong> · mention LoopX in the friend request</sub>
-</p>
-
 ## Partner Projects
 
 LoopX welcomes collaboration with other open-source projects to build the
@@ -910,6 +849,67 @@ Current investment is organized through the
 [Technical Directions map](docs/project/technical-directions.md): long-horizon
 benchmark evidence, operator surface and IM integration, shared-goal cross-host
 coordination, and an explicitly staged architecture and research incubator.
+
+<a id="contributing"></a>
+<a id="community--feedback"></a>
+
+## Community & Contributing
+
+Help shape how long-horizon Agent teams work. Share a workflow, reproduce a
+bug, build an integration, or show what your Agents accomplished. Code,
+documentation, examples, reviews and carefully bounded evidence studies are
+all welcome.
+
+- **Learn:** [Documentation](https://loopx-project.github.io/loopx/docs/) ·
+  [Blog](https://loopx-project.github.io/loopx/blog/) ·
+  [Technical directions](docs/project/technical-directions.md).
+- **Discuss and share:** ask questions, compare workflows and share projects in
+  [GitHub Discussions](https://github.com/loopx-project/loopx/discussions).
+- **Report a bug or suggest a feature:** open a
+  [GitHub Issue](https://github.com/loopx-project/loopx/issues/new/choose) with
+  your version, host/runtime, expected behavior and a public-safe reproduction.
+- **Make your first contribution:** pick a public task from
+  [Contributor Tasks](docs/development/contributor-tasks.md), or bring a
+  self-contained fix. The [contribution guide](CONTRIBUTING.md) covers setup,
+  validation and the PR process; larger changes start with a discussion.
+- **Join the conversation:** [Discord](https://discord.gg/XmGgQyCFZd) ·
+  [Lark](docs/assets/loopx-lark-developer-group.png) ·
+  [WeChat](docs/assets/loopx-wechat-contact.png).
+
+See [Support](.github/SUPPORT.md) for channel routing and official sources, and
+our [Code of Conduct](CODE_OF_CONDUCT.md) for community participation.
+
+<details>
+<summary>Before sharing code, logs or examples</summary>
+
+Keep `.loopx/`, legacy `.codex/goals/`, live `ACTIVE_GOAL_STATE.md`, raw Agent
+sessions and benchmark traces, credentials, private logs, internal links,
+sensitive user/team data and operator artifacts out of public contributions.
+
+</details>
+
+### Contributors
+
+Thank you to everyone contributing code, documentation, bug reports, reviews
+and real-world feedback. You help make long-horizon Agent work easier to run,
+inspect and trust.
+
+[![LoopX GitHub contributors](https://contrib.rocks/image?repo=loopx-project/loopx&columns=12&max=120)](https://github.com/loopx-project/loopx/graphs/contributors)
+
+[All GitHub contributors](https://github.com/loopx-project/loopx/graphs/contributors) ·
+[Authors and contribution records](docs/project/authors.md) ·
+[Governance](.github/GOVERNANCE.md) · [Project history](docs/project/history.md) ·
+[Name and marks](docs/project/trademarks.md).
+
+### Community chats
+
+<p align="center">
+  <a href="docs/assets/loopx-lark-developer-group.png"><img src="docs/assets/loopx-lark-developer-group.png" alt="LoopX Lark developer group QR code" width="280"></a>
+  <a href="docs/assets/loopx-wechat-contact.png"><img src="docs/assets/loopx-wechat-contact.png" alt="LoopX WeChat contact QR code" width="220"></a>
+</p>
+<p align="center">
+  <sub><strong>Lark:</strong> scan to join directly<br><strong>WeChat: <code>huangrt00</code></strong> · mention LoopX in the friend request</sub>
+</p>
 
 ## Star History
 
