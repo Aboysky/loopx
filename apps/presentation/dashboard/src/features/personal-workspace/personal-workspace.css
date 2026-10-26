@@ -2212,6 +2212,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-runtime .personal-chat-model-menu > summary .personal-model-current { font-size: var(--text-caption); }
 .personal-composer-runtime .personal-chat-model-panel { top: auto; bottom: calc(100% + 12px); }
 .personal-composer-runtime .personal-chat-model-panel .personal-select-listbox { bottom: auto; }
+.personal-model-next-heading { display: flex; align-items: center; gap: 6px; }
+.personal-model-options { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.personal-model-options > .personal-agent-select { width: 100%; max-width: none; }
 .personal-composer-actions { position: relative; flex: none; margin: 0; }
 .personal-channel-composer .personal-composer-actions { position: static; }
 .personal-composer-actions > summary { display: grid; place-items: center; width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 6px; color: var(--pw-muted); cursor: pointer; list-style: none; }
