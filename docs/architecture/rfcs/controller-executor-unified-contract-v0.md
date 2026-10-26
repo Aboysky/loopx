@@ -413,6 +413,13 @@ inventing a Todo binding. Full-source input deliberately retains inactive
 capability configuration and diagnostics; those facts do not activate recall
 instructions or reflection result fields. This is a disclosed presentation
 change, with activation and historical parity checked separately.
+The Markdown quota entrypoints now render the same complete contract rather
+than selecting a second subset of facts. Actual File/SQLite CLI captures retain
+every field and instruction under both the ordinary and former envelope flag;
+JSON types and arbitrary source text survive rendering. External-worker
+File/SQLite admission, unresolved-attempt recovery and restart checks pass with
+the complete producer output, but an opaque shell wake still does not prove
+delivery of that original contract to an executor model.
 Cache-suite consistency, old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native

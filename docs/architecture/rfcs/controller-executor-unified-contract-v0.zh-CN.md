@@ -321,6 +321,11 @@ hash 绑定的 review/writeback reader。合成 File/SQLite 执行验证了新 o
 obligation 的 replan 在派发前被拒绝，不伪造 Todo 绑定。完整来源有意保留未激活能力的
 配置和诊断事实；这些事实不会激活 recall 指令或 reflection 结果字段。这是已披露的
 展示变化，激活边界与历史等价分开验证。
+Markdown quota 入口现渲染同一份完整契约，不再另外挑选事实子集。真实 File/SQLite
+CLI 捕获验证普通入口与原 envelope flag 均保留全部字段和指令，JSON 类型与任意
+来源正文经过渲染后不丢失。外部 worker 的 File/SQLite 准入、未决 attempt 恢复和
+重启检查已通过完整 producer 输出；但不透明 shell wake 仍不能证明该原始契约已
+交付 executor 模型。
 Cache 整套测试一致性、旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
