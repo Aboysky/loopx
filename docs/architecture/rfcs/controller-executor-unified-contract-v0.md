@@ -420,6 +420,18 @@ JSON types and arbitrary source text survive rendering. External-worker
 File/SQLite admission, unresolved-attempt recovery and restart checks pass with
 the complete producer output, but an opaque shell wake still does not prove
 delivery of that original contract to an executor model.
+The real benchmark checkpoint preflight now verifies complete source equality
+for File/SQLite, replan/non-replan and context delivery on/off. Its optional
+full recovery retains that same source, with one initial admission and no
+reader writes. This qualifies transport to the checkpoint's model-input file,
+not native session capture or a benchmark/model outcome. A matching outer
+source hash alone previously admitted an unsupported version or invalid inner
+binding through `replan-view`; the reader now uses the existing complete-contract
+validator, while unversioned historical reads retain their decoder. Discovering
+staged commands in the complete quota input and reconciling the staged writer's
+additional successor instructions remain open; these tests obtain the legacy
+reader from the adapter and do not claim that gap is solved. Do not restore a
+second compact executable fact view merely to satisfy historical assertions.
 Cache-suite consistency, old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native

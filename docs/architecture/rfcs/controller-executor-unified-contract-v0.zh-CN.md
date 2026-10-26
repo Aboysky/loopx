@@ -326,6 +326,14 @@ CLI 捕获验证普通入口与原 envelope flag 均保留全部字段和指令�
 来源正文经过渲染后不丢失。外部 worker 的 File/SQLite 准入、未决 attempt 恢复和
 重启检查已通过完整 producer 输出；但不透明 shell wake 仍不能证明该原始契约已
 交付 executor 模型。
+真实 benchmark checkpoint preflight 已验证 File/SQLite、replan/非 replan 及
+context delivery 开关组合下的完整来源相等；可选 full recovery 保留同一来源，初始
+准入只有一次，reader 不写状态。这只证明契约传到 checkpoint 的模型输入文件，
+不代表原生 session 捕获或 benchmark/模型成果。此前只要外层 source hash 相符，
+`replan-view` 就会接受不支持的版本或无效的内部绑定；现在复用既有完整契约 validator，
+未版本化的历史读取保留原解码器。完整 quota 输入如何发现 staged 命令，以及 staged
+writer 额外 successor 指令如何归并仍未解决；这些测试从适配器取得旧 reader，
+不能据此声称缺口已闭合。不能为了满足历史断言而恢复第二份精简可执行事实视图。
 Cache 整套测试一致性、旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
