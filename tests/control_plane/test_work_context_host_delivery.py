@@ -1,0 +1,106 @@
+"""Authored requirements must reach the Host, not just agree after projection."""
+import copy
+import json
+import os
+import shlex
+import subprocess
+from urllib.parse import quote
+
+import pytest
+
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+from tests.control_plane.canonical_authority_fixture import (
+    initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos,
+)
+from tests.control_plane.test_quota_settlement_cli import (
+    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _configure_read_only_todo,
+    _heartbeat_receipt_count, _run_cli, _spend_run_count, _write_fixture,
+)
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('repetitions', [1, 40])
+def test_authored_requirements_survive_capture_projection_and_host(tmp_path, monkeypatch, provider, repetitions):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    task = ('Compare the retained evidence / 保留原始证据. ' * repetitions
+            + 'Stop before publication; return unresolved discrepancies.')
+    goal = ('Keep acceptance separate from task status.\n' * 12
+            + 'Missing comparison evidence remains unknown, not unchanged.')
+    note = 'A complete task body does not replace this separate review requirement.'
+    authored = state.read_text().replace(
+        '- [ ] [P1] Validate and settle the selected delivery.', f'- [ ] [P1] {task}',
+    ).replace('## Next Action', f'## Acceptance\n\n{goal}\n\n## Next Action')
+    # Author only disposable source input, before creating canonical authority.
+    state.write_text(authored.replace(' -->', f' note={quote(note, safe="")} -->'), encoding='utf-8')
+    todos = read_fixture_todos(state)
+    source_task = next(item for item in todos if item['todo_id'] == TODO_ID)
+    # The fixture helper returns an attention view. Seed the canonical record
+    # from the authored full body, never its display truncation.
+    source_task.update(text=f'[P1] {task}', note=note)
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, handoff_mode='soft_claim', todos=todos,
+    )
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
+            '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
+            '--available-capability', 'shell', '--available-capability', 'filesystem_read']
+    capture = tmp_path / 'original-context'
+    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
+                              '--decision-output-dir', str(capture))
+    assert code == 0, envelope
+    saved = capture / 'decision.json'
+    original_bytes = saved.read_bytes()
+    full = json.loads(original_bytes)
+    source_context = full['interaction_contract']['agent_channel']['work_context']
+    assert source_context['complete'] is True
+    assert source_context['instruction']  # Non-vacuous instruction transport.
+    authority = extract_turn_authority({'turn_envelope': envelope})
+    context = authority['work_context']
+    assert context['instruction'] == source_context['instruction']
+    assert authority['selected_todo']['text_source_verified'] is True
+    source_by_kind = {source['source']: source['content'] for source in context['sources']}
+    task_detail = source_by_kind['selected_todo']['todo']
+    assert task_detail['note'] == note
+    delivered_task = task_detail.get('text', authority['selected_todo']['text'])
+    assert delivered_task == source_task['text']
+    # This fixture has an unregistered Goal narrative: pending read must remain
+    # explicit even when all available inline sources were loaded successfully.
+    goal_read = next(item for item in authority['required_reads'] if item['source'] == 'goal_state')
+    assert goal_read['ordering'] == 'before_work'
+    if os.name != 'nt':
+        readback = subprocess.run(shlex.split(goal_read['command']), capture_output=True,
+                                  text=True, check=True)
+        assert goal in readback.stdout
+    else:
+        assert goal in state.read_text(encoding='utf-8')
+    # The actual Host prompt must contain the independent source requirements,
+    # not merely match an action signature computed by the same projector.
+    prompt = render_prompt(authority)
+    transported, _ = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\n', 1)[1])
+    assert transported['selected_todo'] == authority['selected_todo']
+    assert transported['required_reads'] == authority['required_reads']
+    assert transported['work_context'] == context
+    # A compromised carrier cannot silently remove either the instruction or a
+    # separate obligation while retaining the signed action's original digest.
+    for changed_field in ('instruction', 'sources'):
+        altered = copy.deepcopy(envelope)
+        del altered['work_context'][changed_field]
+        with pytest.raises(ValueError, match='action signature'):
+            extract_turn_authority({'turn_envelope': altered})
+    receipts = _heartbeat_receipt_count(runtime, TURN_ID)
+    code, ordinary = _run_cli(registry, runtime, *args)
+    assert code == 0, ordinary
+    ordinary_context = ordinary['interaction_contract']['agent_channel']['work_context']
+    assert ordinary_context['instruction'] == source_context['instruction']
+    ordinary_task = next(source['content']['todo'] for source in ordinary_context['sources']
+                         if source['source'] == 'selected_todo')
+    assert ordinary_task.get('text', ordinary['selected_todo']['text']) == source_task['text']
+    assert ordinary_task['note'] == note
+    assert ordinary['interaction_contract']['cli_channel']['settlement_plan']['identity'] == full[
+        'interaction_contract']['cli_channel']['settlement_plan']['identity']
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
+    assert _spend_run_count(runtime) == 0
+    assert saved.read_bytes() == original_bytes
