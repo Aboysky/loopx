@@ -396,9 +396,13 @@ quota and native Turn capture, and passes it to actual Codex stdin. Isolated
 File/SQLite CLI tests with a synthetic executable cover source integrity,
 failed-attempt recovery and once-only settlement. This advances the two-writer
 and final-input replacement; it does not qualify C1 cutover. The candidate
-still has capability-reentry/cache presentation migrations, staged replan
-instruction parity, structured/external consumers and packaged host continuity
-to finish. Its default writer change remains unshipped; the PR is Draft for
+now routes capability reentry through the canonical CLI channel and preserves
+original hash-bound review/writeback readers in complete-contract Codex input.
+Synthetic File/SQLite execution qualifies those readers for a fresh replan;
+it does not qualify prior Todo-bound replan launch, whose identity preflight
+still rejects the tested recovery. Cache-suite consistency, staged replan
+instruction parity across all consumers, structured/external consumers and
+packaged host continuity remain unfinished. Its default writer change remains unshipped; the PR is Draft for
 unfinished author work, not merely pending review. No model or cost benefit is
 established. Historical effect decoding is temporary; it must not become a
 second permanent executable view.
