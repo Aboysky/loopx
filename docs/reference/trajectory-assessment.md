@@ -297,6 +297,22 @@ explicit analysis with separately recorded usage.
 显式数值编码 v2 要求把有来源语境支持的数量及其所指写成可读正文，仍保留原始标记和
 准确数值限制；未知所指不猜测，不能把支持材料的准备步骤补成原记录的新行动。这不是
 机器语义校验。旧编码及结果保持，新版本仅随明确分析生成并单独记账。
+
+The explicit `"source_text_aliases_with_literal_values_v3"` variant adds a
+generation-time fidelity pass over each row's permitted numeric spellings:
+leading signs, precision and percent suffixes stay exact, while spelled-out units
+are explained in the output language. An adjacent topic cannot resolve an
+ambiguous referent without supporting field-bound evidence. This remains model
+guidance; the exact-literal qualifier and original-text fallback are unchanged.
+The curator selects it in a new versioned input through the existing analysis
+action. Earlier encodings retain their exact prompts, identities and artifacts;
+reading or refreshing them never starts or upgrades analysis.
+
+显式数值编码 v3 增加生成时的逐项忠实性核对：正负号、精度和百分号按允许的原始写法
+保留，文字单位用目标语言解释；不能仅凭邻近主题补全含糊所指。这仍是模型指导，
+既有字面校验和原文回退不放宽。由原输入整理者通过既有分析入口明确生成新版本，
+旧编码的提示、身份和产物保持，阅读与刷新不升级或执行分析。
+
 Translated prose is applied to decoded narrative fields; it is never serialized
 and reparsed as an Explore decision. Owner-format labels or list markers inside
 model text cannot change the original outcome, eligibility or list cardinality.
