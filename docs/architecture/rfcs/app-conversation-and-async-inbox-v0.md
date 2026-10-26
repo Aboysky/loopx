@@ -1288,6 +1288,16 @@ unreadable current Session blocks ordinary send until its exact record recovers;
 never infer an empty conversation or create a replacement driver from a read
 failure. A recovered read does not prove receiver adoption or native GQ02/GQ09.
 
+Equal-timestamp messages retain the original Session's append order: opaque
+message IDs are identity, not chronology. The shared history merge preserves
+complete bodies and repeated text, deduplicates only the same Session/message
+identity, and uses a deterministic Session tie across independent snapshots.
+Browser recovery waits for asynchronous hydration and for the held stale reader
+to settle, including an aborted request; it does not require a response from an
+already timed-out fetch. [Synthetic source-order captures](../../assets/personal-workspace/conversation-history/README.md)
+qualify this read/display boundary, not full history pagination, reply threading
+or installed App/Lark bidirectional delivery.
+
 Following the newest reply also survives a resized viewport or timeline, including
 image layout and expanded replies, without waiting for another message. Scrolling
 up keeps the reader in history across layout changes; the existing latest-message
