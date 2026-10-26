@@ -3465,8 +3465,11 @@ export function DashboardPage() {
       await navigate({
         replace: bindingInitialIdentity,
         search: (current) => {
+          // Normalizing an alias of the same physical reader preserves its
+          // bookmarks; a different source still clears source-local selection.
           const runtimeSourceChanged = Boolean(nextPayload.local_dashboard_api?.read_only_sources?.length
-            && "statusUrl" in current && current.statusUrl && current.statusUrl !== url);
+            && "statusUrl" in current && current.statusUrl && current.statusUrl !== url
+            && (!prepared || !bound || statusSourceForUrl(prepared, current.statusUrl, window.location.href)?.statusUrl !== bound.statusUrl));
           return {
             ...current,
             statusUrl: url,

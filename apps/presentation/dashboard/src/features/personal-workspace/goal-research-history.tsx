@@ -264,7 +264,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     if (focusPending.current && detail.current) {
       focusPending.current = false;
       detail.current.focus({preventScroll: true});
-      detail.current.scrollIntoView({block: "nearest"});
+      detail.current.scrollIntoView({block: "start"});
     }
   }, [active, selected, selectedMembers]);
   const clusterY = layout.length ? Math.max(...layout.map(item => item.y + 124)) + 24 : 24;
@@ -288,7 +288,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     else url.searchParams.set("research_goal", goalId);
     if (selection.finding !== next.finding || selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
   };
-  const choose = (id: string, focus = true) => {readerParent.current = null; select({nodes: id ? [id] : [], day: null}, focus);};
+  const choose = (id: string, focus = true, finding?: string) => {readerParent.current = null; select({nodes: id ? [id] : [], day: null, finding}, focus);};
   const closeReader = () => {
     const parent = readerParent.current;
     readerParent.current = null;
@@ -349,7 +349,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </ContextHelp>
     </div> : null;
   const historyView = !value ? null : lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
-        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={id => choose(id)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
+        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={(id, finding) => choose(id, true, finding)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
         <div className="research-history-stage" style={{width, height}}>
           <svg width={width} height={height} aria-hidden="true" className="research-history-edges">
@@ -523,10 +523,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         </li>)}</ol>
         </div>
       </div> : null}
-      {readingSelection ? <details className="research-history-context" key={selected?.id ?? JSON.stringify(selection.nodes) + selection.day}>
-        <summary>{zh ? "研究全景" : "Research overview"}</summary>
-        <ResearchProgressSummary analysis={analysis}/>{historyView}
-      </details> : historyView}
+      <details className={`research-history-context${readingSelection ? "" : " is-overview"}`} open={!readingSelection || undefined} key={JSON.stringify([goalId, readSourceUrl])}>
+        <summary hidden={!readingSelection}>{zh ? "研究全景" : "Research overview"}</summary>
+        {readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}{historyView}
+      </details>
     </div> : null}
     {(selection.nodes.some(id => !value?.nodes.some(node => node.id === id)) || (selection.day !== null && !selectedGroup)) && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
     {value?.events.length && !value.nodes.length ? <ContextHelp label={zh ? "节点结构未记录" : "Node structure not recorded"} icon={CircleHelp}><p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p></ContextHelp> : null}
