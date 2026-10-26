@@ -102,6 +102,14 @@ try {
           );
         }
       }
+      if (width === 1024) {
+        await drawer.locator(".personal-inspector-size").click();
+        await assertModality(true);
+        assert.equal(await page.locator("[data-context-drawer]").getAttribute("data-drawer-mode"), "inspector-full");
+        await drawer.locator(".personal-inspector-size").click();
+        await assertModality(true);
+        assert.equal(await page.locator("[data-context-drawer]").getAttribute("data-drawer-mode"), "inspector");
+      }
       await page.screenshot({ path: resolve(outputDir, `task-inspector-modal-${width}.png`), animations: "disabled" });
 
       const management = drawer.locator(".personal-task-management");
@@ -199,6 +207,28 @@ try {
       await opener.waitFor();
       assert.equal(await drawer.count(), 0, "An unavailable deep link can be dismissed without a recovery loop");
       assert.deepEqual(scope(), initialScope);
+      if (width === 1512) {
+        await opener.click();
+        await drawer.waitFor();
+        await page.evaluate(() => {
+          const dialog = document.createElement("dialog");
+          dialog.dataset.taskInspectorModelessDialog = "true";
+          const button = document.createElement("button");
+          button.textContent = "Modeless dialog";
+          dialog.append(button);
+          document.body.append(dialog);
+          dialog.show();
+          button.focus();
+        });
+        await page.keyboard.press("Escape");
+        await drawer.waitFor({ state: "hidden" });
+        assert.equal(
+          await page.locator("[data-task-inspector-modeless-dialog]").evaluate(element => element.open),
+          true,
+          "A modeless dialog does not consume Escape from the Task inspector",
+        );
+        await page.locator("[data-task-inspector-modeless-dialog]").evaluate(element => element.remove());
+      }
       if (width === 390) {
         await opener.click();
         await drawer.waitFor();

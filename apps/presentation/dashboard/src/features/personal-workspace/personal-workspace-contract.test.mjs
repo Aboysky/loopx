@@ -255,7 +255,7 @@ assert.match(shell, /aria-modal=\{mobileSidebarOpen \? true : undefined\}/, "Mob
 assert.match(shell, /inert=\{mobileSidebarOpen \|\| drawerOverlay \|\| undefined\}/, "Mobile Goal navigation and the narrow Task inspector remove background content from keyboard navigation");
 assert.match(drawer, /useDrawerOverlay\(drawerRef, selection\.kind === "todo"\)/, "The Task inspector derives modality from the rendered overlay");
 assert.match(drawer, /aria-modal=\{selection\.kind === "todo" \? taskInspectorModal \|\| undefined : true\}/, "Only the narrow Task inspector becomes modal");
-assert.match(drawer, /document\.querySelector\("dialog\[open\]"\)/, "Escape leaves an overlaid dialog in control before the Task inspector");
+assert.match(drawer, /document\.querySelector\("dialog\[open\]:modal"\)/, "Escape leaves a modal dialog in control before the Task inspector");
 assert.doesNotMatch(timeline, /<div aria-live="polite" className="personal-channel-timeline">/, "The full timeline is not a live region");
 assert.match(timeline, /className="personal-live-region"/, "Timeline has a dedicated live region");
 assert.match(drawer, /t\("drawer\.correctionTextarea", \{ agent:[\s\S]*goal:[\s\S]*run:/, "Correction label includes its scoped context");

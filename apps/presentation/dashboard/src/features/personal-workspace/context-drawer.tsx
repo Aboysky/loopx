@@ -296,7 +296,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
       if (event.key === "Escape") {
-        if (document.querySelector("dialog[open]")) return;
+        if (document.querySelector("dialog[open]:modal")) return;
         const openMenu = Array.from(drawerRef.current?.querySelectorAll<HTMLDetailsElement>(
           ".personal-task-management[open], .personal-compact-menu[open]",
         ) ?? []).at(-1);
