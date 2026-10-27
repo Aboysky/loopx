@@ -210,7 +210,7 @@ def test_cli_missing_goal_fails_closed(
     assert "nonexistent-goal" in payload["error"]
 
 
-def test_cli_missing_state_file_fails_closed(
+def test_cli_missing_display_keeps_canonical_read_only_basis(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -234,9 +234,11 @@ def test_cli_missing_state_file_fails_closed(
         "json",
     )
 
-    assert exit_code == 1
-    assert payload["ok"] is False
-    assert "missing" in payload["error"]
+    assert exit_code == 0 and payload["ok"] is True
+    assert payload["read_only"] is True
+    assert payload["source_basis"]["revision_basis"] == "canonical_todo_snapshot"
+    assert payload["frontier_counts"]["current_agent_claimed_advancement_count"] == 1
+    assert not paths["state_file"].exists()
 
 
 def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
@@ -257,6 +259,9 @@ def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
         paths["state_file"].read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    foreign_state.write_text(foreign_state.read_text(encoding="utf-8")
+        + "\n- [ ] Foreign-only work\n  <!-- loopx:todo todo_id=todo_foreign_only status=open -->\n", encoding="utf-8")
+    foreign_before = foreign_state.read_bytes()
     monkeypatch.chdir(foreign_project)
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -271,9 +276,12 @@ def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
         "json",
     )
 
-    assert exit_code == 1
-    assert payload["ok"] is False
-    assert "goal state file is missing" in payload["error"]
+    assert exit_code == 0 and payload["ok"] is True
+    assert payload["read_only"] is True
+    assert payload["source_basis"]["revision_basis"] == "canonical_todo_snapshot"
+    assert payload["frontier_counts"]["current_agent_claimed_advancement_count"] == 1
+    assert "todo_foreign_only" not in json.dumps(payload)
+    assert foreign_state.read_bytes() == foreign_before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
