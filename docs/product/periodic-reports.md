@@ -872,7 +872,9 @@ coverage metadata; exhaustion is partial coverage,
 not success or zero progress. These are IO bounds, not a model budget.
 
 New private and managed-Session editorial requests carry the local artifact
-format marker `source_fact_binding=frozen_source_v1`. Cache reuse, generation
+format marker `source_fact_binding=frozen_source_v1`, also retained in the
+frozen source so stripping it from the request cannot select legacy behavior.
+Cache reuse, generation
 and independent generation validation derive the complete ordered fact list
 again from the unchanged frozen source, including its revision. A recomputed
 request digest cannot substitute an unsupported URL, summary or incomplete fact

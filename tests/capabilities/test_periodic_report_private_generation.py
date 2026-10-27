@@ -210,7 +210,7 @@ def test_source_bound_report_keeps_complete_facts_and_original_artifacts(tmp_pat
 
 @pytest.mark.parametrize("local", [False, True])
 @pytest.mark.parametrize("entrypoint", ["prepare", "freeze"])
-@pytest.mark.parametrize("substitution", ["url", "summary", "omission", "revision"])
+@pytest.mark.parametrize("substitution", ["url", "summary", "omission", "revision", "binding_removed"])
 def test_source_bound_report_rejects_rehashed_input_substitution(tmp_path, local, entrypoint, substitution):
     root, window, response, prepare = _source_prepared_report(tmp_path, local=local)
     folder = attempt_directory(root, window)
@@ -222,8 +222,11 @@ def test_source_bound_report_rejects_rehashed_input_substitution(tmp_path, local
         request["facts"][0]["summary"] = "原始来源没有提供的成功结论。"
     elif substitution == "omission":
         request["facts"].pop()
-    else:
+    elif substitution == "revision":
         request["source_revision"] = "sha256:" + "e" * 64
+    else:
+        request.pop("source_fact_binding", None)
+        request["facts"][0]["source_ref"] = "https://example.org/removed-input-binding"
     request["request_digest"] = _canonical_digest({k: v for k, v in request.items() if k != "request_digest"})
     atomic_write_json(folder / "editorial-request.json", request)
     response["request_digest"] = request["request_digest"]
@@ -242,7 +245,8 @@ def test_source_bound_report_rejects_rehashed_input_substitution(tmp_path, local
 
 
 @pytest.mark.parametrize("local", [False, True])
-def test_generation_validator_rejects_rehashed_facts_with_self_consistent_receipts(tmp_path, local):
+@pytest.mark.parametrize("remove_binding", [False, True])
+def test_generation_validator_rejects_rehashed_facts_with_self_consistent_receipts(tmp_path, local, remove_binding):
     from loopx.capabilities.periodic_report.incremental import build_periodic_report_publication_candidate
     from loopx.capabilities.periodic_report.post_writeback_hook import evaluate_periodic_report_trigger_evaluation_intent
 
@@ -251,6 +255,9 @@ def test_generation_validator_rejects_rehashed_facts_with_self_consistent_receip
     receipt = freeze_private_report(root=root, window=window, response=response)
     request = json.loads((folder / "editorial-request.json").read_text())
     request["facts"][0]["summary"] = "替换了原始来源不支持的事实。"
+    if remove_binding:
+        request.pop("source_fact_binding", None)
+        receipt.pop("source_fact_binding", None)
     request["request_digest"] = _canonical_digest({k: v for k, v in request.items() if k != "request_digest"})
     response["request_digest"] = request["request_digest"]
     candidate = build_periodic_report_publication_candidate(goal_id=window["goal_id"],

@@ -55,9 +55,10 @@ def _source_facts(source: dict[str, Any], *, local: bool) -> list[dict[str, Any]
 def _verify_source_facts(request: dict[str, Any], source: dict[str, Any]) -> None:
     # Old windows retain their original input and validation contract. The
     # marker belongs to this frozen IO format, not a new source/access policy.
-    if "source_fact_binding" not in request:
+    if "source_fact_binding" not in request and "source_fact_binding" not in source:
         return
-    if (request["source_fact_binding"] != "frozen_source_v1"
+    if (request.get("source_fact_binding") != "frozen_source_v1"
+            or source.get("source_fact_binding") != "frozen_source_v1"
             or request.get("destination") not in {
                 "original_managed_session_full_body", "original_owner_private_chat_full_body"}
             or request.get("source_artifact_sha256") != _canonical_digest(source)
@@ -84,8 +85,7 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
                     or request.get("request_digest") != _canonical_digest(
                         {k: v for k, v in request.items() if k != "request_digest"})):
                 raise ValueError("the frozen report belongs to another scope or window")
-            if "source_fact_binding" in request:
-                _verify_source_facts(request, _read(folder / "source.json"))
+            _verify_source_facts(request, _read(folder / "source.json"))
             return request
         source = collect_manager_report_source(read, {
             "window_start": window["start_at"], "window_end": window["due_at"]})
@@ -94,6 +94,7 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
                 or not set(source["goal_ids"]).issubset(authorization_goal_ids)):
             raise ValueError("report evidence is outside its frozen authorization")
         folder.mkdir(parents=True, exist_ok=True)
+        source = {**source, "source_fact_binding": "frozen_source_v1"}
         atomic_write_json(folder / "source.json", source)
         request = _build_editorial_request(intent=cadence_intent(window), runtime_root=root,
             goal_id=window["goal_id"], agent_id=window["agent_id"],
@@ -169,13 +170,13 @@ def prepare_session_report(*, root: Path, window: dict[str, Any], actor: dict[st
                     or frozen.get("request_digest") != _canonical_digest(
                         {k: v for k, v in frozen.items() if k != "request_digest"})):
                 raise ValueError("the frozen report belongs to another Session or window")
-            if "source_fact_binding" in frozen:
-                _verify_source_facts(frozen, _read(folder / "source.json"))
+            _verify_source_facts(frozen, _read(folder / "source.json"))
             return frozen
         source = read()
         rows = source["rows"]
         if len(rows) > 4000 or len(json.dumps(source, ensure_ascii=False).encode()) > 4 * 1024 * 1024:
             raise ValueError("the complete local report source exceeds its existing evidence bound")
+        source = {**source, "source_fact_binding": "frozen_source_v1"}
         request = _build_editorial_request(intent=cadence_intent(window), runtime_root=root,
             goal_id=window["goal_id"], agent_id=window["agent_id"], completed_at=window["due_at"],
             facts=_source_facts(source, local=True))
@@ -212,8 +213,7 @@ def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[
     folder = attempt_directory(root, window)
     with exclusive_file_lock(folder / "generation.lock", operation="freeze_private_report"):
         request = _read(folder / "editorial-request.json")
-        if "source_fact_binding" in request:
-            _verify_source_facts(request, _read(folder / "source.json"))
+        _verify_source_facts(request, _read(folder / "source.json"))
         response_path = folder / "editorial-response.json"
         if response_path.exists() and _read(response_path) != response:
             raise ValueError("a report window already has a different authored response")
