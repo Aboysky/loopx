@@ -25,7 +25,7 @@ agents:
     kwargs:
       execution_mode: heartbeat
       task_entry: loopx-planned
-      iteration_context: fresh
+      iteration_context: resume
       reasoning_effort: max
       codex_sandbox: danger-full-access
       turn_timeout_sec: null
@@ -96,8 +96,16 @@ reads, native discovery and hook IO in treatment cost, not just the delta bytes.
 
 Codex App setup uses the same product configuration renderer as the worker:
 `loopx --format json quota context-config --context-delivery on --codex-app --codex-context-root DIR --goal-id GOAL --agent-id AGENT`.
-It returns native hooks and persistent recovery instructions, without installing
-files or changing trust. A shared root isolates journals by native session;
+It returns native hooks, persistent recovery instructions and native output
+`config_overrides`, without installing files or changing trust. The opted-in
+worker applies those same overrides automatically: 64000-byte continuation
+outputs, a 20000-token history limit and a shell-scoped reader declaration. Page
+zero remains within the ordinary 7900-byte guard limit. Persistent instructions
+request 22000 tokens per reader result and 24000 for code-mode emission, one
+directly forwarded stdout at a time. Unknown budgets retain small pages. These
+limits do not prove model retention or net cost savings. Fresh off trials install
+none of this configuration; rollback also removes generated output overrides.
+A shared root isolates journals by native session;
 the trial-local single-session `--codex-context-dir` remains supported.
 See [heartbeat setup](../../docs/heartbeat-automation-prompt.md#opt-in-native-context-delivery)
 for activation, readback and rollback. Generated setup and a native
@@ -150,12 +158,12 @@ receipts or trajectories as feature-off; qualify their actual input separately.
 | `turn` | Public Turn CLI, typed result, independent validation, settlement | Present |
 | `loopx-goal` | Product Goal body + installed native Goal transport | Present |
 
-`heartbeat` and `turn` accept `iteration_context: resume`. The first invocation
+New `heartbeat` and `turn` runs default to `iteration_context: resume`. The first invocation
 creates one Codex conversation; later planning checkpoints and execution wakes
 resume that exact native session ID for the trial's Goal and Agent, including
 when the selected Todo changes. Both drivers share the product's agent-scoped
-Codex session store. `fresh` remains the runner default and starts a new session
-on each invocation. The former context name is rejected, with no alias.
+Codex session store. Explicit `fresh` starts a new session on each invocation. Other execution modes
+retain `fresh`; this default change does not rewrite existing trial configurations. The former context name is rejected, with no alias.
 
 Resume never falls back to a new conversation when a binding is corrupt, the
 trial home/workspace/model/settings change, or Codex returns a different ID.
@@ -358,7 +366,7 @@ effort, tools, feedback and total budget fixed, and use separate trials:
 kwargs:
   execution_mode: heartbeat
   task_entry: loopx-planned
-  iteration_context: fresh
+  iteration_context: resume
   turn_timeout_sec: null
   scheduler_timeout_sec: 5080
 ```

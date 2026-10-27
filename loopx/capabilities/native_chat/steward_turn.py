@@ -736,7 +736,19 @@ class StewardTurnHost:
                     "native_task_validator": self._report_validator(request)} if report_work else
                    {"native_task_validator": managed_turn.validator(request, turn_id=turn_id),
                     "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if managed_turn else {}))
-        self.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=result)
+        try:
+            self.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=result)
+        except OSError:
+            # The native transaction already owns execution and settlement.
+            # A lost Chat append acknowledgment must not discard its answer
+            # when this exact committed event is independently readable.
+            # Reuse the store's ordered readback without re-entering native work.
+            if result.get("ok") is not True or result.get("status") != "committed":
+                raise
+            recorded = [row for row in self.store.events_after(session_id, turn_id, None)
+                if row["kind"] == "native_loopx.result"]
+            if len(recorded) != 1 or recorded[0]["payload"] != result:
+                raise
         if request.get("work_kind") == "report" and result.get("status") == "committed":
             from ..periodic_report.private_generation import attempt_directory, validate_private_generation
             subscription, window = reports.current_window(report_owner_key)

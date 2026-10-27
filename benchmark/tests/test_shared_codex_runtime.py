@@ -54,6 +54,25 @@ def test_invalid_execution_rejected_before_host(kwargs):
         Execution(**kwargs)
 
 
+@pytest.mark.parametrize("mode", ["plain", "native-goal", "heartbeat", "turn", "loopx-goal"])
+def test_mode_default_context_preserves_explicit_fresh_and_transport_opt_ins(tmp_path, mode):
+    extra = {"validation_command": ("true",)} if mode == "turn" else {}
+    expected = "resume" if mode in {"heartbeat", "turn"} else "fresh"
+    implicit = Execution(mode=mode, **extra)
+    assert implicit.context == expected
+    assert implicit.context_delivery == "off" and implicit.turn_envelope is False
+    assert Execution(mode=mode, context="fresh", **extra).context == "fresh"
+    if expected == "fresh":
+        with pytest.raises(ValueError, match="resume requires"):
+            Execution(mode=mode, context="resume", **extra)
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                           execution_mode=mode, **extra)
+    assert agent.execution.context == expected
+    assert agent._worker_env(cwd="/task")["LOOPX_ITERATION_CONTEXT"] == expected
+
+
 def test_trial_home_preserves_sessions_and_fixes_nonconversation_inputs(tmp_path):
     args = settings(tmp_path)
     prepare_codex_home(**args)
@@ -1280,6 +1299,8 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     overrides = {trusted[i + 1].split("=", 1)[0]: trusted[i + 1].split("=", 1)[1]
                  for i, value in enumerate(trusted) if value == "-c"}
     assert not any(key.startswith("model_provider") for key in overrides)
+    assert overrides["tool_output_token_limit"] == "20000"
+    assert json.loads(overrides["shell_environment_policy.set.LOOPX_CONTEXT_PAGE_OUTPUT_BYTES"]) == "64000"
     assert "CODEX_ROLLOUT_TRACE_ROOT" not in env
     assert not (home / "context-traces").exists()
 

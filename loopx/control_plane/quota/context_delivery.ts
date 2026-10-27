@@ -51,7 +51,7 @@ function parentAt(root: JsonObject, path: Path): Record<string | number, unknown
 }
 
 /** Registered requirement fields and capability evidence subtrees are reusable. Revisions, source
- * failures, claims, reviews, grants, current gates and unknown fields stay fresh.
+ * failures, claims, review conclusions, grants, current gates and unknown fields stay fresh.
  * Source-array order is transport layout, never the identity of a requirement. */
 function splitContext(context: JsonObject): Split {
   const fresh = clone(context), identities = new Set<string>();
@@ -112,6 +112,16 @@ function splitContext(context: JsonObject): Split {
         seen.add(outcome.id);
         const path = [...prefix, "goal_acceptance_contract", "outcome_requirements", "outcomes", j];
         add(JSON.stringify([kind, outcome.id, "objective"]), [...path, "objective"]);
+        // Cumulative provenance and review explanations are evidence, not a
+        // current acceptance decision. Reuse only these registered fields;
+        // conclusions, basis currency, independent verification and unknown
+        // controls still reach every input literally.
+        if (Array.isArray(outcome.sources)) {
+          outcome.sources.forEach((entry, index) => {
+            if (jsonObject(entry)) add(JSON.stringify([kind, outcome.id, "source_summary", index]),
+              [...path, "sources", index, "summary"]);
+          });
+        }
         const requirements = outcome.requirements;
         if (!Array.isArray(requirements)) continue;
         const requirementIds = new Set<string>();
@@ -121,7 +131,15 @@ function splitContext(context: JsonObject): Split {
             valid = false; continue;
           }
           requirementIds.add(requirement.id);
-          add(JSON.stringify([kind, outcome.id, requirement.id, "description"]), [...path, "requirements", k, "description"]);
+          const requirementPath = [...path, "requirements", k];
+          const identity = [kind, outcome.id, requirement.id];
+          add(JSON.stringify([...identity, "description"]), [...requirementPath, "description"]);
+          const review = jsonObject(requirement.agent_review);
+          if (review) {
+            add(JSON.stringify([...identity, "review_note"]), [...requirementPath, "agent_review", "note"]);
+            if (Array.isArray(review.evidence_refs) && review.evidence_refs.every(ref => typeof ref === "string"))
+              add(JSON.stringify([...identity, "review_evidence"]), [...requirementPath, "agent_review", "evidence_refs"], true);
+          }
         }
       }
     } else {
@@ -446,7 +464,12 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
     ...(assumed ? {continuity_basis: "native_hook_assumption"} : {}),
     instruction: "Current controls are inline even when unchanged. Other fields inherit the "
       + (assumed ? "exact baseline under the native-hook continuity assumption" : "confirmed baseline")
-      + "; all requirements remain binding. A value replaces its subtree; from copies the exact string at that path in the base capture, never in current changes. Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
+      + "; all requirements remain binding. "
+      + (assumed ? "After reading this delta completely, use it with the retained model context. "
+        + "Do not also fetch the full projection just to materialize JSON or replace missing Code Mode variables; "
+        + "tool-process memory is separate from retained model context. If required baseline content is unavailable "
+        + "or continuity is uncertain, recover this capture in full before dependent work. " : "")
+      + "A value replaces its subtree; from copies the exact string at that path in the base capture, never in current changes. Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
   // Native consumers page the wire before they can use its baseline. Deliver
