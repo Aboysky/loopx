@@ -1,5 +1,16 @@
 # Required work context
 
+This page specifies current delivery behavior. The
+[unified-contract RFC](../architecture/rfcs/controller-executor-unified-contract-v0.md)
+proposes one full/delta/detail/recovery pipeline across entrypoints. Its
+controller-authored brief must retain complete original requirements and
+reachable evidence; experimental model-token targets never permit truncation
+or replace source-consumption obligations.
+The proposed shared composition boundary preserves source revisions and pending
+read obligations before capture. Recovering delivery from that immutable capture
+does not refresh authority; a legitimate new selection/authority check remains
+distinct from retrying transport.
+
 Ordinary Heartbeat/quota delivers the full effective selected Todo, enabled
 canonical acceptance and Agent-scoped User obligations at
 `interaction_contract.agent_channel.work_context`. These are current work
@@ -276,7 +287,13 @@ with `--runtime-profile codex_app_ssh_goal` in setup and the thin/bootstrap prom
 Its generated guard keeps the native Goal identity and visible-Goal settlement;
 it does not become a hosted heartbeat. It does not install or trust hooks,
 change host configuration or restart the running App. Configure and trust its
-exact hooks for the next native session. The native path preserves authentication,
+exact hooks for the next native session. Existing loaded threads may retain
+their earlier hook configuration despite enabled/trusted `hooks/list` readback;
+discovery does not deliver `SessionStart` or initialize a context journal. Use
+the host's start/resume path after active work reaches its normal safe boundary,
+then verify lifecycle delivery. Keep full delivery and the original capture
+until then; do not fabricate events, borrow another session's journal or restart
+an active host to manufacture adoption. The native path preserves authentication,
 endpoints, provider selection and connection mode, including implicit history via
 `previous_response_id`. It neither enables input diagnostics nor scans model-input
 history. Benchmark preparation stages those same hooks in its isolated trial home.
@@ -341,6 +358,12 @@ not restart stopped Goals, alter quota/leases or qualify installed Desktop,
 all-Goal adoption, actual solver costs or outcome benefit.
 
 ## 中文
+
+本页规定当前交付行为。[统一契约提案](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+拟让所有入口复用 full/delta/detail/recovery 流程。controller 编写的工作说明必须
+保留完整原始要求与可访问证据；实验性模型 token 目标不允许截断，也不替代来源读取义务。
+提议的共享组合边界在 capture 前保留来源 revision 与未完成必读义务。从该不可变 capture
+恢复交付不刷新权限；合法的新选择/权限检查与传输重试仍是不同操作。
 
 普通 Heartbeat/quota 默认在 `agent_channel.work_context` 返回完整选定 Todo、
 启用的验收与当前 Agent 相关的 User Todo，附带来源和修订，不需要开启 TurnEnvelope。
@@ -468,7 +491,11 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 在失效事件发生前仍可用；这不是实际输入保留证明或模型 ACK。共享 codec 仍校验精确基线
 摘要、作用域、本轮控制与完整重建。显式 final-input Host 客户端保留独立的确认输入契约。
 
-为下次原生会话配置并信任精确 hooks，不重启当前 App。原生路径保留认证、端点、provider
+为下次原生会话配置并信任精确 hooks，不重启当前 App。已加载线程可能继续沿用旧 hook
+配置；`hooks/list` 的 enabled/trusted 读回不等于向该线程交付 `SessionStart` 或初始化
+context journal。当前工作到达正常安全边界后，沿宿主正常启动／恢复入口加载配置，再
+核验实际生命周期交付。此前保持全量与原捕获，不伪造事件、借用其他会话 journal 或为
+制造采用样本重启活动宿主。原生路径保留认证、端点、provider
 和连接方式，包括带 `previous_response_id` 的隐式历史；不启用输入诊断，也不逐轮扫描
 模型完整输入。Benchmark 在各自隔离的 trial home 内自动准备同一组 hooks。
 
