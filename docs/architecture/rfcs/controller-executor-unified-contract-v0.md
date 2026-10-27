@@ -491,6 +491,16 @@ original-evidence readers. Altered source facts, schema versions and replan
 obligations reject before the runner seam. The explicit historical reference
 reader remains covered. Eight focused cases pass with an injected recorder,
 not a live DSH model; runtime code is unchanged by this test migration.
+The complete-contract boundary now also reuses the existing interaction decoder
+for its required version, channel types, notification policy and execution
+consistency. Four negative cases previously passed composition despite invalid
+semantics; they now reject even when a producer supplies correct integrity
+hashes. The original object and unknown optional facts remain intact rather than
+being replaced with normalized decoder output. File/SQLite native input checks
+reject an unsupported inner version before Codex prompt execution or DSH runner
+loading, without spend. The complete-contract/context/DSH/stdio selection passes
+352 cases; TypeScript checking and focused lint pass. This qualifies these
+interaction semantics, not every required field or packaged-host adoption.
 Remaining cache consistency investigation, other old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native

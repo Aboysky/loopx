@@ -376,6 +376,12 @@ File/SQLite context→DSH 子进程检查现使用完整 capture 和生产 reque
 来源事实、schema 版本或 replan 义务被修改时，在 runner 接缝前拒绝；显式历史引用
 reader 覆盖仍保留。八项聚焦用例通过，使用注入的记录 runner，未调用真实 DSH 模型；
 本次测试迁移没有修改 runtime 代码。
+完整契约边界现进一步复用既有 interaction decoder，校验必需版本、channel 类型、
+通知策略和执行一致性。四种非法语义原先能通过组合；现在即使 producer 提供正确
+完整性哈希也会拒绝。保留原对象及未知可选事实，不用 decoder 规范化输出替换原文。
+File/SQLite 原生输入检查确认不支持的内层版本在 Codex prompt 执行或 DSH runner
+加载前拒绝，且不扣额。完整契约/context/DSH/stdio 集合 352 项通过，TypeScript
+检查及聚焦 lint 通过。这只证明上述交互语义，不代表所有必需字段或打包宿主已验收。
 剩余 cache 一致性调查、其他旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
