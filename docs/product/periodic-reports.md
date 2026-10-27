@@ -942,6 +942,12 @@ admission, a Task lease, independent validation and quota settlement. Token
 usage and fees depend on the configured host; the calendar makes no savings
 claim. Duplicate observations and a lost completion acknowledgement reconcile
 the existing Task and Core message without another model execution or answer.
+If the native transaction has committed and the Chat result-event append loses
+its acknowledgment, that same invocation may finish returning the original
+answer after reading exactly one event with the complete matching result.
+Missing, conflicting, duplicate or unreadable result events, and uncommitted
+transactions, retain their failure. This readback neither repeats native
+execution or settlement nor reopens historical failed Chat Turns.
 
 Set `enabled=false` to pause new work and delivery; retain the rest of the
 configuration to resume that plan. Clearing the override after a known failed
