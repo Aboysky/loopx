@@ -35,6 +35,31 @@ def _run_alignment_cli(
     return exit_code, payload, captured.out
 
 
+@pytest.mark.parametrize("command", ["shared-goal-alignment", "goal-alignment"])
+def test_unmigrated_alignment_preserves_typed_recovery_without_writes(tmp_path, capsys, command):
+    project = tmp_path / "project"
+    project.mkdir()
+    state = project / "STATE.md"
+    state.write_text("# Goal\n\n## Agent Todo\n\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": GOAL_ID, "repo": str(project), "state_file": str(state),
+        "coordination": {"registered_agents": ["agent-a"]},
+    }]}), encoding="utf-8")
+    before = state.read_bytes(), registry.read_bytes()
+    code, payload, _ = _run_alignment_cli(capsys, registry, command,
+        "--goal-id", GOAL_ID, "--agent-id", "agent-a", "--format", "json")
+    assert code == 1 and payload["ok"] is False
+    assert payload["error_code"] == "canonical_authority_required"
+    assert payload["write_admitted"] is False
+    assert payload["legacy_fallback_used"] is False
+    assert payload["decision_read_from_provider"] is False
+    assert payload["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    assert (state.read_bytes(), registry.read_bytes()) == before
+    assert not (runtime / "authority").exists()
+
+
 def test_cli_projects_shared_goal_alignment_json(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
