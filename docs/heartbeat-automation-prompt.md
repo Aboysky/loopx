@@ -6,6 +6,16 @@ advances one LoopX goal without hiding compute policy inside the timer.
 The timer only wakes the executor. LoopX decides whether that wakeup
 should spend delivery compute.
 
+The [unified-contract RFC](architecture/rfcs/controller-executor-unified-contract-v0.md)
+keeps Codex App heartbeat as a required product qualification path. Its proposed
+controller session would consume one canonical contract and delegate ordinary
+work to an executor. That profile is not enabled by this template: continue to
+use the installed runtime's fresh contract and existing scheduler/stop rules.
+
+中文：[统一契约提案](architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+将 Codex App heartbeat 列为必验产品路径。拟议 controller 消费统一契约后向 executor
+交付业务任务；本模板不启用该模式，仍以已安装运行时的最新契约和调度/停止规则执行。
+
 ## Two Prompt Layers
 
 Keep the Codex App visible goal text and the heartbeat automation task body as
