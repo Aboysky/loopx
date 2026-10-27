@@ -124,6 +124,61 @@ test("fresh control with exact warm bodies; changed source revisions do not rese
   assert.deepEqual(baseline.context, original);
 });
 
+test("cumulative acceptance evidence reuses exact history while current judgments stay inline on every surface", () => {
+  const evidence = "artifact:validation/" + "evidence-segment/".repeat(80);
+  const outcome = {id: "result", objective: "Preserve the original goal.", revision: 1,
+    sources: [{ref: "owner:original", summary: long, unknown_source_control: {must_read: true}}],
+    requirements: Array.from({length: 12}, (_, i) => ({id: `r${i}`, description: "Verify the result.",
+      status: "unverified", planning_satisfied: false,
+      agent_review: {id: `r${i}`, conclusion: "uncertain", basis_current: false,
+        independently_verified: false, note: long, evidence_refs: [evidence + i], unknown_review_control: true}}))};
+  const work = {complete: true, sources: [{source: "goal_acceptance", content: {ok: true,
+    provider_revision: "current", goal_acceptance_contract: {outcome_requirements: {revision: 1, outcomes: [outcome]}}}}]};
+  for (const surface of ["work_context", "quota_packet", "turn_envelope"]) {
+    const prefix = surface === "quota_packet" ? ["interaction_contract", "agent_channel", "work_context"]
+      : surface === "turn_envelope" ? ["work_context"] : [];
+    const wrap = (value: unknown): JsonObject => surface === "quota_packet"
+      ? {interaction_contract: {agent_channel: {work_context: value}}}
+      : surface === "turn_envelope" ? {work_context: value} : value as JsonObject;
+    const original = wrap(work), baseline = prepareContextDelivery({context: original, scope, capture_id: "a", surface});
+    const current = structuredClone(work), updated = current.sources[0].content.goal_acceptance_contract.outcome_requirements;
+    updated.revision = 2;
+    updated.outcomes[0].requirements[0].agent_review.conclusion = "unmet";
+    const args = {context: wrap(current), scope, capture_id: "b", surface};
+    const delta = prepareContextDelivery({...args, baseline, retained: {complete: true, target: baseline.target}});
+    assert.equal(delta.mode, "delta");
+    assert.ok(JSON.stringify(delta).length < JSON.stringify(original).length / 8);
+    const root = [...prefix, "sources", 0, "content", "goal_acceptance_contract", "outcome_requirements"];
+    assert.equal(inline(delta, [...root, "revision"]), 2);
+    const row = [...root, "outcomes", 0, "requirements", 0];
+    for (const [field, expected] of Object.entries(updated.outcomes[0].requirements[0].agent_review))
+      if (!["note", "evidence_refs"].includes(field)) assert.deepEqual(inline(delta, [...row, "agent_review", field]), expected);
+    assert.equal(inline(delta, [...row, "status"]), "unverified");
+    assert.equal(inline(delta, [...row, "planning_satisfied"]), false);
+    assert.deepEqual(inline(delta, [...root, "outcomes", 0, "sources", 0, "unknown_source_control"]), {must_read: true});
+    assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)}).context, wrap(current));
+    assert.deepEqual(baseline.context, original);
+    // Changed, reordered, removed and empty evidence never inherit an old claim.
+    updated.outcomes[0].sources[0].summary = "A new owner correction.";
+    updated.outcomes[0].requirements.reverse();
+    updated.outcomes[0].requirements[0].agent_review.note = "";
+    updated.outcomes[0].requirements[0].agent_review.evidence_refs = ["artifact:new"];
+    updated.outcomes[0].requirements[1].agent_review.evidence_refs = [];
+    delete (updated.outcomes[0].requirements[2].agent_review as JsonObject).note;
+    const edited = {...args, context: wrap(current)};
+    const next = prepareContextDelivery({...edited, baseline, retained: {complete: true, target: baseline.target}});
+    assert.deepEqual(restoreContextDelivery({delivery: next, baseline, current: prepareContextDelivery(edited)}).context, wrap(current));
+  }
+  // An unavailable source is not historical evidence eligible for omission.
+  const unavailable = structuredClone(work) as JsonObject;
+  ((unavailable.sources as JsonObject[])[0].content as JsonObject).read_complete = false;
+  const initial = full(work), delta = warm(unavailable, initial);
+  const result = delta.mode === "full" ? delta.context : recover(delta, initial, unavailable).context;
+  assert.deepEqual(result, unavailable);
+  if (delta.mode === "delta") assert.equal(inline(delta, ["sources", 0, "content", "goal_acceptance_contract",
+    "outcome_requirements", "outcomes", 0, "requirements", 0, "agent_review", "note"]), long);
+});
+
 test("relocated reusable strings reference the exact base while current controls stay inline", () => {
   const original = {registry: {authoring: long}, current_control: {instruction: long}};
   const current = {registry: {attachment: {guidance: long}}, current_control: {instruction: long}};
