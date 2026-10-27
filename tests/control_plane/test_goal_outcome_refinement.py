@@ -117,6 +117,44 @@ def test_review_only_cli_retains_origins_and_requires_provenance_for_new_require
     assert cli("inspect")[1] == before
 
 
+def test_cumulative_review_evidence_reuses_real_quota_sources_without_hiding_new_judgment(acceptance_goal):
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+
+    project, _, cli, run = acceptance_goal
+    declared = refinement([{"id": f"r{i}", "description": "Retain the original requirement"}
+        for i in range(12)], "message:first")
+    assert record(project, cli, declared, "declare")[0][0] == 0
+    review = {"outcome_id": "tour", "review": [{"id": r["id"], "conclusion": "uncertain",
+        "evidence_refs": ["artifact:validation/" + "segment/" * 12],
+        "note": ("Retain the measured result and its applicability. " * 10).strip()} for r in declared["requirements"]]}
+    (code, result), _ = record(project, cli, review, "review")
+    assert code == 0, result
+
+    def capture():
+        code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
+        assert code == 0, packet
+        return packet["interaction_contract"]["agent_channel"]["work_context"]
+
+    original = capture()
+    scope = dict(goal_id="goal-acceptance", agent_id="agent-a", session_id="fixture", context_epoch="cycle")
+    baseline = prepare_context_delivery(original, scope=scope, capture_id="original")
+    review["review"][0]["conclusion"] = "unmet"
+    assert record(project, cli, review, "negative-review")[0][0] == 0
+    current = capture()
+    full = prepare_context_delivery(current, scope=scope, capture_id="current")
+    delta = prepare_context_delivery(current, scope=scope, capture_id="current", baseline=baseline,
+        retained={"complete": True, "target": baseline["target"]})
+    assert delta["mode"] == "delta", delta.get("reason")
+    assert "segment/" not in json.dumps(delta), "unchanged evidence must not be retransmitted"
+    restored = restore_context_delivery(delta, baseline=baseline, current=full)
+    assert restored["context"] == current
+    acceptance = next(s["content"] for s in restored["context"]["sources"] if s.get("source") == "goal_acceptance")
+    row = acceptance["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["requirements"][0]
+    assert row["agent_review"]["conclusion"] == "unmet" and row["agent_review"]["evidence_refs"] == review["review"][0]["evidence_refs"]
+    assert not row["planning_satisfied"] and row["status"] != "accepted"
+    assert restore_context_delivery(delta, baseline=None, current=full)["context"] == current
+
+
 def test_typed_outcome_gaps_are_transported_only_to_their_agent():
     gap = {"kind": "goal_outcome_uncovered", "agent_id": "author", "outcome_id": "tour", "requirement_ids": ["opening"]}
     summary = {"goal_acceptance_contract": {"enabled": False, "outcome_requirements": {"acceptance_gaps": [gap]}}}
