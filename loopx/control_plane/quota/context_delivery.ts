@@ -51,7 +51,7 @@ function parentAt(root: JsonObject, path: Path): Record<string | number, unknown
 }
 
 /** Registered requirement fields and capability evidence subtrees are reusable. Revisions, source
- * failures, claims, reviews, grants, current gates and unknown fields stay fresh.
+ * failures, claims, review conclusions, grants, current gates and unknown fields stay fresh.
  * Source-array order is transport layout, never the identity of a requirement. */
 function splitContext(context: JsonObject): Split {
   const fresh = clone(context), identities = new Set<string>();
@@ -112,6 +112,16 @@ function splitContext(context: JsonObject): Split {
         seen.add(outcome.id);
         const path = [...prefix, "goal_acceptance_contract", "outcome_requirements", "outcomes", j];
         add(JSON.stringify([kind, outcome.id, "objective"]), [...path, "objective"]);
+        // Cumulative provenance and review explanations are evidence, not a
+        // current acceptance decision. Reuse only these registered fields;
+        // conclusions, basis currency, independent verification and unknown
+        // controls still reach every input literally.
+        if (Array.isArray(outcome.sources)) {
+          outcome.sources.forEach((entry, index) => {
+            if (jsonObject(entry)) add(JSON.stringify([kind, outcome.id, "source_summary", index]),
+              [...path, "sources", index, "summary"]);
+          });
+        }
         const requirements = outcome.requirements;
         if (!Array.isArray(requirements)) continue;
         const requirementIds = new Set<string>();
@@ -121,7 +131,15 @@ function splitContext(context: JsonObject): Split {
             valid = false; continue;
           }
           requirementIds.add(requirement.id);
-          add(JSON.stringify([kind, outcome.id, requirement.id, "description"]), [...path, "requirements", k, "description"]);
+          const requirementPath = [...path, "requirements", k];
+          const identity = [kind, outcome.id, requirement.id];
+          add(JSON.stringify([...identity, "description"]), [...requirementPath, "description"]);
+          const review = jsonObject(requirement.agent_review);
+          if (review) {
+            add(JSON.stringify([...identity, "review_note"]), [...requirementPath, "agent_review", "note"]);
+            if (Array.isArray(review.evidence_refs) && review.evidence_refs.every(ref => typeof ref === "string"))
+              add(JSON.stringify([...identity, "review_evidence"]), [...requirementPath, "agent_review", "evidence_refs"], true);
+          }
         }
       }
     } else {
