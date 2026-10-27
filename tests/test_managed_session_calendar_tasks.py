@@ -32,19 +32,20 @@ def settings_server(steward):
     store, runtime, _, transport, *_ = steward
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root = runtime.coordination_runtime_root
     server.registry_path, server.runtime_root_override = runtime.registry_path, store.root.parent
     server.lark_private_conversations = transport
     server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
     server.verbose = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    def request(path, body, origin=None):
+    def request(path, body, origin=None, *, method="POST"):
         connection = http.client.HTTPConnection(*server.server_address, timeout=20)
         try:
             headers = {"Content-Type": "application/json"}
             if origin:
                 headers["Origin"] = origin
-            connection.request("POST", path, json.dumps(body), headers=headers)
+            connection.request(method, path, None if body is None else json.dumps(body), headers=headers)
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:
@@ -431,6 +432,58 @@ def test_frozen_task_cannot_change_work_or_scope_before_dispatch(steward, tmp_pa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_committed_calendar_result_survives_lost_event_ack_without_reexecution(steward, tmp_path, monkeypatch, provider):
+    session, actor, _, capture, workspace, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    point = fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        append, lost = store.append_event, []
+        before = capture.read_bytes()
+        def lose_ack_after_write(*args, **kwargs):
+            result = append(*args, **kwargs)
+            if kwargs.get("kind") == "native_loopx.result" and not lost:
+                lost.append(True)
+                raise OSError("synthetic lost acknowledgment after the committed result event persisted")
+            return result
+        with monkeypatch.context() as lost_ack:
+            lost_ack.setattr(store, "append_event", lose_ack_after_write)
+            completed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert lost and completed["status"] == "completed", completed
+        assert completed["response"]["native_loopx"]["status"] == "committed"
+        assert completed["response"]["native_loopx"]["effects"]["quota_spent"] is True
+        result_events = [row for row in store.events_after(sid, completed["turn_id"], None)
+            if row["kind"] == "native_loopx.result"]
+        assert len(result_events) == 1
+        assert result_events[0]["payload"] == completed["response"]["native_loopx"]
+        messages = [row for row in store.messages(sid)
+            if row.get("turn_id") == completed["turn_id"] and row["role"] == "agent"]
+        assert len(messages) == 1 and messages[0]["text"] == "The independently validated total is 42."
+        status, conversation = request("/api/chat/sessions/" + sid, None, method="GET")
+        assert status == 200 and conversation["active_turn"] is None
+        assert messages[0] in conversation["messages"]
+        calls = [json.loads(line) for line in capture.read_bytes()[len(before):].decode().splitlines()]
+        assert len([row for row in calls if row.get("method") == "turn/start"]) == 1
+        after = capture.read_bytes(), store.messages(sid), list(bot.writes)
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+        journal = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert journal["task_completion"]["message_id"] == messages[0]["message_id"]
+        assert (capture.read_bytes(), store.messages(sid), list(bot.writes)) == after
+        (workspace / "total.json").write_text('{"total": -1}')
+        point[0] += timedelta(days=1)
+        runtime._steward_monitor_next_check.clear()
+        second = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert second["turn_id"] != completed["turn_id"]
+        assert second["response"]["native_loopx"]["status"] == "committed"
+        assert json.loads((workspace / "total.json").read_text()) == {"total": 42}
+        calls = [json.loads(line) for line in capture.read_bytes()[len(before):].decode().splitlines()]
+        assert len([row for row in calls if row.get("method") == "turn/start"]) == 2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_unknown_postcommit_return_never_becomes_cancelled_failure_or_model_replay(steward, tmp_path, monkeypatch, provider):
     session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
     fixed_clock(monkeypatch)
@@ -440,11 +493,10 @@ def test_unknown_postcommit_return_never_becomes_cancelled_failure_or_model_repl
         append = store.append_event
         lost = []
         def lose_native_return(*args, **kwargs):
-            result = append(*args, **kwargs)
             if kwargs.get("kind") == "native_loopx.result" and not lost:
                 lost.append(True)
-                raise OSError("synthetic lost return after the original native commit")
-            return result
+                raise OSError("synthetic missing Chat result event after the original native commit")
+            return append(*args, **kwargs)
         with monkeypatch.context() as lost_return:
             lost_return.setattr(store, "append_event", lose_native_return)
             failed = finish(runtime, pump_steward_monitors(runtime)[0])
@@ -457,6 +509,45 @@ def test_unknown_postcommit_return_never_becomes_cancelled_failure_or_model_repl
         body = {"goal_id": actor["goal_id"], "capability_id": "periodic_report", "configuration": None}
         assert request("/api/chat/goal-configuration/preview", body)[0] == 400
         assert load_goal_from_registry(runtime.registry_path, actor["goal_id"])["control_plane"]["periodic_report"] == config
+        assert (capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)) == before
+        assert store.load_turn(session["session_id"], failed["turn_id"]) == failed
+
+
+@pytest.mark.parametrize("fault", ["conflicting", "duplicate", "unreadable", "uncommitted"])
+def test_lost_result_ack_requires_one_exact_readable_commit(steward, tmp_path, monkeypatch, fault):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, "sqlite")
+    fixed_clock(monkeypatch)
+    store, runtime, bot, *_ = steward
+    if fault == "uncommitted":
+        script = tmp_path / "calendar-model.py"
+        script.write_text(script.read_text().replace('"result_kind": "validated_completion"',
+            '"result_kind": "validated_progress"'))
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        append, read, lost = store.append_event, store.events_after, []
+        def lose_ack(*args, **kwargs):
+            if kwargs.get("kind") != "native_loopx.result" or lost:
+                return append(*args, **kwargs)
+            lost.append(args[1])
+            observed = {**kwargs, "payload": {**kwargs["payload"], "ok": False}} if fault == "conflicting" else kwargs
+            append(*args, **observed)
+            if fault == "duplicate":
+                append(*args, **kwargs)
+            raise OSError("synthetic result acknowledgment unavailable")
+        def unavailable_read(session_id, turn_id, event_id):
+            if fault == "unreadable" and turn_id in lost:
+                raise OSError("synthetic result readback unavailable")
+            return read(session_id, turn_id, event_id)
+        with monkeypatch.context() as lost_ack:
+            lost_ack.setattr(store, "append_event", lose_ack)
+            lost_ack.setattr(store, "events_after", unavailable_read)
+            failed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert lost and failed["status"] == "failed", failed
+        before = capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+        assert not SessionCalendarTasks(runtime).health(session["session_id"])["completion_verified"]
         assert (capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)) == before
         assert store.load_turn(session["session_id"], failed["turn_id"]) == failed
 
