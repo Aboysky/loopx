@@ -148,7 +148,8 @@ def test_review_materials_follow_canonical_text_without_rewriting_authority(
         "schema_version": "todo_item_v0", "todo_id": "todo_review", "index": 1,
         "role": "user", "status": "open", "done": False, "archive_state": "active",
         "source_section": "User Todo", "task_class": "user_action",
-        "text": "Read [Review](docs/review.md#proof) and `../outside.md`.",
+        "text": ("Read [Review](docs/review.md#proof) and `../outside.md`. "
+                 f"Private [reference]({tmp_path / 'private.md'})."),
     }]
     runtime = tmp_path / "runtime"
     initialize_canonical_authority(runtime, goal["id"], _projection(goal["id"], records, record_format),
@@ -162,9 +163,10 @@ def test_review_materials_follow_canonical_text_without_rewriting_authority(
             material.unlink()
         fields = active_state_todo_fields(goal, runtime_root=runtime)
         [todo] = fields["user_todos"]["items"]
-        review, outside = todo["review_materials"]
+        review, outside, *private = todo["review_materials"]
         assert review == {"label": "Review", "path": "docs/review.md#proof", "anchor": "proof", "exists": exists}
         assert outside["exists"] is False
+        assert not private
         assert "resolved_path" not in json.dumps(fields)
         assert "docs/stale.md" not in json.dumps(fields)
         assert str(tmp_path) not in json.dumps(fields)
