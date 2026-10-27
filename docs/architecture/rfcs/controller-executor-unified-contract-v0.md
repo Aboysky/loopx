@@ -630,6 +630,50 @@ full encoding and its delta encoding separately so transport reuse cannot hide
 a semantic regression. Controller/executor separation is a later independent
 comparison and cannot explain away a C1 regression.
 
+### C1 baseline boundary and reuse inventory
+
+The baseline is the **original caller-visible quota delivery**, not the raw
+internal decision. In `cli_commands/quota.py`, the original emitter captures the
+source, optionally applies `replan_cli_view` when a capture exists, then applies
+`compact_quota_should_run_cli_payload`. Native context delivery adds its own
+full/delta transport afterward. Record the exact revision, host flags, capture
+availability and detail options for both arms. Comparing a compact candidate
+against the larger internal source would overstate savings; comparing a full
+candidate against only a deferred entry would omit baseline follow-up costs.
+
+The existing paths already contain useful efficiency behavior. C1 should absorb
+its qualified semantics into the shared TypeScript composition/context owners,
+then retire the old caller-specific producer. Do not call the whole legacy
+compactor as a shortcut: exact sharing, omission and deferred reads have different
+information and failure consequences.
+
+| Existing information / transformation | Fusion disposition and decisive check |
+| --- | --- |
+| Selected work, original requirements, acceptance, evidence, permissions and stops | Available before the dependent decision. Keep distinct revisions and contradictory evidence; neither lane labels nor action signatures establish completeness. |
+| Identical acceptance copies, nested vision audits, authoring and optional guidance | Prefer one complete in-contract owner plus an exact reference where smaller. Compare JSON types and every clause; different/missing owners remain distinct. No extra read or new decision authority. Existing projection tests provide characterization, not new-consumer qualification. |
+| Bounded Todo lanes, shortened suggestions and omitted boundary/history entries | Treat as deliberate omission, not lossless deduplication. Retain completeness/count facts and same-capture recovery; prove the omitted item cannot change the current decision, or load it before deciding. Never inherit the old display limits as semantic limits. |
+| Captured replan review, acceptance detail and writeback readers | Separate decision facts from later authoring format while retaining the original identity and all required meaning. Bound reads to the same capture; count every required stage, error and recovery. A missing/stale reference must not trigger a new guard or authorize work. |
+| Full/delta/resume delivery | Reuse the existing continuity owner after composition. Establish exact semantic reconstruction and required material availability before action; charge cold fallback and lost-baseline recovery. |
+| Scheduler, admission and settlement identities | One authoritative instance before capture; transport must preserve host ownership, original Turn and once-only effects. Repeated representations do not justify weakening their checks. |
+
+A fixed-source synthetic replan audit of candidate `895f38fc5` illustrates why
+the boundary matters. With stride off and no capture staging, the raw source was
+21,461 compact UTF-8 JSON bytes, the original quota CLI projection 20,543, and
+the complete candidate 21,738: **+5.82% against CLI**, versus +1.29% against raw
+source. With capture staging, entry/review/writeback totaled 21,882 bytes versus
+21,821 for the candidate. With `evidence_conditioned_v1`, those staged bytes
+totaled 28,558 versus 33,368 for the candidate. These use the existing synthetic
+replan fixture and production projection/read functions with a synthetic capture
+route; they are not executed model trajectories or an installed-host trial.
+Extra acceptance/Explore reads, actual request framing, cache behavior and
+outcome differences are unmeasured. The legacy receipt toggle produced identical
+data and does not add an independent workload. No net-benefit conclusion follows.
+
+The next implementation slice should first qualify exact same-contract sharing
+through composition, readers and recovery, then assess deferred-detail choices
+with the matched workload above. Keep cold and staged totals separate and retain
+negative results; do not force a byte target by dropping unique instructions.
+
 Report the field/clause diff and its decision consequence together with actual
 model input, cached/uncached tokens, added reads/round trips, reconstruction,
 latency, failures/retries, verification and human intervention. A smaller first

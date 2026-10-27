@@ -476,6 +476,42 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 传输复用掩盖语义退步。Controller/executor 分离是之后独立的对照，不能用来解释或
 抵消 C1 回归。
 
+### C1 基线边界与复用盘点
+
+基线是**原路径中调用者实际收到的 quota 交付**，不是内部原始 decision。
+`cli_commands/quota.py` 的原 emitter 先捕获 source；有 capture 时按条件应用
+`replan_cli_view`，再应用 `compact_quota_should_run_cli_payload`，随后原生上下文
+交付还有 full/delta 传输。两组须记录精确版本、host flags、capture 是否可用及 detail
+选项。用更大的内部 source 对比紧凑候选会夸大节省；只用延后读取的首包对比完整候选，
+则会漏算基线的后续成本。
+
+现有路径已包含值得复用的效率行为。C1 应把已合格的语义吸收到共享 TypeScript
+composition/context owner，再退役旧的 caller-specific producer。不能直接套用整个旧
+compactor：精确共享、省略和延后读取的信息与失败后果各不相同。
+
+| 现有信息／变换 | 融合处理与决定性检查 |
+| --- | --- |
+| 已选工作、原始要求、验收、证据、权限及停止条件 | 依赖它们的决策前可用。保留不同 revision 和矛盾证据；lane 标签或 action signature 均不能证明完整性。 |
+| 相同验收副本、嵌套 vision audit、authoring 和可选指导 | 在更小时优先使用契约内一份完整 owner 加精确引用。比较 JSON 类型及每条义务；不同或缺失 owner 时分别保留。不增加补读或决策权。已有 projection 测试只提供特征验证，不代表新消费者已合格。 |
+| 有限 Todo lanes、缩短的建议、省略的边界／历史项 | 视为主动省略，而非无损去重。保留完整性／计数事实和同 capture 恢复；证明被省略项不影响当前决策，或先加载再决策。旧显示上限不能自动变成语义上限。 |
+| 捕获后的 replan review、验收详情和 writeback reader | 区分决策事实与后续 authoring 格式，同时保留原身份和全部必要含义。读取绑定同一 capture；计入每个必需阶段、错误和恢复。引用缺失／过期不能重新 guard 或授权工作。 |
+| Full/delta/resume 交付 | 在 composition 后复用既有 continuity owner。行动前验证精确语义重建与必要材料可用；计入冷回退及丢失基线的恢复。 |
+| Scheduler、准入与结算身份 | Capture 前只有一份权威实例；传输保留真实 host owner、原 Turn 与一次性 effects。重复表示不构成削弱检查的理由。 |
+
+候选 `895f38fc5` 的固定 source 合成 replan 审计说明了边界的影响。关闭 stride 且不做
+capture 分阶段时，原始 source 为 21,461 个紧凑 UTF-8 JSON 字节，原 quota CLI
+projection 为 20,543，完整候选为 21,738：**相对 CLI 增加 5.82%**，相对原始 source
+则是 1.29%。启用 capture 分阶段后，entry/review/writeback 合计 21,882 字节，候选
+为 21,821。启用 `evidence_conditioned_v1` 时，分阶段合计 28,558，候选为 33,368。
+这里使用既有合成 replan fixture、生产 projection/read 函数与合成 capture 路由；
+不是实际模型轨迹或安装宿主实验。追加的验收／Explore 读取、实际请求包装、缓存行为
+及成果差异均未测。切换 legacy receipt 得到相同数据，不增加独立 workload。这些数字
+不支持净收益结论。
+
+下一实施切片应先在 composition、reader 和 recovery 中验证同契约精确共享，再用上述
+可比负载评估延后详情的取舍。冷启动与分阶段总量分别保留，保留负结果，不能靠删除独有
+指令达到字节目标。
+
 同时报告字段/条款 diff 及其决策后果、实际模型输入、cached/uncached tokens、追加
 读取/往返、重建、延迟、失败/重试、验证与人工介入。首包更小但总补读更多，可能是负向。
 只有必要语义保留且同等验收成果的完整成本降低，或可比预算下验收成果改善，才判正向。
