@@ -42,6 +42,10 @@ def _redacted_status_todo_fields(fields: dict[str, Any]) -> dict[str, Any]:
                         continue
                     material_copy = dict(material)
                     material_copy.pop("resolved_path", None)
+                    if any(isinstance(value, str) and value
+                           and public_safe_compact_text(value, limit=len(value)) is None
+                           for value in material_copy.values()):
+                        continue
                     redacted_materials.append(material_copy)
                 item_copy["review_materials"] = redacted_materials
             items.append(item_copy)

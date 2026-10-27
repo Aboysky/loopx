@@ -163,13 +163,12 @@ def test_review_materials_follow_canonical_text_without_rewriting_authority(
             material.unlink()
         fields = active_state_todo_fields(goal, runtime_root=runtime)
         [todo] = fields["user_todos"]["items"]
-        review, outside, *private = todo["review_materials"]
+        review, outside = todo["review_materials"]
         assert review == {"label": "Review", "path": "docs/review.md#proof", "anchor": "proof", "exists": exists}
         assert outside["exists"] is False
-        assert not private
         assert "resolved_path" not in json.dumps(fields)
         assert "docs/stale.md" not in json.dumps(fields)
-        assert str(tmp_path) not in json.dumps(fields)
+        assert str(tmp_path) not in json.dumps(todo["review_materials"])
         assert state.read_bytes() == before_state
         assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"]) == before
 
