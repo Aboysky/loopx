@@ -26,7 +26,10 @@ evidence belongs in a dated ledger when an implementation first produces it.
    governed work contract**: one schema, one semantic producer, one capture,
    one delivery/recovery mechanism and one settlement identity. Different hosts
    carry that same contract; permanent quota/Turn compatibility views are not
-   the target. Existing domain owners still decide their own facts.
+   the target. Combine quota packet's decision-necessary information with
+   TurnEnvelope's delivery efficiency; replace both and qualify the net change
+   against the original quota-packet path. Existing domain owners still decide
+   their own facts.
 2. In the optional two-session profile, the **controller model session is the
    sole model-facing Core client**. It reads the contract, reasons about work,
    talks to the executor and submits explicit typed Core operations. Core owns
@@ -356,16 +359,36 @@ lossless mapping and explicit maintainer approval required by the RFC index.
 
 ### C1 wire-layout recommendation
 
-The proposed starting layout evolves the existing Turn-envelope version into
-one complete contract, retaining complete decision fields at their current root
-paths. Add actual host-operation binding and integrity metadata through their
-existing owners; do not wrap a second complete `facts` document beside a compact
-`action` projection. This is a migration recommendation, not a registered wire
-version or a claim that today's quota payload is already the final protocol.
+The target combines quota packet's decision-necessary information with
+TurnEnvelope's efficiency and replaces both. “Complete” means complete necessary
+semantics, not every duplicated diagnostic in today's packet permanently inline.
+The lossless root-preserving candidate below is an intermediate migration oracle:
+it exposes omissions and reference breakage while consumers move. Renaming that
+candidate or forwarding all old fields does not satisfy the final design.
+
+Inventory each field and instruction clause with its owning rule and consumer.
+Keep current task, original requirements and revisions, relevant evidence,
+authority, required reads, execution/stop conditions and original settlement
+obligations available before their dependent decision. Reuse typed ownership to
+remove proven duplicate representations and unrelated diagnostic noise. Stable
+material can be referenced or differentially delivered only with verified
+retention or a resolvable, integrity-bound source and explicit read ordering;
+missing context must recover before dependent work. A reference alone does not
+prove that the model received its constraints. Unknown fields cannot be silently
+classified as optional or dropped by a prose heuristic.
+
+Within one canonical contract, absorb the useful envelope properties: clear
+execution identity and action organization, a single machine-owned binding,
+less duplicate instruction text, bounded delivery and reliable detail/recovery.
+Full/delta/detail are encodings of that instance, not permanent competing semantic
+views. Preserve raw source evidence in its existing owner without emitting a
+second executable packet. The final wire layout may change where its mapped
+references, consumers and measured benefit justify it; root preservation is not
+an immutable product constraint.
 
 | Source or concern | Candidate mapping and qualification |
 | --- | --- |
-| Complete current decision fields | Preserve path and value, including optional mode-specific fields; enumerate all modes before cutover. Do not copy only one observed packet's keys. |
+| Current decision fields during migration | Preserve path/value in the lossless oracle; enumerate all modes and classify necessary semantics, proven duplication and diagnostic-only material before the final mapping. Do not infer optionality from one observed packet. |
 | Work context, required reads and settlement | Keep their existing `interaction_contract` paths and owners. Existing root-relative references retain their meaning; any intentional relocation requires explicit reference and reader migration. Never rewrite prose or command strings by pattern. |
 | Host-operation binding | Compose from the actual caller execution context. Validate consistency with source authority; reject conflicting bindings rather than choosing whichever representation is convenient. |
 | Content and transport integrity | Commit the entire semantic instance independently of the former compact action digest. Preserve exact capture-byte verification and original settlement identity as separate checks; changing a transport encoding does not create a new effect. |
@@ -597,6 +620,28 @@ by this document alone.
 | Shared production paths | Real CLI and supported File/SQLite paths; real isolated PostgreSQL suite when authority persistence changes; packaged App heartbeat and benchmark worker reuse | No live Goal corruption; unsupported/unrun hosts stay unqualified |
 | Outcome and cost benefit | Matched current single-session, unified single-session and unified two-session arms with fixed task/model/policy/budget/evaluator | Report uncertainty, failures and counterexamples; no claim from prompt bytes alone |
 
+The primary C1 comparison is **original quota packet versus the fused contract
+in the same single-session product path**. Keep host, task, original facts,
+model/policy, evaluator and available budget matched. Compare cold full input,
+ordinary warm continuation, replan, missing baseline and interrupted recovery;
+include long/repeated history and capability-off cases. The old envelope may be
+a diagnostic reference arm, not a second permanent destination. Compare the new
+full encoding and its delta encoding separately so transport reuse cannot hide
+a semantic regression. Controller/executor separation is a later independent
+comparison and cannot explain away a C1 regression.
+
+Report the field/clause diff and its decision consequence together with actual
+model input, cached/uncached tokens, added reads/round trips, reconstruction,
+latency, failures/retries, verification and human intervention. A smaller first
+packet with more total reads can be negative. Judge positive only with preserved
+required semantics and comparable accepted outcomes at lower complete cost, or
+better accepted outcomes at comparable budget. Mixed results remain a tradeoff;
+transport-only passes and unmeasured outcomes remain inconclusive. Set numeric
+criteria before running matched experiments, using the existing measurement
+contract rather than inventing an arbitrary compression threshold. C1 cutover
+requires this quota-baseline comparison; a serializer or byte reduction alone
+cannot close it.
+
 Use the [existing measurement model](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model).
 Include both sessions' input/output/cached tokens, tool and material reads,
 planning/replan/recovery, wall time, verification, human attention and provider
@@ -629,7 +674,7 @@ are stable design references, not claims that a canonical Todo is complete.
 
 | Task / dependency | Owner and concrete replacement | Decisive exit / rollback |
 | --- | --- | --- |
-| **C1 — Unified contract; first** | Interaction/work-context + quota/Turn owners: inventory fields and instruction clauses, capture one schema, migrate actual ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with complete requirements, action binding and once-only settlement; retain version-pinned readers until cutover qualifies |
+| **C1 — Unified contract; first** | Interaction/work-context + quota/Turn owners: inventory fields and instruction clauses, capture one schema, migrate actual ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus the quota-baseline effectiveness/full-cost comparison in §9; retain version-pinned readers until cutover qualifies |
 | **C2 — One context-delivery pipeline; C1** | Context owner + host observers: absorb full/delta/detail/recovery into the canonical contract; remove packet-format branches and duplicate context copies | Same-capture recovery and exact role/session continuity through normal/replan/resume; full fallback without a new admission; rollback encoding to full |
 | **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |

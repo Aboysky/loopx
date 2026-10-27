@@ -22,7 +22,9 @@
 
 1. 将 quota 执行 packet 与 TurnEnvelope 融合成**一份版本化的受治理工作契约**：
    同一 schema、语义生产入口、capture、交付/恢复机制和结算身份。不同宿主携带同一契约，
-   长期保留 quota/Turn 兼容视图不是目标。各 domain owner 仍决定自己拥有的事实。
+   长期保留 quota/Turn 兼容视图不是目标。吸收 quota packet 的必要信息量优势与
+   TurnEnvelope 的交付效率优势，一起替换二者，并相对原 quota packet 路径验收净变化。
+   各 domain owner 仍决定自己拥有的事实。
 2. 在可选的双会话 profile 中，**controller 模型会话是唯一面向 Core 的模型客户端**。
    它读契约、判断工作、与 executor 沟通并提交显式 typed Core 操作。Core 拥有合法迁移与
    回执；controller 不是第二个权威。
@@ -280,14 +282,26 @@ capture/回执保留原版本/签名与 replay 身份，不能改写成新 schem
 
 ### C1 wire 布局建议
 
-建议的起点是演进既有 Turn-envelope 版本为一份完整契约，完整 decision 字段保留在
-当前根路径。通过既有 owner 补充实际 host-operation binding 与完整性元数据；不要在
-紧凑 `action` 投影旁再包装一份完整 `facts` 文档。这是迁移建议，不是已注册 wire
-版本，也不表示当前 quota payload 已经是最终协议。
+目标是吸收 quota packet 的必要信息量优势与 TurnEnvelope 的效率优势，一起替换
+二者。“完整”指必要语义完整，不表示今天 packet 中所有重复诊断都永久内联。下述
+保留根路径的无损候选只是迁移对照，用于在消费者迁移时发现遗漏与引用断裂；给它改名
+或转发全部旧字段，均不能满足最终设计。
+
+逐字段、逐条指令盘点所属规则与实际消费者。在依赖它的决策之前，必须具备当前任务、
+原需求及修订、相关证据、权限、必读、执行/停止条件和原结算义务。通过 typed owner
+识别并消除已证实的重复表达与无关诊断噪声。稳定材料只有在保留证据已验证，或来源
+可解析且绑定完整性、读取顺序明确时，才可引用或差分交付；缺失上下文须先恢复再执行
+依赖工作。引用本身不证明模型收到了约束。不能凭正文启发式把未知字段当成可选或静默删除。
+
+在同一规范契约内吸收 envelope 的有效特性：清晰的执行身份与动作组织、单一机器
+binding、减少重复指令、有界交付与可靠详情/恢复。Full/delta/detail 是同一实例的
+编码，不是永久并存的不同语义视图。原始来源证据保留在既有 owner，不再输出第二份
+可执行 packet。最终布局可在引用映射、消费者迁移与实测收益成立时调整；保留根路径
+不是不可更改的产品约束。
 
 | 来源或关注点 | 候选映射与资格要求 |
 | --- | --- |
-| 当前完整 decision 字段 | 保留路径和值，包括各模式的可选字段；切换前枚举全部模式，不能只复制某次观察到的 packet keys。 |
+| 迁移中的当前 decision 字段 | 无损对照保留路径和值；最终映射前枚举各模式，区分必要语义、已证实重复与纯诊断材料，不能凭某次 packet 推断可选性。 |
 | Work context、必读与结算 | 保留既有 `interaction_contract` 路径与 owner。现有根相对引用保持含义；有意搬迁须显式迁移引用与 reader，不能按模式改写正文或命令字符串。 |
 | Host-operation binding | 从真实调用方 execution context 组合，验证与源权限一致；binding 冲突时拒绝，不能选择方便的表示。 |
 | 内容与传输完整性 | 对整个语义实例作完整性承诺，独立于原紧凑 action digest。精确 capture 字节校验和原结算身份仍分别检查；更换传输编码不创建新 effect。 |
@@ -455,6 +469,20 @@ reader。本文不单独授权破坏性迁移。
 | 共享生产路径 | 真实 CLI 与受支持 File/SQLite；涉及 authority 持久化变更时跑真实隔离 PostgreSQL；打包 App heartbeat 与 benchmark worker 复用 | 不破坏 live Goal；未支持/未运行 host 仍未合格 |
 | 成果与成本收益 | 当前单会话、统一契约单会话、统一契约双会话三组，固定 task/model/policy/budget/evaluator | 报告不确定性、失败与反例，不从 prompt bytes 单独宣称收益 |
 
+C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融合后新契约**。
+匹配 host、任务、原始事实、模型/policy、evaluator 和可用预算，覆盖冷启动全量、普通
+暖续接、replan、缺失基线与中断恢复，并包含长/重复历史和 capability-off。旧 envelope
+可以作为诊断参考组，不成为永久第二目标。新契约 full 与 delta 编码分别比较，避免
+传输复用掩盖语义退步。Controller/executor 分离是之后独立的对照，不能用来解释或
+抵消 C1 回归。
+
+同时报告字段/条款 diff 及其决策后果、实际模型输入、cached/uncached tokens、追加
+读取/往返、重建、延迟、失败/重试、验证与人工介入。首包更小但总补读更多，可能是负向。
+只有必要语义保留且同等验收成果的完整成本降低，或可比预算下验收成果改善，才判正向。
+效果混合则报告取舍；只有传输通过或成果未测时结论仍不确定。按既有测量合同在可比实验
+前确定数值标准，不凭空规定压缩比例。C1 切换须完成这个 quota 基线对照，不能仅凭
+serializer 或字节减少结清。
+
 使用[既有测量模型](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model)。
 计入两个会话的输入/输出/cached tokens、工具及材料读取、planning/replan/recovery、
 墙钟时间、验证、人工注意力和 provider 成本；未知用量不是零。持久化因果归因，转发
@@ -480,7 +508,7 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 
 | 任务 / 依赖 | Owner 与实际替换内容 | 决定性退出 / 回退 |
 | --- | --- | --- |
-| **C1 — 统一契约；首先** | Interaction/work-context + quota/Turn owner：盘点字段与指令条款，捕获同一 schema，迁移真实普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留完整要求、动作绑定和一次结算；cutover 合格前保留绑定版本的 reader |
+| **C1 — 统一契约；首先** | Interaction/work-context + quota/Turn owner：盘点字段与指令条款，捕获同一 schema，迁移真实普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留必要信息、动作绑定和一次结算，并完成第 9 节相对 quota 基线的效果/完整成本对照；cutover 合格前保留绑定版本的 reader |
 | **C2 — 一个上下文交付管线；C1** | Context owner + host observer：将 full/delta/detail/recovery 纳入 canonical 契约，删除 packet 格式分支和重复上下文副本 | 正常/replan/resume 中同 capture 恢复及精确 role/session 连续性；full 回退不重新准入；编码可回退 full |
 | **C3 — 会话绑定与原生生命周期；C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
 | **C4 — 共享受治理生命周期；C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
